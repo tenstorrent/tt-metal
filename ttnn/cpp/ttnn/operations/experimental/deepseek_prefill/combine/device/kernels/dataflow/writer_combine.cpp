@@ -14,6 +14,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
@@ -413,6 +414,25 @@ void kernel_main() {
 #endif
                 ccl_routing_utils::fabric_set_line_unicast_route(
                     pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
+#if OVERLAPING_TOKEN_WRITE
+                // Stage 2: tag the send with a NOC transaction id and wait on THAT specific trid
+                // instead of a global flush. Still issued + waited adjacently (single trid, one send
+                // in flight), so behaviorally equivalent to stage 1 — this just proves the trid path
+                // works before stage 3 (cycle a trid pool) and stage 4 (lag the wait). The barrier is
+                // a completion (ack) wait, marginally stronger than the flush it replaces; harmless at
+                // one-in-flight and hidden once the wait is lagged. See overlap_config.hpp.
+                constexpr uint32_t OVERLAP_TRID = 1;  // stage 3 will cycle a pool instead of reusing one
+                fabric_send_noc_unicast_with_trid<fabric_max_packet_size>(
+                    output_addr_gen,
+                    payload_sender,
+                    unicast_packet_header,
+                    output_data_addr,
+                    output_page_idx,
+                    (int)aligned_output_page_size,
+                    l1_alignment,
+                    OVERLAP_TRID);
+                wait_on_flush_for_trid(OVERLAP_TRID);  // adjacent WAIT on this packet's trid
+#else
                 fabric_send_noc_unicast<fabric_max_packet_size>(
                     output_addr_gen,
                     payload_sender,
@@ -422,6 +442,7 @@ void kernel_main() {
                     (int)aligned_output_page_size,
                     l1_alignment);
                 noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
+#endif
 
                 bw_total_payload_bytes += aligned_output_page_size;
             }

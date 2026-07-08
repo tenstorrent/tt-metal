@@ -430,6 +430,73 @@ inline void fabric_send_noc_unicast(
     }
 }
 
+// Non-blocking ISSUE half of fabric_send_noc_unicast: identical to the above but the payload +
+// header NOC writes are issued non-blocking (perform_payload_send<false,false>), so the only stall
+// is wait_for_empty_write_slot(). The caller is responsible for the completion WAIT before it reuses
+// `packet_header` / the payload source or frees them (e.g. noc_async_writes_flushed() adjacently, or
+// a lagged per-transaction barrier). See OVERLAPING_TOKEN_WRITE in the combine op.
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType, class SenderType>
+inline void fabric_send_noc_unicast_nonblocking(
+    AddrGenType addrgen,
+    SenderType& fabric_connection,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t payload_l1_address,
+    uint64_t noc_page,
+    int32_t size_bytes,
+    uint32_t alignment,
+    uint32_t offset = 0) {
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
+
+        tt::tt_fabric::linear::to_noc_unicast_write(
+            align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
+        perform_payload_send<false /*blocking*/, false /*flush*/, SenderType>(
+            fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+
+        payload_l1_address += curr_packet_size;
+        offset += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
+}
+
+// trid-tagged ISSUE half of fabric_send_noc_unicast: like fabric_send_noc_unicast_nonblocking but
+// each send's payload+header NOC writes are tagged with `trid`, so the caller waits on exactly this
+// packet via wait_on_flush_for_trid(trid) rather than a global flush. Only wait_for_empty_write_slot
+// stalls here. See OVERLAPING_TOKEN_WRITE in the combine op. (Combine sends one fabric packet per
+// token, so the loop runs once; a multi-packet payload would share one trid across its chunks.)
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType, class SenderType>
+inline void fabric_send_noc_unicast_with_trid(
+    AddrGenType addrgen,
+    SenderType& fabric_connection,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t payload_l1_address,
+    uint64_t noc_page,
+    int32_t size_bytes,
+    uint32_t alignment,
+    uint32_t trid,
+    uint32_t offset = 0) {
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
+
+        tt::tt_fabric::linear::to_noc_unicast_write(
+            align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_current_slot_non_blocking_with_trid(
+            payload_l1_address, curr_packet_size, (uint32_t)packet_header, trid);
+
+        payload_l1_address += curr_packet_size;
+        offset += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
+}
+
+// WAIT half: block until the writes tagged with `trid` have completed (so their L1 sources — the
+// payload CB slot and the packet header — can be reused/freed). Uses the same NOC the trid'd sends
+// used (get_fabric_worker_noc), so it must pair with fabric_send_noc_unicast_with_trid.
+FORCE_INLINE void wait_on_flush_for_trid(uint32_t trid) {
+    noc_async_write_barrier_with_trid(trid, tt::tt_fabric::get_fabric_worker_noc());
+}
+
 /*
 enum eth_chan_directions {
     EAST = 0,
