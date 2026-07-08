@@ -53,6 +53,13 @@ constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
 // Reader's own `start` scratch, used when read_x_at_offset (x is a shared
 // buffer). Separate from the writer's so the two RISCs don't share one L1 page.
 constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
+// Row-major bf16 staging for x when x_is_row_major: the reader fills it with
+// row-major sticks and the compute kernel tilizes it to bf8_b into CB_IN0_X.
+// Allocated ONLY in row-major mode (unlike the tiny start scratches, this is a
+// full per-K-block bf16 block, so allocating it unconditionally would grow the
+// bf8_b path's L1). The CT-arg index is passed either way; the CB just isn't
+// created (and never touched by the kernels) when x is already TILE.
+constexpr uint32_t CB_X_RM = tt::CBIndex::c_16;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -493,6 +500,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
     make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles * 2, x_tile_size);
+    // Row-major bf16 x staging (x_is_row_major only). One per-K-block block,
+    // single-buffered for stage 1 to bound L1. Skipped entirely when x is TILE
+    // so the bf8_b path's L1 footprint is unchanged.
+    if (op.x_is_row_major) {
+        make_cb(
+            CB_X_RM,
+            tt::DataFormat::Float16_b,
+            /*tiles=*/gu_in0_block_num_tiles,
+            tt::tile_size(tt::DataFormat::Float16_b));
+    }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
     make_cb(CB_IN1_UP, up_df, /*tiles=*/gu_in1_block_num_tiles * 2, up_tile_size);
     make_cb(CB_IN1_DOWN, down_df, /*tiles=*/d_in1_block_num_tiles * 2, down_tile_size);
@@ -638,6 +655,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         static_cast<uint32_t>(op.read_x_at_offset),
         // CB_START_SCRATCH_READER — L1 page holding the fetched `start` vector.
         CB_START_SCRATCH_READER,
+        // x_is_row_major — 1 => x is ROW_MAJOR bf16; reader streams sticks into
+        // CB_X_RM and compute tilizes. 0 => x is TILE bf8_b, read directly.
+        static_cast<uint32_t>(op.x_is_row_major),
+        // CB_X_RM — row-major bf16 staging (only allocated/used in row-major mode).
+        CB_X_RM,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -754,8 +776,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // let compute convert count -> effective_chunks and bound the loop.
         op.local_expert_id,
         chunk_M_tiles,
+        // x_is_row_major — 1 => compute tilizes CB_X_RM -> CB_IN0_X before the
+        // gate/up matmul. 0 => x already TILE in CB_IN0_X (no tilize).
+        static_cast<uint32_t>(op.x_is_row_major),
     };
     std::unordered_map<std::string, uint32_t> compute_named_args = {
+        // Row-major bf16 x staging (x_is_row_major only); tilize input CB.
+        {"cb_x_rm", CB_X_RM},
         {"cb_in0_x", CB_IN0_X},
         {"cb_in1_gate", CB_IN1_GATE},
         {"cb_in1_up", CB_IN1_UP},

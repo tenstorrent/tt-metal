@@ -580,6 +580,10 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_compile_time_arg_val(30);
     constexpr uint32_t local_expert_id = get_compile_time_arg_val(31);
     constexpr uint32_t chunk_M_tiles = get_compile_time_arg_val(32);
+    // x_is_row_major: tilize cb_x_rm -> cb_in0_x before the gate/up matmul.
+    // 0 => x already TILE in cb_in0_x. (Consumed by the tilize stage added in a
+    // later commit; unused when 0.)
+    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(33);
 
     // CBs
     constexpr uint32_t cb_in0_x = get_named_compile_time_arg_val("cb_in0_x");
@@ -596,6 +600,9 @@ void kernel_main() {
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_counts_scratch = get_named_compile_time_arg_val("cb_counts_scratch");
     constexpr uint32_t cb_idx_scratch = get_named_compile_time_arg_val("cb_idx_scratch");
+    // Row-major bf16 x staging (x_is_row_major only); tilize input CB. Unused
+    // when x is TILE — the tilize stage that reads it lands in a later commit.
+    constexpr uint32_t cb_x_rm = get_named_compile_time_arg_val("cb_x_rm");
 
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
