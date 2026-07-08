@@ -861,9 +861,9 @@ def _recommend_failed_retrain(cats: dict, total: int, analyses: list[LogAnalysis
         msg_parts.append(f"Links failed to retrain in all {count}/{total} iterations.")
 
     if has_qsfp:
-        msg_parts.append("If missing connections are over QSFP, check cable seating.")
+        msg_parts.append("If missing connections are over QSFP, report for cable reseating.")
 
-    msg_parts.append("Report to cluster installation team/Syseng for triage.")
+    msg_parts.append("Report to DC Deployment / Syseng for triage.")
 
     return [" ".join(msg_parts)]
 
@@ -875,7 +875,7 @@ def _recommend_missing_devices(cats: dict, total: int, analyses: list[LogAnalysi
     count = cats["missing_devices"]
     return [
         f"- {Colors.RED}Device init error:{Colors.NC} Board failed to initialize in {count} occurrence(s) "
-        f"(PCIe hang or ARC startup failure). If problem persists after resetting the board / power cycling machine, escalate to Syseng."
+        f"(PCIe hang or ARC startup failure). Try resetting the board. If problem persists, escalate to Syseng."
     ]
 
 
@@ -895,7 +895,7 @@ def _recommend_workload_timeout(cats: dict, total: int, analyses: list[LogAnalys
     timeout_rate = cats["workload_timeout"] / total * 100
     msg = (
         f"- {Colors.YELLOW}Workload timeout:{Colors.NC} Traffic tests timed out ({cats['workload_timeout']} "
-        f"occurrence(s), {timeout_rate:.1f}% of runs). This indicates an ethernet issue. "
+        f"occurrence(s), {timeout_rate:.1f}% of runs). Make sure no other processes are running in the cluster. "
         "Document timeout occurrences. "
     )
     if timeout_rate >= TIMEOUT_ESCALATION_THRESHOLD:
@@ -926,7 +926,7 @@ def _recommend_aiclk_timeout(cats: dict, total: int, analyses: list[LogAnalysis]
     count = cats["aiclk_timeout"]
     return [
         f"- {Colors.RED}AICLK timeout:{Colors.NC} AICLK failed to settle ({count} occurrence(s)). "
-        f"Could indicate bad Firmware or Hardware state. Escalate to Systems Engineering."
+        f"Could indicate bad Firmware or Hardware state. Power cycle the machine and if problem persists, escalate to Syseng."
     ]
 
 
@@ -935,7 +935,9 @@ def _recommend_mpi_error(cats: dict, total: int, analyses: list[LogAnalysis]) ->
     """Generate recommendations for MPI errors."""
     if not cats.get("mpi_error"):
         return []
-    return [f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Check SSH agent and network."]
+    return [
+        f"- {Colors.RED}MPI error:{Colors.NC} Lost connection between hosts. Confirm SSH access to all nodes, ssh-agent running, network and mpi interface settings."
+    ]
 
 
 @register_recommendation("ssh_error")
@@ -1009,7 +1011,7 @@ def print_recommendations(analyses: list[LogAnalysis]) -> None:
     if discovery_failed_count > 0:
         recs.append(
             f"- {Colors.RED}Discovery failed:{Colors.NC} Physical discovery found no chips ({discovery_failed_count} "
-            f"occurrence(s)). This is a critical red flag. Notify Syseng immediately."
+            f"occurrence(s)). This is critical. Escalate to Syseng."
         )
 
     if total > 0:
