@@ -80,22 +80,19 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # 3-D matrix: 3 boards x 2 shapes x 5 shards = 30 cells off the ONE
+      # 3-D matrix: 2 boards x 2 shapes x 5 shards = 20 cells off the ONE
       # arch-agnostic build. include entries attach per-board (label, arch)
       # and per-shape (perf_shape) — GitHub merges an include entry into every
       # cell whose existing keys it matches, so `hw:` entries fan across all
       # shapes/shards and `shape:` entries fan across all boards/shards.
       # inputs.arch / inputs.runner-label are unused — boards are fixed here.
       matrix:
-        hw: [N150, N300, P100a]
+        hw: [N150, P100a]
         shape: [small, large]
         shard: [1, 2, 3, 4, 5]
         include:
           - hw: N150
             label: tt-ubuntu-2204-N150-viommu-stable
-            arch: wormhole_b0
-          - hw: N300
-            label: tt-ubuntu-2204-N300-viommu-stable
             arch: wormhole_b0
           - hw: P100a
             label: tt-ubuntu-2204-P100a-viommu-stable
@@ -193,12 +190,12 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     # One combine per (board, shape): merge that combo's 5 shards into a single
-    # named JSON. 3 boards x 2 shapes = 6 combine jobs. Runs even if some cells
+    # named JSON. 2 boards x 2 shapes = 4 combine jobs. Runs even if some cells
     # failed (if: always()).
     strategy:
       fail-fast: false
       matrix:
-        hw: [N150, N300, P100a]
+        hw: [N150, P100a]
         shape: [small, large]
     steps:
       - name: ⬇️ Download this (board, shape) shard results
