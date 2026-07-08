@@ -81,33 +81,30 @@ def chunk_gated_delta_rule_seq_adapter(
     V = v.shape[3]
     BH = B * H
 
-    # L2-norm q/k (the seq kernel does NOT normalize; it only scales q internally).
-    q = l2_norm_ttnn(q, dim=-1)
-    k = l2_norm_ttnn(k, dim=-1)
+    def _tilize_f32(t):
+        # Tilize + fp32 cast in one op, which avoids a separate typecast pass.
+        return ttnn.to_layout(t, ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=_DRAM)
 
     def _to_bhtd(t, D):  # [B,T,H,D] -> [BH,T,D] float32 TILE/DRAM (ROW_MAJOR-correct)
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
         t = ttnn.reshape(t, [B, T, H, D])
         t = ttnn.permute(t, (0, 2, 1, 3))  # [B,H,T,D]
         t = ttnn.reshape(t, [BH, T, D])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
-        if t.dtype != ttnn.float32:
-            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
-        return t
+        return _tilize_f32(t)
 
     def _to_bht(t):  # [B,T,H] -> [BH,T] float32 TILE/DRAM
         t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
         t = ttnn.reshape(t, [B, T, H])
         t = ttnn.permute(t, (0, 2, 1))  # [B,H,T]
         t = ttnn.reshape(t, [BH, T])
-        t = ttnn.to_layout(t, ttnn.TILE_LAYOUT, memory_config=_DRAM)
-        if t.dtype != ttnn.float32:
-            t = ttnn.typecast(t, ttnn.float32, memory_config=_DRAM)
-        return t
+        return _tilize_f32(t)
 
     q_bh = _to_bhtd(q, K)
     k_bh = _to_bhtd(k, K)
     v_bh = _to_bhtd(v, V)
+
+    q_bh = l2_norm_ttnn(q_bh, dim=-1)
+    k_bh = l2_norm_ttnn(k_bh, dim=-1)
     g_bh = _to_bht(g)
     beta_bh = ttnn.reshape(_to_bht(beta), [BH, T, 1])
 
