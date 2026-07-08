@@ -73,6 +73,31 @@ def _sp_shard_embed(mesh, model, padded_ids, sp, isl_per_row):
     return emb
 
 
+def _oracle_hidden_states_to_tt(mesh, hs_np, sp, isl_per_row, max_seq_len):
+    """Convert oracle layer output [1, real_len, hidden_size] to a TT tensor matching
+    the shape/layout of the embedding output: per-device [1, 1, isl_per_row, hidden_size],
+    SP-sharded on sequence (dim 2), replicated across TP.
+
+    Pads the sequence dim with zeros up to max_seq_len if needed.  Padded positions
+    don't affect the K/V cache PCC comparison since only real positions are read back.
+    """
+    hs = torch.from_numpy(hs_np).float()  # [1, real_len, hidden_size]
+    real_len = hs.shape[1]
+    hidden_size = hs.shape[2]
+    if real_len < max_seq_len:
+        pad = torch.zeros(1, max_seq_len - real_len, hidden_size, dtype=hs.dtype)
+        hs = torch.cat([hs, pad], dim=1)
+    # Reshape to [1, 1, max_seq_len, hidden_size]
+    hs = hs.unsqueeze(0)  # [1, 1, max_seq_len, hidden_size]
+    return ttnn.from_torch(
+        hs,
+        device=mesh,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh.shape, dims=(2, None)),
+    )
+
+
 def _gather_kv_cache(cache_tensor, mesh, real_len, isl_per_row):
     """Read K or V cache back to CPU as float32 [num_kv_heads, real_len, head_dim].
 
@@ -133,6 +158,13 @@ def main():
         "--verbose-rows",
         action="store_true",
         help="for SP>1 meshes, also print per-SP-row K/V PCC to isolate which rows diverge",
+    )
+    ap.add_argument(
+        "--use-oracle-input",
+        action="store_true",
+        help="before each evaluated layer, overwrite hidden_states with the oracle output of "
+        "the previous layer.  Isolates per-layer K/V correctness from upstream compounding "
+        "errors.  Requires oracle produced with --save-layers as well as --save-kv.",
     )
     args = ap.parse_args()
 
@@ -290,8 +322,26 @@ def main():
 
         max_layer_idx = max(layers_to_test)
 
+        layer_files = record.get("layer_files", {}) if args.use_oracle_input else {}
+        if args.use_oracle_input and not layer_files:
+            print(
+                "[kv_cache] ERROR: --use-oracle-input requires oracle produced with --save-layers "
+                "(no layer_files in ref_results.json)",
+                flush=True,
+            )
+            return 1
+
         for i, decoder_layer in enumerate(model.layers):
             layer_kv = decoder_layer.self_attn.kv_cache  # [k_cache, v_cache] on device
+
+            # Optionally replace running hidden_states with oracle input for this layer.
+            # For layer 0 the input is the token embedding, which is already correct
+            # (layer 0 K PCC≈0.9996 in the baseline run), so we leave it as-is.
+            if args.use_oracle_input and i > 0 and str(i - 1) in layer_files:
+                oracle_hs = np.load(oracle_dir / layer_files[str(i - 1)])  # [1, real_len, hidden_size]
+                hidden_states.deallocate(True)
+                hidden_states = _oracle_hidden_states_to_tt(mesh, oracle_hs, sp, isl_per_row, max_seq_len)
+                print(f"[kv_cache] layer {i:3d}: injected oracle input from layer {i - 1}", flush=True)
 
             hidden_states = decoder_layer(
                 hidden_states,
