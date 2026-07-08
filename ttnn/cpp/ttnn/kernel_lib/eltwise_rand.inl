@@ -12,31 +12,31 @@ namespace compute_kernel_lib {
 
 /// RandTile chain element.
 ///
-/// The caller must call `rand_tile_init(seed)` ONCE outside the chain (typically right
-/// after `init_sfpu`); the element's `init()` is a no-op because the chain can't thread a
-/// runtime seed through the static init hook (same pattern as `Dropout<Slot>`). The
-/// per-instance `from` / `scale` (uniform [from, from+scale] range) is passed at construction.
+/// `rand_tile_init(seed)` is rand's per-op SFPU init (it seeds the PRNG) — the rand
+/// analogue of every other op's `*_tile_init`, except it takes the runtime seed. So
+/// `init()` is a normal instance method (non-static, like `exec`) that reads the
+/// element's `seed_`; the chain dispatches init on the instance, emitting it once at
+/// boot-hoist — the once-per-kernel seeding the kernel used to do out-of-band. The
+/// per-instance `from` / `scale` (uniform [from, from+scale] range) and `seed` are all
+/// passed at construction (same pattern as `Dropout<Slot>`).
 ///
 /// @code
-///   rand_tile_init(get_arg_val<uint32_t>(0));     // out-of-band, once
 ///   eltwise_chain(num_tiles,
-///       RandTile<Dst::D0>{from, scale},
+///       RandTile<Dst::D0>{from, scale, get_arg_val<uint32_t>(0)},
 ///       PackTile<cb_out, Dst::D0, OutStreaming, PackTileReconfig::None>{});
 /// @endcode
 template <Dst DstSlot>
 struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {
-    /// Runtime payload — `from` and `scale` define the uniform [from, from+scale] range.
+    /// Runtime payload — `from`/`scale` define the uniform [from, from+scale] range;
+    /// `seed` seeds the PRNG once at init.
     uint32_t from_;
     uint32_t scale_;
+    uint32_t seed_;
 
-    constexpr RandTile(uint32_t f, uint32_t s) noexcept : from_(f), scale_(s) {}
-    constexpr RandTile() noexcept : from_(0), scale_(0) {}
+    constexpr RandTile(uint32_t f, uint32_t s, uint32_t seed) noexcept : from_(f), scale_(s), seed_(seed) {}
+    constexpr RandTile() noexcept : from_(0), scale_(0), seed_(0) {}
 
-    /// No-op: `rand_tile_init(seed)` MUST be called by the caller with the
-    /// runtime seed before the first `eltwise_chain(...)` invocation that
-    /// contains a RandTile element. The chain has no way to thread a runtime
-    /// seed through the static `init()` hook.
-    static ALWI void init() {}
+    ALWI void init() const { rand_tile_init(seed_); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         rand_tile(to_u32(DstSlot) + slot_offset, from_, scale_);
     }
