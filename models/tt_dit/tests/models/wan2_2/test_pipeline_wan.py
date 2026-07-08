@@ -19,7 +19,7 @@ from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_conf
 from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 
 @pytest.mark.parametrize(
@@ -29,19 +29,19 @@ from ....utils.test import line_params, ring_params
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, quant_config_name",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True, None],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, None],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
         # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False, None],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True, None],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True, None],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False, None],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
         # BH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False, None],
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
         # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True, "all_bf8_lofi"],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
         "2x2sp0tp1",
@@ -82,6 +82,8 @@ def test_pipeline_inference(
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     num_frames = 81
     num_inference_steps = 40

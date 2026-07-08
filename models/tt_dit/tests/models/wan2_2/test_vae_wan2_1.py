@@ -31,6 +31,7 @@ from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
 from ....utils.golden import load_golden, save_golden
 from ....utils.tensor import typed_tensor_2dshard
+from ....utils.test import skip_if_unsupported_num_links
 
 VAE_MODEL_NAME = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 VAE_COMMIT_HASH_PLACEHOLDER = "local"
@@ -54,18 +55,6 @@ MESH_CONFIG_IDS = [
     "4x8h0w1nl4",  # WH (ring) on 4x8 uses more links
     "4x8h0w1nl2",  # BH (linear) on 4x8 uses fewer links
 ]
-
-
-def skip_if_unsupported_num_links(mesh_device, num_links):
-    """Skip the test if the mesh device does not support the requested number of links."""
-    from models.common.modules.tt_ccl import get_num_links
-
-    available_links = get_num_links(mesh_device)
-    if available_links < num_links:
-        pytest.skip(
-            f"Mesh device supports {available_links} link(s) but test requires {num_links}. "
-            f"Mesh shape: {mesh_device.shape}"
-        )
 
 
 def setup_hooks(model):

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
+
 import ttnn
 
 
@@ -31,3 +33,15 @@ line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_co
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
 line_params_req_exact_devices = {**line_params, "require_exact_physical_num_devices": True}
 ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devices": True}
+
+
+def skip_if_unsupported_num_links(mesh_device, num_links):
+    """Skip the test if the mesh device does not support the requested number of links."""
+    from models.common.modules.tt_ccl import get_num_links
+
+    available_links = get_num_links(mesh_device)
+    if available_links < num_links:
+        pytest.skip(
+            f"Mesh device supports {available_links} link(s) but test requires {num_links}. "
+            f"Mesh shape: {mesh_device.shape}"
+        )

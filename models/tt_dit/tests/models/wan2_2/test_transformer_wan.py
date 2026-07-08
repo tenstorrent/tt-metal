@@ -19,7 +19,7 @@ from ....utils.golden import load_golden, save_golden
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
-from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices
+from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -180,6 +180,8 @@ def test_wan_transformer_block(
 ) -> None:
     MIN_PCC = 0.999_500
     MAX_RMSE = 0.032
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
@@ -353,6 +355,8 @@ def test_wan_transformer_model(
     MAX_RMSE = 0.15
     num_layers = 1
 
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
@@ -457,6 +461,8 @@ def test_wan_transformer_inner_step(
     num_layers = 1
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
+
+    skip_if_unsupported_num_links(mesh_device, num_links)
 
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
