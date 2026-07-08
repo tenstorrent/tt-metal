@@ -1,0 +1,8 @@
+PHASE,ops,chips,compute_ms,socket_wait_ms,busiest_chip_ms,host_dispatch_ms
+init_one_time,1084,28,10.847,0.0,1.163,36.465
+warm-up,3986,28,46.993,51.533,5.599,54.666
+iter:vision,425,5,8.038,2.09,3.093,0.982
+iter:build_prefix,4,1,0.06,0.0,0.06,0.014
+iter:prefill,395,18,17.585,17.625,2.081,1.19
+iter:kv_migration,72,24,0.0,4.894,0.315,0.135
+iter:denoise,3090,6,21.363,1.325,4.053,7.27

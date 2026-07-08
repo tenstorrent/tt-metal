@@ -1,0 +1,18 @@
+# Source files for ttnn_op_matmul_decode.
+# Module owners should update this file when adding/removing/renaming source files.
+
+set(TTNN_OP_MATMUL_DECODE_SRCS
+    matmul_decode.cpp
+    device/matmul_decode_device_operation.cpp
+    device/full_width_sharded_program_factory.cpp
+    device/partial_width_sharded_program_factory.cpp
+    device/multi_core_program_factory.cpp
+    device/gate_up_matmul_decode_device_operation.cpp
+    device/gate_up_partial_width_sharded_program_factory.cpp
+)
+
+# Nanobind (Python binding) sources for this op. Wired onto the shared `ttnn`
+# module target in CMakeLists.txt, per the new per-op registration convention.
+set(TTNN_OP_MATMUL_DECODE_NANOBIND_SRCS
+    matmul_decode_nanobind.cpp
+)

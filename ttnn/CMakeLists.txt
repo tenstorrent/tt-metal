@@ -244,6 +244,8 @@ target_link_libraries(
         TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
+        TTNN::Ops::MatmulDecode
+        TTNN::Ops::KvSdpa
         TTNN::Ops::Moreh
         TTNN::Ops::Transformer
 )
@@ -432,6 +434,8 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
+add_subdirectory(cpp/ttnn/operations/matmul_decode)
+add_subdirectory(cpp/ttnn/operations/kv_sdpa)
 add_subdirectory(cpp/ttnn/operations/moreh)
 add_subdirectory(cpp/ttnn/operations/transformer)
 add_subdirectory(examples)

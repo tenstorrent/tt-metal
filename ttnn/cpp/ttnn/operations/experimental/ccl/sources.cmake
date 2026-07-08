@@ -63,6 +63,12 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     send_recv_async/recv_async/recv_async.cpp
     send_recv_async/recv_async/device/recv_async_op_device_operation.cpp
     send_recv_async/recv_async/device/recv_async_op_program_factory.cpp
+    send_recv_async/send_direct_async/send_direct_async.cpp
+    send_recv_async/send_direct_async/device/send_direct_async_op_device_operation.cpp
+    send_recv_async/send_direct_async/device/send_direct_async_op_program_factory.cpp
+    send_recv_async/recv_direct_async/recv_direct_async.cpp
+    send_recv_async/recv_direct_async/device/recv_direct_async_op_device_operation.cpp
+    send_recv_async/recv_direct_async/device/recv_direct_async_op_program_factory.cpp
     send_recv_async/recv_async_h2d/recv_async_h2d.cpp
     send_recv_async/recv_async_h2d/device/recv_async_h2d_op_device_operation.cpp
     send_recv_async/recv_async_h2d/device/recv_async_h2d_op_program_factory.cpp
@@ -150,4 +156,6 @@ set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
     moe_compute/moe_compute_nanobind.cpp
     moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
+    send_recv_async/recv_direct_async/recv_direct_async_nanobind.cpp
+    send_recv_async/send_direct_async/send_direct_async_nanobind.cpp
 )

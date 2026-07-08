@@ -2,6 +2,16 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
+    nlp_create_qkv_heads_rope/nlp_create_qkv_heads_rope.cpp
+    nlp_create_qkv_heads_rope/device/nlp_create_qkv_heads_rope_device_operation.cpp
+    nlp_create_qkv_heads_rope/device/nlp_create_qkv_heads_rope_program_factory.cpp
+    rotary_embedding_fused_qk/rotary_embedding_fused_qk.cpp
+    rotary_embedding_fused_qk/device/rotary_embedding_fused_qk_device_operation.cpp
+    rotary_embedding_fused_qk/device/rotary_embedding_fused_qk_program_factory.cpp
+    concat_heads_matmul_decode/concat_heads_matmul_decode.cpp
+    concat_heads_matmul/concat_heads_matmul.cpp
+    concat_heads_matmul/device/concat_heads_matmul_device_operation.cpp
+    concat_heads_matmul/device/concat_heads_matmul_program_factory.cpp
     all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
     all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.cpp
     all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
@@ -125,4 +135,8 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     rotate_half/rotate_half_nanobind.cpp
     split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
+    concat_heads_matmul_decode/concat_heads_matmul_decode_nanobind.cpp
+    concat_heads_matmul/concat_heads_matmul_nanobind.cpp
+    nlp_create_qkv_heads_rope/nlp_create_qkv_heads_rope_nanobind.cpp
+    rotary_embedding_fused_qk/rotary_embedding_fused_qk_nanobind.cpp
 )
