@@ -3,7 +3,10 @@ from typing import Optional
 import torch
 import ttnn
 
-from .attention import DeepSeekV4Attention, _LayerKVCache, _StaticLayerCache
+from .attention import (
+    DeepSeekV4Attention,
+    _StaticLayerCache,
+)
 from .common import DeepSeekV4Module, _HIFI4, _profile, _region
 from .hyperconnection import DeepSeekV4HyperConnection
 from .layers import DeepSeekV4RMSNorm
@@ -121,20 +124,25 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         neg_sin: ttnn.Tensor,
         cos_win: ttnn.Tensor | None,
         sin_win: ttnn.Tensor | None,
-        kv_cache: "_LayerKVCache",
+        mask: ttnn.Tensor,
+        scache: "_StaticLayerCache",
+        sliding_pos: ttnn.Tensor,
+        compress_pos: ttnn.Tensor,
         input_ids: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
         """Single-token decode: ``hidden_streams`` ``[B, 1, hc_mult, D]`` -> same.
 
         Everything outside attention (hyper-connections, norms, MoE / MLP) is
-        per-token; attention runs against the running ``kv_cache``.
+        per-token; attention runs against the paged in-place ``scache``.
         """
         with _region("ATTN_HC"):
             post, comb, collapsed = self.attn_hc(hidden_streams)
         with _region("INPUT_NORM"):
             normed = self.input_layernorm(collapsed)
         with _region("ATTENTION"):
-            attn_out = self.self_attn.decode(normed, cos, sin, neg_sin, cos_win, sin_win, kv_cache)
+            attn_out = self.self_attn.decode(
+                normed, cos, sin, neg_sin, cos_win, sin_win, mask, scache, sliding_pos, compress_pos
+            )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
         _profile(self.device)

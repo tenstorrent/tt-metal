@@ -4,7 +4,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from .attention import _LayerKVCache, _StaticLayerCache, make_rope_table
+from .attention import _StaticLayerCache, build_static_layer_cache, host_decode_mask, int32_pos_tensor, make_rope_table
 from .common import DeepSeekV4Module, _MASK_NEG, _profile, _trace_capture_guard
 from .decoder_layer import DeepSeekV4DecoderLayer
 from .embedding import DeepSeekV4Embedding
@@ -228,9 +228,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
         if self.layer_devices:
             self.last_device = self.layer_devices[-1]
 
-        # Per-layer decode state (sliding K=V + optional compressor projections).
+        # Per-layer decode state (paged in-place sliding K=V + optional compressor projections).
         self.sliding_window = config.sliding_window
-        self.kv_caches: list[_LayerKVCache] = self._new_caches()
+        self._decode_max_seq: Optional[int] = None
+        self.kv_caches: list[_StaticLayerCache] = []
 
         self.hc_head = DeepSeekV4HyperHead(
             config,
@@ -317,15 +318,24 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return DeepSeekV4HashRouter(self.config, weights, this_device)
 
     # -- decode KV-cache state -------------------------------------------------- #
-    def _new_caches(self) -> list["_LayerKVCache"]:
-        return [
-            _LayerKVCache(self.sliding_window, self.config.layer_types[li] != "sliding_attention")
+    def reset_caches(self, max_seq: int) -> None:
+        """Allocate empty fixed-size paged decode buffers for a fresh sequence.
+
+        ``max_seq`` is the longest absolute position + 1 the caller will decode
+        (prompt + generation), padded to tile / compress-rate multiples as needed.
+        """
+        self._decode_max_seq = max_seq
+        self.kv_caches = [
+            build_static_layer_cache(
+                self.layer_devices[li],
+                self.sliding_window,
+                self.config.layer_types[li],
+                self.config.head_dim,
+                max_seq,
+                self.config.compress_rates,
+            )
             for li in range(self.num_layers)
         ]
-
-    def reset_caches(self) -> None:
-        """Drop all per-layer decode state (call before decoding a fresh sequence)."""
-        self.kv_caches = self._new_caches()
 
     # -- per-layer RoPE tables / masks ------------------------------------------ #
     def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -340,8 +350,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         Returns ``(cos, sin, neg_sin, cos_win, sin_win)`` where ``cos/sin/neg_sin``
         are the one ``[1,1,1,Rd]`` rows at absolute position ``pos`` and the window
-        tables cover the ``(pos + 1) // compress_rate`` currently-emittable windows
-        (``None`` when none / a sliding layer).
+        tables cover every compressor window in the fixed paged buffer (``None`` for
+        sliding layers).
         """
         key = f'{"sliding" if layer_type == "sliding_attention" else compress_rate}_{device.id()}'
         if key in cache:
@@ -355,10 +365,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         cos_win_tt = sin_win_tt = None
         if layer_type != "sliding_attention":
-            n_win = (pos + 1) // compress_rate
-            if n_win > 0:
+            assert self._decode_max_seq is not None
+            n_win_cap = self._decode_max_seq // compress_rate
+            if n_win_cap > 0:
                 cw_h, sw_h = rope["win"][compress_rate]
-                cw, sw = make_rope_table(cw_h[:n_win], sw_h[:n_win])
+                cw, sw = make_rope_table(cw_h[:n_win_cap], sw_h[:n_win_cap])
                 cos_win_tt = self._to_tt(cw, device)
                 sin_win_tt = self._to_tt(sw, device)
         out = (cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt)
@@ -400,6 +411,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
 
         rope_cache: dict = {}
         last_submesh_id = 0
+        w = self.sliding_window
+        if not self.kv_caches:
+            raise RuntimeError("call reset_caches(max_seq) before decode()")
         for li, layer in enumerate(self.layers):
             if self.use_submeshes:
                 current_submesh_id = self._submesh_id_for_layer(li)
@@ -413,6 +427,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
                 rope, pos, layer_type, compress_rate, rope_cache, this_device
             )
+            mask = host_decode_mask(w, layer_type, compress_rate, pos, self._decode_max_seq, this_device)
             streams = layer.decode(
                 streams,
                 cos_tt,
@@ -420,7 +435,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 neg_sin_tt,
                 cos_win_tt,
                 sin_win_tt,
+                mask,
                 self.kv_caches[li],
+                int32_pos_tensor(pos % w, this_device),
+                int32_pos_tensor(pos, this_device),
                 input_ids=ids,
             )
             last_submesh_id = current_submesh_id
@@ -455,43 +473,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # ------------------------------------------------------------------ #
 
     def _build_static_layer_cache(self, li: int, device: ttnn.MeshDevice) -> "_StaticLayerCache":
-        """Allocate a layer's fixed-size in-place caches *empty* (all-zero).
-
-        There is no prefill: the prompt is fed one token at a time through
-        :meth:`decode_traced`, which writes each token's K=V / compressor
-        projection into these buffers in place at its absolute position. Unwritten
-        ring slots / windows stay zero and are dropped by the per-step decode mask.
-        """
-        dh = self.config.head_dim
-        w = self.sliding_window
-        sliding = ttnn.from_torch(
-            torch.zeros(1, 1, w, dh),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        """Allocate a layer's fixed-size in-place caches *empty* (all-zero)."""
+        assert self._decode_max_seq is not None, "set max_seq via reset_caches or prepare_static_decode first"
+        return build_static_layer_cache(
+            device,
+            self.sliding_window,
+            self.config.layer_types[li],
+            self.config.head_dim,
+            self._decode_max_seq,
+            self.config.compress_rates,
         )
-        ckv = cgate = None
-        layer_type = self.config.layer_types[li]
-        if layer_type != "sliding_attention":
-            cr = self.config.compress_rates[layer_type]
-            cap = self._cr_caps[cr][0]
-            feat = (2 if layer_type == "compressed_sparse_attention" else 1) * dh
-            ckv = ttnn.from_torch(
-                torch.zeros(1, 1, cap, feat),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            cgate = ttnn.from_torch(
-                torch.zeros(1, 1, cap, feat),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        return _StaticLayerCache(sliding, ckv, cgate)
 
     def prepare_static_decode(self, rope: dict, max_seq: int, lm_head=None) -> None:
         """Allocate the traced-decode state (the prompt is prefilled by replaying
@@ -513,6 +504,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
             assert max_seq % cr == 0, f"max_seq ({max_seq}) must be a multiple of compress_rate {cr}"
         self._traced_rope = rope
         self._lm_head_traced = lm_head
+        self._decode_max_seq = max_seq
         self._cr_caps = {
             cr: (max_seq, max_seq // cr)
             for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}
