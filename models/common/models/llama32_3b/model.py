@@ -18,6 +18,7 @@ TTTv1 source for precision recipes:
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
@@ -138,8 +139,11 @@ class TransformerBlock1D(LightweightModule):
         return out
 
     def prefill_forward(
-        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx
+        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size: int = 1
     ) -> ttnn.Tensor:
+        # For batched prefill (batch_size > 1) x is the folded [1,1,B*S,dim] hidden state; norm,
+        # residual add and MLP are row-independent so they treat B*S as one long sequence unchanged.
+        # Only attention unfolds the batch axis internally (see Attention1D.prefill_forward).
         residual = x
 
         attn_in = self.attention_norm.prefill_forward(x)
@@ -151,6 +155,7 @@ class TransformerBlock1D(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            batch_size=batch_size,
         )
         attn_out = ttnn.to_memory_config(attn_out, self.prefill_residual_memcfg)
 
@@ -181,9 +186,12 @@ class TransformerBlock1D(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        batch_size: int = 1,
     ):
         if mode == "prefill":
-            return self.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
+            return self.prefill_forward(
+                x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size=batch_size
+            )
         return self.decode_forward(x, current_pos, rot_mats, page_table)
 
 
@@ -292,6 +300,17 @@ class Llama32_3BExecutorRuntimeConfig:
     model_cache_path: Path | None = None
     kv_cache_dtype: ttnn.DataType = ttnn.bfloat8_b
     optimizations: Any = None
+    # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
+    # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
+    # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
+    # per-group batch (8 = partial batching, design rec); ``disable_batched_prefill`` is the escape
+    # hatch back to the sequential loop.
+    supports_batched_prefill: bool = True
+    max_prefill_batch_size: int = 8
+    disable_batched_prefill: bool = False
+    # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
+    # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
+    batched_prefill_batched_extract: bool = True
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
         # Mirror TTTv1's prefill-trace gate (model_config.get_trace_prefill_supported_seq_lens):
@@ -345,6 +364,10 @@ class Llama32_3BConfig:
 class _Llama32_3BWHTuning:
     mlp_prefill_len_cutoff: int | None = None
     mlp_decode_spill_w1_to_dram: bool = False
+    # Use ttnn.experimental.minimal_matmul for QKV + W2 prefill matmuls above seq_len > 128 (TTTv1
+    # parity, PLAN_01). A/B escape hatch: set DISABLE_MINIMAL_MATMUL=1 to force ttnn.linear. Kept on
+    # for consistency with the 1B/family ports + long-prompt prefill; ~parity on short prompts.
+    prefill_minimal_matmul: bool = True
 
 
 def _resolve_llama32_3b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llama32_3BWHTuning:
@@ -352,6 +375,7 @@ def _resolve_llama32_3b_wh_tuning(*, num_dev: int, max_batch_size: int) -> _Llam
     t = _Llama32_3BWHTuning()
     t.mlp_prefill_len_cutoff = 512 if num_dev == 1 else 1024
     t.mlp_decode_spill_w1_to_dram = False
+    t.prefill_minimal_matmul = not os.environ.get("DISABLE_MINIMAL_MATMUL")
     logger.info(
         f"MLP tuning for Llama-3.2-3B on {num_dev} device(s): "
         f"prefill_len_cutoff={t.mlp_prefill_len_cutoff}, "
@@ -437,6 +461,7 @@ def _build_decoder_layer(
                 q_chunk_size=0,
                 k_chunk_size=0,
             ),
+            prefill_qkv_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -470,6 +495,7 @@ def _build_decoder_layer(
             decode_ff1_3_compute_kernel_cfg=precision.mlp_ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
             decode_ff2_compute_kernel_cfg=precision.mlp_ff2_compute_kernel_cfg,
+            prefill_w2_minimal_matmul=wh.prefill_minimal_matmul,
         )
     )
 
@@ -838,7 +864,11 @@ class Llama32_3BTransformer1D(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
+        # batch_size > 1: x_embed is the folded [1,1,B*S,dim] tensor (B users). The batched path always
+        # returns the full hidden state (get_last_token == -1); the executor does per-slot last-token
+        # extraction + norm/lm_head so those stages stay bit-identical to the single-user path.
         x = x_embed
         for i, layer in enumerate(self.layers):
             activation_dtype = self.activation_dtypes[i]
@@ -846,7 +876,7 @@ class Llama32_3BTransformer1D(LightweightModule):
                 old = x
                 x = ttnn.typecast(x, activation_dtype)
                 ttnn.deallocate(old)
-            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
+            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
 
         if get_last_token == -1:
             return x
@@ -891,6 +921,7 @@ class Llama32_3BTransformer1D(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         rot_mats = rot_mats_global
         if mode == "prefill":
@@ -902,6 +933,7 @@ class Llama32_3BTransformer1D(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 get_last_token=get_last_token,
+                batch_size=batch_size,
             )
         return self.decode_forward(x, current_pos, rot_mats, page_table=page_table)
 
