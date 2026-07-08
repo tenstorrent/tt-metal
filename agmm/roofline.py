@@ -6,6 +6,11 @@ DRAM_PEAK = 512e9  # bytes/s
 LINK_PEAK = 50e9   # bytes/s per unidirectional ethernet link
 CYCLES = {"HiFi2": 2, "HiFi4": 4, "LoFi": 1, "HiFi3": 3}
 
+# achievable fractions of peak for the best-case projection
+EFF_FLOP = 0.50
+EFF_DRAM = 0.90
+EFF_FABRIC = 0.80
+
 d = json.load(open("agmm/agmm_instances.json"))
 rows = []
 for r in d:
@@ -34,6 +39,16 @@ for r in d:
     ach_link_bw = bytes_per_link / t
     fabric_util = ach_link_bw / LINK_PEAK
 
+    # --- best-case projection: time each resource needs at its achievable ceiling ---
+    # compute/DRAM/fabric overlap within AGMM, so ideal time = max(bottleneck)
+    t_compute = flops / (EFF_FLOP * peak_flops)
+    t_dram = bytes_read / (EFF_DRAM * DRAM_PEAK)
+    t_fabric = bytes_per_link / (EFF_FABRIC * LINK_PEAK)
+    limiter, t_ideal = max(
+        [("compute", t_compute), ("dram", t_dram), ("fabric", t_fabric)],
+        key=lambda p: p[1])
+    speedup = t / t_ideal
+
     rows.append({
         "stage": r["stage"], "id": r["instance"],
         "M": M, "K_gathered": Kg, "N": N,
@@ -51,6 +66,9 @@ for r in d:
         "fabric_util_%": fabric_util * 100,
         "bound": max(("compute", flop_util), ("dram", dram_util), ("fabric", fabric_util),
                      key=lambda p: p[1])[0],
+        "t_ideal_us": t_ideal * 1e6,
+        "limiter": limiter,
+        "speedup": speedup,
     })
 
 # save
@@ -61,15 +79,20 @@ with open("agmm/agmm_roofline.csv", "w", newline="") as f:
         w.writerow({k: (round(v, 3) if isinstance(v, float) else v) for k, v in x.items()})
 
 # print table
-h = ["stg", "id", "M", "Kgat", "N", "fused", "t_us", "TFLOP/s", "FLOP%", "DRAM%",
-     "fabGB/s", "FAB%", "bound"]
-print("{:>4} {:>3} {:>5} {:>5} {:>5} {:>12} {:>8} {:>8} {:>6} {:>6} {:>8} {:>6} {:>7}".format(*h))
-print("-" * 118)
+h = ["stg", "id", "M", "Kgat", "N", "fused", "t_us", "FLOP%", "DRAM%", "FAB%",
+     "ideal_us", "limiter", "speedup"]
+print("{:>4} {:>3} {:>5} {:>5} {:>5} {:>12} {:>8} {:>6} {:>6} {:>6} {:>9} {:>8} {:>8}".format(*h))
+print("-" * 120)
 for x in rows:
-    print("{:>4} {:>3} {:>5} {:>5} {:>5} {:>12} {:>8.1f} {:>8.1f} {:>5.1f}% {:>5.1f}% {:>8.1f} {:>5.1f}% {:>7}".format(
+    print("{:>4} {:>3} {:>5} {:>5} {:>5} {:>12} {:>8.1f} {:>5.1f}% {:>5.1f}% {:>5.1f}% {:>9.1f} {:>8} {:>7.2f}x".format(
         x["stage"], x["id"], x["M"], x["K_gathered"], x["N"], x["fused"] or "-",
-        x["time_us"], x["TFLOPs_ach"], x["flop_util_%"], x["dram_util_%"],
-        x["fabric_GBps_per_link"], x["fabric_util_%"], x["bound"]))
-print("-" * 118)
+        x["time_us"], x["flop_util_%"], x["dram_util_%"], x["fabric_util_%"],
+        x["t_ideal_us"], x["limiter"], x["speedup"]))
+print("-" * 120)
 print(f"Peak: compute {108*2048*FREQ/1e12:.1f} TFLOP/s (HiFi2,108c@1.35GHz) | DRAM 512 GB/s | "
-      f"fabric 50 GB/s per unidir link (ring={rows[0]['M'] and d[0]['ring_size']}, links={d[0]['num_links']}/dir)")
+      f"fabric 50 GB/s per unidir link (ring={d[0]['ring_size']}, links={d[0]['num_links']}/dir)")
+print(f"Achievable ceilings: {EFF_FLOP:.0%} FLOP util, {EFF_DRAM:.0%} DRAM BW, {EFF_FABRIC:.0%} fabric BW")
+tot_meas = sum(x["time_us"] for x in rows)
+tot_ideal = sum(x["t_ideal_us"] for x in rows)
+print(f"Aggregate (sum of all 44): measured {tot_meas/1000:.1f} ms -> ideal {tot_ideal/1000:.1f} ms "
+      f"= {tot_meas/tot_ideal:.2f}x")
