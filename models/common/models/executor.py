@@ -1956,7 +1956,6 @@ def run_perf_benchmark(
     batch_size = tokens.shape[0]
     prompt_len = tokens.shape[1]
     max_batch_size = max(max_batch_size, batch_size)
-    cluster_shape = list(executor.model.config.mesh_device.shape)
     # todo)) prompt_lens should be always passed in!
     prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([prompt_len] * batch_size)
 
@@ -2009,7 +2008,6 @@ def run_perf_benchmark(
 
     compile_time = None
     decode_times = []
-    device_sampled_token_snapshots = []
 
     for i in range(num_decode_tokens):
         t0 = time.perf_counter()
@@ -2039,21 +2037,7 @@ def run_perf_benchmark(
             for user_id, tok in enumerate(next_tok.tolist()):
                 generated_token_ids[user_id].append(int(tok))
             current_tokens[:batch_size] = next_tok
-        elif sampling_params is not None and isinstance(logits, ttnn.Tensor):
-            device_sampled_token_snapshots.append(ttnn.clone(logits))
         current_pos[:batch_size] += 1
-
-    if device_sampled_token_snapshots:
-        try:
-            for tt_toks in device_sampled_token_snapshots:
-                toks_host = tt_toks.cpu()
-                next_tok = _process_output_decode_tokens(toks_host, batch_size, cluster_shape)
-                for user_id, tok in enumerate(next_tok.view(-1).tolist()):
-                    generated_token_ids[user_id].append(int(tok))
-        finally:
-            cleanup_ttnn_value(device_sampled_token_snapshots)
-            if hasattr(executor, "mesh_device"):
-                ttnn.synchronize_device(executor.mesh_device)
 
     return PerfBenchmarkResult(
         prefill_time_s=prefill_time,
