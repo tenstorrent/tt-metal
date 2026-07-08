@@ -68,6 +68,10 @@ struct MinimalMatmulOpReceiver {
     uint32_t* forward_sem_addrs = nullptr;   // [num_ag_workers] L1 semaphore addresses
     volatile tt_l1_ptr uint32_t* self_sem_ptr = nullptr;
     std::array<uint32_t, 3> sem_targets = {};  // indexed by direction: [backward, forward, self]
+    // Direction the most recent compute_actual_k_block_iter awaited, so a caller doing per-band reads
+    // can wait_for_dir() the same direction for bands 1..N. dir 2 (self/local) is not aggregator-
+    // signaled, so the caller must read it whole rather than band-by-band.
+    uint8_t streamed_dir = 2;
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
     bool read_local_slice_from_input;
 
@@ -332,6 +336,8 @@ struct MinimalMatmulOpReceiver {
         uint8_t dev;
         uint32_t chunk;
         next_interleaved_slot(dir, dev, chunk);
+        // Record for a banded caller: it wait_for_dir()s this same direction for bands 1..N.
+        streamed_dir = dir;
         wait_for_dir(dir);
         uint32_t k_block = device_k_block_start_ids[dev] + chunk;
         k_block_device_received[k_block]++;  // expected==1 on this path; preserve the received count
@@ -375,6 +381,9 @@ struct MinimalMatmulOpReceiver {
                         }
                         sem_targets[curr_k_block_dir]++;
                     }
+                    // Record before process_chunk advances curr_k_block_dir, so a banded caller waits
+                    // the same direction's aggregator signal for this k-block's later bands.
+                    streamed_dir = curr_k_block_dir;
                     int32_t k_block = process_chunk(
                         device_id, device_chunk_id, curr_k_block_dir, devices_received, next_forward, next_backward);
                     if (k_block >= 0) {
