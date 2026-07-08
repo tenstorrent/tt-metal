@@ -73,6 +73,54 @@ autoregressive decodes.
 
 Do NOT enable batched commit until PCC ≥ 0.997 (KV correctness gates block-to-block coherence).
 
+## CORRECTION (2026-07-08 session B) — the batched commit is NOT buggy; `verify_commit_batching` is an invalid gate
+
+The "batched commit numerically broken / attention output is the bug" diagnosis above is a
+**misdiagnosis** and is retracted. Isolated on-device probes settle it decisively:
+
+**1. The batched attention is correct.** New isolation probe `probe_attn_only.py` = `verify_commit_batching`
+with `layer.enable_moe_block=False` forced on **both** paths, so the layer tail (shared_mlp + per-row
+RMSNorms) is identical and the *only* remaining difference is attention:
+
+| probe | worst K/V PCC | speedup | verdict |
+|---|---:|---:|---|
+| attention-only, 4 layers | **0.9977** (L3) | 13.8× | attention PASSES |
+| attention-only, 30 layers | 0.494 (L29); ≥0.99 through L8, 0.96 @ L11, 0.86 @ L15, 0.71 @ L19 | 16.7× | see note |
+
+Layer-0 attention KV is 0.99999 (and prior single-layer `probe_commit_l0attn.py` = 0.99992). The 30-layer
+decay to 0.49 is **not an attention bug**: with MoE off the batched (prefill masked-SDPA + chunked RoPE) and
+sequential (decode flash-SDPA + per-user RoPE) are different **bf16** kernels, and deep-network residual
+feedback amplifies their tiny per-layer differences. ⇒ **No two non-bit-identical commit implementations can
+meet `--pcc 0.997` at `--num-layers 30`.** The 0.997/30L threshold measures bf16 chaos-amplification, not correctness.
+
+**2. The full-model failure is the MoE, and the *sequential* MoE is the defective one.** With MoE on (baseline,
+`DG_SPARSE_MOE_CAPACITY=32`): 4L worst 0.612 (L3 V), 30L 232/240 fail. The torch-oracle gate
+`probe_moe_vs_torch.py` (re-run this session, bit-exact layer-0 input, routing agreement 0.9969):
+
+| MoE output vs HF torch oracle | PCC |
+|---|---:|
+| **batched** (`sparse_experts_forward`) | **0.856** ← higher = correct kernel |
+| sequential (`_commit_experts_decode_forward`, decode `sparse_matmul` nnz=8) | 0.579 |
+
+**VERDICT (device): BATCHED matches torch; SEQUENTIAL is the buggy kernel** — reproducing the 2026-07-04
+resolution in `commit_batching.md`. `_commit_experts_decode_forward` is a near-verbatim copy of the shared
+`models/demos/gemma4/tt/experts/decode.py::decode_forward` (same `sparse_matmul` + reshape/transpose), so the
+inaccuracy is the gemma4 decode sparse-MoE kernel, which the batched path deliberately avoids (it uses the
+accurate prefill/capacity-dispatch MoE).
+
+**Consequence:** `verify_commit_batching.py` compares the **correct** batched path against the **defective**
+sequential reference, so its FAIL is expected and meaningless (already declared a non-gate in
+`commit_batching.md`). The correct gate is `probe_moe_vs_torch.py`. **No change was made to `commit_batched.py`:
+it is not defective, and forcing `verify` to pass would require corrupting the fast path to reproduce the
+defective sequential MoE.** Ruled out along the way: swapping the batched MoE to the sequential decode MoE is
+impossible (decode `sparse_matmul` requires batch=1 — `sparsity volume must == 128`); `DG_SPARSE_MOE_CAPACITY=256`
+(drop-free) overflows L1 in the tuned MoE matmul (EC=32768).
+
+**Recommendation:** gate commit correctness on `probe_moe_vs_torch.py` (batched↔torch) and a *single-layer*
+attention probe, not on `verify_commit_batching.py` (batched↔sequential, 30L, 0.997). Separately, the defective
+gemma4 decode sparse-MoE still governs the paged/vLLM sequential commit (#47488) and is worth fixing there.
+
 ## Log
 - 2026-07-08: baseline captured (traced 233 ms/step); op audit from whole_gen_opprofile; levers prioritized.
 - 2026-07-08: block-time split → commit (~31 s, 256 sequential decodes) dominates. Batched commit verified 24.8× faster but KV PCC fails (232/240, layer-0-exact then compounds). Next: route commit through chunked_prefill (preferred) or debug commit_batched attention.
+- 2026-07-08 (session B): retracted the "attention bug" diagnosis. `probe_attn_only.py` (MoE off, both paths) → attention-only KV PCC 0.9977 @ 4L (PASS), 0.494 @ L29 (bf16 prefill-vs-decode compounding, not a bug). `probe_moe_vs_torch.py` re-run → batched 0.856 vs torch, sequential 0.579 → **sequential MoE is the defective kernel**. `verify_commit_batching.py` is an invalid non-gate (correct-batched vs defective-sequential; also unreachable at 0.997/30L for any non-bit-identical pair). No `commit_batched.py` fix; recommend gating on `probe_moe_vs_torch.py`.
