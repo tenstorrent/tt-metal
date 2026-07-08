@@ -88,15 +88,8 @@ inline KernelSpec MakeMinimalGen2DMKernel(std::string name, uint32_t num_threads
 }
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen1/WH/BH)
-inline KernelSpec MakeMinimalGen1DMKernel(std::string name) {
-    return KernelSpec{
-        .unique_id = KernelSpecName{std::move(name)},
-        .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
-        .num_threads = 1,
-        .hw_config = CreateReaderGen1DataMovementConfig()};
-}
-
-inline KernelSpec MakeMinimalGen1DMKernel(std::string name, tt::tt_metal::DataMovementProcessor processor) {
+inline KernelSpec MakeMinimalGen1DMKernel(
+    std::string name, tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
     auto noc = processor == DataMovementProcessor::RISCV_0 ? NOC::RISCV_0_default : NOC::RISCV_1_default;
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
