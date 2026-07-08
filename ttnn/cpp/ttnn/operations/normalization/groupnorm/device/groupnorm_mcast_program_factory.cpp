@@ -956,12 +956,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         });
     }
 
-    // cb_ex_external holds packed cb_ex_external_slot_pitch_bytes-sized partial-reduction
+    // cb_ex_external holds packed dfb_ex_external_slot_pitch_bytes-sized partial-reduction
     // scalars gathered from every core in the mcast group, for every out_block. The
     // reader kernel (reader_mcast_sender_unary_gn) and compute kernel (groupnorm) both
     // reserve / wait-for cb_ex_external_tiles_required tiles at once, where
     //   cb_ex_external_tiles_required =
-    //       ceil(num_out_blocks_padded * num_mcast_cores * cb_ex_external_slot_pitch_bytes / tile_size)
+    //       ceil(num_out_blocks_padded * num_mcast_cores * dfb_ex_external_slot_pitch_bytes / tile_size)
     // so the CB must be at least that large. Mirror the kernel's
     // num_out_blocks_padded calculation to get the exact count.
     // Note that Welford does not use cb_ex_external.
@@ -974,7 +974,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             num_out_blocks_padded += (residual / out_block_h_normal + 1);
         }
         uint32_t cb_ex_external_tiles =
-            (num_out_blocks_padded * num_cores_per_mcast_group * cb_ex_external_slot_pitch_bytes + single_tile_size -
+            (num_out_blocks_padded * num_cores_per_mcast_group * dfb_ex_external_slot_pitch_bytes + single_tile_size -
              1) /
             single_tile_size;
         desc.cbs.push_back(CBDescriptor{

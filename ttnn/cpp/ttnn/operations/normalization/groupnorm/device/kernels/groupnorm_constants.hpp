@@ -18,9 +18,9 @@
 //   * Any code that strides between per-core slots, or sizes cb_ex_external
 //     to hold N slots, should use this constant (rather than e.g. a literal 16).
 //   * Any producer writing into a slot should static_assert
-//     `datum_size_bytes <= cb_ex_external_slot_pitch_bytes` so a too-wide
+//     `datum_size_bytes <= dfb_ex_external_slot_pitch_bytes` so a too-wide
 //     datum fails the build instead of silently corrupting the reduction.
 //   * Raising this value to support a wider datum (e.g. fp32) requires
 //     auditing every consumer of the constant, since SRAM footprint and tile
 //     packing change in lockstep.
-inline constexpr std::uint32_t cb_ex_external_slot_pitch_bytes = 16;
+inline constexpr std::uint32_t dfb_ex_external_slot_pitch_bytes = 16;
