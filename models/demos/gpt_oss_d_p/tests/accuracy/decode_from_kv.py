@@ -104,15 +104,22 @@ def scatter_kv_into_cache(
     assert gathered_seq_len == real_len, f"KV .npy seq dim ({gathered_seq_len}) does not match real_len ({real_len})"
     assert num_kv_heads % tp == 0, f"num_kv_heads={num_kv_heads} not divisible by tp={tp}"
 
-    # Per-device cache dim 2 is the FULL max_seq_len (see attention/kv_cache.py:48-53),
-    # not per-row.  Under SP sharding each row's fill_cache writes only
-    # isl_per_row = max_seq_len/sp positions locally (starting at 0); positions
-    # [isl_per_row, max_seq_len) stay zero.  Build host tensor sized max_seq_len,
-    # shard dim 2 across sp rows so each row gets exactly isl_per_row positions.
-    max_seq_len = k_cache.shape[2]
-    assert max_seq_len % sp == 0, f"max_seq_len={max_seq_len} not divisible by sp={sp}"
-    total_seq = max_seq_len
-    assert real_len <= total_seq, f"real_len={real_len} exceeds cache capacity {total_seq}"
+    # The on-device cache is allocated with dim 2 = config.max_seq_len (often 128k),
+    # but the original prefill only wrote isl_per_row positions per row, using its
+    # own block-padded sequence length (see kv_cache_prefill.py:288-290):
+    #     block = sp * 32
+    #     padded_seq = ceil(real_len / block) * block
+    #     isl_per_row = padded_seq / sp
+    # Each row's local cache holds positions [0, isl_per_row) of its shard.  We
+    # must mirror that here — using k_cache.shape[2] would put all real positions
+    # in row 0's local slot, and _gather_kv_cache would read zero-padded slots
+    # from rows 1..sp-1.
+    max_seq_len_cache = k_cache.shape[2]
+    block = sp * 32
+    padded_seq = ((real_len + block - 1) // block) * block
+    isl_per_row = padded_seq // sp
+    total_seq = padded_seq
+    assert padded_seq <= max_seq_len_cache, f"padded_seq={padded_seq} exceeds cache capacity {max_seq_len_cache}"
 
     def _prep(np_arr):
         host = torch.zeros(1, num_kv_heads, total_seq, head_dim, dtype=torch.float32)
@@ -130,8 +137,9 @@ def scatter_kv_into_cache(
     if debug:
         print(
             f"[debug] scatter: k_np.shape={k_np.shape} real_len={real_len} "
-            f"max_seq_len={max_seq_len} sp={sp} tp={tp} "
-            f"local_kv_heads={num_kv_heads // tp} isl_per_row={max_seq_len // sp}",
+            f"cache_max_seq_len={max_seq_len_cache} sp={sp} tp={tp} "
+            f"local_kv_heads={num_kv_heads // tp} padded_seq={padded_seq} "
+            f"isl_per_row={isl_per_row}",
             flush=True,
         )
         _debug_shard_check(tt_k, k_np, real_len, mesh, "K post-shard")
@@ -237,10 +245,20 @@ def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
         )
         return 1
 
-    model, _tok, _mesh_config, max_seq_len = _build_model(mesh, shape, args, real_len_hint=real_len)
-    isl_per_row = max_seq_len // sp
+    model, _tok, _mesh_config, _requested_max_seq_len = _build_model(mesh, shape, args, real_len_hint=real_len)
+    # The model's KV cache dim 2 is dictated by its config (often 128k), not the
+    # value we compute in _build_model.  Read the actual per-device dim 2 from
+    # the first layer's cache.  isl_per_row must match what the original prefill
+    # used (block=sp*32, padded_seq=ceil(real_len/block)*block, isl=padded/sp),
+    # not cache_dim2/sp.
+    cache_max_seq_len = model.layers[0].self_attn.kv_cache[0].shape[2]
+    block = sp * 32
+    padded_seq = ((real_len + block - 1) // block) * block
+    isl_per_row = padded_seq // sp
     print(
-        f"[decode_from_kv] model built; real_len={real_len} max_seq_len={max_seq_len} " f"isl_per_row={isl_per_row}",
+        f"[decode_from_kv] model built; real_len={real_len} "
+        f"cache_max_seq_len={cache_max_seq_len} padded_seq={padded_seq} "
+        f"isl_per_row={isl_per_row}",
         flush=True,
     )
 
