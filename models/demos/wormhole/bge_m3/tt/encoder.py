@@ -141,6 +141,11 @@ def _attention_score_dtype(
         # no typecasts. PCC 0.9469 (passes). NOTE: B8 full-bf8 SDPA drops PCC to
         # 0.9249 (< 0.94 gate) — B8 has less headroom, so B8 keeps bf16 score.
         return dtype
+    # N300 B12/S8192: bf8 score (= qkv_dtype bf8) kills the 3 bf8->bf16 typecasts
+    # per layer (72 ops) AND halves SDPA Q/K/V read bandwidth. batch-12 averaging
+    # gives large PCC headroom (end-to-end bf8 measured 0.961). Gated by checks.sh.
+    if max_seq_len == 8192:
+        return dtype
     return ttnn.bfloat16
 
 
