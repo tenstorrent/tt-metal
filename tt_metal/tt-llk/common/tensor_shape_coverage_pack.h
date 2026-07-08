@@ -18,7 +18,7 @@ namespace ckernel::coverage
 
 // No pack TensorShape coverage probes are currently defined.
 
-constexpr bool is_pack_tensor_shape_covered(const TensorShapeFunctionCoverage, const TensorShape&)
+__attribute__((noinline)) inline bool is_pack_tensor_shape_covered(const TensorShapeFunctionCoverage, const TensorShape&)
 {
     return false;
 }

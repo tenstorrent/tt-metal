@@ -11,8 +11,6 @@
 
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 
 #include "tensor_shape.h"
@@ -106,19 +104,6 @@ constexpr bool tensor_shape_eq(const TensorShape& lhs, const TensorShape& rhs)
 {
     return lhs.face_r_dim == rhs.face_r_dim && lhs.face_c_dim == rhs.face_c_dim && lhs.num_faces_r_dim == rhs.num_faces_r_dim &&
            lhs.num_faces_c_dim == rhs.num_faces_c_dim;
-}
-
-template <std::size_t N>
-constexpr bool contains_tensor_shape(const std::array<TensorShape, N>& covered_shapes, const TensorShape& tensor_shape)
-{
-    for (const TensorShape& covered_shape : covered_shapes)
-    {
-        if (tensor_shape_eq(covered_shape, tensor_shape))
-        {
-            return true;
-        }
-    }
-    return false;
 }
 
 constexpr const char* tensor_shape_dim_name(const std::uint8_t dim)
