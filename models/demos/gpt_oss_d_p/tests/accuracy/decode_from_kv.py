@@ -28,6 +28,7 @@ Example:
 
 import argparse
 import gc
+import hashlib
 import json
 import pathlib
 import sys
@@ -49,10 +50,10 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float((am * bm).sum() / (denom + 1e-8))
 
 
-def _debug_shard_check(tt_tensor, np_source: np.ndarray, real_len: int, mesh, label: str):
+def _debug_shard_check(tt_tensor, np_source: np.ndarray, real_len: int, mesh, label: str, layout: str = "sp_sharded"):
     """Read back each device tensor from a freshly-sharded multi-device tensor and
     PCC-compare against the expected shard from np_source.  Isolates whether
-    ShardTensor2dMesh(dims=(2, 1)) actually produced the right per-device shards.
+    ShardTensor2dMesh produced the right per-device shards.
     """
     sp, tp = tuple(mesh.shape)
     num_kv_heads = np_source.shape[0]
@@ -60,19 +61,26 @@ def _debug_shard_check(tt_tensor, np_source: np.ndarray, real_len: int, mesh, la
     local_kv_heads = num_kv_heads // tp
     per_device_seq = tt_tensor.shape[2]
     devs = ttnn.get_device_tensors(tt_tensor)
-    print(f"[debug] {label}: per-device tt_tensor.shape={tuple(tt_tensor.shape)} n_devices={len(devs)}", flush=True)
+    print(
+        f"[debug] {label} ({layout}): per-device tt_tensor.shape={tuple(tt_tensor.shape)} n_devices={len(devs)}",
+        flush=True,
+    )
     for r in range(sp):
         for c in range(tp):
             dev_t = ttnn.to_torch(devs[r * tp + c]).float()  # [1, local_kv_heads, per_device_seq, head_dim]
-            seq_lo = r * per_device_seq
-            seq_hi = min(seq_lo + per_device_seq, real_len)
             head_lo = c * local_kv_heads
             head_hi = head_lo + local_kv_heads
+            if layout == "sp_sharded":
+                seq_lo = r * per_device_seq
+                seq_hi = min(seq_lo + per_device_seq, real_len)
+            else:  # replicated: every row has the full [0, real_len)
+                seq_lo = 0
+                seq_hi = min(per_device_seq, real_len)
             if seq_hi <= seq_lo:
                 continue
             expected_len = seq_hi - seq_lo
-            expected = torch.from_numpy(np_source[head_lo:head_hi, seq_lo:seq_hi, :]).float()  # [lkv, len, hd]
-            got = dev_t[0, :, :expected_len, :]  # [lkv, len, hd]
+            expected = torch.from_numpy(np_source[head_lo:head_hi, seq_lo:seq_hi, :]).float()
+            got = dev_t[0, :, :expected_len, :]
             pcc = _pcc(expected, got)
             print(
                 f"[debug] {label} r={r} c={c} (heads[{head_lo}:{head_hi}] seq[{seq_lo}:{seq_hi}]) "
@@ -82,44 +90,52 @@ def _debug_shard_check(tt_tensor, np_source: np.ndarray, real_len: int, mesh, la
 
 
 def scatter_kv_into_cache(
-    k_cache, v_cache, k_np: np.ndarray, v_np: np.ndarray, mesh, real_len: int, debug: bool = False
+    k_cache,
+    v_cache,
+    k_np: np.ndarray,
+    v_np: np.ndarray,
+    mesh,
+    real_len: int,
+    layout: str = "sp_sharded",
+    debug: bool = False,
 ):
-    """Inverse of kv_cache_prefill._gather_kv_cache.
+    """Inverse of kv_cache_prefill._gather_kv_cache.  Two layouts:
 
-    Takes gathered [num_kv_heads, real_len, head_dim] tensors (Meta interleave,
-    as saved by --save-tt-kv), re-shards for the current mesh, and calls
-    ttnn.fill_cache on both K and V caches.
+    layout="sp_sharded" (matches the original SP=rows prefill dump):
+      dim 2 (seq) across SP rows using the original block-padded isl_per_row
+      = ceil(real_len / (sp*32)) * 32 / sp; dim 1 (heads) across TP cols.
+      Each row's local cache holds positions [0, isl_per_row).  Compatible
+      with _gather_kv_cache for round-trip verification, but NOT usable for
+      decode (each row only has its own sequence shard).
 
-    Sharding:
-      - dim 1 (heads) across TP cols → each col holds local_kv_heads = num_kv_heads/tp heads
-      - dim 2 (seq)   across SP rows → each row holds isl_per_row positions
-
-    The on-device cache is allocated with per-device seq dim = isl_per_row.
-    We build a host tensor of shape [1, num_kv_heads, isl_per_row*sp, head_dim],
-    fill positions [0, real_len) with data and zero-pad the rest, then let
-    ShardTensor2dMesh(dims=(2, 1)) split it correctly across devices.
+    layout="replicated" (needed for decode):
+      dim 2 (seq) NOT sharded — the sequence is replicated across rows so
+      every row's cache holds the full [0, real_len).  dim 1 (heads) still
+      TP-sharded across cols.  Decode's SDPA runs per-row (rows are EP
+      replicas), and each row needs the full history to attend over.
     """
     sp, tp = tuple(mesh.shape)
     num_kv_heads, gathered_seq_len, head_dim = k_np.shape
     assert gathered_seq_len == real_len, f"KV .npy seq dim ({gathered_seq_len}) does not match real_len ({real_len})"
     assert num_kv_heads % tp == 0, f"num_kv_heads={num_kv_heads} not divisible by tp={tp}"
 
-    # The on-device cache is allocated with dim 2 = config.max_seq_len (often 128k),
-    # but the original prefill only wrote isl_per_row positions per row, using its
-    # own block-padded sequence length (see kv_cache_prefill.py:288-290):
-    #     block = sp * 32
-    #     padded_seq = ceil(real_len / block) * block
-    #     isl_per_row = padded_seq / sp
-    # Each row's local cache holds positions [0, isl_per_row) of its shard.  We
-    # must mirror that here — using k_cache.shape[2] would put all real positions
-    # in row 0's local slot, and _gather_kv_cache would read zero-padded slots
-    # from rows 1..sp-1.
     max_seq_len_cache = k_cache.shape[2]
-    block = sp * 32
-    padded_seq = ((real_len + block - 1) // block) * block
-    isl_per_row = padded_seq // sp
-    total_seq = padded_seq
-    assert padded_seq <= max_seq_len_cache, f"padded_seq={padded_seq} exceeds cache capacity {max_seq_len_cache}"
+
+    if layout == "sp_sharded":
+        # See kv_cache_prefill.py:288-290 for the block-padding math.
+        block = sp * 32
+        padded_seq = ((real_len + block - 1) // block) * block
+        assert padded_seq <= max_seq_len_cache, f"padded_seq={padded_seq} exceeds cache capacity {max_seq_len_cache}"
+        total_seq = padded_seq
+        mesh_dims = (2, 1)
+    elif layout == "replicated":
+        # Tile-align only; no per-row split of the sequence.
+        padded_seq = ((real_len + 31) // 32) * 32
+        assert padded_seq <= max_seq_len_cache, f"padded_seq={padded_seq} exceeds cache capacity {max_seq_len_cache}"
+        total_seq = padded_seq
+        mesh_dims = (None, 1)
+    else:
+        raise ValueError(f"unknown layout {layout!r}; use 'sp_sharded' or 'replicated'")
 
     def _prep(np_arr):
         host = torch.zeros(1, num_kv_heads, total_seq, head_dim, dtype=torch.float32)
@@ -129,20 +145,19 @@ def scatter_kv_into_cache(
             device=mesh,
             dtype=k_cache.dtype,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh.shape, dims=(2, 1)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=mesh.shape, dims=mesh_dims),
         )
 
     tt_k = _prep(k_np)
     tt_v = _prep(v_np)
     if debug:
         print(
-            f"[debug] scatter: k_np.shape={k_np.shape} real_len={real_len} "
+            f"[debug] scatter: layout={layout} k_np.shape={k_np.shape} real_len={real_len} "
             f"cache_max_seq_len={max_seq_len_cache} sp={sp} tp={tp} "
-            f"local_kv_heads={num_kv_heads // tp} padded_seq={padded_seq} "
-            f"isl_per_row={isl_per_row}",
+            f"local_kv_heads={num_kv_heads // tp} padded_seq={padded_seq} mesh_dims={mesh_dims}",
             flush=True,
         )
-        _debug_shard_check(tt_k, k_np, real_len, mesh, "K post-shard")
+        _debug_shard_check(tt_k, k_np, real_len, mesh, "K post-shard", layout=layout)
     ttnn.fill_cache(k_cache, tt_k, batch_idx=0)
     ttnn.fill_cache(v_cache, tt_v, batch_idx=0)
     tt_k.deallocate(True)
@@ -278,7 +293,7 @@ def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
                 f"mean={float(k_np.mean()):.4f} std={float(k_np.std()):.4f}",
                 flush=True,
             )
-        scatter_kv_into_cache(k_cache, v_cache, k_np, v_np, mesh, real_len, debug=debug_this)
+        scatter_kv_into_cache(k_cache, v_cache, k_np, v_np, mesh, real_len, layout="sp_sharded", debug=debug_this)
         ttnn.synchronize_device(mesh)
 
         k_round = _gather_kv_cache(k_cache, mesh, real_len, isl_per_row)
@@ -327,6 +342,153 @@ def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
     return 1 if any_fail else 0
 
 
+def _run_decode(args, mesh, shape, record, oracle_dir, kv_dir):
+    from transformers import AutoTokenizer
+
+    sp, tp = shape[0], shape[1]
+    real_len = record["n_tokens"]
+    if args.num_tokens is not None and args.num_tokens != real_len:
+        print(
+            f"[decode_from_kv] ERROR: --num-tokens={args.num_tokens} but oracle record " f"has n_tokens={real_len}.",
+            flush=True,
+        )
+        return 1
+
+    if "generation" not in record or not record["generation"]:
+        print(
+            "[decode_from_kv] ERROR: oracle record has no 'generation' list. "
+            "Re-run hf_reference_oracle.py with --gen-tokens N.",
+            flush=True,
+        )
+        return 1
+    oracle_gen = record["generation"]
+    gen_tokens = args.gen_tokens if args.gen_tokens > 0 else len(oracle_gen)
+    if gen_tokens > len(oracle_gen):
+        print(
+            f"[decode_from_kv] ERROR: --gen-tokens={gen_tokens} exceeds oracle's "
+            f"generation length ({len(oracle_gen)}).",
+            flush=True,
+        )
+        return 1
+    print(
+        f"[decode_from_kv] decoding {gen_tokens} tokens from real_len={real_len}, "
+        f"seeded from oracle argmax={oracle_gen[0]['argmax_id']} "
+        f"({oracle_gen[0]['argmax_text']!r})",
+        flush=True,
+    )
+
+    # Locate the TT KV dump layers.
+    tt_layers_present = sorted(int(p.stem.split("layer")[1].split("_")[0]) for p in kv_dir.glob("tt_layer*_k.npy"))
+    if not tt_layers_present:
+        print(f"[decode_from_kv] ERROR: no tt_layer*_k.npy files in {kv_dir}", flush=True)
+        return 1
+
+    model, _tok_unused, _mesh_config, _requested_max_seq_len = _build_model(
+        mesh, shape, args, real_len_hint=real_len + gen_tokens
+    )
+    n_model_layers = len(model.layers)
+    missing = [i for i in range(n_model_layers) if i not in tt_layers_present]
+    if missing:
+        print(
+            f"[decode_from_kv] ERROR: KV dump missing layers {missing[:8]}"
+            f"{'...' if len(missing) > 8 else ''} — decode needs all {n_model_layers} layers.",
+            flush=True,
+        )
+        return 1
+
+    # Load HF tokenizer for decoding token ids to text in the output JSON.
+    from models.demos.gpt_oss.tt.model_config import ModelArgs
+
+    tok = AutoTokenizer.from_pretrained(ModelArgs(mesh_device=mesh).model_path, trust_remote_code=True)
+
+    # Scatter every layer's KV into the on-device cache with REPLICATED layout —
+    # each row's cache must hold the full [0, real_len) so decode's SDPA (which
+    # runs per row as an EP replica) sees the full history.
+    print(f"[decode_from_kv] loading KV for {n_model_layers} layers (replicated layout)...", flush=True)
+    for i in range(n_model_layers):
+        k_np = np.load(kv_dir / f"tt_layer{i}_k.npy")
+        v_np = np.load(kv_dir / f"tt_layer{i}_v.npy")
+        assert k_np.shape[1] == real_len, f"layer {i}: k_np seq={k_np.shape[1]} != real_len={real_len}"
+        k_cache, v_cache = model.layers[i].self_attn.kv_cache
+        scatter_kv_into_cache(k_cache, v_cache, k_np, v_np, mesh, real_len, layout="replicated", debug=(i == 0))
+    ttnn.synchronize_device(mesh)
+    print("[decode_from_kv] KV load complete", flush=True)
+
+    # Build the kv_cache list the model expects.
+    kv_cache_list = [layer.self_attn.kv_cache for layer in model.layers]
+
+    # Seed decode from the oracle's first-generated token.  All decode work is
+    # single-user (batch=1); the model was built with max_local_batch_size=1.
+    seed_id = oracle_gen[0]["argmax_id"]
+    tt_gen = [
+        {
+            "pos": real_len,
+            "argmax_id": seed_id,
+            "argmax_text": oracle_gen[0]["argmax_text"],
+            "top5": None,  # seed came from oracle, no TT logits at this step
+            "seed": True,
+        }
+    ]
+
+    out_tok = torch.tensor([seed_id], dtype=torch.int64)
+    current_pos = torch.tensor([real_len], dtype=torch.int64)
+
+    for step in range(1, gen_tokens):
+        tt_tokens, tt_current_pos, tt_rope_idxs, _ = model.prepare_inputs_decode(out_tok, current_pos, None)
+        decode_out = model.ttnn_decode_forward(
+            tt_tokens,
+            tt_current_pos,
+            rot_mat_idxs=tt_rope_idxs,
+            page_table=None,
+            kv_cache=kv_cache_list,
+            on_device_logits=False,
+        )
+        logits_ttnn = decode_out[0] if isinstance(decode_out, tuple) else decode_out
+        logits_host = logits_ttnn.cpu()
+        logits_torch = model.process_output_decode(logits_host, B=1, S=1, is_tokens=False)
+        logits_flat = logits_torch.view(-1).float()
+        topk = torch.topk(logits_flat, 5)
+        argmax_id = int(topk.indices[0])
+        top5 = [{"id": int(i), "text": tok.decode([int(i)]), "logit": float(logits_flat[int(i)])} for i in topk.indices]
+        pos_now = real_len + step
+        tt_gen.append(
+            {
+                "pos": pos_now,
+                "argmax_id": argmax_id,
+                "argmax_text": tok.decode([argmax_id]),
+                "top5": top5,
+                "seed": False,
+            }
+        )
+        print(
+            f"[decode_from_kv] step {step:3d} pos={pos_now} tt_argmax={argmax_id} "
+            f"({tok.decode([argmax_id])!r})  oracle={oracle_gen[step]['argmax_id']} "
+            f"({oracle_gen[step]['argmax_text']!r})  "
+            f"{'MATCH' if argmax_id == oracle_gen[step]['argmax_id'] else 'MISMATCH'}",
+            flush=True,
+        )
+        out_tok = torch.tensor([argmax_id], dtype=torch.int64)
+        current_pos = current_pos + 1
+
+    # Persist output next to the KV dump.
+    key = hashlib.sha256(args.prompt.encode()).hexdigest()[:12]
+    out_path = kv_dir / f"tt_generation_{key}.json"
+    with out_path.open("w") as f:
+        json.dump(
+            {
+                "prompt": args.prompt,
+                "real_len": real_len,
+                "gen_tokens": gen_tokens,
+                "seed_from_oracle": True,
+                "generation": tt_gen,
+            },
+            f,
+            indent=2,
+        )
+    print(f"[decode_from_kv] wrote {out_path}", flush=True)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rows", type=int, default=4)
@@ -362,6 +524,13 @@ def main():
     )
     ap.add_argument("--max-layers", type=int, default=None)
     ap.add_argument("--pcc-threshold", type=float, default=PCC_THRESHOLD_CHECK)
+    ap.add_argument(
+        "--gen-tokens",
+        type=int,
+        default=0,
+        help="decode mode: number of tokens to generate.  Defaults to the length "
+        "of the oracle's generation record.  Must not exceed it.",
+    )
     args = ap.parse_args()
 
     if args.prompt_file is not None:
@@ -408,8 +577,7 @@ def main():
         if args.mode == "check":
             return _run_check(args, mesh, shape, record, oracle_dir, kv_dir)
         else:
-            print("[decode_from_kv] --mode decode not yet implemented (M3).", flush=True)
-            return 2
+            return _run_decode(args, mesh, shape, record, oracle_dir, kv_dir)
     finally:
         ttnn.close_mesh_device(mesh)
         if fabric is not None:
