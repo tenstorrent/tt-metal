@@ -14,7 +14,7 @@ namespace ttnn {
 Tensor moreh_norm(
     const Tensor& input,
     float p,
-    const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dim,
+    const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
     bool keepdim,
     const std::optional<Tensor>& output,
     const std::optional<MemoryConfig>& memory_config,

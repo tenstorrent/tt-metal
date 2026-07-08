@@ -5,92 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-# Element size (bytes) for each ttnn dtype we exercise in this file.
-_DTYPE_ELEM_SIZE = {
-    ttnn.bfloat16: 2,
-    ttnn.float32: 4,
-    ttnn.uint32: 4,
-    ttnn.int32: 4,
-    ttnn.uint16: 2,
-    ttnn.uint8: 1,
-    ttnn.bfloat8_b: 1,
-}
-
-
-def _divisible_grid_1d(total_dim, max_cores, step):
-    """Return the largest n <= max_cores such that total_dim % (n * step) == 0.
-
-    Raises:
-        ValueError: If no valid n exists (i.e. total_dim is not a multiple of step).
-    """
-    for n in range(max_cores, 0, -1):
-        if total_dim % (n * step) == 0:
-            return n
-    raise ValueError(f"No valid 1D grid size for total_dim={total_dim}, max_cores={max_cores}, step={step}")
-
-
-def make_sharded_memory_config(device, shape, strategy, layout, dtype=ttnn.bfloat16):
-    """Create a valid sharded MemoryConfig for `shape` on `device`.
-
-    For TILE layout the shard dims must be tile-aligned (multiples of 32).
-    For ROW_MAJOR, shard_width * element_size must be a multiple of the
-    recommended L1 alignment (64 bytes today), so the shard-width step is
-    derived from the `dtype` argument.
-    """
-    grid = device.compute_with_storage_grid_size()
-    max_x, max_y = grid.x, grid.y
-    tile_h, tile_w = 32, 32
-
-    # TILE layout: pad last two dims to tile-multiples before collapsing so
-    # total_h/total_w match the physical layout and create_sharded_memory_config
-    # gets tile-aligned shards.
-    shape_for_memcfg = list(shape)
-    if layout == ttnn.TILE_LAYOUT and len(shape) >= 2:
-        padded_h_dim = ((shape[-2] + tile_h - 1) // tile_h) * tile_h
-        padded_w_dim = ((shape[-1] + tile_w - 1) // tile_w) * tile_w
-        total_h = padded_h_dim
-        for d in shape[:-2]:
-            total_h *= d
-        total_w = padded_w_dim
-        shape_for_memcfg[-2] = padded_h_dim
-        shape_for_memcfg[-1] = padded_w_dim
-    else:
-        total_h = 1
-        for d in shape[:-1]:
-            total_h *= d
-        total_w = shape[-1]
-
-    step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
-    recommended_alignment_bytes = 64
-    element_size = _DTYPE_ELEM_SIZE.get(dtype, 2)
-    rm_step_w = max(1, recommended_alignment_bytes // element_size)
-    step_w = tile_w if layout == ttnn.TILE_LAYOUT else rm_step_w
-
-    if strategy == ttnn.ShardStrategy.HEIGHT:
-        ny = _divisible_grid_1d(total_h, max_y, step_h)
-        core_grid = ttnn.CoreGrid(y=ny, x=1)
-    elif strategy == ttnn.ShardStrategy.WIDTH:
-        nx = _divisible_grid_1d(total_w, max_x, step_w)
-        core_grid = ttnn.CoreGrid(y=1, x=nx)
-    else:  # BLOCK
-        ny = _divisible_grid_1d(total_h, max_y, step_h)
-        nx = _divisible_grid_1d(total_w, max_x, step_w)
-        core_grid = ttnn.CoreGrid(y=ny, x=nx)
-
-    return ttnn.create_sharded_memory_config(
-        shape=shape_for_memcfg,
-        core_grid=core_grid,
-        strategy=strategy,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+from tests.ttnn.utils_for_testing import assert_with_pcc, make_sharded_memory_config
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +505,7 @@ def test_reshape_sharded_memory_config_without_shard_spec_autoderives_from_input
     _assert_reshape(torch_output, actual, ttnn.bfloat16)
 
 
-def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(device):
+def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(device, expect_error):
     """Interleaved input + layout-only sharded output memory_config must TT_FATAL
     with an actionable message when no input shard_spec is available to seed from.
     """
@@ -606,5 +521,5 @@ def test_reshape_layout_only_sharded_output_without_input_shard_spec_fails(devic
     out_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1)
     assert out_mc.shard_spec is None
 
-    with pytest.raises(RuntimeError, match="no input_shard_spec is available"):
+    with expect_error(RuntimeError, "no input_shard_spec is available"):
         ttnn.reshape(tt_input, (1, 1, 512, 128), memory_config=out_mc)
