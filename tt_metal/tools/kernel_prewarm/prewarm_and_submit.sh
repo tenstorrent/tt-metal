@@ -67,7 +67,9 @@ if [[ "$FORCE_CAPTURE" == "1" || -z "$MANIFEST" || ! -s "$MANIFEST" ]]; then
   # The pipeline runs on garbage tensors under capture-only, so its output check may FAIL -- that is
   # expected; the manifest is the artifact. Gate the next stage on the manifest growing, not the exit code.
   MANIFEST_BEFORE=0; [[ -n "$MANIFEST" && -s "$MANIFEST" ]] && MANIFEST_BEFORE=$(stat -c %s "$MANIFEST" 2>/dev/null || echo 0)
-  tt-device-mcp run "TT_METAL_KERNEL_CAPTURE_ONLY=1 $CMD" -w "$WORKSPACE" -t "$TIMEOUT" ${ENV_FILE:+-e "$ENV_FILE"} || true
+  # export, not a "VAR=1 $CMD" prefix: $CMD starts with `source ...`, so a prefix would scope the var to
+  # the source builtin and the python worker downstream in the && chain would never see it (full compile).
+  tt-device-mcp run "export TT_METAL_KERNEL_CAPTURE_ONLY=1; $CMD" -w "$WORKSPACE" -t "$TIMEOUT" ${ENV_FILE:+-e "$ENV_FILE"} || true
   MANIFEST_AFTER=0; [[ -n "$MANIFEST" && -s "$MANIFEST" ]] && MANIFEST_AFTER=$(stat -c %s "$MANIFEST" 2>/dev/null || echo 0)
   if [[ "$MANIFEST_AFTER" -le "$MANIFEST_BEFORE" ]]; then
     echo "prewarm_and_submit.sh: capture pass produced no manifest growth ($MANIFEST) -- aborting" >&2
