@@ -74,5 +74,5 @@ Rereview after remediation returned `clean-pass` with no required work. The revi
 
 - Repo: `/localdev/mvasiljevic/tt-metal`
 - Branch: `mvasiljevic/llama-forge-seed-rerun`
-- Commit: `cefa7c409db`
+- Implementation checkpoint commit: `77600fb40a5`
 - Push: not pushed
