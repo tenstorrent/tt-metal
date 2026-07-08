@@ -5,6 +5,8 @@
 This document covers the Tenstorrent tt_dit implementation of Bria's **FIBO** text-to-image model. FIBO is a flow-matching MMDiT (Flux-shaped) model conditioned on an LLM text encoder. The implementation is decomposed into four sub-projects, built in data-flow order. See the design spec for full detail:
 [`docs/superpowers/specs/2026-07-06-fibo-smollm3-encoder-design.md`](../../../docs/superpowers/specs/2026-07-06-fibo-smollm3-encoder-design.md)
 
+**Status:** all four sub-projects are done and PCC-validated on the 2×2 Blackhole mesh; the pipeline runs **fully on-device** end-to-end, including the Wan 2.2 VAE decode (see *Sub-project 4 → On-device VAE decode*). FIBO's intended input is a structured JSON caption produced by a host-side VLM — the full natural-language **text → JSON → image** path is documented in the *VLM Front-end* section at the end.
+
 ## 4-Sub-Project Decomposition
 
 | # | Sub-project | Status | Strategy |
@@ -271,14 +273,14 @@ All tests pass PCC ≥ 0.99. The production-resolution decode (64×64 latent, ma
 
 `BriaFiboPipeline` (`pipelines/bria_fibo/pipeline_bria_fibo.py`) wires the three validated components into one text→image flow-match denoise loop, mirroring `pipelines/flux1/pipeline_flux1.py` with the FIBO deltas below. It runs on the 2×2 Blackhole mesh as a single submesh: `DiTParallelConfig.from_tuples(cfg=(1,0), sp=(2,0), tp=(2,1))`, one `CCLManager`, one `BriaFiboTransformer`, one `EulerSolver`. The encoder runs fully replicated (`tp=1`, no CCL); the VAE decoder is configured hw-parallel `(2,2)`. No inter-stage eviction (all of encoder + transformer + VAE stay resident; no OOM observed).
 
-`__call__(prompt, *, negative_prompt="", height=1024, width=1024, num_inference_steps=30, guidance_scale=5.0, seed=0, latents=None, output_type="pil")`:
+`__call__(prompt, *, negative_prompt="", height=1024, width=1024, num_inference_steps=30, guidance_scale=5.0, seed=0, latents=None, output_type="pil", force_device_decode=False)`:
 
 1. **Encode** the positive and negative prompts **separately** via the SmolLM3 wrapper (below); build two 46-entry `text_encoder_layers` lists (the 37→46 pad, below); move each branch's prompt + layers + RoPE to the submesh once (reused across all steps).
 2. **Latents (no 2×2 pack):** `(1, 48, h, w) → (1, h*w, 48)` with `h=w=height/16` (`in_channels == z_dim == 48`), sequence-sharded on the `sp` axis. `latents=` injects a fixed initial noise in this packed layout (used by the reference-PCC test).
 3. **RoPE:** flux-style ids `cat([zeros(T,3), _latent_image_ids(h,w)])` → `pos_embed` → split into a replicated prompt part (`[:T]`) and a sequence-sharded spatial part (`[T:]`); `head_dim=128 = 16+56+56`.
 4. **Schedule:** `mu = _calculate_shift(h*w, scheduler)`; `scheduler.set_timesteps(sigmas=linspace(1, 1/N, N), mu=mu)`; `solver.set_schedule(scheduler.sigmas.tolist())`.
 5. **Denoise loop:** per step, run the transformer **twice** (once per CFG branch), combine `v = uncond + guidance_scale·(cond − uncond)` (`ttnn.lerp`), then `solver.step`. Per-step deallocations + `synchronize_device` keep DRAM bounded across the untraced loop.
-6. **Decode:** all-gather the sp-sharded latent → `(1, 48, 1, h, w)` BCTHW → VAE decode → `unpatchify(patch_size=2)` + `clamp(-1,1)` → `VaeImageProcessor.postprocess`. `output_type="latent"` instead returns the pre-VAE latent (for the reference-PCC gate).
+6. **Decode:** all-gather the sp-sharded latent → `(1, 48, 1, h, w)` BCTHW → **on-device** Wan 2.2 residual VAE decode (full 2×2 submesh, hw-parallel) → `unpatchify(patch_size=2)` + `clamp(-1,1)` → `VaeImageProcessor.postprocess`. Pass `force_device_decode=True` to require the on-device path (raise on failure instead of falling back to the host reference decode — see *On-device VAE decode* below). `output_type="latent"` instead returns the pre-VAE latent (for the reference-PCC gate).
 
 ### Text Encoder Wrapper + 37→46 Layer Build
 
@@ -288,6 +290,14 @@ All tests pass PCC ≥ 0.99. The production-resolution decode (64×64 latent, ma
 
 The reference batches `cat([negative, positive])` and passes a padding **attention mask**. The tt transformer has no mask parameter, so instead the pipeline runs **batch=1, unpadded, per CFG branch** — each branch encodes at its *true* token length and gets its own transformer forward per step. With no padding there is no mask to apply, making this bit-faithful to the reference (whose mask is a no-op on unpadded tokens). This was confirmed by the end-to-end latent PCC below. Cost: two forwards per step (batched+masked CFG is a perf follow-up).
 
+### On-device VAE decode
+
+The Wan 2.2 residual VAE decode runs **on-device** on the full 2×2 submesh (hw-parallel; the decode's activations spread across all 4 devices, reusing the transformer's `CCLManager`), producing the 1024×1024 image with no host fallback.
+
+Reaching this required a one-line fix in `models/tt_dit/models/vae/vae_wan2_1.py`: `WanVAEDecoderAdapter` built its `WanDecoder` **without** `decoder_base_dim`, so it defaulted to `base_dim` (160) instead of FIBO's *asymmetric* `decoder_base_dim` (256). That made `decoder.conv_in` a `(1728, 640)` Parameter while the real weight is `(1728, 1024)` → a `LoadingError` at weight load, **on every mesh size** (this was originally mis-attributed to a hw-parallel limitation; sp3's `test_vae` never hit it because it constructs `WanDecoder` directly, bypassing the adapter). The adapter now passes `decoder_base_dim=getattr(config, "decoder_base_dim", None)`; Wan 2.1 configs omit the field, so `WanDecoder` defaults `None → base_dim` and the Wan 2.1 path is unchanged.
+
+`_decode_vae` still keeps the host-torch `AutoencoderKLWan.decode` as a *defensive* fallback on `LoadingError`, but it no longer fires. `force_device_decode=True` re-raises instead of falling back, so a regression fails loudly (used by the smoke + the on-device decode test).
+
 ### Files
 
 ```
@@ -295,9 +305,11 @@ models/tt_dit/
   pipelines/bria_fibo/
     __init__.py
     text_encoder.py                 # SmolLM3TextEncoderWrapper + build_text_encoder_layers (37->46)
-    pipeline_bria_fibo.py           # BriaFiboPipeline, __call__, _decode_latents, CFG, host-VAE fallback
+    pipeline_bria_fibo.py           # BriaFiboPipeline, __call__, _decode_latents, CFG, on-device VAE decode
   tests/models/bria_fibo/
-    test_pipeline.py                # layer-build (host), wrapper-encode PCC, end-to-end latent PCC, full image smoke
+    test_pipeline.py                # layer-build (host), wrapper-encode PCC, latent PCC, image smoke,
+                                    #   e2e-image golden, on-device VAE decode golden
+    test_vlm_pipeline.py            # full product path: text -> FIBO-vlm (CPU) -> JSON -> TT pipeline -> image
 ```
 
 ### Running the Tests
@@ -319,12 +331,54 @@ HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
 | Text-encoder wrapper vs reference `get_prompt_embeds` | representative prompt | 99.79% |
 | End-to-end latent trajectory vs diffusers `BriaFiboPipeline` | 512² (32×32 latent, 1024 tokens), 2 steps, identical injected noise | 99.69% |
 | End-to-end latent trajectory (higher-confidence, committed test) | 512², 4 steps | 99.12% |
-| Full image smoke | 1024², 30 steps | runs; finite, non-degenerate `(1024,1024,3)` image |
+| On-device VAE decode | 1024², synthetic latent | runs on-device; correct-range `(1,3,1,1024,1024)` image (golden PCC-vs-host is an on-demand test) |
+| Full image smoke (on-device decode) | 1024², 30 steps, `force_device_decode=True` | runs; finite, non-degenerate `(1024,1024,3)` image |
 
 The end-to-end latent PCC is measured against a full-precision (fp32) diffusers reference fed *identical* injected noise (`latents=`), on the pre-VAE latent. PCC declines slightly with step count (99.69% @ 2 steps → 99.12% @ 4 steps) — accumulated bf16 drift over solver steps, not a wiring defect (a glue bug would crater PCC far below 0.99 at any step count). The glue under test (noise → no-patch pack → RoPE → per-branch CFG → Euler solver → latent) is resolution-independent, so the reduced-resolution gate transfers to production resolution, where each component carries its own production PCC (sp1–sp3). The committed test runs 4 steps.
 
 ### Out of Scope / Deferred
 
-- **On-device VAE decode on the 2×2 mesh**: the hw-parallel `(2,2)` residual decoder currently fails at weight load (`decoder.conv_in.weight` (1728,640) vs (1728,1024)) — a Wan hw-parallel *residual* weight-prep limitation (sp3 validated the residual VAE only at single-device `(1,1)`). The pipeline uses a **host-torch `AutoencoderKLWan` fallback** for decode (bit-faithful to the reference decode; the on-device path is attempted first and auto-activates if fixed). On-device fix: repair the residual hw-parallel `conv_in` weight-prep, or decode on a dedicated `(1,1)` submesh (sp3's validated config).
-- **Perf**: tracing the denoise loop (flux1 `Tracer`), batched+masked CFG (needs transformer attention-mask support), and DRAM/coresidence tuning are all follow-ups — this bringup is functional-first and untraced.
-- **VLM prompt→JSON front-end** is out of scope (the pipeline takes the text prompt directly).
+- **Perf** (functional-first, untraced): productionizing tracing into `__call__` — a prototype measured **1.28×** on the denoise step (634→494 ms/step; 30-step 19.0→14.8 s). The denoise is compute-bound (8B transformer over 4096 tokens), so tracing's host-dispatch savings are modest; the trace region needs ≥71 MB (vs the default 50 MB). Larger levers: batched+masked CFG (~2× by halving the per-step forwards; needs transformer attention-mask support) and matmul-config tuning (the run logs many `No known best blocking` warnings).
+- **On-demand golden tests**: `test_fibo_pipeline_vae_decode_on_device` (native-res 1024² VAE golden vs host) and `test_fibo_pipeline_e2e_image_golden` (reduced-res image golden vs the diffusers reference) are committed but slow (host reference decode), so they run on-demand rather than in fast CI.
+
+---
+
+## VLM Front-end: Full Text → JSON → Image Path
+
+FIBO is a **two-stage** system. Sub-projects 1–4 above are the diffusion half (**structured JSON → image**). FIBO was trained on structured JSON captions, not free-form text, so its intended input is a JSON string; the front-end that turns a user's natural-language prompt (or a reference image) into that JSON is a separate **VLM**.
+
+### The VLM
+
+- **`briaai/FIBO-VLM-prompt-to-JSON`** — a tiny (~5-file) remote-code `ModularPipelineBlocks` that wraps the model. Despite the "Gemini" title in its README, the code loads a **local** model, not an API.
+- **`briaai/FIBO-vlm`** — the actual weights: a **Qwen3-VL** model (~8.9 GB, 2 safetensors shards, public/not-gated). `transformers` ≥ 5.10 provides `Qwen3VLForConditionalGeneration`.
+- It runs **on host CPU** (bf16): the model loads in ~0.8 s and generates the JSON caption in ~87 s (greedy). Output is a minimal JSON string with FIBO's caption schema: `short_description`, `objects`, `background_setting`, `lighting`, `aesthetics`, `photographic_characteristics`, `style_medium`, `text_render`, `context`, `artistic_style`.
+- **Gotcha:** the block's `__init__` hardcodes `self.engine.model.to("cuda")` (no CUDA here). We bypass the `ModularPipeline` and call its `TransformersEngine("briaai/FIBO-vlm")` + `generate_json_prompt(...)` helpers **directly**, which load/run on CPU.
+
+The VLM is **not** ported to Tenstorrent (out of scope) — it runs on the host and its compute is small relative to the diffusion pipeline. Running the diffusion pipeline does not *require* the VLM: you can hand-write a JSON prompt, or pass free text (out-of-distribution — still produces an image, just without FIBO's structured control).
+
+### Files
+
+```
+models/tt_dit/tests/models/bria_fibo/
+  test_vlm_pipeline.py              # text -> FIBO-vlm (CPU) -> JSON -> BriaFiboPipeline (TT) -> 1024x1024 image
+```
+
+The pipeline itself is unchanged — it already takes a string prompt, so the JSON string flows straight through `SmolLM3TextEncoderWrapper`.
+
+### Running the Test
+
+```bash
+HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+  python_env/bin/python -m pytest \
+  models/tt_dit/tests/models/bria_fibo/test_vlm_pipeline.py -v -s
+```
+
+**Prerequisites** (in addition to the sub-project 4 ones):
+
+- **Weights**: `briaai/FIBO-vlm` (~8.9 GB) and `briaai/FIBO-VLM-prompt-to-JSON` cached (both public). The test `pytest.skip`s if absent.
+- **Deps**: the block needs `ujson` + `boltons` (`python_env/bin/python -m pip install ujson boltons`; if the venv has no pip, `python_env/bin/python -m ensurepip --upgrade` first).
+- **Slow**: host CPU autoregressive decode of the JSON (~87 s) + the TT generation (~90 s) ≈ 3 min. On-demand, not fast CI.
+
+### Result
+
+`test_fibo_vlm_to_image_e2e` **passes**: free text → valid structured JSON (3490 chars) → non-degenerate 1024×1024 image on the 2×2 Blackhole mesh (on-device decode). Artifacts: `fibo_vlm_prompt.json` (the intermediate JSON) + `fibo_vlm_e2e.png`.
