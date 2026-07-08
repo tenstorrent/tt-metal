@@ -282,7 +282,25 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
+            if constexpr (is_avg_pool) {
+                clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
+            } else {
+                // QSR max_pool coherency fix: the pre-clear above (clear_out_tiles) uses a NoC
+                // self-loopback read from clear_value_cb into in_cb. On the Quasar sim that self-loopback
+                // read is unreliable (drops / reads stale SRAM), so in_cb's rows beyond the window are
+                // left holding stale L1. The compute reduces the FULL 4-face (32-row) tile, so that stale
+                // L1 leaks into the MAX (e.g. one reader's output pinned to a spurious max). Clear in_cb
+                // with the SRAM-coherent NoC zero-write instead (the same primitive FIX #1 / the halo pad
+                // use). Compute the region from the DFB object (get_local_cb_interface / get_tile_size are
+                // stale for Metal-2.0 DFBs). For MAX the reduce identity must be <= every real window
+                // element; the pooled inputs here are non-negative (resnet stem maxpool is post-ReLU), so 0
+                // is a safe identity and the once-at-init clear persists across the in_cb ring (the reader
+                // only overwrites the window rows). The unwritten tail rows then reduce to a no-op.
+                DataflowBuffer icb_clear(in_cb_id);
+                Noc clear_noc;
+                clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
+                clear_noc.write_zeros_l1_barrier();
+            }
         }
     }
 
