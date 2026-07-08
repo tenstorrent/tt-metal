@@ -1,0 +1,13 @@
+[93m This option will auto retry resetting galaxy 6u trays up to 3 times if it fails. [0m
+[93m Trying reset (1/3)... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[94m Issuing USER_RESET on 32 devices before IPMI reset... [0m
+[91m Error in resetting galaxy 6u trays, resetting again... [0m
+[93m Trying reset (2/3)... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[94m Issuing USER_RESET on 32 devices before IPMI reset... [0m
+[91m Error in resetting galaxy 6u trays, resetting again... [0m
+[93m Trying reset (3/3)... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[94m Issuing USER_RESET on 32 devices before IPMI reset... [0m
+[91m Failed on last reset...exiting with error code 1 [0m

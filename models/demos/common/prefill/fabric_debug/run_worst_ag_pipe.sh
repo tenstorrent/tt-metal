@@ -19,7 +19,7 @@ echo "  reset local=$(grep -c 'Re-initialized 32 boards' $WK/logs/rst_${TAG}_loc
 echo "=== launch ttrun (rank0=$LOCAL, rank1=$PEER) $(date) ===" | tee -a "$LOG"
 timeout --signal=KILL 1200 python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface ens5f0np0 --rank-binding $WK/bindings/worst_ag_2galaxy.yaml \
-  --mpi-args "--host ${LOCAL}:1,${PEER}:1 --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x TT_METAL_HOME -x WORST_AG_OUT" \
+  --mpi-args "--host ${LOCAL}:1,${PEER}:1 --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH -x PYTHONPATH -x TT_METAL_HOME -x WORST_AG_OUT -x TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE -x TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING -x TT_METAL_FABRIC_TRIMMING_PROFILE -x TT_METAL_FABRIC_TRIMMING_OVERRIDE" \
   bash "$WK/worst_ag_rank_wrapper.sh" >>"$LOG" 2>&1
 echo "=== exit rc=$? $(date) ===" | tee -a "$LOG"
 find "$WORST_AG_OUT" -name 'ops_perf_results*.csv' | tee -a "$LOG"

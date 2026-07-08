@@ -25,6 +25,23 @@ which is exactly the variable under test.
 import os
 import time
 
+# --- Channel-trimming env setup (must run BEFORE ttnn/metal reads rtoptions) ---
+# Keyed off WORST_AG_CT_MODE (capture|apply) + this rank, so the connected run needs no special
+# per-rank wrapper file (avoids the mpirun/NFS wrapper-not-found gremlin on the peer). Each rank
+# writes/reads its OWN profile under CTDIR/rank<N>.
+_CT_MODE = os.environ.get("WORST_AG_CT_MODE", "")
+_CT_RANK = os.environ.get("OMPI_COMM_WORLD_RANK", os.environ.get("PMIX_RANK", "0"))
+_CT_DIR = os.environ.get("WORST_AG_CT_DIR", "/data/ppopovic/prof_out/ct_connected")
+if _CT_MODE == "capture":
+    os.environ["TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE"] = "1"
+    os.environ["TT_METAL_FABRIC_TRIMMING_PRESERVE_VC0_FORWARDING"] = "1"
+    os.environ["TT_METAL_LOGS_PATH"] = f"{_CT_DIR}/rank{_CT_RANK}"
+    os.makedirs(f"{_CT_DIR}/rank{_CT_RANK}", exist_ok=True)
+elif _CT_MODE == "apply":
+    os.environ[
+        "TT_METAL_FABRIC_TRIMMING_PROFILE"
+    ] = f"{_CT_DIR}/rank{_CT_RANK}/generated/reports/channel_trimming_capture.yaml"
+
 import torch
 from loguru import logger
 

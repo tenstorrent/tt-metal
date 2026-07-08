@@ -1,0 +1,10 @@
+
+[93m This option will auto retry resetting galaxy 6u trays up to 3 times if it fails. [0m
+[93m Trying reset (1/3)... [0m
+[95m Resetting WH Galaxy trays with reset command... [0m
+[94m Issuing USER_RESET on 32 devices before IPMI reset... [0m
+[93mWaiting for 30 seconds: 0[0m[93mWaiting for 30 seconds: 1[0m[93mWaiting for 30 seconds: 2[0m[93mWaiting for 30 seconds: 3[0m[93mWaiting for 30 seconds: 4[0m[93mWaiting for 30 seconds: 5[0m[93mWaiting for 30 seconds: 6[0m[93mWaiting for 30 seconds: 7[0m[93mWaiting for 30 seconds: 8[0m[93mWaiting for 30 seconds: 9[0m[93mWaiting for 30 seconds: 10[0m[93mWaiting for 30 seconds: 11[0m[93mWaiting for 30 seconds: 12[0m[93mWaiting for 30 seconds: 13[0m[93mWaiting for 30 seconds: 14[0m[93mWaiting for 30 seconds: 15[0m[93mWaiting for 30 seconds: 16[0m[93mWaiting for 30 seconds: 17[0m[93mWaiting for 30 seconds: 18[0m[93mWaiting for 30 seconds: 19[0m[93mWaiting for 30 seconds: 20[0m[93mWaiting for 30 seconds: 21[0m[93mWaiting for 30 seconds: 22[0m[93mWaiting for 30 seconds: 23[0m[93mWaiting for 30 seconds: 24[0m[93mWaiting for 30 seconds: 25[0m[93mWaiting for 30 seconds: 26[0m[93mWaiting for 30 seconds: 27[0m[93mWaiting for 30 seconds: 28[0m[93mWaiting for 30 seconds: 29[0m[93mWaiting for 30 seconds: 30[0mAll 32 chips found in "/dev/tenstorrent"
+
+[94m Issuing POST_RESET on 32 devices after IPMI reset... [0m
+[95m Re-initializing boards after reset.... [0m
+[92m Re-initialized 32 boards after reset. Exiting... [0m
