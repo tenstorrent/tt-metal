@@ -30,15 +30,14 @@ class _Gemma4VllmOptimizations:
 
 def _gemma4_prefill_trace_unsafe(model, bounded_sliding_kv_cache) -> bool:
     """True when the hybrid bridge feeds *non-uniform* per-layer page tables
-    to the paged ops, which makes the vLLM prefill device trace unsafe.
+    to the paged ops, so a prefill-trace capture must run *through* the
+    per-layer page-table routing rather than the plain ``prefill_forward_text``.
 
-    Prefill-trace capture (the gemma4 warmup sweep / direct
-    ``prefill_forward_text`` callers) runs *before* the per-layer routing
-    that :meth:`Gemma4ForCausalLM.prefill_forward` applies at runtime, so it
-    binds the traced paged ops to the single full page_table shared by every
-    layer. That only matches runtime when every layer truly uses that one
-    table. It diverges — and the captured trace then addresses the wrong KV
-    slots, corrupting prefill output — whenever:
+    A direct ``prefill_forward_text`` capture binds the traced paged ops to the
+    single full page_table shared by every layer. That only matches runtime
+    when every layer truly uses that one table. It diverges — and the captured
+    trace then addresses the wrong KV slots, corrupting prefill output —
+    whenever:
 
       * bounded sliding is on and the model has ``sliding_attention`` layers
         (:meth:`_pad_sliding_page_tables_for_bounded` widens only the sliding
@@ -46,12 +45,13 @@ def _gemma4_prefill_trace_unsafe(model, bounded_sliding_kv_cache) -> bool:
       * the model kv-shares layers (``kv_shared_layer_map`` re-points a shared
         layer's table at its source's).
 
-    Decode is unaffected: decode warmup goes through ``decode_forward``, which
-    sets up the per-layer routing before capture — so disabling *only* the
-    prefill trace keeps the throughput-critical decode path traced. Models
-    without sliding layers (or with bounded sliding off and no kv-share) keep
-    their prefill trace, so the gate is structural and self-scoping rather
-    than a hard-coded model list.
+    When this returns True, :meth:`warmup_model_prefill` routes the warmup
+    capture through :meth:`prefill_forward` (which populates the persistent
+    per-layer buffers before capture) — exactly how decode warmup routes
+    through ``decode_forward``. Models without sliding layers (or with bounded
+    sliding off and no kv-share) can capture directly via
+    ``prefill_forward_text``, so the gate is structural and self-scoping
+    rather than a hard-coded model list.
     """
     if getattr(model, "kv_shared_layer_map", None):
         return True
@@ -186,21 +186,35 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         can_sample_on_device,
         greedy_only: bool = False,
     ):
-        # Mirror the runtime gate (``can_enable_trace`` was already forced off
-        # in ``_patch_model_args``): warm up prefill *eagerly* — compiled, no
-        # trace capture — when the hybrid per-layer page tables diverge from
-        # the single broadcast table this warmup path would otherwise capture.
-        # Without this the sweep would try to capture a corrupting prefill
-        # trace; with it, the else-branch of ``warmup_gemma4_model_prefill``
-        # runs the eager prefill warmup instead.
+        # #49083 fix: pre-capture the prefill-bucket traces here, at warmup,
+        # rather than lazily on the first runtime prefill. A cold *eager*
+        # prefill dispatched after a shared-Generator traced-decode session
+        # (the release workflow's evals phase) wedges the fetch queue
+        # (nlp_concat_heads) at ISL=2048 — capturing every bucket up front so
+        # runtime only *replays* removes that trace->eager transition.
+        #
+        # The hybrid per-layer page tables diverge from the single broadcast
+        # table a direct ``prefill_forward_text`` capture would bind, so route
+        # the capture through ``prefill_forward`` (``prefill_forward_fn`` below).
+        # That sets up per-layer routing and populates the persistent per-layer
+        # buffers *before* the traced forward, so the captured paged ops bind
+        # those buffers — identical to how decode warmup binds via
+        # ``decode_forward``. Runtime ``prefill_forward`` then just refreshes the
+        # same buffers' block IDs out-of-trace and replays. ``_mock_tokens``
+        # sizes the warmup page table to the runtime width, so the persistent
+        # buffers match runtime (and decode-warmup) shapes.
+        #
+        # GEMMA4_DISABLE_PREFILL_TRACE=1 keeps prefill fully eager (no capture).
+        prefill_forward_fn = None
         if enable_trace and _gemma4_prefill_trace_unsafe(self.model[0], self._bounded_sliding_kv_cache):
-            enable_trace = False
+            prefill_forward_fn = self.prefill_forward
         warmup_gemma4_model_prefill(
             self,
             kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
             greedy_only=greedy_only,
+            prefill_forward_fn=prefill_forward_fn,
         )
 
     def prefill_forward_text(self, *args, enable_trace=True, **kwargs):
@@ -569,31 +583,23 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
             prefill_trace_unsafe = _gemma4_prefill_trace_unsafe(model_i, bounded_sliding_kv_cache)
-            # GH #49083 fix: enable the RUNTIME prefill device trace even for the
-            # hybrid per-layer case. A cold *eager* prefill dispatched right after
-            # a shared-Generator traced decode wedges the fetch queue
-            # (nlp_concat_heads); replaying the prefill from a trace instead (as
-            # Qwen does) avoids it — confirmed on-device.
-            #
-            # This is SAFE because the runtime prefill trace is captured *lazily*
-            # inside ``Gemma4ForCausalLM.prefill_forward`` — i.e. after per-layer
-            # page-table routing is active and the persistent per-layer buffers
-            # are populated — so the captured paged ops bind those per-layer
-            # buffers (exactly how decode_forward captures the decode trace). Only
-            # the *warmup* pre-capture is unsafe (it drives ``prefill_forward_text``
-            # directly, before routing, binding one broadcast table); that path is
-            # kept eager by ``warmup_model_prefill`` (the ``_gemma4_prefill_trace_unsafe``
-            # gate there), so warmup never captures the corrupting broadcast trace.
-            # The first runtime prefill of each bucket therefore pays the one-time
-            # capture cost; size ``trace_region_size`` for the prefill buckets served.
-            # GEMMA4_DISABLE_PREFILL_TRACE=1 restores the old fully-eager prefill.
+            # GH #49083 fix: pre-capture the prefill device traces at *warmup*
+            # (see ``warmup_model_prefill``), routed through ``prefill_forward``
+            # for the hybrid per-layer case. A cold *eager* prefill dispatched
+            # after a shared-Generator traced-decode session (the release
+            # workflow's evals phase) wedges the fetch queue (nlp_concat_heads)
+            # at ISL=2048; capturing every bucket up front so runtime only
+            # *replays* removes that trace->eager transition. Capturing at warmup
+            # (before any traced decode) is what makes it safe — a lazy
+            # first-runtime capture still hits the wedge.
+            # GEMMA4_DISABLE_PREFILL_TRACE=1 restores the fully-eager prefill.
             prefill_trace_enabled = os.environ.get("GEMMA4_DISABLE_PREFILL_TRACE", "0") != "1"
             if prefill_trace_unsafe:
                 logger.info(
                     "Gemma4 vLLM: prefill device trace for {} runs hybrid per-layer "
-                    "page tables — warmup stays eager (no broadcast-table pre-capture); "
-                    "the runtime trace is captured lazily inside prefill_forward with "
-                    "per-layer routing active (#49083 fix). prefill_trace_enabled={}.",
+                    "page tables — warmup pre-captures each bucket through "
+                    "prefill_forward (per-layer routing active), so runtime replays "
+                    "instead of cold-eager capturing (#49083 fix). prefill_trace_enabled={}.",
                     model_path,
                     prefill_trace_enabled,
                 )

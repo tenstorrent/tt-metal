@@ -265,6 +265,7 @@ def warmup_gemma4_batched_prefill_traces(
     enable_trace: bool,
     can_sample_on_device,
     greedy_only: bool = False,
+    prefill_forward_fn=None,
 ) -> None:
     """Capture prefill traces for MoE models across batch sizes and trace ISLs.
 
@@ -272,10 +273,21 @@ def warmup_gemma4_batched_prefill_traces(
     skipping combinations that meet or exceed ``MAX_BATCHED_PREFILL_SEQ_LEN`` (128k).
     Caller must set ``generator.already_warmed_up_prefill`` before calling if needed,
     or this function sets it on entry.
+
+    ``prefill_forward_fn`` selects the entry point used for each capture. It
+    defaults to ``generator.prefill_forward_text`` (demo / uniform-page-table
+    path). The vLLM hybrid bridge passes ``generator.prefill_forward`` so the
+    capture runs *through* the per-layer page-table routing and binds the
+    traced paged ops to the persistent per-layer buffers — exactly how decode
+    warmup binds via ``decode_forward``. Pre-capturing the prefill buckets at
+    warmup (before any traced decode) keeps runtime prefills to trace *replay*,
+    avoiding the #49083 cold-eager-capture fetch-queue wedge.
     """
     if generator.already_warmed_up_prefill:
         return
     generator.already_warmed_up_prefill = True
+
+    prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
 
     model_args = generator.model_args[0]
     sequence_lengths_to_warmup = model_args.get_warmup_prefill_supported_seq_lens()
@@ -356,7 +368,7 @@ def warmup_gemma4_batched_prefill_traces(
                             batch_size,
                             param,
                         )
-                    generator.prefill_forward_text(
+                    prefill_forward(
                         **warmup_args,
                         kv_cache=kv_cache,
                         enable_trace=capture_trace,
@@ -380,7 +392,7 @@ def warmup_gemma4_batched_prefill_traces(
         prefill_forward_args = generator._mock_tokens(1, 128, kv_cache, model_id)
 
         logger.info("Warming up vision encoder with image size {}x{}", vision_chunk_size, vision_chunk_size)
-        generator.prefill_forward_text(
+        prefill_forward(
             **prefill_forward_args,
             kv_cache=kv_cache,
             enable_trace=False,
@@ -399,8 +411,14 @@ def warmup_gemma4_model_prefill(
     enable_trace,
     can_sample_on_device,
     greedy_only: bool = False,
+    prefill_forward_fn=None,
 ) -> None:
-    """Shared prefill warmup for standalone and vLLM Gemma4 generators."""
+    """Shared prefill warmup for standalone and vLLM Gemma4 generators.
+
+    ``prefill_forward_fn`` (vLLM hybrid bridge only) routes the trace capture
+    through the per-layer page-table path; see
+    :func:`warmup_gemma4_batched_prefill_traces`.
+    """
     enable_trace = maybe_disable_pli_prefill_trace(enable_trace, generator.model[0])
     if enable_trace:
         warmup_gemma4_batched_prefill_traces(
@@ -409,6 +427,7 @@ def warmup_gemma4_model_prefill(
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
             greedy_only=greedy_only,
+            prefill_forward_fn=prefill_forward_fn,
         )
         return
     from models.tt_transformers.tt.generator import Generator
