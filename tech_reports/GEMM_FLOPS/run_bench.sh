@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+export TT_METAL_HOME="$(pwd)"
+export TT_METAL_RUNTIME_ROOT="$(pwd)"
+export PYTHONPATH="${TT_METAL_HOME}:${PYTHONPATH:-}"
+source python_env/bin/activate
+
+export TT_METAL_DEVICE_PROFILER=1
+export ENABLE_TRACY=1
+export TT_METAL_PROFILER_MID_RUN_DUMP=1
+
+mkdir -p generated
+
+BENCH=tests/ttnn/unit_tests/benchmarks/test_benchmark.py
+
+pytest "${BENCH}::test_matmul_2d_host_perf" -xvs --timeout=7200
+pytest "${BENCH}::test_matmul_2d_host_perf_out_of_box" -xvs --timeout=7200
+
+ARCH=$(python -c "from models.common.utility_functions import is_blackhole; print('bh' if is_blackhole() else 'wh')")
+mkdir -p tech_reports/GEMM_FLOPS/data
+cp generated/matmul_2d_host_perf_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}-tuned.csv"
+cp generated/matmul_2d_host_perf_out_of_box_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}-oob.csv"
+
+python tech_reports/GEMM_FLOPS/plot_util_grid.py
