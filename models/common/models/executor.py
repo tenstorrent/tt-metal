@@ -575,18 +575,20 @@ class EagerLLMExecutor:
         if start_pos is not None:
             assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
 
-        logits = self.prefill_forward(
+        prefill_output = self.prefill_forward(
             tokens,
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
+            sampling_params=sampling_params,
             start_pos=start_pos,
         )
         ttnn.synchronize_device(self.mesh_device)
 
         # Capture output spec (logits is host tensor here, so just record shape/dtype)
         # todo)) use TensorSpec.from_tensor() directly? logits is torch.tensor though so may need new function/method
+        logits = prefill_output[0] if isinstance(prefill_output, tuple) else prefill_output
         self.prefill_output_spec = TensorSpec(
             shape=tuple(logits.shape),
             dtype=ttnn.bfloat16,  # Model output dtype
@@ -594,7 +596,7 @@ class EagerLLMExecutor:
             memory_config=None,  # Host tensor
         )
 
-        return logits
+        return prefill_output
 
     def compile_decode(
         self,
@@ -739,9 +741,11 @@ class EagerLLMExecutor:
 
         # todo)) output_tensor is just overwritten later? why allocate it here then?
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
+        output_tokens = torch.zeros(batch_size, dtype=torch.long)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
         if empty_slots is None:
             empty_slots = list(range(batch_size))
+        sampling_on_device = sampling_params is not None and getattr(self.model, "sampling", None) is not None
 
         prefill_results = []
 
@@ -781,26 +785,39 @@ class EagerLLMExecutor:
                 num_cached_tokens=num_cached_tokens,
             )
 
-            logits = ttnn.untilize(logits, use_multicore=True)
-            prefill_results.append(
-                {
-                    "idx": idx,
-                    "last_token_idx": last_token_idx,
-                    "logits": logits.cpu(blocking=False),
-                }
-            )
+            if sampling_on_device:
+                tt_toks, _ = self._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+                prefill_results.append(
+                    {
+                        "idx": idx,
+                        "tokens": tt_toks.cpu(blocking=False),
+                    }
+                )
+            else:
+                logits = ttnn.untilize(logits, use_multicore=True)
+                prefill_results.append(
+                    {
+                        "idx": idx,
+                        "last_token_idx": last_token_idx,
+                        "logits": logits.cpu(blocking=False),
+                    }
+                )
 
         for res in prefill_results:
             ttnn.synchronize_device(self.mesh_device)
-            last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
-            output_tensor[res["idx"]] = _process_output_prefill(
-                res["logits"],
-                last_relative % 32,
-                vocab_size,
-                cluster_shape,
-            )
+            if "tokens" in res:
+                sampled = _process_output_decode_tokens(res["tokens"], 1, cluster_shape)
+                output_tokens[res["idx"]] = sampled.view(-1)[0].to(torch.long)
+            else:
+                last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
+                output_tensor[res["idx"]] = _process_output_prefill(
+                    res["logits"],
+                    last_relative % 32,
+                    vocab_size,
+                    cluster_shape,
+                )
 
-        return output_tensor
+        return (output_tokens, None) if sampling_on_device else output_tensor
 
     def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
         """Prefill a single user with chunked prefill support.
@@ -1201,17 +1218,19 @@ class TracedLLMExecutor:
         # _prealloc_sampling_buffers.
         self._prealloc_sampling_buffers(sampling_params)
 
-        logits = self.prefill_forward(
+        prefill_output = self.prefill_forward(
             tokens,
             page_table=page_table,
             kv_cache=kv_cache,
             prompt_lens=prompt_lens,
             empty_slots=empty_slots,
+            sampling_params=sampling_params,
             start_pos=start_pos,
         )
         ttnn.synchronize_device(self.mesh_device)
 
         # Capture output spec
+        logits = prefill_output[0] if isinstance(prefill_output, tuple) else prefill_output
         self.prefill_output_spec = TensorSpec(
             shape=tuple(logits.shape),
             dtype=ttnn.bfloat16,
@@ -1219,7 +1238,7 @@ class TracedLLMExecutor:
             memory_config=None,
         )
 
-        return logits
+        return prefill_output
 
     def compile_decode(
         self,
@@ -1319,10 +1338,12 @@ class TracedLLMExecutor:
         vocab_size = self.model.vocab_size
         cluster_shape = self.cluster_shape
         output_tensor = torch.zeros(batch_size, 1, vocab_size)
+        output_tokens = torch.zeros(batch_size, dtype=torch.long)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
         # todo)) empty_slots is only used when integrating with vLLM? If true, we should move this integration into generator.py
         if empty_slots is None:
             empty_slots = list(range(batch_size))
+        sampling_on_device = sampling_params is not None and getattr(self.model, "sampling", None) is not None
 
         prefill_results = []
 
@@ -1382,26 +1403,39 @@ class TracedLLMExecutor:
                     num_cached_tokens=num_cached_tokens,
                 )
 
-            logits = ttnn.untilize(logits, use_multicore=True)
-            prefill_results.append(
-                {
-                    "idx": idx,
-                    "last_token_idx": last_token_idx,
-                    "logits": logits.cpu(blocking=False),
-                }
-            )
+            if sampling_on_device:
+                tt_toks, _ = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+                prefill_results.append(
+                    {
+                        "idx": idx,
+                        "tokens": tt_toks.cpu(blocking=False),
+                    }
+                )
+            else:
+                logits = ttnn.untilize(logits, use_multicore=True)
+                prefill_results.append(
+                    {
+                        "idx": idx,
+                        "last_token_idx": last_token_idx,
+                        "logits": logits.cpu(blocking=False),
+                    }
+                )
 
         for res in prefill_results:
             ttnn.synchronize_device(self.mesh_device)
-            last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
-            output_tensor[res["idx"]] = _process_output_prefill(
-                res["logits"],
-                last_relative % 32,
-                vocab_size,
-                cluster_shape,
-            )
+            if "tokens" in res:
+                sampled = _process_output_decode_tokens(res["tokens"], 1, cluster_shape)
+                output_tokens[res["idx"]] = sampled.view(-1)[0].to(torch.long)
+            else:
+                last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
+                output_tensor[res["idx"]] = _process_output_prefill(
+                    res["logits"],
+                    last_relative % 32,
+                    vocab_size,
+                    cluster_shape,
+                )
 
-        return output_tensor
+        return (output_tokens, None) if sampling_on_device else output_tensor
 
     def _easy_trace_prefill(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
         """Lazy trace capture for prefill. Captures on first call per seq_len."""
@@ -1784,10 +1818,11 @@ def _compile_prefill_and_decode(
             sampling_params=sampling_params,
         )
 
-    # todo)) check these against what is actually running in TTTv1 --> the prefill_forward may run sampling on device!
     batch_size = prefill_tokens.shape[0]
     decode_tokens = torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device)
-    if logits is not None:
+    if isinstance(logits, tuple):
+        decode_tokens = logits[0].view(-1)[:batch_size].to(dtype=torch.long, device=prefill_tokens.device)
+    elif logits is not None:
         decode_tokens = torch.argmax(logits[:, -1:, :], dim=-1).view(-1)
     decode_start_pos = torch.full(
         (batch_size,),
@@ -1925,11 +1960,12 @@ class PerfBenchmarkResult:
 
     @property
     def ttft_ms(self) -> float:
-        """Wall-clock time until the first token is available for any user.
+        """TTTv1-style average time to first token per user.
 
-        In a batched prefill, this is not amortized by batch size.
+        TTTv1 reports batch prefill TTFT as total prefill wall time divided by
+        batch size, so keep this metric amortized for parity gating.
         """
-        return self.prefill_time_s * 1000
+        return self.prefill_time_s / self.batch_size * 1000
 
     @property
     def tok_s_u(self) -> float:

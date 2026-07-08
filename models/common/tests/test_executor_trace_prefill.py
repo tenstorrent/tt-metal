@@ -135,3 +135,28 @@ def test_traced_sampled_decode_uses_device_feedback_after_reset(monkeypatch):
         )
     ]
     assert page_table_copies == [("host_page_table", "device_page_table")]
+
+
+def test_compile_prefill_and_decode_uses_sampled_prefill_tokens(monkeypatch):
+    class Executor:
+        def compile_prefill(self, **kwargs):
+            assert kwargs["sampling_params"] == "sampling"
+            return (executor_module.torch.tensor([42]), None)
+
+        def compile_decode(self, **kwargs):
+            decode_calls.append(kwargs)
+
+    decode_calls = []
+    executor = Executor()
+    page_table = executor_module.torch.zeros((1, 1), dtype=executor_module.torch.int32)
+
+    executor_module._compile_prefill_and_decode(
+        executor,
+        prefill_tokens=executor_module.torch.ones((1, 128), dtype=executor_module.torch.long),
+        prefill_page_table=page_table,
+        sampling_params="sampling",
+    )
+
+    assert len(decode_calls) == 1
+    assert decode_calls[0]["tokens"].tolist() == [42]
+    assert decode_calls[0]["sampling_params"] == "sampling"
