@@ -20,6 +20,14 @@ This directory holds the design contract for **TT-RDMA**: a verbs-shaped, NIC-ag
 | `tt-rdma-pfc-lossless.md` | Mellanox PFC config + WH CMAC pause enable |
 | `tt-rdma-eswitch-bypass.md` | Mellanox switchdev / vfio-pci paths to remove the eSwitch bottleneck |
 | `bf3-gateway-design.md` | BlueField-3 + DOCA gateway design for RoCEv2 ↔ TT-RDMA-v1 translation — lets `libibverbs`/MPI/UCX apps reach WH nodes |
+| `tt-rdma-verbs-provider.md` | Native `rdma-core` provider (`libtt_rdma`) — the software alternative to the BF3 gateway for FPGA-TT-Link |
+| `tt-rdma-bidirectional-mesh-gap.md` | What's missing to make a TT node a *symmetric* RoCEv2-reachable mesh endpoint (accessible in both directions via a gateway) |
+| `tt-rdma-mesh-addressing-spec.md` | Detailed spec for the two critical-path gaps: endpoint addressing (rkey/QPN routing) + remote-MR import + QP object — no FW change |
+| `tt-rdma-switch-interop-architecture.md` | Gateway path vs native-switch path: how TT interoperates on L2 switches / RoCE fabrics today (gateway + in-band addressing) vs the Exabox A0/Keraunos-2 silicon fix (parallel queues + linked-list ARQ + bigger header table) |
+| `tt-rdma-mesh-egress-multicast.md` | Composition: an **interior** tt-fabric mesh chip pushing a tensor out through an edge chip + gateway, incl. **one-to-many multicast** to external GPUs (memory-tier staging + gateway fan-out — the piece neither the fabric nor the RDMA docs cover) |
+| `runtime-workload-coexistence.md` | "Where do bytes move" diagram: a Tensix inference workload (Qwen3) sharing one chip with the erisc CMAC FW over FPGA-TT-Link |
+| `tt-rdma-blackhole-port.md` | Bringing TT-RDMA to **Blackhole** as a 2nd chip-side target: same wire + same gateway, but a different FW model (tt-metal active-eth over `bh-erisc` base FW), Rianta MAC, 400 G links, RoCE HW-offload hooks (note: HW packet-resend ARQ exists on WH too — not a BH delta) |
+| `glossary.md` | Acronym + term key (IMM, RETH, PSN, RCB, MR, QPN, WQE/CQE, eswitch, …) |
 
 ## Architecture, one diagram
 
@@ -70,6 +78,16 @@ The WH-side FW + wire protocol is **NIC-agnostic**. What differs across deployme
 
 Today's testbed: **WH ↔ Mellanox ConnectX-5 (Gen3 x4)**. Every Gbps number quoted below is from this rig.
 
+> **The table above varies the *partner*; the *chip side* is a second axis.** All
+> shipped numbers are Wormhole. **Blackhole is a second chip-side target** — same
+> wire (`0x1AF6`) and same gateway concept, but a different FW model (a tt-metal
+> active-eth kernel coexisting with the `bh-erisc` base FW, not standalone
+> `erisc_cmac_simple`), a Rianta MAC, 400 Gbps links, and RoCE HW-offload hooks.
+> (Hardware packet-resend ARQ is *not* a BH delta — WH has it too via `ETH_TXQ`
+> packet mode; TT-RDMA uses raw mode on both, so it's unused either way.) The
+> WH-specific docs (PFC register map, RX FW arch, L1 layout) need BH variants.
+> Full port design: `tt-rdma-blackhole-port.md`.
+
 ## Where we are (shipped vs planned)
 
 ### Shipped (v1.0)
@@ -113,7 +131,7 @@ Both directions are within ~1 Gbps of the Mellanox PCIe Gen3 x4 ceiling.
 - **Opcode encoding**: 0x01 SEND, 0x02 SEND_IMM, 0x10 WRITE, 0x11 WRITE_IMM, 0x20 READ_REQ, 0x21 READ_RESP, 0x40 ACK, 0xF0 CONTROL.
 - **Reserved opcode ranges**: 0x0X SEND-family, 0x1X WRITE-family, 0x2X READ-family, 0x3X ATOMIC-family, 0x4X control-plane, 0xF0 CONTROL.
 - **Frame alignment**: payload must be 16-byte aligned (matches CMAC L1 placement).
-- **MR table**: 16 entries × 32 B at L1:0x8500. `rkey = (slot_idx << 24) | (rand16 << 8) | generation`.
+- **MR table**: 16 entries × 32 B at L1:0x8500. `rkey = (slot_idx << 24) | (rand16 << 8) | generation`. Holds only *local* regions exposed as inbound targets — remote MRs you initiate against are host-side only and cost no slot. Sizing per workload (1 for smoke, ~12 for a verbs app, 64 for NCCL/UCX): `tt-rdma-host-sdk.md §2 "How many MRs do I actually need?"`.
 - **Reliability**: auto-on for one-sided ops (WRITE/READ); off for plain SEND.
 - **RX ring**: single 14 KB at L1:0x4000–0x7800; CMAC BUF_WRAP enabled.
 - **TX layout**: 32 slots × 4096 B at WQE_PAYLOAD_BASE = 0x9000 (ends at 0x29000); TX_BUF0/1 at 0x29000/0x2A000.

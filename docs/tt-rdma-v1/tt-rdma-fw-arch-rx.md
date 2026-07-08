@@ -1,17 +1,24 @@
-# fw-arch-rx-rdma.md — TT-RDMA-over-Ethernet RX Path on WH erisc CMAC FW
+# tt-rdma-fw-arch-rx.md — TT-RDMA-over-Ethernet RX Path on WH erisc CMAC FW
+
+> **Canonical wire values live in `tt-rdma-wire-protocol-v1.md`.** This doc
+> describes the FW RX dispatch *mechanism*; where a constant (opcode value,
+> header size, MR-entry layout, rkey format) appears here it is reproduced
+> from the shipped v1.0 format — if the two ever disagree, the wire-protocol
+> doc + the shipped `main_cmac.cc` win. Values below were reconciled to the
+> shipped FW (v1.0, README shipped table) on 2026-07-07.
 
 ## 0. Premise
 
-Replace the current 2-slot (later 4-slot probe) ping-pong PACKET_BUF / PACKET_BUF1 scheme in `run_wqe_ring_loop`'s RX block with a **single ring** sized `N` bytes at `PACKET_BUF_ADDR=0x4000`, exploiting CMAC's already-enabled `ETH_RXQ_CTRL_BUF_WRAP` mode (`eth_cmac_init.cpp:745`). Frame boundaries come from the wire-protocol length field:
+Replace the current 2-slot (later 4-slot probe) ping-pong PACKET_BUF / PACKET_BUF1 scheme in `run_wqe_ring_loop`'s RX block with a **single ring** sized `N` bytes at `PACKET_BUF_ADDR=0x4000`, exploiting CMAC's already-enabled `ETH_RXQ_CTRL_BUF_WRAP` mode (`eth_cmac_init.cpp:745`). Frame boundaries come from the wire-protocol length field. The header is the fixed **32-byte** v1 header (`tt-rdma-wire-protocol-v1.md §1`):
 
 ```
-[u8 opcode][u8 flags][u16 reserved][u32 length][u32 seq][u32 rkey]
-[u64 remote_offset][... payload ...]
+[u8 opcode][u8 version_flags][u16 tag][u32 length][u32 seq][u32 rkey]
+[u64 remote_offset][u32 imm_data][u32 header_cksum][... payload ...]
 ```
 
-`length` = total frame size in bytes including the header. Header is 24B aligned to 16B (matches CMAC RX DMA write width).
+`length` = **payload byte length, NOT including the 32-byte header** (frame+4; matches the shipped builder, `external_iface_sender.cpp:768` "length = bytes-requested"). Header is 32 B and 16-B aligned, so the payload that follows is 16-B aligned (matches CMAC RX DMA write width — see P2 round-to-16).
 
-ACK frames reuse the same header with `opcode=ACK` and `length=24` (header-only, `seq` carries `ack_seq`).
+ACK frames reuse the same header with `opcode=0x40` and `length=0` (header-only, `seq` carries `ack_seq`).
 
 ---
 
@@ -23,29 +30,35 @@ ACK frames reuse the same header with `opcode=ACK` and `length=24` (header-only,
 
 ### Proposed new map
 
+**Shipped v1.0 map (reconciled to `external_iface_sender.hpp` + README shipped table):**
+
 ```
 0x0000-0x021F  startup + boot params
 0x1F40-0x1FFF  GW mailbox (some fields repurposed)
 0x2000-0x3AD0  cmac_simple .text / .data
-0x4000-0x7BFF  PACKET_BUF (RX ring, single, N=14 KB)  ← NEW
-0x7C00-0x7FFF  reserved scratch (256 B; for ring-overflow staging)
-0x8000-0x83FF  WQE descriptor table (unchanged, 1 KB)
-0x8400-0x84BF  RCB header (unchanged through +0x3F)
-0x84C0-0x84FF  RCB DBG counters (unchanged, dbg[0..15])
-0x8500-0x85FF  MR table (16 entries × 16 B = 256 B)  ← NEW
-0x8600-0x8FFF  RxWqeRing (RX→host descriptors, 10 slots × 256B — see L5 doc)
-0x9000-0x20FFF WQE_PAYLOAD (TX side, unchanged 96 KB)
-0x21000-0x21800 TX_BUF0 (relocated from 0x6000)  ← NEW
-0x21800-0x22000 TX_BUF1 (relocated from 0x6600)  ← NEW
-0x22000+        free / FW scratch (not RX-DMA-addressable)
+0x4000-0x77FF  PACKET_BUF (RX ring, single, N=14 KB)   ← shipped (P1)
+0x7800-0x7FFF  reserved scratch (for ring-overflow staging)
+0x8000-0x83FF  WQE descriptor table (64 slots × 16 B = 1 KB)
+0x8400-0x843F  RCB header (host↔FW mailbox; ctrl doorbell at +0x28, ctrl slot +0x2C)
+0x8440-0x84AF  RCB DBG counters (dbg[0..27], 28 × 4 B = 112 B — see §8)
+0x8500-0x86FF  MR table (16 entries × 32 B = 512 B)     ← shipped (P2)
+0x9000-0x28FFF WQE_PAYLOAD (TX side, 32 × 4096 B = 128 KB)  ← jumbo
+0x29000-0x29FFF TX_BUF0 (relocated by P1)                ← shipped
+0x2A000-0x2AFFF TX_BUF1 (relocated by P1)                ← shipped
+0x2B000+        free / FW scratch (not RX-DMA-addressable)
 ```
+
+> **The RxWqeRing is NOT in L1.** SEND-family frames are DMA-pushed by FW to a
+> **host hugepage** at offset +128 KB (Phase P5), reverse of the TX DMA-pull.
+> An earlier draft placed it in L1 at 0x8600; that was never shipped. See
+> `tt-rdma-host-sdk.md §3` for the host-side ring layout.
 
 ### Why N = 14 KB
 
 - Phase 3.2 sustained ~909k fps wire RX. 1500 B frame at 909k fps = ~1.36 GB/s = **1.36 KB/µs**. A 14 KB ring gives ~10 µs head-room before producer catches consumer.
-- TX_BUF0/1 must move out of `0x6000–0x6BFF` to free contiguous space. CMAC **TX** (unlike RX) has no addressability problem with upper L1 — Phase 3.2 already writes WQE payload up to 0x21000. Safe to relocate.
+- TX_BUF0/1 moved out of `0x6000–0x6BFF` to free contiguous space for the RX ring (P1), landing at `0x29000/0x2A000` past the WQE payload pool. CMAC **TX** (unlike RX) has no addressability problem with upper L1 — the jumbo TX ring already writes WQE payload up to 0x29000. Safe to relocate.
 
-> Punt: 14 vs 16 KB ring. If we drop the spill scratch at 0x7C00 we get 16 KB (power-of-two-friendly modulo). 14 KB is the safer default for v1.
+> Punt: 14 vs 16 KB ring. If we drop the spill scratch at 0x7800 we get 16 KB (power-of-two-friendly modulo). 14 KB is the shipped default for v1.
 
 ---
 
@@ -117,20 +130,39 @@ static uint32_t rx_drain(uint32_t* last_rx_ptr_io) {
 ## 3. Opcode Dispatch
 
 ```c
+// Canonical v1 opcode values (family-ranged; see tt-rdma-wire-protocol-v1.md §2).
+// NOTE: these are NOT sequential — the family ranges (0x0X SEND, 0x1X WRITE,
+// 0x2X READ, 0x4X control) are load-bearing, so the per-opcode dbg counter
+// uses an explicit small mapping, not `dbg[op]`.
 enum {
     OP_SEND      = 0x01,
-    OP_WRITE     = 0x02,
-    OP_READ_REQ  = 0x03,
-    OP_READ_RESP = 0x04,
-    OP_ACK       = 0x05,
+    OP_SEND_IMM  = 0x02,
+    OP_WRITE     = 0x10,
+    OP_WRITE_IMM = 0x11,
+    OP_READ_REQ  = 0x20,
+    OP_READ_RESP = 0x21,
+    OP_ACK       = 0x40,
+    OP_CONTROL   = 0xF0,
 };
+
+// opcode → contiguous dbg counter index (dbg[16..21], see §8)
+static inline uint32_t op_dbg_idx(uint8_t op) {
+    switch (op) {
+    case OP_SEND: case OP_SEND_IMM:   return 16;
+    case OP_WRITE: case OP_WRITE_IMM: return 17;
+    case OP_READ_REQ:                 return 18;
+    case OP_READ_RESP:                return 19;
+    case OP_ACK:                      return 20;
+    default:                          return 21;  // spare / other
+    }
+}
 
 static void dispatch_opcode(uint8_t op, uint32_t base, uint32_t off,
                             uint32_t N, uint32_t len) {
     uint32_t seq  = read_u32_with_wrap(base, off, N, 8);
     uint32_t rkey = read_u32_with_wrap(base, off, N, 12);
     uint64_t roff = read_u64_with_wrap(base, off, N, 16);
-    dbg[15 + op]++;
+    dbg[op_dbg_idx(op)]++;
 
     switch (op) {
     case OP_WRITE: {
@@ -181,23 +213,31 @@ static void dispatch_opcode(uint8_t op, uint32_t base, uint32_t off,
 
 ## 4. Memory Region Table
 
-### Layout (16 entries × 16 B = 256 B at 0x8500)
+### Layout (16 entries × 32 B = 512 B at 0x8500)
 
 ```c
 typedef struct {
-    uint32_t base_noc_lo;     // +0x00
-    uint32_t base_noc_hi;     // +0x04  (PCIe/NoC tile encoding)
-    uint32_t length;          // +0x08  bytes
-    uint8_t  access_flags;    // +0x0C  bit0=READ, bit1=WRITE, bit2=ATOMIC
-    uint8_t  rkey;            // +0x0D  must match entry index for v1
-    uint16_t reserved;        // +0x0E
+    uint32_t base_noc_lo;     // +0x00  target NoC address (PCIe/NoC tile encoding)
+    uint32_t base_noc_hi;     // +0x04
+    uint32_t length_lo;       // +0x08  region length, bytes (u64)
+    uint32_t length_hi;       // +0x0C
+    uint32_t rkey;            // +0x10  host-assigned, 0 = entry-not-valid
+    uint32_t access_flags;    // +0x14  bit0=LOCAL_WRITE, bit1=REMOTE_WRITE,
+                              //        bit2=REMOTE_READ, bit3=REMOTE_ATOMIC
+    uint32_t pd;              // +0x18  protection domain (defer; 0 = default)
+    uint32_t reserved;        // +0x1C
 } mr_entry_t;
 
 #define MR_TABLE_ADDR  0x8500
-#define MR_TABLE_N     16
+#define MR_TABLE_N     16     // per-entry 32 B → 512 B table
 ```
 
-For v1, `rkey == table_index`. Lookup is single-cycle indexed read; no hash.
+**rkey encoding (shipped):** `rkey = (slot_idx << 24) | (rand16 << 8) | generation`.
+The lookup is O(1) direct-index — `slot = (rkey >> 24) & 0x0F` (`main_cmac.cc:596`) —
+then FW validates the full stored `rkey` matches (catches stale generation / spoofing).
+No linear scan, no hash. (Earlier drafts used `rkey == table_index` with a u8 rkey;
+that is **not** the shipped format — the generation byte is what invalidates late
+frames after a dereg/re-register into the same slot, see `tt-rdma-host-sdk.md §2`.)
 
 ### Host registration mechanism — **recommend (a)**
 
@@ -207,7 +247,7 @@ For v1, `rkey == table_index`. Lookup is single-cycle indexed read; no hash.
 
 Choose (a); (b) as fallback if descriptor-table changes are too invasive.
 
-> Punt: MR table location 0x8500. If RxWqeRing wants more room, move MR to `0x83C0` (RCB header has 64 B free at +0xC0..+0xFF).
+> Resolved: MR table shipped at 0x8500 (0x8500–0x86FF, 512 B). No L1 contention with the RxWqeRing — that ring lives in host hugepage (P5), not L1. Growing the table to 64 entries (mesh-spec §7.2, M7) needs 2 KB (0x8500–0x8CFF), still below the WQE payload base at 0x9000.
 
 ---
 
@@ -237,10 +277,10 @@ Single TX WQE per outer iter (existing convention). Yields 1:32 TX:RX worst-case
 
 **Current:** ACK frames have `WQE_ACK_MAGIC=0xACE5C0DE` at payload offset 0; offset 4 = `ack_seq`. RX block matches the magic and updates `rcb[2]`.
 
-**New:** ACK has `opcode=OP_ACK=0x05`; `seq` field carries `ack_seq`. Dispatch arm updates `rcb[2]` identically. Magic-word check becomes single opcode comparison.
+**New:** ACK has `opcode=OP_ACK=0x40`; `seq` field carries `ack_seq`. Dispatch arm updates `rcb[2]` identically. Magic-word check becomes single opcode comparison.
 
 **Transition:**
-1. Land FW with both detection paths active (opcode==0x05 *or* first word == WQE_ACK_MAGIC) for one-build overlap.
+1. Land FW with both detection paths active (opcode==0x40 *or* first word == WQE_ACK_MAGIC) for one-build overlap.
 2. Host emits new header.
 3. Drop magic check.
 
@@ -268,10 +308,11 @@ retx-pending walk (`rcb[5]`) unchanged.
 uint32_t rx0_buf_word_addr  = RX_RING_BASE / 16;   // = 0x400
 uint32_t rx0_buf_size_words = RX_RING_N / 16;      // = 0x380
 eth_rxq_init(0, rx0_buf_word_addr, rx0_buf_size_words, /*wrap=*/true, /*packet_mode=*/false);
-// RXQ1: disable or stub to 0x7C00 (256 B)
+// RXQ1: disable or stub to 0x7800 (reserved scratch)
 ```
 
-Relocate `TX_BUF0_ADDR=0x21000`, `TX_BUF1_ADDR=0x21800` in `eth_cmac_init.h:37-38`.
+Relocate `TX_BUF0_ADDR=0x29000`, `TX_BUF1_ADDR=0x2A000` in `eth_cmac_init.h:37-38`
+(shipped values — must match `external_iface_sender.hpp:371-372` `kTxBuf0`/`kTxBuf1`).
 
 ---
 

@@ -35,6 +35,14 @@ Offset  Size  Field            Notes
 32      L     payload          L = length bytes; absent for READ_REQ/ACK.
 ```
 
+> **Extension note (0x1AF7):** the mesh-addressing work reclaims this +28
+> `header_cksum` word as a 32-bit `qpn` (low 24 b) in a new ethertype `0x1AF7`
+> variant, to give per-QP reliability/ordering without growing the header
+> (payload must stay 16-B aligned). The on-wire header CRC moves to a
+> gateway-side software check. See `tt-rdma-mesh-addressing-spec.md §7.3`
+> (Option A, decided). `0x1AF6` (this format) is unchanged and dual-stacks
+> with `0x1AF7` during transition.
+
 Total header = 32 B. Header offsets are 4-byte aligned so the erisc can use word loads through the whole walk. The header CRC is over the 28 bytes of header *only* — wire FCS covers the payload byte-for-byte already, and a payload-CRC would force the entire frame to be in L1 before validation (we want to stream).
 
 **Why this order:**

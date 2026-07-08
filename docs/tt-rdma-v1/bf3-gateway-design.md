@@ -50,7 +50,7 @@ shipped FW, md5 `43bdcb46`). All protocol translation lives in the gateway.
               │            ▼                                                │
               │   TT-RDMA-v1 ENCODER (lib)                                 │
               │    - Build 32 B v1 hdr                                     │
-              │    - Pack as ethertype 0x1AF4 frame                        │
+              │    - Pack as ethertype 0x1AF6 frame                        │
               │            │                                                │
               │            ▼                                                │
               │   ConnectX-7 NIC port "tt"  (TT-RDMA-v1 side)              │
@@ -58,7 +58,7 @@ shipped FW, md5 `43bdcb46`). All protocol translation lives in the gateway.
               └────────────┼─────────────────────────────────────────────────┘
                            │
                            ▼ TT-RDMA-v1 wire
-                           ▼ ethertype 0x1AF4
+                           ▼ ethertype 0x1AF6
               ┌──────────────────────────────────────────────────────────┐
               │ WORMHOLE CHIP                                            │
               │  erisc_cmac_simple.elf (TT-RDMA-v1 FW, v1.0)             │
@@ -198,7 +198,7 @@ Gateway:
     rkey = 0      (SEND doesn't use MR on target)
     remote_offset = 0
     imm = 0
-  Emit on "tt" port: [L2 hdr ethertype 0x1AF4] + [32 B TT hdr] + [payload]
+  Emit on "tt" port: [L2 hdr ethertype 0x1AF6] + [32 B TT hdr] + [payload]
 
 WH FW:
   case 0x01 → NoC-push to host RxWqeRing slot
@@ -479,8 +479,17 @@ Critical for production. Build in from G.1:
    Options: Ethernet management LAN, OOB UART, dedicated PCIe link.
    Each has its own latency + reliability tradeoffs.
 
-3. **Single point of failure.** BF3 down = TT cluster unreachable from
-   RDMA peers. Plan for HA: dual BF3, active/standby with floating MR table.
+3. **Single point of failure → N×M rail matrix.** A single BF3 down = TT
+   cluster unreachable. The production answer is not just dual active/standby
+   but a **rail matrix**: multiple external-CMAC erisc cores per WH chip ×
+   multiple gateways (BF3/FPGA), for bandwidth aggregation *and* HA. This works
+   because (a) the NoC is chip-global, so a one-sided op for any MR can land via
+   any rail — MRs are rail-agnostic; (b) rkey pass-through means every gateway
+   shares the same rkey→MR meaning with zero shared state. The rule: **pin a QP
+   to one rail, aggregate with many QPs** (NCCL/UCX multi-rail pattern) — never
+   per-packet stripe a QP. Failover = drain + RDMA-CM reconnect of the affected
+   QPs on a surviving rail; other QPs are untouched (graceful degradation).
+   Full design in `tt-rdma-mesh-addressing-spec.md §8`.
 
 4. **Performance under load.** Need careful profiling. The 25 Gbps WH
    ceiling is fine for many workloads; for KV-cache transfer at
@@ -546,7 +555,18 @@ After production hardening:
 - `tt-rdma-host-sdk.md` — `ExternalIfaceSender` API surface
 - `tt-rdma-pfc-lossless.md` — PFC config for lossless fabric
 - `tt-rdma-eswitch-bypass.md` — SR-IOV/switchdev for PCIe-bound paths
+- `tt-rdma-bidirectional-mesh-gap.md` — what this doc does *not* yet cover: the outbound (TT-as-initiator) direction
+- `tt-rdma-mesh-addressing-spec.md` — the endpoint-addressing + remote-MR + QP-object spec that closes the outbound half
 
 The BF3 gateway built per this doc consumes the **wire protocol** + **host
 SDK** from those docs. It does not require any changes to the WH FW
 beyond v1.0.
+
+> **Scope note (2026 addendum):** §5 above translates almost entirely in the
+> **inbound** direction — external RoCE app as requester, WH FW as passive
+> target. For a *symmetric* mesh node (TT also *initiating* RDMA into the RoCE
+> fabric), the gateway needs the outbound routing + deferred end-to-end ACK +
+> active-connect proxy specced in `tt-rdma-mesh-addressing-spec.md`. The
+> per-opcode routing there (one-sided by `rkey`, two-sided by `tag`-as-QPN)
+> requires **no WH FW change** — extend `qp_table.c` / `mr_table.c` /
+> `translate.c` with the forward+reverse binding tables in that spec §3.

@@ -1,5 +1,13 @@
 # Plan A — TT-RDMA Lossless Wire Layer via PFC
 
+> **Wormhole-specific.** §3 below programs the **DWC XLGMAC** registers
+> (`MAC_RX_FLOW_CTRL` 0x90, `MAC_PRI0_TX_FLOW_CTRL` 0x70, …) in
+> `mac_tx_rx_enable()`. Blackhole's MAC/PCS is a **Rianta RSm410**, not DWC —
+> these register offsets do **not** apply, and BH PFC config is still a `TODO`
+> in its base FW (`bh-erisc` `eth_init.cpp:538`). The Mellanox side (§1–§2) is
+> partner-side and carries over. See `tt-rdma-blackhole-port.md §7` for the BH
+> flow-control gap (phase BH.6).
+
 ## Recommendation up front
 
 Run TT-RDMA traffic in 802.1Q VLAN (VID 100) with PCP=3. Enable PFC on priority 3 on both Mellanox and WH CMAC. Simplest path on ConnectX-5 (no RoCE/IP/DSCP plumbing needed). DPDK app needs one-line change: add VLAN tag insertion. CMAC pause-honoring is OFF by default — needs two register writes to enable.
@@ -51,7 +59,7 @@ sudo mlnx_qos -i enp2s0np0 --pfc 0,0,0,0,0,0,0,0 --prio_tc 0,0,0,0,0,0,0,0
 
 - ConnectX-5 ingress maps PCP→prio when `trust pcp` set
 - DPDK side: `mbuf->ol_flags |= RTE_MBUF_F_TX_VLAN; mbuf->vlan_tci = (3<<13)|100;` and enable `RTE_ETH_TX_OFFLOAD_VLAN_INSERT`
-- CMAC side: build 802.1Q tag in L1 payload buffer the gw kernel hands to `eth_send_packet`. Frame becomes `[DA][SA][0x8100][TCI][0x1AF4][payload][FCS]`. `ETH_TXQ_ETH_TYPE=0x8100`; 802.1Q TCI + inner ethertype become first 4 payload bytes.
+- CMAC side: build 802.1Q tag in L1 payload buffer the gw kernel hands to `eth_send_packet`. Frame becomes `[DA][SA][0x8100][TCI][0x1AF6][payload][FCS]`. `ETH_TXQ_ETH_TYPE=0x8100`; 802.1Q TCI + inner ethertype become first 4 payload bytes.
 
 **Option 2: DSCP.** Requires UDP/IP wrap — significant FW work. Skip unless RoCEv2 destination.
 
@@ -98,7 +106,7 @@ sudo ip link set enp2s0np0 up
 
 # 3. DPDK receiver with VLAN/PCP=3:
 sudo /tmp/mlx_smoke_bin/test_external_cmac_smoke_mlx \
-    --proc-type=primary -- --count 0 --ethertype 0x1AF4
+    --proc-type=primary -- --count 0 --ethertype 0x1AF6
 
 # 4. WH TX soak at 100% line rate.
 

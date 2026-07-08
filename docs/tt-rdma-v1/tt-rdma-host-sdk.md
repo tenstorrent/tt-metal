@@ -41,9 +41,13 @@ struct MrHandle {
     bool valid() const { return rkey != 0; }
 };
 
+// Values MUST match the shipped wire protocol (tt-rdma-wire-protocol-v1.md §2).
+// Family-ranged, NOT sequential: 0x0X SEND, 0x1X WRITE, 0x2X READ, 0x4X ctrl.
 enum class WireOpcode : uint8_t {
-    kSend = 0x01, kWrite = 0x02, kWriteImm = 0x03,
-    kReadReq = 0x04, kReadResp = 0x05, kAck = 0x06,
+    kSend     = 0x01, kSendImm  = 0x02,
+    kWrite    = 0x10, kWriteImm = 0x11,
+    kReadReq  = 0x20, kReadResp = 0x21,
+    kAck      = 0x40, kControl  = 0xF0,
 };
 
 enum class CqStatus : uint8_t {
@@ -142,17 +146,21 @@ Notable refinements over the initial sketch:
 
 FW MR-table sized for 16 entries (covers control plane + a handful of bulk buffers; fits in 256 B; trivial expansion later).
 
-L1 addition after RCB+0x40:
+L1 addition after RCB+0x40 (**32 B per entry — matches `tt-rdma-wire-protocol-v1.md §3` and the shipped FW MR table**; an earlier draft used 16 B):
 
 ```
-0x8500–0x85FF  MR table: 16 entries × 16 B
-   +0x00 u32 host_noc_lo
-   +0x04 u32 host_noc_hi
-   +0x08 u32 len_bytes
-   +0x0C u16 flags
-         u8  generation
-         u8  state (0=free, 1=valid, 2=zombie)
+0x8500–0x86FF  MR table: 16 entries × 32 B = 512 B
+   +0x00 u64 base_noc_addr    target NoC address (PCIe/NoC tile encoding)
+   +0x08 u64 length           bytes
+   +0x10 u32 rkey             (slot<<24)|(rand16<<8)|generation; 0 = free
+   +0x14 u32 access_flags     bit0=LOCAL_WRITE bit1=REMOTE_WRITE
+                              bit2=REMOTE_READ bit3=REMOTE_ATOMIC
+   +0x18 u32 pd               protection domain (0 = default)
+   +0x1C u32 reserved         (SDK may stash state: 0=free,1=valid,2=zombie)
 ```
+
+The `generation` byte lives in the low byte of `rkey`; the SDK's `state`/zombie
+bookkeeping is host-side and can ride in the reserved word.
 
 RCB additions at `+0x28`:
 
@@ -173,6 +181,58 @@ Lifecycle:
 4. `deregister_mr`: `state=2` first, wait one ring depth's worth of completions, then `state=0`. `generation` bump invalidates any straggling wire frame.
 
 16-entry cap; no automatic eviction.
+
+### How many MRs do I actually need?
+
+**The FW MR table only holds *local* regions that a *remote* peer will target
+(inbound WRITE / READ / ATOMIC).** Regions you *initiate against* do **not**
+consume a slot: a `RemoteMr` (`tt-rdma-mesh-addressing-spec.md §5.1`) is a
+host-side handle built from the peer's advertised `{rkey, base_vaddr}` and never
+touches the FW table. So a node doing purely *outbound* WRITE/READ to many peers
+needs **zero** FW MR slots — the requirement is driven by *how many distinct
+local buffers this node exposes as targets*, not by how many peers it talks to.
+
+| Deployment | FW slots required | Why |
+|---|---|---|
+| MVP / smoke | **1** | only slot 0 is regression-tested (`README.md` open-Q #5) |
+| Disaggregated inference (KV-cache/weights target) | **~1–3** | one DRAM buffer per exposed region (`runtime-workload-coexistence.md`) |
+| Native verbs provider, usable | **~12 of 16** | kernel reserves 4 for RxWqeRing + CQ ring + control (`tt-rdma-verbs-provider.md §5.3`) |
+| NCCL / UCX | **> 16 → needs 64** | these pool/register per-buffer and exhaust 16 (`tt-rdma-verbs-provider.md` R1) |
+| Mesh node, many peers | scales with (local regions exposed), **not** peer count | imported remote MRs are host-side only |
+
+#### Why "many peers" doesn't multiply the count
+
+An `rkey` is a password to a region: register once → one rkey → **one slot** →
+anyone holding that rkey may access the region. How you hand the password out
+decides whether peer count multiplies slots:
+
+- **Shared-rkey (default):** register the buffer once, advertise the *same* rkey
+  to every peer. **1 slot regardless of peer count.** No isolation between peers
+  (all share the region), but that's fine because the gateway resolves peer
+  identity from its `rkey → endpoint` table (`mesh-spec §3`, rkey pass-through) —
+  so you know who sent a frame without spending a slot per peer.
+- **Per-peer isolated:** register the same region once *per peer*, each with a
+  distinct rkey; peer B never learns peer A's key, so the FW rejects cross-peer
+  access (`rkey_miss` drop). **1 slot per peer × regions-per-peer** — this is the
+  only model where peers multiply slots. It's a multi-tenancy choice, not a
+  requirement of scaling peers.
+
+| 10 peers, 1 exposed buffer each | Registrations | FW slots | Isolation |
+|---|---|---|---|
+| Shared-rkey | 1 | **1** | none (all 10 share) |
+| Per-peer isolated | 10 | **10** | full (each walled off) |
+
+When per-peer isolation *does* run out, the answer isn't a bigger table — it's
+gateway-side rkey namespacing (`mesh-spec` open-Q #1), which keeps the TT table
+small regardless of peer count.
+
+**Target 64 for anything multi-tenant or NCCL-shaped.** The 16→64 bump is
+free — the lookup is already O(1) direct-index (`slot = (rkey>>24)&0x0F`), so it
+is just widening the mask to `&0x3F` and growing the table to 64 × 32 B = 2 KB
+L1 (`0x8500–0x8CFF`, still below the WQE payload base at `0x9000`); **0 ns on the
+data path** (`tt-rdma-mesh-addressing-spec.md §7.2`, milestone M7). 16 is fine for
+inference-target and point-to-point; NCCL/UCX MR pools are the one workload that
+demands the wider table.
 
 ---
 

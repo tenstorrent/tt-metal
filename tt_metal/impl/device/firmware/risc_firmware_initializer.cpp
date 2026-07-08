@@ -1080,11 +1080,20 @@ void RiscFirmwareInitializer::initialize_cmac_firmware(tt::ChipId device_id, Cor
     // that silently drops the next ~hundreds of ms of frames. Avoiding
     // unnecessary resets resolves the WH→Mellanox first-frame drop and is
     // a general win for any latency-sensitive peer.
-    std::string cmac_elf_path = rtoptions_.get_root_dir() + "tt_metal/hw/firmware/bin/erisc_cmac_simple.elf";
+    // TT_METAL_CMAC_FW_PATH overrides the default ELF location. Used to load
+    // erisc_cmac_fpga.elf (FPGA-peer sibling target) without overwriting the
+    // mlnx-path erisc_cmac_simple.elf baseline.
+    const char* cmac_fw_path_env = std::getenv("TT_METAL_CMAC_FW_PATH");
+    std::string cmac_elf_path = cmac_fw_path_env
+        ? std::string(cmac_fw_path_env)
+        : rtoptions_.get_root_dir() + "tt_metal/hw/firmware/bin/erisc_cmac_simple.elf";
     TT_FATAL(
         std::filesystem::exists(cmac_elf_path),
-        "erisc_cmac_simple.elf not found at {}. Build from budabackend and copy to this path.",
-        cmac_elf_path);
+        "ERISC CMAC firmware ELF not found at {}. {}",
+        cmac_elf_path,
+        cmac_fw_path_env
+            ? "Path set by TT_METAL_CMAC_FW_PATH env var."
+            : "Build from budabackend and copy to this path (or set TT_METAL_CMAC_FW_PATH to override).");
 
     uint32_t aiclk_mhz = cluster_.get_device_aiclk(device_id);
     uint32_t aiclk_ps = (aiclk_mhz > 0) ? (1'000'000 / aiclk_mhz) : 833;
