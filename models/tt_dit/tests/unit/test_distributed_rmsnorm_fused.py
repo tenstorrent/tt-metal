@@ -1670,9 +1670,9 @@ def _sweep_id(p: dict) -> str:
     [pytest.param(*p, id=i) for p, i in zip(_SWEEP_PARAMS, _SWEEP_IDS)],
     indirect=["mesh_device", "device_params"],
 )
-def test_sweep(mesh_device, tp, topology, tp_axis, full_mesh):
+def test_sweep(mesh_device, tp, topology, tp_axis, full_mesh, is_ci_env):
     """Exhaustive local correctness sweep. Skipped in CI (expensive: hundreds of shapes)."""
-    if _os.getenv("CI") or _os.getenv("GITHUB_ACTIONS"):
+    if is_ci_env:
         pytest.skip("test_sweep is a local-only exhaustive sweep (too expensive for CI)")
 
     submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
