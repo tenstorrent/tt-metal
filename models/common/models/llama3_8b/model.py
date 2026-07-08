@@ -1452,6 +1452,7 @@ def build_llama3_transformer_1d_config(
         if vocab_size // sampling_splits > 64 * 1024:
             return None
 
+        use_galaxy_force_argmax = is_galaxy_cluster and num_devices >= 8
         return Sampling1DConfig(
             vocab_size=padded_vocab_size,
             valid_vocab_size=vocab_size,
@@ -1459,12 +1460,12 @@ def build_llama3_transformer_1d_config(
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
             pad_to_power_of_2=pad_logits_to_power_of_2,
-            # Llama-3.1-8B's perf recipe is greedy (temperature=0, formatted as
-            # k=1/p=0/temp=1). Route that case through the TTTv1 force-argmax path;
-            # non-greedy requests still provide k/p/temp tensors and use top-k sampling.
-            allow_force_argmax=True,
-            num_argmax_gather_links=4 if num_devices >= 8 else 1,
-            ag_topology=ttnn.Topology.Ring if num_devices >= 8 else ttnn.Topology.Linear,
+            # Match TTTv1's measured sampling CCL policy: force-argmax is only
+            # enabled for Galaxy's 4-link model-specific config. T3K and smaller
+            # meshes keep the default top-k path even for greedy temperature=0.
+            allow_force_argmax=use_galaxy_force_argmax,
+            num_argmax_gather_links=4 if use_galaxy_force_argmax else 1,
+            ag_topology=ttnn.Topology.Ring if use_galaxy_force_argmax else ttnn.Topology.Linear,
             argmax_num_workers_per_link=2,
         )
 

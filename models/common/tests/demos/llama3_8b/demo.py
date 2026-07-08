@@ -43,8 +43,9 @@ from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, p
 
 # Expected accuracy metrics from measuring TTTv1 for Llama-3.1-8B (top1, top5 only).
 # Decode-throughput targets are measured TTTv1 parity numbers from the old tt_transformers demo
-# sweep recorded in consolidated_git_status_markdown.md. Batch-32 TTFT uses the corresponding
-# batch-1 wall-clock guardrail until we have direct batch-32 wall-clock baselines.
+# sweep recorded in consolidated_git_status_markdown.md. T3K batch-1 TTFT uses comparable
+# simple_text_demo measurements; batch-32 TTFT uses the corresponding batch-1 guardrail until
+# we have direct batch-32 wall-clock baselines.
 EXPECTED_METRICS = {
     "performance": {
         "N150": {
@@ -62,7 +63,7 @@ EXPECTED_METRICS = {
         "T3K": {
             "top1": 90,
             "top5": 98,
-            "batch-1": {"tok_s_u": 70.3, "ttft_ms": 39.9},
+            "batch-1": {"tok_s_u": 70.3, "ttft_ms": 43.1},
             "batch-32": {"tok_s_u": 56.1, "ttft_ms": 39.9},
         },
     },
@@ -82,7 +83,7 @@ EXPECTED_METRICS = {
         "T3K": {
             "top1": 97,
             "top5": 100,
-            "batch-1": {"tok_s_u": 64.4, "ttft_ms": 41.9},
+            "batch-1": {"tok_s_u": 64.4, "ttft_ms": 46.04},
             "batch-32": {"tok_s_u": 52.2, "ttft_ms": 41.9},
         },
     },
@@ -145,6 +146,7 @@ def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_ba
     instruct = "Instruct" in hf_model
 
     max_seq_len = 1024
+    n_layers = int(os.environ.get("LLAMA3_8B_TTTV2_NUM_LAYERS", "32"))
 
     block_size = 32
     max_num_blocks = 1024
@@ -156,6 +158,7 @@ def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_ba
         instruct=instruct,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
+        n_layers=n_layers,
         optimizations=optimizations,
         dtype=ttnn.bfloat8_b,
         paged_attention_config=paged_attention_config,
@@ -342,7 +345,7 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
         prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
         prompts = load_input_prompts(prompts_path, batch_size)
         tokenizer = llm.tokenizer
-        num_decode_tokens = 200
+        num_decode_tokens = int(os.environ.get("LLAMA3_8B_TTTV2_DECODE_TOKENS", "200"))
         input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
             prompts,
             llm,
@@ -385,8 +388,16 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
         cleanup_ttnn_value(kv_cache)
         kv_cache = None
 
-        top1, top5 = _measure_teacher_forcing_accuracy(llm, mesh_device, log_text=False)
-        logger.info(f"Performance-side teacher forcing — top1: {top1:.1f}%, top5: {top5:.1f}%")
+        skip_perf_teacher_forcing = os.environ.get("LLAMA3_8B_TTTV2_SKIP_PERF_TEACHER_FORCING", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if skip_perf_teacher_forcing:
+            logger.info("Skipping performance-side teacher forcing because profiling requested decode-only execution")
+        else:
+            top1, top5 = _measure_teacher_forcing_accuracy(llm, mesh_device, log_text=False)
+            logger.info(f"Performance-side teacher forcing — top1: {top1:.1f}%, top5: {top5:.1f}%")
 
         if expected:
             targets = result.meets_target(expected, PERF_TOLERANCE)
