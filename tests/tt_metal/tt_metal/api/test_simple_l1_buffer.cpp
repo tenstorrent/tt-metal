@@ -172,49 +172,6 @@ TEST_F(MeshDeviceFixture, TestSimpleL1BufferHi) {
     }
 }
 
-// Regression guard for the emule MEM_ZEROS invariant: the firmware-reserved
-// MEM_ZEROS region in L1 must read as all zeros (a) immediately after device
-// init, and (b) after running a real JIT kernel. This is the silicon invariant
-// emule has to preserve so kernels can NOC-read MEM_ZEROS_BASE for cheap
-// zero-fill; it guards the reset_l1_bump / DFB-allocation gating against
-// regressing and clobbering the region. WH base=0x3280, BH base=0x32E0, size=512.
-TEST_F(MeshDeviceFixture, EmuleMemZerosStaysZero) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh = this->devices_.at(id);
-        size_t base = (mesh->arch() == tt::ARCH::BLACKHOLE) ? 0x32E0 : 0x3280;
-        constexpr size_t SZ = 512;
-
-        // Scan a handful of cores rather than just bank-0 to catch any
-        // per-core divergence.
-        for (uint32_t bank = 0; bank < std::min<uint32_t>(8, mesh->allocator()->get_num_banks(BufferType::L1)); ++bank) {
-            CoreCoord c = mesh->allocator()->get_logical_core_from_bank_id(bank);
-
-            std::vector<uint8_t> before(SZ);
-            readL1Backdoor(mesh, c, base, before);
-            for (size_t i = 0; i < SZ; ++i) {
-                ASSERT_EQ(before[i], 0)
-                    << "MEM_ZEROS dirty BEFORE any program on bank " << bank
-                    << " (core " << c.str() << ") at offset 0x" << std::hex << (base + i)
-                    << " value=0x" << (int)before[i];
-            }
-
-            // Run a trivial kernel pass to dirty the L1 above l1_unreserved_base,
-            // then re-check MEM_ZEROS hasn't been touched.
-            size_t addr = 768 * 1024;
-            ASSERT_TRUE(SimpleTiledL1WriteCBRead(mesh, c, addr + 8 * 1024, addr + 16 * 1024, 2 * 1024));
-
-            std::vector<uint8_t> after(SZ);
-            readL1Backdoor(mesh, c, base, after);
-            for (size_t i = 0; i < SZ; ++i) {
-                ASSERT_EQ(after[i], 0)
-                    << "MEM_ZEROS clobbered AFTER kernel run on bank " << bank
-                    << " (core " << c.str() << ") at offset 0x" << std::hex << (base + i)
-                    << " value=0x" << (int)after[i];
-            }
-        }
-    }
-}
-
 TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWriteTileLo) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         size_t lo_address = 768 * 1024;

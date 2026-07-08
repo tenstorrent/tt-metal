@@ -140,7 +140,8 @@ tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
             divide_by_shards
                 ? dspec.core_groups_tuple()
                 : (use_sub_core_grids
-                       ? tt::tt_metal::split_work_to_cores(*operation_attributes.sub_core_grids, num_output_tiles)
+                       ? tt::tt_metal::split_work_to_cores(
+                             *operation_attributes.sub_core_grids, num_output_tiles, /*row_wise=*/true)
                        : tt::tt_metal::split_work_to_cores(grid, num_output_tiles, /*row_wise=*/true));
     num_cols_per_core_group_1 *= shard_factor;
     num_cols_per_core_group_2 *= shard_factor;

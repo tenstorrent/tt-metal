@@ -70,7 +70,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
 TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
+    ttsl::SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
     TT_FATAL(out_shape.size() == 4, "Only 4D tensors are supported for padded_slice");
     auto output_dim_i = [&args](size_t i) {

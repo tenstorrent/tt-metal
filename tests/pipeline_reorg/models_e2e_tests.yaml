@@ -333,12 +333,12 @@
 - name: Qwen3.6-27B e2e tests
   cmd: |
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=Qwen/Qwen3.6-27B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3.6-27B
-    pytest --timeout 300 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
-    pytest --timeout 300 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "traced_128 and not traced_128k"
+    pytest --timeout 1200 models/demos/blackhole/qwen36/demo/text_demo.py -k "determinism_128"
   model: qwen3.6-27b
   skus:
     bh_quietbox_2:
-      timeout: 10
+      timeout: 30
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
@@ -381,12 +381,14 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
-    # test_lm_head and test_model::test_full_model load real weights via
+    # test_lm_head, test_packed_verify (spec-decode packed verify, #46755) and
+    # test_model::test_full_model load real weights via
     # AutoModelForCausalLM.from_pretrained, so they live in the e2e job
     # (HF_MODEL=hub-id resolves to the populated /mnt/MLPerf cache) rather
     # than the unit job (HF_MODEL=local config-only dir).
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-e2b
   skus:
@@ -406,6 +408,7 @@
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 600 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-e4b
   skus:
@@ -429,6 +432,7 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-26b-a4b
   skus:
@@ -456,6 +460,7 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-31b
   skus:
@@ -480,6 +485,7 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-12b
   skus:

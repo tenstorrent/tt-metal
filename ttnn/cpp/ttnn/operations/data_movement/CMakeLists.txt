@@ -271,7 +271,6 @@ target_sources(
             tilize/device/tilize_multi_core_block_program_factory.hpp
             tilize/device/tilize_multi_core_default_program_factory.hpp
             tilize/device/tilize_multi_core_sharded_program_factory.hpp
-            tilize/device/tilize_multi_core_width_sharded_program_factory.hpp
             tilize/device/tilize_single_core_program_factory.hpp
             # tilize_with_val_padding/
             tilize_with_val_padding/tilize_with_val_padding_nanobind.hpp

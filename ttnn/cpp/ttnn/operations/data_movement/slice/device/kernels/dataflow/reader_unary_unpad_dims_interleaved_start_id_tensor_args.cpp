@@ -46,7 +46,7 @@ void kernel_main() {
 
     // Read start and end indices from tensors using TensorAccessor
     uint32_t start_indices[num_dims];
-    uint32_t end_indices[num_dims];
+    [[maybe_unused]] uint32_t end_indices[num_dims];
 
     // Read start tensor data using separate circular buffer
     cb_tensor.reserve_back(1);
