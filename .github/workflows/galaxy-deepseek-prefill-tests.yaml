@@ -114,6 +114,9 @@ jobs:
     needs: [validate-test-type, check-harbor, build-artifact]
     # Skip when only the perf checks were requested (they run on the profiler build below).
     if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
+    permissions:
+      id-token: write
+      contents: read
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
@@ -130,6 +133,9 @@ jobs:
     needs: [validate-test-type, check-harbor, build-artifact-profiler]
     # Runs for the default "all" and when the sdpa_perf group is selected (alone or with others).
     if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
+    permissions:
+      id-token: write
+      contents: read
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
