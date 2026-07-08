@@ -70,10 +70,15 @@ def scatter_kv_into_cache(k_cache, v_cache, k_np: np.ndarray, v_np: np.ndarray, 
     assert gathered_seq_len == real_len, f"KV .npy seq dim ({gathered_seq_len}) does not match real_len ({real_len})"
     assert num_kv_heads % tp == 0, f"num_kv_heads={num_kv_heads} not divisible by tp={tp}"
 
-    # Per-device cache seq dim = isl_per_row; total logical seq capacity = isl_per_row * sp.
-    isl_per_row = k_cache.shape[2]
-    total_seq = isl_per_row * sp
-    assert real_len <= total_seq, f"real_len={real_len} exceeds total cache capacity {total_seq}"
+    # Per-device cache dim 2 is the FULL max_seq_len (see attention/kv_cache.py:48-53),
+    # not per-row.  Under SP sharding each row's fill_cache writes only
+    # isl_per_row = max_seq_len/sp positions locally (starting at 0); positions
+    # [isl_per_row, max_seq_len) stay zero.  Build host tensor sized max_seq_len,
+    # shard dim 2 across sp rows so each row gets exactly isl_per_row positions.
+    max_seq_len = k_cache.shape[2]
+    assert max_seq_len % sp == 0, f"max_seq_len={max_seq_len} not divisible by sp={sp}"
+    total_seq = max_seq_len
+    assert real_len <= total_seq, f"real_len={real_len} exceeds cache capacity {total_seq}"
 
     def _prep(np_arr):
         host = torch.zeros(1, num_kv_heads, total_seq, head_dim, dtype=torch.float32)
@@ -161,6 +166,13 @@ def _run_check(args, mesh, shape, record, oracle_dir, kv_dir):
 
     sp = shape[0]
     real_len = record["n_tokens"]
+    if args.num_tokens is not None and args.num_tokens != real_len:
+        print(
+            f"[decode_from_kv] ERROR: --num-tokens={args.num_tokens} but oracle record "
+            f"has n_tokens={real_len}.  Re-run the oracle with matching --num-tokens.",
+            flush=True,
+        )
+        return 1
 
     available_layers = sorted(int(k) for k in record.get("kv_files", {}))
     if not available_layers:
@@ -247,6 +259,14 @@ def main():
         type=str,
         required=True,
         help="directory containing ref_results.json from hf_reference_oracle.py",
+    )
+    ap.add_argument(
+        "--num-tokens",
+        type=int,
+        default=None,
+        help="optional sanity assertion: expected prompt length after truncation.  "
+        "Must match the oracle record's n_tokens (and the --num-tokens used when "
+        "generating the KV dump).  Not used for record lookup.",
     )
     ap.add_argument("--max-layers", type=int, default=None)
     ap.add_argument("--pcc-threshold", type=float, default=PCC_THRESHOLD_CHECK)
