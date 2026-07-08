@@ -99,17 +99,20 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     ProgramDescriptor desc;
 
     // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
+    // Page size is the L1-aligned per-row stride so that total_size (= num_rows * padded stride)
+    // stays divisible by the page size; when aligned, local_unit_size_padded == unit_size.
     push_reshard_same_width_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
+        desc, cb_index, data_format, total_size, local_unit_size_padded, all_cores, /*bound_buffer=*/local_buffer);
 
     if (unaligned) {
-        // Scratch CB used by kernels when local/remote alignments differ.
+        // Scratch CB used by kernels when local/remote alignments differ. Its page size is the
+        // remote-aligned stride, matching its total_size (= remote rows * remote padded stride).
         push_reshard_same_width_cb_pair(
             desc,
             cb_scratch_index,
             data_format,
             remote_units_per_shard * remote_unit_size_padded,
-            unit_size,
+            remote_unit_size_padded,
             all_cores,
             /*bound_buffer=*/nullptr);
     }
