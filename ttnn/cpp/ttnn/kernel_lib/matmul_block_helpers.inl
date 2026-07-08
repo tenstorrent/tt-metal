@@ -91,7 +91,7 @@ ALWI void copy_subblock_row_strided(
  * Applies the requested transforms on the packer as it writes out:
  *   - dtype convert: pack_reconfig_data_format(out) (out may be a lower-precision / different
  *     format than the fp32/fp16_b accumulation).
- *   - relu (finalize_relu): llk_pack_relu_config(zero) around the block, restored after.
+ *   - relu (apply_relu_on_last_block): llk_pack_relu_config(zero) around the block, restored after.
  *   - Activation (SFPU): apply_activation_from_pack on the fully-accumulated values.
  *
  * Consumes the whole block from interm (wait_front + pop_front over out_block_num_tiles) and
@@ -99,7 +99,7 @@ ALWI void copy_subblock_row_strided(
  * DST chunks so DST capacity is never exceeded (out_subblock_h*out_subblock_w <= DST limit,
  * asserted by the caller).
  */
-template <bool packer_l1_acc, bool finalize_relu, typename Activation, typename Buf>
+template <bool packer_l1_acc, bool apply_relu_on_last_block, typename Activation, typename Buf>
 ALWI void matmul_block_finalize_copy(
     Buf& interm_buf,
     Buf& out_buf,
@@ -122,7 +122,7 @@ ALWI void matmul_block_finalize_copy(
     if constexpr (packer_l1_acc) {
         PACK((llk_pack_reconfig_l1_acc(0)));
     }
-    if constexpr (finalize_relu) {
+    if constexpr (apply_relu_on_last_block) {
         PACK((llk_pack_relu_config(ReluConfig::zero())));
     }
 
@@ -150,7 +150,7 @@ ALWI void matmul_block_finalize_copy(
     interm_buf.pop_front(out_block_num_tiles);
 
     // Restore a clean packer relu state for the next consumer/op.
-    if constexpr (finalize_relu) {
+    if constexpr (apply_relu_on_last_block) {
         PACK((llk_pack_relu_config(ReluConfig::none())));
     }
 }
@@ -237,8 +237,10 @@ ALWI void matmul_block(
     // needs_finalize = (buf_id(out) != buf_id(accum)); false → the accumulated block already IS out
     // (alias_out, streamed) → zero-copy skip. Interm target consumes from interm directly → no finalize.
     constexpr bool target_is_interm = (last_block_target == LastBlockTarget::Interm);
-    // Relu on the finalize copy (OutWithRelu, exception 4); Interm defers relu to its downstream phase.
-    constexpr bool finalize_relu = (last_block_target == LastBlockTarget::OutWithRelu);
+    // Relu on the FULLY-ACCUMULATED block (OutWithRelu). Drives relu on both the finalize copy
+    // (in_place) and the non-l1_acc straight-to-out last pack — hence "last block", not "finalize".
+    // Interm defers relu to its downstream phase.
+    constexpr bool apply_relu_on_last_block = (last_block_target == LastBlockTarget::OutWithRelu);
 
     // in_place: the (packer_l1_acc + accumulate-to-interm) config packs in place — one reserve_back
     // over the whole output block before the K-loop, skipping the per-K-block reserve/push/drain. Each
@@ -264,7 +266,7 @@ ALWI void matmul_block(
     constexpr bool pack_last_to_interm = target_is_interm || in_place;
 
     // activate_on_last_pack: the straight-to-out Out/OutWithRelu path (non-l1_acc, no interm round-trip)
-    // has no finalize, so relu (finalize_relu) and the SFPU Activation apply HERE, on the last-block
+    // has no finalize, so relu (apply_relu_on_last_block) and the SFPU Activation apply HERE, on the last-block
     // pack — correct because that block is the fully-accumulated sum (num_k_blocks==1, or the software
     // reload has already added every prior K-block into DST). in_place / Interm defer these to the
     // finalize / downstream phase (a per-partial relu under packer_l1_acc would relu each partial before
@@ -294,7 +296,7 @@ ALWI void matmul_block(
     //                                  path unchanged (its row-strided reserve/pad geometry is not
     //                                  in scope here).
     //   !target_is_interm            — Interm feeds a downstream in-kernel op that reads from interm.
-    //   !finalize_relu && no SFPU Activation — relu / SFPU activation are finalize-only for in_place
+    //   !apply_relu_on_last_block && no SFPU Activation — relu / SFPU activation are finalize-only for in_place
     //                                  (a per-partial apply under packer_l1_acc would transform each
     //                                  partial before the sum); aliasing would silently drop them.
     //   !fp32_dest_acc_en            — with fp32 DEST the factory makes interm Float32 ≠ out; keep
@@ -335,8 +337,8 @@ ALWI void matmul_block(
     // so it is skipped here for that mode.
     if constexpr (init_mode != matmul_config::InitMode::ShortAfterPreKBlock) {
         if constexpr (
-            reconfig == matmul_config::DataFormatReconfig::INPUT ||
-            reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+            reconfig == matmul_config::DataFormatReconfig::Input ||
+            reconfig == matmul_config::DataFormatReconfig::InputAndOutput) {
             // Matmul convention: srca takes in1, srcb takes in0.
             reconfig_data_format(in1_cb_id, in0_cb_id);
         }
@@ -346,8 +348,8 @@ ALWI void matmul_block(
         // packer mis-configured (silent corruption) — the .hpp interm_buf doc requires a
         // same-format placeholder; pass out_buf.
         if constexpr (
-            reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
-            reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+            reconfig == matmul_config::DataFormatReconfig::Output ||
+            reconfig == matmul_config::DataFormatReconfig::InputAndOutput) {
             PACK((pack_reconfig_data_format(accum_cb_id)));
         }
         if constexpr (init_mode == matmul_config::InitMode::Short) {
@@ -411,13 +413,13 @@ ALWI void matmul_block(
             // active_in0_cb_id (so an In0SourceFn that swaps in0 restores the right operand).
             if constexpr (init_mode == matmul_config::InitMode::ShortAfterPreKBlock) {
                 if constexpr (
-                    reconfig == matmul_config::DataFormatReconfig::INPUT ||
-                    reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+                    reconfig == matmul_config::DataFormatReconfig::Input ||
+                    reconfig == matmul_config::DataFormatReconfig::InputAndOutput) {
                     reconfig_data_format(in1_cb_id, active_in0_cb_id);
                 }
                 if constexpr (
-                    reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
-                    reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
+                    reconfig == matmul_config::DataFormatReconfig::Output ||
+                    reconfig == matmul_config::DataFormatReconfig::InputAndOutput) {
                     PACK((pack_reconfig_data_format(accum_cb_id)));
                 }
                 matmul_block_init(
@@ -588,7 +590,7 @@ ALWI void matmul_block(
                         // Straight-to-out relu (OutWithRelu, non-l1_acc): configure the packer to relu
                         // this block as it writes out; restored after the pack below. In-place / Interm
                         // relu happens in the finalize / downstream phase, so it is not set here.
-                        if constexpr (activate_on_last_pack && finalize_relu) {
+                        if constexpr (activate_on_last_pack && apply_relu_on_last_block) {
                             PACK((llk_pack_relu_config(ReluConfig::zero())));
                         }
 
@@ -633,7 +635,7 @@ ALWI void matmul_block(
 
                         tile_regs_release();
                         // Restore a clean (non-relu) packer state for the next consumer/op.
-                        if constexpr (activate_on_last_pack && finalize_relu) {
+                        if constexpr (activate_on_last_pack && apply_relu_on_last_block) {
                             PACK((llk_pack_relu_config(ReluConfig::none())));
                         }
                         if constexpr (tile_order == OutputCBLayout::SubblockMajor) {
@@ -798,7 +800,7 @@ ALWI void matmul_block(
         if constexpr (pack_last_to_interm && !target_is_interm) {
             const bool needs_finalize = (out_cb_id != accum_cb_id);
             if (needs_finalize) {
-                matmul_block_finalize_copy<packer_l1_acc, finalize_relu, Activation>(
+                matmul_block_finalize_copy<packer_l1_acc, apply_relu_on_last_block, Activation>(
                     interm_buf, out_buf, out_block_num_tiles, out_num_tiles, /*prev_srca_cb_id=*/in1_cb_id);
                 // The finalize copy left the unpacker in datacopy mode and the packer on out's
                 // format. If another batch's K-loop follows, restore matmul unpack/math state and

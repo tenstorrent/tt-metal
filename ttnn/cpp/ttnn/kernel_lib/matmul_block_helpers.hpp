@@ -114,7 +114,7 @@ namespace matmul_config {
  *        unpack/math state after an intervening op without the slow hw_configure MMIO.
  * None   skip the init. Use when the caller already issued matmul_block_init, or when
  *        chaining helper calls that left matmul state configured. Independent of
- *        reconfig (pass reconfig=NONE separately if reconfig is also external).
+ *        reconfig (pass reconfig=None separately if reconfig is also external).
  * ShortAfterPreKBlock
  *        like Short but issues reconfig + init INSIDE the K-loop, right after
  *        pre_k_block() each iteration. Use when a state-dirtying PreKBlockFn (tilize /
@@ -132,21 +132,21 @@ namespace matmul_config {
 enum class InitMode : uint8_t { Short, None, ShortAfterPreKBlock };
 
 /**
- * Data-format reconfig for matmul_block: reconfig_data_format on the unpacker (INPUT)
- * and/or pack_reconfig_data_format on the packer (OUTPUT). Independent of init_mode
+ * Data-format reconfig for matmul_block: reconfig_data_format on the unpacker (Input)
+ * and/or pack_reconfig_data_format on the packer (Output). Independent of init_mode
  * (separate gate, per the tilize/reduce/binary pattern).
  *
- * NONE              skip both. Use when reconfig is external or formats already match.
- * INPUT             unpacker only — reconfig_data_format(in1, in0).
- * OUTPUT            packer only — pack_reconfig_data_format(interm). Targets interm
- *                   because non-last K-blocks spill there; the in-loop swap to out at
- *                   the last block (gated on l1_acc / fp32 DEST) handles the rest.
- * INPUT_AND_OUTPUT  (default) both. Safe for any first-time or post-non-matmul call.
+ * InputAndOutput  (default) both. Safe for any first-time or post-non-matmul call.
+ * Input           unpacker only — reconfig_data_format(in1, in0).
+ * Output          packer only — pack_reconfig_data_format(interm). Targets interm
+ *                 because non-last K-blocks spill there; the in-loop swap to out at
+ *                 the last block (gated on l1_acc / fp32 DEST) handles the rest.
+ * None            skip both. Use when reconfig is external or formats already match.
  *
  * Each reconfig is a few MMIO writes; unnecessary ones cost cycles but never corrupt.
  * Narrower modes are perf opt-ins for callers tracking format usage across ops.
  */
-enum class DataFormatReconfig : uint8_t { NONE, INPUT, OUTPUT, INPUT_AND_OUTPUT };
+enum class DataFormatReconfig : uint8_t { InputAndOutput, Input, Output, None };
 
 }  // namespace matmul_config
 
@@ -291,7 +291,7 @@ struct NoIn1BaseOffset {
  *   AVOID HiFi4 + fp32_dest_acc_en with bf16 inputs — silent K-accumulator corruption on
  *   Wormhole B0 (issue #38306); use HiFi2/HiFi3.
  *
- * Init/reconfig: by default (init_mode=Short, reconfig=INPUT_AND_OUTPUT) the helper issues
+ * Init/reconfig: by default (init_mode=Short, reconfig=InputAndOutput) the helper issues
  * the data-format reconfig + matmul_block_init itself, so callers only do the one
  * boot-time init at the top of kernel_main. See the InitMode / DataFormatReconfig enums
  * for the narrower modes.
@@ -331,12 +331,12 @@ struct NoIn1BaseOffset {
  *   out_buf            final result.
  *   interm_buf         spill/reload (software K-accum) or L1-ACC FIFO region. When
  *                      num_k_blocks == 1 there is no spill, but under reconfig
- *                      OUTPUT / INPUT_AND_OUTPUT the helper still issues
+ *                      Output / InputAndOutput the helper still issues
  *                      pack_reconfig_data_format to interm's DATA FORMAT before the K-loop,
  *                      so pass out_buf as the zero-cost placeholder (it already carries the
  *                      output format). Any other buffer is safe ONLY if its data format
  *                      matches out_buf — a mismatch silently mis-configures the packer
- *                      width. (Exempt under reconfig=NONE, which issues no pack reconfig.)
+ *                      width. (Exempt under reconfig=None, which issues no pack reconfig.)
  *   shape              MatmulBlockShape — build with MatmulBlockShape::of(...).
  *   post_compute, ...  functor instances for the template hooks above.
  *   in1_per_core_w     actual N-tiles the producer pushes per K-block. 0 = derive from
@@ -378,7 +378,7 @@ template <
     typename In0SourceFn = NoIn0Source,
     typename In1BaseOffsetFn = NoIn1BaseOffset,
     typename Activation = NoneActivation,
-    matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT,
+    matmul_config::DataFormatReconfig reconfig = matmul_config::DataFormatReconfig::InputAndOutput,
     typename Buf = ::CircularBuffer>
 ALWI void matmul_block(
     Buf& in0_buf,
