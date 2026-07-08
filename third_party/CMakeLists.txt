@@ -478,3 +478,41 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
+
+############################################################################################################################
+# ZeroMQ (libzmq + cppzmq) : experimental non-MPI distributed-context backend
+############################################################################################################################
+if(ENABLE_DISTRIBUTED_ZMQ)
+    CPMAddPackage(
+        NAME libzmq
+        GITHUB_REPOSITORY zeromq/libzmq
+        GIT_TAG v4.3.5
+        OPTIONS
+            "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+            # libzmq 4.3.5 still declares cmake_minimum_required(VERSION 3.0.2),
+            # which modern CMake rejects. Allow it to configure anyway.
+            "CMAKE_POLICY_VERSION_MINIMUM 3.5"
+            "BUILD_SHARED_LIBS OFF"
+            "BUILD_TESTS OFF"
+            "WITH_PERF_TOOL OFF"
+            "WITH_DOCS OFF"
+            "ENABLE_CPACK OFF"
+            "ENABLE_CURVE OFF"
+            "ENABLE_DRAFTS OFF"
+    )
+
+    # cppzmq is header-only; it locates libzmq via find_package by default, so
+    # consume it DOWNLOAD_ONLY and expose an interface target wired to libzmq.
+    CPMAddPackage(NAME cppzmq GITHUB_REPOSITORY zeromq/cppzmq GIT_TAG v4.10.0 DOWNLOAD_ONLY YES)
+    if(cppzmq_ADDED AND NOT TARGET cppzmq)
+        add_library(cppzmq INTERFACE)
+        add_library(cppzmq::cppzmq ALIAS cppzmq)
+        target_include_directories(cppzmq SYSTEM INTERFACE "$<BUILD_INTERFACE:${cppzmq_SOURCE_DIR}>")
+        # libzmq's static target is named `libzmq-static`; fall back to `libzmq`.
+        if(TARGET libzmq-static)
+            target_link_libraries(cppzmq INTERFACE libzmq-static)
+        else()
+            target_link_libraries(cppzmq INTERFACE libzmq)
+        endif()
+    endif()
+endif()
