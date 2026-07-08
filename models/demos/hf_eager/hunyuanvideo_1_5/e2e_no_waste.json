@@ -1,0 +1,64 @@
+{
+  "graduated_total": 18,
+  "invoked_union": [
+    "ada_layer_norm_continuous",
+    "ada_layer_norm_zero",
+    "combined_timestep_text_proj_embeddings",
+    "feed_forward",
+    "hunyuan_video15_ada_norm",
+    "hunyuan_video15_by_t5_text_projection",
+    "hunyuan_video15_image_projection",
+    "hunyuan_video15_individual_token_refiner",
+    "hunyuan_video15_individual_token_refiner_block",
+    "hunyuan_video15_patch_embed",
+    "hunyuan_video15_rotary_pos_embed",
+    "hunyuan_video15_time_embedding",
+    "hunyuan_video15_token_refiner",
+    "hunyuan_video15_transformer_block",
+    "linear_activation",
+    "pix_art_alpha_text_projection",
+    "timestep_embedding",
+    "timesteps"
+  ],
+  "on_path": 18,
+  "missing": [],
+  "pcc_threshold": 0.95,
+  "runs": [
+    {
+      "task": "i2v",
+      "granularity": "composite",
+      "pcc": 0.9999793093421966,
+      "invoked": 8
+    },
+    {
+      "task": "i2v",
+      "granularity": "mid",
+      "pcc": 0.9999793093421966,
+      "invoked": 11
+    },
+    {
+      "task": "i2v",
+      "granularity": "deep",
+      "pcc": 0.9999793093421966,
+      "invoked": 13
+    },
+    {
+      "task": "t2v",
+      "granularity": "composite",
+      "pcc": 0.9999790316181318,
+      "invoked": 8
+    },
+    {
+      "task": "t2v",
+      "granularity": "mid",
+      "pcc": 0.9999790316181318,
+      "invoked": 11
+    },
+    {
+      "task": "t2v",
+      "granularity": "deep",
+      "pcc": 0.9999790316181318,
+      "invoked": 13
+    }
+  ]
+}

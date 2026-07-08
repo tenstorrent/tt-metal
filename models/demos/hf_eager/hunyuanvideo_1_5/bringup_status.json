@@ -1,0 +1,290 @@
+{
+  "new_model_id": "tencent/HunyuanVideo-1.5",
+  "new_model_type": null,
+  "sibling_hf_id": null,
+  "sibling_model_type": null,
+  "backend": {
+    "name": "hf_eager universal (Video)",
+    "demo_path": "models/demos/hf_eager/demo.py"
+  },
+  "counts": {
+    "REUSE": 3,
+    "ADAPT": 0,
+    "NEW": 18
+  },
+  "common_reuse": [
+    {
+      "purpose": "LayerNorm / RMSNorm",
+      "path": "models/common/rmsnorm.py"
+    },
+    {
+      "purpose": "LightweightModule base",
+      "path": "models/common/lightweightmodule.py"
+    },
+    {
+      "purpose": "Tensor helpers",
+      "path": "models/common/tensor_utils.py"
+    },
+    {
+      "purpose": "Generic utility funcs",
+      "path": "models/common/utility_functions.py"
+    }
+  ],
+  "components": [
+    {
+      "name": "self_attention",
+      "kind": "self_attention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0.",
+      "submodule_path": null,
+      "class_name": null
+    },
+    {
+      "name": "mlp",
+      "kind": "mlp",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mlp.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: swiglu_mlp -> models/tt_transformers/tt/mlp.py::MLP (REUSE). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh.",
+      "submodule_path": null,
+      "class_name": null
+    },
+    {
+      "name": "hunyuan_video15_transformer_block",
+      "kind": "HunyuanVideo15TransformerBlock",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=54 sample_paths=['transformer_blocks.0', 'transformer_blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer_blocks.0",
+      "class_name": "HunyuanVideo15TransformerBlock"
+    },
+    {
+      "name": "attention",
+      "kind": "Attention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=4 leaves=36 sample_paths=['context_embedder.token_refiner.refiner_blocks.0.attn', 'context_embedder.token_refiner.refiner_blocks.1.attn'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.token_refiner.refiner_blocks.0.attn",
+      "class_name": "Attention"
+    },
+    {
+      "name": "hunyuan_video15_token_refiner",
+      "kind": "HunyuanVideo15TokenRefiner",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=34 sample_paths=['context_embedder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder",
+      "class_name": "HunyuanVideo15TokenRefiner"
+    },
+    {
+      "name": "hunyuan_video15_individual_token_refiner",
+      "kind": "HunyuanVideo15IndividualTokenRefiner",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=26 sample_paths=['context_embedder.token_refiner'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.token_refiner",
+      "class_name": "HunyuanVideo15IndividualTokenRefiner"
+    },
+    {
+      "name": "hunyuan_video15_individual_token_refiner_block",
+      "kind": "HunyuanVideo15IndividualTokenRefinerBlock",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=26 sample_paths=['context_embedder.token_refiner.refiner_blocks.0', 'context_embedder.token_refiner.refiner_blocks.1'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.token_refiner.refiner_blocks.0",
+      "class_name": "HunyuanVideo15IndividualTokenRefinerBlock"
+    },
+    {
+      "name": "feed_forward",
+      "kind": "FeedForward",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=6 leaves=20 sample_paths=['context_embedder.token_refiner.refiner_blocks.0.ff', 'context_embedder.token_refiner.refiner_blocks.1.ff'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.token_refiner.refiner_blocks.0.ff",
+      "class_name": "FeedForward"
+    },
+    {
+      "name": "ada_layer_norm_zero",
+      "kind": "AdaLayerNormZero",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=4 leaves=12 sample_paths=['transformer_blocks.0.norm1', 'transformer_blocks.0.norm1_context'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "transformer_blocks.0.norm1",
+      "class_name": "AdaLayerNormZero"
+    },
+    {
+      "name": "combined_timestep_text_proj_embeddings",
+      "kind": "CombinedTimestepTextProjEmbeddings",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=7 sample_paths=['context_embedder.time_text_embed'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.time_text_embed",
+      "class_name": "CombinedTimestepTextProjEmbeddings"
+    },
+    {
+      "name": "timestep_embedding",
+      "kind": "TimestepEmbedding",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=6 sample_paths=['context_embedder.time_text_embed.timestep_embedder', 'time_embed.timestep_embedder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.time_text_embed.timestep_embedder",
+      "class_name": "TimestepEmbedding"
+    },
+    {
+      "name": "hunyuan_video15_by_t5_text_projection",
+      "kind": "HunyuanVideo15ByT5TextProjection",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=5 sample_paths=['context_embedder_2'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder_2",
+      "class_name": "HunyuanVideo15ByT5TextProjection"
+    },
+    {
+      "name": "hunyuan_video15_image_projection",
+      "kind": "HunyuanVideo15ImageProjection",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=5 sample_paths=['image_embedder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "image_embedder",
+      "class_name": "HunyuanVideo15ImageProjection"
+    },
+    {
+      "name": "hunyuan_video15_ada_norm",
+      "kind": "HunyuanVideo15AdaNorm",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=4 sample_paths=['context_embedder.token_refiner.refiner_blocks.0.norm_out', 'context_embedder.token_refiner.refiner_blocks.1.norm_out'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.token_refiner.refiner_blocks.0.norm_out",
+      "class_name": "HunyuanVideo15AdaNorm"
+    },
+    {
+      "name": "hunyuan_video15_time_embedding",
+      "kind": "HunyuanVideo15TimeEmbedding",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=4 sample_paths=['time_embed'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "time_embed",
+      "class_name": "HunyuanVideo15TimeEmbedding"
+    },
+    {
+      "name": "linear_activation",
+      "kind": "LinearActivation",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=4 sample_paths=['context_embedder.token_refiner.refiner_blocks.0.ff.net.0', 'context_embedder.token_refiner.refiner_blocks.1.ff.net.0'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.token_refiner.refiner_blocks.0.ff.net.0",
+      "class_name": "LinearActivation"
+    },
+    {
+      "name": "ada_layer_norm_continuous",
+      "kind": "AdaLayerNormContinuous",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=3 sample_paths=['norm_out'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "norm_out",
+      "class_name": "AdaLayerNormContinuous"
+    },
+    {
+      "name": "pix_art_alpha_text_projection",
+      "kind": "PixArtAlphaTextProjection",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=3 sample_paths=['context_embedder.time_text_embed.text_embedder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.time_text_embed.text_embedder",
+      "class_name": "PixArtAlphaTextProjection"
+    },
+    {
+      "name": "timesteps",
+      "kind": "Timesteps",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=2 leaves=2 sample_paths=['context_embedder.time_text_embed.time_proj', 'time_embed.time_proj'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "context_embedder.time_text_embed.time_proj",
+      "class_name": "Timesteps"
+    },
+    {
+      "name": "hunyuan_video15_patch_embed",
+      "kind": "HunyuanVideo15PatchEmbed",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=1 sample_paths=['x_embedder'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "x_embedder",
+      "class_name": "HunyuanVideo15PatchEmbed"
+    },
+    {
+      "name": "hunyuan_video15_rotary_pos_embed",
+      "kind": "HunyuanVideo15RotaryPosEmbed",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": null,
+      "notes": "[supplemental module-tree pass] module-tree: occ=1 leaves=1 sample_paths=['rope'] (primary extractor's template did not cover this class \u2014 falling back to module-tree discovery + op_classifier classification).",
+      "submodule_path": "rope",
+      "class_name": "HunyuanVideo15RotaryPosEmbed"
+    }
+  ],
+  "notes": [
+    "Sibling config could not be fetched; classification falls back to NEW for components without a clear file match. Set HF_TOKEN or pre-download `None` and re-run for a sharper diff."
+  ]
+}

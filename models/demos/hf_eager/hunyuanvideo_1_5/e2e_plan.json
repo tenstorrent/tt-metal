@@ -1,0 +1,116 @@
+{
+  "model_id": "tencent/HunyuanVideo-1.5",
+  "backend": "hf_eager universal (Video)",
+  "reference_architecture": "diffusers.HunyuanVideo15Transformer3DModel",
+  "reference_note": "Not a transformers AutoModel. The repo ships Tencent's native hyvideo checkpoint; the tt-metal port + every stub/PCC test target the diffusers re-implementation HunyuanVideo15Transformer3DModel, built from the repo's real config with deterministic random weights and the two repeated stacks shrunk (num_layers=2, num_refiner_layers=2) for CPU feasibility. Stubs copy weights FROM this same module, so PCC validates the ttnn op implementation, not trained values.",
+
+  "task_family": "text/image-to-video diffusion transformer (MMDiT / DiT). NOT a generative LM: the reference is a single forward (model(...)), NOT model.generate(). The task unit is ONE denoising step: (noisy video latent, timestep, dual text embeddings, optional image embedding) -> denoised velocity/flow prediction. The full model is this transformer called repeatedly inside a flow-matching sampler + VAE (out of scope for bring-up).",
+
+  "pipeline_stages": ["denoise"],
+  "pipeline_stages_rationale": "architectures=[HunyuanVideo15Transformer3DModel]; is_encoder_decoder=false; not ForCausalLM -> a single one-shot forward stage. The variable dim is the latent sequence axis (num_frames*height*width, bound = spatial/temporal latent size); there is no autoregressive decode and no vocoder stage.",
+
+  "pass_criteria": {
+    "gate1_native": "Every routed graduated stub is real native ttnn (no torch fallback: no self._torch_module(/_get_torch_submodule( in _stubs/*.py; _runtime_fallbacks.json empty). All 18 are single-device native (TP=1; .last_good_native snapshots, no .last_good_sharded).",
+    "gate2_invoked": "Every one of the 18 graduated modules is INVOKED on the REAL forward path (its output feeds downstream toward the final task output; NOT a coverage sweep). Because composite stubs fully inline the leaf stubs beneath them, a single non-redundant forward cannot invoke all 18; the UNION of stubs invoked across the three decomposition granularities (composite/mid/deep) == the full graduated set.",
+    "gate3_pcc": "The pipeline's FINAL output PCC vs the HF golden (HunyuanVideo15Transformer3DModel.forward) is >= 0.95, for both conditioning regimes (t2v, i2v) and all three granularities."
+  },
+
+  "validation_metric": "PCC(final velocity prediction, HF golden) >= 0.95, printed as `e2e PCC=<value>` on EVERY run before the assert.",
+  "achieved_pcc": 0.999979,
+
+  "graduated_modules_source_b": {
+    "count": 18,
+    "status": "all NEW + GRADUATED (native ttnn, .last_good_native, PCC-verified in isolation)",
+    "reuse_not_graduated": ["self_attention", "mlp", "attention"],
+    "reuse_note": "The 3 REUSE entries have no stub and are NOT graduated work products. self_attention/mlp are template guesses (tt_transformers GQA/SwiGLU) that do not appear in this diffusers architecture. `attention` (diffusers Attention) is the token-refiner / transformer-block attention; it has no graduated stub, so its small QKV/out math is inlined verbatim from the validated stub bodies where a block is decomposed."
+  },
+
+  "conditioning_regimes_task_heads": [
+    {
+      "task": "i2v",
+      "demo": "demo/demo_i2v.py",
+      "description": "image-to-video: dual text (mllm/qwen + byT5) + an ACTIVE image embedding; all condition tokens valid -> fully unmasked joint attention (exact match to the stubs' unmasked path).",
+      "input": "hidden_states (1,32,F,H,W), timestep, encoder_hidden_states (1,Lm,3584)+mask ones, encoder_hidden_states_2 (1,Lb,1472)+mask ones, image_embeds (1,Li,1152) nonzero",
+      "output": "denoised velocity (1,32,F,H,W)"
+    },
+    {
+      "task": "t2v",
+      "demo": "demo/demo_t2v.py",
+      "description": "text-to-video: dual text only; image_embeds zeroed (reference is_t2v path). Reproduced faithfully via a per-key additive attention bias that masks the invalid image KEYS. The final latent output is provably independent of the invalid image tokens (latent queries never attend to masked image keys, and valid text/latent tokens never take image as a key), so column-masking matches the reference latent output exactly and avoids any fully-masked-row NaN.",
+      "input": "same as i2v but image_embeds = 0",
+      "output": "denoised velocity (1,32,F,H,W)"
+    }
+  ],
+  "task_head_sharing_note": "t2v and i2v share ALL graduated modules -> per the 'if two calls share a graduated module use ONE agent/pipeline' rule they are ONE shared pipeline (tt/pipeline.py::run) parameterized by `task`; the two demos differ only in whether image_embeds is populated.",
+
+  "coverage_strategy": {
+    "why": "The graduated set is over-complete: it contains ancestor composites AND their descendant leaves on the same tree path (e.g. token_refiner ⊃ individual_token_refiner ⊃ individual_token_refiner_block ⊃ {ada_norm, feed_forward ⊃ linear_activation}). Each composite stub is self-contained and inlines its subtree, so a single non-redundant forward cannot invoke both a composite and its descendants. We therefore run the SAME faithful forward at three granularities; each is a real full-transformer forward (real task output, PCC>=0.95) that decomposes different subtrees.",
+    "granularities": {
+      "composite": {
+        "invokes": ["hunyuan_video15_rotary_pos_embed", "hunyuan_video15_time_embedding", "hunyuan_video15_patch_embed", "hunyuan_video15_token_refiner", "hunyuan_video15_by_t5_text_projection", "hunyuan_video15_image_projection", "hunyuan_video15_transformer_block", "ada_layer_norm_continuous"],
+        "count": 8
+      },
+      "mid": {
+        "decomposes": "time_embed -> timesteps + timestep_embedding; context_embedder -> combined_timestep_text_proj_embeddings + proj_in(glue) + individual_token_refiner; transformer_block -> ada_layer_norm_zero(norm1/norm1_context) + inline joint-attention + feed_forward(ff/ff_context) + norm2(glue)",
+        "invokes_new": ["timesteps", "timestep_embedding", "combined_timestep_text_proj_embeddings", "hunyuan_video15_individual_token_refiner", "ada_layer_norm_zero", "feed_forward"],
+        "count": 11
+      },
+      "deep": {
+        "decomposes": "context_embedder.time_text_embed -> timesteps + timestep_embedding + pix_art_alpha_text_projection (sum); token_refiner stack -> refiner_blocks[0] via individual_token_refiner_block stub, refiner_blocks[1] via hunyuan_video15_ada_norm(norm_out) + inline self-attention + linear_activation(ff.net[0]) + net[2](glue)",
+        "invokes_new": ["pix_art_alpha_text_projection", "hunyuan_video15_individual_token_refiner_block", "hunyuan_video15_ada_norm", "linear_activation"],
+        "count": 13
+      }
+    },
+    "union_check": "composite ∪ mid ∪ deep == all 18 graduated modules (verified on device: union invoked = 18/18, missing = [])."
+  },
+
+  "stub_routing": {
+    "hunyuan_video15_rotary_pos_embed": "rope(hidden_states) -> (cos,sin); applied on-device to the LATENT-stream q/k inside every transformer block (interleaved RoPE via a fixed (D,D) rotate matmul + cos/sin; matches diffusers apply_rotary_emb use_real_unbind_dim=-1). Used in all granularities.",
+    "hunyuan_video15_time_embedding": "time_embed(timestep) -> temb (B,inner) [composite/deep].",
+    "timesteps": "time_proj sinusoid: time_embed.time_proj [mid] and context_embedder.time_text_embed.time_proj [deep].",
+    "timestep_embedding": "timestep_embedder MLP: time_embed.timestep_embedder [mid] and context_embedder.time_text_embed.timestep_embedder [deep].",
+    "hunyuan_video15_patch_embed": "x_embedder(hidden_states) -> (B,N,inner); unit-patch (1,1,1) native on-device reshape+permute+matmul. All granularities.",
+    "hunyuan_video15_token_refiner": "context_embedder(encoder_hidden_states, timestep, mask) -> mllm text conditioning [composite].",
+    "combined_timestep_text_proj_embeddings": "context_embedder.time_text_embed(timestep, pooled) -> temb_tr [mid].",
+    "pix_art_alpha_text_projection": "context_embedder.time_text_embed.text_embedder(pooled) -> text conditioning [deep].",
+    "hunyuan_video15_individual_token_refiner": "context_embedder.token_refiner(h, temb_tr) -> refined text tokens [mid].",
+    "hunyuan_video15_individual_token_refiner_block": "context_embedder.token_refiner.refiner_blocks[0](h, temb_tr) [deep].",
+    "hunyuan_video15_ada_norm": "refiner_blocks[1].norm_out(temb_tr) -> (gate_msa,gate_mlp) [deep].",
+    "linear_activation": "refiner_blocks[1].ff.net[0] (LinearActivation proj+SiLU) [deep].",
+    "hunyuan_video15_by_t5_text_projection": "context_embedder_2(encoder_hidden_states_2) -> byT5 text conditioning. All granularities.",
+    "hunyuan_video15_image_projection": "image_embedder(image_embeds) -> image conditioning. All granularities.",
+    "hunyuan_video15_transformer_block": "transformer_blocks[i](hidden, enc, temb, rope, mask) -> dual-stream MMDiT block [composite/deep].",
+    "ada_layer_norm_zero": "transformer_blocks[i].norm1 and .norm1_context -> (norm_x, gate_msa, shift_mlp, scale_mlp, gate_mlp) [mid].",
+    "feed_forward": "transformer_blocks[i].ff and .ff_context (GELU-tanh FF) [mid].",
+    "ada_layer_norm_continuous": "norm_out(hidden, temb) -> final output norm before proj_out. All granularities."
+  },
+  "glue_not_graduated": {
+    "proj_in": "context_embedder.proj_in Linear(text_embed_dim, inner) — ttnn matmul+bias.",
+    "proj_out": "proj_out Linear(inner, patch_vol*out_channels) — ttnn matmul+bias -> (B,N,out_ch).",
+    "cond_type_embed": "nn.Embedding(3, inner); rows [0,1,2] added on-device to mllm/byt5/image streams before reorder.",
+    "reorder": "static concat of the three condition streams (i2v: [image,byt5,mllm]; t2v: [byt5,mllm,image] with image keys masked). Pure ttnn.concat + a pre-uploaded additive bias.",
+    "unpatchify": "(B,N,out_ch) -> (B,out_ch,F,H,W): pure layout (unit patch)."
+  },
+
+  "behavioral_proof": "The pipeline consumes exactly the tensors HunyuanVideo15Transformer3DModel.forward takes (constructed by tt.pipeline.build_inputs, matching the reference-loader self-check), chains the graduated stubs into the actual forward, and emits the real task output (velocity prediction). Each stage is fed the previous TT stage's real output (no reference tensor injected at any joint). PCC against the HF golden = 0.999979 (>> 0.95) for every task x granularity.",
+
+  "self_validation_plan": {
+    "shared_pipeline": "tt/pipeline.py::HunyuanVideo15Pipeline.run — the SINGLE chained forward; BOTH demo/ and tests/e2e/ import and call it (a green test guarantees a working demo).",
+    "gate_test": "tests/e2e/test_e2e_pipeline.py: test_gate1_stubs_native (static native check) + test_e2e_gates (runs all 6 task x granularity configs on device, prints `e2e PCC=<v>` each, asserts PCC>=0.95 [Gate 3] and union invoked == 18 [Gate 2]).",
+    "run": "./python_env/bin/python -m pytest models/demos/hf_eager/hunyuanvideo_1_5/tests/e2e/test_e2e_pipeline.py -s",
+    "demos": "python -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_i2v ; python -m models.demos.hf_eager.hunyuanvideo_1_5.demo.demo_t2v",
+    "no_waste_report": "e2e_no_waste.json (written by the gate test) records the invoked union vs the graduated total and per-run PCC."
+  },
+
+  "trace_2cq_contract": {
+    "factory": "tt/pipeline.py::build_pipeline(device, model=None, **kwargs) -> resident HunyuanVideo15Pipeline (carries PIPELINE_STAGES + denoise_* hooks); returns the object, never runs it.",
+    "stage_hooks": "denoise_trace_setup(inputs) pins the latent-sequence dim and pre-uploads RoPE cos/sin + temb + padded latent + reordered conditioning + masked-key bias into persistent buffers; denoise_trace_step() is one host-op-free forward reading only those buffers; denoise_write_inputs() stages the next latent on CQ1.",
+    "selftests": "trace_capture_selftest(device) captures/executes/releases each stage trace and checks PCC; host_op_selftest() runs the model math under host_op_observer.observe_host_ops (encoding + weight build outside the observed region) and returns verdict(ops) — expecting ZERO host aten ops."
+  },
+
+  "notes_and_reconciliation": [
+    "Source B canonical dir is models/demos/hf_eager/hunyuanvideo_1_5 (where bringup_status.json + _stubs live); the emitted demo/tt/tests package lives alongside it. The command's logical path 'models/demos/hunyuanvideo_1.5' maps to this underscore/hf_eager dir (a dotted dir is not an importable python package).",
+    "transformer_block stub was extended (backward-compatible) to apply on-device RoPE to the latent q/k and accept an optional additive attention bias; freqs_cis=None / attn_bias=None preserve the original per-component behavior, so the per-component PCC test is unchanged.",
+    "Inputs are deterministic tensors at the transformer boundary (the graduated modules' real input), matching how the per-component PCC tests and the reference-loader self-check drive the model; the upstream text/image encoders and VAE are out of bring-up scope and not part of the graduated set."
+  ]
+}
