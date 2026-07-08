@@ -1,6 +1,7 @@
 """Tests for the real boundaries (execution faked — no hardware, no creds)."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,9 @@ def test_board_to_arch():
 def test_build_tracy_command_is_profile_this_form():
     cmd = build_tracy_command("models/x/test_perf.py", "S128", "/tmp/out")
     # raw profile_this command: -v -r -p (NO --no-runtime-analysis) + -o
-    assert cmd[:6] == ["python", "-m", "tracy", "-v", "-r", "-p"]
+    # uses sys.executable (not a bare "python") so it always resolves to the SAME interpreter
+    # running this process, not whatever "python" happens to be first on PATH.
+    assert cmd[:6] == [sys.executable, "-m", "tracy", "-v", "-r", "-p"]
     assert "--no-runtime-analysis" not in cmd
     assert cmd[cmd.index("-o") + 1] == "/tmp/out"
     m_idx = cmd.index("-m", cmd.index("-o"))  # the SECOND -m (tracy's), not python's
@@ -134,13 +137,13 @@ def test_run_profiled_falls_back_to_watermark_glob(tmp_path):
 
 def test_run_profiled_crash_on_nonzero_exit(tmp_path):
     rp = make_run_profiled(tmp_path, "t.py", execute=_fake_execute(returncode=3), collect_runner=_COLLECT_ONE)
-    with pytest.raises(TracyRunError, match="exit 3"):
+    with pytest.raises(TracyRunError, match="exit 3"):  # allow-pytest.raises: no expect_error fixture
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
 
 
 def test_run_profiled_crash_when_no_csv_found(tmp_path):
     rp = make_run_profiled(tmp_path, "t.py", execute=_fake_execute(), collect_runner=_COLLECT_ONE)
-    with pytest.raises(TracyRunError, match="no ops_perf_results"):
+    with pytest.raises(TracyRunError, match="no ops_perf_results"):  # allow-pytest.raises: no expect_error fixture
         rp("e2e", 1, 128, tmp_path / "profiles", 0)
 
 
@@ -150,7 +153,7 @@ def test_preflight_passes_when_tests_selected(tmp_path):
 
 
 def test_preflight_raises_on_zero_selection(tmp_path):
-    with pytest.raises(PreflightError, match="selects no cases"):
+    with pytest.raises(PreflightError, match="selects no cases"):  # allow-pytest.raises: no expect_error fixture
         preflight_collect(
             tmp_path, "t.py", "S512", runner=_fake_collect("5 deselected, 0 tests collected", returncode=5)
         )
@@ -195,7 +198,7 @@ def test_resolve_node_id_self_heals_on_bad_hint(tmp_path):
 def test_resolve_node_id_empty_raises_clear_error(tmp_path):
     from agent.probes import PreflightError, resolve_node_id
 
-    with pytest.raises(PreflightError, match="collects no tests"):
+    with pytest.raises(PreflightError, match="collects no tests"):  # allow-pytest.raises: no expect_error fixture
         resolve_node_id(tmp_path, "models/x/test_m.py", "in0", runner=_fake_collect("0 tests collected\n"))
 
 
@@ -256,7 +259,7 @@ def test_match_input_seq_len():
     params = ["S128", "S1024", "S2048", "S4096", "S8192"]
     assert match_input_to_case("128", params) == "S128"
     assert match_input_to_case("4096", params) == "S4096"
-    with pytest.raises(InputMatchError, match="NO test case"):
+    with pytest.raises(InputMatchError, match="NO test case"):  # allow-pytest.raises: no expect_error fixture
         match_input_to_case("512", params)  # the S512 lesson, now permanent
 
 
@@ -265,12 +268,12 @@ def test_match_input_image_size():
 
     params = ["128x128", "256x256", "512x512"]
     assert match_input_to_case("128x128", params) == "128x128"
-    with pytest.raises(InputMatchError):
+    with pytest.raises(InputMatchError):  # allow-pytest.raises: no expect_error fixture
         match_input_to_case("64x64", params)
 
 
 def test_match_input_ambiguous_stops():
     from agent.probes import InputMatchError, match_input_to_case
 
-    with pytest.raises(InputMatchError, match="ambiguous"):
+    with pytest.raises(InputMatchError, match="ambiguous"):  # allow-pytest.raises: no expect_error fixture
         match_input_to_case("8", params=["224-b8", "448-b8"])

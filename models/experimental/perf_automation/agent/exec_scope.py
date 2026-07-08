@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -52,7 +53,7 @@ def ensure_scope(ctx) -> None:
         # one perf-test run, BOTH plugins: exec-trace (which files run) + op-attribution
         # (which source line emits each matmul) -> the automated "where is the hot op" deep-dive.
         cmd = [
-            "python",
+            sys.executable,
             "-m",
             "pytest",
             perf,

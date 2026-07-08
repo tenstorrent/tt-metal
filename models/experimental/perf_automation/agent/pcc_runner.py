@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from . import gitio
@@ -47,7 +48,7 @@ def run_pcc(ctx) -> dict:
         env["TT_METAL_VISIBLE_DEVICES"] = str(vd)
     try:
         r = subprocess.run(
-            ["python", "-m", "pytest", "-o", "addopts=", "-o", "timeout=0", test, "-sv"],
+            [sys.executable, "-m", "pytest", "-o", "addopts=--import-mode=importlib", "-o", "timeout=0", test, "-sv"],
             cwd=str(gitio.repo_root(ctx.model_root())),
             env=env,
             capture_output=True,

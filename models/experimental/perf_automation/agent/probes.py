@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -293,7 +294,21 @@ def build_tracy_command(perf_test: str, case: str | None, out_dir: str | Path) -
     TT_METAL_DEVICE_PROFILER=1 python -m tracy -v -r -p -o <out> -m pytest ... -sv
     Run directly (never via profile_this.py: it swallows the exit code).
     """
-    cmd = ["python", "-m", "tracy", "-v", "-r", "-p", "-o", str(out_dir), "-m", "pytest", "-o", "timeout=0", perf_test]
+    cmd = [
+        sys.executable,
+        "-m",
+        "tracy",
+        "-v",
+        "-r",
+        "-p",
+        "-o",
+        str(out_dir),
+        "-m",
+        "pytest",
+        "-o",
+        "timeout=0",
+        perf_test,
+    ]
     if case:
         cmd += ["-k", case]
     cmd += ["-sv"]
@@ -476,9 +491,13 @@ def collect_cases(
 
     Used to pick the DEFAULT case (the FIRST collected) when neither the user
     nor the sub-agent supplied one."""
-    # -o addopts= : neutralize pytest.ini verbosity so collect prints FLAT
-    # node ids (repo addopts include -v, which turns the listing into a tree).
-    cmd = ["python", "-m", "pytest", "-o", "addopts=", perf_test, "--collect-only", "-q"]
+    # -o addopts=--import-mode=importlib : override pytest.ini's verbosity flags (repo addopts
+    # include -v, which turns the listing into a tree) so collect prints FLAT node ids, while
+    # explicitly RE-ASSERTING --import-mode=importlib (also set by pytest.ini, but a bare
+    # `addopts=` clears it too) -- without it, a demo's own `tests/e2e/__init__.py` package
+    # collides with the repo's top-level `tests/` package under the default import mode
+    # ('ModuleNotFoundError: No module named "tests.e2e"'), reporting 0 collected.
+    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=--import-mode=importlib", perf_test, "--collect-only", "-q"]
     proc = runner(
         cmd, cwd=Path(tt_metal_root), env=env or dict(os.environ), capture_output=True, text=True, timeout=120
     )
@@ -547,7 +566,7 @@ def preflight_collect(
 
     Catches the zero-selection trap ('5 deselected, 0 selected') in seconds.
     Returns the number of selected tests."""
-    cmd = ["python", "-m", "pytest", "-o", "addopts=", perf_test, "--collect-only", "-q"]
+    cmd = [sys.executable, "-m", "pytest", "-o", "addopts=--import-mode=importlib", perf_test, "--collect-only", "-q"]
     if case:
         cmd += ["-k", case]
     proc = runner(
