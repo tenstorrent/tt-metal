@@ -36,6 +36,7 @@ from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params, ring_params
 
 # Ring SDPA (sequence parallel) requires the padded sequence to be divisible by
 # k_chunk_size * sp_factor. Must match Ideogram4TransformerBlock.sdpa_k_chunk_size.
@@ -124,25 +125,32 @@ def _build_inputs(batch_size: int, text_len: int, image_len: int, torch_dtype, n
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
     [
         # factor == submesh axis size. TP shards heads (padded to a multiple of tp);
         # SP shards the sequence (ring attention). Full mesh is the 2x4 BH loudbox.
         # factor == submesh axis size; sp on axis 0 (size up to 2), tp on axis 1 (size up to 4).
-        pytest.param((2, 4), (1, 1), 0, 1, 1, id="tp1sp1"),  # regression: single device
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="tp2"),  # 18 heads % 2 == 0, no padding
-        pytest.param((2, 4), (1, 4), 0, 1, 1, id="tp4_pad20"),  # 18 -> 20 heads
-        pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),  # sequence parallel only (TP=1)
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4_pad20"),  # SP=2, TP=4 (pad 20)
-        pytest.param((4, 2), (4, 2), 0, 1, 2, id="sp4tp2"),  # SP=4, TP=2 (full mesh, 4x2 arrangement); num_links=2
+        pytest.param(
+            (2, 4), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp1sp1"
+        ),  # regression: single device
+        pytest.param(
+            (2, 4), (1, 2), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp2"
+        ),  # 18 heads % 2 == 0, no padding
+        pytest.param((2, 4), (1, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp4_pad20"),  # 18 -> 20 heads
+        pytest.param(
+            (2, 4), (2, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2"
+        ),  # sequence parallel only (TP=1)
+        pytest.param((2, 4), (2, 2), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp2"),
+        pytest.param(
+            (2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp4_pad20"
+        ),  # SP=2, TP=4 (pad 20)
+        pytest.param(
+            (4, 2), (4, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, id="sp4tp2"
+        ),  # SP=4, TP=2 (full 4x2 loudbox); num_links=2
+        # BH Galaxy 4x8, 2D torus Ring: SP=8 (axis 1), TP=4 (axis 0), 2 links/neighbor. 18 heads -> pad 20.
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="bh_galaxy_sp8tp4"),
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("batch_size", "text_len", "image_len"),
@@ -160,6 +168,7 @@ def test_transformer_block(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
     batch_size: int,
     text_len: int,
     image_len: int,
@@ -203,7 +212,7 @@ def test_transformer_block(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
-    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=topology)
 
     # Head padding for TP divisibility (18 heads -> next multiple of tp_factor).
     padding_config = (

@@ -22,6 +22,7 @@ from ....parallel.config import ParallelFactor, VAEParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params, ring_params
 
 Z_CHANNELS = 32
 
@@ -73,19 +74,23 @@ def test_vae_decoder(*, mesh_device: ttnn.MeshDevice, latent_h: int, latent_w: i
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis"),
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((2, 4), (1, 4), 1, id="tp4"),
-        pytest.param((4, 2), (4, 2), 1, id="tp2"),  # SP4xTP2 denoiser: VAE TP=2, replicated on size-4 axis
+        pytest.param((2, 4), (1, 4), 1, 1, {**line_params, "l1_small_size": 32768}, ttnn.Topology.Linear, id="tp4"),
+        # SP4xTP2 denoiser: VAE TP=2, replicated on size-4 axis
+        pytest.param((4, 2), (4, 2), 1, 1, {**line_params, "l1_small_size": 32768}, ttnn.Topology.Linear, id="tp2"),
+        # BH Galaxy 4x8, 2D torus Ring: VAE TP=4 (axis 0), replicated on the size-8 axis, 2 links/neighbor.
+        pytest.param(
+            (4, 8), (4, 8), 0, 2, {**ring_params, "l1_small_size": 32768}, ttnn.Topology.Ring, id="bh_galaxy_tp4"
+        ),
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}], indirect=True
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("latent_h", "latent_w"), [(64, 64), (128, 128)], ids=["512px", "1024px"])
-def test_vae_decoder_tp4(*, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis, latent_h: int, latent_w: int) -> None:
-    """VAE decode channel-parallel at TP=4 across the mesh (GroupNorm shards channels)."""
+def test_vae_decoder_tp4(
+    *, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis, num_links, topology, latent_h: int, latent_w: int
+) -> None:
+    """VAE decode channel-parallel at TP across the mesh (GroupNorm shards channels)."""
     torch.manual_seed(0)
     torch_dtype = torch.bfloat16
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
@@ -107,7 +112,7 @@ def test_vae_decoder_tp4(*, mesh_device: ttnn.MeshDevice, submesh_shape, tp_axis
     )
 
     parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
-    ccl_manager = CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh, num_links=num_links, topology=topology)
     tt_decoder = Ideogram4VAEDecoder.from_torch(
         akl, mesh_device=submesh, parallel_config=parallel_config, ccl_manager=ccl_manager
     )

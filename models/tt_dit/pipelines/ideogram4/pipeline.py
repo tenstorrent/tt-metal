@@ -243,10 +243,12 @@ class Ideogram4Pipeline:
         qwen_repo: str = "Qwen/Qwen3-VL-8B-Instruct",
         tp_axis: int = 1,
         num_links: int = 2,
+        topology: ttnn.Topology = ttnn.Topology.Linear,
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = weights_dir
         self.tp_axis = tp_axis
+        self.topology = topology
         self.config = modeling_ideogram4.Ideogram4Config()
         self.patch, self.ae = 2, 8
         tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -260,7 +262,7 @@ class Ideogram4Pipeline:
         self.sp_factor = tuple(mesh_device.shape)[self.sp_axis]
         cfg = self.config
 
-        ccl = CCLManager(mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+        ccl = CCLManager(mesh_device, num_links=num_links, topology=topology)
         self.ccl = ccl
         dit_pc = DiTParallelConfig(
             cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),

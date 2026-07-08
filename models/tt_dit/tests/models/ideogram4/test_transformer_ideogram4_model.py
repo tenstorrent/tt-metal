@@ -25,6 +25,7 @@ from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params, ring_params
 from .test_transformer_ideogram4 import _sp_padded_len
 
 IMAGE_POSITION_OFFSET = 65536
@@ -174,18 +175,19 @@ def _seq_shard(t: torch.Tensor, seq_dim: int, padded_len: int, sp_factor: int, s
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
     [
         # sp on axis 0, tp on axis 1 (factor == axis size). Full mesh is the 2x4 BH loudbox.
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="tp2"),
-        pytest.param((2, 4), (1, 4), 0, 1, 1, id="tp4_pad20"),
-        pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4_pad20"),
+        pytest.param((2, 4), (1, 2), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp2"),
+        pytest.param((2, 4), (1, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp4_pad20"),
+        pytest.param((2, 4), (2, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2"),
+        pytest.param((2, 4), (2, 2), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp2"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp4_pad20"),
+        # BH Galaxy 4x8, 2D torus Ring: SP=8 (axis 1), TP=4 (axis 0), 2 links/neighbor.
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="bh_galaxy_sp8tp4"),
     ],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("num_layers", [2], ids=["layers2"])
 @pytest.mark.parametrize(
     ("batch_size", "llm_len", "image_len"),
@@ -198,6 +200,7 @@ def test_transformer_model_parallel(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
     num_layers: int,
     batch_size: int,
     llm_len: int,
@@ -238,7 +241,7 @@ def test_transformer_model_parallel(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
-    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=topology)
     padding_config = (
         PaddingConfig.from_tensor_parallel_factor(config.num_heads, config.emb_dim // config.num_heads, tp_factor)
         if config.num_heads % tp_factor != 0

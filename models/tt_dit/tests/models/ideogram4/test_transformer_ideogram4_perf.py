@@ -24,6 +24,7 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params, ring_params
 from .test_transformer_ideogram4 import (
     ADALN_DIM,
     EMB_DIM,
@@ -40,19 +41,22 @@ TIMED_ITERS = 10
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links"),
+    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((2, 4), (1, 1), 0, 1, 1, id="tp1sp1"),
-        pytest.param((2, 4), (1, 2), 0, 1, 1, id="tp2"),
-        pytest.param((2, 4), (1, 4), 0, 1, 1, id="tp4"),
-        pytest.param((2, 4), (2, 1), 0, 1, 1, id="sp2"),
-        pytest.param((2, 4), (2, 2), 0, 1, 1, id="sp2tp2"),
-        pytest.param((2, 4), (2, 4), 0, 1, 1, id="sp2tp4"),
-        pytest.param((4, 2), (4, 2), 0, 1, 2, id="sp4tp2"),  # SP=4, TP=2 (full mesh, 4x2 arrangement); num_links=2
+        pytest.param((2, 4), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp1sp1"),
+        pytest.param((2, 4), (1, 2), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp2"),
+        pytest.param((2, 4), (1, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="tp4"),
+        pytest.param((2, 4), (2, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2"),
+        pytest.param((2, 4), (2, 2), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp2"),
+        pytest.param((2, 4), (2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, id="sp2tp4"),
+        pytest.param(
+            (4, 2), (4, 2), 0, 1, 2, line_params, ttnn.Topology.Linear, id="sp4tp2"
+        ),  # SP=4, TP=2 (full 4x2 loudbox); num_links=2
+        # BH Galaxy 4x8, 2D torus Ring: SP=8 (axis 1), TP=4 (axis 0), 2 links/neighbor.
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, id="bh_galaxy_sp8tp4"),
     ],
-    indirect=["mesh_device"],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     ("batch_size", "text_len", "image_len"),
     [
@@ -68,6 +72,7 @@ def test_transformer_block_perf(
     sp_axis: int,
     tp_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
     batch_size: int,
     text_len: int,
     image_len: int,
@@ -87,7 +92,7 @@ def test_transformer_block_perf(
         tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
         sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
     )
-    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(submesh_device, num_links=num_links, topology=topology)
     padding_config = (
         PaddingConfig.from_tensor_parallel_factor(NUM_HEADS, HEAD_DIM, tp_factor)
         if NUM_HEADS % tp_factor != 0

@@ -26,6 +26,7 @@ from PIL import Image
 import ttnn
 
 from ....pipelines.ideogram4.pipeline import Ideogram4Pipeline
+from ....utils.test import line_params, ring_params
 
 
 # =============================================================================
@@ -187,34 +188,30 @@ def _typography_prompt_json() -> str:
 PROMPT = _typography_prompt_json()
 
 
+# Trace region for the per-branch transformer-forward traces (cond + uncond).
+# 60MB headroom; bump if "trace region" OOM at higher resolution.
+_LINE_PIPE = {**line_params, "l1_small_size": 65536, "trace_region_size": 60000000}
+_RING_PIPE = {**ring_params, "l1_small_size": 65536, "trace_region_size": 60000000}
+
+
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis"),
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((2, 4), (1, 4), 1, id="tp4"),
-        pytest.param((4, 2), (4, 2), 1, id="sp4tp2"),  # full-mesh SP4xTP2 denoiser default
+        pytest.param((2, 4), (1, 4), 1, 2, _LINE_PIPE, ttnn.Topology.Linear, id="tp4"),
+        # full-mesh SP4xTP2 denoiser default (4x2 loudbox)
+        pytest.param((4, 2), (4, 2), 1, 2, _LINE_PIPE, ttnn.Topology.Linear, id="sp4tp2"),
+        # BH Galaxy 4x8, 2D torus Ring: SP=8 (axis 1), TP=4 (axis 0), 2 links/neighbor.
+        pytest.param((4, 8), (4, 8), 0, 2, _RING_PIPE, ttnn.Topology.Ring, id="bh_galaxy_sp8tp4"),
     ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "l1_small_size": 65536,
-            # Trace region for the per-branch transformer-forward traces (cond + uncond).
-            # 60MB headroom; bump if "trace region" OOM at higher resolution.
-            "trace_region_size": 60000000,
-        }
-    ],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
     ("height", "width"), [(512, 512), (1024, 1024), (2048, 2048)], ids=["512px", "1024px", "2048px"]
 )
 @pytest.mark.parametrize("preset", ["V4_TURBO_12", "V4_QUALITY_48"])
-def test_pipeline_class(*, mesh_device, submesh_shape, tp_axis, height, width, preset) -> None:
+def test_pipeline_class(*, mesh_device, submesh_shape, tp_axis, num_links, topology, height, width, preset) -> None:
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis)
+    pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis, num_links=num_links, topology=topology)
 
     # Warmup run: triggers JIT compile + program-cache fill (NOT timed).
     pipe(PROMPT, height=height, width=width, preset=preset, seed=1234)
@@ -234,21 +231,24 @@ def test_pipeline_class(*, mesh_device, submesh_shape, tp_axis, height, width, p
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis"),
-    [pytest.param((4, 2), (4, 2), 1, id="sp4tp2")],
-    indirect=["mesh_device"],
+    ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param((4, 2), (4, 2), 1, 2, {**line_params, "l1_small_size": 65536}, ttnn.Topology.Linear, id="sp4tp2"),
+        # BH Galaxy 4x8, 2D torus Ring: SP=8 (axis 1), TP=4 (axis 0), 2 links/neighbor.
+        pytest.param(
+            (4, 8), (4, 8), 0, 2, {**ring_params, "l1_small_size": 65536}, ttnn.Topology.Ring, id="bh_galaxy_sp8tp4"
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 65536}], indirect=True
-)
-def test_2048_presets(*, mesh_device, submesh_shape, tp_axis) -> None:
+def test_2048_presets(*, mesh_device, submesh_shape, tp_axis, num_links, topology) -> None:
     """UNTRACED 2048px generation across all 3 sampler presets, saved for manual review.
 
     Builds the pipeline ONCE and loops the presets (avoids a per-preset model reload).
     Untraced (traced=False) per the serving plan; 2048px doesn't benefit from tracing.
     """
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis)
+    pipe = Ideogram4Pipeline.from_pretrained(submesh, tp_axis=tp_axis, num_links=num_links, topology=topology)
     for preset in ("V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"):
         img = pipe(PROMPT, height=2048, width=2048, preset=preset, seed=1234, traced=False)
         out = f"/data/cglagovich/ideogram4_2048_{preset}.png"
