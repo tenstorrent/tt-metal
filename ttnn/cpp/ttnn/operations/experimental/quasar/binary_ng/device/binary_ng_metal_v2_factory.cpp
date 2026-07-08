@@ -230,34 +230,22 @@ ProgramArtifacts create_sharded_artifacts(
     // Reader/writer take NO tensor bindings: the input/output shards are borrowed by the DFBs
     // (DataflowBufferSpec::borrowed_from already registers each TensorParameter as used), and the
     // kernels do no NoC work — they only publish/drain the resident shards. So no TensorAccessor.
-    m2::DataMovementHardwareConfig reader_hw;
-    if (a.device()->arch() == tt::ARCH::QUASAR) {
-        reader_hw = m2::DataMovementGen2Config{};
-    } else {
-        reader_hw = m2::CreateReaderGen1DataMovementConfig();
-    }
     m2::KernelSpec reader_spec{
         .unique_id = READER,
         .source = std::filesystem::path(kShardedReaderDfb),
         .num_threads = 1,
         .dfb_bindings = {m2::ProducerOf(IN0, "in0"), m2::ProducerOf(IN1, "in1")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = std::move(reader_hw),
+        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
-    m2::DataMovementHardwareConfig writer_hw;
-    if (a.device()->arch() == tt::ARCH::QUASAR) {
-        writer_hw = m2::DataMovementGen2Config{};
-    } else {
-        writer_hw = m2::CreateWriterGen1DataMovementConfig();
-    }
     m2::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path(kShardedWriterDfb),
         .num_threads = 1,
         .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = std::move(writer_hw),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // bf8/bf16 outputs do not need fp32 dest accumulation (matches descriptor factory: false unless
