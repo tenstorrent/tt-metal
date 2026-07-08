@@ -165,8 +165,12 @@ inline void llk_unpack_tilizeA_B(
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
+    // FIX: the row-to-row stride must include the FULL channel-tile width (block_ct_dim), matching the LLK
+    // reference driver (unpack_reduce_col_tilizeA_strided test uses FULL_CT_DIM*num_faces_r_dim*face_r_dim)
+    // and the WH/BH core (_llk_unpack_tilizeA_B_ scales the bottom-face stride by block_ct_dim). Without it,
+    // for >1 channel tile (C>=64) later window rows/columns under-advance and alias into earlier tiles' data.
     const std::uint32_t tile_row_stride =
-        tensor_shape_A.num_faces_r_dim *
+        block_ct_dim * tensor_shape_A.num_faces_r_dim *
         tensor_shape_A.face_r_dim;  // used to advance to the next row of tiles in the L1 buffer
     const std::uint32_t l1_index_a = rd_entry_idx_a * tile_row_stride + tile_index_a;
 
