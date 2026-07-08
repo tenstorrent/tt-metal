@@ -10,13 +10,15 @@ from fast_untilize_common import (
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.llk_params import DestAccumulation, PerfRunType
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     TILE_COUNT,
+    TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
 
@@ -61,7 +63,9 @@ def test_perf_fast_untilize_baseline_compare(
             PerfRunType.PACK_ISOLATE,
         ],
         templates=[
-            generate_input_dim(pixel_dimensions, pixel_dimensions, block_ct_dim)
+            generate_input_dim(pixel_dimensions, pixel_dimensions, block_ct_dim),
+            DEST_SYNC(DestSync.Half),
+            TILE_DST_CT_OFFSET(0),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

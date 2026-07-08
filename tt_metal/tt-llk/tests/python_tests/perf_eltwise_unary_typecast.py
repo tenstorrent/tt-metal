@@ -51,20 +51,19 @@ from helpers.test_variant_parameters import (
 # The five (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path
 # re-introduced by issue #46751.
 #
-# dest_acc is the production setting EXCEPT for the two rows marked below: their
-# macro fast path is gated !DST_ACCUM_MODE, but ttnn.typecast forces dest_acc=Yes
-# for 32-bit outputs (typecast.cpp:38-41), so production takes the plain loop. Those
-# rows measure the macro in isolation and their speedup is not production-realized.
+# dest_acc follows production typecast selection. Widening to a 32-bit output
+# requires fp32 Dest; running those cases with DestAccumulation.No leaves no room
+# to store/pack the widened result and can hang hardware readback on Blackhole.
 _TYPECAST_PERF_CASES = [
     # Float16_b -> UInt16: routes through calculate_typecast_fp32_to_uint16 (the
     # Compute API maps Float16_b-in-Dest -> UInt16 to it, no FP32 load from L1).
     (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
-    # uint16_to_fp32 -- NOT production-reachable (Float32 out -> dest_acc=Yes).
-    (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
+    # uint16_to_fp32 -- Float32 output requires 32-bit Dest.
+    (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.Yes),
     # uint32_to_fp16b, macro mode-agnostic; UInt32 needs 32-bit Dest.
     (DataFormat.UInt32, DataFormat.Float16_b, DestAccumulation.Yes),
-    # uint16_to_uint32 -- NOT production-reachable (UInt32 out -> dest_acc=Yes).
-    (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.No),
+    # uint16_to_uint32 -- UInt32 output requires 32-bit Dest.
+    (DataFormat.UInt16, DataFormat.UInt32, DestAccumulation.Yes),
     # int32_to_uint16, macro mode-agnostic; Int32 needs 32-bit Dest.
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
 ]
@@ -114,12 +113,11 @@ def test_perf_eltwise_unary_typecast(
     )
     assert tile_count_A == (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
 
-    # Unpack straight into Dest when the input is 32-bit: the unpacker has no
+    # Unpack straight into Dest only for 32-bit inputs: the unpacker has no
     # SrcA/SrcB path for Int32/UInt32/Float32, so cunpack_common asserts
-    # unpack_to_dest for them (matches the functional typecast test). The perf
-    # kernel keeps the unpack-A acc_to_dest template arg false so this is legal
-    # even when dest_acc=Yes. For 16-bit inputs the data is copied SrcA -> Dest
-    # by the math datacopy A2D before the SFPU typecast runs.
+    # unpack_to_dest for them (matches the functional typecast test). For
+    # 16-bit inputs, including widened 32-bit outputs, math copies SrcA to Dest
+    # before the SFPU typecast runs.
     unpack_to_dest = input_format.is_32_bit()
 
     configuration = PerfConfig(
@@ -168,9 +166,9 @@ def test_perf_eltwise_unary_typecast(
     # *output* value, so the packer must read the output's register
     # representation, not the input's. In 16-bit Dest mode (dest_acc=No) the
     # inferred pack_src would otherwise stay equal to the input format and the
-    # pack would be rejected (e.g. UInt16 -> UInt32 is not a supported packer
-    # conversion). For dest_acc=Yes the 32-bit gasket converts from Dest and the
-    # inference already yields the output format, so no patch is needed there.
+    # pack would be rejected. For dest_acc=Yes the 32-bit gasket converts from
+    # Dest and the inference already yields the output format, so no patch is
+    # needed there.
     if dest_acc == DestAccumulation.No:
         pack_src = (
             DataFormat.Float16_b if _is_block_float(output_format) else output_format
