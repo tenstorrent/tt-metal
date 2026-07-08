@@ -454,6 +454,20 @@ _BLOCKINGS = {
     (4, 8, 1024, 4096, (1, 3, 3), 19, 5, 4): (256, 64, 1, 4, 4),  # ups_ups (kT=1) — 1235us
     (4, 8, 1024, 1024, (3, 3, 3), 21, 10, 8): (128, 64, 5, 4, 8),  # ups_post_res — 2012us
     (4, 8, 1024, 128, (3, 3, 3), 21, 10, 8): (128, 64, 7, 8, 4),  # ups_final — 277us
+    # LTX-2.3 704x1280 (720p) decoder, BH Galaxy 4x8. Large-spatial res/change convs, transplanted
+    # from the nearest same-(Cin,Cout,kernel) 1080p entry — all H_out*W_out=32 to stay off the BH
+    # non-32-hw conv3d hang path. Recovers the off-1080p VAE-decode regression (was hitting the
+    # conservative channel fallback); the deep 1024-ch stages stay on that fallback pending a full sweep.
+    (4, 8, 256, 256, (3, 3, 3), 147, 22, 20): (64, 256, 1, 8, 4),  # s3_res
+    (4, 8, 256, 256, (3, 3, 3), 3, 22, 20): (64, 256, 1, 8, 4),  # s3_res (cached-T)
+    (4, 8, 256, 256, (3, 3, 3), 4, 22, 20): (64, 256, 1, 8, 4),  # s3_res (chunk head)
+    (4, 8, 256, 512, (3, 3, 3), 147, 22, 20): (64, 256, 1, 8, 4),  # s3_chg
+    (4, 8, 512, 512, (3, 3, 3), 75, 22, 20): (64, 256, 1, 8, 4),  # s2_res
+    (4, 8, 512, 512, (3, 3, 3), 3, 22, 20): (64, 256, 1, 8, 4),  # s2_res (cached-T)
+    (4, 8, 512, 512, (3, 3, 3), 39, 11, 10): (64, 256, 1, 4, 8),  # s1_res
+    (4, 8, 512, 4096, (3, 3, 3), 39, 11, 10): (128, 64, 5, 4, 8),  # s1_up
+    (4, 8, 128, 128, (3, 3, 3), 147, 44, 40): (128, 64, 6, 2, 16),  # s4_res
+    (4, 8, 128, 128, (3, 3, 3), 3, 44, 40): (128, 64, 6, 2, 16),  # s4_res (cached-T)
 }
 
 # Fallback table: (C_in, C_out, kernel) -> blocking.
