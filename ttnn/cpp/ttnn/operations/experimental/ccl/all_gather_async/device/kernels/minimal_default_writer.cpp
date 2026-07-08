@@ -117,6 +117,10 @@ void kernel_main() {
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    // WAR-hazard wait (demo, #48222/#48469): fixed-prefix args (idx 14/15). Non-zero only on the
+    // gather's drain/anchor core; 0 elsewhere disables the wait. See minimal_default writer note below.
+    const uint32_t war_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t war_wait_value = get_arg_val<uint32_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
@@ -270,6 +274,15 @@ void kernel_main() {
         }
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
+
+    // WAR-hazard wait (demo): on the drain/anchor core (war_sem_addr != 0), block until the
+    // downstream sampling op has signalled it finished reading the reused output buffer, then reset
+    // for the next decode step. Independent of use_barrier_sem (which is off under persistent buffers).
+    // Placed after the barrier and before any output write, so it gates the buffer overwrite.
+    if (war_sem_addr != 0) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(war_sem_addr), war_wait_value);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(war_sem_addr), 0);
     }
 
     uint32_t slice_writes = 0;
