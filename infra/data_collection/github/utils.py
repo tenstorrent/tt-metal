@@ -371,7 +371,8 @@ def _is_sku_name_prefix(prefix: str, sku_name: str) -> bool:
     return sku_name[len(prefix)] in "_-"
 
 
-# Generic runner pools: store the runner label itself as card_type (not a SKU name).
+# CPU runner pools shared with sim_* SKUs in sku_config.yaml (sim_wormhole_b0 /
+# sim_blackhole → ubuntu-latest; galaxy sim SKUs → tt-ubuntu-2204-large-stable).
 _GENERIC_RUNNER_LABELS: frozenset[str] = frozenset(
     {
         "ubuntu-latest",
@@ -400,6 +401,14 @@ def _uses_generic_runner_labels(label_set: set[str]) -> bool:
 
 
 def _card_type_from_generic_runner_labels(label_set: set[str]) -> Optional[str]:
+    """
+    Map sim_* shared CPU pools back to their runner label for card_type.
+
+    sim_* SKUs run on ubuntu-latest or tt-ubuntu-2204-large-stable; strict
+    sku_config matching cannot distinguish sim tests from other CPU jobs on those
+    pools. When labels are only these pools, return the CPU runner label itself
+    rather than a sim_* SKU name.
+    """
     if not _uses_generic_runner_labels(label_set):
         return None
     return sorted(label_set)[0]
