@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
+#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -15,10 +16,77 @@
 
 namespace ttnn::operations::data_movement::detail {
 
+namespace {
+
+inline bool is_width_or_block_sharded(const MemoryConfig& mc) {
+    const auto layout = mc.memory_layout();
+    return mc.is_sharded() &&
+           (layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED);
+}
+
+// Route through to_memory_config composite only when native kernels cannot handle the input.
+//
+// All L1 WIDTH/BLOCK sharded inputs are handled natively:
+//   - TILE layout: tile factories use TensorAccessor page_id addressing, resolved transparently
+//     by the Device 2.0 API for any sharded buffer.
+//   - RM layout: noc_async_*_sharded in the default RM factory iterates across per-row pages
+//     regardless of tile alignment; the front_padding kernel branch reads into a temp buffer
+//     and memmoves to the correct L1 offset, so width front-pad is also handled natively.
+//
+// DRAM-sharded W/B inputs use to_memory_config → pad → (optional) to_memory_config/interleaved_to_sharded.
+// sharded_to_interleaved is L1-only, so to_memory_config is used instead (mirrors repeat.cpp).
+inline bool needs_pad_composite_fallback(const ttnn::Tensor& input_tensor) {
+    if (!is_width_or_block_sharded(input_tensor.memory_config())) {
+        return false;
+    }
+    return !input_tensor.memory_config().is_l1();  // DRAM-sharded edge case only
+}
+
+ttnn::Tensor pad_via_interleaved_composite(
+    const ttnn::Tensor& input_tensor,
+    std::span<const uint32_t> output_padded_shape,
+    std::span<const uint32_t> input_tensor_start,
+    const float value,
+    const bool use_multicore,
+    const MemoryConfig& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+    // sharded_to_interleaved is L1-only; DRAM-sharded W/B inputs use to_memory_config (mirrors repeat.cpp).
+    auto interleaved_input = ttnn::to_memory_config(input_tensor, interleaved_config, std::nullopt);
+
+    MemoryConfig working_output =
+        output_memory_config.is_sharded()
+            ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, output_memory_config.buffer_type()}
+            : output_memory_config;
+
+    ttnn::Shape out_shape{output_padded_shape};
+    ttnn::Shape start{input_tensor_start};
+    auto padded = ttnn::prim::pad(
+        interleaved_input,
+        out_shape,
+        out_shape,
+        start,
+        value,
+        working_output,
+        use_multicore,
+        std::nullopt,
+        sub_core_grids);
+
+    if (output_memory_config.is_sharded()) {
+        if (output_memory_config.is_l1()) {
+            return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
+        }
+        return ttnn::to_memory_config(padded, output_memory_config, std::nullopt);
+    }
+    return padded;
+}
+
+}  // namespace
+
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
-    ttnn::SmallVector<uint32_t> updated_shape;
+    ttsl::SmallVector<uint32_t> updated_shape;
     size_t input_rank = input_shape.rank();
     for (size_t i = 0; i < input_rank - 2; i++) {
         updated_shape.push_back(input_shape[i]);
@@ -66,7 +134,19 @@ ttnn::Tensor pad_impl(
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    if (input_tensor.is_sharded() && input_tensor.memory_config().memory_layout() != TensorMemoryLayout::ND_SHARDED &&
+    if (needs_pad_composite_fallback(input_tensor)) {
+        return pad_via_interleaved_composite(
+            input_tensor,
+            output_padded_shape,
+            input_tensor_start,
+            value,
+            use_multicore,
+            output_memory_config,
+            sub_core_grids);
+    }
+
+    if (input_tensor.is_sharded() &&
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         auto total_height = [](const auto& shape) {
@@ -101,7 +181,7 @@ ttnn::Tensor pad_impl(
             if (height_distinct(input_logical_shape, output_padded_shape)) {
                 // we will decompose the padding into two parts and run two
                 // separate pads.
-                ttnn::SmallVector<uint32_t> adjusted_input_tensor_start{0, 0, 0, input_tensor_start[3]};
+                ttsl::SmallVector<uint32_t> adjusted_input_tensor_start{0, 0, 0, input_tensor_start[3]};
 
                 TT_FATAL(
                     not(height_distinct(input_logical_shape, output_shape_width_padded) and
@@ -157,7 +237,7 @@ ttnn::Tensor pad_impl(
 
 ttnn::Tensor pad_impl(
     const ttnn::Tensor& input_tensor,
-    ttnn::SmallVector<PadSpecDim> padding,
+    ttsl::SmallVector<PadSpecDim> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -214,7 +294,7 @@ ttnn::Tensor pad_impl(
 }
 
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
-    const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<PadSpecDim>& pad_spec) {
+    const ttnn::Shape& input_logical_shape, const ttsl::SmallVector<PadSpecDim>& pad_spec) {
     if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) {
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
@@ -222,7 +302,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
     }
 
     const auto rank = input_logical_shape.rank();
-    ttnn::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
+    ttsl::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
 
     std::transform(
         input_logical_shape.cbegin(),
@@ -237,7 +317,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
 
 ttnn::Tensor invoke_rm(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding_vec,
+    const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -249,7 +329,7 @@ ttnn::Tensor invoke_rm(
 
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
-        auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
+        auto to_vec = [](const auto& span) { return ttsl::SmallVector<uint32_t>{span.begin(), span.end()}; };
         auto output_shape = to_vec(output_tensor.padded_shape().view());
         auto padded_shape = to_vec(output_tensor.padded_shape().view());
         if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
@@ -268,7 +348,7 @@ ttnn::Tensor invoke_rm(
 
 ttnn::Tensor invoke_tile(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding_vec,
+    const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -285,7 +365,7 @@ ttnn::Tensor invoke_tile(
 
     // Consistent with behavior expected by callers
     if (input_tensor.storage_type() != StorageType::DEVICE) {
-        ttnn::Shape zeros(ttnn::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
+        ttnn::Shape zeros(ttsl::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
         return input_tensor.pad(requested_padded_shape, zeros, value);
     }
 
@@ -306,7 +386,7 @@ ttnn::Tensor invoke_tile(
     } else {
         // need to align the requested padding to tile size. Note that begin padding is not supported so now just
         // set to zero
-        ttnn::SmallVector<PadSpecDim> padded_padding_vec;
+        ttsl::SmallVector<PadSpecDim> padded_padding_vec;
         padded_padding_vec.reserve(requested_rank);
         std::transform(
             requested_padded_shape.cbegin(),
@@ -352,7 +432,7 @@ namespace ttnn {
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<operations::data_movement::PadSpecDim>& padding,
+    const ttsl::SmallVector<operations::data_movement::PadSpecDim>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -360,7 +440,7 @@ ttnn::Tensor pad(
     using PadSpecDim = operations::data_movement::PadSpecDim;
     const int original_rank = input_tensor.logical_shape().rank();
 
-    ttnn::SmallVector<PadSpecDim> working_padding = padding;
+    ttsl::SmallVector<PadSpecDim> working_padding = padding;
 
     if (int diff = original_rank - padding.size(); diff != 0) {
         TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
@@ -395,13 +475,13 @@ ttnn::Tensor pad(
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using PadSpecDim = operations::data_movement::PadSpecDim;
-    ttnn::SmallVector<PadSpecDim> padding_impl;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
     std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
         return PadSpecDim(p[0], p[1]);
     });
@@ -418,7 +498,7 @@ ttnn::Tensor pad(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using PadSpecDim = operations::data_movement::PadSpecDim;
-    ttnn::SmallVector<PadSpecDim> padding_impl;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
     const auto& log_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < output_padded_shape.size(); ++i) {
         padding_impl.emplace_back(

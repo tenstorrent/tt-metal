@@ -11,6 +11,7 @@ Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
 
 import gc
+import os
 import random
 from pathlib import Path
 
@@ -23,6 +24,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
@@ -164,8 +166,11 @@ def run_model(
     # weights that a later PCC run loads as "complete" — producing all-zero
     # expert outputs (PCC=0). Keep the two cohorts in separate directories.
     weights_type = "realistic" if run_pcc_check else "dummy"
+    # Base dir is env-overridable so concurrent users don't collide on a single shared /tmp path
+    # (the default /tmp/{variant}_moe_cache is world-visible but owner-writable → cross-user EACCES).
+    _moe_cache_base = os.environ.get("DS_MOE_CACHE_DIR", f"/tmp/{variant.name}_moe_cache")
     moe_cache_dir = Path(
-        f"/tmp/{variant.name}_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid_{weights_type}"
+        f"{_moe_cache_base}/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid_{weights_type}"
     )
     moe_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -606,6 +611,12 @@ def run_model(
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+        # GLM-5.1 MoE (256 experts / top-8, emb 6144, moe_int 2048). Exercises the >64-expert unfused
+        # extract->FFN->insert routed-expert path on GLM dims. Gate is generic here (op-level test);
+        # GLM's noaux_tc knife-edge gate is validated at the transformer level. 25k = 3200 per-chip x 8.
+        pytest.param(1600, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        pytest.param(3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, GLM51Config.NUM_ROUTED_EXPERTS, GLM51Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL,    True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="pcc-host-glm-256"),
         # fmt: on
     ],
 )

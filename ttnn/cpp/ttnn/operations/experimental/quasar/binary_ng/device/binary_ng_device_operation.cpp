@@ -233,7 +233,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+        (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,

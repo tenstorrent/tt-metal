@@ -296,6 +296,13 @@ size_t TensorLayout::compute_page_size_bytes(const Shape2D& page_size) const {
     return page_config_.get_page_size_bytes(page_size, dtype_);
 }
 
+TensorLayout TensorLayout::with_memory_config(MemoryConfig memory_config) const {
+    TensorLayout result = *this;
+    result.memory_config_ = std::move(memory_config);
+    CMAKE_UNIQUE_NAMESPACE::validate_alignment(result);
+    return result;
+}
+
 size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
     const tt::tt_metal::Shape& shape, size_t page_alignment, size_t num_banks) const {
     const Shape2D physical_shape = compute_physical_shape(shape);

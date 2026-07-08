@@ -43,7 +43,9 @@ ALWI void pack_untilize_dest_init_impl(uint32_t ocb, uint32_t call_line = __buil
         llk_pack_untilize_init<block_ct_dim, full_ct_dim, false /*diagonal*/, narrow_row, row_num_datums, dense>(ocb)));
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
 #else
-    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
+    static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
+    static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
+    static_assert(dense == false, "non-default dense not supported on Quasar");
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
 #endif
 }
@@ -82,7 +84,9 @@ pack_untilize_dest_init_impl(
 #pragma GCC diagnostic pop
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false /*diagonal*/>()));
 #else
-    LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar");
+    static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
+    static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
+    static_assert(dense == false, "non-default dense not supported on Quasar");
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
 #endif
 }
@@ -417,6 +421,11 @@ ALWI void pack_untilize_dest(
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #else
+    static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
+    static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
+    static_assert(tile_dst_ct_offset == 0, "non-default tile_dst_ct_offset not supported on Quasar");
+    static_assert(dense == false, "non-default dense not supported on Quasar");
+    static_assert(diagonal == false, "non-default diagonal not supported on Quasar");
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #endif
 }
@@ -473,6 +482,11 @@ pack_untilize_dest(
         block_rt_dim, ocb, face_r_dim, num_faces, block_c_index, tile_dst_rt_offset)));
 #pragma GCC diagnostic pop
 #else
+    static_assert(narrow_row == false, "non-default narrow_row not supported on Quasar");
+    static_assert(row_num_datums == TILE_C_DIM, "non-default row_num_datums not supported on Quasar");
+    static_assert(tile_dst_ct_offset == 0, "non-default tile_dst_ct_offset not supported on Quasar");
+    static_assert(dense == false, "non-default dense not supported on Quasar");
+    static_assert(diagonal == false, "non-default diagonal not supported on Quasar");
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim>(block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
 #endif
 }
