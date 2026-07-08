@@ -589,3 +589,62 @@ def test_ttnn_routed_expert_models(
         run_pcc_check,
         use_predictable_data,
     )
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device, device_params", [ROUTED_EXPERT_MESH_PARAMS[0]], indirect=["mesh_device", "device_params"]
+)
+def test_ttnn_routed_expert_ffn_row_major(mesh_device, device_params):
+    """Direct unified_routed_expert_ffn test for x_is_row_major.
+
+    Feeds a ROW_MAJOR bf16 per-expert x; the op tilizes it internally (bf16 ->
+    bf8_b) before the gate/up matmul, fusing the standalone to_layout. One
+    expert, all rows valid, no region offset — isolates the row-major read +
+    compute tilize from the composite / insert-offset path. Output is TILE bf16
+    (must match x dtype per the op contract).
+    """
+    torch.manual_seed(0)
+    emb = 1024  # K_gate_tiles = 32 -> 2 gate/up K-blocks
+    hidden = 512
+    max_tokens = 64  # 2 tile-rows
+
+    # Torch reference: silu(x @ gate) * (x @ up) @ down.
+    x = torch.randn(max_tokens, emb, dtype=torch.bfloat16)
+    scale = 0.05
+    gate = (torch.randn(emb, hidden) * scale).bfloat16()
+    up = (torch.randn(emb, hidden) * scale).bfloat16()
+    down = (torch.randn(hidden, emb) * scale).bfloat16()
+    xf = x.float()
+    ref = (torch.nn.functional.silu(xf @ gate.float()) * (xf @ up.float())) @ down.float()
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    def to_tt(t, layout, dtype):
+        return ttnn.from_torch(t, layout=layout, dtype=dtype, device=mesh_device, memory_config=dram)
+
+    x_tt = to_tt(x, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16)
+    gate_tt = to_tt(gate, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    up_tt = to_tt(up, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    down_tt = to_tt(down, ttnn.TILE_LAYOUT, ttnn.bfloat8_b)
+    counts_tt = to_tt(torch.tensor([max_tokens], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+    idx_tt = to_tt(torch.tensor([0], dtype=torch.int32), ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
+    out_tt = to_tt(torch.zeros(max_tokens, emb, dtype=torch.bfloat16), ttnn.TILE_LAYOUT, ttnn.bfloat16)
+
+    ttnn.experimental.deepseek_prefill.unified_routed_expert_ffn(
+        x_tt,
+        gate_tt,
+        up_tt,
+        down_tt,
+        counts_tt,
+        idx_tt,
+        0,  # local_expert_id
+        output=out_tt,
+        input_m_tiles=max_tokens // 32,
+        x_is_row_major=True,
+    )
+
+    out = ttnn.to_torch(out_tt).float()[:max_tokens, :]
+    passing, pcc = comp_pcc(ref.float(), out, 0.97)
+    logger.info(f"[row-major FFN] PCC: {pcc}")
+    assert passing, f"row-major FFN PCC {pcc} below 0.97"

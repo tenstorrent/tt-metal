@@ -141,6 +141,13 @@ void kernel_main() {
     constexpr uint32_t x_accessor_offset = 29;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
+    // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
+    // page is one token-row stick = emb elements = K_gate_tiles*32 bf16 (2 B
+    // each). Partial-stick reads index page_id=token-row, offset_bytes=column
+    // window. Only used in the row-major path; the tile-page x_acc above serves
+    // the TILE path.
+    constexpr uint32_t x_rm_stick_bytes = K_gate_tiles * 32 * 2;
+    const auto x_acc_rm = TensorAccessor(x_args, x_addr, x_rm_stick_bytes);
 
     constexpr uint32_t gate_accessor_offset = x_args.next_compile_time_args_offset();
     constexpr auto gate_args = TensorAccessorArgs<gate_accessor_offset>();
@@ -187,7 +194,18 @@ void kernel_main() {
     CircularBuffer cb_counts_scratch_obj(cb_counts_scratch);
     CircularBuffer cb_idx_scratch_obj(cb_idx_scratch);
     CircularBuffer cb_start_scratch_obj(cb_start_scratch);
+    CircularBuffer cb_x_rm_obj(cb_x_rm);
     CircularBuffer cb_activated_obj(cb_activated);
+
+    // x staging CB for the in0 path. Row-major: the reader fills + mcasts
+    // cb_x_rm (bf16 row-major) and the compute kernel tilizes it into cb_in0_x.
+    // TILE: the reader fills + mcasts cb_in0_x directly. reserve / pre-zero /
+    // mcast / push all operate on x_stage_obj; only the DRAM read loop differs
+    // (partial-stick vs tile-page). In row-major mode the reader never touches
+    // cb_in0_x — compute produces it.
+    constexpr uint32_t x_stage_cb = (x_is_row_major != 0) ? cb_x_rm : cb_in0_x;
+    CircularBuffer x_stage_obj(x_stage_cb);
+    const uint32_t x_stage_tile_bytes = x_stage_obj.get_tile_size();
 
     // D2.0 Semaphore wrappers.
     Semaphore<> in1_ready_sem(in1_ready_sem_id);
@@ -302,11 +320,16 @@ void kernel_main() {
         if (is_in0_sender) {
             const uint32_t this_core_last_row = this_core_first_row + per_core_M;
             if (this_core_last_row > M_bound) {
-                const uint32_t slot_size_bytes = g_in0_block_num_tiles * cb_in0_x_obj.get_tile_size();
-                const uint32_t both_slots_bytes = 2 * slot_size_bytes;
+                // Zero the staging slots so invalid rows the read loop skips feed
+                // zeros to the matmul (row-major: zeros tilize to zero tiles;
+                // TILE: zeros are read directly). Both cb_x_rm and cb_in0_x are
+                // double-buffered.
+                constexpr uint32_t x_stage_slots = 2u;
+                const uint32_t slot_size_bytes = g_in0_block_num_tiles * x_stage_tile_bytes;
+                const uint32_t all_slots_bytes = x_stage_slots * slot_size_bytes;
                 volatile tt_l1_ptr uint64_t* zero_dst =
-                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(cb_in0_x_obj.get_write_ptr());
-                const size_t num_u64_words = both_slots_bytes / sizeof(uint64_t);
+                    reinterpret_cast<volatile tt_l1_ptr uint64_t*>(x_stage_obj.get_write_ptr());
+                const size_t num_u64_words = all_slots_bytes / sizeof(uint64_t);
                 for (size_t word = 0; word < num_u64_words; ++word) {
                     zero_dst[word] = 0;
                 }
@@ -327,7 +350,7 @@ void kernel_main() {
         //   per-K-block elapsed time at small per_core_M where mcast/handshake
         //   overhead dominates compute.
         for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
-            cb_in0_x_obj.reserve_back(g_in0_block_num_tiles);
+            x_stage_obj.reserve_back(g_in0_block_num_tiles);
             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
             if constexpr (reader_mcasts_up) {
                 cb_in1_up_obj.reserve_back(g_in1_block_num_tiles);
@@ -364,37 +387,61 @@ void kernel_main() {
                 in0_ready_sem.wait(in0_num_receivers);
                 in0_ready_sem.set(0);
 
-                uint32_t l1_x = cb_in0_x_obj.get_write_ptr();
+                uint32_t l1_x = x_stage_obj.get_write_ptr();
                 const uint32_t block_start = l1_x;
-                for (uint32_t m = 0; m < per_core_M; ++m) {
-                    const uint32_t row = this_core_first_row + m;
-                    // count_tiles is the runtime tile-row count for this expert.
-                    // Rows past it are NOT filled by extract — they hold
-                    // uninitialized DRAM bytes. Reading them would feed garbage
-                    // (potentially NaN/Inf in bf8 representation) into the
-                    // matmul, which propagates through the per-K-block L1_ACC
-                    // accumulation and contaminates the FFN output. Zero-fill
-                    // the L1 region for those rows instead — silu(0) = 0,
-                    // 0 * up = 0, 0 @ W_down = 0 (safe and free of NaN).
-                    const bool row_valid = row < count_tiles;
-                    if (row_valid) {
-                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                            const uint32_t col = kb * in0_block_w_gu + k;
-                            // x_start_tile_idx offsets into this expert's region
-                            // of a shared buffer (0 when x is per-expert).
-                            const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
-                            noc_read.async_read(
-                                x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
-                            l1_x += x_tile_bytes;
+                // Rows past count_tiles are NOT valid — they hold uninitialized
+                // DRAM. Reading them would feed garbage (NaN/Inf) into the matmul.
+                // Skip them; the pre-zero above left those L1 bytes zero
+                // (silu(0)=0, 0*up=0, 0@W_down=0 — safe).
+                if constexpr (x_is_row_major != 0) {
+                    // Row-major: read this K-block's column window (in0_block_w_gu
+                    // tiles wide) from each of the 32 token-row sticks of every
+                    // tile-row, laid contiguously so each tile-row forms one
+                    // 32 x (in0_block_w_gu*32) strip for tilize_block. page_id is
+                    // the token-row stick; offset_bytes is the K-block column
+                    // window within the emb-wide stick.
+                    constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * 32 * 2;
+                    const uint32_t col_off_bytes = kb * rm_kblock_bytes;
+                    for (uint32_t m = 0; m < per_core_M; ++m) {
+                        const uint32_t tile_row = this_core_first_row + m;
+                        if (tile_row < count_tiles) {
+                            for (uint32_t r = 0; r < 32; ++r) {
+                                const uint32_t stick = tile_row * 32 + r;
+                                noc_read.async_read(
+                                    x_acc_rm,
+                                    CoreLocalMem<uint32_t>(l1_x),
+                                    rm_kblock_bytes,
+                                    {.page_id = stick, .offset_bytes = col_off_bytes},
+                                    {});
+                                l1_x += rm_kblock_bytes;
+                            }
+                        } else {
+                            l1_x += 32 * rm_kblock_bytes;
                         }
-                    } else {
-                        // Pre-zero already covered these L1 bytes. Just advance.
-                        l1_x += in0_block_w_gu * x_tile_bytes;
+                    }
+                } else {
+                    for (uint32_t m = 0; m < per_core_M; ++m) {
+                        const uint32_t row = this_core_first_row + m;
+                        const bool row_valid = row < count_tiles;
+                        if (row_valid) {
+                            for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
+                                const uint32_t col = kb * in0_block_w_gu + k;
+                                // x_start_tile_idx offsets into this expert's region
+                                // of a shared buffer (0 when x is per-expert).
+                                const uint32_t tile_idx = x_start_tile_idx + row * K_gate_tiles + col;
+                                noc_read.async_read(
+                                    x_acc, CoreLocalMem<uint32_t>(l1_x), x_tile_bytes, {.page_id = tile_idx}, {});
+                                l1_x += x_tile_bytes;
+                            }
+                        } else {
+                            // Pre-zero already covered these L1 bytes. Just advance.
+                            l1_x += in0_block_w_gu * x_tile_bytes;
+                        }
                     }
                 }
                 noc_read.async_read_barrier();
 
-                const uint32_t block_bytes = g_in0_block_num_tiles * x_tile_bytes;
+                const uint32_t block_bytes = g_in0_block_num_tiles * x_stage_tile_bytes;
                 // linked=true keeps the multicast path RESERVED so the in0_valid
                 // sem multicast below travels the SAME path and is delivered
                 // AFTER the data at every receiver. With linked=false the path is
@@ -417,7 +464,7 @@ void kernel_main() {
                      .noc_y_end = in0_mcast_ny_end,
                      .addr = block_start},
                     /*linked=*/true);
-                cb_in0_x_obj.push_back(g_in0_block_num_tiles);
+                x_stage_obj.push_back(g_in0_block_num_tiles);
 
                 noc.async_writes_flushed();
                 in0_valid_sem.set(IN0_VALID);
@@ -552,7 +599,7 @@ void kernel_main() {
             // Step 3: receivers wait for both valid semaphores and push.
             if (!is_in0_sender) {
                 in0_valid_sem.wait(IN0_VALID);
-                cb_in0_x_obj.push_back(g_in0_block_num_tiles);
+                x_stage_obj.push_back(g_in0_block_num_tiles);
             }
             if (!is_in1_sender) {
                 in1_valid_sem.wait(IN1_VALID);
