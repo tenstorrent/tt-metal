@@ -16,6 +16,7 @@ namespace tt::tt_metal {
 constexpr std::string_view PROFILER_RUNTIME_ROOT_DIR = "generated/profiler/";
 constexpr std::string_view PROFILER_LOGS_DIR_NAME = ".logs/";
 constexpr std::string_view PROFILER_DEVICE_PERF_REPORT_NAME = "cpp_device_perf_report.csv";
+constexpr std::string_view RT_DEVICE_PERF_REPORT_NAME = "rt_device_perf_report.csv";
 
 // TODO: This function should not be reading environment variables directly, it should use rtoptions.
 inline std::string get_profiler_artifacts_dir() {

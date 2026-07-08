@@ -173,6 +173,15 @@ def main():
     parser.add_option(
         "--no-capture-tool", dest="noCapture", action="store_true", help="Do not run Tracy capture tool", default=False
     )
+    parser.add_option(
+        "--quick",
+        dest="quick_report",
+        action="store_true",
+        help="Quick mode: derive device kernel time and op-to-op latency from the real-time profiler instead of the "
+        "full device profiler. All other device-profiler columns are left empty. Not supported on some setups "
+        "(e.g. ETH dispatch, remote chips).",
+        default=False,
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -200,7 +209,14 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
+        generate_report(
+            generate_logs_folder(outputFolder),
+            binaryFolder,
+            "",
+            None,
+            options.collect_noc_traces,
+            quick_report=options.quick_report,
+        )
         sys.exit(0)
 
     if options.port:
@@ -315,11 +331,18 @@ def main():
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)
             logger.info(f"Setting performance counter groups: {options.perf_counter_groups} (bitfield: {bitfield})")
 
+    if options.quick_report:
+        os.environ["TT_METAL_PROFILER_RT_QUICK"] = "1"
+
     if not (
-        options.no_runtime_analysis or options.do_sum or options.profile_dispatch_cores or options.perf_counter_groups
+        options.no_runtime_analysis
+        or options.do_sum
+        or options.profile_dispatch_cores
+        or options.perf_counter_groups
+        or options.quick_report
     ):
         os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
-    else:
+    elif not options.quick_report:
         reasons = []
         if options.no_runtime_analysis:
             reasons.append("--no-runtime-analysis")
@@ -401,7 +424,7 @@ def main():
             testCommand = f"{sys.executable} -m tracy {osCmd}"
 
             envVars = dict(os.environ)
-            if options.device:
+            if options.device and not options.quick_report:
                 envVars["TT_METAL_DEVICE_PROFILER"] = "1"
             elif "TT_METAL_DEVICE_PROFILER" in envVars.keys():
                 del envVars["TT_METAL_DEVICE_PROFILER"]
@@ -474,6 +497,7 @@ def main():
                         options.child_functions,
                         options.collect_noc_traces,
                         options.device_analysis_types,
+                        quick_report=options.quick_report,
                     )
             except subprocess.TimeoutExpired as e:
                 captureProcess.terminate()

@@ -53,6 +53,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "dispatch/data_collector.hpp"
+#include "dispatch/realtime_profiler_csv_report_handler.hpp"
 
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_core_manager.hpp>
@@ -272,6 +273,9 @@ void MetalContext::initialize(
     }
 
     data_collector_ = std::make_unique<DataCollector>();
+    if (rtoptions().get_profiler_rt_quick_report()) {
+        rt_csv_report_handler_ = std::make_unique<RealtimeProfilerCsvReportHandler>();
+    }
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -334,6 +338,8 @@ void MetalContext::teardown() {
         return;
     }
     initialized_ = false;
+
+    rt_csv_report_handler_.reset();
 
     if (data_collector_) {
         data_collector_->DumpData();

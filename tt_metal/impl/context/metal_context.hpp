@@ -40,6 +40,7 @@ class Data;
 
 class ContextDescriptor;
 class DataCollector;
+class RealtimeProfilerCsvReportHandler;
 class DeviceManager;
 class RiscFirmwareInitializer;
 class dispatch_core_manager;
@@ -240,6 +241,7 @@ private:
     std::unique_ptr<WatcherServer> watcher_server_;
     std::unique_ptr<ProfilerStateManager> profiler_state_manager_;
     std::unique_ptr<DataCollector> data_collector_;
+    std::unique_ptr<RealtimeProfilerCsvReportHandler> rt_csv_report_handler_;
     std::unique_ptr<DeviceManager> device_manager_;
     std::unique_ptr<NOCDebugState> noc_debug_state_;
     // The context descriptor used for runtime components.

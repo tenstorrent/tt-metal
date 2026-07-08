@@ -213,6 +213,7 @@ class RunTimeOptions {
     bool profiler_trace_profiler = false;
     bool profiler_trace_tracking = false;
     bool profiler_cpp_post_process = false;
+    bool profiler_rt_quick_report = false;
     bool profiler_sum = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
@@ -621,6 +622,8 @@ public:
     bool get_profiler_trace_tracking() const { return profiler_trace_tracking; }
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
+    bool get_profiler_rt_quick_report() const { return profiler_rt_quick_report; }
+    void set_profiler_rt_quick_report(bool enable) { profiler_rt_quick_report = enable; }
     bool get_profiler_sum() const { return profiler_sum; }
     std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
     void set_profiler_program_support_count(uint32_t profiler_program_support_count) {

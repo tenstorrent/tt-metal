@@ -131,6 +131,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_TRACE_TRACKING,              // Enable trace tracking
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
+    TT_METAL_PROFILER_RT_QUICK,                    // Enable real-time profiler quick perf report
     TT_METAL_PROFILER_SUM,                         // Enable sum profiling
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
@@ -938,6 +939,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Only enable C++ post-processing if device profiler is also enabled
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_cpp_post_process = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_RT_QUICK
+        // Enable the real-time profiler quick perf report. This runs with the device profiler off and derives device
+        // kernel time / op-to-op latency from real-time profiler records Default: false Usage: export
+        // TT_METAL_PROFILER_RT_QUICK=1
+        case EnvVarID::TT_METAL_PROFILER_RT_QUICK: {
+            if (is_env_enabled(value)) {
+                this->profiler_rt_quick_report = true;
             }
             break;
         }

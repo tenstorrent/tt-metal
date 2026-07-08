@@ -28,6 +28,7 @@ from tracy.process_device_log import import_log_run_stats
 from tracy.common import (
     PROFILER_DEVICE_SIDE_LOG,
     PROFILER_CPP_DEVICE_PERF_REPORT,
+    RT_DEVICE_PERF_REPORT,
     PROFILER_ARTIFACTS_DIR,
     PROFILER_OUTPUT_DIR,
     TRACY_FILE_NAME,
@@ -571,11 +572,15 @@ def _enrich_ops_from_perf_csv(
     host_ops_by_device: DeviceOpsDict,
     device_perf_by_device: Dict[int, Dict[Tuple[int, Optional[int], Optional[int]], Dict[str, Any]]],
     trace_replays: Optional[TraceReplayDict],
+    require_all_ops: bool = True,
 ) -> DeviceOpsDict:
     for device_id in host_ops_by_device:
-        assert (
-            device_id in device_perf_by_device
-        ), f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+        if device_id not in device_perf_by_device:
+            if require_all_ops:
+                raise AssertionError(
+                    f"Device {device_id} present in host logs but missing from {PROFILER_CPP_DEVICE_PERF_REPORT}"
+                )
+            continue
 
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
@@ -603,10 +608,14 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                if require_all_ops:
+                    raise AssertionError(
+                        f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                        f"for device {device_id} (trace_id={host_trace_id})"
+                    )
+                enriched_ops.append(host_op)
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
@@ -1002,36 +1011,51 @@ def append_device_data(
     analyze_noc_traces: bool,
     device_analysis_types: Tuple[str, ...] | List[str],
     force_legacy_device_logs: bool = False,
+    quick_report: bool = False,
 ) -> Tuple[DeviceOpsDict, Dict[int, OpDict]]:
-    """Join host metadata with either the perf CSV or legacy device logs."""
+    """Join host metadata with the RT perf CSV (quick mode), the full device perf CSV, or legacy device logs."""
 
     host_ops_by_device, _ = get_device_op_data(ops, host_device_op_compare)
     logger.info("Appending device data")
 
-    device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
-    use_perf_csv = device_perf_report.is_file() and not force_legacy_device_logs
-
-    if use_perf_csv:
-        if device_analysis_types:
-            logger.warning(
-                "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
-            )
-        device_perf_by_device = load_device_perf_report(device_perf_report)
-        host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
-    else:
-        if device_perf_report.is_file() and force_legacy_device_logs:
-            logger.info(
-                f"Forcing legacy device-log parsing even though {PROFILER_CPP_DEVICE_PERF_REPORT} exists in {logFolder}."
+    if quick_report:
+        rt_perf_report = Path(logFolder) / RT_DEVICE_PERF_REPORT
+        device_perf_by_device = load_device_perf_report(rt_perf_report) if rt_perf_report.is_file() else {}
+        if any(device_perf_by_device.values()):
+            host_ops_by_device = _enrich_ops_from_perf_csv(
+                host_ops_by_device, device_perf_by_device, traceReplays, require_all_ops=False
             )
         else:
             logger.warning(
-                f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
-                f"Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer."
+                f"Quick mode: no real-time profiler data found in {RT_DEVICE_PERF_REPORT}. The real-time profiler "
+                "is not supported on this configuration (e.g. ETH dispatch, remote chips, or non-MMIO devices). "
+                "Producing a host-only report; re-run without --quick to use the full device profiler."
             )
-        # Pass traceReplays so legacy path can generate trace host data
-        host_ops_by_device = _enrich_ops_from_device_logs(
-            host_ops_by_device, logFolder, device_analysis_types, traceReplays
-        )
+    else:
+        device_perf_report = Path(logFolder) / PROFILER_CPP_DEVICE_PERF_REPORT
+        use_perf_csv = device_perf_report.is_file() and not force_legacy_device_logs
+
+        if use_perf_csv:
+            if device_analysis_types:
+                logger.warning(
+                    "device_analysis_types is not supported when using cpp_device_perf_report.csv; ignoring option."
+                )
+            device_perf_by_device = load_device_perf_report(device_perf_report)
+            host_ops_by_device = _enrich_ops_from_perf_csv(host_ops_by_device, device_perf_by_device, traceReplays)
+        else:
+            if device_perf_report.is_file() and force_legacy_device_logs:
+                logger.info(
+                    f"Forcing legacy device-log parsing even though {PROFILER_CPP_DEVICE_PERF_REPORT} exists in {logFolder}."
+                )
+            else:
+                logger.warning(
+                    f"Device perf report {PROFILER_CPP_DEVICE_PERF_REPORT} not found in {logFolder}. "
+                    f"Falling back to legacy device-log parsing via import_log_run_stats(); this will take longer."
+                )
+            # Pass traceReplays so legacy path can generate trace host data
+            host_ops_by_device = _enrich_ops_from_device_logs(
+                host_ops_by_device, logFolder, device_analysis_types, traceReplays
+            )
 
     sub_device_id_lookup = build_sub_device_id_lookup_from_device_csv(Path(logFolder) / PROFILER_DEVICE_SIDE_LOG)
     attach_sub_device_ids_to_ops(host_ops_by_device, sub_device_id_lookup)
@@ -1796,6 +1820,7 @@ def process_ops(
     analyze_noc_traces: bool = False,
     device_analysis_types: Tuple[str, ...] | List[str] = (),
     force_legacy_device_logs: bool = False,
+    quick_report: bool = False,
 ) -> None:
     """Top-level entry point used by both CLI and importers."""
 
@@ -1814,6 +1839,7 @@ def process_ops(
             analyze_noc_traces,
             device_analysis_types,
             force_legacy_device_logs=force_legacy_device_logs,
+            quick_report=quick_report,
         )
         generate_reports(ops, deviceOps, traceOps, signposts, logFolder, reportFolder, date, name_append)
     else:

@@ -123,7 +123,13 @@ def run_report_setup(verbose, outputFolder, binFolder, port):
 
 
 def generate_report(
-    outputFolder, binFolder, nameAppend, childCalls, collect_noc_traces=False, device_analysis_types=[]
+    outputFolder,
+    binFolder,
+    nameAppend,
+    childCalls,
+    collect_noc_traces=False,
+    device_analysis_types=[],
+    quick_report=False,
 ):
     logsFolder = generate_logs_folder(outputFolder)
     tracyOutFile = logsFolder / TRACY_FILE_NAME
@@ -180,6 +186,7 @@ def generate_report(
         analyze_noc_traces=collect_noc_traces,
         device_analysis_types=device_analysis_types,
         force_legacy_device_logs=False,
+        quick_report=quick_report,
     )
 
 
