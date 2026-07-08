@@ -1,7 +1,7 @@
 [submodule "tt_metal/third_party/tracy"]
 	path = tt_metal/third_party/tracy
-	url = https://github.com/tenstorrent-metal/tracy.git
-	branch = master
+	url = https://github.com/shengxiangjiTT/tracy.git
+	branch = shengxiangji/profiler-48927
 [submodule "tt_metal/third_party/umd"]
 	path = tt_metal/third_party/umd
 	url = https://github.com/tenstorrent/tt-umd.git
