@@ -51,7 +51,7 @@ FORCE_INLINE number_type perform_reduction(
     }
 }
 
-// performs scatter on data loaded to cb with load_to_cb
+// performs scatter on data loaded to dfb with load_to_dfb
 template <typename number_type, typename index_type>
 FORCE_INLINE void scatter_along_chunk(
     const DataflowBuffer& input_dfb,
@@ -143,7 +143,7 @@ void kernel_main() {
                 std::min(ctas.input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
-            load_to_cb(
+            load_to_dfb(
                 noc,
                 ctas.input_dfb,
                 input_addr_gtor,
@@ -166,7 +166,7 @@ void kernel_main() {
                     const uint32_t source_chunk_length =
                         std::min(ctas.source_stick_size - source_offset, source_chunk_size);
 
-                    load_to_cb(
+                    load_to_dfb(
                         noc,
                         ctas.index_dfb,
                         index_addr_gtor,
@@ -175,7 +175,7 @@ void kernel_main() {
                         index_stick_id);
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
-                    load_to_cb(
+                    load_to_dfb(
                         noc,
                         ctas.source_dfb,
                         source_addr_gtor,
@@ -199,7 +199,7 @@ void kernel_main() {
                 }
             }
 
-            // third phase: push to the output cb
+            // third phase: push to the output dfb
             output_dfb.push_back(ONE_PAGE);
             input_dfb.pop_front(ONE_PAGE);
         }

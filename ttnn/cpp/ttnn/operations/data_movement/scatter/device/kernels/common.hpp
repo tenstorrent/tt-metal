@@ -120,14 +120,14 @@ std::array<uint32_t, N> make_shape_array_from_runtime_args(const uint32_t& C) {
 
 // this function is supposed to load either a whole stick or part of it
 template <typename AddrGen>
-FORCE_INLINE void load_to_cb(
+FORCE_INLINE void load_to_dfb(
     Noc noc,
-    const uint32_t& cb,
+    const uint32_t& dfb_id,
     const AddrGen& addr_gtor,
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    DataflowBuffer dfb_exp(cb);
+    DataflowBuffer dfb_exp(dfb_id);
     dfb_exp.reserve_back(ONE_PAGE);
     const uint64_t source_noc_address = addr_gtor.get_noc_addr(stick_id) + offset_bytes;
     const uint32_t l1_write_address = dfb_exp.get_write_ptr();
@@ -149,12 +149,12 @@ FORCE_INLINE void load_to_cb(
 template <typename AddrGen>
 FORCE_INLINE void write_to_output(
     Noc noc,
-    const uint32_t& cb,
+    const uint32_t& dfb_id,
     const AddrGen& addr_gtor,
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    DataflowBuffer dfb_exp(cb);
+    DataflowBuffer dfb_exp(dfb_id);
     dfb_exp.wait_front(ONE_PAGE);
     const uint64_t destination_noc_address = addr_gtor.get_noc_addr(stick_id) + offset_bytes;
     const uint32_t l1_read_address = dfb_exp.get_read_ptr();
