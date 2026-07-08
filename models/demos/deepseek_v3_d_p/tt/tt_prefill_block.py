@@ -423,9 +423,10 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            d2h_service: optional per-layer migration ack sink. In chunked prefill, after MLA writes the
-                chunk this block zeros the pad window past actual_end, then enqueues a device-op metadata
-                send (record_dev) on the same CQ — no host sync.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                this layer's KV cache has been populated on device. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, then enqueues the ack via the
+                outbound_socket_service_sync device op on the same CQ — no host sync.
             record_dev: the chunk's PrefillMetadata device tensor sent as the ack record; required when
                 d2h_service is set.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache

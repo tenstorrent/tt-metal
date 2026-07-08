@@ -313,9 +313,10 @@ class TtPrefillTransformer(LightweightModule):
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
                         If list, returns first temperature result but stores all in intermediates.
-            d2h_service: optional metadata-only D2HStreamService for per-layer migration acks. When set,
-                        each block zeros the cache pad window and enqueues a device-op metadata send (no host
-                        sync). When None, no migration or zeroing.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                        each layer's KV cache has been populated on device. When set, each block zeros the
+                        cache pad window and enqueues the ack via the outbound_socket_service_sync device op
+                        on the same CQ (no host sync). When None, no ack or zeroing.
             record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
                         d2h_service is set.
 
