@@ -269,6 +269,133 @@ class Qwen36Model:
             out.append(nxt)
         return out
 
+    def prefill_seed_tp(self, token_ids, valid_len, batch_slot):
+        """Batched-decode seeding prefill (num_devices>1): run one sequence's prompt
+        through the TP layers and write its state into lane `batch_slot` — attention
+        KV cache lane, GDN state stashed for finalize_seed. Mirrors prefill_tp but
+        threads batch_slot. Returns torch next-token logits [vocab_size] at valid_len-1.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_prefill
+
+        B, T = token_ids.shape
+        assert B == 1, "prefill_seed_tp takes one sequence at a time (its slot is batch_slot)"
+
+        tok = ttnn.from_torch(
+            token_ids.to(torch.int32),
+            dtype=ttnn.uint32,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        x = self.embd(tok)
+        x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
+        cos, sin = rot_mats_prefill(self.device, self.args.rope_head_dim, T, self.args.rope_theta)
+
+        for layer in self.layers:
+            x = layer.forward(
+                x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len, batch_slot=batch_slot
+            )
+
+        sel = torch.zeros(1, 1, 1, T, dtype=torch.float32)
+        sel[0, 0, 0, valid_len - 1] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel, dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)
+        )
+        x_last = ttnn.matmul(sel_tt, x)
+        ttnn.deallocate(sel_tt)
+        ttnn.deallocate(x)
+        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
+        logits = ttnn.linear(x_last, self.lm_head_weight)
+        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        return lt[0].reshape(-1)[: self.vocab_size]
+
+    def decode_tp_batched(self, token_ids, positions):
+        """Single-step TP decode for B sequences at once (B = args.max_batch_size).
+
+        token_ids: list[int] length B (one current token per sequence).
+        positions: list[int] length B (each sequence's absolute decode position).
+        Returns torch logits [B, vocab_size]. Continues from the batched KV + GDN
+        state left by prefill_seed_tp / finalize_seed / prior batched decode steps.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
+
+        B = len(token_ids)
+        tok = ttnn.from_torch(
+            torch.tensor([token_ids], dtype=torch.int32),  # [1, B]
+            dtype=ttnn.uint32,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        x = self.embd(tok)  # [1, B, dim_frac]
+        x = ttnn.reshape(x, (1, 1, B, x.shape[-1]))  # [1,1,B,dim_frac]
+        cos, sin = rot_mats_decode(
+            self.device,
+            self.args.rope_head_dim,
+            self.args.max_seq_len,
+            self.args.rope_theta,
+            torch.tensor(positions, dtype=torch.int32),
+        )
+        cur_pos_tt = ttnn.from_torch(
+            torch.tensor(positions, dtype=torch.int32),
+            dtype=ttnn.int32,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+        )
+        for layer in self.layers:
+            x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
+        x = self.norm(x, mode=Mode.DECODE)
+        logits = ttnn.linear(x, self.lm_head_weight)  # [1,1,B,vocab] replicated
+        lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+        return lt[0].reshape(B, -1)[:, : self.vocab_size]
+
+    def generate_tp_batched(self, prompts, max_new_tokens=20, eos_id=None):
+        """Stateful batched TP generation for B = len(prompts) sequences (num_devices>1).
+
+        Each prompt is prefilled independently into its own batch lane (prefill_seed_tp),
+        the GDN state is assembled with finalize_seed, then all B sequences decode in
+        lockstep — one batched forward per step. Returns list[list[int]] of new ids.
+
+        B must equal args.max_batch_size (the module buffers are sized to it).
+        """
+        import math as _math
+
+        B = len(prompts)
+        assert B == self.args.max_batch_size, (
+            f"generate_tp_batched expects len(prompts)=={self.args.max_batch_size} (args.max_batch_size); got {B}"
+        )
+        self.reset_tp()
+
+        positions = []
+        cur = []
+        for b, prompt_ids in enumerate(prompts):
+            T = len(prompt_ids)
+            T_pad = max(128, _math.ceil(T / 128) * 128)
+            padded = list(prompt_ids) + [0] * (T_pad - T)
+            logits = self.prefill_seed_tp(torch.tensor([padded], dtype=torch.long), valid_len=T, batch_slot=b)
+            cur.append(int(torch.argmax(logits).item()))
+            positions.append(T)
+
+        # Assemble the per-slot GDN state into the [B,...] decode buffers.
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.finalize_seed(B)
+
+        out = [[c] for c in cur]
+        done = [False] * B
+        for _ in range(max_new_tokens - 1):
+            logits = self.decode_tp_batched(cur, positions)  # [B, vocab]
+            nxt = [int(torch.argmax(logits[b]).item()) for b in range(B)]
+            for b in range(B):
+                positions[b] += 1
+                if not done[b]:
+                    out[b].append(nxt[b])
+                    if eos_id is not None and nxt[b] == eos_id:
+                        done[b] = True
+                cur[b] = nxt[b]
+            if all(done):
+                break
+        return out
+
     def prefill(self, token_ids):
         B, T = token_ids.shape
 
