@@ -288,7 +288,7 @@ set -o pipefail
 h=$(hostname)
 script -qefc "tt-smi -glx_reset" /dev/null |
     tr -d '\000-\010\013\014\016-\032\034-\037' |
-    sed -u 's/\r$//; s/.*\r//; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
+    sed -u 's/\r$//; s/.*\r//; s/\^@//g; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
     awk '{
         key = $0
         gsub(/\033\[[0-9;]*[a-zA-Z]/, "", key)    # ignore color codes when comparing
