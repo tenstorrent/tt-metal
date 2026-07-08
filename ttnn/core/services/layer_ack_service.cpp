@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <thread>
 #include <vector>
-#include <chrono>
 
 #include <tt_stl/span.hpp>
 
@@ -53,7 +52,7 @@ void LayerAckService::reader_loop() {
         const bool all_ready =
             std::all_of(sockets.begin(), sockets.end(), [](auto* socket) { return socket->has_data(); });
         if (!all_ready) {
-            std::this_thread::sleep_for(std::chrono::microseconds(10));
+            std::this_thread::yield();
             continue;
         }
         d2h_service_.read_metadata(ttsl::Span<std::byte>(metadata.data(), metadata.size()));
