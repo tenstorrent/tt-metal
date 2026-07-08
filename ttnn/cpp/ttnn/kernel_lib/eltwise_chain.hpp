@@ -9,7 +9,8 @@
  *
  * Every element-wise compute pattern (FPU binary, SFPU unary/binary/ternary, dest-reuse, copy,
  * pack, fill, rand, unary broadcast) is expressed as a sequence of chain elements passed to
- * `eltwise_chain(num_tiles, elem0, elem1, ...)`.
+ * `eltwise_chain(shape, elem0, elem1, ...)` (shape is an `EltwiseShape`, e.g.
+ * `EltwiseShape::tiles(num_tiles)`).
  *
  * The chain owns, per call:
  *   - the dst-sync window (`tile_regs_acquire/commit/wait/release`);
@@ -47,13 +48,13 @@
  * Examples
  * --------
  *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
- *   eltwise_chain(num_tiles,
+ *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       CopyTile<dfb_in, Dst::D0, InputLifecycle::Streaming>{},
  *       Exp<>{},
  *       PackTile<dfb_out, Dst::D0, OutputLifecycle::Streaming>{});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
- *   eltwise_chain(num_tiles,
+ *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       BinaryFpu<dfb_a, dfb_b, BinaryFpuOp::Add>{},
  *       PackTile<dfb_out, Dst::D0, OutputLifecycle::Streaming, OperandKind::Scalar,
  *                PackTileReconfig::Output>{});
@@ -98,8 +99,10 @@ namespace compute_kernel_lib {
 ///   - `EltwiseShape::grid(H, W)`         — 2D, block_size = 1
 ///   - `EltwiseShape::grid(H, W, blk)`    — 2D + block
 ///
-/// Implicit conversion from `uint32_t` produces `tiles(n_tiles)` so bare callers
-/// (`eltwise_chain(n_tiles, ...)`) resolve without an explicit shape.
+/// Construction from a tile count is `explicit`: a bare number is NOT accepted as a
+/// shape — call sites must spell the iteration shape out as `EltwiseShape::tiles(n)`
+/// (or `EltwiseShape::single()` for one tile). This keeps `eltwise_chain(...)` and the
+/// convenience wrappers from silently treating a stray integer as a tile count.
 ///
 /// `of/row/col/single` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`.
 struct EltwiseShape {
@@ -109,8 +112,9 @@ struct EltwiseShape {
 
     constexpr EltwiseShape(uint32_t H, uint32_t W, uint32_t blk = 1) : Ht(H), Wt(W), block_size(blk) {}
 
-    // Implicit so `eltwise_chain(n_tiles, ...)` resolves via uint32_t -> EltwiseShape.
-    constexpr EltwiseShape(uint32_t n_tiles) : Ht(1), Wt(n_tiles), block_size(1) {}
+    // Explicit: bare numbers are forbidden at call sites. Use EltwiseShape::tiles(n) or
+    // EltwiseShape::single() so the iteration shape is always written out.
+    explicit constexpr EltwiseShape(uint32_t n_tiles) : Ht(1), Wt(n_tiles), block_size(1) {}
 
     static constexpr EltwiseShape tiles(uint32_t n, uint32_t blk = 1) { return {1, n, blk}; }
     static constexpr EltwiseShape grid(uint32_t H, uint32_t W, uint32_t blk = 1) { return {H, W, blk}; }
@@ -119,6 +123,25 @@ struct EltwiseShape {
     static constexpr EltwiseShape row(uint32_t c) { return {1, c, 1}; }
     static constexpr EltwiseShape col(uint32_t r) { return {r, 1, 1}; }
     static constexpr EltwiseShape single() { return {1, 1, 1}; }
+};
+
+/// Who performs the chain's one-time setup — init + reconfig — the leading template arg to
+/// `eltwise_chain`. This is about *ownership*, NOT about whether inits are hoistable: which inits
+/// are hoistable is deduced from the chain's uniformity and is never a manual choice.
+///
+///   eltwise_chain(shape, elts...);                       // default: SetupOwner::Chain
+///   // To hoist the setup out of your own loop: emit it ONCE before the loop yourself (e.g. the
+///   // original raw *_init call), then hand ownership to the caller so the chain skips it:
+///   <emit the chain's one-time setup once, before the loop>
+///   for (...) eltwise_chain<SetupOwner::Caller>(EltwiseShape::single(), elts...);
+///
+/// SetupOwner::Caller is only valid when the chain's entire setup is boot-hoistable (uniform math
+/// MOP + SFPU init AND homogeneous pack CBs) — i.e. there's a single "once, before the loop" the
+/// caller can own. eltwise_chain static_asserts this; a chain that must re-emit setup per tile
+/// (so the caller can't pre-do it once) is a compile error pointing you back to SetupOwner::Chain.
+enum class SetupOwner {
+    Chain,   // this eltwise_chain call emits the one-time setup (init + reconfig)
+    Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
 };
 
 // =============================================================================
@@ -136,15 +159,17 @@ struct EltwiseShape {
 enum class WaitPolicy : uint8_t {
     None,        // chain emits no wait_front
     PerTile,     // wait 1 per iter
-    PerChunk,    // wait K per K-iter chunk
+    PerChunk,    // wait K per K-iter chunk (K = EltwiseShape::block_size, the per-outer-iter tile count)
+    PerOuter,    // wait 1 at each OUTER (ht/row) iteration entry — one tile per row
     Upfront,     // wait M once at entry (M = kind's tile count)
-    Cumulative,  // wait (i+1) per iter / chunk
+    Cumulative,  // wait (i+1)*block_size per iteration (number is clamped as not to wait for more than Wt)
 };
 
 enum class PopPolicy : uint8_t {
     None,      // chain emits no pop_front
     PerTile,   // pop 1 per iter
     PerChunk,  // pop K per K-iter chunk
+    PerOuter,  // pop 1 at each OUTER (ht/row) iteration exit — one tile per row
     AtEnd,     // pop M once at exit
 };
 
@@ -159,7 +184,7 @@ struct InputLifecycle {
     // defined out-of-line below (a static member of the class's own type needs the class
     // complete at the point of definition).
     static const InputLifecycle Streaming, Chunked, Bulk, Pipelined, CallerManaged, BulkDrain, HeldBulk, HeldCumulative,
-        HeldStream, DeferredPop, NoWaitPop;
+        HeldStream, DeferredPop, NoWaitPop, OuterStream;
 };
 
 // Default: wait for and pop 1 tile each iteration. Use for a normal input read once, tile by tile.
@@ -212,13 +237,14 @@ constexpr bool is_legal_input_lifecycle(InputLifecycle lc) noexcept {
     return lc == InputLifecycle::Streaming || lc == InputLifecycle::Chunked || lc == InputLifecycle::Bulk ||
            lc == InputLifecycle::Pipelined || lc == InputLifecycle::CallerManaged || lc == InputLifecycle::BulkDrain ||
            lc == InputLifecycle::HeldBulk || lc == InputLifecycle::HeldCumulative || lc == InputLifecycle::HeldStream ||
-           lc == InputLifecycle::DeferredPop || lc == InputLifecycle::NoWaitPop;
+           lc == InputLifecycle::DeferredPop || lc == InputLifecycle::NoWaitPop || lc == InputLifecycle::OuterStream;
 }
 
 enum class ReservePolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
+    PerOuter,  // reserve 1 at each OUTER (ht/row) iteration entry — one output tile per row
     Upfront,
 };
 
@@ -226,6 +252,7 @@ enum class PushPolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
+    PerOuter,  // push 1 at each OUTER (ht/row) iteration exit — one output tile per row
     AtEnd,
 };
 
@@ -240,7 +267,7 @@ struct OutputLifecycle {
 
     // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Defined out-of-line below.
     static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
-        HeldReserve, DeferredReserve;
+        HeldReserve, DeferredReserve, OuterStream;
 };
 
 // Default: reserve and push 1 output tile each step.
@@ -268,7 +295,7 @@ constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
            lc == OutputLifecycle::BulkReservePerTile || lc == OutputLifecycle::BulkReservePerChunk ||
            lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::HeldReserve ||
-           lc == OutputLifecycle::DeferredReserve;
+           lc == OutputLifecycle::DeferredReserve || lc == OutputLifecycle::OuterStream;
 }
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -385,13 +412,14 @@ enum class Dst : uint32_t {
 constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 
 // =============================================================================
-// 3. Self-documenting enums for op-struct template params
+// 3. Block size — `EltwiseShape::block_size` semantics
 // =============================================================================
+//
+// Op-struct template-param enums (Approx / Legacy) live in eltwise_op_params.hpp — they
+// are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
-enum class Approx : bool { Exact = false, Fast = true };
-enum class Legacy : bool { Off = false, On = true };
-
-/// Block size. Runtime arg on `eltwise_chain(n_tiles, block_size, ...)`. Each outer iter
+/// Block size. Carried by `EltwiseShape` (the `blk` arg of `EltwiseShape::tiles(n, blk)` /
+/// `grid(H, W, blk)`), passed as the shape to `eltwise_chain(shape, ...)`. Each outer iter
 /// processes `block_size` tiles across `block_size` DEST lanes (lane j at slot
 /// dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape.
 ///
@@ -594,8 +622,9 @@ struct RandTile;
 // one boot per stage for multi-stage kernels); the chain owns only per-element init.
 
 /// Run the chain over an (Ht, Wt) tile grid with optional per-outer-iter block size.
-/// `EltwiseShape` covers both walks: `tiles(n[, blk])` (1D, Ht=1), `grid(H, W[, blk])`
-/// (2D), or a bare `uint32_t n_tiles` (implicitly `tiles(n)`).
+/// `EltwiseShape` covers both walks: `tiles(n[, blk])` (1D, Ht=1) or `grid(H, W[, blk])`
+/// (2D). A bare number is not accepted — write `EltwiseShape::tiles(n)` (or
+/// `EltwiseShape::single()` for one tile) so the iteration shape is always explicit.
 ///
 /// Compile-time validation static_asserts on: illegal (Policy × IndexMode) cells,
 /// duplicate upfront CBs across CB-readers, colliding pack writes, and hoist requested on
@@ -605,7 +634,7 @@ struct RandTile;
 /// Row / Col / Scalar pick the per-iter tile index; any `is_upfront` element takes the
 /// upfront-block path; Streaming chains clamp block_size to 1. Row/Col need a non-streaming
 /// policy. Query `chain_supports_block_v` / `chain_max_block_v` for a build-time block check.
-template <class... Es>
+template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
 
 }  // namespace compute_kernel_lib
