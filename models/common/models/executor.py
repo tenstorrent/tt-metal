@@ -2010,32 +2010,104 @@ def run_perf_benchmark(
     compile_time = None
     decode_times = []
 
-    for i in range(num_decode_tokens):
-        t0 = time.perf_counter()
-        logits, _ = executor.decode_forward(
-            current_tokens,
-            current_pos,
-            page_table=page_table,
-            kv_cache=kv_cache,
-            read_from_device=True,
-            sampling_params=sampling_params,
-        )
-        elapsed = time.perf_counter() - t0
+    # Pipelined non-blocking readback (on-device decode loop, top-k path only).
+    # The captured trace feeds the sampled token back on device (ttnn.sampling
+    # output_tensor=) and advances position/rope on device (ttnn.plus_one), so step
+    # N+1's replay does NOT depend on step N's token reaching the host. We therefore
+    # issue each step's token readback non-blocking, launch the next step's trace,
+    # and resolve step N's token one iteration later — the host stays exactly one
+    # step behind the device, mirroring TTTv1's on-device sampling loop. This
+    # overlaps the readback + host bookkeeping with device compute, removing the
+    # per-step host round-trip that otherwise serializes with the tiny b1 device step
+    # (the residual after Stage-1/1b). The token stream is unchanged: the device
+    # produces the same tokens; we only read them back deferred, then drain the last
+    # one so generated_token_ids is byte-identical to the blocking loop. Escape
+    # hatch for A/B: TTT_DECODE_PIPELINE_READBACK=0 keeps the blocking readback.
+    # Every other path (host resupply, force-argmax, host sampling) is unaffected —
+    # only _decode_loop_active (opt-in TTT_ONDEVICE_DECODE_LOOP=1 + top-k) qualifies.
+    _engine = getattr(executor, "_engine", executor)
+    _pipeline_readback = (
+        isinstance(_engine, TracedLLMExecutor)
+        and _engine._decode_loop_active(sampling_params)
+        and os.environ.get("TTT_DECODE_PIPELINE_READBACK", "1") == "1"
+    )
 
-        if i == 0:
-            compile_time = elapsed
-        else:
-            decode_times.append(elapsed)
+    if _pipeline_readback:
+        cluster_shape = _engine.model_args.cluster_shape if getattr(_engine, "model_args", None) else [1, 1]
+        mesh_device = executor.mesh_device
 
-        if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
-            next_tok = torch.argmax(logits[:, -1, :], dim=-1)
-        else:
-            next_tok = logits
-        next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
-        for user_id, tok in enumerate(next_tok.tolist()):
-            generated_token_ids[user_id].append(int(tok))
-        current_tokens[:batch_size] = next_tok
-        current_pos[:batch_size] += 1
+        def _consume(host_tok):
+            toks = _process_output_decode_tokens(host_tok, batch_size, cluster_shape)
+            for user_id, tok in enumerate(toks.view(-1)[:batch_size].tolist()):
+                generated_token_ids[user_id].append(int(tok))
+
+        prev_event = None
+        prev_host_tok = None
+        for i in range(num_decode_tokens):
+            t0 = time.perf_counter()
+            # read_from_device=False: get the persistent device token buffer without
+            # a blocking readback. current_tokens is intentionally not refreshed — the
+            # device owns the token via in-trace feedback after the first (reseed)
+            # step; the steady-state path ignores it (and a page-table refresh copies
+            # only the page table, never the token buffer).
+            tt_output = executor.decode_forward(
+                current_tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                read_from_device=False,
+                sampling_params=sampling_params,
+            )
+            tt_toks = tt_output[0]
+            host_tok = tt_toks.cpu(blocking=False)  # issue read; do not wait
+            read_event = ttnn.record_event(mesh_device, 0)  # retires when this read lands
+            if prev_event is not None:
+                # Wait for the PREVIOUS step's read, which retired in the background
+                # while this step's trace ran — this is the loop's device-paced beat.
+                ttnn.event_synchronize(prev_event)
+            elapsed = time.perf_counter() - t0
+
+            if prev_host_tok is not None:
+                _consume(prev_host_tok)
+            prev_event, prev_host_tok = read_event, host_tok
+            current_pos[:batch_size] += 1
+
+            if i == 0:
+                compile_time = elapsed
+            else:
+                decode_times.append(elapsed)
+
+        # Drain the final in-flight token so the generated stream matches exactly.
+        if prev_host_tok is not None:
+            ttnn.event_synchronize(prev_event)
+            _consume(prev_host_tok)
+    else:
+        for i in range(num_decode_tokens):
+            t0 = time.perf_counter()
+            logits, _ = executor.decode_forward(
+                current_tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                read_from_device=True,
+                sampling_params=sampling_params,
+            )
+            elapsed = time.perf_counter() - t0
+
+            if i == 0:
+                compile_time = elapsed
+            else:
+                decode_times.append(elapsed)
+
+            if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
+                next_tok = torch.argmax(logits[:, -1, :], dim=-1)
+            else:
+                next_tok = logits
+            next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
+            for user_id, tok in enumerate(next_tok.tolist()):
+                generated_token_ids[user_id].append(int(tok))
+            current_tokens[:batch_size] = next_tok
+            current_pos[:batch_size] += 1
 
     return PerfBenchmarkResult(
         prefill_time_s=prefill_time,
