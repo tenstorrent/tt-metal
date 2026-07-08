@@ -54,6 +54,7 @@ models/autoports/<model>/tests/__init__.py
 models/autoports/<model>/tests/test_functional_decoder.py     # prefill PCC vs HF, incl. >=1 real-weight test
 models/autoports/<model>/doc/functional_decoder/README.md
 models/autoports/<model>/doc/functional_decoder/work_log.md
+models/autoports/<model>/doc/functional_decoder/forge_sharding_recommendations.json  # emitted per-op layout, for the optimize stage to seed from
 models/autoports/<model>/doc/context_contract.json
 ```
 
@@ -72,11 +73,20 @@ FORGE_DIR/model/graph_0/
 ```
 
 Read `model_ttnn.py` first — it is already modularized into clean per-layer classes (a post-codegen
-refactor). It is your semantic ground truth. **Do not** copy its hand-tuned seq=16 shard specs,
-`MatmulMultiCoreReuseMultiCast1DProgramConfig`s, or per-core grids — those are static-shape layout
-glue that will not generalize. Reimplement the *math* on simple `ttnn.bfloat16` / `ttnn.TILE_LAYOUT`
-/ `ttnn.DRAM_MEMORY_CONFIG` defaults (the functional-decoder correctness-first convention), so the
-layer accepts an arbitrary `seq_len`.
+refactor). It is your semantic ground truth. **Do not** copy its hand-tuned seq-specialized shard
+specs, `MatmulMultiCoreReuseMultiCast1DProgramConfig`s, or per-core grids **into the runtime
+forward** — those are static-shape layout glue that will not generalize. Reimplement the *math* on
+simple `ttnn.bfloat16` / `ttnn.TILE_LAYOUT` / `ttnn.DRAM_MEMORY_CONFIG` defaults (the
+functional-decoder correctness-first convention), so the layer accepts an arbitrary `seq_len`. One
+refinement: the emit's compute-kernel precision (`math_fidelity`, `fp32_dest_acc_en`, `packer_l1_acc`) is
+seq-independent, so keep the runtime on defaults but adopt the emit's setting for a numerically sensitive
+op (norms, etc.) when prefill PCC is at or below the bar — a correctness fix, not an optimization.
+
+**But do not throw the layout knowledge away.** The emit's layouts, shard widths, program configs,
+fusions, and precision are the best seed the downstream `optimize` stage has; discarding them makes it
+rediscover sharding blind and re-lose wins the emit already had. Record them verbatim into
+`doc/functional_decoder/forge_sharding_recommendations.json` (schema below) — provenance, not runtime
+code, so it does not affect arbitrary-`seq_len` correctness.
 
 **Preserve the emitted workload batch size.** The emit is generated for a specific batch (read it
 from `model_pt.BATCH_SIZE`, e.g. **32** for Llama-3.1-8B). That batch is part of the workload the
@@ -87,6 +97,45 @@ not the batch. Parameterize the layer by `batch` (defaulting to the emitted `BAT
 `seq_len`, so it accepts arbitrary values of both. If you have a documented reason to also support
 batch-1 (single-user latency), add it as an *additional* supported value — do not make it the sole
 target and do not lose the emitted batch.
+
+### Forge sharding recommendations (`forge_sharding_recommendations.json`)
+
+Capture, per emitted op, what *your* emit did, so `optimize` can seed from it instead of a blank DRAM
+slate. Record as much as the emit specifies — completeness is the goal; `optimize` decides how much to
+use. The skeleton below is the field set with placeholder `<...>` values, not real data: fill every
+field from your own emit rather than copying the example.
+
+```json
+{
+  "provenance": {
+    "emit": "<path to the model_ttnn.py you translated>",
+    "emitted_batch": "<emitted BATCH_SIZE>",
+    "emitted_seq_len": "<emitted seq_len>",
+    "emitted_grid": "<the emit's program grid, copied raw>",
+    "note": "Grids/shard-core counts are verbatim from the emit's authoring device and MUST be legalized to the optimize target's real compute grid; only the intent (layout class, shard-width fraction, weights layout, fused activation, compute-kernel precision) ports as-is."
+  },
+  "ops": {
+    "<op_role>": {
+      "memory_layout": "<L1_WIDTH_SHARDED | L1_HEIGHT_SHARDED | L1_INTERLEAVED | DRAM>",
+      "shard_shape": "<[rows, cols] from the emit, or null>",
+      "shard_orientation": "<ROW_MAJOR | COL_MAJOR, or null>",
+      "core_count": "<int from the emit, or null>",
+      "output_dtype": "<the emit's output dtype for this op, e.g. BFLOAT16>",
+      "program_config": "<the ENTIRE emitted program config, all fields, serialized verbatim; keep the class name; null if the emit passes none>",
+      "weights_layout": "<interleaved | dram_width_sharded (matmuls only)>",
+      "fused_activation": "<activation fused into this op, or null>",
+      "compute_kernel": "<the ENTIRE emitted compute-kernel config, all fields verbatim, or null>"
+    }
+  }
+}
+```
+
+One entry per op the emit lays out, using this model's actual op set; use `null` for defaults, and record
+ops the emit deliberately ran in DRAM as `DRAM` rather than omitting them. Do not invent ops or values.
+For `program_config` and `compute_kernel`, serialize the complete emitted object — every field of
+whatever class it is (matmul, DRAM-sharded, SDPA, compute-kernel, etc.) — via the helpers in
+`models/common/tensor_utils.py`, not a hand-picked subset. Copy grids and shard specs verbatim too;
+legalizing them to the target device is `optimize`'s job, not yours.
 
 ### Per-layer semantics (extracted from `Qwen3DecoderLayer` / `Qwen3Attention` / `Qwen3MLP`)
 
@@ -192,6 +241,9 @@ Done means all of these are true and recorded:
   provenance (which files you translated), and an explicit **Limitations** section (prefill-only,
   static-shape origin, decode pending, no paged KV yet, context below advertised).
 - A short note that the runtime `prefill_forward` has no torch/host fallback.
+- `doc/functional_decoder/forge_sharding_recommendations.json`: the emit's per-op layout captured
+  verbatim per the schema above, every emitted op present (including DRAM ones), referenced from the
+  README as the seed input for `optimize`.
 
 Watcher / tracy / long-context / paged-KV evidence from the full `functional-decoder` skill is
 **not required** for this pass (the emit does not support those yet) — but do not claim them either.
@@ -212,6 +264,7 @@ If a quick warmed-prefill timing is easy, include it; otherwise record it as not
 
 - Prefer explicit model contracts over permissive fallback logic.
 - Do not silently infer or patch invalid config values; fail directly.
-- Keep the seq=16-specific forge layout glue out of the generalized implementation.
+- Keep the seq-specialized forge layout glue out of the *runtime*, but capture it in
+  `forge_sharding_recommendations.json` for the optimize stage — drop it from the code, not from the record.
 - **Preserve the emitted workload batch** (`model_pt.BATCH_SIZE`); drop layout glue, not batch.
 - Be honest in the docs and contract about what is and isn't supported this pass.
