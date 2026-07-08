@@ -132,8 +132,8 @@ struct SFPUPostCompute {
 
 // Per-K-block PreKBlockFn. Two responsibilities, both gated by compile-time switches:
 //   ENABLE_GLOBAL_CB → compute the next in1 ring rd_ptr (UNPACK-only side effect).
-//   PACK_RELU + untilize_out → enable ZERO_RELU on the last K-block (the helper's
-//      OutWithUntilize target doesn't auto-enable relu the way OutWithRelu does).
+//   PACK_RELU + untilize_out → enable ZERO_RELU on the last K-block (the untilize
+//      path via the Interm target doesn't auto-enable relu the way OutWithRelu does).
 template <bool EnableGlobalCb, bool EnableReluOnLast, uint32_t In1CbId, uint32_t NumBlocks, uint32_t In1BlockSizeBytes>
 struct RingPreKBlock {
     uint32_t* curr_block_index_ptr;

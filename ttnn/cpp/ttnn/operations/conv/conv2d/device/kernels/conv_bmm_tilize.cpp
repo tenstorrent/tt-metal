@@ -618,7 +618,7 @@ void kernel_main() {
             // (ConvTilizePreKBlock),
             // so the functor no longer carries the matmul-state restore. The downstream bias-add and
             // untilize phases reconfig data formats, and the helper's per-iter restore re-establishes
-            // matmul state on the next call. reconfig stays at its INPUT_AND_OUTPUT default — the
+            // matmul state on the next call. reconfig stays at its InputAndOutput default — the
             // per-K-block srcA/srcB reconfig matches the old functor restore, and the per-K-block
             // pack reconfig to interm is the same one the pre-loop path used to issue once.
             //

@@ -303,7 +303,7 @@ void kernel_main() {
                                     // in1_policy=WaitAndRetainOnLastBlock: weights stay across all
                                     // matmul_M_t/subblock_h invocations within this output block
                                     // (popped at the c_out_block level, see end of c_out_block loop).
-                                    // InitMode::Short (default reconfig=INPUT_AND_OUTPUT):
+                                    // InitMode::Short (default reconfig=InputAndOutput):
                                     //   - kernel's boot mm_init at the top of kernel_main owns
                                     //     hw_configure (the only place hw_configure is safe);
                                     //   - the helper's per-call Short does reconfig_data_format
