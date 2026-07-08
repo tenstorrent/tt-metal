@@ -114,6 +114,12 @@ enum NocSendType : uint8_t {
     // Highest defined type; bounds the execute reachability guard and telemetry iteration.
     NOC_SEND_TYPE_MAX = NOC_SPARSE_MCAST_WRITE
 };
+// Compile-time gate for chip-sparse-multicast handling in the per-packet router/transmission hot
+// paths. When enabled, the sparse path is kept off the common path: WRITE_AND_FORWARD resolves the
+// send type from the packed load it already performs (no extra L1 read), and the local-write dispatch
+// handles sparse as an early unlikely branch so the standard switch keeps its dense jump table.
+// When disabled, all sparse branches fold away and the codegen matches the non-sparse baseline.
+constexpr bool enable_sparse_mcast_write = true;
 // How to send the payload across the cluster
 // 1 bit
 enum ChipSendType : uint8_t { CHIP_UNICAST = 0, CHIP_MULTICAST = 1, CHIP_SEND_TYPE_LAST = CHIP_MULTICAST };

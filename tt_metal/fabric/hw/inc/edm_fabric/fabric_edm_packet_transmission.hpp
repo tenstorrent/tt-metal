@@ -146,11 +146,32 @@ FORCE_INLINE
     constexpr bool update_counter = false;
 
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
-    // Standard local-write types are 0..NOC_SEND_TYPE_LAST; NOC_SPARSE_MCAST_WRITE is the one valid
-    // type above that range. Everything else (the dead multicast/read slots in between) cannot reach
-    // this path, so exclude the gap explicitly rather than widening the bound to the max enum value.
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST &&
-        noc_send_type != tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) {
+    // NOC_SPARSE_MCAST_WRITE (enum value 8) sits above the contiguous standard range. Handling it as
+    // an early, unlikely branch (compiled out entirely when the feature is disabled) keeps the standard
+    // switch below bounded to the dense 0..NOC_SEND_TYPE_LAST range, so its jump table is unchanged.
+    if constexpr (tt::tt_fabric::enable_sparse_mcast_write) {
+        if (noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) [[unlikely]] {
+            // chip_idx/write_idx select this chip's page group; the router advances both before
+            // forwarding, so the values read here are guaranteed to be this chip's (see
+            // receiver_forward_packet). The same payload is written to each of this chip's pages.
+            const auto& sparse = header.command_fields.sparse_mcast_write;
+            const uint8_t count = sparse.counts[sparse.chip_idx];
+            const uint8_t base = sparse.write_idx;
+            for (uint8_t j = 0; j < count; j++) {
+                noc_async_write_one_packet_with_trid<update_counter, false>(
+                    payload_start_address,
+                    sparse.noc_address[base + j],
+                    payload_size_bytes,
+                    transaction_id,
+                    tt::tt_fabric::local_chip_data_cmd_buf,
+                    tt::tt_fabric::edm_to_local_chip_noc,
+                    tt::tt_fabric::forward_and_local_write_noc_vc);
+            }
+            return;
+        }
+    }
+    // Standard local-write types are 0..NOC_SEND_TYPE_LAST; nothing above that range reaches this point.
+    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
@@ -297,25 +318,6 @@ FORCE_INLINE
                 // Every scatter write packet contains a chunk_count, and the unicast_writes above are only called for
                 // chunk_count-1 times. Therefore, we should never get here (seeing a NOP).
                 ASSERT(false);
-            }
-        } break;
-
-        case tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE: {
-            // chip_idx/write_idx select this chip's page group; the router advances both before
-            // forwarding, so the values read here are guaranteed to be this chip's (see
-            // receiver_forward_packet). The same payload is written to each of this chip's pages.
-            const auto& sparse = header.command_fields.sparse_mcast_write;
-            const uint8_t count = sparse.counts[sparse.chip_idx];
-            const uint8_t base = sparse.write_idx;
-            for (uint8_t j = 0; j < count; j++) {
-                noc_async_write_one_packet_with_trid<update_counter, false>(
-                    payload_start_address,
-                    sparse.noc_address[base + j],
-                    payload_size_bytes,
-                    transaction_id,
-                    tt::tt_fabric::local_chip_data_cmd_buf,
-                    tt::tt_fabric::edm_to_local_chip_noc,
-                    tt::tt_fabric::forward_and_local_write_noc_vc);
             }
         } break;
 
