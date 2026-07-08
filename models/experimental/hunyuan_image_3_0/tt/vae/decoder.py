@@ -308,12 +308,14 @@ class ResnetBlockTTNN(Module):
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         residual = self.nin_shortcut(x_bthwc) if self.nin_shortcut is not None else x_bthwc
 
+        # SiLU inherits the GroupNorm output's memory (L1 for small activations, DRAM
+        # otherwise) so the norm -> SiLU -> conv chain stays resident without a DRAM hop.
         h = self._gn(self.norm1, x_bthwc)
-        h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.silu(h, memory_config=h.memory_config())
         h = self.conv1(h)
 
         h = self._gn(self.norm2, h)
-        h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.silu(h, memory_config=h.memory_config())
         h = self.conv2(h)
 
         return ttnn.add(residual, h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
