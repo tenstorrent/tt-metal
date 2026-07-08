@@ -22,6 +22,10 @@ namespace {
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
+// ===========================================================================
+// UNIVERSAL BLOCKS: run for every program config (independent of which config is chosen).
+// ===========================================================================
+
 // Universal Block-1: basic operand check. Inputs must be on the same device, tilized,
 // have a 32-wide inner tile dim (the hardware matmul works on 32x32 tiles), and both
 // be floating-point.
@@ -52,8 +56,8 @@ void validate_matmul_operand_basics(
 }
 
 // Universal Block-2: matrix dimension check. Ranks, K/M/N > 0, and A's K equals B's K.
-// K is asymmetric: A's K is its last dim (width); B's K is at [-2] (height), so B's K
-// is read manually after b.rank >= 2 is verified.
+// The a_shape/b_shape passed in are already transpose-adjusted, so K sits at [-1] for A
+// (width) and [-2] for B (height); B's K is read manually after b.rank >= 2 is verified.
 void validate_matmul_matrix_dimensions(
     const ttnn::Shape& a_shape,
     const ttnn::Shape& b_shape,
@@ -82,8 +86,9 @@ void validate_matmul_matrix_dimensions(
     TT_FATAL(Kt_a == Kt_b, "K dimension in tiles must match between input A ({}) and input B ({})", Kt_a, Kt_b);
 }
 
-// Universal Block-3: bfloat4 tile-size check. A bfloat4 input needs a tile dim >= 4.
-// A only checks height — its width is K, which Block-1 already forces to 32.
+// Universal Block-3: bfloat4 tile-size check. A bfloat4 input needs each tile dim >= 4.
+// Only A's height and B's width are checked; the other two dims (A's width, B's height)
+// are the K axis, already forced to 32 by Universal Block-1, so they can't be < 4.
 void validate_matmul_bfloat4_tile_dims(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -380,10 +385,9 @@ void validate_matmul_untilize_out(
         attributes.output_dtype.value());
     TT_FATAL(
         std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config),
-        "{}: Untilize out is not supported for this program config: {}, only supported for "
+        "{}: untilize_out is not supported for this program config, only supported for "
         "MatmulMultiCoreReuseMultiCast1DProgramConfig",
-        config_name,
-        ttsl::get_active_type_name_in_variant(chosen_program_config));
+        config_name);
 }
 
 // ===========================================================================
@@ -391,10 +395,8 @@ void validate_matmul_untilize_out(
 // internally per config. Messages are config-named.
 // ===========================================================================
 
-// Block-9: block/subblock configuration. Runs for Reuse, Mcast2D, Mcast1D; MultiCore,
-// DRAMSharded, and BatchedDRAMSharded skip it. Mcast2D/Mcast1D have an out_block level;
-// Reuse divides per_core by out_subblock directly. Keeps its own in0_block_w != 0 guard
-// so its Kt-divide is self-contained (Block-10 also checks it — a harmless overlap).
+// Shared Block-1: block/subblock configuration. Runs for Reuse, Mcast2D, Mcast1D
+// (MultiCore, DRAMSharded, BatchedDRAMSharded skip it).
 void validate_matmul_block_and_subblock_configuration(
     const MatmulParams& attributes,
     const ttnn::Shape& a_shape_padded,
@@ -499,12 +501,7 @@ void validate_matmul_block_and_subblock_configuration(
         chosen_program_config);
 }
 
-// Block-10: compute-grid + per-core dims. MultiCore skips. Reuse/Mcast2D/Mcast1D check
-// the program grid is non-zero and fits the device (Mcast1D gather_in0 skips it — its
-// grid comes from the input shard grid). All non-MultiCore configs check in0_block_w /
-// per_core_M / per_core_N are non-zero (via the helper below).
-
-// Checks in0_block_w / per_core_M / per_core_N are non-zero. Block-9's Kt-divide relies on this.
+// Helper: checks in0_block_w / per_core_M / per_core_N are non-zero.
 void validate_matmul_nonzero_block_dims(
     std::string_view config_name, std::size_t in0_block_w, std::size_t per_core_M, std::size_t per_core_N) {
     TT_FATAL(in0_block_w != 0, "{}: in0_block_w is 0, which is not valid", config_name);
@@ -512,6 +509,10 @@ void validate_matmul_nonzero_block_dims(
     TT_FATAL(per_core_N != 0, "{}: per_core_N is 0, which is not valid", config_name);
 }
 
+// Shared Block-2: compute-grid + per-core dims. Skips MultiCore. For every other config it
+// checks in0_block_w / per_core_M / per_core_N are non-zero (via the helper above); Reuse/
+// Mcast2D/Mcast1D also check the program grid is non-zero and fits the device (Mcast1D
+// gather_in0 skips that grid check — its grid comes from the input A shard grid).
 void validate_matmul_compute_grid_and_per_core_dims(
     const Tensor& input_tensor_a, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     const CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
@@ -520,9 +521,10 @@ void validate_matmul_compute_grid_and_per_core_dims(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig>) {
-                return;  // C1: no program grid / block dims to check
+                return;  // MultiCore: no program grid / block dims to check
             } else {
-                // C2-C6. Grid-bounds check applies to C2/C3/C4 only (C5/C6 map to DRAM banks).
+                // Non-MultiCore. Grid-bounds check applies to Reuse/Mcast2D/Mcast1D only
+                // (DRAMSharded/BatchedDRAMSharded map to DRAM banks).
                 if constexpr (
                     std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig> ||
                     std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig> ||
@@ -560,13 +562,8 @@ void validate_matmul_compute_grid_and_per_core_dims(
         chosen_program_config);
 }
 
-// Block-11: grid-containment helpers. Check that a sharded tensor's shard grid fits
-// inside the compute grid. Two helpers — one for a tensor input, one for the output
-// mem-config; only L1-sharded tensors are checked (DRAM is skipped).
-
-// Orig 25-43.
+// Helper: an L1-sharded tensor's shard grid must fit within the given grid (DRAM skipped).
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
-    // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
         const auto& shard_spec = tensor.memory_config().shard_spec().value();
         const auto& shard_grid = shard_spec.grid;
@@ -585,12 +582,11 @@ void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     }
 }
 
-// Orig 216-236. Keeps its original context_label param (the config name / a
-// descriptive tag); the extent-non-zero message is now also prefixed with it.
+// Helper: an L1-sharded output's shard grid must fit within the given extent (DRAM skipped).
 void check_output_shard_grid_within_extent(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::CoreCoord& extent,
-    const char* context_label) {
+    std::string_view config_name) {
     if (!output_mem_config.is_sharded() || output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM) {
         return;
     }
@@ -601,7 +597,7 @@ void check_output_shard_grid_within_extent(
     TT_FATAL(
         extent.x > 0 && extent.y > 0,
         "{}: device grid extent must be non-zero, got ({}, {})",
-        context_label,
+        config_name,
         extent.x,
         extent.y);
     const tt::tt_metal::CoreRange bbox(
@@ -609,15 +605,14 @@ void check_output_shard_grid_within_extent(
     TT_FATAL(
         bbox.contains(shard_grid),
         "{}: output shard grid {} must lie within extent {}",
-        context_label,
+        config_name,
         shard_grid,
         extent);
 }
 
-// Block-12: work distribution + gather ring topology. Runs for Reuse/Mcast2D/Mcast1D.
-// Checks output blocks fit the cores (Mcast1D uses a 1D total count, Mcast2D a 2D
-// per-axis check), and for Mcast1D gather_in0 the ring setup (A sharded, sub-device
-// present, hop cores not overlapping).
+// Shared Block-3: work distribution + gather ring topology. Runs for Reuse/Mcast2D/Mcast1D.
+// Checks output blocks fit the cores; for Mcast1D gather_in0 also checks the ring setup
+// (A sharded, sub-device present, hop cores not overlapping).
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -664,10 +659,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             program_config.hop_cores,
                             worker_cores);
                     }
-                    check_output_shard_grid_within_extent(
-                        output_mem_config,
-                        device_extent,
-                        "MatmulMultiCoreReuseMultiCast1DProgramConfig (gather_in0 output vs device grid)");
+                    check_output_shard_grid_within_extent(output_mem_config, device_extent, config_name);
                 } else {
                     TT_FATAL(
                         program_config.hop_cores.empty(),
@@ -698,8 +690,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                             per_core_M,
                             num_blocks_y);
                     }
-                    check_output_shard_grid_within_extent(
-                        output_mem_config, grid, "MatmulMultiCoreReuseMultiCast1DProgramConfig");
+                    check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
                 }
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
@@ -733,8 +724,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                     config_name,
                     num_blocks_y,
                     grid.y);
-                check_output_shard_grid_within_extent(
-                    output_mem_config, grid, "MatmulMultiCoreReuseMultiCastProgramConfig");
+                check_output_shard_grid_within_extent(output_mem_config, grid, config_name);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
@@ -747,8 +737,7 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
                                          input_tensor_b.memory_config().is_sharded() || output_mem_config.is_sharded();
                 const auto effective_extent =
                     any_sharded ? device_extent : program_config.compute_with_storage_grid_size;
-                check_output_shard_grid_within_extent(
-                    output_mem_config, effective_extent, "MatmulMultiCoreReuseProgramConfig");
+                check_output_shard_grid_within_extent(output_mem_config, effective_extent, config_name);
             } else {
                 (void)transpose_a;
                 (void)transpose_b;
@@ -757,8 +746,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
         chosen_program_config);
 }
 
-// Block-10a — Reuse config only. Sharded operand grids must fit within the program
-// compute grid.
+// Shared Block-4 — Reuse config only. Each L1-sharded input's shard grid must fit within
+// the device grid. Non-sharded inputs and DRAM inputs are not checked.
 void validate_matmul_sharded_operand_grids_within_program_compute_grid(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -772,8 +761,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
                 // against the origin-anchored compute_with_storage_grid_size rectangle incorrectly
                 // rejects grids that don't start at (0,0) (e.g. column 1 in a multi-chain fused op).
                 // The only physical constraint is that the shard grid fits within the device grid.
-                // For non-sharded inputs the config grid drives split_work_to_cores, so the
-                // origin-anchored check is still correct there.
+                // Non-sharded inputs are not checked here (the check only applies to L1-sharded tensors).
                 const auto& config_grid = program_config.compute_with_storage_grid_size;
                 const auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
                 auto effective_grid_a = input_tensor_a.memory_config().is_sharded() ? device_grid : config_grid;
@@ -785,7 +773,9 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         chosen_program_config);
 }
 
-// Block-10b — Reuse config only. Checks sharded output block divisibility.
+// Shared Block-5 — Reuse config only. If an input is sharded across N cores, the total
+// number of output blocks must be a multiple of N so the work splits evenly across those
+// cores; otherwise the program factory can't distribute it and fails.
 void validate_matmul_reuse_sharded_output_block_divisibility(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -828,7 +818,7 @@ void validate_matmul_reuse_sharded_output_block_divisibility(
         chosen_program_config);
 }
 
-// Block-10c — bias support by config. Reuse rejects bias; other configs allow it.
+// Shared Block-6 — bias support by config. Reuse rejects bias; other configs allow it.
 void validate_matmul_bias(
     const std::optional<const Tensor>& optional_bias,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
@@ -1033,8 +1023,8 @@ void warn_if_allowed_worker_cores_missing(
         */
 }
 
-// Runs for Mcast1D on a sub-device (non-gather). The sub-device's cores must form a
-// solid block with no gaps, and the matmul's grid must fit within that block.
+// Shared Block-7 — Mcast1D on a sub-device (non-gather). Checks the matmul grid fits on
+// the sub-device's cores.
 void validate_matmul_mcast1d_subdevice_worker_grid(
     const Tensor& input_tensor_a,
     const MatmulParams& attributes,
@@ -1075,7 +1065,7 @@ void validate_matmul_mcast1d_subdevice_worker_grid(
     }
 }
 
-// Shared block: input A and output must agree on buffer type + memory layout. Used by
+// Helper: input A and output must agree on buffer type + memory layout. Used by
 // Reuse/Mcast2D/Mcast1D/DRAMSharded/BatchedDRAMSharded.
 void validate_input_a_output_mem_config_match(
     std::string_view config_name, const Tensor& input_tensor_a, const tt::tt_metal::MemoryConfig& output_mem_config) {
@@ -1093,7 +1083,7 @@ void validate_input_a_output_mem_config_match(
         output_mem_config.memory_layout());
 }
 
-// Shared block: output subblock/block width must divide per_core_N. Used by
+// Helper: output subblock/block width must divide per_core_N. Used by
 // Mcast2D/Mcast1D (Reuse keeps its own inline variant).
 void validate_output_subblock_block_divides_per_core_n(
     std::string_view config_name,
@@ -1126,7 +1116,7 @@ void validate_output_subblock_block_divides_per_core_n(
 
 // MultiCore config — the un-optimized fallback. Rejects tiny outer tiles and requires
 // all operands + output to be INTERLEAVED.
-void validate_matmul_c1_multicore_config(
+void validate_matmul_multicore_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MatmulParams& attributes,
@@ -1164,7 +1154,7 @@ void validate_matmul_c1_multicore_config(
 
 // DRAMSharded config. in0 width-sharded in L1, in1 width-sharded in DRAM; height must
 // be a single tile (M == 1) and K/shard dims divide in0_block_w.
-void validate_matmul_c5_dram_sharded_config(
+void validate_matmul_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MatmulParams& attributes,
@@ -1226,7 +1216,7 @@ void validate_matmul_c5_dram_sharded_config(
 
 // BatchedDRAMSharded config. [1,B,M,K] x [1,B,K,N]: A height-sharded in L1, B height-
 // sharded in DRAM, output height-sharded in L1; contracted dim divides in0_block_w.
-void validate_matmul_c6_batched_dram_sharded_config(
+void validate_matmul_batched_dram_sharded_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MatmulParams& attributes,
@@ -1237,9 +1227,9 @@ void validate_matmul_c6_batched_dram_sharded_config(
     // Batch-sharded DRAM matmul validations
     // For batched matmul: [1, B, M, K] x [1, B, K, N] = [1, B, M, N]
     // Sharded by batch dimension - each worker handles B/num_workers complete matmuls
-    // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/12 complete [M, N] matrices)
-    // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/12 complete [N, K] matrices)
-    // Output: HEIGHT_SHARDED in L1 (batch-sharded, each core outputs B/12 complete [M, K] matrices)
+    // Input A: HEIGHT_SHARDED in L1 (batch-sharded, each core has B/num_workers complete [M, K] matrices)
+    // Input B: HEIGHT_SHARDED in DRAM (batch-sharded, each bank has B/num_workers complete [K, N] matrices)
+    // Output: HEIGHT_SHARDED in L1 (batch-sharded, each core outputs B/num_workers complete [M, N] matrices)
     TT_FATAL(
         input_tensor_a.is_sharded(), "{}: Input tensor A must be sharded for batch-sharded DRAM matmul", config_name);
     TT_FATAL(
@@ -1277,7 +1267,7 @@ void validate_matmul_c6_batched_dram_sharded_config(
 
 // Mcast2D config — block-sharded 2D multicast. Validates that sharded input A, input B,
 // and the output have layouts, grids, and orientations consistent with a 2D multicast.
-void validate_matmul_c3_mcast2d_config(
+void validate_matmul_mcast2d_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MatmulParams& attributes,
@@ -1485,7 +1475,7 @@ void validate_matmul_c3_mcast2d_config(
 // Reuse config — non-multicast block reuse. Validates per_core_M/N divisibility vs M/N,
 // sharded A/B/output layouts, grid/shard-shape agreement, and rejects batch broadcast.
 // (The post-visit work-split check is also Reuse-only, wired at the dispatch.)
-void validate_matmul_c2_reuse_config(
+void validate_matmul_reuse_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const MatmulParams& attributes,
@@ -1650,7 +1640,7 @@ void validate_matmul_c2_reuse_config(
 // Mcast1D config — 1D multicast. Validates the mcast_in0 and gather_in0 paths, the
 // width-sharded and height-sharded in0 paths, and the output layout/subblock rules for
 // 1-row vs 1-column grids.
-void validate_matmul_c4_mcast1d_config(
+void validate_matmul_mcast1d_config(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const Tensor>& optional_bias,
@@ -2144,7 +2134,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             if constexpr (std::is_same_v<
                               ProgramConfigType,
                               operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
-                validate_matmul_c4_mcast1d_config(
+                validate_matmul_mcast1d_config(
                     input_tensor_a,
                     input_tensor_b,
                     optional_bias,
@@ -2157,18 +2147,18 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
-                validate_matmul_c5_dram_sharded_config(
+                validate_matmul_dram_sharded_config(
                     input_tensor_a, input_tensor_b, attributes, a_shape_padded, in0_tile, program_config);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::
                                          MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig>) {
-                validate_matmul_c6_batched_dram_sharded_config(
+                validate_matmul_batched_dram_sharded_config(
                     input_tensor_a, input_tensor_b, attributes, a_shape_padded, in0_tile, program_config);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                validate_matmul_c3_mcast2d_config(
+                validate_matmul_mcast2d_config(
                     input_tensor_a,
                     input_tensor_b,
                     attributes,
@@ -2180,7 +2170,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                validate_matmul_c2_reuse_config(
+                validate_matmul_reuse_config(
                     input_tensor_a,
                     input_tensor_b,
                     attributes,
@@ -2190,7 +2180,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     in1_tile,
                     program_config);
             } else {
-                validate_matmul_c1_multicore_config(input_tensor_a, input_tensor_b, attributes, in0_tile, in1_tile);
+                validate_matmul_multicore_config(input_tensor_a, input_tensor_b, attributes, in0_tile, in1_tile);
             }
         },
         chosen_program_config);
