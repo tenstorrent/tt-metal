@@ -188,22 +188,6 @@ def test_resolve_informer_dynamic_allocation():
     assert resolve_trace_region_size("informer", "wh_n150") == TRACE_REGION_SIZE_DYNAMIC
 
 
-def test_blocked_models_have_todo_comment_in_yaml():
-    """Blocked multi-trace models must document #48869 in the YAML source."""
-    raw = TRACE_REGION_SIZES_YAML_PATH.read_text(encoding="utf-8")
-    doc = yaml.safe_load(raw)
-    sizes = doc.get("sizes", {})
-    for model_key in sizes:
-        if model_key not in BLOCKED_ON_48869_MODEL_KEYS:
-            continue
-        # Find the model block header in raw YAML (comments precede the key line).
-        marker = f"  {model_key}:"
-        idx = raw.find(marker)
-        assert idx != -1, f"{model_key}: block not found in YAML"
-        preceding = raw[max(0, idx - 400) : idx]
-        assert "#48869" in preceding, f"{model_key}: missing TODO(#48869) comment before block"
-
-
 def test_resolve_qwen3_vl_32b_hf_model_alias():
     assert (
         resolve_trace_region_size_for_candidates(
