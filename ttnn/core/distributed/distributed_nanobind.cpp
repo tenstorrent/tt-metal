@@ -26,6 +26,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -585,6 +586,15 @@ void py_module(nb::module_& mod) {
     // Release GIL: close can block a long time; other threads need it to run Python (e.g. real-time profiler
     // callbacks).
     mod.def("close_mesh_device", &close_mesh_device, nb::arg("mesh_device"), nb::call_guard<nb::gil_scoped_release>());
+
+    // THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror) — safe to remove once that
+    // investigation closes.
+    mod.def(
+        "force_ethernet_retrain",
+        [](const std::shared_ptr<MeshDevice>& mesh_device) { ForceEthernetRetrain(mesh_device->get_devices()); },
+        nb::arg("mesh_device"),
+        "THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror): force an ethernet retrain "
+        "on every active+up ethernet core in the mesh, without waiting for it to settle.");
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
     py_placement_shard.def(nb::init<int>())

@@ -3,13 +3,26 @@
 # production MLA Chunked test, and pinpointed it to MetalContext's implicit
 # default-context init (conftest.py:548 -> GetNumPCIeDevices -> MetalContext::
 # instance() -> create_default_instance_implicit_locked()) — but that was
-# inferred from log adjacency, not a real stack trace. This round adds native
+# inferred from log adjacency, not a real stack trace. Round 3 added native
 # backtrace dumps at every candidate .at() call site in
 # tt_metal/impl/context/metal_env.cpp (MetalEnvImpl ctor, is_base_routing_fw_enabled,
 # should_enable_blackhole_dram_programmable_cores, set_hal) and
 # tt_metal/llrt/tt_cluster.cpp (Cluster::set_hal's four sub-calls), built with
-# RelWithDebInfo for symbol resolution, to get the actual throw site instead of
-# a theory. Triggers on push to this branch only, same reasoning as before.
+# RelWithDebInfo for symbol resolution — but a 3-sample bash loop on the scarce
+# bh_galaxy (topology-6u) runner queued ~9h and came back clean.
+#
+# Round 4: nothing in the theory is actually Galaxy-specific — the candidate
+# throw sites are chip_id/board_type-keyed maps built during any cluster/
+# topology discovery, not gated on chip count. The only real requirement is an
+# ethernet link that still needs to finish training when the process boots, so
+# this should reproduce on any topology with a real inter-chip ethernet link
+# (e.g. P150_X2/"bh_quietbox_2"), which uses a far larger, less contended
+# runner pool than the specialty bh_galaxy rack — hence the 9h queue there.
+# Also replaces the "hope 3 incidental samples land on it" approach with
+# forcing the race on demand every iteration (see
+# .github/scripts/ci_repro_force_retrain_loop.py) and looping many samples in
+# one job/one queue-wait instead of restarting the whole pytest process (and
+# paying a fresh CI queue) per sample.
 name: "[investigation] Repro cluster-teardown IndexError"
 
 on:
@@ -37,8 +50,25 @@ jobs:
 
   repro:
     needs: [check-harbor, build-artifact]
-    name: "repro (bh_galaxy, instrumented)"
-    runs-on: [arch-blackhole, pipeline-functional, topology-6u, in-service]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Primary target: real inter-chip ethernet link, far less contended runner pool.
+          - name: "bh_quietbox_2 (P150_X2, instrumented)"
+            runs-on: '["BH-Quietbox-2", "pipeline-perf", "in-service"]'
+            runs: 50
+          # Comparison: the original 32-chip Galaxy mesh where this was first observed.
+          - name: "bh_galaxy (instrumented)"
+            runs-on: '["arch-blackhole", "pipeline-functional", "topology-6u", "in-service"]'
+            runs: 30
+          # Negative control: a lone card with no ethernet partner has nothing to retrain
+          # against, so this should NOT reproduce — if it does, the theory is wrong.
+          - name: "bh_p150 (lone card, negative control)"
+            runs-on: '["in-service", "arch-blackhole", "P150", "pipeline-functional"]'
+            runs: 30
+    name: "repro (${{ matrix.name }})"
+    runs-on: ${{ fromJSON(matrix.runs-on) }}
     timeout-minutes: 40
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -48,7 +78,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         REPRO_INSTRUMENT_DEVICE_CALLS: "1"
-        MESH_DEVICE: TG
       volumes:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -75,43 +104,9 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
-      - name: Run production MLA Chunked test with native backtrace instrumentation
+      - name: Forced-retrain repro loop with native backtrace instrumentation
         id: repro
-        run: |
-          set -uo pipefail
-          RUNS=3
-          fail_count=0
-          repro_count=0
-          mkdir -p /tmp/repro_logs
-
-          for i in $(seq 1 $RUNS); do
-            echo "::group::run $i/$RUNS"
-            if pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill \
-                -k "maxedge-1u and cpu and 8x4 and fabric2d" -vvv --tb=long \
-                > "/tmp/repro_logs/run_$i.log" 2>&1; then
-              echo "run $i: PASSED"
-            else
-              fail_count=$((fail_count+1))
-              if grep -q "IndexError: unordered_map::at" "/tmp/repro_logs/run_$i.log"; then
-                repro_count=$((repro_count+1))
-                echo "run $i: FAILED — reproduced the IndexError"
-              else
-                echo "run $i: FAILED — different error"
-              fi
-            fi
-            cat "/tmp/repro_logs/run_$i.log"
-            echo "::endgroup::"
-          done
-
-          {
-            echo "## Instrumented MLA Chunked repro (native backtrace)"
-            echo ""
-            echo "Ran the real production test $RUNS times: $repro_count/$RUNS reproduced the IndexError, $fail_count/$RUNS failed total."
-            echo ""
-            echo '```'
-            grep -h "REPRO-INSTRUMENT" /tmp/repro_logs/run_*.log || echo "(no [REPRO-INSTRUMENT] lines captured)"
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
+        run: python3 .github/scripts/ci_repro_force_retrain_loop.py ${{ matrix.runs }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

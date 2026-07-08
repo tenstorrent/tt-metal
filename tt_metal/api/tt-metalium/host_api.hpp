@@ -87,6 +87,15 @@ size_t GetNumPCIeDevices();
 
 ChipId GetPCIeDeviceID(ChipId device_id);
 
+// THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror) — safe to remove once that
+// investigation closes. Forces a link retrain on every active+up ethernet core across the given
+// devices, without waiting for it to settle.
+void ForceEthernetRetrain(const std::vector<IDevice*>& devices);
+
+// THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror). Tears down MetalContext so the
+// next tt_metal call implicitly reconstructs it from scratch (see MetalContext::instance()).
+void ForceMetalContextReinit();
+
 // clang-format off
 /**
  * Instantiates a device object.

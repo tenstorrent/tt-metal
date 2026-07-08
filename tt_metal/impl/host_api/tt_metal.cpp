@@ -1231,6 +1231,33 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
     return MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
+// THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror) — see round 2-4 investigation of
+// the intermittent IndexError in MetalContext's implicit init. Mirrors the retrain-force trick
+// from tests/tt_metal/tt_metal/debug_tools/watcher/test_link_training.cpp, minus the settle
+// sleep: we want the retrain still in flight when ForceMetalContextReinit() below reconstructs
+// the Cluster, to race the verify_fw_capabilities() throw site on demand instead of hoping to
+// catch it at natural process-boot timing.
+void ForceEthernetRetrain(const std::vector<IDevice*>& devices) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    const uint32_t retrain_force_addr =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::RETRAIN_FORCE);
+    const std::vector<uint32_t> reset_val = {0x1};
+    for (IDevice* device : devices) {
+        for (const CoreCoord& eth_core : device->get_active_ethernet_cores()) {
+            if (!cluster.is_ethernet_link_up(device->id(), eth_core)) {
+                continue;
+            }
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
+            cluster.write_core(device->id(), virtual_core, reset_val, retrain_force_addr);
+        }
+    }
+}
+
+// THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror). See
+// tests/tt_metal/tt_metal/context/test_metal_context_api.cpp::CreateImplicitAfterDestroy for the
+// proven destroy-then-implicit-recreate pattern this wraps.
+void ForceMetalContextReinit() { MetalContext::destroy_all_instances(/*check_device_count=*/false); }
+
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {

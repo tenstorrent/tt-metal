@@ -332,6 +332,13 @@ void device_module(nb::module_& m_device) {
         Returns associated mmio device of give device id.
     )doc");
 
+    // THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror) — safe to remove once that
+    // investigation closes.
+    m_device.def("ForceMetalContextReinit", &tt::tt_metal::ForceMetalContextReinit, R"doc(
+        THROWAWAY diagnostic (ci-repro/cluster-teardown-indexerror): tears down MetalContext so
+        the next tt_metal call reconstructs it from scratch.
+    )doc");
+
     m_device.def("SetRootDir", &tt::tt_metal::SetRootDir, nb::arg("root_dir"), R"doc(
         Sets the root directory for TT Metal operations.
         Args:
