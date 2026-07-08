@@ -172,7 +172,7 @@ inline void calculate_sine() {
     sfpi::vFloat C3, C2, C1, C0;
 
     // Coefficients are chosen per destination precision target for sin(a) on [0, PI/2].
-    if (is_fp32_dest_acc_en) {
+    if constexpr (is_fp32_dest_acc_en) {
         C3 = 0x1.5dc908p-19f;
         C2 = -0x1.9f70fp-13f;
         C1 = 0x1.110edap-7f;
@@ -214,7 +214,7 @@ inline void calculate_sine() {
         a = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) ^ q);
 
         sfpi::vFloat r;
-        if (is_fp32_dest_acc_en) {
+        if constexpr (is_fp32_dest_acc_en) {
             r = C3 * s + C2;
             r = r * s + C1;
             sfpi::vFloat c = a * s;
