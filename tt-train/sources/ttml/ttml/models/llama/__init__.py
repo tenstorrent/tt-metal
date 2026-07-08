@@ -16,6 +16,7 @@ from ttml.modules import (
     Embedding,
     LinearLayer,
     ModuleList,
+    VocabParallelEmbedding,
 )
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
@@ -42,12 +43,7 @@ class LlamaConfig:
     and ``intermediate_size`` — this is validated in ``__post_init__``.  The
     vocab does *not* need to be TP-divisible: the embedding and LM-head
     weights are padded internally to ``lcm(32, tp_size)``, exposed as
-    ``Llama.padded_vocab_size``.  In TP mode the LM head keeps its output
-    vocab-sharded ([B,1,S,padded_V/tp_size] per device) so the trailing
-    padded columns can be handled by the downstream loss; pair the model
-    with :func:`ttml.ops.distributed.vocab_parallel_cross_entropy_loss`.
-    In non-TP mode the LM head is fully replicated and the padded columns
-    are sliced off before returning.
+    ``Llama.padded_vocab_size``.
     """
 
     hidden_size: int = 384
@@ -98,12 +94,6 @@ class LlamaConfig:
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
         if self.use_tp:
-            if self.weight_tying == WeightTyingType.Enabled:
-                raise ValueError(
-                    "weight_tying=Enabled is not supported with use_tp=True: "
-                    "tok_emb is replicated but fc is sharded on dim 2, so they "
-                    "cannot share a single Parameter."
-                )
             tp_size = ttml.mesh().axis_size("tp")
             if self.num_attention_heads % tp_size != 0:
                 raise ValueError(
@@ -154,6 +144,15 @@ class Llama(AbstractModuleBase):
                 gather_output=False,
                 axis_name="tp",
             )
+            # Shard the embedding table on the vocab dim to mirror the LM head:
+            # each device keeps only its vocab slice instead of a full replicated
+            # table, and the matching layout allows a tied weight (below).
+            self.tok_emb = VocabParallelEmbedding(
+                self.padded_vocab_size,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+                axis_name="tp",
+            )
         else:
             self.padded_vocab_size = ((config.vocab_size + 31) // 32) * 32
             self.fc = LinearLayer(
@@ -161,12 +160,11 @@ class Llama(AbstractModuleBase):
                 self.padded_vocab_size,
                 False,
             )
-
-        self.tok_emb = Embedding(
-            self.padded_vocab_size,
-            config.hidden_size,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+            self.tok_emb = Embedding(
+                self.padded_vocab_size,
+                config.hidden_size,
+                weight_init=ttml.init.normal(0.0, 0.02),
+            )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight

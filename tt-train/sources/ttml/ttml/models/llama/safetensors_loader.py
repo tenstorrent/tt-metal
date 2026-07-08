@@ -197,8 +197,11 @@ def load_from_safetensors(
             emb_param_name = "Llama/fc/weight" if weight_tying == WeightTyingType.Enabled else "Llama/tok_emb/weight"
             param = get_param(emb_param_name)
             tgt = param.shape()
-            resized = _pad_and_resize(hf_arr, tgt[-2], tgt[-1])
-            _assign_tensor(param, _to_bf16_4d(resized))
+            shard_type = "col_w" if use_tp else None
+            full_rows = tgt[-2] * tp_size if shard_type == "col_w" else tgt[-2]
+            resized = _pad_and_resize(hf_arr, full_rows, tgt[-1])
+            mapper = _make_tp_mapper(shard_type)
+            _assign_tensor(param, _to_bf16_4d(resized), mapper=mapper)
             continue
 
         # ── LM head ──
