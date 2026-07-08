@@ -18,7 +18,18 @@ namespace ttnn {
 // The conventional reader / writer DM placement, generation-agnostic. On Gen1 these forward to the
 // metal create_reader/writer_gen1_datamovement_config() placement; on Quasar both yield a default
 // DataMovementGen2Config.
-tt::tt_metal::experimental::DataMovementHardwareConfig create_reader_datamovement_config(tt::ARCH arch);
-tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_datamovement_config(tt::ARCH arch);
+inline tt::tt_metal::experimental::DataMovementHardwareConfig create_reader_datamovement_config(tt::ARCH arch) {
+    if (arch == tt::ARCH::QUASAR) {
+        return tt::tt_metal::experimental::DataMovementGen2Config{};
+    }
+    return tt::tt_metal::experimental::CreateReaderGen1DataMovementConfig();
+}
+
+inline tt::tt_metal::experimental::DataMovementHardwareConfig create_writer_datamovement_config(tt::ARCH arch) {
+    if (arch == tt::ARCH::QUASAR) {
+        return tt::tt_metal::experimental::DataMovementGen2Config{};
+    }
+    return tt::tt_metal::experimental::CreateWriterGen1DataMovementConfig();
+}
 
 }  // namespace ttnn
