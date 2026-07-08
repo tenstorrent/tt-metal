@@ -31,27 +31,22 @@ from ....utils.test import line_params_req_exact_devices, ring_params_req_exact_
     [
         [(2, 2), (2, 2), 0, 1, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, None],
-        # BH on 2x4
         [(2, 4), (2, 4), 1, 0, 2, True, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
-        # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params_req_exact_devices, ttnn.Topology.Ring, True, None],
-        # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, line_params_req_exact_devices, ttnn.Topology.Linear, False, None],
-        # BH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
         [(4, 32), (4, 32), 1, 0, 2, False, ring_params_req_exact_devices, ttnn.Topology.Ring, False, None],
-        # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
         [(2, 4), (2, 4), 0, 1, 1, True, line_params_req_exact_devices, ttnn.Topology.Linear, True, "all_bf8_lofi"],
     ],
     ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0_linear",
-        "bh_4x8sp1tp0_ring",
-        "bh_4x32sp1tp0",
-        "2x4sp0tp1_bf8_lofi",
+        "2x2sp0tp1nl2_linear_is_fsdp1",
+        "2x4sp0tp1nl1_linear_is_fsdp1",
+        "2x4sp1tp0nl2_linear_is_fsdp0",  # BH on 2x4
+        "4x8sp1tp0nl4_ring_is_fsdp1",  # WH (ring) on 4x8
+        "4x8sp1tp0nl2_linear_is_fsdp0",  # BH (linear) on 4x8
+        "4x8sp1tp0nl2_ring_is_fsdp0",  # BH (ring) on 4x8
+        "4x32sp1tp0nl2_ring_is_fsdp0",
+        "2x4sp0tp1nl1_linear_is_fsdp1_bf8_lofi",  # FSDP on 2x4 with bf8 weights+activations, LoFi linear, bf8 HiFi2 SDPA
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -84,6 +79,9 @@ def test_pipeline_inference(
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     skip_if_unsupported_num_links(mesh_device, num_links)
+
+    if (not is_fsdp) and (not ttnn.device.is_blackhole()):
+        pytest.skip("FSDP=False unsupported on non-blackhole systems due to memory constraints")
 
     num_frames = 81
     num_inference_steps = 40

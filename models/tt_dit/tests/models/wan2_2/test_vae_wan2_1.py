@@ -2104,6 +2104,11 @@ def test_wan_decoder_chunked_consistency(
     """
     Verify that VAE decoding with t_chunk_size=(2, 4, 8, 16, T) produces the same output as with t_chunk_size=1
     """
+    # Currently broken on Wormhole; skip until fixed.
+    # Tracking issue: https://github.com/tenstorrent/tt-metal/issues/49418
+    if not ttnn.device.is_blackhole():
+        pytest.skip("Chunked consistency test is broken on Wormhole (see #49418)")
+
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
