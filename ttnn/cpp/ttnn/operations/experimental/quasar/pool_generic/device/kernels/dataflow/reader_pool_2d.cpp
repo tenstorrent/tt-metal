@@ -363,10 +363,8 @@ void kernel_main() {
         (uint32_t)kernel_h,
         (uint32_t)kernel_w);
 
-    // [DEBUG scratch->out] NoC handle + this reader's output-stick counter. With split reader, reader0
-    // writes even output rows, reader1 writes odd, so global row = 2*counter + reader_id.
-    Noc out_noc;
-    UnicastEndpoint out_self_ep;
+    // This reader's output-stick counter. With split reader, reader0 writes even output rows, reader1
+    // writes odd, so global row = 2*counter + reader_id.
     uint32_t out_stick_counter = 0;
 
     while (num_segments--) {
@@ -448,13 +446,27 @@ void kernel_main() {
                 const uint32_t global_stick =
                     use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
                 const uint32_t scratch_row0_addr = scratch_cb.get_read_ptr();  // untilized row 0 = the result
-                out_noc.async_read(
-                    out_self_ep,
-                    out_shard_cb,
-                    out_row_bytes,
-                    experimental::local_addr(scratch_row0_addr),
-                    {.offset_bytes = global_stick * out_row_bytes});
-                out_noc.async_read_barrier();
+                // Scratch and the borrowed output shard are BOTH local L1 on this core, so the reduced row 0
+                // -> output-stick copy is a local L1->L1 move. Do it with a direct pointer copy rather than a
+                // NoC self-loopback async_read: on HW both are correct, but the sim's per-stick self-loopback
+                // read under multi-core load silently drops/duplicates sticks (the zero-write + adjacent-dup
+                // artifacts). A straight L1 copy is race-free and HW-faithful.
+                //
+                // COHERENCY: the compute packer wrote this stick's reduced row directly to Tensix L1 (TL1),
+                // bypassing this DM core's private L1 D$ / shared L2. The scratch CB is single-buffered, so
+                // its L1 line address is constant across sticks: after the first read caches it, every later
+                // read hits the STALE cached copy (all sticks would read stick 0's result). On HW the reader
+                // must invalidate any address another agent wrote before reading it (invalidate_l1_cache() is
+                // a no-op on Quasar DM). Invalidate the scratch row's L2+L1D lines so the load re-fetches the
+                // freshly packed data from TL1. The prior NoC-read path avoided this because the NoC engine
+                // reads TL1 directly (non-snooping), never through the DM cache.
+                invalidate_l2_cache_range(scratch_row0_addr, out_row_bytes);
+                const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() + global_stick * out_row_bytes;
+                volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_row0_addr);
+                volatile tt_l1_ptr uint32_t* dst_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_dst_addr);
+                for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
+                    dst_w[w] = src_w[w];
+                }
 #if ENABLE_DEBUG_PRINT == 1
                 // Sample scratch row 0 (the reduced result) so unpack correctness is separable from
                 // routing: for input c->c+1, a correct reduce gives ch0..7 = 1..8 and ch60..63 = 61..64;
