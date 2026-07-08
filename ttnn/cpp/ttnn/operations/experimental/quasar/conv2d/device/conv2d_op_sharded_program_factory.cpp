@@ -261,7 +261,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const auto& block_config = operation_attributes.block_config;
     const auto transpose_mcast = a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
     auto& output = output_tensor;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
+    // Copies the config because dst_full_sync_en maybe overwritten
+    auto compute_kernel_config = operation_attributes.compute_kernel_config;
     const auto enable_act_double_buffer = operation_attributes.enable_act_double_buffer;
     const auto enable_weights_double_buffer = operation_attributes.enable_weights_double_buffer;
     const auto full_inner_dim = operation_attributes.full_inner_dim;
@@ -296,8 +297,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+    const auto& fp32_dest_acc_en = compute_kernel_config.fp32_dest_acc_en;
+    const auto& packer_l1_acc = compute_kernel_config.packer_l1_acc;
+    auto& dst_full_sync_en = compute_kernel_config.dst_full_sync_en;
 
     TT_FATAL(
         out_block_h_ntiles >= act_block_h_ntiles,
