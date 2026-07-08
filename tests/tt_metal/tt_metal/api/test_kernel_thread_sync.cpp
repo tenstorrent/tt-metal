@@ -101,17 +101,15 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
         kernel_configs.push_back({"dm_barrier_kernel", spec, make_layout(l1_base, kRounds)});
         work_unit_kernel_names = {"dm_barrier_kernel"};
     } else {
-        auto make_gen1 = [&](const std::string& name, KernelSpec spec, uint32_t layout_base) {
+        auto make_gen1 = [&](KernelSpec spec, uint32_t layout_base) {
             spec.source = kKernelPath;
             spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
-            return KernelConfig{name, std::move(spec), make_layout(layout_base, kRounds)};
+            return KernelConfig{*spec.unique_id, std::move(spec), make_layout(layout_base, kRounds)};
         };
         // BRISC (RISCV_0) uses the writer role; NCRISC (RISCV_1) uses the reader role.
-        kernel_configs.push_back(
-            make_gen1("brisc_barrier_kernel", MakeMinimalWriterDMKernel("brisc_barrier_kernel"), l1_base));
+        kernel_configs.push_back(make_gen1(MakeMinimalWriterDMKernel("brisc_barrier_kernel"), l1_base));
         uint32_t ncrisc_base = l1_base + kernel_configs[0].layout.total_words * sizeof(uint32_t);
-        kernel_configs.push_back(
-            make_gen1("ncrisc_barrier_kernel", MakeMinimalReaderDMKernel("ncrisc_barrier_kernel"), ncrisc_base));
+        kernel_configs.push_back(make_gen1(MakeMinimalReaderDMKernel("ncrisc_barrier_kernel"), ncrisc_base));
         work_unit_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};
     }
 
