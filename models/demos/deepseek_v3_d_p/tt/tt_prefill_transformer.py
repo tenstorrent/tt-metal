@@ -299,6 +299,7 @@ class TtPrefillTransformer(LightweightModule):
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
+        index_kv_cache: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -313,6 +314,8 @@ class TtPrefillTransformer(LightweightModule):
                 emb_dim/tp] hidden-state activation handed over from the previous rank.
             kvpe_cache: externally created KVPE cache [num_layers, 1, seq_len_local, head_dim];
                         each layer writes to its own slot via cache_layer_idx
+            index_kv_cache: sparse-DSA chunked only — per-layer list of block-cyclic indexer key caches
+                        (the indexer is single-layer, so layers can't share one tensor). None otherwise.
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
             temperature: Temperature for sampling. Can be a single float or list of floats.
@@ -380,6 +383,7 @@ class TtPrefillTransformer(LightweightModule):
                 padding_side=self.padding_side,
                 indexer_indices=inject,
                 return_indexer_indices=reuse,
+                index_kv_cache=index_kv_cache[i] if index_kv_cache is not None else None,
             )
             if reuse:
                 h, _, new_idx = ret
