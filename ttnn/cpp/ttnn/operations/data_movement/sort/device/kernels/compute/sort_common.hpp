@@ -27,6 +27,7 @@
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
  */
+FORCE_INLINE
 void sort_Wt_tiles_row_to_bitonic_sequence(
     DataflowBuffer& input_dfb,
     DataflowBuffer& index_dfb,
@@ -105,6 +106,7 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
  * @param dest_dfb Destination circular buffer where packed tiles will be stored.
  * @param Wt Number of tiles to process (width in tiles).
  */
+FORCE_INLINE
 void transpose_and_pack(DataflowBuffer& transposed_dfb, DataflowBuffer& dest_dfb, uint32_t Wt) {
     constexpr uint32_t one_tile = 1;
 
@@ -224,6 +226,7 @@ void sync_packer_unpacker(DataflowBuffer& packer_unpacker_sync_dfb) {
  * @param dst_dfb Destination circular buffer to which tile will be copied.
  * @param dst_tile_id Index of the tile in the destination circular buffer.
  */
+FORCE_INLINE
 void copy_tile_between_cbs(
     uint32_t& last_used_cb_index,
     DataflowBuffer& src_dfb,
