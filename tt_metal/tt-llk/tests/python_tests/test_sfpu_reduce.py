@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -37,8 +38,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
-
-from conftest import skip_for_blackhole
 
 max_tiles = 4
 
