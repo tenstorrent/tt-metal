@@ -80,12 +80,15 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      # 2-D matrix: 3 boards x 5 shards = 15 cells off the ONE arch-agnostic
-      # build. Each board's viommu runner label + device arch come from the
-      # include block (added to every shard cell of that board). inputs.arch /
-      # inputs.runner-label are no longer used — the boards are fixed here.
+      # 3-D matrix: 3 boards x 2 shapes x 5 shards = 30 cells off the ONE
+      # arch-agnostic build. include entries attach per-board (label, arch)
+      # and per-shape (perf_shape) — GitHub merges an include entry into every
+      # cell whose existing keys it matches, so `hw:` entries fan across all
+      # shapes/shards and `shape:` entries fan across all boards/shards.
+      # inputs.arch / inputs.runner-label are unused — boards are fixed here.
       matrix:
         hw: [N150, N300, P100a]
+        shape: [small, large]
         shard: [1, 2, 3, 4, 5]
         include:
           - hw: N150
@@ -97,11 +100,16 @@ jobs:
           - hw: P100a
             label: tt-ubuntu-2204-P100a-viommu-stable
             arch: blackhole
+          - shape: small
+            perf_shape: "1,1,32,32"
+          - shape: large
+            perf_shape: "1,1,1024,1024"
     runs-on: ${{ matrix.label }}
     container:
       image: ${{ contains(matrix.label, 'tt-ubuntu-2204') && needs.check-harbor.outputs.harbor-prefix || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
       env:
         ARCH_NAME: ${{ matrix.arch }}
+        PERF_SHAPE: ${{ matrix.perf_shape }}   # test_eltwise_operations.py reads this
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -172,8 +180,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # Per-board, per-shard artifact so the combine job can group by board.
-          name: eltwise-perf-results-${{ matrix.hw }}-shard-${{ matrix.shard }}
+          # Per-board, per-shape, per-shard artifact so the combine job can
+          # group by (board, shape).
+          name: eltwise-perf-results-${{ matrix.hw }}-${{ matrix.shape }}-shard-${{ matrix.shard }}
           path: /work/shard-${{ matrix.shard }}.json
           if-no-files-found: error
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
@@ -183,33 +192,35 @@ jobs:
     needs: test-dispatch
     if: always()
     runs-on: ubuntu-latest
-    # One combine per board: merge that board's 5 shards into a single
-    # board-named JSON. Runs even if some cells failed (if: always()).
+    # One combine per (board, shape): merge that combo's 5 shards into a single
+    # named JSON. 3 boards x 2 shapes = 6 combine jobs. Runs even if some cells
+    # failed (if: always()).
     strategy:
       fail-fast: false
       matrix:
         hw: [N150, N300, P100a]
+        shape: [small, large]
     steps:
-      - name: ⬇️ Download this board's shard results
+      - name: ⬇️ Download this (board, shape) shard results
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: eltwise-perf-results-${{ matrix.hw }}-shard-*
+          pattern: eltwise-perf-results-${{ matrix.hw }}-${{ matrix.shape }}-shard-*
           merge-multiple: true
           path: shards
       - name: 🧩 Merge shards into one JSON
         run: |
           set -euo pipefail
-          echo "Shard files for ${{ matrix.hw }}:"; ls -la shards/
+          echo "Shard files for ${{ matrix.hw }}/${{ matrix.shape }}:"; ls -la shards/
           curl -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-performance-dashboard/main/perf_measurement_script.py -o driver.py
           python3 driver.py --merge shards/shard-*.json
-          # Name the combined file after the board so our repo can tell them apart.
+          # Name the combined file after the board+shape so our repo can tell them apart.
           f=$(ls -1 eltwise_perf_results_*_final.json | head -1)
-          mv "$f" "eltwise_perf_results_${{ matrix.hw }}.json"
-          echo "Combined:"; ls -la "eltwise_perf_results_${{ matrix.hw }}.json"
+          mv "$f" "eltwise_perf_results_${{ matrix.hw }}_${{ matrix.shape }}.json"
+          echo "Combined:"; ls -la "eltwise_perf_results_${{ matrix.hw }}_${{ matrix.shape }}.json"
         shell: bash
-      - name: 📤 Upload combined per-board JSON
+      - name: 📤 Upload combined per-(board,shape) JSON
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: eltwise-perf-results-${{ matrix.hw }}
-          path: eltwise_perf_results_${{ matrix.hw }}.json
+          name: eltwise-perf-results-${{ matrix.hw }}-${{ matrix.shape }}
+          path: eltwise_perf_results_${{ matrix.hw }}_${{ matrix.shape }}.json
           if-no-files-found: error
