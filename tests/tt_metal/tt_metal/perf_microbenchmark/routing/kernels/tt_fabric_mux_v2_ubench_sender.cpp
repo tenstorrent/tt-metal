@@ -28,10 +28,8 @@ void kernel_main() {
     const uint32_t num_packets = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t packet_header_buffer_address = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const uint32_t payload_buffer_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dummy_target_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t dummy_receiver_noc_xy_encoding = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const uint32_t seed = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_delay_cycles = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t drainer_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
     const uint8_t drainer_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
@@ -83,12 +81,9 @@ void kernel_main() {
         }
     }
 
-    DEVICE_PRINT("Sender reached the barrier, waiting for start cycle: {}\n", start_signal_ptr[0]);
     const uint32_t start_cycle = start_signal_ptr[0];
     while (!reached_start_cycle(start_cycle)) {
     }
-
-    DEVICE_PRINT("Sender starting after the delay\n");
 
     sender.open();
 
@@ -102,8 +97,6 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
     uint32_t cached_free_write_slots = 0;
 
-    DEVICE_PRINT("Sender starting to send {} packets of size {} bytes\n", num_packets, packet_payload_size_bytes);
-
     for (uint32_t packet_idx = 0; packet_idx < num_packets; ++packet_idx) {
         while (cached_free_write_slots == 0) {
             cached_free_write_slots = sender.get_num_free_write_slots();
@@ -113,10 +106,8 @@ void kernel_main() {
             packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
         cached_free_write_slots--;
     }
-    DEVICE_PRINT("Sender finished sending all packets\n");
 
     sender.close();
-    DEVICE_PRINT("Sender closed\n");
     const uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
     const uint64_t bytes_sent = static_cast<uint64_t>(num_packets) * packet_payload_size_bytes;
 

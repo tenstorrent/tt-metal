@@ -147,18 +147,6 @@ void enqueue_single_device_mesh_program(
     tt::tt_metal::distributed::Finish(command_queue);
 }
 
-void enqueue_single_device_mesh_program(const MeshDevicePtr& mesh_device, tt::tt_metal::Program&& program) {
-    const auto zero_coordinate =
-        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
-    const auto device_range = tt::tt_metal::distributed::MeshCoordinateRange(zero_coordinate, zero_coordinate);
-    tt::tt_metal::distributed::MeshWorkload workload;
-    workload.add_program(device_range, std::move(program));
-
-    auto& command_queue = mesh_device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueMeshWorkload(command_queue, workload, false);
-    tt::tt_metal::distributed::Finish(command_queue);
-}
-
 SenderResultSummary read_and_validate_sender_results(
     tt::tt_metal::IDevice* device,
     const std::vector<SenderExecutionContext>& sender_execution_contexts,

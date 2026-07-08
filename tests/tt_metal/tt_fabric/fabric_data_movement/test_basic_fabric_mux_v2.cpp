@@ -245,8 +245,7 @@ private:
 };
 
 std::optional<SenderMemoryLayout> try_build_sender_memory_layout(
-    const MeshDevicePtr& device, uint32_t packet_payload_size_bytes, const TestCaseConfig& test_case) {
-    (void)test_case;
+    const MeshDevicePtr& device, uint32_t packet_payload_size_bytes) {
     AlignedL1Cursor cursor(device);
     SenderMemoryLayout layout{};
     layout.test_results_address = cursor.reserve(kTestResultsSizeBytes);
@@ -709,8 +708,8 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
     ASSERT_TRUE(sender_receiver_assignments.has_value())
         << "Case " << test_case.name << " could not assign sender and receiver worker cores";
 
-    auto sender_memory = try_build_sender_memory_layout(
-        routing_selection->sender_device, test_runtime_config.packet_payload_size_bytes, test_case);
+    auto sender_memory =
+        try_build_sender_memory_layout(routing_selection->sender_device, test_runtime_config.packet_payload_size_bytes);
     ASSERT_TRUE(sender_memory.has_value())
         << "Case " << test_case.name << " sender worker memory layout exceeds worker L1 budget for payload size "
         << test_runtime_config.packet_payload_size_bytes;

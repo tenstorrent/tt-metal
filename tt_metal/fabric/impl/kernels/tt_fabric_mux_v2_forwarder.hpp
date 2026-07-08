@@ -4,10 +4,7 @@
 
 #pragma once
 
-#include <array>
-
 #include "tt_metal/fabric/impl/kernels/tt_fabric_mux_v2_kernel_common.hpp"
-#include "api/debug/device_print.h"
 
 namespace tt::tt_fabric::mux_v2::kernel {
 
@@ -66,7 +63,6 @@ inline void try_forward_channel_packet(
     ForwarderChannel& channel,
     ForwarderSharedTridRingPublisher& shared_trid_ring,
     uint32_t& cached_downstream_free_slots,
-    uint8_t noc,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection) {
     if constexpr (DrainMode) {
         while (cached_downstream_free_slots == 0) {
@@ -93,11 +89,11 @@ inline void try_forward_channel_packet(
     if constexpr (!DrainMode) {
         const uint32_t trid = shared_trid_ring.get_next_transaction_id();
         fabric_connection.send_current_slot_stateful_non_blocking_from_address_with_trid(
-            packet_l1_address, packet_size_bytes, trid, noc);
+            packet_l1_address, packet_size_bytes, trid, noc_index);
         shared_trid_ring.publish_logical_channel_id(logical_channel_id);
     } else {
         fabric_connection.send_current_slot_stateful_non_blocking_from_address(
-            packet_l1_address, packet_size_bytes, noc);
+            packet_l1_address, packet_size_bytes, noc_index);
     }
 
     cached_downstream_free_slots -= 1;
@@ -109,7 +105,6 @@ inline bool service_channels(
     ForwarderContext& context,
     ForwarderSharedTridRingPublisher& shared_trid_ring,
     uint32_t& cached_downstream_free_slots,
-    uint8_t noc,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection) {
     bool any_pending_channel = false;
 
@@ -122,7 +117,7 @@ inline bool service_channels(
 
         any_pending_channel = true;
         try_forward_channel_packet<DrainMode>(
-            channel_idx, channel, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection);
+            channel_idx, channel, shared_trid_ring, cached_downstream_free_slots, fabric_connection);
     }
 
     return any_pending_channel;
@@ -139,12 +134,11 @@ inline void run_forwarder(ForwarderContext& context) {
     auto fabric_connection = build_downstream_sender();
     // Tracked downstream writes are issued on the forwarder's local noc_index directly.
     // The manager retires them from the sibling RISC by polling 1 - noc_index.
-    const uint8_t noc = noc_index;
     fabric_connection.open<false>();
     noc_semaphore_wait(manager_init_done_sem_ptr, 1);
 
     shared_trid_ring.initialize();
-    fabric_connection.setup_stateful_send_cmd_bufs</*posted=*/false>(noc);
+    fabric_connection.setup_stateful_send_cmd_bufs</*posted=*/false>(noc_index);
     const uint8_t data_noc_cmd_buf = fabric_connection.get_stateful_send_data_noc_cmd_buf();
     uint32_t cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
 
@@ -152,18 +146,17 @@ inline void run_forwarder(ForwarderContext& context) {
         for (uint32_t service_pass = 0;
              service_pass < kForwarderServiceBurstSize && shared_control_ptr->drain_initiated == 0;
              ++service_pass) {
-            if (!service_channels<false>(
-                    context, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection)) {
+            if (!service_channels<false>(context, shared_trid_ring, cached_downstream_free_slots, fabric_connection)) {
                 break;
             }
         }
     }
 
     shared_control_ptr->forwarder_stop_tracking = 1;
-    noc_clear_packet_tag(noc, data_noc_cmd_buf);
+    noc_clear_packet_tag(noc_index, data_noc_cmd_buf);
 
     while (true) {
-        if (!service_channels<true>(context, shared_trid_ring, cached_downstream_free_slots, noc, fabric_connection)) {
+        if (!service_channels<true>(context, shared_trid_ring, cached_downstream_free_slots, fabric_connection)) {
             break;
         }
     }

@@ -10,9 +10,9 @@
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_v2_kernel_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
+#include <hostdevcommon/fabric_mux_v2_common.h>
 
 namespace tt::tt_fabric::mux_v2::kernel {
 
@@ -121,9 +121,6 @@ inline void initialize_shared_control_block(
     shared_control_ptr->drain_initiated = 0;
     shared_control_ptr->forwarder_stop_tracking = 0;
     shared_control_ptr->forwarder_done = 0;
-    shared_control_ptr->reserved_0 = 0;
-    shared_control_ptr->reserved_1 = 0;
-    shared_control_ptr->reserved_2 = 0;
 }
 
 inline void initialize_shared_ring_header() {

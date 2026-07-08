@@ -107,7 +107,6 @@ private:
 
         size_t get_address() const { return base_address; }
         size_t get_end_address() const { return base_address + size_bytes; }
-        size_t get_total_size() const { return size_bytes; }
     };
 
     size_t noc_aligned_address_size_bytes_ = 0;
@@ -127,7 +126,6 @@ struct SenderMemoryMap {
     uint32_t start_signal_address = 0;
     uint32_t ready_count_address = 0;
     uint32_t packet_header_buffer_address = 0;
-    uint32_t payload_buffer_address = 0;
     uint32_t dummy_target_address = 0;
     uint32_t end_address = 0;
 };
@@ -156,7 +154,6 @@ SenderMemoryMap create_sender_memory_map(uint32_t base_l1_address, uint32_t payl
     current_address += kPacketHeaderBufferSizeBytes;
 
     current_address = align_up(current_address, kNocAddressPaddingBytes);
-    memory_map.payload_buffer_address = current_address;
     memory_map.dummy_target_address = current_address;
     current_address += payload_size_bytes;
 
@@ -255,7 +252,6 @@ void create_sender_kernel(
     uint32_t num_packets,
     uint32_t packet_payload_size_bytes,
     uint32_t dummy_receiver_noc_xy_encoding,
-    uint32_t seed,
     uint32_t master_sender_noc_xy_encoding,
     uint32_t expected_ready_count,
     bool is_master_sender,
@@ -276,10 +272,8 @@ void create_sender_kernel(
         num_packets,
         packet_payload_size_bytes,
         sender_memory_map.packet_header_buffer_address,
-        sender_memory_map.payload_buffer_address,
         sender_memory_map.dummy_target_address,
         dummy_receiver_noc_xy_encoding,
-        seed,
         kSenderStartDelayCycles,
         static_cast<uint32_t>(drainer_virtual_core.x),
         static_cast<uint32_t>(drainer_virtual_core.y),
@@ -407,7 +401,6 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
             num_packets,
             resolved_payload_size_bytes,
             dummy_receiver_noc_xy_encoding,
-            0x12340000u + static_cast<uint32_t>(sender_idx),
             master_sender_noc_xy_encoding,
             expected_ready_count,
             sender_idx == 0,

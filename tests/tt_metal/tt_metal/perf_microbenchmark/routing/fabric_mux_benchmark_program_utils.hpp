@@ -60,7 +60,6 @@ void create_data_movement_kernel(
 
 void enqueue_single_device_mesh_program(
     const MeshDevicePtr& mesh_device, ChipId physical_device_id, tt::tt_metal::Program&& program);
-void enqueue_single_device_mesh_program(const MeshDevicePtr& mesh_device, tt::tt_metal::Program&& program);
 
 SenderResultSummary read_and_validate_sender_results(
     tt::tt_metal::IDevice* device,
