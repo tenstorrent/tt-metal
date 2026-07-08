@@ -326,9 +326,10 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     # N300 B12/S8192: HiFi2 is lossless for bf8xbf8 (tt-perf-report advice) and
-    # 2x HiFi4 throughput. MLPwi is bf8 x bf8 here.
+    # 2x HiFi4 throughput. fp32_dest_acc_en=False lifts subblock h*w cap to 8
+    # (needed for the minimal_matmul 4x2 subblock winner).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -339,9 +340,10 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     if max_seq_len == 512 and max_batch in (8, 16, 32):
         # fp32_dest_acc_en=False for MinimalMatmul subblock 8x1 (h*w=8 > 4 cap).
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
-    # N300 B12/S8192: HiFi2 lossless for bf8xbf8, 2x HiFi4 throughput.
+    # N300 B12/S8192: HiFi2 lossless for bf8xbf8. fp32_dest_acc_en=False for the
+    # minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -350,9 +352,10 @@ def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
-    # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). QKV is bf16 act x bf8 weight.
+    # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
+    # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -361,9 +364,10 @@ def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_ba
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
-    # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). AttnOut is bf16 act x bf8 weight.
+    # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
+    # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -562,9 +566,21 @@ def _b32s512_sequence_program_config(
 
 def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size, intermediate_size):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len != 512 or max_batch != 32:
-        return None
     if hidden_size != 1024 or intermediate_size != 4096:
+        return None
+    # N300 B12/S8192: MLPwi (M=98304 K=1024 N=4096 +GELU) is the slowest matmul
+    # (42.7ms default). Sweep winner m16/k8/n4 sb4x2 = 9.94ms (4.3x). The 2D
+    # mcast config can't be used at this M (per_core_M blows L1); minimal_matmul
+    # streams M in blocks. Runs on the 8x8=64-core grid.
+    if max_seq_len == 8192 and mesh_device is not None and not ttnn_is_blackhole(mesh_device):
+        g = mesh_device.compute_with_storage_grid_size()
+        if g.x >= 8 and g.y >= 8:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=16, K_block_size=8, N_block_size=4,
+                subblock_h=4, subblock_w=2,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+    if max_seq_len != 512 or max_batch != 32:
         return None
     if mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
@@ -584,9 +600,19 @@ def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
 
 def _mlp_wo_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size, intermediate_size):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len != 512 or max_batch != 32:
-        return None
     if hidden_size != 1024 or intermediate_size != 4096:
+        return None
+    # N300 B12/S8192: MLPwo (M=98304 K=4096 N=1024) 13.9ms default. Sweep winner
+    # m16/k16/n4 sb4x2 = 6.76ms (2.1x). minimal_matmul streams M.
+    if max_seq_len == 8192 and mesh_device is not None and not ttnn_is_blackhole(mesh_device):
+        g = mesh_device.compute_with_storage_grid_size()
+        if g.x >= 8 and g.y >= 8:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=16, K_block_size=16, N_block_size=4,
+                subblock_h=4, subblock_w=2,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+    if max_seq_len != 512 or max_batch != 32:
         return None
     if mesh_device is None or not ttnn_is_blackhole(mesh_device):
         return None
