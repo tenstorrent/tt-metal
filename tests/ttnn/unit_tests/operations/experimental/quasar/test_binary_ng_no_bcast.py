@@ -185,10 +185,17 @@ _BIG2_WIDTH_G = _width_sharded_config([32 * 32, 8 * 32], ttnn.CoreRangeSet({ttnn
 # Fused activations exercised by the op, each with its torch golden. A lhs (pre) activation applies to
 # operand A before the binary op; a post activation applies to the result. RELU is ResNet50's fused
 # residual activation; SILU is Llama's SwiGLU gate (models/tt_transformers/tt/mlp.py emits
-# ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])).
+# ttnn.mul(w1_out, w3_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])). GELU/TANH/SQUARE/SIGMOID
+# are further activations the WH-baseline matrix (QUASAR_LLK_GAPS.md Table 2) marks SUPPORTED on Quasar
+# (each has a Quasar ckernel + SfpuType + an #else ARCH_QUASAR compute-API branch); they are exercised by
+# test_no_bcast_activation_supported below.
 _ACT_GOLDEN = {
     ttnn.UnaryOpType.RELU: torch.relu,
     ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
+    ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+    ttnn.UnaryOpType.TANH: torch.tanh,
+    ttnn.UnaryOpType.SQUARE: torch.square,
+    ttnn.UnaryOpType.SIGMOID: torch.sigmoid,
 }
 
 
@@ -348,6 +355,47 @@ def test_no_bcast_lhs_silu_swiglu(device, layout):
         mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
         shape = _HEIGHT_SHAPE
     _run(device, "multiply", mem_config, ttnn.bfloat16, shape, lhs_act=ttnn.UnaryOpType.SILU, pcc=0.99)
+
+
+# Class-(C) coverage headroom (QUASAR_PARITY_GAPS.md §5): activations the WH-baseline matrix
+# (QUASAR_LLK_GAPS.md Table 2) marks SUPPORTED on Quasar but that this op previously never exercised —
+# only relu and silu were tested. gelu/tanh/square/sigmoid are the model-relevant fusions and each has a
+# Quasar ckernel + SfpuType + an #else ARCH_QUASAR compute-API branch, so they should fuse today. This
+# validates that matrix claim end-to-end through the op; a failure means either an op-layer gap or an
+# over-optimistic matrix cell (both worth knowing).
+_LLK_SUPPORTED_ACTS = [
+    ttnn.UnaryOpType.GELU,
+    ttnn.UnaryOpType.TANH,
+    ttnn.UnaryOpType.SQUARE,
+    ttnn.UnaryOpType.SIGMOID,
+]
+
+
+@pytest.mark.parametrize("act", _LLK_SUPPORTED_ACTS)
+@pytest.mark.parametrize("position", ["post", "lhs"])
+@pytest.mark.parametrize("layout", ["interleaved", "height"])
+def test_no_bcast_activation_supported(device, act, position, layout):
+    # Each activation fused on the SFPU multiply kernel, as a post activation (act(a*b)) and as an lhs
+    # (pre) activation (act(a)*b — the post_lhs DFB self-loop path that needs Quasar's pack_init retarget).
+    # bf16; interleaved and height-sharded. These activations are accurate in bf16, so _run uses the file's
+    # default _PCC[bf16] (0.997) — not the looser 0.99 the divide/silu tests need.
+    #
+    # gelu is the exception on Quasar: tanh/square/sigmoid compile + pass (sim-certified), but the Quasar
+    # gelu LLK bridge (hw/ckernels/quasar/.../llk_sfpu/ckernel_sfpu_gelu.h) fails to JIT-compile —
+    # gelu_init() calls _sfpu_load_config32_ *unqualified*, but it lives in namespace ckernel::math
+    # (cmath_common.h); the sibling topk bridge calls it qualified, so only gelu is affected. It still
+    # runs on Wormhole. TODO: un-skip when the LLK bridge is fixed (tenstorrent/tt-metal#49314). See
+    # binary_ng/QUASAR_PARITY_GAPS.md §5 and QUASAR_LLK_GAPS.md (Table 2, gelu row) for the one-line fix.
+    if _on_quasar() and act == ttnn.UnaryOpType.GELU:
+        pytest.skip("Quasar gelu LLK bridge fails to compile (_sfpu_load_config32_ unqualified in ckernel_sfpu_gelu.h)")
+    if layout == "interleaved":
+        mem_config = ttnn.DRAM_MEMORY_CONFIG
+        shape = _INTERLEAVED_SHAPE
+    else:
+        mem_config = _height_sharded_config(_HEIGHT_SHARD, _HEIGHT_GRID)
+        shape = _HEIGHT_SHAPE
+    act_kwarg = {"post_act": act} if position == "post" else {"lhs_act": act}
+    _run(device, "multiply", mem_config, ttnn.bfloat16, shape, **act_kwarg)
 
 
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])

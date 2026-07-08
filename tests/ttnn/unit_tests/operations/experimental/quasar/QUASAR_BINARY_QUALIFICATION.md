@@ -42,14 +42,18 @@ op FAILS on sim
 ```
 
 This formalizes the manual bf16-mul investigation (PCC ~0.02): run the LLK SFPU float test for the
-same `(op, dtype)`; if it passes, the gap is in the op, not the LLK/sim.
+same `(op, dtype)`; if it passes, the gap is in the op, not the LLK/sim. **In `--run` default mode the
+driver does this automatically** — it fires the LLK probe for exactly the cells whose op failed, so a
+green run never pays the foundation-compile cost.
 
-**Reading foundation-probe failures.** `FAIL(2)` is a *compile-step* failure (not a numeric one) and is
-transient-prone on a cold build cache or the first probe in a session — the driver retries it once. If
-it still fails, re-run that single `--test-id` in isolation (`run_test.sh run --test-id ...`): a clean
-isolated pass means it was transient; a repeat failure is a real tt-llk compile gap. A foundation
-`FAIL` while the op `PASS`es (the "FOUNDATION-ONLY FAIL" verdict) means the failing LLK path is one our
-op does not exercise — not a blocker for us, but worth confirming it is not a narrow LLK gap.
+**Reading foundation-probe failures.** A foundation probe can fail transiently in a grid run — a
+`FAIL(2)` *compile-step* failure on a cold build cache / parallel-compile contention, or a `FAIL(1)`
+*test-run* failure when the probe races the sim the op probe just used (same localhost port). The driver
+disambiguates both automatically: on any exit-1/2 it re-runs the same `--test-id` in isolation and reports
+`FLAKY` / `FLAKY_COMPILE` when that clean re-run passes (transient — no action) versus `FAIL(1)` / `FAIL(2)`
+only when it reproduces (a real tt-llk gap). Hangs (exit 5) are recorded as `HANG`, not retried. A
+reproducible foundation `FAIL` while the op `PASS`es (the "FOUNDATION-ONLY FAIL" verdict) means the failing
+LLK path is one our op does not exercise — not a blocker for us, but worth confirming it is not a narrow LLK gap.
 
 ## Filing a foundation gap (which repo)
 
@@ -63,12 +67,12 @@ Use craq-sim's simulator error taxonomy (the sim is intentionally stricter than 
 
 ## The driver: `qualify_quasar_binary.py`
 
-The authoritative op-cell ↔ LLK-test mapping lives in the driver. It runs a **single representative
-LLK variant** per cell (not the full sweep — that is craq-sim CI's job) by collecting LLK ids
-through the harness venv (`tt-llk/tests/.venv`), filtering by exact id-substrings, and running the
-first match as one `--test-id` through `run_test.sh` (flock-serialised sim access). Op probes run
-under the QSR-sim env (`TT_METAL_SIMULATOR` + slow dispatch; **not** `TT_METAL_MOCK_CLUSTER_DESC_PATH`,
-which expects a cluster — not soc — descriptor).
+The authoritative op-cell ↔ LLK-test mapping lives in the driver. It runs our op probe per cell and —
+on op-failure, or with `--force-foundation` — a **single representative LLK variant** (not the full
+sweep — that is craq-sim CI's job) by collecting LLK ids through the harness venv (`tt-llk/tests/.venv`),
+filtering by exact id-substrings, and running the first match as one `--test-id` through `run_test.sh`
+(flock-serialised sim access). Op probes run under the QSR-sim env (`TT_METAL_SIMULATOR` + slow dispatch;
+**not** `TT_METAL_MOCK_CLUSTER_DESC_PATH`, which expects a cluster — not soc — descriptor).
 
 ```bash
 # See the mapping (op cell -> LLK probe + op probe):
@@ -78,8 +82,12 @@ python qualify_quasar_binary.py --show-mapping
 # an LLK/op test is renamed or reparametrized:
 python qualify_quasar_binary.py --validate
 
-# Full grid on the sim; save a baseline:
+# Default grid on the sim (op probe per cell; the foundation LLK probe fires only for a cell whose op
+# FAILS, to localize it -- a green run pays no foundation-compile cost). Save a baseline:
 python qualify_quasar_binary.py --run --out baseline.json
+
+# Exhaustive: probe the foundation for EVERY cell too (slow; use on a sim/tt-llk bump):
+python qualify_quasar_binary.py --run --force-foundation --out baseline.json
 
 # Just one layer / a subset:
 python qualify_quasar_binary.py --run --layer op         --cells '*.bf16.*'
@@ -117,19 +125,38 @@ can tell "different family" from "unported". Scope: the FPU (`test_eltwise_binar
 
 ## Verify-on-bump procedure
 
-When bumping the tt-llk or craq-sim pin (or rebuilding the sim):
+When bumping the tt-llk pin, updating craq-sim, or rebuilding the sim. **The op unit test is the gate;
+the qualification harness is the localizer / discovery / recorder — run the test first.** (The harness's
+op layer only re-runs a subset of the unit test, so running it *first* would tell you strictly less; its
+foundation grid is expensive and overlaps craq-sim's own `quasar-llk.yml` sweep.)
 
-1. Rebuild the sim if craq-sim changed.
-2. `python qualify_quasar_binary.py --run --baseline <prev>.json --out <new>.json`.
-3. Read the diff:
-   - **REGRESSIONS** (was PASS, now not): if foundation regressed, file upstream; if only the op
-     regressed, it is ours.
-   - **PROGRESSIONS** (was not PASS, now PASS): enable the cell in op routing, drop the op-test skip,
-     and update `QUASAR_PARITY_GAPS.md`.
-4. Keep this baseline JSON as the new reference.
-
-The `expected` field in the mapping (`PASS` / `KNOWN_GAP` / `OP_COVERAGE_GAP`) flags a deviation
-even on a first run with no baseline.
+0. **Prep by trigger.**
+   - **craq-sim changed** → rebuild the sim: `cd /workspaces/craq-sim && ./make.py src/_out/release_qsr/libttsim.so`
+     (otherwise you are testing the old sim).
+   - **only tt-llk changed** → no sim rebuild needed: the op JIT-compiles kernels from the `tt_metal/tt-llk`
+     headers at run time. Just ensure the updated tt-llk is checked out (don't trust a stale kernel cache).
+1. **Run the op unit test first — this is the gate.** It is the fast, comprehensive, authoritative signal
+   for "does our op still work on the new foundation" (real FPU/SFPU paths, every layout, the fused
+   activations, PCC-vs-torch), under the QSR-sim env (see "The driver" above for the exact env):
+   ```bash
+   <QSR-sim env>  pytest tests/ttnn/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
+   ```
+   - **Green** → nothing regressed; the gate passes. Done (optionally do step 2).
+   - **Fails** → localize with step 3.
+2. **Cheap no-sim discovery (always worth it):** `qualify_quasar_binary.py --coverage` and
+   `--supports <op>` — did the bump *unblock* an LLK primitive you can now broaden the op into? Costs no
+   sim; a new headroom row is the prompt to add a cell + an op test + drop a skip (a "progression").
+3. **Localize a failure (only if step 1 failed):** `qualify_quasar_binary.py --run` (op-first) re-runs the
+   failing cell and fires the LLK probe on failure → **OP BUG** (foundation passes → fix in the op) vs
+   **FOUNDATION GAP** (LLK fails too → file tt-llk / craq-sim, not an op fix). See the triage rule above.
+4. **Optional — record a foundation baseline for the bump:**
+   `qualify_quasar_binary.py --run --force-foundation --baseline <prev>.json --out <new>.json` probes
+   *every* foundation cell (not just op-failed ones) and diffs:
+   - **REGRESSIONS** (was PASS, now not): if foundation regressed, file upstream; if only the op regressed, it is ours.
+   - **PROGRESSIONS** (was not PASS, now PASS): enable the cell in op routing, drop the op-test skip, update `QUASAR_PARITY_GAPS.md`.
+   Keep the new JSON as the reference. This is for a durable local record, not a required gate (craq-sim's
+   `quasar-llk.yml` already sweeps the whole LLK suite). The `expected` field
+   (`PASS` / `KNOWN_GAP` / `OP_COVERAGE_GAP`) flags a deviation even on a first run with no baseline.
 
 ## Pointers
 

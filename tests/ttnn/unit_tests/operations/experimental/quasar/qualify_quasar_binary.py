@@ -12,10 +12,12 @@ the two layers we build on into a single, repeatable, fast check:
   Foundation layer : the LLK binary micro-tests (run on the sim => transitively cover craq-sim).
   Op layer         : our ttnn binary op tests (test_binary_ng_no_bcast.py).
 
-For each capability cell (op x dtype x compute-path) it can run a single representative LLK
-variant and our op probe on the QSR sim, record a PASS/FAIL/SKIP grid, diff against a saved
-baseline (to surface regressions and progressions as tt-llk / craq-sim move), and print a triage
-verdict that localizes any op failure to the op layer vs the foundation.
+For each capability cell (op x dtype x compute-path) it runs our op probe on the QSR sim and -- when
+that op probe FAILS (or with --force-foundation) -- a single representative LLK variant to localize
+the failure. It records a PASS/FAIL/SKIP grid, diffs against a saved baseline (to surface regressions
+and progressions as tt-llk / craq-sim move), and prints a triage verdict that localizes any op failure
+to the op layer vs the foundation. The foundation probe is expensive (a full compile-producer), so by
+default it is fired only on demand; a green op run does not pay for it.
 
 Why a single LLK variant: the LLK suites are huge (the FPU file alone is ~55k variants) and the
 full sweep is exactly what craq-sim's CI runs. A local *probe* only needs one representative
@@ -32,7 +34,8 @@ Usage:
     python qualify_quasar_binary.py --validate                       # resolve every cell (no sim)
     python qualify_quasar_binary.py --coverage                       # LLK supports but our op doesn't (no sim)
     python qualify_quasar_binary.py --supports pow                   # does LLK already have op X? (no sim)
-    python qualify_quasar_binary.py --run --out baseline.json        # full grid on the sim
+    python qualify_quasar_binary.py --run --out baseline.json        # op grid + foundation on op-fail
+    python qualify_quasar_binary.py --run --force-foundation --out base.json  # exhaustive op+LLK grid (sim bump)
     python qualify_quasar_binary.py --run --baseline baseline.json --out new.json
     python qualify_quasar_binary.py --run --layer op --cells '*.bf16.*'
 """
@@ -364,11 +367,18 @@ def run_llk(cell: Cell, sim_dir: Path, timeout: int) -> str:
         if not test_id:
             return "NO_MATCH"
         rc = _run_llk_once(cell, test_id, sim_dir, timeout)
-        # run_test.sh exit 2 = compile-step failure, which is transient-prone on a cold build cache /
-        # the first probe in a session (a back-to-back grid run hit it on the first FPU cells while an
-        # isolated re-run compiled clean). Retry compile failures once; a real gap fails both times.
-        if rc == 2:
-            rc = _run_llk_once(cell, test_id, sim_dir, timeout)
+        # A foundation probe can fail transiently in a grid run: a compile-step failure (exit 2) on a
+        # cold build cache / parallel-compile contention, OR a test-run failure (exit 1) when the probe
+        # races the sim the op probe just used (same localhost port) -- both were observed passing on an
+        # isolated re-run. So disambiguate any exit-1/2 rather than trust one attempt: re-run the single
+        # --test-id in isolation. A clean isolated pass => transient (FLAKY / FLAKY_COMPILE, not a real
+        # gap); a repeat failure => a reproducible tt-llk gap. Hangs (exit 5) / env errors are NOT retried.
+        # (The isolated retry can double a cell's foundation cost, but only for a cell that first failed.)
+        if rc in (1, 2):
+            rc2 = _run_llk_once(cell, test_id, sim_dir, timeout)
+            if rc2 == 0:
+                return "FLAKY_COMPILE" if rc == 2 else "FLAKY"
+            rc = rc2  # reproducible -> report the retry's code (FAIL(1) / FAIL(2) / ...)
     except subprocess.TimeoutExpired:
         return "HANG"  # record HANG and let the grid finish (baseline still gets written)
     return "PASS" if rc == 0 else f"FAIL({rc})"
@@ -410,14 +420,17 @@ def triage(cell: Cell, foundation: str, op: str) -> str:
             return "OP BUG (foundation passes => fix in the op layer)"
         if found_failed:
             return "FOUNDATION GAP (LLK fails too => file tt-llk / craq-sim; not an op fix)"
+        if foundation in ("FLAKY_COMPILE", "FLAKY"):
+            return "op fails; LLK probe was only flaky (transient) => re-run the probe in isolation to localize"
         if foundation in ("NO_LLK", "NO_MATCH"):
             return "KNOWN GAP (no foundation primitive for this cell)"
-        return "foundation not run (--layer op): run the LLK probe to localize"
-    # Op is fine but the foundation probe failed: the failing LLK path is one the op does not
-    # exercise (e.g. a representative variant that won't compile). Not a blocker for us, but the
-    # probe needs a look -- it is either a narrow LLK gap or a probe/harness artifact.
-    if found_failed and op in ("PASS", "SKIP", "NO_OP_TEST"):
-        return "FOUNDATION-ONLY FAIL: LLK probe failed but op does not => probe variant/harness issue or a foundation path the op doesn't exercise; inspect the probe"
+        return "op failed; foundation NOT probed => re-run with --force-foundation (or --layer foundation) to localize"
+    # Op is fine. Only flag genuinely-actionable foundation states (a reproducible LLK fail on a path the
+    # op doesn't exercise); a not-probed or flaky-compile foundation is not actionable and stays quiet.
+    if found_failed:
+        return "FOUNDATION-ONLY FAIL: LLK probe failed but op does not => reproducible LLK path the op doesn't exercise; inspect the probe"
+    if foundation in ("FLAKY_COMPILE", "FLAKY"):
+        return "foundation probe was flaky (transient; isolated re-run passed) -- no action"
     return ""
 
 
@@ -451,22 +464,18 @@ def cmd_run(args) -> int:
     sim_dir = Path(args.sim_dir)
     ensure_sim(sim_dir)
     cells = select_cells(args.cells)
-    do_found = args.layer in ("both", "foundation")
     do_op = args.layer in ("both", "op")
+    # Foundation probing is expensive (a full compile-producer per cell). In the default `both` mode we
+    # run the OP probe first and fire the foundation (LLK) probe only for cells whose op FAILED -- the
+    # only time we need to localize op-vs-foundation (the runbook's triage rule). `--layer foundation`
+    # probes every selected cell (foundation-only); `--force-foundation` restores the exhaustive
+    # op+foundation grid on every cell (use it on a sim/tt-llk bump, when checking the foundation is
+    # exactly the point).
+    # --force-foundation only widens the default `both` mode to probe every cell; it does NOT override an
+    # explicit `--layer op` (which stays strictly op-only, per its contract and the flag's help text).
+    force_found = args.layer == "foundation" or (args.force_foundation and args.layer == "both")
 
     results = {}
-    print(f"Running {len(cells)} cell(s) on {sim_dir}  [layer={args.layer}]\n")
-    print(f"{'cell':<18} {'foundation':<12} {'op':<10} verdict")
-    print("-" * 78)
-    for cell in cells:
-        f_status = run_llk(cell, sim_dir, args.timeout) if do_found else "-"
-        o_status = run_op(cell, sim_dir, args.timeout) if do_op else "-"
-        verdict = ""
-        if do_op:
-            verdict = "; ".join(v for v in (triage(cell, f_status, o_status), expected_note(cell, o_status)) if v)
-        results[cell.id] = {"foundation": f_status, "op": o_status, "expected": cell.expected}
-        print(f"{cell.id:<18} {f_status:<12} {o_status:<10} {verdict}")
-
     record = {
         "timestamp": args.now or datetime.datetime.now().isoformat(timespec="seconds"),
         "tt_metal_sha": git_sha(REPO_ROOT),
@@ -474,11 +483,34 @@ def cmd_run(args) -> int:
         "craq_sim_sha": git_sha(Path("/workspaces/craq-sim")),
         "sim_dir": str(sim_dir),
         "layer": args.layer,
+        "force_foundation": bool(args.force_foundation),
         "results": results,
     }
+    mode = args.layer + ("+force-foundation" if args.force_foundation else "")
+    print(f"Running {len(cells)} cell(s) on {sim_dir}  [layer={mode}]\n", flush=True)
+    print(f"{'cell':<18} {'foundation':<12} {'op':<10} verdict", flush=True)
+    print("-" * 78, flush=True)
+    for cell in cells:
+        o_status = run_op(cell, sim_dir, args.timeout) if do_op else "-"
+        op_failed = o_status in ("FAIL", "NOCOLLECT", "HANG")
+        if force_found:
+            f_status = run_llk(cell, sim_dir, args.timeout)
+        elif args.layer == "both" and op_failed:
+            f_status = run_llk(cell, sim_dir, args.timeout)  # localize the failure on demand
+        elif args.layer == "both":
+            f_status = "NO_LLK" if cell.llk_test is None else "NOT_PROBED"  # op ok -> foundation not needed
+        else:  # --layer op
+            f_status = "-"
+        verdict = ""
+        if do_op:
+            verdict = "; ".join(v for v in (triage(cell, f_status, o_status), expected_note(cell, o_status)) if v)
+        results[cell.id] = {"foundation": f_status, "op": o_status, "expected": cell.expected}
+        print(f"{cell.id:<18} {f_status:<12} {o_status:<10} {verdict}", flush=True)
+        if args.out:  # write incrementally so a later hang/timeout still leaves a partial grid
+            Path(args.out).write_text(json.dumps(record, indent=2) + "\n")
+
     if args.out:
-        Path(args.out).write_text(json.dumps(record, indent=2) + "\n")
-        print(f"\nWrote {args.out}")
+        print(f"\nWrote {args.out}", flush=True)
     if args.baseline:
         diff_baseline(args.baseline, record)
     return 0
@@ -492,11 +524,15 @@ def diff_baseline(baseline_path: str, current: dict) -> None:
         f"sim {base.get('craq_sim_sha')}->{current['craq_sim_sha']}) ==="
     )
     regressions, progressions = [], []
+    # States that carry no comparable signal: not-run ("-"), foundation skipped on an op-pass
+    # ("NOT_PROBED"), or an inconclusive transient ("FLAKY_COMPILE"). Never diff these either way
+    # (else an on-demand run that didn't probe a foundation cell would look like a regression).
+    INCONCLUSIVE = (None, "-", "NOT_PROBED", "FLAKY_COMPILE", "FLAKY")
     for cell_id, cur in current["results"].items():
         prev = base.get("results", {}).get(cell_id, {})
         for layer in ("foundation", "op"):
             b, c = prev.get(layer), cur.get(layer)
-            if b is None or c in (None, "-") or b == c:
+            if b in INCONCLUSIVE or c in INCONCLUSIVE or b == c:
                 continue
             if b == "PASS" and c != "PASS":
                 regressions.append(f"{cell_id}/{layer}: {b} -> {c}")
@@ -684,6 +720,13 @@ def main() -> int:
         help="ask whether the LLK binary suite already supports OP (e.g. pow, gt) before broadening",
     )
     p.add_argument("--layer", choices=["both", "foundation", "op"], default="both")
+    p.add_argument(
+        "--force-foundation",
+        action="store_true",
+        help="in --layer both, probe the foundation (LLK) for EVERY cell, not just op-failed cells "
+        "(exhaustive, slow). Default: foundation is probed on-demand only when a cell's op fails. "
+        "Use on a sim/tt-llk bump, when checking the foundation is the point.",
+    )
     p.add_argument("--cells", help="fnmatch glob over cell ids, e.g. '*.bf16.*'")
     p.add_argument("--sim-dir", default=str(DEFAULT_SIM_DIR), help="dir containing libttsim.so")
     p.add_argument("--timeout", type=int, default=420, help="per-probe pytest/sim timeout (s)")
