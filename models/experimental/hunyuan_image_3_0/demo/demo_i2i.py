@@ -45,6 +45,32 @@ ROOT = Path(__file__).resolve().parents[4]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _bootstrap_vae_model_dir() -> None:
+    """``MODEL_DIR`` is resolved at import time; set before hunyuan ref imports."""
+    if os.environ.get("HUNYUAN_MODEL_DIR"):
+        return
+    for env_key in ("HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR", "HUNYUAN_INSTRUCT_MODEL_DIR"):
+        if p := os.environ.get(env_key):
+            os.environ["HUNYUAN_MODEL_DIR"] = p
+            return
+    hub = Path.home() / ".cache" / "huggingface" / "hub"
+    for repo in (
+        "tencent/HunyuanImage-3.0-Instruct-Distil",
+        "tencent/HunyuanImage-3.0-Instruct",
+        "tencent/HunyuanImage-3.0",
+    ):
+        snaps = hub / f"models--{repo.replace('/', '--')}" / "snapshots"
+        if not snaps.is_dir():
+            continue
+        for snap in sorted(snaps.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if snap.is_dir() and (snap / "model.safetensors.index.json").is_file():
+                os.environ["HUNYUAN_MODEL_DIR"] = str(snap)
+                return
+
+
+_bootstrap_vae_model_dir()
+
 import ttnn
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.hunyuan_image_3_0.ref.image_processor import HunyuanImage3ImageProcessor
@@ -373,6 +399,10 @@ def main():
 
     model_dir = _resolve_model_dir(args.distil)
     _setup_upstream_path(model_dir)
+    # TT VAE encoder/ref loaders read HUNYUAN_MODEL_DIR (base repo). Instruct checkpoints
+    # ship the same vae.* weights; default to the resolved instruct dir when unset.
+    if not os.environ.get("HUNYUAN_MODEL_DIR"):
+        os.environ["HUNYUAN_MODEL_DIR"] = str(model_dir)
     if not (model_dir / "model.safetensors.index.json").is_file():
         label = "Instruct-Distil" if args.distil else "Instruct"
         repo = "tencent/HunyuanImage-3.0-Instruct-Distil" if args.distil else "tencent/HunyuanImage-3.0-Instruct"
