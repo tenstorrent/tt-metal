@@ -60,20 +60,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-// copy srca to dest
+    // copy srca to dest
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         TILE_NUM_FACES, formats.math);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    test_utils::call_unary_sfpu_operation_init<
-        SFPU_UNARY_OPERATION,
-        APPROX_MODE,
-        is_fp32_dest_acc_en,
-        iterations,
-        FAST_MODE,
-        false /* STABLE_SORT */,
-        CLAMP_NEGATIVE>();
+    test_utils::call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, iterations, FAST_MODE, STABLE_SORT, CLAMP_NEGATIVE>();
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
@@ -98,7 +91,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 is_fp32_dest_acc_en,
                 iterations,
                 FAST_MODE,
-                false /* STABLE_SORT */,
+                STABLE_SORT,
                 CLAMP_NEGATIVE>(block_tile, formats.math);
         }
 

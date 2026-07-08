@@ -40,12 +40,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const bool UNPACK_TRANSPOSE_FACES       = params.UNPACK_TRANSPOSE_FACES;
     const bool UNPACK_TRANSPOSE_WITHIN_FACE = params.UNPACK_TRANSPOSE_WITHIN_FACE;
 #endif
+    // num_faces / TEST_FACE_R_DIM are compile-time template constants in both modes.
     {
         START_PERF_MEASURE("INIT")
 
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, TILE_NUM_FACES, TILE_NUM_FACES);
-        _llk_unpack_A_init_<>(UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, FACE_R_DIM, TILE_NUM_FACES, formats.unpack_A_src, formats.unpack_A_dst);
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, TEST_FACE_R_DIM, TEST_FACE_R_DIM, num_faces, num_faces);
+        _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
+        _llk_unpack_A_init_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
+            UNPACK_TRANSPOSE_FACES, UNPACK_TRANSPOSE_WITHIN_FACE, TEST_FACE_R_DIM, num_faces, formats.unpack_A_src, formats.unpack_A_dst);
         PROFILER_SYNC();
     }
 
@@ -54,7 +57,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
         {
-            _llk_unpack_A_<>(PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
+            _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
+                PERF_ADDRESS(PERF_INPUT_A, tile), formats.unpack_A_src, formats.unpack_A_dst);
         }
         PROFILER_SYNC();
     }
@@ -80,12 +84,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<
-            DataCopyType::A2D,
-            is_fp32_dest_acc_en,
-            BroadcastType::NONE,
-            false /* is_int_fpu_en */,
-            PackMode::Default>(TILE_NUM_FACES, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BROADCAST_TYPE, false /* is_int_fpu_en */, PackMode::Default>(
+            num_faces, formats.math);
         PROFILER_SYNC();
     }
 
@@ -108,7 +108,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 LLK_ASSERT(
                     (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
-                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
                     block_tile, formats.math, formats.math);
             }
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

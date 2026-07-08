@@ -15,8 +15,10 @@ from helpers.param_config import (
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    DEST_SYNC,
     LOOP_FACTOR,
     TILE_COUNT,
+    TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
@@ -42,7 +44,7 @@ _PACK_UNTILIZE_INPUT_DIMENSIONS = [
     dest_acc=[DestAccumulation.No],
     input_dimensions=_PACK_UNTILIZE_INPUT_DIMENSIONS,
     dest_sync=[DestSync.Half],
-    tile_dst_ct_offset=[0],
+    tile_dst_ct_offset=[0],  # Non-zero offsets are tracked in #1449
 )
 def test_perf_pack_untilize(
     perf_report,
@@ -90,7 +92,9 @@ def test_perf_pack_untilize(
             PerfRunType.L1_CONGESTION,
         ],
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions, block_ct_dim)
+            generate_input_dim(input_dimensions, input_dimensions, block_ct_dim),
+            DEST_SYNC(dest_sync),
+            TILE_DST_CT_OFFSET(tile_dst_ct_offset),
         ],
         runtimes=[TILE_COUNT(tile_count), LOOP_FACTOR()],
         variant_stimuli=StimuliConfig(

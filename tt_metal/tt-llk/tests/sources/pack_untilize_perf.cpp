@@ -106,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
             4 /* num_faces */, formats.math);
-        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_reconfig_remap_wrapper_(true);
         PROFILER_SYNC();
@@ -134,14 +134,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
                     {
                         LLK_ASSERT(
-                            (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                            "Block tile index exceeds maximum destination tiles");
+                            (block_tile + TILE_DST_CT_OFFSET < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index + TILE_DST_CT_OFFSET exceeds maximum destination tiles");
                         // In this case, unpacker needs software synchronization from math - to acknowledge that destination register is
                         // "consumed" and can be overwritten with new data.
                         // Due to the fact that BROADCAST_TYPE is always NONE in the test and combination of unpack_to_dest and 32b data is always set,
                         // this method will perform synchronization only and no actual data copy.
-                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                            block_tile, formats.math, formats.math);
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            block_tile + TILE_DST_CT_OFFSET, formats.math, formats.math);
                     }
                 }
             }
@@ -152,16 +152,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t block = 0; block < TILE_CNT / BLOCK_CT_DIM; block++)
             {
-                _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                _llk_math_wait_for_dest_available_<dest_sync>();
                 for (std::uint32_t block_tile = 0; block_tile < BLOCK_CT_DIM; block_tile++)
                 {
                     LLK_ASSERT(
-                        (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                        "Block tile index exceeds maximum destination tiles");
-                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                        block_tile, formats.math, formats.math);
+                        (block_tile + TILE_DST_CT_OFFSET < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                        "Block tile index + TILE_DST_CT_OFFSET exceeds maximum destination tiles");
+                    _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                        block_tile + TILE_DST_CT_OFFSET, formats.math, formats.math);
                 }
-                _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();
@@ -192,7 +192,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>(
             formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
+        _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
         _llk_pack_untilize_init_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(formats.pack_src, formats.pack_dst, FACE_R_DIM, 4 /* num_faces */);
         PROFILER_SYNC();
     }
@@ -206,7 +206,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t tile = 0; tile < TILE_CNT; tile += BLOCK_CT_DIM)
                 {
-                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                    _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
                         PERF_ADDRESS(PERF_OUTPUT, tile), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
                 }
             }
@@ -219,9 +219,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t i = 0; i < TILE_CNT; i += BLOCK_CT_DIM)
             {
                 _llk_packer_wait_for_math_done_();
-                _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM>(
+                _llk_pack_untilize_wrapper_<BLOCK_CT_DIM, FULL_CT_DIM, false /* diagonal */, false /* narrow_row */, TILE_C_DIM, TILE_DST_CT_OFFSET>(
                     PERF_ADDRESS(PERF_OUTPUT, i), formats.pack_dst, FACE_R_DIM, 4 /* num_faces */, 0 /* tile_dst_rt_offset */);
-                _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         PROFILER_SYNC();

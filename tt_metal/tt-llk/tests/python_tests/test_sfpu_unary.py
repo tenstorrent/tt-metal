@@ -39,6 +39,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    STABLE_SORT,
     TILE_COUNT,
     DestSync,
     generate_input_dim,
@@ -242,6 +243,7 @@ def test_eltwise_unary_sfpu_float(
         math_op,
         fast_mode,
         input_dimensions,
+        stable_sort=stable_sort,
     )
 
 
@@ -459,6 +461,7 @@ def eltwise_unary_sfpu(
     fast_mode: FastMode,
     input_dimensions: list[int],
     spec_A=None,
+    stable_sort: StableSort = StableSort.No,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -497,6 +500,7 @@ def eltwise_unary_sfpu(
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(approx_mode),
             FAST_MODE(fast_mode),
+            STABLE_SORT(stable_sort),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
         ],
@@ -586,6 +590,7 @@ def test_exponential_clamp_negative(clamp_negative: bool):
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.Yes),
             FAST_MODE(FastMode.Yes),
+            STABLE_SORT(StableSort.No),
             CLAMP_NEGATIVE(clamp_negative),
             MATH_OP(mathop=MathOperation.Exp),
         ],

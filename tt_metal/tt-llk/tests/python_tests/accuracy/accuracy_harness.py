@@ -24,6 +24,7 @@ from helpers.llk_params import (
     DestAccumulation,
     FastMode,
     MathOperation,
+    StableSort,
     format_dict,
 )
 from helpers.param_config import get_num_blocks_and_num_tiles_in_block
@@ -38,6 +39,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    STABLE_SORT,
     TILE_COUNT,
     DestSync,
     generate_input_dim,
@@ -352,6 +354,7 @@ def run_case(
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(approx_mode),
             FAST_MODE(fast_mode),
+            STABLE_SORT(StableSort.No),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=op),
         ],

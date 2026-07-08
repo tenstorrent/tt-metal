@@ -40,7 +40,7 @@ def test_perf_fast_tilize_full(perf_report, formats, dest_acc, dimensions):
     if ct_dim < 2:
         pytest.skip("ct_dim < 2 uses standard tilize fallback")
 
-    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
+    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, dest_acc)
 
 
 # ---------------------------------------------------------------------------
@@ -62,13 +62,13 @@ def test_perf_fast_tilize_full(perf_report, formats, dest_acc, dimensions):
 )
 def test_perf_fast_tilize_bfp(perf_report, formats, dest_acc, dimensions):
     rt_dim, ct_dim = dimensions
-    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim)
+    _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, dest_acc)
 
 
 # ---------------------------------------------------------------------------
 # Shared helper
 # ---------------------------------------------------------------------------
-def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
+def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim, dest_acc):
     tile_count = rt_dim * ct_dim
     dimensions = (rt_dim * 32, ct_dim * 32)
 
@@ -99,6 +99,7 @@ def _run_fast_tilize_perf(perf_report, formats, rt_dim, ct_dim):
             tile_count_B=tile_count,
             tile_count_res=tile_count,
         ),
+        dest_acc=dest_acc,
         compile_time_formats=True,
     )
 
