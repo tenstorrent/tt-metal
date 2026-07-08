@@ -45,7 +45,10 @@ LYRICS = (
     "[chorus]\n愿你是风吹过我的脸\n带我飞过最远最遥远的山间\n"
     "[bridge]\n唱起对你的想念不隐藏\n[verse]\n深夜的钢琴弹起动人的旋律\n"
 )
-AUDIO_DURATION = 170.64  # seconds — matches upstream audio_duration
+# Match the ACE-Step v1.5 headline's 4-minute (240 s) song. Our DiT MLP requires t_prime (= seq_len/
+# patch) to be a multiple of 512; 240 s -> t_prime 3000 (INVALID). 245.76 s -> t_prime 3072 (valid) is
+# the nearest 4-minute length that satisfies the tiling constraint (only ~6 s longer than their 240 s).
+AUDIO_DURATION = 245.76  # seconds (t_prime=3072); nearest valid 4-min length to the 240 s headline
 INFER_STEPS = 60  # matches upstream infer_step
 GUIDANCE_SCALE = 15.0  # matches upstream guidance_scale (apg)
 RUNS = 3  # median of N measured full generations (warmup excluded)
@@ -69,6 +72,34 @@ REFERENCE_TIMINGS = {
 
 def _rtf(audio_s: float, wall_s: float) -> float:
     return audio_s / wall_s if wall_s > 0 else float("nan")
+
+
+def _dit_tokens(audio_s: float) -> int:
+    """ACE-Step DiT input sequence length (tokens) for a given audio length: 25 latent frames/s,
+    padded to a multiple of 8, patchified by 2. This is the audio 'input' the DiT denoises."""
+    n = max(2, round(audio_s * 25))
+    seq = ((n + 7) // 8) * 8
+    return seq // 2
+
+
+def _input_sizes(pipe):
+    """Full generation-input breakdown (token/frame counts) for the benchmark config:
+    prompt tokens + lyric tokens (cross-attn text conditioning), timbre frames, and the DiT audio
+    sequence length. These are ALL the inputs fed into a generation."""
+    tok = pipe.tokenizer
+    formatted_text = pipe._SFT_GEN_PROMPT.format(pipe._DIT_INSTRUCTION, PROMPT,
+                                                 pipe._metadata_string(audio_duration=AUDIO_DURATION))
+    formatted_lyrics = f"# Languages\nen\n\n# Lyric\n{LYRICS}<|endoftext|>"
+    prompt_tok = len(tok(formatted_text, truncation=True, max_length=256).input_ids)
+    lyric_tok = len(tok(formatted_lyrics, truncation=True, max_length=2048).input_ids)
+    dit = _dit_tokens(AUDIO_DURATION)
+    return {
+        "prompt_tok": prompt_tok,
+        "lyric_tok": lyric_tok,
+        "timbre_frames": 512,
+        "dit_tokens": dit,
+        "cross_ctx_tok": prompt_tok + lyric_tok + 1,  # text + lyric + 1 timbre CLS token
+    }
 
 
 def _timed_generate(pipe, *, use_trace: bool):
@@ -141,16 +172,31 @@ def main():
         tt = _measure(pipe, use_trace=True)
         audio_s = AUDIO_DURATION
         tt_rtf = _rtf(audio_s, tt["total_s"])
+        ins = _input_sizes(pipe)
 
+        # ── generation inputs (what's fed in) ──────────────────────────────────────────────────
         print("\n" + "=" * 78)
-        print(f"ACE-Step v1.5 — TT (Blackhole p150) vs CUDA reference | {AUDIO_DURATION:.1f}s audio, {INFER_STEPS} steps")
+        print(f"ACE-Step v1.5 — generation inputs | {AUDIO_DURATION:.1f}s (4-min) song, {INFER_STEPS} steps")
         print("=" * 78)
-        hdr = f"{'Platform':<34}{'total(s)':>9}{'audio(s)':>9}{'RTF':>7}"
+        print(f"  prompt tokens (text cond)   : {ins['prompt_tok']}")
+        print(f"  lyric tokens  (text cond)   : {ins['lyric_tok']}")
+        print(f"  timbre frames               : {ins['timbre_frames']}")
+        print(f"  -> cross-attn context tokens: {ins['cross_ctx_tok']}   (prompt + lyric + 1 timbre CLS)")
+        print(f"  DiT audio sequence (tokens) : {ins['dit_tokens']}   (25 Hz x {AUDIO_DURATION:.1f}s / patch 2)")
+
+        # ── platform comparison ────────────────────────────────────────────────────────────────
+        print("\n" + "=" * 78)
+        print("ACE-Step v1.5 — TT (Blackhole p150) vs CUDA reference")
+        print("=" * 78)
+        hdr = (f"{'Platform':<30}{'text in':>8}{'DiT in':>8}{'gen(s)':>9}{'audio(s)':>9}{'RTF':>7}")
         print(hdr)
         print("-" * 78)
-        print(f"{'TT Blackhole p150 (this run, traced)':<34}{tt['total_s']:>9.2f}{audio_s:>9.1f}{tt_rtf:>6.1f}x")
+        print(f"{'TT Blackhole p150 (traced)':<30}{ins['cross_ctx_tok']:>8}{ins['dit_tokens']:>8}"
+              f"{tt['total_s']:>9.2f}{audio_s:>9.1f}{tt_rtf:>6.1f}x")
         for name, r in REFERENCE_TIMINGS.items():
-            print(f"{name:<34}{r['total_s']:>9.2f}{r['audio_s']:>9.1f}{_rtf(r['audio_s'], r['total_s']):>6.1f}x")
+            r_dit = _dit_tokens(r["audio_s"])
+            print(f"{name:<30}{ins['cross_ctx_tok']:>8}{r_dit:>8}"
+                  f"{r['total_s']:>9.2f}{r['audio_s']:>9.1f}{_rtf(r['audio_s'], r['total_s']):>6.1f}x")
         print("-" * 78)
 
         # per-stage split for TT (encode / DiT denoise / VAE decode)

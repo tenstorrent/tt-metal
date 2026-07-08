@@ -36,6 +36,7 @@ encoder, conditioning, the denoise loop and VAE decode internally. Lower-level s
 - [PCC results](#pcc-results)
 - [Running the PCC tests](#running-the-pcc-tests)
 - [End-to-end SongEval eval (`test_songeval_pipeline`)](#end-to-end-songeval-eval-test_songeval_pipeline)
+- [Trace capture (fast denoise)](#trace-capture-fast-denoise)
 - [Weight loading](#weight-loading)
 
 ## Approach
@@ -255,6 +256,66 @@ Expected output (p150, ~8 s of audio, 30 ODE steps):
 
 The generated `.wav` is git-ignored (never committed). For a quick numeric smoke test of the same
 one-call API without writing audio, see `tests/pcc/test_generate_song_api.py`.
+
+## Trace capture (fast denoise)
+
+The denoise loop is the pipeline's hot path — the same DiT step runs `infer_steps` times (×2 per
+step under CFG). **Trace capture** records that step once on the host, then replays it on-device
+with no per-step host dispatch. It is **numerically identical** to the eager loop (latent PCC 1.0);
+it only removes host overhead. It's exposed as a single flag.
+
+### Using it (one flag)
+
+```python
+import ttnn
+from models.experimental.acestep.tt.model_config import AceStepModelConfig
+from models.experimental.acestep.tt.pipeline import create_tt_pipeline
+
+# A trace lives in a dedicated DRAM region — you MUST size it when opening the device.
+device = ttnn.open_mesh_device(
+    mesh_shape=ttnn.MeshShape(1, 1),
+    trace_region_size=23887872,   # ~23 MB; override via TT_PERF_TRACE_REGION if needed
+)
+pipe = create_tt_pipeline(AceStepModelConfig.from_hf(), device)
+
+wav = pipe.generate_song(
+    "upbeat synthwave, driving bass, nostalgic",
+    lyrics="neon lights over the city tonight",
+    seconds=8,
+    use_trace=True,          # <-- capture + replay the denoise step
+)
+```
+
+`use_trace` flows straight through to the lower-level `pipe.generate(..., use_trace=True)`, so the
+same flag works whether you call the one-line `generate_song` API or drive the stages manually.
+Without a `trace_region_size` the device open will not have room for the trace; the tests default
+it to `23887872` (see `TT_PERF_TRACE_REGION`).
+
+### What actually gets traced
+
+| Path | Traced fn | Notes |
+|------|-----------|-------|
+| **no-CFG** (`guidance_scale = 1.0`) | one DiT velocity pass (`_generate_traced`) | Euler update runs eager outside the trace |
+| **CFG** (`guidance_scale > 1.0`) | both DiT passes **+ APG** (`_generate_cfg_traced`) | APG momentum running-average is a stateful trace input, copied back each step |
+
+Implementation detail (`tt/pipeline.py`): the tracer is `models/tt_dit/utils/tracing.py::Tracer`.
+Denoise-invariant tensors — **cross-attention K/V, RoPE cos/sin, context latents** — are computed
+**once outside the trace** and passed as trace constants (supplied on the first *capture* call, then
+reused via `tracer.inputs[...]` on every replay). Only the per-step-varying inputs (the running
+latent `xt`, the timestep, and the APG momentum state) change between replays. `tracer.release_trace()`
+frees the DRAM trace region when the loop finishes.
+
+### Measuring the speedup
+
+The deployment benchmarks always warm up once (to capture the trace) and then time N replayed runs:
+
+```bash
+# per-song wall-clock + real-time factor, traced path, vs the official CUDA numbers
+python models/experimental/acestep/perf/bench_e2e_comparison.py
+```
+
+On a p150 the traced denoise removes the per-step host dispatch; see `perf/README.md` for the full
+sequence-length sweep and the stage-by-stage breakdown.
 
 ## Weight loading
 
