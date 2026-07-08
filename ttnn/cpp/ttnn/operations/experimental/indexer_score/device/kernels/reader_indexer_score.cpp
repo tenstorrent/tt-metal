@@ -488,7 +488,13 @@ void kernel_main() {
 #else
             const uint32_t band = band_i;
 #endif
+#ifdef FUSED_RING
+            // Fused perm entries are ABSOLUTE band indices this column owns (striped set, band0=0); every iterated
+            // band is a real owned band (stream_heads -- the only source of phantom bands -- is disallowed here).
+            const bool real_band = true;
+#else
             const bool real_band = band < num_bands;  // phantom bands (streaming pad) carry q-mcast only
+#endif
             if (real_band) {
                 span.set(group, band0 + band);
                 if constexpr (fuse_single && fused_stream_k) {

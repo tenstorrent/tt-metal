@@ -157,6 +157,25 @@ ProgramDescriptor build_fused_program_descriptor(
     const uint32_t G = 1;
     const uint32_t subblock_basis = HB;
 
+    // Overlap-quality guidance for block-cyclic: a k-band (KC tiles) should not straddle a per-SP-shard chunk
+    // boundary (cl_t tiles), or it inherits the LATER of two shards and piles onto the final ring-arrival wave
+    // (KC=16, cl_t=20 -> ~40% of bands wait for the farthest shard -> long exposed tail). If KC divides cl_t the
+    // readiness histogram is flat and block-cyclic overlaps as well as contiguous. Correctness is unaffected
+    // either way (the reader gates every shard a band touches); this only shapes the AG/compute overlap.
+    if (args.has_block_cyclic()) {
+        const uint32_t cl_t_hint = args.block_cyclic->chunk_local / tt::constants::TILE_WIDTH;
+        if (KC == 0 || cl_t_hint % KC != 0) {
+            log_warning(
+                tt::LogOp,
+                "indexer_score fused: k_chunk_size ({} tiles) does not divide block_cyclic chunk_local ({} tiles); "
+                "bands straddle SP-shard boundaries and back-load the ring-arrival tail. For best AG/compute "
+                "overlap pick a k_chunk_size whose tile count divides {}.",
+                KC,
+                cl_t_hint,
+                cl_t_hint);
+        }
+    }
+
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         ttnn::get_compute_kernel_config_args(q.device()->arch(), args.compute_kernel_config);
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -170,14 +189,18 @@ ProgramDescriptor build_fused_program_descriptor(
 
     // --- banded-product schedule (DSA: group_count = Sqt/QC), on a grid REDUCED to leave AG worker rows. -----
     const auto phys_grid = q.device()->compute_with_storage_grid_size();
-    const uint32_t grid_x = phys_grid.x;
-    // Reserve enough top rows for the AG workers (num_links * 2 senders per link), so the compute rectangle
-    // and the AG worker cores are disjoint (ccl_core_grid_offset points at the first reserved row).
+    // Keep ALL compute ROWS and reserve COLUMNS for the AG workers. rows_for_groups() picks the largest DIVISOR
+    // of the group count <= grid_y, so shaving even one row can halve the schedule (10 groups: grid_y 10->9 drops
+    // group_rows 10->5 -> 55 cores instead of 110). cols_for_bands() just distributes the bands over min(bands,
+    // grid_x) columns (uneven remainder handled by band_start/band_size), so a reserved column costs exactly one
+    // column of compute -- no divisor cliff. The AG needs only num_links*2 workers; one column (grid_y cores) is
+    // plenty and the compute keeps grid_y*(grid_x-reserved_cols) cores.
+    const uint32_t grid_y = phys_grid.y;
     const uint32_t ag_worker_cores = std::max<uint32_t>(1u, fused.num_links * 2u);
-    const uint32_t reserved_rows = std::max<uint32_t>(1u, (ag_worker_cores + grid_x - 1) / grid_x);
-    TT_FATAL(phys_grid.y > reserved_rows, "indexer_score fused: grid too small to reserve {} AG rows", reserved_rows);
-    const uint32_t grid_y = phys_grid.y - reserved_rows;  // effective compute rows
-    const CoreCoord ccl_core_grid_offset{0, grid_y};      // AG workers start on the first reserved row
+    const uint32_t reserved_cols = std::max<uint32_t>(1u, (ag_worker_cores + grid_y - 1) / grid_y);
+    TT_FATAL(phys_grid.x > reserved_cols, "indexer_score fused: grid too small to reserve {} AG cols", reserved_cols);
+    const uint32_t grid_x = phys_grid.x - reserved_cols;  // effective compute columns
+    const CoreCoord ccl_core_grid_offset{grid_x, 0};      // AG workers start in the first reserved column
 
     const uint32_t group_count = Sqt / QC;
     const uint32_t band_count = units_in_group(KC, Tt);
@@ -187,25 +210,32 @@ ProgramDescriptor build_fused_program_descriptor(
     const uint32_t rows_used = group_rows * num_blocks;
     const uint32_t num_groups = group_count / group_rows;
 
-    std::vector<std::vector<uint32_t>> band_start(num_blocks, std::vector<uint32_t>(cols_used));
-    std::vector<std::vector<uint32_t>> band_size(num_blocks, std::vector<uint32_t>(cols_used));
+    // STRIPED band -> column assignment (fused overlap balance). The classic factory gives each column a
+    // CONTIGUOUS band run; but an SP shard occupies ~sll_t/KC contiguous bands, so a contiguous split puts each
+    // shard onto only a few adjacent columns. When that shard arrives late (ring tail), those few columns are the
+    // long pole -- they stall until arrival then compute the shard's whole band run -- while every other column,
+    // done with its already-arrived shard, sits idle. Striping (col c owns bands blk_off+c, blk_off+c+cols_used,
+    // ...) gives every column a mix of early- and late-arriving bands, so the last shard's bands spread across ALL
+    // columns and the tail exposed after the all-gather is ~(bands_of_last_shard / cols_used) instead of the whole
+    // shard. Each column's bands are ABSOLUTE indices (reader/compute/writer get band0=0 + the absolute list), so
+    // the per-column readiness sort below still walks local-first-then-arrival exactly as before.
+    std::vector<std::vector<std::vector<uint32_t>>> band_list(
+        num_blocks, std::vector<std::vector<uint32_t>>(cols_used));
+    uint32_t max_bands = 0;
     {
         const uint32_t bands_per_block = band_count / num_blocks, blk_extra = band_count % num_blocks;
         uint32_t blk_off = 0;
         for (uint32_t blk = 0; blk < num_blocks; ++blk) {
             const uint32_t blk_bands = bands_per_block + (blk < blk_extra ? 1u : 0u);
-            const uint32_t bands_per_col = blk_bands / cols_used, extra = blk_bands % cols_used;
-            uint32_t off = blk_off;
-            for (uint32_t col = 0; col < cols_used; ++col) {
-                band_size[blk][col] = bands_per_col + (col < extra ? 1u : 0u);
-                band_start[blk][col] = off;
-                off += band_size[blk][col];
+            for (uint32_t i = 0; i < blk_bands; ++i) {
+                band_list[blk][i % cols_used].push_back(blk_off + i);
             }
             blk_off += blk_bands;
+            for (uint32_t col = 0; col < cols_used; ++col) {
+                max_bands = std::max<uint32_t>(max_bands, static_cast<uint32_t>(band_list[blk][col].size()));
+            }
         }
     }
-    const uint32_t bands_in_widest_block = (band_count + num_blocks - 1) / num_blocks;
-    const uint32_t max_bands = (bands_in_widest_block + cols_used - 1) / cols_used;
 
     const CoreRange core_rect(CoreCoord{0, 0}, CoreCoord{cols_used - 1, rows_used - 1});
     const CoreRangeSet core_ranges(core_rect);
@@ -286,7 +316,25 @@ ProgramDescriptor build_fused_program_descriptor(
     sdpa_sig.init_all_gather(ring_size, device_index, rw.forward_writes_expected, rw.backward_writes_expected);
     sdpa_sig.fused_op_signaler_mode = ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;
     sdpa_sig.fused_op_receiver_cores_noc.clear();
-    for (const auto& core : corerange_to_cores(core_ranges, std::nullopt, /*row_wise=*/true)) {
+    // Signal ONLY the cores that actually gate on the all-gather. The AG master worker's per-slab signal is a
+    // UNICAST LOOP over the receiver cores (worker_sync_utils MULTI mode: one noc_semaphore_inc per core per
+    // delivered slab), and it sits on the gather's critical path -- so signalling the whole 100-core compute
+    // rectangle slowed the co-scheduled AG ~40-80us vs standalone. With k-mcast on (group_rows>1) only the
+    // k-mcast SENDER of each column reads K from DRAM and gates (reader: k_dir.role==sender); the receiver rows
+    // take the already-gated K over the column mcast and never wait on the AG semaphore. So the sender set --
+    // row == block_base for each block, every column -- is the minimal correct receiver list (num_blocks*cols_used
+    // cores, ~group_rows-fold fewer signals). With k-mcast off every core is its own k-reader, so signal them all.
+    std::vector<CoreCoord> signal_cores;
+    if (k_mcast_on) {
+        for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+            for (uint32_t col = 0; col < cols_used; ++col) {
+                signal_cores.push_back(CoreCoord{col, blk * group_rows});
+            }
+        }
+    } else {
+        signal_cores = corerange_to_cores(core_ranges, std::nullopt, /*row_wise=*/true);
+    }
+    for (const auto& core : signal_cores) {
         sdpa_sig.fused_op_receiver_cores_noc.push_back(q.device()->worker_core_from_logical_core(core));
     }
     const uint32_t fused_sem0 = push_sem(0);
@@ -423,17 +471,18 @@ ProgramDescriptor build_fused_program_descriptor(
             const uint32_t k_px = u32(phys[block_base][col].x);
             const CoreCoord k_sender = phys[block_base][col];
             const CoreCoord core{col, row};
-            const std::array<uint32_t, 6> sched = {
-                row % group_rows, group_rows, num_groups, band_start[block][col], band_size[block][col], max_bands};
-
-            // This core's band-visit permutation (offsets into [0, num_bands), sorted by arrival readiness).
-            // Identical for every row in a k-mcast column (same band range + ring schedule), so the k-mcast
-            // stays in lockstep. Appended to all three kernels below.
-            std::vector<uint32_t> band_perm(band_size[block][col]);
-            std::iota(band_perm.begin(), band_perm.end(), 0u);
+            // This column's ABSOLUTE band indices (striped set), sorted by ring arrival readiness so the core
+            // scores its local + already-arrived bands first and hides the farther slabs behind that compute.
+            // band0 is passed as 0 and the kernels read these absolute indices straight from the perm slots
+            // (span.set(group, 0 + band)); identical for every row in a k-mcast column (same set + schedule), so
+            // the k-mcast stays in lockstep.
+            std::vector<uint32_t> band_perm = band_list[block][col];
             std::stable_sort(band_perm.begin(), band_perm.end(), [&](uint32_t a, uint32_t b) {
-                return band_readiness(band_start[block][col] + a) < band_readiness(band_start[block][col] + b);
+                return band_readiness(a) < band_readiness(b);
             });
+            const uint32_t col_num_bands = static_cast<uint32_t>(band_perm.size());
+            const std::array<uint32_t, 6> sched = {
+                row % group_rows, group_rows, num_groups, /*band0=*/0u, col_num_bands, max_bands};
 
             KernelDescriptor::RTArgList reader_rt;
             reader_rt.push_back(q.buffer());
@@ -548,7 +597,9 @@ ProgramDescriptor build_fused_program_descriptor(
         fused.ag_sub_device_id,
         ag_sig,
         ccl_core_grid_offset,
-        ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+        // COL_MAJOR so the reserved-column offset lays the workers DOWN the free column ((grid_x,0),(grid_x,1),
+        // ...) instead of running off the right grid edge ((grid_x,0),(grid_x+1,0)) as row-major would.
+        ttnn::ccl::CoreAllocationStrategy::COL_MAJOR);
 
     log_debug(
         tt::LogOp,
@@ -561,7 +612,7 @@ ProgramDescriptor build_fused_program_descriptor(
         rw.backward_writes_expected,
         grid_x,
         grid_y,
-        reserved_rows,
+        reserved_cols,
         rows_used,
         cols_used,
         band_count,
