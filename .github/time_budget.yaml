@@ -224,7 +224,7 @@ llk:
 
 models:
   smoke:
-    wh_galaxy_merge_gate: 5
+    wh_galaxy_merge_gate: 7 # test-only: raised 5->7 to rule out budget vs hang. DO NOT MERGE.
   sanity:
     wh_galaxy_perf: 10
     wh_n300_civ2: 5
