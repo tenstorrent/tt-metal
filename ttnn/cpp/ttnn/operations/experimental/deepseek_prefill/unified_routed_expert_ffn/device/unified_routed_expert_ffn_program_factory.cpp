@@ -160,6 +160,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t ibw_d = pcN_gu;
         uint64_t b = 0;
         b += 2ull * pcM * ibw_gu * x_ts;     // CB_IN0_X (double-buffered)
+        if (op.x_is_row_major) {
+            b += 2ull * pcM * ibw_gu * p_ts;  // CB_X_RM bf16 staging (row-major only)
+        }
         b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_GATE
         b += 2ull * ibw_gu * pcN_gu * w_ts;  // CB_IN1_UP
         b += 2ull * ibw_d * pcN_d * w_ts;    // CB_IN1_DOWN
@@ -300,6 +303,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
         total += static_cast<uint64_t>(M * w_gu * 2) * x_tile_size;                               // cb_in0_x
+        if (op.x_is_row_major) {
+            total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+        }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
         total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;        // cb_in1_down
