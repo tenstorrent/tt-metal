@@ -70,7 +70,7 @@
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d" -vvv --tb=short --timeout=900
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d and pretrained" -vvv --tb=short --timeout=900
   test_type: prefill_block
   test_group: module
   skus:
@@ -188,7 +188,10 @@
 - name: "(Galaxy) DeepSeek Prefill - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism" -vvv --tb=short --timeout=1800
+    export KIMI_K2_6_HF_MODEL=/mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/moonshotai/Kimi-K2.6-Cache/CI
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
   test_type: kimi_prefill_block
   test_group: module
   skus:
@@ -201,7 +204,7 @@
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced" -vvv --tb=short --timeout=900
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained" -vvv --tb=short --timeout=900
   test_type: prefill_block_determinism
   test_group: module
   skus:
@@ -242,5 +245,29 @@
     bh_galaxy:
       # Both perf checks run in ~5.6 min; 15 leaves ~2.7x headroom for tracy/Galaxy variance.
       timeout: 15
+  owner_id: U08RL15T4N8
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - Chunked Kimi (code_debug 55k)"
+  # 55k-ISL chunked-prefill perf/smoke for Kimi: full 61 layers, 11 chunks x 5120 = 56320 tokens
+  # (the full code_debug trace), 10 iterations. No-PCC: it drives the real chunked-prefill path end to
+  # end (build once, forward 10x) and passes on completion -- no golden readback, no accuracy compare.
+  #
+  # Paths (CI mounts /mnt/MLPerf:ro):
+  #   KIMI_K2_6_HF_MODEL  -> dequantized Kimi HF checkpoint (config.json + safetensors.index.json)
+  #   TT_KIMI_PREFILL_TTNN_CACHE is intentionally NOT set; the conftest falls back to the
+  #     shared cache path under KIMI_K2_6_HF_MODEL/tensor_cache_bh_32dev/8x4.
+  #   PREFILL_TRACE_DIR   -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill.
+  cmd: |
+    export MESH_DEVICE=TG
+    export KIMI_K2_6_HF_MODEL=/mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized
+    export PREFILL_TRACE_DIR=/mnt/MLPerf/kimi-prefill-cache/vllm-kimi-k26-codedebug-56320
+    pytest "models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_prefill_transformer_chunked_no_pcc[blackhole-kimi-mesh-8x4-L61-chunks_eleven-ten_iters-margin5pct]" -xvs
+  test_type: kimi_chunked
+  test_group: module
+  skus:
+    bh_galaxy:
+      # Job takes under 20 minutes; 30 minute timeout provides buffer for variance.
+      timeout: 30
   owner_id: U08RL15T4N8
   team: models

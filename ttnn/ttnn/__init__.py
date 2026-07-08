@@ -337,7 +337,6 @@ from ttnn.device import (
     ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
-    pad_to_tile_shape,
     SubDevice,
     SubDeviceId,
     SubDeviceManagerId,

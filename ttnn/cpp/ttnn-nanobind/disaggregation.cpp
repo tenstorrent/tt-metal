@@ -5,8 +5,12 @@
 #include "disaggregation.hpp"
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/map.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
+
+#include <map>
+#include <span>
 
 #include <tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -91,7 +95,24 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def(
             nb::init<const KvChunkAddressTableConfig&>(),
             nb::arg("config"),
-            "Construct a KvChunkAddressTable from configuration.")
+            "Construct a single-config KvChunkAddressTable (config id 0, name \"0\").")
+        .def(
+            "__init__",
+            [](KvChunkAddressTable* self, const std::vector<KvChunkAddressTableConfig>& configs) {
+                new (self) KvChunkAddressTable(std::span<const KvChunkAddressTableConfig>(configs));
+            },
+            nb::arg("configs"),
+            R"(
+            Construct a multi-config KvChunkAddressTable from a list of configs.
+            Config i is named "i", so string accessors resolve "0".."N-1" to ids 0..N-1.
+            )")
+        .def(
+            nb::init<const std::map<std::string, KvChunkAddressTableConfig>&>(),
+            nb::arg("configs"),
+            R"(
+            Construct a multi-config KvChunkAddressTable from a name->config map.
+            Config ids are assigned in sorted key order; each config's name is its key.
+            )")
 
         // Device group management
         .def(
@@ -115,15 +136,28 @@ void bind_disaggregation_api(nb::module_& mod) {
         // Mutators
         .def(
             "set",
-            &KvChunkAddressTable::set,
+            static_cast<void (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, KvCacheLocation, uint32_t)>(
+                &KvChunkAddressTable::set),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
             nb::arg("location"),
+            nb::arg("config_id") = 0,
             R"(
-            Set the location for a specific (layer, position, slot).
-            Position is in tokens and must be chunk-aligned (multiple of chunk_n_tokens).
+            Set the location for a specific (layer, position, slot, config_id).
+            Position is in tokens and must be chunk-aligned (multiple of the config's chunk_n_tokens).
+            config_id defaults to 0 (the single-config case).
             )")
+        .def(
+            "set",
+            static_cast<void (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, KvCacheLocation, const std::string&)>(
+                &KvChunkAddressTable::set),
+            nb::arg("layer"),
+            nb::arg("position"),
+            nb::arg("slot"),
+            nb::arg("location"),
+            nb::arg("config"),
+            "Set the location for a specific (layer, position, slot, config-name).")
         .def(
             "set_fabric_node_host",
             &KvChunkAddressTable::set_fabric_node_host,
@@ -134,19 +168,37 @@ void bind_disaggregation_api(nb::module_& mod) {
         // Accessors
         .def(
             "lookup",
-            &KvChunkAddressTable::lookup,
+            static_cast<const KvCacheLocation& (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, uint32_t) const>(
+                &KvChunkAddressTable::lookup),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
+            nb::arg("config_id") = 0,
             nb::rv_policy::reference_internal,
             R"(
-            Lookup a single entry. Position is in tokens (chunk-aligned).
-            Returns a reference to the KvCacheLocation.
+            Lookup a single entry by (layer, position, slot, config_id). Position is in tokens (chunk-aligned).
+            config_id defaults to 0. Returns a reference to the KvCacheLocation.
             )")
         .def(
+            "lookup",
+            static_cast<
+                const KvCacheLocation& (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&) const>(
+                &KvChunkAddressTable::lookup),
+            nb::arg("layer"),
+            nb::arg("position"),
+            nb::arg("slot"),
+            nb::arg("config"),
+            nb::rv_policy::reference_internal,
+            "Lookup a single entry by (layer, position, slot, config-name).")
+        .def(
             "lookup_range",
-            [](const KvChunkAddressTable& table, uint32_t layer, uint32_t start_pos, uint32_t end_pos, uint32_t slot) {
-                auto span = table.lookup_range(layer, start_pos, end_pos, slot);
+            [](const KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t start_pos,
+               uint32_t end_pos,
+               uint32_t slot,
+               uint32_t config_id) {
+                auto span = table.lookup_range(layer, start_pos, end_pos, slot, config_id);
                 // Convert span to vector for Python
                 return std::vector<KvCacheLocation>(span.begin(), span.end());
             },
@@ -154,12 +206,30 @@ void bind_disaggregation_api(nb::module_& mod) {
             nb::arg("start_pos"),
             nb::arg("end_pos"),
             nb::arg("slot"),
+            nb::arg("config_id") = 0,
             R"(
-            Lookup a contiguous range of position chunks for a given (layer, slot).
-            Returns a list of KvCacheLocation entries.
+            Lookup a contiguous range of position chunks for a given (layer, slot, config_id).
+            Returns a list of KvCacheLocation entries. config_id defaults to 0.
             start_pos must be chunk-aligned. end_pos need not be aligned.
             Returns entries for chunks covering positions [start_pos, end_pos).
             )")
+        .def(
+            "lookup_range",
+            [](const KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t start_pos,
+               uint32_t end_pos,
+               uint32_t slot,
+               const std::string& config) {
+                auto span = table.lookup_range(layer, start_pos, end_pos, slot, config);
+                return std::vector<KvCacheLocation>(span.begin(), span.end());
+            },
+            nb::arg("layer"),
+            nb::arg("start_pos"),
+            nb::arg("end_pos"),
+            nb::arg("slot"),
+            nb::arg("config"),
+            "Lookup a contiguous range of position chunks for a given (layer, slot, config-name).")
         .def(
             "get_host",
             &KvChunkAddressTable::get_host,
@@ -176,29 +246,59 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def(
             "config",
             &KvChunkAddressTable::config,
+            nb::arg("config_id") = 0,
             nb::rv_policy::reference_internal,
-            "Get the configuration used to construct this table.")
+            "Get a config by id (default 0, the lone config of a single-config table).")
+        .def("num_configs", &KvChunkAddressTable::num_configs, "Number of configs (\"groups\") held by this table.")
+        .def(
+            "config_name",
+            &KvChunkAddressTable::config_name,
+            nb::arg("config_id"),
+            nb::rv_policy::reference_internal,
+            "Name of a config by id.")
+        .def(
+            "config_id_of",
+            &KvChunkAddressTable::config_id_of,
+            nb::arg("name"),
+            "Resolve a config name to its id (throws if unknown).")
         .def(
             "num_position_chunks",
             &KvChunkAddressTable::num_position_chunks,
-            "Number of position chunks (computed from config).")
-        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries in the table.")
+            nb::arg("config_id") = 0,
+            "Number of position chunks for a config (default 0).")
+        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.")
 
         // Device reads
         .def(
             "read_device_chunk",
-            [](const KvChunkAddressTable& table, uint32_t layer, uint32_t position, uint32_t slot) {
-                auto buf = table.read_device_chunk(layer, position, slot);
+            [](const KvChunkAddressTable& table, uint32_t layer, uint32_t position, uint32_t slot, uint32_t config_id) {
+                auto buf = table.read_device_chunk(layer, position, slot, config_id);
                 return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
             },
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
+            nb::arg("config_id") = 0,
             R"(
             Read the raw bytes of a single chunk from the primary replica device.
             Resolves the device internally via the global ControlPlane.
-            Position is in tokens (chunk-aligned).
-            )");
+            Position is in tokens (chunk-aligned). config_id defaults to 0.
+            )")
+        .def(
+            "read_device_chunk",
+            [](const KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t position,
+               uint32_t slot,
+               const std::string& config) {
+                auto buf = table.read_device_chunk(layer, position, slot, config);
+                return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+            },
+            nb::arg("layer"),
+            nb::arg("position"),
+            nb::arg("slot"),
+            nb::arg("config"),
+            "Read the raw bytes of a single chunk (config addressed by name).");
 
     mod.def(
         "tensor_from_bfp8_bytes",

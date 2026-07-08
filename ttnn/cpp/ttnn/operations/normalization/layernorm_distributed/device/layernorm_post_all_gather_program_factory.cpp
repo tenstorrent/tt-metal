@@ -76,6 +76,13 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat stats_data_format = tt::tt_metal::datatype_to_dataformat_converter(stats.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    // FP32 input/stats require fp32_dest_acc_en: the intermediate CBs (cb_data_format) only become
+    // Float32 when it is set, otherwise a Float32 input/stats CB feeds Float16_b intermediates and
+    // precision is silently lost. Reject the unsupported combination up front.
+    TT_FATAL(
+        !((in_data_format == tt::DataFormat::Float32 || stats_data_format == tt::DataFormat::Float32) &&
+          !fp32_dest_acc_en),
+        "FLOAT32 input/stats require fp32_dest_acc_en=true in the compute kernel config.");
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat gamma_cb_data_format = gamma.has_value()
                                               ? tt::tt_metal::datatype_to_dataformat_converter(gamma.value().dtype())
