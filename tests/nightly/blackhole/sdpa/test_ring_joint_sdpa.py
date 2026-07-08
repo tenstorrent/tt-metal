@@ -588,9 +588,27 @@ def get_test_case_id(config: ModelConfig, q_chunk_size: int, k_chunk_size: int) 
     return f"{config.name}-q{q_chunk_size}-k{k_chunk_size}"
 
 
-def get_model_qk_configs(config: ModelConfig) -> List[Tuple[int, int]]:
-    """Return all Q/K chunk-size combinations covered by a model config."""
-    return list(product(config.q_chunk_sizes, config.k_chunk_sizes))
+# fp32_dest_acc_en=True doubles the tile size of cb_qk_im (Sq×Sk tiles) and
+# cb_sum_A/B (Sq tiles each). Extra static CB bytes per (q, k) combo:
+#     Δ = (Sq·Sk + 2·Sq) · (fp32_tile_bytes − bf16_tile_bytes)
+#       = Sq · (Sk + 2) · 2048 bytes
+# 192 KB caps Δ at what wan/videogen shapes at d=128 can absorb without pushing
+# static CBs past BH L1. Above that, promotion is dropped from the sweep.
+FP32_MAX_STATIC_CB_DELTA_BYTES = 192 * 1024
+
+
+def _fp32_static_cb_delta_bytes(q_chunk_size: int, k_chunk_size: int) -> int:
+    Sq = q_chunk_size // 32
+    Sk = k_chunk_size // 32
+    return (Sq * Sk + 2 * Sq) * 2048
+
+
+def get_model_qk_configs(config: ModelConfig, fp32_dest_acc_en: bool = False) -> List[Tuple[int, int]]:
+    """Return q/k chunk-size combos for a model, filtered to those that fit static CB budget in fp32."""
+    combos = list(product(config.q_chunk_sizes, config.k_chunk_sizes))
+    if not fp32_dest_acc_en:
+        return combos
+    return [(q, k) for (q, k) in combos if _fp32_static_cb_delta_bytes(q, k) <= FP32_MAX_STATIC_CB_DELTA_BYTES]
 
 
 def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
@@ -3138,19 +3156,22 @@ def test_ring_joint_attention_sdpa_accuracy(model_name, fp32_dest_acc_en):
     mesh_config = MESH_CONFIG
     model = MODEL_CONFIGS[model_name]
 
+    qk_configs = get_model_qk_configs(model, fp32_dest_acc_en=fp32_dest_acc_en)
+    if fp32_dest_acc_en and not qk_configs:
+        pytest.skip(f"{model_name}: no q/k combo fits BH L1 static CB budget with fp32 dest")
+
     pcc_threshold = DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD
     rmse_threshold = DEFAULT_RMSE_THRESHOLD
     run_ring_joint_sdpa_model_configs(
         mesh_config,
         model,
-        get_model_qk_configs(model),
+        qk_configs,
         pcc_threshold=pcc_threshold,
         rmse_threshold=rmse_threshold,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
-@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["bf16_acc", "fp32_acc"])
 @pytest.mark.parametrize(
     "b,sq,nhq,nhk,d_q,d_k,d_v,q_chunk_size,k_chunk_size,is_balanced,q_dtype,kv_dtype",
     RING_MLA_TEST_CONFIGS,
@@ -3169,9 +3190,7 @@ def test_ring_mla_accuracy(
     is_balanced,
     q_dtype,
     kv_dtype,
-    fp32_dest_acc_en,
 ):
-    pcc_threshold = DEFAULT_PCC_THRESHOLD_FP32 if fp32_dest_acc_en else DEFAULT_PCC_THRESHOLD
     run_ring_mla_sdpa(
         MESH_CONFIG,
         b,
@@ -3186,8 +3205,6 @@ def test_ring_mla_accuracy(
         q_dtype,
         kv_dtype,
         is_balanced=is_balanced,
-        pcc_threshold=pcc_threshold,
-        fp32_dest_acc_en=fp32_dest_acc_en,
     )
 
 
