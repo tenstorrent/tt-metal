@@ -54,8 +54,8 @@ void kernel_main() {
     // unpack-fp32 CB without an alias, so those kernels need the unpack-fp32
     // state and the alias gating to be tracked independently.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("dfb_in0_welford");
-    constexpr uint32_t dfb_in_welford_id = get_named_compile_time_arg_val("dfb_in_welford");
+    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
+    constexpr uint32_t dfb_in_welford_id = get_named_compile_time_arg_val("cb_in_welford");
 
     // dst regs
     constexpr uint32_t dst0 = 0;

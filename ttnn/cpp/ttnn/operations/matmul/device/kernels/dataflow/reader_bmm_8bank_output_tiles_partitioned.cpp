@@ -34,8 +34,8 @@ void kernel_main() {
     // DPRINT("src0={} src1={}\n", src0_addr, src1_addr);
     // DPRINT("batch={}\n", batch);
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     constexpr uint32_t onetile = 1;
     const uint32_t in0_tile_bytes = get_tile_size(dfb_id_in0);

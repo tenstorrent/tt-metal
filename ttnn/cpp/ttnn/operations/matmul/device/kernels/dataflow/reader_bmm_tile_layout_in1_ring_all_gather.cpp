@@ -106,9 +106,9 @@ void kernel_main() {
         dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
-    constexpr uint32_t sync_dfb = get_named_compile_time_arg_val("dfb_sync");
-    constexpr uint32_t sync_dfb2 = get_named_compile_time_arg_val("dfb_sync2");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t sync_dfb = get_named_compile_time_arg_val("cb_sync");
+    constexpr uint32_t sync_dfb2 = get_named_compile_time_arg_val("cb_sync2");
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
     constexpr auto in1_args = TensorAccessorArgs<12>();
 

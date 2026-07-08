@@ -12,7 +12,7 @@ void kernel_main() {
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("dfb_out");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)

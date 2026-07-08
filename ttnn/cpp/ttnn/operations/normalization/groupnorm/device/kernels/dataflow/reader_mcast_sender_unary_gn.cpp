@@ -84,7 +84,7 @@ void kernel_main() {
     // core's slot and silently corrupt the reduction. Zero-fill does not fix this; the
     // slot pitch itself would need to grow.
     static_assert(datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
-                  "dfb_ex_external slot pitch is hardcoded; "
+                  "cb_ex_external slot pitch is hardcoded; "
                   "datum_size_bytes must be <= cb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");

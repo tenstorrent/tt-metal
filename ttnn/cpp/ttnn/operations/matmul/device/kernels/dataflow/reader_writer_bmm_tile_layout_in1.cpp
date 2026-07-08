@@ -60,9 +60,9 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(18);
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     // WRITER
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("dfb_out");
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     constexpr auto in1_args = TensorAccessorArgs<19>();
     constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();

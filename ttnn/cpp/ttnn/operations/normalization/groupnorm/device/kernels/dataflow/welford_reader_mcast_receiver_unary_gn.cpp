@@ -59,7 +59,7 @@ void kernel_main() {
     // The Welford section of compute reads the alias to get full fp32 into DEST, while later
     // FPU consumers read dfb_in0 directly. When welford_fp32_alias is false, cb_in0_welford_id
     // == cb_in0_id and the gated pushes below are skipped.
-    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("dfb_in0_welford");
+    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     Noc noc;

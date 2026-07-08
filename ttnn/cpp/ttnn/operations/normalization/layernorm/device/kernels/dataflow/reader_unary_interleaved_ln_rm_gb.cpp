@@ -33,8 +33,8 @@ void kernel_main() {
     // primary CB itself: cb_in (non-fused) or cb_x (fused).
     constexpr uint32_t dfb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("dfb_gamma");
-    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("dfb_beta");
+    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);

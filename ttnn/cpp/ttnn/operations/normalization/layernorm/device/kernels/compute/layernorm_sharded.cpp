@@ -63,30 +63,30 @@ void kernel_main() {
 
     constexpr uint32_t dfb_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t dfb_in1 = get_named_compile_time_arg_val("cb_in1");
-    constexpr uint32_t dfb_scaler_id = get_named_compile_time_arg_val("dfb_scaler");
+    constexpr uint32_t dfb_scaler_id = get_named_compile_time_arg_val("cb_scaler");
     constexpr uint32_t dfb_eps = get_named_compile_time_arg_val("cb_eps");
-    constexpr uint32_t dfb_scaler_global_id = get_named_compile_time_arg_val("dfb_scaler_global");
-    constexpr uint32_t dfb_gamma_id = get_named_compile_time_arg_val("dfb_gamma");
-    constexpr uint32_t dfb_beta_id = get_named_compile_time_arg_val("dfb_beta");
+    constexpr uint32_t dfb_scaler_global_id = get_named_compile_time_arg_val("cb_scaler_global");
+    constexpr uint32_t dfb_gamma_id = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t dfb_beta_id = get_named_compile_time_arg_val("cb_beta");
     constexpr uint32_t dfb_x = get_named_compile_time_arg_val("cb_x");  // x minus mean
 #if defined RMSNORM and not defined FUSE_PRE_ADD
     constexpr uint32_t dfb_xmm_id = dfb_in0;  // x minus mean
 #else
-    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("dfb_xmm");  // x minus mean
+    constexpr uint32_t dfb_xmm_id = get_named_compile_time_arg_val("cb_xmm");  // x minus mean
 #endif
-    constexpr uint32_t dfb_ex_partial_id = get_named_compile_time_arg_val("dfb_ex_partial");  // E[x] partial reduce
-    constexpr uint32_t dfb_ex_id = get_named_compile_time_arg_val("dfb_ex");                  // E[x] global reduce
-    constexpr uint32_t dfb_ex_external_id = get_named_compile_time_arg_val("dfb_ex_external");
+    constexpr uint32_t dfb_ex_partial_id = get_named_compile_time_arg_val("cb_ex_partial");  // E[x] partial reduce
+    constexpr uint32_t dfb_ex_id = get_named_compile_time_arg_val("cb_ex");                  // E[x] global reduce
+    constexpr uint32_t dfb_ex_external_id = get_named_compile_time_arg_val("cb_ex_external");
     constexpr uint32_t dfb_ex_partial2_id =
-        get_named_compile_time_arg_val("dfb_ex_partial2");                      // E[(x-E[x])^2] partial reduce
-    constexpr uint32_t dfb_ex2_id = get_named_compile_time_arg_val("dfb_ex2");  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t dfb_ex_external2_id = get_named_compile_time_arg_val("dfb_ex_external2");
-    constexpr uint32_t dfb_ex_global_id = get_named_compile_time_arg_val("dfb_ex_global");  // E[x] global reduce
+        get_named_compile_time_arg_val("cb_ex_partial2");                      // E[(x-E[x])^2] partial reduce
+    constexpr uint32_t dfb_ex2_id = get_named_compile_time_arg_val("cb_ex2");  // E[(x-E[x])^2] global reduce
+    constexpr uint32_t dfb_ex_external2_id = get_named_compile_time_arg_val("cb_ex_external2");
+    constexpr uint32_t dfb_ex_global_id = get_named_compile_time_arg_val("cb_ex_global");   // E[x] global reduce
     constexpr uint32_t dfb_xmm2_id = dfb_x;                                                 // xmm^2
-    constexpr uint32_t dfb_ex2pe_id = get_named_compile_time_arg_val("dfb_ex2pe");          // E[(x-E[x])^2]+eps
+    constexpr uint32_t dfb_ex2pe_id = get_named_compile_time_arg_val("cb_ex2pe");           // E[(x-E[x])^2]+eps
     constexpr uint32_t dfb_fusion_id =
-        get_named_compile_time_arg_val("dfb_xmm");  // stream gamma/beta (alias of cb_xmm_id)
-    constexpr uint32_t dfb_out_id = get_named_compile_time_arg_val("dfb_out");
+        get_named_compile_time_arg_val("cb_xmm");  // stream gamma/beta (alias of cb_xmm_id)
+    constexpr uint32_t dfb_out_id = get_named_compile_time_arg_val("cb_out");
 #ifdef DO_COL_MASK
 #ifndef RMSNORM
     // Scratch buffer holding the input with any padding columns zeroed, so those
