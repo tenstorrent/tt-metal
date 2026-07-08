@@ -351,6 +351,75 @@ def test_to_layout_sharded_batched_unpad(dtype, device):
     assert_quality(torch_input_tensor, ttnn.to_torch(output), dtype)
 
 
+def _height_sharded_l1_config(grid_end, shard_shape):
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(*grid_end))])
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM])
+@pytest.mark.parametrize(
+    "shape, grid_end, shard_shape",
+    [
+        # issue_test.py repro: 1024 padded [32,64] matrices, 16 per core over an 8x8 grid; logical
+        # height 17 is not tile-aligned so every matrix carries 15 interior pad rows to be stripped.
+        ([32, 32, 17, 64], (7, 7), (512, 64)),
+        # batch == 1 per core but many matrices total: each core holds exactly one [32,64] matrix.
+        # The old writer advanced the interleaved output pointer by the padded height (32) instead of
+        # the logical height (17), so every matrix past core 0 landed at the wrong row. 64 matrices.
+        ([64, 1, 17, 64], (7, 7), (32, 64)),
+        # matrix taller than one tile: H 40 -> padded 64 => 2 tile-rows per matrix, 2 matrices/core
+        # over 8 cores. Exercises block_height_ntiles > 1 together with batch > 1.
+        ([16, 1, 40, 64], (7, 0), (128, 64)),
+        # width not tile-aligned: W 50 -> padded 64. Exercises per-row column unpadding (write 50 of
+        # 64 columns) on top of the interior row unpadding.
+        ([32, 32, 17, 50], (7, 7), (512, 64)),
+        # single logical matrix row-split across cores (global batch == 1): the legacy contiguous
+        # path, which must keep working unchanged. H 500 -> padded 512, 64 rows/core over 8 cores.
+        ([1, 1, 500, 64], (7, 0), (64, 64)),
+    ],
+    ids=["repro_1024x16", "batch1_per_core", "multi_tile_row_matrix", "width_unpad", "single_matrix_split"],
+)
+def test_to_layout_sharded_to_interleaved_unpad(dtype, output_buffer_type, shape, grid_end, shard_shape, device):
+    # Height-sharded TILE input -> ROW_MAJOR INTERLEAVED output. untilize-with-unpadding must strip
+    # each matrix's interior tile pad rows (and any column padding) and land every matrix at its own
+    # logical row offset in the interleaved output. Regression for the batched HEIGHT_SHARDED ->
+    # INTERLEAVED path, previously blocked by a "Can only write unbatched output interleaved" fatal.
+    input_mem_config = _height_sharded_l1_config(grid_end, shard_shape)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=input_mem_config)
+
+    output = ttnn.to_layout(ttnn_input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert output.memory_config().buffer_type == output_buffer_type
+    assert_quality(torch_input_tensor, ttnn.to_torch(output), dtype)
+
+
+def test_to_layout_sharded_to_interleaved_matrix_split_unsupported(device):
+    # A multi-matrix batch (global batch == 2) whose padded matrices ([64, 64]) straddle core
+    # boundaries (shard height 32 < padded matrix height 64) is not supported for interleaved output.
+    # It must raise a clear precondition error instead of silently writing garbage.
+    input_mem_config = _height_sharded_l1_config((3, 0), (32, 64))  # 4 cores, half a matrix each
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    torch_input_tensor = torch.randn([2, 1, 40, 64], dtype=torch.bfloat16)  # H 40 -> padded 64
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=input_mem_config)
+
+    output = ttnn.to_layout(ttnn_input_tensor, ttnn.ROW_MAJOR_LAYOUT, memory_config=output_mem_config)
+
+    assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert output.memory_config().buffer_type == output_buffer_type
+    assert_quality(torch_input_tensor, ttnn.to_torch(output), dtype)
+
+
 @pytest.mark.parametrize("batch_size", [9, 32])
 @pytest.mark.parametrize("sentence_size", [32, 256])
 def test_int_untilize(device, batch_size, sentence_size):
