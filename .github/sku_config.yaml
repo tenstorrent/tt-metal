@@ -227,6 +227,24 @@ skus:
       topologyKeys:
         - exabox.tenstorrent.com/SC16
 
+  bh_sp4-blitz:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      topologyKeys:
+        - exabox.tenstorrent.com/SC16
+      mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto
+
+  bh_sp4-mgd:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: MGD
+      topologyKeys:
+        - exabox.tenstorrent.com/SC16
+      mgd_file: tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto
+
   cpu_medium:
     runs_on:
       - tt-ubuntu-2204-medium-stable

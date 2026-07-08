@@ -37,3 +37,5 @@ bh_galaxy:                  38
 bh_galaxy_perf:             15
 bh_sp1:                      0  # exabox-multihost-with-nfs; no observed tt-metal jobs
 bh_sp4:                      0  # exabox-multihost-with-nfs; same label as bh_sp1
+bh_sp4-blitz:                0  # exabox-multihost-with-nfs; same label as bh_sp1
+bh_sp4-mgd:                  0  # exabox-multihost-with-nfs; same label as bh_sp1
