@@ -12,7 +12,13 @@
 namespace ttnn::operations::experimental::matmul_decode {
 
 MatmulDecodeDeviceOperation::program_factory_t MatmulDecodeDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // A rank-4 activation ([d0, d1, M, K]) is a batched matmul; dispatch to the batched
+    // factory (weights folded along batch and N). The partial_width_sharded flag only
+    // selects between the two rank-2 factories.
+    if (tensor_args.input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
+        return BatchedWidthSharded{};
+    }
     if (operation_attributes.partial_width_sharded) {
         return PartialWidthSharded{};
     }
@@ -40,6 +46,120 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.logical_shape()[-2] == operation_attributes.M,
         "Input tensor A must have the same M dimension as the operation attributes");
+
+    if (input_tensor_a.logical_shape().rank() == 4 && operation_attributes.batch > 1) {
+        // Batched matmul: A is [d0, d1, M, K] and the batch is the product of the two leading
+        // dims (batch = d0 * d1). The weights are folded along BOTH the batch and N dimensions
+        // across b_blocks * n_blocks cores. The caller reshapes/permutes the [batch, K, N]
+        // weights into a width-sharded tensor with shard [Bc * K, Nc] (Bc = batch / b_blocks,
+        // Nc = N / n_blocks), so B's logical shape becomes [Bc * K, b_blocks * N] (packed
+        // rank-4). Recover that geometry (mirroring BatchedWidthSharded::create_descriptor) and
+        // validate it.
+        const int batch = operation_attributes.batch;
+        const int b_blocks = operation_attributes.b_blocks;
+        const int n_blocks = operation_attributes.n_blocks;
+
+        TT_FATAL(
+            input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1] == batch,
+            "Batched matmul_decode expects A leading dims {} x {} to multiply to the operation batch {}",
+            input_tensor_a.logical_shape()[0],
+            input_tensor_a.logical_shape()[1],
+            batch);
+        // A real batch (> 1) requires rank-4 weights carrying the same batch size.
+        if (batch > 1) {
+            TT_FATAL(
+                input_tensor_b.logical_shape().rank() == 4,
+                "batched matmul_decode with batch {} > 1 requires rank-4 weights, but got rank {}",
+                batch,
+                input_tensor_b.logical_shape().rank());
+        }
+        TT_FATAL(
+            b_blocks > 0 && batch % b_blocks == 0,
+            "Batched matmul_decode requires b_blocks {} to be a positive divisor of the batch {}",
+            b_blocks,
+            batch);
+        TT_FATAL(
+            n_blocks > 0 && operation_attributes.N % n_blocks == 0,
+            "Batched matmul_decode requires n_blocks {} to be a positive divisor of N {}",
+            n_blocks,
+            operation_attributes.N);
+        const int Bc = batch / b_blocks;
+        const int Nc = operation_attributes.N / n_blocks;
+
+        const auto& a_tile = input_tensor_a.tensor_spec().tile();
+        const uint32_t a_tile_height = a_tile.get_height();
+        const int M_tiles = tt::div_up(operation_attributes.M, static_cast<int>(a_tile_height));
+
+        // The compute kernel computes the whole M dimension in a single DST block
+        // (out_block_h = M_tiles), so M_tiles must fit in DST (<= 8 in half-sync mode).
+        TT_FATAL(
+            M_tiles <= 8,
+            "batched matmul_decode requires M_tiles (= ceil(M / tile_height)) <= 8 so the output block fits in "
+            "DST, but got M_tiles={} (M={}, tile_height={})",
+            M_tiles,
+            operation_attributes.M,
+            a_tile_height);
+
+        // ---- A (activation) shard: width(K)-sharded ----
+        const auto& a_shard = input_tensor_a.memory_config().shard_spec().value();
+        TT_FATAL(
+            a_shard.shape[1] % tt::constants::TILE_WIDTH == 0,
+            "Input tensor A shard width {} must be divisible by the tile width {}",
+            a_shard.shape[1],
+            tt::constants::TILE_WIDTH);
+
+        // ---- B (weight) shard: [Bc * K, Nc] block, tile-aligned ----
+        const auto& b_shard = input_tensor_b.memory_config().shard_spec().value();
+        const uint32_t b_shard_h = b_shard.shape[0];
+        const uint32_t b_shard_w = b_shard.shape[1];
+        TT_FATAL(
+            b_shard_h % tt::constants::TILE_HEIGHT == 0 && b_shard_w % tt::constants::TILE_WIDTH == 0,
+            "batched matmul_decode requires B shard dims [{}, {}] to be tile-aligned (tile {}x{})",
+            b_shard_h,
+            b_shard_w,
+            tt::constants::TILE_HEIGHT,
+            tt::constants::TILE_WIDTH);
+        TT_FATAL(
+            b_shard_h == static_cast<uint32_t>(Bc) * operation_attributes.K,
+            "batched matmul_decode expects B shard height {} to equal Bc * K = {} * {} = {}",
+            b_shard_h,
+            Bc,
+            operation_attributes.K,
+            Bc * operation_attributes.K);
+        TT_FATAL(
+            b_shard_w == static_cast<uint32_t>(Nc),
+            "batched matmul_decode expects B shard width {} to equal Nc = N / n_blocks = {}",
+            b_shard_w,
+            Nc);
+
+        // ---- B is sharded across exactly b_blocks * n_blocks cores ----
+        const int num_B_cores = static_cast<int>(b_shard.grid.num_cores());
+        TT_FATAL(
+            num_B_cores == b_blocks * n_blocks,
+            "batched matmul_decode expects B sharded across b_blocks * n_blocks = {} * {} = {} cores, but got {}",
+            b_blocks,
+            n_blocks,
+            b_blocks * n_blocks,
+            num_B_cores);
+
+        // ---- Folding: B's logical shape must be [Bc * K, b_blocks * N] after reshape/permute ----
+        TT_FATAL(
+            input_tensor_b.logical_shape()[-2] == Bc * operation_attributes.K,
+            "batched matmul_decode expects B logical height {} to equal Bc * K = {} * {} = {}",
+            input_tensor_b.logical_shape()[-2],
+            Bc,
+            operation_attributes.K,
+            Bc * operation_attributes.K);
+        TT_FATAL(
+            input_tensor_b.logical_shape()[-1] == b_blocks * operation_attributes.N,
+            "batched matmul_decode expects B logical width {} to equal b_blocks * N = {} * {} = {} (the weights are "
+            "reshaped/permuted so the batch-blocks fold into the width)",
+            input_tensor_b.logical_shape()[-1],
+            b_blocks,
+            operation_attributes.N,
+            b_blocks * operation_attributes.N);
+        return;
+    }
 
     if (operation_attributes.partial_width_sharded) {
         // Partial width-sharded B: the caller reshapes/permutes a [K, N] weight into a
@@ -147,7 +267,7 @@ void MatmulDecodeDeviceOperation::validate_on_program_cache_miss(
     }
 
     // Full width-sharded B: each shard holds the full K dimension for its N-slice.
-    if (input_tensor_a.logical_shape().rank() > 2) {
+    if (input_tensor_a.logical_shape().rank() > 2 && input_tensor_b.logical_shape().rank() > 2) {
         for (int i = 0; i < input_tensor_a.logical_shape().rank() - 2; i++) {
             TT_FATAL(
                 input_tensor_a.logical_shape()[i] == input_tensor_b.logical_shape()[i],
@@ -178,6 +298,22 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
 
+    if (input_tensor_a.logical_shape().rank() == 4) {
+        // Batched: the output directly matches the torch reference [d0, d1, M, N] (A's shape with
+        // the last dim replaced by N). For this initial implementation the output is DRAM
+        // INTERLEAVED, so the writer kernel can scatter each core's [Bc, M, Nc] block to the
+        // correct batch rows / N-slice by tile index without any unfolding on the host.
+        const auto memory_config = operation_attributes.output_mem_config.value_or(
+            MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM));
+
+        return TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                dtype,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tensor_a.tensor_spec().tile()),
+                memory_config));
+    }
+
     CoreRangeSet output_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
     int output_num_cores = output_core_range_set.num_cores();
     if (operation_attributes.partial_width_sharded) {
@@ -194,10 +330,13 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
             output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size(), true);
     }
     int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
-    std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
+    const uint32_t shard_height =
+        tt::round_up(operation_attributes.M, input_tensor_a.tensor_spec().tile().get_height());
+    std::array<uint32_t, 2> shard_shape = {shard_height, per_core_output_width};
     auto shard_spec =
         tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
-    auto memory_config = MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec);
+    auto memory_config = operation_attributes.output_mem_config.value_or(
+        MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec));
 
     return TensorSpec(
         output_shape,
@@ -220,8 +359,83 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
-    std::optional<const DataType> dtype) {
+    std::optional<const DataType> dtype,
+    const std::optional<MemoryConfig>& output_mem_config) {
     using OperationType = ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation;
+
+    // Batched matmul: A is rank-4 ([d0, d1, M, K]); the batch is the product of the two leading
+    // dims (batch = d0 * d1). The caller reshapes/permutes the [batch, K, N] weights so the batch
+    // and N dims fold across b_blocks * n_blocks cores; the weights' logical shape becomes
+    // [Bc * K, b_blocks * N] (packed rank-4, i.e. [1, 1, Bc * K, b_blocks * N]). The whole fold
+    // geometry is inferred from the shapes (like the partial layout recovers N from the
+    // K_a / K_b ratio):
+    //   Bc = weight_height / K, b_blocks = batch / Bc, N = weight_width / b_blocks,
+    //   n_blocks = num_B_cores / b_blocks.
+    if (input_tensor_a.logical_shape().rank() == 4) {
+        const int batch = input_tensor_a.logical_shape()[0] * input_tensor_a.logical_shape()[1];
+        const int M = input_tensor_a.logical_shape()[-2];
+        const int K = input_tensor_a.logical_shape()[-1];
+        // A real batch (> 1) requires rank-4 weights carrying the same batch size.
+        if (batch > 1) {
+            TT_FATAL(
+                input_tensor_b.logical_shape().rank() == 4,
+                "batched matmul_decode with batch {} > 1 requires rank-4 weights, but got rank {}",
+                batch,
+                input_tensor_b.logical_shape().rank());
+            const int weight_height = input_tensor_b.logical_shape()[-2];  // = Bc * K
+            const int weight_width = input_tensor_b.logical_shape()[-1];   // = b_blocks * N
+            TT_FATAL(
+                K > 0 && weight_height % K == 0,
+                "batched matmul_decode: weight height {} must be a multiple of K {} (weight height = Bc * K)",
+                weight_height,
+                K);
+            const int Bc = weight_height / K;
+            TT_FATAL(
+                Bc > 0 && batch % Bc == 0,
+                "batched matmul_decode: batch {} must be a multiple of Bc {} (Bc = weight_height / K)",
+                batch,
+                Bc);
+            const int b_blocks = batch / Bc;
+            TT_FATAL(
+                weight_width % b_blocks == 0,
+                "batched matmul_decode: weight width {} must be a multiple of b_blocks {} (weight width = b_blocks * "
+                "N)",
+                weight_width,
+                b_blocks);
+            const int N = weight_width / b_blocks;
+            const int num_B_cores =
+                static_cast<int>(input_tensor_b.memory_config().shard_spec().value().grid.num_cores());
+            TT_FATAL(
+                num_B_cores % b_blocks == 0,
+                "batched matmul_decode: number of weight cores {} must be a multiple of b_blocks {}",
+                num_B_cores,
+                b_blocks);
+            const int n_blocks = num_B_cores / b_blocks;
+            log_debug(
+                tt::LogOp,
+                "matmul_decode (batched) batch={}, M={}, N={}, K={}, Bc={}, b_blocks={}, n_blocks={}",
+                batch,
+                M,
+                N,
+                K,
+                Bc,
+                b_blocks,
+                n_blocks);
+            auto operation_attributes = OperationType::operation_attributes_t{
+                M,
+                N,
+                K,
+                output_mem_config,
+                dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
+                /*partial_width_sharded=*/false,
+                batch,
+                b_blocks,
+                n_blocks,
+            };
+            auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
+            return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+        }
+    }
 
     // For the partial width-sharded layout the caller reshapes/permutes B so that its last
     // logical dim is K_blocks * N rather than N; recover the true N from the K_a / K_b ratio.
@@ -248,7 +462,7 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
         M,
         N,
         K,
-        input_tensor_a.memory_config(),
+        output_mem_config,
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
     };
