@@ -961,14 +961,11 @@ class TracedLLMExecutor:
         # Only valid for free-running greedy/top-k generation — NOT teacher forcing (which injects
         # host tokens every step), so accuracy/teacher-forcing runs must leave this OFF.
         self._ondevice_decode_loop = os.environ.get("TTT_ONDEVICE_DECODE_LOOP", "0") == "1"
-        # Diagnostic: read back device current_pos on the first few steps to prove plus_one persistence.
-        self._ondevice_decode_loop_debug = os.environ.get("TTT_ONDEVICE_DECODE_LOOP_DEBUG", "0") == "1"
         # Per sampling-mode flag: the next decode step must re-seed the persistent buffers from host
         # (correct first token + start position). Set after every prefill and at init; cleared once
         # the device has been seeded, after which steady-state steps carry state on device.
         self._decode_needs_reseed: dict[bool, bool] = defaultdict(lambda: True)
         self._prev_decode_page_table: torch.Tensor | None = None
-        self._decode_dbg_count = 0
 
         self.mode = None
         self.already_warmed_up_prefill = False
@@ -1515,15 +1512,6 @@ class TracedLLMExecutor:
             blocking=False,
         )
         tt_output = self.trace_output_decode[sampling_on_device]
-
-        if loop_active and self._ondevice_decode_loop_debug and self._decode_dbg_count < 6:
-            # Prove plus_one persistence: read back the device position after this replay.
-            # Expect device current_pos to track host+1 (device already incremented for next step);
-            # if it stays pinned, plus_one is not persisting across replays.
-            self._decode_dbg_count += 1
-            dbg_pos = self.trace_inputs_decode[sampling_on_device][1]
-            pos_host = ttnn.to_torch(ttnn.get_device_tensors(dbg_pos)[0]).flatten()[:1].tolist()
-            logger.info(f"[ondevice-loop-debug] host start_pos[0]={int(start_pos[0])} device current_pos[0]={pos_host}")
 
         if read_from_device:
             if sampling_on_device:
