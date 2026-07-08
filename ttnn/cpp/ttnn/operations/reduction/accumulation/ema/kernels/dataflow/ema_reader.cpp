@@ -34,14 +34,14 @@ void kernel_main() {
     const auto src_accessor = TensorAccessor(src_args, src_base_addr);
 
     Noc noc;
-    DataflowBuffer cb_src(src_cb_idx);
+    DataflowBuffer dfb_src(src_cb_idx);
 
     //-------------------------------------------------------------------------
     // Main loop - pull pages from src and push to src_cb
     for (uint32_t tile_id = src_start_tile; tile_id < (src_start_tile + total_tiles_per_core); ++tile_id) {
-        cb_src.reserve_back(ONE_TILE);
-        noc.async_read(src_accessor, cb_src, src_tile_size, {.page_id = tile_id}, {.offset_bytes = 0});
+        dfb_src.reserve_back(ONE_TILE);
+        noc.async_read(src_accessor, dfb_src, src_tile_size, {.page_id = tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_src.push_back(ONE_TILE);
+        dfb_src.push_back(ONE_TILE);
     }
 }

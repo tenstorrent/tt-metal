@@ -20,48 +20,48 @@ void kernel_main() {
     constexpr uint32_t tile_hw = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_11;
+    constexpr uint32_t dfb_id_out0 = tt::CBIndex::c_11;
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out0);
+    const uint32_t tile_bytes = get_tile_size(dfb_id_out0);
 
-    constexpr uint32_t cb_id_mask = tt::CBIndex::c_5;
+    constexpr uint32_t dfb_id_mask = tt::CBIndex::c_5;
     const uint32_t mask_padded_data = get_arg_val<uint32_t>(4);
     // const uint32_t num_datum_padded = get_arg_val<uint32_t>(5);
 
     Noc noc;
-    DataflowBuffer cb_id_out0_obj(cb_id_out0);
-    DataflowBuffer cb_id_mask_obj(cb_id_mask);
+    DataflowBuffer dfb_id_out0_obj(dfb_id_out0);
+    DataflowBuffer dfb_id_mask_obj(dfb_id_mask);
 
     // Adds -inf padding. Note: the value is the uint16 representation of bfloat16's -inf
     constexpr uint16_t mask_val = 0xFF80;
     constexpr uint32_t mask_val_32 = ((uint32_t)mask_val << 16) + mask_val;
     if (mask_padded_data) {
-        // generate_bcast_row_mask(cb_id_mask, num_datum_padded, mask_val);
-        uint32_t ptr = (cb_id_mask_obj.get_write_ptr());
+        // generate_bcast_row_mask(dfb_id_mask, num_datum_padded, mask_val);
+        uint32_t ptr = (dfb_id_mask_obj.get_write_ptr());
         // same pointer, but for zeroing out the tile
         volatile tt_l1_ptr uint16_t* zero_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_mask_obj.get_write_ptr());
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dfb_id_mask_obj.get_write_ptr());
         for (uint32_t i = 0; i < tile_hw; i++) {
             zero_ptr[i] = 0.0f;
         }
         constexpr uint32_t num_datum_unpadded = 32 - num_datum_padded;
         fill_pad_tile<uint16_t, num_datum_unpadded, 32>(ptr, mask_val);
-        cb_id_mask_obj.push_back(1);
+        dfb_id_mask_obj.push_back(1);
     }
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
-        cb_id_out0_obj.wait_front(blk);
+        dfb_id_out0_obj.wait_front(blk);
 
         uint32_t read_offset = 0;
         for (uint32_t j = 0; j < blk; j++) {
-            noc.async_write(cb_id_out0_obj, s, tile_bytes, {.offset_bytes = read_offset}, {.page_id = tile_id});
+            noc.async_write(dfb_id_out0_obj, s, tile_bytes, {.offset_bytes = read_offset}, {.page_id = tile_id});
             tile_id++;
             read_offset += tile_bytes;
         }
         noc.async_write_barrier();
-        cb_id_out0_obj.pop_front(blk);
+        dfb_id_out0_obj.pop_front(blk);
     }
 }

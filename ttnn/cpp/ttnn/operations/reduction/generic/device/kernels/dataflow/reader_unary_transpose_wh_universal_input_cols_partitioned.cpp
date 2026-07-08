@@ -26,30 +26,30 @@ void kernel_main() {
     constexpr bool use_welford = get_compile_time_arg_val(4) != 0;
     constexpr auto fp32_mode = get_compile_time_arg_val(5) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
 
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
     // per chunk, which would feed the Welford kernel tiles from the wrong columns.
     // Int32 SFPU max keeps one acc DST per column plus one shared work DST (DEST_AUTO_LIMIT - 1).
-    constexpr DataFormat reduce_format = get_dataformat(cb_id_in0);
+    constexpr DataFormat reduce_format = get_dataformat(dfb_id_in0);
     constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
     constexpr uint32_t row_chunk = use_welford ? 1
                                                : (use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1)
                                                                        : compute_kernel_lib::DEST_AUTO_LIMIT);
 
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes = get_tile_size(dfb_id_in0);
 
-    constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_id_in2 = tt::CBIndex::c_2;
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     constexpr auto tensor_args = TensorAccessorArgs<6>();
     auto tensor_accessor = TensorAccessor(tensor_args, src_addr);
 
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     uint32_t w = curr_col_in_batch;
 
@@ -79,10 +79,10 @@ void kernel_main() {
             w = reset_w;
             col_start_tile_id = reset_col_start;
             for (uint32_t k = i; k < chunk_end; ++k) {
-                cb_in0.reserve_back(onetile);
-                noc.async_read(tensor_accessor, cb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+                dfb_in0.reserve_back(onetile);
+                noc.async_read(tensor_accessor, dfb_in0, tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_in0.push_back(onetile);
+                dfb_in0.push_back(onetile);
 
                 ++w;
 

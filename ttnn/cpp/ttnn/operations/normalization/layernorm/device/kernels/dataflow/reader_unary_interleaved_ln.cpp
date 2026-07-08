@@ -59,27 +59,27 @@ void kernel_main() {
     const uint32_t H_logical = get_arg_val<uint32_t>(9);
 #endif
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in");
     // Welford-fp32 alias of cb_in (non-fused) or cb_x (fused). Shares SRAM with the
     // primary CB but has its own read/write pointers, so we must push_back on it whenever we
-    // push to the primary CB. When welford_fp32_alias is 0, cb_x_welford == cb_in.
-    constexpr uint32_t cb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
+    // push to the primary CB. When welford_fp32_alias is 0, dfb_x_welford == cb_in.
+    constexpr uint32_t dfb_id_x_welford = get_named_compile_time_arg_val("dfb_x_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_inb");
+    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("dfb_gamma");
+    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("dfb_beta");
 
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
-    DataflowBuffer cb_x_welford(cb_id_x_welford);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_x_welford(dfb_id_x_welford);
 #ifdef FUSE_PRE_ADD
-    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    DataflowBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer dfb_gamma(dfb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    DataflowBuffer cb_beta(cb_id_beta);
+    DataflowBuffer dfb_beta(dfb_id_beta);
 #endif
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
@@ -95,50 +95,50 @@ void kernel_main() {
 
 #ifdef TILIZE_IN
     // ROW_MAJOR path: input a is a row-major tensor.
-    // The compute kernel tilizes cb_in_rm (c_27) → cb_in (c_0) before processing.
+    // The compute kernel tilizes dfb_in_rm (c_27) → cb_in (c_0) before processing.
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
-    DataflowBuffer cb_in_rm(cb_id_in_rm);
+    constexpr uint32_t dfb_id_in_rm = get_named_compile_time_arg_val("dfb_in_rm");
+    DataflowBuffer dfb_in_rm(dfb_id_in_rm);
 
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
     // TILE path: input a is already in tile layout.
-    const uint32_t src0_page_bytes = get_tile_size(cb_id_in0);
+    const uint32_t src0_page_bytes = get_tile_size(dfb_id_in0);
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #ifdef FUSE_GAMMA
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
+    const uint32_t gamma_tile_bytes = get_tile_size(dfb_id_gamma);
     const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
-    const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
+    const uint32_t beta_tile_bytes = get_tile_size(dfb_id_beta);
     const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
+    const uint32_t src1_tile_bytes = get_tile_size(dfb_id_in1);
     const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 
     // Generate constant tiles for layernorm compute
-    constexpr uint32_t cb_scaler = get_named_compile_time_arg_val("cb_scaler");
-    constexpr uint32_t cb_eps = get_named_compile_time_arg_val("cb_eps");
+    constexpr uint32_t dfb_scaler = get_named_compile_time_arg_val("cb_scaler");
+    constexpr uint32_t dfb_eps = get_named_compile_time_arg_val("cb_eps");
 
     if constexpr (!use_welford) {
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
 
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_scaler,
+            dfb_scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
         if constexpr (partial_last_tile_cols > 0) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_scaler,
+                dfb_scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
                 dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
@@ -146,40 +146,40 @@ void kernel_main() {
     }
 
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
+    generate_bcast_col_scalar(CircularBuffer(dfb_eps), eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;
 
         // --- Input read: branches on layout ---
 #ifdef TILIZE_IN
-        // ROW_MAJOR: push one tile-row of row-major data into cb_in_rm (block-by-block).
-        // The compute kernel's TILIZE_IN block converts cb_in_rm → cb_in before processing.
+        // ROW_MAJOR: push one tile-row of row-major data into dfb_in_rm (block-by-block).
+        // The compute kernel's TILIZE_IN block converts dfb_in_rm → cb_in before processing.
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #else
         // TILE: read input a and b (if present) interleaved per block.
         for (auto block : generic::blocks(Wt, block_size)) {
             const uint32_t flat_offset = curr_tile_row * Wt + block.start();
-            layernorm_dataflow_utils::read_block_to_cb(noc, cb_in0, src_a, src0_page_bytes, flat_offset, block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, dfb_in0, src_a, src0_page_bytes, flat_offset, block);
 #ifdef FUSE_PRE_ADD
-            layernorm_dataflow_utils::read_block_to_cb(noc, cb_in1, src_b, src1_tile_bytes, flat_offset, block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, dfb_in1, src_b, src1_tile_bytes, flat_offset, block);
 #else
-            // Non-fused welford-fp32 alias: cb_x_welford shares cb_in0's memory but has its own
-            // read/write pointers. After the data lands in cb_in0, push
-            // cb_x_welford by the same amount so compute can wait_front on the alias separately
-            // for welford reads. Skipped when no alias is active (cb_x_welford == cb_in0; the
-            // duplicate push would double-count cb_in0's semaphore).
+            // Non-fused welford-fp32 alias: dfb_x_welford shares dfb_in0's memory but has its own
+            // read/write pointers. After the data lands in dfb_in0, push
+            // dfb_x_welford by the same amount so compute can wait_front on the alias separately
+            // for welford reads. Skipped when no alias is active (dfb_x_welford == dfb_in0; the
+            // duplicate push would double-count dfb_in0's semaphore).
             if constexpr (welford_fp32_alias) {
-                cb_x_welford.reserve_back(block.full_block_size());
-                cb_x_welford.push_back(block.full_block_size());
+                dfb_x_welford.reserve_back(block.full_block_size());
+                dfb_x_welford.push_back(block.full_block_size());
             }
 #endif
         }
@@ -190,10 +190,11 @@ void kernel_main() {
         if (ncht == 0) {
             for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef FUSE_GAMMA
-                layernorm_dataflow_utils::read_block_to_cb(noc, cb_gamma, addrg, gamma_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(
+                    noc, dfb_gamma, addrg, gamma_tile_bytes, block.start(), block);
 #endif
 #ifdef FUSE_BETA
-                layernorm_dataflow_utils::read_block_to_cb(noc, cb_beta, addrb, beta_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(noc, dfb_beta, addrb, beta_tile_bytes, block.start(), block);
 #endif
             }  // wt loop
         }

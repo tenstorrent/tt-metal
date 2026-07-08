@@ -47,12 +47,12 @@ void kernel_main() {
     // Circular buffer that the reader kernel fills with input tiles.
     // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so copy_tile
     // preserves the FP32 mantissa into DEST for the welford SFPU consumer. BF16 input: Default.
-    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto dfb_in = tt::CBIndex::c_0;
     // Circular buffer where the final variance/std output tile is written.
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_out = tt::CBIndex::c_16;
 
-    DataflowBuffer cb_in_obj(cb_in);
-    DataflowBuffer cb_out_obj(cb_out);
+    DataflowBuffer dfb_in_obj(dfb_in);
+    DataflowBuffer dfb_out_obj(dfb_out);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -68,8 +68,8 @@ void kernel_main() {
     // in the last tile via welford_update_rows.
     constexpr uint32_t last_tile_rows = ((H % tile_height) == 0) ? tile_height : (H % tile_height);
 
-    compute_kernel_hw_startup(cb_in, cb_out);
-    pack_reconfig_data_format(cb_out);
+    compute_kernel_hw_startup(dfb_in, dfb_out);
+    pack_reconfig_data_format(dfb_out);
 
     for (uint32_t ncwt = 0; ncwt < NCWt; ncwt++) {
         // Welford accumulation along the H dimension for one column of tiles.
@@ -104,18 +104,18 @@ void kernel_main() {
         // - If is_std, sqrt_tile() turns variance into standard deviation in place.
         // - start_N advances by one tile height each iteration so Welford sees the correct
         //   element count / divisor progression across the whole H reduction.
-        copy_tile_to_dst_init_short(cb_in);
+        copy_tile_to_dst_init_short(dfb_in);
         tile_regs_acquire();
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
         // persists across DST cycles because LREGs are separate from
         // the DST register file managed by tile_regs_acquire/release.
         for (uint32_t ht = 0; ht < Ht; ++ht) {
-            cb_in_obj.wait_front(onetile);
+            dfb_in_obj.wait_front(onetile);
             // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32 so the
             // FP32 mantissa is preserved into DEST for the welford SFPU consumer.
-            copy_tile(cb_in, 0, input_dst);
-            cb_in_obj.pop_front(onetile);
+            copy_tile(dfb_in, 0, input_dst);
+            dfb_in_obj.pop_front(onetile);
 
             if (ht < (Ht - 1)) {
                 welford_update<0>(input_dst, start_N, {});
@@ -146,11 +146,11 @@ void kernel_main() {
         // Pack variance/std directly to output -- no transpose needed for H reduction
         // because Welford natively produces results in row orientation which matches
         // the desired output layout (one row of results per column of input).
-        cb_out_obj.reserve_back(onetile);
+        dfb_out_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_out);
-        pack_tile(var_dst, cb_out);
+        pack_reconfig_data_format(dfb_out);
+        pack_tile(var_dst, dfb_out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_out_obj.push_back(onetile);
     }
 }

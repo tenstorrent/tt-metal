@@ -46,21 +46,21 @@ void kernel_main() {
     Noc noc_obj(noc_id);
     Semaphore<> signal_sem(get_compile_time_arg_val(4));
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in2");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
+    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("dfb_in2");
 
-    DataflowBuffer cb_in0(cb_id_in0);
-    DataflowBuffer cb_in2(cb_id_in2);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in2(dfb_id_in2);
 
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
 
     // Reserving/pushing the local shard is done in compute
-    cb_in2.reserve_back((ring_size - 1) * shard_size_in_tiles);
+    dfb_in2.reserve_back((ring_size - 1) * shard_size_in_tiles);
 
-    uint32_t local_shard_read_addr = cb_in0.get_read_ptr();
-    uint32_t l1_write_addr_in0 = cb_in2.get_write_ptr();
+    uint32_t local_shard_read_addr = dfb_in0.get_read_ptr();
+    uint32_t l1_write_addr_in0 = dfb_in2.get_write_ptr();
 
     uint32_t hop_core_offset = static_cast<uint32_t>(is_hop_core);
 
@@ -98,14 +98,14 @@ void kernel_main() {
 
         // Do stuff for matmul fusion here
         if (shard_cnt > 0) {
-            cb_in2.push_back(shard_size_in_tiles);
+            dfb_in2.push_back(shard_size_in_tiles);
         }
     }
 
     if (!is_hop_core) {
         for (uint32_t b = 0; b < batch - 1; ++b) {  // for rest batches, not need to gather in0 anymore
-            cb_in2.reserve_back((ring_size - 1) * shard_size_in_tiles);
-            cb_in2.push_back((ring_size - 1) * shard_size_in_tiles);
+            dfb_in2.reserve_back((ring_size - 1) * shard_size_in_tiles);
+            dfb_in2.push_back((ring_size - 1) * shard_size_in_tiles);
         }
     }
     noc_obj.async_atomic_barrier();

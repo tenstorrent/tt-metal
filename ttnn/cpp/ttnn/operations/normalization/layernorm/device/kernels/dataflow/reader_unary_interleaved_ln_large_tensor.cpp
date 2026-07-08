@@ -58,21 +58,21 @@ void kernel_main() {
     const uint32_t H_logical = get_arg_val<uint32_t>(9);
 #endif
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
-    constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_inb");
+    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("dfb_gamma");
+    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("dfb_beta");
 
     Noc noc;
-    DataflowBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 #ifdef FUSE_PRE_ADD
-    DataflowBuffer cb_in1(cb_id_in1);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    DataflowBuffer cb_gamma(cb_id_gamma);
+    DataflowBuffer dfb_gamma(dfb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    DataflowBuffer cb_beta(cb_id_beta);
+    DataflowBuffer dfb_beta(dfb_id_beta);
 #endif
 
     // No use_welford slot (large-tensor + Welford uses a separate kernel).
@@ -88,56 +88,56 @@ void kernel_main() {
 
 #ifdef TILIZE_IN
     // ROW_MAJOR path: input a is a row-major tensor.
-    // The compute kernel tilizes cb_in_rm (c_27) → cb_in (c_0) before each pass.
+    // The compute kernel tilizes dfb_in_rm (c_27) → cb_in (c_0) before each pass.
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
-    DataflowBuffer cb_in_rm(cb_id_in_rm);
+    constexpr uint32_t dfb_id_in_rm = get_named_compile_time_arg_val("dfb_in_rm");
+    DataflowBuffer dfb_in_rm(dfb_id_in_rm);
 
     const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
 #else
     // TILE path: input a is already in tile layout.
-    const uint32_t src0_page_bytes = get_tile_size(cb_id_in0);
+    const uint32_t src0_page_bytes = get_tile_size(dfb_id_in0);
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
 #ifdef FUSE_GAMMA
-    const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
+    const uint32_t gamma_tile_bytes = get_tile_size(dfb_id_gamma);
     const auto addrg = TensorAccessor(gamma_args, gamma_addr);
 #endif
 #ifdef FUSE_BETA
-    const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
+    const uint32_t beta_tile_bytes = get_tile_size(dfb_id_beta);
     const auto addrb = TensorAccessor(beta_args, beta_addr);
 #endif
 #ifdef FUSE_PRE_ADD
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
+    const uint32_t src1_tile_bytes = get_tile_size(dfb_id_in1);
     const auto src_b = TensorAccessor(src1_args, b_addr);
 #endif
 
     // Generate constant tiles (scaler and epsilon) — shared between TILE and RM paths.
     {
-        constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_scaler");
+        constexpr uint32_t dfb_in_2 = get_named_compile_time_arg_val("cb_scaler");
         constexpr uint32_t partial_last_tile_cols = W_logical % tt::constants::TILE_WIDTH;
 
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_in_2,
+            dfb_in_2,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
             dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
         if constexpr (partial_last_tile_cols > 0) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_in_2,
+                dfb_in_2,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
                 dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
         }
     }
-    constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
+    constexpr uint32_t eps_dfb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_dfb_id), eps);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         const uint32_t curr_tile_row = start_tile_row + ncht;
@@ -146,17 +146,17 @@ void kernel_main() {
         // Pass 0: Data for calculating E[X]
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #else
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #endif
@@ -165,24 +165,24 @@ void kernel_main() {
 // RM path: push all in_rm first, then all in1 (separate) — the tilize step in
 //   compute provides enough pipeline slack.
 // TILE path: in0 and in1 MUST be interleaved per block to avoid deadlock.
-//   cb_in0 holds only 2*block_size tiles; filling all in0 before any in1 stalls
+//   dfb_in0 holds only 2*block_size tiles; filling all in0 before any in1 stalls
 //   once the buffer is full while compute waits for in1 — circular wait.
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, dfb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #else  // TILE path: interleaved per block
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
 #endif
         }
 #endif
@@ -190,10 +190,10 @@ void kernel_main() {
         // Pass 2: Data for the final normalization step.
         // For the ROW_MAJOR path, input MUST be interleaved with gamma/beta per block.
         // Pushing all pass-2 input first and then all gamma would deadlock:
-        //   cb_in_rm capacity = 1 block; the compute's normalization loop reads gamma
-        //   INSIDE the same per-block loop that drains cb_in_rm.  Once compute finishes
-        //   the x/sqrt(var+eps) step it blocks on cb_gamma, while the reader is still
-        //   blocked on cb_in_rm for the next block — circular wait.
+        //   dfb_in_rm capacity = 1 block; the compute's normalization loop reads gamma
+        //   INSIDE the same per-block loop that drains dfb_in_rm.  Once compute finishes
+        //   the x/sqrt(var+eps) step it blocks on dfb_gamma, while the reader is still
+        //   blocked on dfb_in_rm for the next block — circular wait.
         // For the TILE path the same block-interleaved order is used for consistency.
 #ifdef TILIZE_IN
         const uint32_t abs_row_base = curr_tile_row * TILE_H;
@@ -210,7 +210,7 @@ void kernel_main() {
 #ifdef TILIZE_IN
             layernorm_dataflow_utils::read_row_major_block_to_cb<decltype(src_a), decltype(block), TILE_W, TILE_H>(
                 noc,
-                cb_in_rm,
+                dfb_in_rm,
                 src_a,
                 curr_tile_row,
                 num_valid_rows_pass2,
@@ -219,20 +219,20 @@ void kernel_main() {
                 block);
 #else
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in0, src_a, src0_page_bytes, curr_tile_row * Wt + block.start(), block);
 #endif
 
             // Gamma/beta and b-tensor for this block — pushed immediately after input so
             // compute finds them in the CB when it reaches the per-block multiply step.
 #ifdef FUSE_PRE_ADD
             layernorm_dataflow_utils::read_block_to_cb(
-                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, dfb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
 #endif
 #ifdef FUSE_GAMMA
-            layernorm_dataflow_utils::read_block_to_cb(noc, cb_gamma, addrg, gamma_tile_bytes, block.start(), block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, dfb_gamma, addrg, gamma_tile_bytes, block.start(), block);
 #endif
 #ifdef FUSE_BETA
-            layernorm_dataflow_utils::read_block_to_cb(noc, cb_beta, addrb, beta_tile_bytes, block.start(), block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, dfb_beta, addrb, beta_tile_bytes, block.start(), block);
 #endif
         }  // wt loop
     }  // ncht loop

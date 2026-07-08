@@ -19,11 +19,11 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(5);
 
     constexpr auto src0_args = TensorAccessorArgs<0>();
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0, dfb_id_in1 = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
+    uint32_t src0_tile_bytes = get_tile_size(dfb_id_in0);
 
 #if FUSED_SCALE_MASK
     uint32_t Ht = get_arg_val<uint32_t>(6);
@@ -32,9 +32,9 @@ void kernel_main() {
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
     constexpr auto mask_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id_attn = 4;
-    DataflowBuffer cb_id_attn_obj(cb_id_attn);
-    uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
+    constexpr uint32_t dfb_id_attn = 4;
+    DataflowBuffer dfb_id_attn_obj(dfb_id_attn);
+    uint32_t mask_tile_bytes = get_tile_size(dfb_id_attn);
 
     const auto addr_mask = TensorAccessor(mask_args, mask_addr);
 
@@ -50,25 +50,25 @@ void kernel_main() {
     uint32_t ht = start_ht;
     uint32_t mask_id = start_mask_id;
     bool read_mask = true;
-    constexpr auto cb_fused_scale = tt::CBIndex::c_3;
+    constexpr auto dfb_fused_scale = tt::CBIndex::c_3;
     const uint32_t pre_scale = get_arg_val<uint32_t>(2);
-    generate_bcast_unary_scalar(CircularBuffer(cb_fused_scale), pre_scale);
+    generate_bcast_unary_scalar(CircularBuffer(dfb_fused_scale), pre_scale);
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
     Noc noc;
-    DataflowBuffer cb_id_in0_obj(cb_id_in0);
+    DataflowBuffer dfb_id_in0_obj(dfb_id_in0);
 
     {
-        constexpr uint32_t cb_max_scaler = tt::CBIndex::c_2;
-        constexpr uint32_t cb_sum_scaler = tt::CBIndex::c_13;
+        constexpr uint32_t dfb_max_scaler = tt::CBIndex::c_2;
+        constexpr uint32_t dfb_sum_scaler = tt::CBIndex::c_13;
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_max_scaler,
+            dfb_max_scaler,
             ckernel::PoolType::MAX,
             ckernel::ReduceDim::REDUCE_ROW>();
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            cb_sum_scaler,
+            dfb_sum_scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW>();
     }
@@ -79,16 +79,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_blks; ++i) {
         for (uint32_t j = 0; j < Wt; j += blk) {
             uint32_t rem = blk;  // (i + blk > num_tiles) ? num_tiles - i : blk;
-            cb_id_in0_obj.reserve_back(rem);
+            dfb_id_in0_obj.reserve_back(rem);
             uint32_t write_offset = 0;
             for (uint32_t r = 0; r < rem; ++r) {
                 noc.async_read(
-                    src_a, cb_id_in0_obj, src0_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = write_offset});
+                    src_a, dfb_id_in0_obj, src0_tile_bytes, {.page_id = curr_tile}, {.offset_bytes = write_offset});
                 curr_tile++;
                 write_offset += src0_tile_bytes;
             }
             noc.async_read_barrier();
-            cb_id_in0_obj.push_back(rem);
+            dfb_id_in0_obj.push_back(rem);
         }
 
 #if FUSED_SCALE_MASK
@@ -97,12 +97,12 @@ void kernel_main() {
 // of slice of tensor that was assigned to our core, then we skip to next batch
 #if CAUSAL_MASK
         for (uint32_t j = 0; j < Wt; j += blk) {
-            cb_id_attn_obj.reserve_back(blk);
+            dfb_id_attn_obj.reserve_back(blk);
             uint32_t mask_write_offset = 0;
             for (uint32_t wb = 0; wb < blk; ++wb) {
                 noc.async_read(
                     addr_mask,
-                    cb_id_attn_obj,
+                    dfb_id_attn_obj,
                     mask_tile_bytes,
                     {.page_id = mask_id},
                     {.offset_bytes = mask_write_offset});
@@ -110,7 +110,7 @@ void kernel_main() {
                 ++mask_id;
             }
             noc.async_read_barrier();
-            cb_id_attn_obj.push_back(blk);
+            dfb_id_attn_obj.push_back(blk);
         }
         ++ht;
         ++mask_ht;
@@ -126,12 +126,12 @@ void kernel_main() {
         if (read_mask) {
             for (uint32_t j = 0; j < Wt; j += blk) {
                 // This is only executed every blk wts
-                cb_id_attn_obj.reserve_back(blk);
+                dfb_id_attn_obj.reserve_back(blk);
                 uint32_t mask_write_offset = 0;
                 for (uint32_t wb = 0; wb < blk; ++wb) {
                     noc.async_read(
                         addr_mask,
-                        cb_id_attn_obj,
+                        dfb_id_attn_obj,
                         mask_tile_bytes,
                         {.page_id = mask_id},
                         {.offset_bytes = mask_write_offset});
@@ -139,7 +139,7 @@ void kernel_main() {
                     ++mask_id;
                 }
                 noc.async_read_barrier();
-                cb_id_attn_obj.push_back(blk);
+                dfb_id_attn_obj.push_back(blk);
             }
             read_mask = false;
         }

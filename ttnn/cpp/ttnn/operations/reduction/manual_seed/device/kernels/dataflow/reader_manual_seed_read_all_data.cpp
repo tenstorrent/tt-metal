@@ -18,9 +18,9 @@ void kernel_main() {
     const uint32_t core_id = get_arg_val<uint32_t>(2);
 
     // Compile time args
-    constexpr uint32_t user_ids_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t seeds_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t kernel_communication_cb_index = get_compile_time_arg_val(2);
+    constexpr uint32_t user_ids_dfb_index = get_compile_time_arg_val(0);
+    constexpr uint32_t seeds_dfb_index = get_compile_time_arg_val(1);
+    constexpr uint32_t kernel_communication_dfb_index = get_compile_time_arg_val(2);
     constexpr uint32_t number_of_ids = get_compile_time_arg_val(3);
     constexpr auto user_ids_tensor_accessor_args = TensorAccessorArgs<4>();
     constexpr auto seeds_tensor_accessor_args =
@@ -30,28 +30,28 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Index tensor config
-    constexpr DataFormat user_ids_tensor_data_format = get_dataformat(user_ids_cb_index);
+    constexpr DataFormat user_ids_tensor_data_format = get_dataformat(user_ids_dfb_index);
     const auto user_ids_tensor_dram = TensorAccessor(user_ids_tensor_accessor_args, user_ids_tensor_buffer_addr);
 
-    constexpr DataFormat seeds_tensor_data_format = get_dataformat(seeds_cb_index);
+    constexpr DataFormat seeds_tensor_data_format = get_dataformat(seeds_dfb_index);
     const auto seeds_tensor_dram = TensorAccessor(seeds_tensor_accessor_args, seeds_tensor_buffer_addr);
 
     Noc noc;
-    DataflowBuffer user_ids_cb(user_ids_cb_index);
-    DataflowBuffer seeds_cb(seeds_cb_index);
-    DataflowBuffer kernel_communication_cb(kernel_communication_cb_index);
+    DataflowBuffer user_ids_dfb(user_ids_dfb_index);
+    DataflowBuffer seeds_dfb(seeds_dfb_index);
+    DataflowBuffer kernel_communication_dfb(kernel_communication_dfb_index);
 
     // Read user_id from circular buffer
-    user_ids_cb.reserve_back(one_tile);
-    const uint32_t l1_write_addr_index = user_ids_cb.get_write_ptr();
+    user_ids_dfb.reserve_back(one_tile);
+    const uint32_t l1_write_addr_index = user_ids_dfb.get_write_ptr();
     noc.async_read(
-        user_ids_tensor_dram, user_ids_cb, get_tile_size(user_ids_cb_index), {.page_id = 0}, {.offset_bytes = 0});
+        user_ids_tensor_dram, user_ids_dfb, get_tile_size(user_ids_dfb_index), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
     // Read seeds from circular buffer
-    seeds_cb.reserve_back(one_tile);
-    const uint32_t seeds_l1_write_addr_index = seeds_cb.get_write_ptr();
-    noc.async_read(seeds_tensor_dram, seeds_cb, get_tile_size(seeds_cb_index), {.page_id = 0}, {.offset_bytes = 0});
+    seeds_dfb.reserve_back(one_tile);
+    const uint32_t seeds_l1_write_addr_index = seeds_dfb.get_write_ptr();
+    noc.async_read(seeds_tensor_dram, seeds_dfb, get_tile_size(seeds_dfb_index), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
     // Process user_ids
@@ -68,11 +68,11 @@ void kernel_main() {
     }
 
     // Prepare message for compute kernel
-    kernel_communication_cb.reserve_back(one_tile);
-    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_cb.get_write_ptr());
+    kernel_communication_dfb.reserve_back(one_tile);
+    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_dfb.get_write_ptr());
     communication_ptr[0] = is_user_id ? 1 : 0;
     communication_ptr[1] = is_user_id ? seed : 0;
 
     // Send to compute kernel
-    kernel_communication_cb.push_back(one_tile);
+    kernel_communication_dfb.push_back(one_tile);
 }
