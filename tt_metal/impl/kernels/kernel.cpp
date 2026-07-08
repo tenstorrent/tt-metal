@@ -621,6 +621,15 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
+// Enforced ceiling on the combined (unique + common) runtime-arg count for a Tensix kernel. Args above
+// max_runtime_args are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single core's
+// payload inline in one prefetcher command. The smallest dispatch prefetch command size is the ethernet
+// dispatcher's 32 KB (~8176 words), and the dispatch core type is not known when validate_runtime_args_size
+// runs (SetRuntimeArgs time), so this cap is dispatch-core-independent and set conservatively below that limit
+// (with margin so several cores' commands still fit the ethernet cmddat queue). The actual L1 fit is still
+// enforced at program finalize.
+constexpr uint32_t max_runtime_args_tensix = 4096;
+
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 // num_unique_rt_args and num_common_rt_args are user-visible arg counts (excluding any watcher count words).
 void Kernel::validate_runtime_args_size(
@@ -635,10 +644,8 @@ void Kernel::validate_runtime_args_size(
         case HalProgrammableCoreType::TENSIX:
             // The TENSIX kernel-config L1 size is device-dependent (derived from the allocator at program
             // finalize, not available from the HAL here), so bound by the dispatch-core-independent
-            // large-unicast cap. A single core's RTA payload is sent inline in one prefetcher command; this
-            // cap keeps it within the smallest dispatch prefetch command size (ethernet's 32 KB) regardless
-            // of where the dispatcher runs. The actual L1 fit is enforced later against the kernel-config
-            // ring buffer (see kernel_types.hpp:max_runtime_args_tensix).
+            // large-unicast cap (see max_runtime_args_tensix above). The actual L1 fit is enforced later
+            // against the kernel-config ring buffer.
             expected_max_rt_args = max_runtime_args_tensix;
             break;
         case HalProgrammableCoreType::ACTIVE_ETH:
