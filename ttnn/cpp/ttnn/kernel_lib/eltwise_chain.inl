@@ -1791,7 +1791,7 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
 
 namespace detail {
 
-template <bool EmitMathInit, bool EmitSfpuInit, std::size_t I, class ElemT, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, bool SkipCompute, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_compute(
     const ElemT& elem,
     uint32_t i_flat,
@@ -1803,7 +1803,7 @@ ALWI void elem_apply_compute(
     uint32_t Wt) {
     // Per-block streaming: pass chunk-local index `j` to exec so BlockIter
     // returns the local CB-front offset (the just-waited window).
-    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
+    [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
         (void)elem; (void)i_flat; (void)ht; (void)wt; (void)inner_count;
         (void)chain_lane_width; (void)Ht; (void)Wt;
@@ -1812,41 +1812,51 @@ ALWI void elem_apply_compute(
         // block_size 1, so per_tile and per_block never both fire). The Bulk upfront wait is NOT
         // here: it's hoisted once to the chain boundary (elem_wait_upfront, pre-loop fold), so it's
         // placed exactly once rather than re-issued per block-iter relying on idempotency.
+        //
+        // wait/pop are CB ops and always fire (even under SkipCompute) so the pipeline handshake and
+        // tile counts are byte-for-byte identical to Run — only init + exec are elided.
         elem.wait_per_tile(i_flat + inner_count);
         elem.wait_per_block(inner_count);
-        if constexpr (EmitMathInit) {
+        if constexpr (EmitMathInit && !SkipCompute) {
             emit_pre_element_transitions<ElemT, I, Es...>();
             elem.init();  // instance dispatch (see convention note above)
         }
-        constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            if constexpr (per_side) {
-                // Per-side path: chain hands both indices; element picks per operand.
-                elem.exec(/*i_flat_local=*/j,
-                             /*i_flat_abs=*/(i_flat + j),
-                             ht,
-                             /*wt_local=*/j,
-                             /*wt_abs=*/(wt + j),
-                             j * chain_lane_width);
-            } else {
-                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-                elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+        if constexpr (!SkipCompute) {
+            constexpr bool per_side = elem_needs_per_side_idx_v<ElemT>;
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                if constexpr (per_side) {
+                    // Per-side path: chain hands both indices; element picks per operand.
+                    elem.exec(/*i_flat_local=*/j,
+                                 /*i_flat_abs=*/(i_flat + j),
+                                 ht,
+                                 /*wt_local=*/j,
+                                 /*wt_abs=*/(wt + j),
+                                 j * chain_lane_width);
+                } else {
+                    const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                    elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+                }
             }
         }
         elem.pop_per_tile(i_flat);
         elem.pop_per_block(inner_count);
     } else if constexpr (is_dest_only_op_v<ElemT>) {
-        if constexpr (EmitSfpuInit) {
-            emit_pre_element_transitions<ElemT, I, Es...>();
-            elem.init();  // instance dispatch (see convention note above)
-        }
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            elem.exec(i_flat + j, j * chain_lane_width);
+        // DEST-only (SFPU) op — no CB side, so under SkipCompute it collapses to nothing.
+        if constexpr (!SkipCompute) {
+            if constexpr (EmitSfpuInit) {
+                emit_pre_element_transitions<ElemT, I, Es...>();
+                elem.init();  // instance dispatch (see convention note above)
+            }
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                elem.exec(i_flat + j, j * chain_lane_width);
+            }
+        } else {
+            (void)elem; (void)i_flat; (void)inner_count; (void)chain_lane_width;
         }
     }
 }
 
-template <std::size_t I, class ElemT, class... Es>
+template <bool SkipCompute, std::size_t I, class ElemT, class... Es>
 ALWI void elem_apply_pack(
     const ElemT& elem,
     uint32_t i_flat,
@@ -1856,15 +1866,22 @@ ALWI void elem_apply_pack(
     uint32_t chain_lane_width,
     [[maybe_unused]] uint32_t Ht,
     [[maybe_unused]] uint32_t Wt) {
-    constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
+    [[maybe_unused]] constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
-        // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
-        emit_per_stage_pack_reconfig<ElemT, I, Es...>();
+        // reserve/push are CB ops and always fire (even under SkipCompute) so the output CB is still
+        // reserved and pushed with the same counts — the consumer handshake is intact. Only the
+        // pack-side reconfig (init) and pack_tile (exec) are elided; the pushed tile is garbage.
+        if constexpr (!SkipCompute) {
+            // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
+            emit_per_stage_pack_reconfig<ElemT, I, Es...>();
+        }
         elem.reserve_per_tile(i_flat);
         elem.reserve_per_block(inner_count);
-        for (uint32_t j = 0; j < inner_count; ++j) {
-            const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
-            elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+        if constexpr (!SkipCompute) {
+            for (uint32_t j = 0; j < inner_count; ++j) {
+                const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
+                elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
+            }
         }
         elem.push_per_tile(i_flat);
         elem.push_per_block(inner_count);
@@ -1874,7 +1891,7 @@ ALWI void elem_apply_pack(
     }
 }
 
-template <bool EmitMathInit, bool EmitSfpuInit, std::size_t... Is, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, bool SkipCompute = false, std::size_t... Is, class... Es>
 ALWI void apply_compute_phase(
     std::index_sequence<Is...>,
     uint32_t i_flat,
@@ -1888,13 +1905,13 @@ ALWI void apply_compute_phase(
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_compute<EmitMathInit, EmitSfpuInit, II, ElemT, Es...>(
+        elem_apply_compute<EmitMathInit, EmitSfpuInit, SkipCompute, II, ElemT, Es...>(
             elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
-template <std::size_t... Is, class... Es>
+template <bool SkipCompute = false, std::size_t... Is, class... Es>
 ALWI void apply_pack_phase(
     std::index_sequence<Is...>,
     uint32_t i_flat,
@@ -1908,7 +1925,7 @@ ALWI void apply_pack_phase(
     auto run_one = [&](auto idx_const, auto& elem) {
         constexpr std::size_t II = decltype(idx_const)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
-        elem_apply_pack<II, ElemT, Es...>(
+        elem_apply_pack<SkipCompute, II, ElemT, Es...>(
             elem, i_flat, ht, wt, inner_count, chain_lane_width, Ht, Wt);
     };
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
@@ -1955,7 +1972,7 @@ ALWI void elem_push_per_row(const E& e) {
 // is emitted inside the loop. eltwise_chain_impl always passes `!hoist_*`: a hoistable cohort emits
 // nothing here (it was hoisted to boot by this call under SetupOwner::Chain, or by the caller under
 // SetupOwner::Caller), and a non-hoistable cohort re-inits per tile regardless.
-template <bool EmitMathInit, bool EmitSfpuInit, class... Es>
+template <bool EmitMathInit, bool EmitSfpuInit, bool SkipCompute = false, class... Es>
 ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
     // Block size lives on the shape. The DEST footprint is block_size * chain_lane_width;
@@ -2002,11 +2019,11 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
                 (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
             const uint32_t i_flat = row_base + wt_base;
             tile_regs_acquire();
-            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit>(
+            detail::apply_compute_phase<EmitMathInit, EmitSfpuInit, SkipCompute>(
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_commit();
             tile_regs_wait();
-            detail::apply_pack_phase(
+            detail::apply_pack_phase<SkipCompute>(
                 IdxSeq{}, i_flat, ht, wt_base, inner_count, chain_lane_w, Ht, Wt, elts...);
             tile_regs_release();
         }
@@ -2027,6 +2044,11 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
 template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
+    // Performance-analysis build knob (macro, NOT a template arg): emit only the CB lifecycle +
+    // tile_regs window; skip all one-time init, all per-tile init/reconfig, and all compute (see
+    // the CKL_ELTWISE_CHAIN_SKIP_COMPUTE doc in eltwise_chain.hpp). The CB wait/pop/reserve/push
+    // counts are unchanged, so the pipeline still handshakes — no hang.
+    constexpr bool skip_compute = (CKL_ELTWISE_CHAIN_SKIP_COMPUTE != 0);
     static_assert(!chain_has_duplicate_upfront_cbs_v<Chain>,
                   "eltwise_chain: two CB-reader elements share a CB on upfront-wait policy.");
     static_assert(!chain_pack_writes_collide_v<Chain>,
@@ -2057,11 +2079,11 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     constexpr bool hoist_math = chain_hoist_math_mop_v<Chain>;
     constexpr bool hoist_sfpu = chain_hoist_sfpu_v<Chain>;
     using IdxSeq = std::make_index_sequence<sizeof...(Es)>;
-    if constexpr (SO == SetupOwner::Chain) {
+    if constexpr (SO == SetupOwner::Chain && !skip_compute) {
         detail::pack_init_for_each<Es...>(IdxSeq{});
         detail::hoist_compute_init<hoist_math, hoist_sfpu>(IdxSeq{}, elts...);
     }
-    chain_run_loop<!hoist_math, !hoist_sfpu>(shape, elts...);
+    chain_run_loop<!hoist_math, !hoist_sfpu, skip_compute>(shape, elts...);
 }
 
 // =============================================================================
