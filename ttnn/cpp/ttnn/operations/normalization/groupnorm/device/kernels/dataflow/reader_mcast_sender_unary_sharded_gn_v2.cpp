@@ -24,16 +24,16 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_compile_time_arg_val(5);
     const uint32_t per_core_N_bytes_with_stride = get_compile_time_arg_val(6);
     constexpr uint32_t datum_size_bytes = get_compile_time_arg_val(7);
-    // Per-core slots in dfb_ex_external are hardcoded to a cb_ex_external_slot_pitch_bytes
-    // pitch (see the `l1_write_addr_external += cb_ex_external_slot_pitch_bytes`
+    // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
+    // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
-    // datum_size_bytes > cb_ex_external_slot_pitch_bytes would overflow into the
+    // datum_size_bytes > dfb_ex_external_slot_pitch_bytes would overflow into the
     // next core's slot and silently corrupt the reduction. The slot pitch itself
     // would need to grow to support larger datums.
     static_assert(
         datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
-        "cb_ex_external slot pitch is hardcoded; "
-        "datum_size_bytes must be <= cb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
+        "dfb_ex_external slot pitch is hardcoded; "
+        "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_compile_time_arg_val(8);
     constexpr uint32_t tile_height = get_compile_time_arg_val(9);
 
@@ -176,11 +176,11 @@ void kernel_main() {
                 //   - bytes [0, datum_size_bytes): local core's scalar (slot 0).
                 //   - bytes [datum_size_bytes, single_tile_size_bytes): exact zero.
                 // The remote-core reads below then overwrite slot bytes
-                // [cb_ex_external_slot_pitch_bytes*i,
-                //  cb_ex_external_slot_pitch_bytes*i + datum_size_bytes) for
+                // [dfb_ex_external_slot_pitch_bytes*i,
+                //  dfb_ex_external_slot_pitch_bytes*i + datum_size_bytes) for
                 // i = 1 .. num_mcast_cores-1.
                 // All gap bytes, per-slot bytes
-                // [datum_size_bytes, cb_ex_external_slot_pitch_bytes) and any
+                // [datum_size_bytes, dfb_ex_external_slot_pitch_bytes) and any
                 // trailing-tile bytes past slot num_mcast_cores-1, stay zero, so
                 // the downstream reduce_tile sum on dfb_ex_external is not
                 // polluted.
