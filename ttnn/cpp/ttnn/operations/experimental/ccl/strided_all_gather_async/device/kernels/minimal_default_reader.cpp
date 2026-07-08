@@ -16,6 +16,12 @@
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
 
+// Must match write_chunk / the aggregator: the CB producer (read_chunk) splits each chunk into this
+// many row-bands so its tile order matches the consumer (write_chunk). Default 1 = whole-chunk.
+#ifndef IN0_SUB_CHUNKS
+#define IN0_SUB_CHUNKS 1
+#endif
+
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -144,7 +150,9 @@ void kernel_main() {
                     input_tensor_Ht,
                     output_tensor_Wt,
                     my_chip_id,
-                    false);
+                    false,
+                    mm_cores_y,
+                    IN0_SUB_CHUNKS);
             }
 
             // Receive remote chunks
@@ -209,7 +217,9 @@ void kernel_main() {
                                 input_tensor_Ht,
                                 output_tensor_Wt,
                                 actual_sender_chip_id,
-                                true);
+                                true,
+                                mm_cores_y,
+                                IN0_SUB_CHUNKS);
                         } else {
                             advance_chunk_start_tile(
                                 input_chunk_start_tile, actual_chunk_w, actual_chunk_h, input_tensor_Wt);
