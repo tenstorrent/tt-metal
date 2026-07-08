@@ -1020,7 +1020,10 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             uint32_t end_virtual_grid;
             if (hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
                 end_virtual_grid = hal_.get_virtual_worker_start_y() + logical_grid_size.y;
-            } else if (cluster_.arch() == ARCH::BLACKHOLE) {
+            } else if (cluster_.arch() == ARCH::BLACKHOLE || cluster_.arch() == ARCH::QUASAR) {
+                // Quasar shares Blackhole's COL harvest axis and virtual-grid layout
+                // (VIRTUAL_TENSIX_START_X/Y are identical), so a harvested column takes the same
+                // virtual coordinate as on Blackhole rather than the Wormhole-shaped fallback below.
                 end_virtual_grid = max_along_axis - 1;
             } else {
                 end_virtual_grid = hal_.get_virtual_worker_start_x() + logical_grid_size.x;
