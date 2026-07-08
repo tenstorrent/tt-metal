@@ -325,6 +325,10 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
+    # N300 B12/S8192: HiFi2 is lossless for bf8xbf8 (tt-perf-report advice) and
+    # 2x HiFi4 throughput. MLPwi is bf8 x bf8 here.
+    if max_seq_len == 8192:
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -335,6 +339,9 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     if max_seq_len == 512 and max_batch in (8, 16, 32):
         # fp32_dest_acc_en=False for MinimalMatmul subblock 8x1 (h*w=8 > 4 cap).
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
+    # N300 B12/S8192: HiFi2 lossless for bf8xbf8, 2x HiFi4 throughput.
+    if max_seq_len == 8192:
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -343,6 +350,9 @@ def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
+    # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). QKV is bf16 act x bf8 weight.
+    if max_seq_len == 8192:
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -351,6 +361,9 @@ def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_ba
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
+    # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). AttnOut is bf16 act x bf8 weight.
+    if max_seq_len == 8192:
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -365,6 +378,10 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
         # HiFi2 (vs HiFi4) speeds up SDPA without dropping PCC below 0.94.
         fid = ttnn.MathFidelity.HiFi2 if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
+    # N300 B12/S8192: SDPA is 66% of runtime. HiFi2 halves the QK^T/softmax@V
+    # matmul cost (bf16 q/k/v, discards lowest bits); PCC headroom is large (0.961).
+    if max_seq_len == 8192:
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
@@ -378,6 +395,9 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     # NOTE: B16 LN with fp32_dest_acc_en=False saves ~0.5ms but drops PCC to
     # 0.9359 (below 0.94 gate) — reverted. B16 keeps fp32_dest_acc_en=True.
     if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
+    # N300 B12/S8192: HiFi2 LN reduction (bf8/bf16), PCC headroom large.
+    if max_seq_len == 8192:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
