@@ -899,6 +899,14 @@ static void emit_metal2_namespaces(
             named_compile_args.begin(), named_compile_args.end());
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
+            // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
+            // which is not a valid flat C++ identifier; emitting
+            // `constexpr CtaVal<uint32_t> cp.dst{...}` fails to compile. Such args
+            // are materialized as `ct_args::<ns>` structs (which the kernels
+            // reference), so skip them in the flat `args::` form.
+            if (name.find('.') != std::string::npos) {
+                continue;
+            }
             f << "constexpr ::experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
         }
         f << "}  // namespace args\n";
@@ -1704,6 +1712,15 @@ static void collect_kernels(
             const auto& ksrc = kernel->kernel_source();
             std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
 
+            // Thread each kernel's configured include roots into its JIT -I flags.
+            // Kernels can declare extra include paths (Kernel::process_include_paths)
+            // so root-rooted includes resolve at compile time; silicon's build wires
+            // these through the compiler include dirs, so mirror that here.
+            std::string kernel_extra_inc = extra_inc;
+            kernel->process_include_paths([&kernel_extra_inc](const std::string& p) {
+                kernel_extra_inc += " -I\"" + p + "\"";
+            });
+
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
             // Capture the namespace-structured CT + RT args so we can emit
@@ -1820,7 +1837,7 @@ static void collect_kernels(
                             named_ct_arg_namespaces,
                             named_runtime_arg_namespaces,
                             defs,
-                            extra_inc,
+                            kernel_extra_inc,
                             bindings};
                     }
                 }
