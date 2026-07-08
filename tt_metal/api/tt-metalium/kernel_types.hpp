@@ -48,6 +48,14 @@ enum NOC_MODE : uint8_t {
 // kernel-config space for the target core type (see Kernel::validate_runtime_args_size).
 constexpr uint32_t max_runtime_args = 341;
 
+// Enforced ceiling on the combined (unique + common) runtime-arg count per Tensix kernel. Args above
+// `max_runtime_args` are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, which sends a single
+// core's payload inline in one prefetcher command. The smallest dispatch prefetch command size is the
+// ethernet dispatcher's 32 KB (~8176 words), and the dispatch core type is not known this early, so this
+// cap is dispatch-core-independent and set conservatively below that limit (with margin so several cores'
+// commands still fit the ethernet cmddat queue). The actual L1 fit is still enforced at program finalize.
+constexpr uint32_t max_runtime_args_tensix = 4096;
+
 using KernelHandle = std::uint32_t;
 
 // Option that controls build optimization level

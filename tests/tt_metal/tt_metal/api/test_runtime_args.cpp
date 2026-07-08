@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <limits>
 #include <map>
 #include <memory>
 #include <cstddef>
@@ -719,9 +718,9 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
             mesh_device, core_range_set, 0, 0);  // Kernel isn't run here.
         auto& program = workload.get_programs().at(device_range);
 
-        // The enforced TENSIX ceiling is bounded by the uint16_t RTA offset field (see
-        // Kernel::validate_runtime_args_size). Mirror that here.
-        const uint32_t tensix_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
+        // The enforced TENSIX ceiling is the dispatch-core-independent large-unicast cap (see
+        // Kernel::validate_runtime_args_size and kernel_types.hpp:max_runtime_args_tensix). Mirror that here.
+        const uint32_t tensix_max_rt_args = tt::tt_metal::max_runtime_args_tensix;
 
         // Set 100 unique args, then try to set enough common args to overflow the combined ceiling and fail.
         std::vector<uint32_t> initial_runtime_args(100);
