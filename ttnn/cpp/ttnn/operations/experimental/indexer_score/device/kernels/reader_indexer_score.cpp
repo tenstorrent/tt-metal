@@ -21,18 +21,30 @@
 
 #include "indexer_score_common.hpp"  // shared CB indices, compile-time dims, work-unit walk
 
+#ifdef FUSED_RING
+// Ring-fused indexer: the fused all-gather producer signals per-slab arrival into two direction semaphores;
+// the reader does ONE coarse barrier (wait for the WHOLE gather to land) before reading any K. Reuses the
+// ring-joint-SDPA receiver so the crossed direction-index swap + asymmetric thresholds stay identical.
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp"
+#endif
+
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16
 constexpr uint32_t k_tile_bytes = get_tile_size(cb_k);     // k: bf16 or bfp8_b (smaller tile)
 
-// CT arg layout after the common args: q/k/w TensorAccessors, then 8 multicast args.
-// File-scope so the semaphore ids work as template parameters.
+// CT arg layout after the common args: q/k/w TensorAccessors, then (fused only) the k_local accessor, then
+// 8 multicast args. File-scope so the semaphore ids work as template parameters.
 constexpr auto q_args = TensorAccessorArgs<num_common_ct_args>();
 constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
 constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
-
-// ---- multicast CT config (semaphore ids; on/off per direction) -------------------
+#ifdef FUSED_RING
+// Fused ring: the SP-sharded LOCAL K shard (the all-gather input) is read directly for this device's own slab
+// (the all-gather does NOT write the local band into the gathered buffer). Its accessor args sit after w's.
+constexpr auto kl_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
+constexpr uint32_t mc_ct_base = kl_args.next_compile_time_args_offset();
+#else
 constexpr uint32_t mc_ct_base = w_args.next_compile_time_args_offset();
+#endif
 constexpr uint32_t k_mcast_on = get_compile_time_arg_val(mc_ct_base + 0);
 constexpr uint32_t q_mcast_on = get_compile_time_arg_val(mc_ct_base + 1);  // covers q and w (shared row mcast)
 constexpr uint32_t k_send_sem = get_compile_time_arg_val(mc_ct_base + 2);
@@ -281,6 +293,53 @@ inline void read_k_chunk(
         });
 }
 
+#ifdef FUSED_RING
+/** Ring-fused k chunk: dual-source per tile. The gathered buffer (k_acc) holds every REMOTE SP-shard's slab
+ *  (the all-gather wrote them); this device's OWN shard is read straight from the SP-sharded local cache
+ *  (k_local_acc) -- the all-gather omits the local band from the gathered buffer. shard(logical tile L) =
+ *  BC_KTILE(L)/sll_t; local page = (BC_KTILE(L) - ring_index*sll_t)*head_dim_tiles (the within-shard tile).
+ *  Same mcast wrapper + pad/stale-slot behavior as read_k_chunk. */
+template <typename KAcc, typename KLocalAcc>
+inline void read_k_chunk_fused(
+    Noc noc,
+    const KAcc& k_acc,
+    const KLocalAcc& k_local_acc,
+    uint32_t ring_index,
+    uint32_t sll_t,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    const McastDir& k_dir,
+    uint32_t k_batch_page_offset) {
+    read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
+        noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
+            uint32_t ptr = addr;
+            for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
+                const uint32_t seq_tile = BC_KTILE(k_tile_start + k_col);
+                const uint32_t shard = seq_tile / sll_t;
+                if (shard == ring_index) {
+                    const uint32_t local_base = (seq_tile - ring_index * sll_t) * head_dim_tiles;
+                    for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+                        noc.async_read(
+                            k_local_acc,
+                            CoreLocalMem<uint32_t>(ptr),
+                            k_tile_bytes,
+                            {.page_id = local_base + dim_tile},
+                            {});
+                        ptr += k_tile_bytes;
+                    }
+                } else {
+                    const uint32_t rem_base = k_batch_page_offset + seq_tile * head_dim_tiles;
+                    for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+                        noc.async_read(
+                            k_acc, CoreLocalMem<uint32_t>(ptr), k_tile_bytes, {.page_id = rem_base + dim_tile}, {});
+                        ptr += k_tile_bytes;
+                    }
+                }
+            }
+        });
+}
+#endif
+
 /** Fused path: read the k chunk in mm_col_batch sub-chunks, pushing each as it lands so compute matmuls
  *  it while the next reads (overlap). Pushes the full k_chunk_tiles (pad cols stale, compute masks them).
  *  No mcast. mm_col_batch is shared with the compute kernel's DEST column batch (indexer_score_common.hpp). */
@@ -334,6 +393,58 @@ void kernel_main() {
 
     Noc noc;
 
+#ifdef FUSED_RING
+    // Per-band, per-shard all-gather gate (fine-grained overlap; replaces the coarse barrier). The 6-arg fused
+    // block {ring_size, ring_index, forward_writes_expected, backward_writes_expected, sem0, sem1} sits at slot
+    // 27. Instead of waiting for the WHOLE gather, each band waits only on the SP-shards its tiles land in, so
+    // a band whose shards have already arrived scores immediately while farther slabs are still in flight.
+    //
+    // shard(logical tile L) = BC_KTILE(L) / sll_t (the gathered buffer stores shard c in physical band
+    // [c*sll_t,(c+1)*sll_t)). "shard c arrived" == semaphore[dir_c] >= val_c, where (dir_c, val_c) is exactly
+    // what RingIdSequencer emits for the iteration that delivers c -- so we REPLAY the sequencer once on-device
+    // to build a shard -> (dir, val) table (inheriting the crossed direction swap + asymmetric fwd/bwd + the
+    // forward-writer +1 pre-signal verbatim). wait_min is monotone/non-destructive, so re-waiting an already
+    // resident shard is a no-op and the gate cannot deadlock (edge-device empty directions are simply never
+    // required, since a band never lands in a shard that device does not receive).
+    uint32_t fused_argidx = 27;
+    RingSDPAOpReceiver fused_recv(/*wait_for_op_signal=*/true, fused_argidx);
+    const uint32_t fused_ring_index = fused_recv.seq.ring_index;
+    const uint32_t fused_ring_size = fused_recv.seq.ring_size;
+    const uint32_t fused_sll_t = k_len_tiles / fused_ring_size;  // tiles per SP shard in the gathered buffer
+    const uint32_t fused_sem_id[2] = {fused_recv.signal_op_semaphore_ids[0], fused_recv.signal_op_semaphore_ids[1]};
+    // Local SP shard cache (all-gather input): read this device's own slab directly (slot 33 = k_local addr).
+    const uint32_t k_local_addr = get_arg_val<uint32_t>(33);
+    const auto k_local_acc = TensorAccessor(kl_args, k_local_addr, k_tile_bytes);
+    uint32_t fused_shard_dir[32] = {0};
+    uint32_t fused_shard_val[32] = {0};
+    {
+        RingIdSequencer s = fused_recv.seq;  // fresh copy (received={0,0}); replay to index (dir,val) by shard
+        for (uint32_t i = 0; i < fused_ring_size; ++i) {
+            uint32_t cap_dir = 0, cap_val = 0;
+            const uint32_t rid = s.get_next_ring_id([&](uint32_t d, uint32_t v) {
+                cap_dir = d;
+                cap_val = v;
+            });
+            fused_shard_dir[rid] = cap_dir;
+            fused_shard_val[rid] = cap_val;
+        }
+    }
+    // Wait on each distinct non-local SP-shard the band [k_tile_start, +k_tiles_in_unit) lands in. Shards form
+    // contiguous runs over the tiles (shard changes only at block boundaries), so we wait on each run's start.
+    auto fused_gate_band = [&](uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
+        uint32_t prev_shard = 0xFFFFFFFFu;
+        for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
+            const uint32_t shard = BC_KTILE(k_tile_start + c) / fused_sll_t;
+            if (shard != prev_shard) {
+                prev_shard = shard;
+                if (shard != fused_ring_index) {
+                    Semaphore<>(fused_sem_id[fused_shard_dir[shard]]).wait_min(fused_shard_val[shard]);
+                }
+            }
+        }
+    };
+#endif
+
     build_mask_tiles(noc);
     if constexpr (block_pool) {
         // 1.0 reduce-MAX scaler for the block-max-pool (row-0 fill, the layout reduce_block_max_row expects).
@@ -362,22 +473,57 @@ void kernel_main() {
         if constexpr (stream_heads) {
             read_w_group(noc, w_acc, q_row_start, q_dir);  // gates before the streamed q (once per group)
         }
-        for (uint32_t band = 0; band < band_iters; ++band) {
+#ifdef FUSED_RING
+        // Fused ring (DSA: !fuse_single, !stream_heads): read q + gates FIRST, UNGATED, so the q/w row-mcast
+        // rendezvous completes immediately (decoupled from the per-band fabric gate) and every reordered band's
+        // compute has its resident q/w ready.
+        read_q_rows(noc, q_acc, q_row_start, q_dir);
+        read_w_group(noc, w_acc, q_row_start, q_dir);
+#endif
+        for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
+#ifdef FUSED_RING
+            // Reordered band-visit order (local-first, then remote by ring arrival); perm offsets at rt slots
+            // 34.. Must be IDENTICAL to compute/writer so the cb_k / cb_out FIFOs stay in lockstep.
+            const uint32_t band = get_arg_val<uint32_t>(34 + band_i);
+#else
+            const uint32_t band = band_i;
+#endif
             const bool real_band = band < num_bands;  // phantom bands (streaming pad) carry q-mcast only
             if (real_band) {
                 span.set(group, band0 + band);
                 if constexpr (fuse_single && fused_stream_k) {
                     read_k_chunk_streaming(noc, k_acc, span.k_tile_start(), span.k_tiles());  // no mcast: stream
                 } else {
+#ifdef FUSED_RING
+                    // Fine-grained gate: wait only on this band's SP-shards before its DRAM read. Skip the mcast
+                    // receiver role (it gets K from the sender, which already gated); gate the sender / no-mcast.
+                    if (k_mcast_on == 0 || k_dir.role == iscore::mcast_role_sender) {
+                        fused_gate_band(span.k_tile_start(), span.k_tiles());
+                    }
+                    // Dual-source: local shard from k_local_acc, remote shards from the gathered buffer (k_acc).
+                    read_k_chunk_fused(
+                        noc,
+                        k_acc,
+                        k_local_acc,
+                        fused_ring_index,
+                        fused_sll_t,
+                        span.k_tile_start(),
+                        span.k_tiles(),
+                        k_dir,
+                        k_batch_page_offset);
+#else
                     // k FIRST: compute waits the whole k chunk, so reading k ahead lets the split q-row0 push
                     // unblock the first matmul.
                     read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
+#endif
                 }
+#ifndef FUSED_RING
                 if (band == 0 && !stream_heads && !fuse_single) {
-                    // Non-fused resident: q/w deferred behind q/k here.
+                    // Non-fused resident: q/w deferred behind q/k here. (Fused reads q/w before the band loop.)
                     read_q_rows(noc, q_acc, q_row_start, q_dir);
                     read_w_group(noc, w_acc, q_row_start, q_dir);
                 }
+#endif
             }
             if constexpr (stream_heads) {
                 // one q-block per output tile per head group, matching compute's order over the FULL
