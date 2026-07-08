@@ -29,6 +29,7 @@ file(
     moe_routing_remap/device/kernels/*
     non_zero_indices/device/kernels/*
     move/device/kernels/*
+    move/codegen/kernels/*
     pad/device/kernels/*
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
@@ -149,6 +150,8 @@ target_sources(
             move/device/move_overlap_program_factory.hpp
             move/device/move_program_factory.hpp
             move/device/move_sharded_program_factory.hpp
+            move/codegen/move_codegen_program_factory.hpp
+            move/codegen/move_codegen_supported.hpp
             # non_zero_indices/
             non_zero_indices/non_zero_indices.hpp
             non_zero_indices/non_zero_indices_nanobind.hpp

@@ -8,6 +8,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 
@@ -29,6 +30,11 @@ void bind_move(nb::module_& mod) {
             | arg1     | MemoryConfig of tensor of  | tt_lib.tensor.MemoryConfig | Default is same as input tensor | No       |
             |          | TT accelerator device      |                            |                                 |          |
             +----------+----------------------------+----------------------------+---------------------------------+----------+
+
+            ``implementation`` selects the backing prim: ``"auto"`` (default) routes in-scope calls
+            to the codegen prim and everything else to native; ``"native"`` always uses the
+            existing native prim; ``"codegen"`` forces the codegen prim and raises if the call is
+            out of scope.
         )doc";
 
     ttnn::bind_function<"move">(
@@ -37,7 +43,8 @@ void bind_move(nb::module_& mod) {
         &ttnn::move,
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 
 }  // namespace ttnn::operations::data_movement::detail

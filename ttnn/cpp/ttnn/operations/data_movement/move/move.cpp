@@ -5,6 +5,8 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
+#include "codegen/move_codegen_device_operation.hpp"
+#include "codegen/move_codegen_supported.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -117,6 +119,31 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     return ttnn::prim::move(ghost_input_tensor, output_tensor, output_mem_config, move_op_parallelization_strategy);
 }
 
+// Codegen counterpart to move_impl. The codegen kernels are a pure reader->CB->writer identity
+// copy with no in-place-overlap handling (unlike move_impl's MULTI_CORE_OVERLAP strategy), matching
+// tt-dm-codegen's ops/move/move.py, which always targets a freshly allocated buffer and treats the
+// overlap case as out of scope. Reuses the same ghost-tensor dance as move_impl so the codegen path
+// participates in the same dealloc-then-realloc address dance as native move.
+inline Tensor move_codegen_impl(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+    TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
+    TensorSpec output_tensor_spec = input_tensor.tensor_spec();
+
+    auto ghost_input_tensor = create_ghost_tensor(input_tensor);
+    const_cast<Tensor&>(input_tensor).deallocate(/* force = */ false);
+    if (input_tensor.is_allocated()) {
+        // TODO: Should this throw error?
+        return input_tensor;
+    }
+
+    if (mem_config) {
+        output_tensor_spec = TensorSpec(
+            output_tensor_spec.logical_shape(), output_tensor_spec.tensor_layout().with_memory_config(*mem_config));
+    }
+
+    auto output_tensor = create_device_tensor(output_tensor_spec, ghost_input_tensor.device());
+    return ttnn::prim::move_codegen(ghost_input_tensor, output_tensor, output_tensor.memory_config());
+}
+
 inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     TT_FATAL(input_tensor.memory_config().is_sharded(), "Expected input tensor to be sharded");
@@ -167,11 +194,42 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
 
 namespace ttnn {
 
-Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor move(
+    const Tensor& input_tensor,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::string& implementation) {
+    using ttnn::operations::data_movement::move_codegen::ImplementationSelector;
+    using ttnn::operations::data_movement::move_codegen::parse_implementation;
+    using ttnn::operations::data_movement::move_codegen::supported_by_codegen;
+
+    const ImplementationSelector selector = parse_implementation(implementation);
+
     if (input_tensor.memory_config().is_sharded()) {
+        // manifests/move.yaml scopes sharded moves out of the codegen port (see
+        // move_codegen_supported.cpp); implementation="codegen" must TT_FATAL rather than silently
+        // falling back to native.
+        TT_FATAL(
+            selector != ImplementationSelector::Codegen,
+            "ttnn.move: implementation=\"codegen\" is not supported for sharded tensors");
         return operations::data_movement::move_sharded(input_tensor, output_mem_config);
     }
-    return operations::data_movement::move_impl(input_tensor, output_mem_config);
+
+    const MemoryConfig resolved_mem_config = output_mem_config.value_or(input_tensor.memory_config());
+    switch (selector) {
+        case ImplementationSelector::Native: return operations::data_movement::move_impl(input_tensor, output_mem_config);
+        case ImplementationSelector::Codegen: {
+            TT_FATAL(
+                supported_by_codegen(input_tensor, resolved_mem_config),
+                "ttnn.move: implementation=\"codegen\" is not supported for this call");
+            return operations::data_movement::move_codegen_impl(input_tensor, output_mem_config);
+        }
+        case ImplementationSelector::Auto:
+        default:
+            if (supported_by_codegen(input_tensor, resolved_mem_config)) {
+                return operations::data_movement::move_codegen_impl(input_tensor, output_mem_config);
+            }
+            return operations::data_movement::move_impl(input_tensor, output_mem_config);
+    }
 }
 
 }  // namespace ttnn

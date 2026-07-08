@@ -53,6 +53,9 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     move/device/move_program_factory.cpp
     move/device/move_overlap_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
+    move/codegen/move_codegen_device_operation.cpp
+    move/codegen/move_codegen_program_factory.cpp
+    move/codegen/move_codegen_supported.cpp
     move/move.cpp
     narrow/narrow.cpp
     non_zero_indices/device/non_zero_indices_device_operation.cpp
@@ -191,6 +194,7 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     fill_rm/fill_rm.hpp
     fill_rm/device/fill_rm_device_operation.hpp
     move/device/move_device_operation.hpp
+    move/codegen/move_codegen_device_operation.hpp
     pad/pad.hpp
     permute/permute.hpp
     repeat/repeat.hpp
