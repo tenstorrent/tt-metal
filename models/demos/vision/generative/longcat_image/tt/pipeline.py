@@ -1223,7 +1223,10 @@ class LongCatImagePipelineTT:
             h.remove()
         cos, sin = cap["cos"].float(), cap["sin"].float()  # [3,1,S,hd]
 
-        # collapse the 3 M-RoPE sections exactly like apply_multimodal_rotary_pos_emb
+        # collapse the 3 M-RoPE sections like apply_multimodal_rotary_pos_emb. NOTE: for every
+        # input we see the 3 captured sections are IDENTICAL (this text encoder uses sequential
+        # positions here), so the partition is a no-op; if a config ever yields distinct sections,
+        # match HF exactly with `sect = list(mrope_section) * 2` ([16,24,24,16,24,24]).
         def _combine(t):
             sect = [s * 2 for s in mrope_section]
             chunks = t.split(sect, dim=-1)
