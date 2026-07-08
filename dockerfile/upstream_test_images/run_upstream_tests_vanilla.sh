@@ -263,8 +263,7 @@ test_suite_bh_6u_torus_xyz_health_check_tests() {
 
 test_suite_bh_6u_deployment_tests() {
     echo "[upstream-tests] running BH GLX upstream deployment tests"
-    python3 tests/tt_metal/tt_metal/deployment/eth/test_runner.py
-    python3 tests/tt_metal/tt_metal/deployment/dram/test_runner.py
+    ./build/test/tt_metal/unit_tests_deployment
 }
 
 # Define test suite mappings for different hardware topologies
