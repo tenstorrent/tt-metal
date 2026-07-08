@@ -830,6 +830,55 @@ _LNBATCH_PARAMS = [
 ]
 _LNBATCH_IDS = ["tp4_line", "tp4_ring"]
 
+# TP=1 single-device params: a (1,1) submesh (is_tp_1, no fabric / all-gather).
+_LNTP1_PARAMS = [((4, 8), _DP_GAL, 1, ttnn.Topology.Linear, 1, False)]
+_LNTP1_IDS = ["tp1"]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_LNTP1_PARAMS, _LNTP1_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_layernorm_noaffine_wide_tp1_corr(mesh_device, tp, topology, tp_axis, full_mesh):
+    """Plain (no-affine) LayerNorm on a WIDE TP=1 single-device shard (dim=3072 -> 96 tile-cols).
+    Regression guard for the Blackhole-only garbage bug: with weight=bias=None the L1 estimate drops
+    the affine CBs, so decide_streaming_low_l1 (hardcoded 1.5 MB budget) can select streamed input
+    while decide_block_major_post (arch L1 cap) still says the POST fits resident. On BH's larger L1
+    that lands in the illegal 'streamed input + resident POST' combo (resident POST reads a
+    block-sized input_cb across the whole row -> PCC~0). The fix ties block_major_post to
+    streaming_low_l1, so streamed input always uses the block-major POST. WH passes both before/after
+    (WH's smaller L1 makes overflows_resident_post=true -> block-major already); the BH path is
+    validated in CI on the BH SKU."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    dim = 3072  # TP=1 -> 96 tile-cols (divisible; NOT a tail case), the width that hits the L1 band
+    rows = 128
+    torch.manual_seed(0)
+    x_t = (torch.randn(1, 1, rows, dim, dtype=torch.bfloat16) * 2 + 4).float()
+    mean = x_t.mean(-1, keepdim=True)
+    var = x_t.var(-1, unbiased=False, keepdim=True)
+    ref = ((x_t - mean) / torch.sqrt(var + NORM_EPS)).reshape(rows, dim)
+
+    x = bf16_tensor(x_t.to(torch.bfloat16), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    ccl = CCLManager(mesh_device=submesh, num_links=GALAXY_LINKS, topology=topology)
+    mod = DistributedLayerNorm(
+        embedding_dim=dim,
+        norm_elementwise_affine=False,  # no-affine: the discriminator that exposes the bug
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=submesh,
+        ccl_manager=ccl,
+    )
+    n_launch = int(_os.getenv("LNMOD_LAUNCHES", "3"))
+    outs = [mod.forward(x) for _ in range(n_launch)]
+    gathered = [_gather(o, tp_axis) for o in outs]
+    det = all(torch.equal(gathered[0], g) for g in gathered[1:])
+    out0 = gathered[0].reshape(rows, dim)
+    pcc = _pcc(out0, ref)
+    logger.info(f"LNTP1WIDE tp{tp}_{topology.name} dim={dim} (96 tile-cols) no-affine pcc={pcc * 100:.4f}% det={det}")
+    assert det, "wide no-affine TP=1 LayerNorm not deterministic across launches"
+    assert pcc >= 0.999, f"wide no-affine TP=1 LayerNorm pcc too low: {pcc}"
+
 
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),

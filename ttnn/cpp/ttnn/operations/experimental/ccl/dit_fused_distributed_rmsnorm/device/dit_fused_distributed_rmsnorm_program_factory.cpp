@@ -680,8 +680,20 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool force_recip_stream = use_recip_lut && use_mux && (num_tile_cols >= 56u);
     const bool streaming_low_l1 =
         streaming_input || force_recip_stream || (overflows_resident_post && !args.per_head_norm);
+    // INVARIANT: streamed input REQUIRES a block-major POST. When streaming_low_l1 is set the
+    // input_cb is block-sized and the reader pushes the row block-by-block; the resident POST
+    // instead reads input_cb[col] across the WHOLE row, which for a block-sized CB wraps the ring
+    // and reads stale tiles -> garbage (PCC~0). So for the non-per_head path block_major_post must
+    // track streaming_low_l1 exactly. The old form `(overflows || force_recip) && streaming_low_l1`
+    // dropped block-major when streaming was triggered by decide_streaming_low_l1 alone
+    // (streaming_input) while decide_block_major_post said the POST fit resident — the two use
+    // different L1 budgets (hardcoded 1.5 MB vs the arch L1 cap), so they disagree on Blackhole
+    // (larger L1) for wide no-affine shards (dim=3072 -> 96 tile-cols, no weight/bias to tip
+    // decide_block_major_post over), landing in the broken streamed-input + resident-POST combo.
+    // streaming_low_l1 already implies num_tile_cols % block_size == 0 (the guard below), so
+    // block-major's divisibility requirement is satisfied. per_head_norm keeps its own layout.
     const bool block_major_post =
-        (overflows_resident_post || force_recip_stream) && (streaming_low_l1 || args.per_head_norm);
+        args.per_head_norm ? (overflows_resident_post || force_recip_stream) : streaming_low_l1;
     // TP>1 wide (streaming input 2-pass + block-major POST + fabric AG) uses the
     // reader's SPLIT input schedule: the PRE pass is read first so the local stats /
     // ring gather start ASAP, then the side inputs, then the POST re-read pass (weight
