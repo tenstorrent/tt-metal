@@ -120,7 +120,7 @@ void kernel_main() {
     // ---------- Drain cb_variance → cb_out ----------
     // Per-tile streaming copy with input + output format reconfig (chain owns
     // wait/pop on cb_variance and reserve/push on cb_out).
-    ckl::copy<cb_variance, cb_out>(Ht);
+    ckl::copy<cb_variance, cb_out>(ckl::EltwiseShape::tiles(Ht));
 
     cb_pop_front(cb_scaler, HAS_PARTIAL_W ? 2 : 1);
 }
