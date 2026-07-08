@@ -198,6 +198,7 @@ class LTXDistilledPipeline(LTXPipeline):
         stages: tuple[str, ...] = ("s1", "s2"),
         capture_all: bool = False,
         in_capture_pass: bool = False,
+        capture_traced: bool = False,
     ) -> None:
         """Compile both stages' programs. Both stages use variant 0 (distilled doesn't
         swap weights — only the sequence length differs); ``stages=("s1",)`` skips s2.
@@ -274,6 +275,8 @@ class LTXDistilledPipeline(LTXPipeline):
                     width=s1_w,
                     sigma_values=s1_sigmas,
                     seed=0,
+                    traced=capture_traced,
+                    trace_key="s1",
                 )
         elif skip_dit_warmup:
             logger.info("LTX_DIT_PREP_RUN: skipping stage-1 warmup denoise (gen#0 self-warms via prep_run)")
@@ -309,6 +312,8 @@ class LTXDistilledPipeline(LTXPipeline):
                         seed=0,
                         initial_video_latent=dummy_v_init,
                         initial_audio_latent=dummy_a_init,
+                        traced=capture_traced,
+                        trace_key="s2",
                     )
 
             # Compile VAE decode at full-res (only s2 feeds decode in generate).

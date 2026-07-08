@@ -53,14 +53,16 @@ every run). Reads `TT_METAL_CACHE`/`TT_METAL_HOME` from the env yaml so every st
 | Path | cold | dprint (new build_key) | output |
 |---|---:|---:|---|
 | all-on-device (no prewarm) | 531s | 578s | — |
-| in-process cold-start (automatic fallback) | ~235s | ~310s | byte-identical |
-| **3-stage wrapper (this script)** | **~166s** | **~172s** | byte-identical |
+| **in-process cold-start (automatic, default)** | **~146s** | **~153s** | byte-identical |
+| 3-stage wrapper (this script) | ~166s | ~172s | byte-identical |
 
-The 3-stage wins because the off-device compile runs while the device is unreserved, and its separate
-capture process warms the whole kernel set (incl. audio) that the in-process path leaves to compile
-in-window. Use it for a known cold/new build_key; if an agent forgets, the automatic in-process
-cold-start still lands ~235–310s. (Watcher is a separate story — it crashes fabric bring-up on this
-box, so no run completes under it, prewarmed or not.)
+The **in-process cold-start is the automatic default** and now the fastest total device-held (~146/153s)
+— it captures the whole kernel set including the audio trace kernels (see "In-process cold-start" below)
+and shares one imports/init/weight-load, which the two-reservation 3-stage pays twice. Reach for the
+**3-stage wrapper** when you specifically want to **free the device during the ~57s off-device compile**
+(heavy multi-tenant contention): it holds the device only for the capture + real reservations, releasing
+it in between, at the cost of ~20s more total. Both are byte-identical. (Watcher is a separate story —
+it crashes fabric bring-up on this box, so no run completes under it, prewarmed or not.)
 
 Or invoke the tool directly (warms the cache for a later run):
 
@@ -135,20 +137,26 @@ capture pass, nothing to forget. Controls are bound to `ttnn._ttnn.device`
 (`kernel_prewarm_cold_start_needed` / `_set_capture_only` / `_offline_compile`),
 declared in `<tt-metalium/kernel_prewarm_control.hpp>`.
 
-Measured (LTX distilled `bh_2x4sp1tp0`): **531s → 235s device-held, output
-byte-identical**. One reservation held continuously (the off-device compile runs
-while the device sits idle-but-reserved), so it trades ~40-70s more device-held
-than the split three-phase for being foolproof and automatic.
+Measured (LTX distilled `bh_2x4sp1tp0`, device-held): **cold 531s → ~146s, dprint
+578s → ~153s**, output byte-identical, ~90 kernels left in-window. One reservation
+held continuously (the off-device compile runs while the device sits idle-but-
+reserved) — a touch more device-held than the split three-phase (~166/172s), traded
+for being foolproof and automatic.
 
-**Limitation — the audio path.** Components that lazily initialize device statics
-on first dispatch and capture traces with `prep_run=False` (the LTX vocoder) can't
-be captured under capture-only: dispatch is skipped, so their statics are left
-corrupted (wrong output) or half-warmed (crash). The pipeline **skips audio decode
-in the capture pass** and lets it compile op-by-op in the warm real warmup. On a
-warm ccache that's fast (the 235s above); on a **new** build_key (e.g. toggling
-dprint) that audio compile is cold-ccache serial and pushes device-held to ~310s.
-For a strict <250s on a new build_key, use the split three-phase (offloads the
-audio compile off-device too).
+**Capturing the trace (audio) kernels.** Under a trace (`LTX_TRACED=1`) the real run
+uses the *trace-variant* programs (persistent-buffer configs). The audio vocoder
+captures its trace with `prep_run=False` and lazily warms device statics on dispatch,
+so a capture-only pass (dispatch skipped) crashes `begin_trace_capture` and leaves the
+statics corrupt. The fix, all in-process: (1) the tracer skips the device
+trace-capture under capture-only (`tracing.set_kernel_prewarm_capturing`) but still
+runs the forward, so the trace-variant kernel *recipes* are recorded at program
+construction; (2) the capture runs at the run's own traced setting so it records the
+trace variants, not eager ones; (3) `Vocoder.release_trace` clears `_warmed_shapes`
+**and** `_tpad_mask_cache` — the persistent device state a capture-only warm leaves
+garbage — so the real run recomputes it. Without (3) the audio is silently wrong
+(passes the test, wrong md5); with it, byte-identical. Only ~90 non-trace kernels
+still compile in-window (~15s on a cold ccache), so the in-process path stays under
+250s even on a new build_key.
 
 ## What it costs / when it does NOT help
 

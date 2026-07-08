@@ -32,6 +32,37 @@ from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.test import line_params, ring_params
 from models.tt_dit.utils.vbench import assert_vbench_quality
 
+
+def _apply_local_iter_env() -> None:
+    # setdefault from a local dev env file so pipeline iteration toggles (resident DiT,
+    # warmup/gate toggles) apply to a bare local run without the broker's -e handoff. Kernel
+    # prewarm needs nothing here: the framework runs it by default and self-bootstraps its manifest
+    # under the JIT cache root, for the normal and profiler build_keys alike. Explicit env always
+    # wins and an absent file is a no-op, so CI (this test is checkpoint-gated) and the committed
+    # VBench/CLIP gate defaults are untouched. Flat "KEY: VALUE" lines; override path via LTX_ITER_ENV.
+    path = os.environ.get("LTX_ITER_ENV") or os.path.join(
+        os.environ.get("TT_METAL_HOME", ""), "tmp", "ltx_env_prewarm.yaml"
+    )
+    if not os.path.isfile(path):
+        return
+    applied = []
+    with open(path) as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#") or ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip()
+            if key and key not in os.environ:
+                os.environ[key] = val.strip().strip('"').strip("'")
+                applied.append(key)
+    if applied:
+        logger.info(f"LTX iter env: {len(applied)} defaults from {path}: {', '.join(applied)}")
+
+
+_apply_local_iter_env()
+
+
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
 # l1_small_size: native ttnn.conv1d (the depthwise audio taps) runs an UntilizeWithHalo gather
