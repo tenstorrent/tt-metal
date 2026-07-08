@@ -579,16 +579,13 @@ class TtIndexer:
             # straddle for a non-slab-aligned start_pos (padded chunk). Scores the FULL preallocated width T:
             # positions past each query are causally -inf, and top-k below drops those (-inf -> sentinel).
             #
-            # TODO(perf, indexer kv_len): on an over-allocated cache (T >> written extent, e.g. a 55k slot
-            # with a 5k chunk written) this scores the whole T. The op supports bounding the scored logical
-            # prefix via kv_len (the tightest legal value is end_pos = start_pos + chunk_global; it cannot go
-            # lower because the pad query rows push the fullest-device causal window to end_pos, and the op
-            # TT_FATALs on kv_len < that). Wiring kv_len=end_pos here is NOT correct on its own: kv_len only
-            # writes logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf), so the
-            # downstream top-k over full-T then picks garbage columns (observed: rotated-prefill PCC -> 0.0).
-            # It also needs the logits sliced to [0, end_pos) before top-k (that path validated correct at the
-            # OP level, but is deferred). Investigate: slice-vs-stale-tail interaction + whether the extra
-            # slice/copy is cheaper than the saved score/top-k work before turning this on.
+            # Bound the score to the real written prefix (kv_len=end_pos) rather than the full preallocated
+            # width T: end_pos = start_pos + chunk_global is the tightest legal value (the pad query rows
+            # push the fullest-device causal window to end_pos; the op TT_FATALs on kv_len < that). kv_len
+            # only WRITES logits[:, :, :, :end_pos] and leaves the tail [end_pos, T) STALE (not -inf); the
+            # top-k below is told the valid length (valid_length=end_pos) so it never reads or ranks that
+            # stale tail — which is the future top-k would drop anyway (causally -inf), so the selection is
+            # unchanged.
             k_full = self._gather_index_kbuf(index_kv_cache)  # [num_users, 1, T, D_idx] bf16 TILE, block-cyclic
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,
@@ -600,6 +597,7 @@ class TtIndexer:
                 cache_batch_idx=cache_user_id,
                 block_cyclic_sp_axis=self.sp_axis,
                 block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp
+                kv_len=end_pos,
             )
             ttnn.deallocate(k_full)
         else:
@@ -625,7 +623,13 @@ class TtIndexer:
         # index_topk is a multiple of 16, so k is too iff end_pos is — assert it at the caller contract
         # (current chunk sizing guarantees tile alignment) rather than failing deep inside the op.
         assert end_pos % 16 == 0, f"indexer top-k requires a tile-aligned key count; got end_pos={end_pos}"
-        return ttnn.experimental.topk_large_indices(logits, k=min(self.index_args.index_topk, end_pos))
+        # Block-cyclic logits are the full preallocated width T with a stale [end_pos, T) tail (kv_len only
+        # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
+        # The natural path's cache is exact-sized (no tail), so it needs no bound.
+        topk_valid_length = end_pos if self._blockcyclic else None
+        return ttnn.experimental.topk_large_indices(
+            logits, k=min(self.index_args.index_topk, end_pos), valid_length=topk_valid_length
+        )
 
 
 class NullIndexer:

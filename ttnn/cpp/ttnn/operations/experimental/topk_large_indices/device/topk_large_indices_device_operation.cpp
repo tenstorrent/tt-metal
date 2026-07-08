@@ -58,6 +58,18 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
         input_row_bytes <= std::numeric_limits<uint32_t>::max(),
         "topk_large_indices input row size must fit in uint32_t bytes; got {} bytes",
         input_row_bytes);
+
+    // Optional bounded search width: top-k scans only the first valid_length columns of each row (the rest
+    // of the physically-wider row is ignored, not read). Must hold at least k values and fit within the row.
+    if (attrs.valid_length.has_value()) {
+        const uint32_t valid_length = attrs.valid_length.value();
+        TT_FATAL(valid_length >= attrs.k, "topk_large_indices valid_length {} must be >= k {}", valid_length, attrs.k);
+        TT_FATAL(
+            valid_length <= n,
+            "topk_large_indices valid_length {} must be <= the input last dimension {}",
+            valid_length,
+            n);
+    }
 }
 
 }  // namespace
@@ -110,17 +122,18 @@ tensor_return_value_t TopkLargeIndicesDeviceOperation::create_output_tensors(
 }
 
 std::tuple<TopkLargeIndicesDeviceOperation::operation_attributes_t, TopkLargeIndicesDeviceOperation::tensor_args_t>
-TopkLargeIndicesDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k) {
-    return {operation_attributes_t{.k = k}, tensor_args_t{.input_tensor = input_tensor}};
+TopkLargeIndicesDeviceOperation::invoke(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
+    return {operation_attributes_t{.k = k, .valid_length = valid_length}, tensor_args_t{.input_tensor = input_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices
 
 namespace ttnn::experimental {
 
-Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k) {
+Tensor topk_large_indices(const Tensor& input_tensor, uint32_t k, std::optional<uint32_t> valid_length) {
     auto [operation_attributes, tensor_args] =
-        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(input_tensor, k);
+        operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation::invoke(
+            input_tensor, k, valid_length);
     return ttnn::device_operation::launch<
         operations::experimental::topk_large_indices::TopkLargeIndicesDeviceOperation>(
         operation_attributes, tensor_args);
