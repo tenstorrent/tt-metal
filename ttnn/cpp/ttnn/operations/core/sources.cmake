@@ -3,7 +3,6 @@
 
 set(TTNN_OP_CORE_SRCS
     compute_kernel/compute_kernel_config.cpp
-    data_movement_kernel/datamovement_kernel_config.cpp
     core.cpp
     to_layout/to_layout_op.cpp
     to_dtype/to_dtype_op.cpp
