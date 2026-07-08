@@ -5,6 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -343,9 +344,12 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
 
-    // Boot-time matmul block init. The helper invocation below uses InitMode::None,
-    // so the per-(m,n) matmul_block_init below is the only re-init that fires.
-    mm_block_init(in0_cb_id, in1_cb_id, intermediate_cb_id, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
+    // Boot-time matmul init: compute_kernel_hw_startup does the one hw_configure MMIO, then
+    // matmul_block_init sets up unpack/math matmul state (mm_block_init is deprecated). The helper
+    // invocation below uses InitMode::None, so the per-(m,n) matmul_block_init below is the only
+    // re-init that fires.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, intermediate_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;

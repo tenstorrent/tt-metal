@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "internal/mod_div_lib.h"
@@ -20,7 +21,7 @@ enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 // ── Local CB rd_ptr utilities (used by ENABLE_GLOBAL_CB ring management) ─────
 // reload_from_cb_to_dst is gone — the matmul_block helper does its own reload
 // (copy_tile_to_dst_init_short_with_dt + copy_block_matmul_partials +
-// mm_block_init_short_with_dt) inline as part of its K-loop.
+// reconfig_data_format_srca + matmul_block_init) inline as part of its K-loop.
 
 FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
@@ -319,12 +320,13 @@ void kernel_main() {
     CircularBuffer in0_buf(in0_cb_id);
     CircularBuffer in1_buf(in1_cb_id);
 
-    // Boot-time matmul init. The helper invocation below uses InitMode::None so it
-    // doesn't re-init each call; the per-batch pack_reconfig_data_format below
-    // re-binds the packer to the current batch's partials CB without disturbing
-    // the unpacker matmul state.
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // Boot-time matmul init: compute_kernel_hw_startup does the one hw_configure MMIO, then
+    // matmul_block_init sets up unpack/math matmul state (mm_block_init is deprecated). The helper
+    // invocation below uses InitMode::None so it doesn't re-init each call; the per-batch
+    // pack_reconfig_data_format below re-binds the packer to the current batch's partials CB without
+    // disturbing the unpacker matmul state.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 
     // Per-batch ring CB state (used by ENABLE_GLOBAL_CB; declared at the outer
     // scope so the functors can hold pointers into it across helper invocations).

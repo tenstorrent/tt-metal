@@ -8,6 +8,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -232,7 +233,7 @@ struct ConvTilizePreKBlock {
                 }
                 // Matmul-state restore is now the helper's job: matmul_block is invoked with
                 // InitMode::ShortAfterPreKBlock, so it reconfigs srcA/srcB and re-issues
-                // mm_block_init_short itself after this functor returns. This functor only
+                // matmul_block_init itself after this functor returns. This functor only
                 // tilizes (plus the relu / packer-l1_acc config above, which it owns).
             }
         } else {
@@ -478,7 +479,11 @@ void kernel_main() {
     // a valid index (UNTILIZE_STAGING is allocated only when untilize_out && fuse_bias).
     experimental::CB cb_bias_out(bias_out_cb_id);
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    // Boot-time matmul init: compute_kernel_hw_startup does the one hw_configure MMIO (first compute
+    // API call), then matmul_block_init sets up the unpack/math matmul state. mm_block_init is
+    // deprecated.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -607,9 +612,10 @@ void kernel_main() {
                 in0_num_blocks_w,
                 /*batch=*/1);
 
-            // init_mode=ShortAfterPreKBlock: the kernel-entry mm_block_init at the top of
-            // kernel_main covers initial state; thereafter the helper itself reconfigs srcA/srcB
-            // and re-issues mm_block_init_short after each per-K-block tilize (ConvTilizePreKBlock),
+            // init_mode=ShortAfterPreKBlock: the kernel-entry compute_kernel_hw_startup +
+            // matmul_block_init at the top of kernel_main cover initial state; thereafter the helper
+            // itself reconfigs srcA/srcB and re-issues matmul_block_init after each per-K-block tilize
+            // (ConvTilizePreKBlock),
             // so the functor no longer carries the matmul-state restore. The downstream bias-add and
             // untilize phases reconfig data formats, and the helper's per-iter restore re-establishes
             // matmul state on the next call. reconfig stays at its INPUT_AND_OUTPUT default — the

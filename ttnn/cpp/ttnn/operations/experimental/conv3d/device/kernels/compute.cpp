@@ -308,7 +308,7 @@ void kernel_main() {
                                     //     hw_configure (the only place hw_configure is safe);
                                     //   - the helper's per-call Short does reconfig_data_format
                                     //     (in1, in0) + pack_reconfig_data_format(interm) +
-                                    //     mm_block_init_short, which both restores matmul-mode
+                                    //     matmul_block_init, which both restores matmul-mode
                                     //     unpack/math state after the tilize above AND brings
                                     //     the dataformats back to weights/vol2col_tiled (the
                                     //     pre-tilize reconfig on the use_fp32_partials path is
