@@ -11,8 +11,10 @@
  * LLK UNPACK AB SUB BCAST COL CUSTOM - SDPA specialized blocked sub path
  *************************************************************************/
 
-inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t /*operandA*/) {
-    _llk_unpack_AB_sub_bcast_col_init_custom_();
+inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
+    _llk_unpack_AB_sub_bcast_col_init_custom_(num_faces);
 }
 
 inline void llk_unpack_AB_sub_bcast_col_custom(

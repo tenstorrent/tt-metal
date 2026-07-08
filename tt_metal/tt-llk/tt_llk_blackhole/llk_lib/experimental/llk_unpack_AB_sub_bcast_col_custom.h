@@ -19,13 +19,16 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 // SDPA-specific custom init for the blocked sub+bcast(col) unpack flow.
-inline void _llk_unpack_AB_sub_bcast_col_init_custom_()
+// @param num_faces Number of faces per tile (2 for 16x32 tiny tiles, 4 for full 32x32 tiles).
+inline void _llk_unpack_AB_sub_bcast_col_init_custom_(const std::uint32_t num_faces = 4)
 {
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0); // transpose within the face
 
-    // Force both unpackers to unpack entire tile
-    TTI_SETADCXX(p_setadc::UNP0, 1023, 0x0);
-    TTI_SETADCXX(p_setadc::UNP1, 1023, 0x0);
+    // Force both unpackers to unpack the requested number of faces (num_faces * 16 * 16
+    // datums). Full 32x32 tile = 4 faces = 1024 datums, 16x32 tiny tile = 2 faces = 512 datums.
+    const std::uint32_t x_end = num_faces * FACE_R_DIM * FACE_C_DIM - 1;
+    TT_SETADCXX(p_setadc::UNP0, x_end, 0x0);
+    TT_SETADCXX(p_setadc::UNP1, x_end, 0x0);
 }
 
 // SDPA-specific custom blocked unpack: one SrcB tile + ct_dim SrcA tiles.

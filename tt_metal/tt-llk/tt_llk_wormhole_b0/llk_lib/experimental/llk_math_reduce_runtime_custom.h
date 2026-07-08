@@ -11,6 +11,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_math_common.h"
 #include "lltt.h"
 
@@ -54,16 +55,76 @@ inline void reduce_max_row_configure_addrmod_reinit_runtime()
  * - Scaler values are 1.0 and are contained inside F0 of the scaler tile
  * - The scaler doesn't change for the duration of the whole block operation
  * - Operand and scaler data format is bfloat16_b
- * - Operand tile size is 32x32
+ * - Operand tile size is 32x32 (num_faces=4) or 16x32 (num_faces=2, a single face-row)
  * - Can work on both 16-bit or 32-bit DEST register modes based on is_fp32_dest_acc_en flag
  * - Does only MAX pool on ROW dimension
+ *
+ * For num_faces=2 the per-tile MOP reduces only F0&F1 (no F2 jump, no second reduce) and the
+ * recorded transpose block covers the single face-row.
  *
  * This function should NOT be used as a substitute for native reduce LLK MOP configuration.
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim)
+inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t block_ct_dim, std::uint32_t num_faces = 4)
 {
+    if (num_faces == 2)
+    {
+        // Single face-row (16x32 tiny tile): only F0&F1 exist. Reduce them, transpose once, no F2 jump.
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            // FP32 path records the same 15-instruction layout; only the execute-side replay differs.
+            lltt::record(0, 15);
+
+            TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+            TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+
+            TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            TTI_TRNSPSRCB;
+            TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+            TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+            TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+            TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            TTI_TRNSPSRCB;
+            // No F2 exists for a single face-row: last write uses ADDR_MOD_2 (no +20 jump); CLR_B resets counters.
+            TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        }
+        else
+        {
+            // Non-FP32 single face-row: 2 GMPOOLs + one transpose block (6 instrs) + CLR_B = 9 instructions.
+            lltt::record(0, 9);
+
+            TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+            TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_1, p_gpool::INDEX_DIS, 0);
+
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+            TTI_TRNSPSRCB;
+            TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_MOVB2D(0, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_2, p_movb2d::MOV_4_ROWS, 0);
+            TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        }
+
+        const std::uint32_t outer_loop_2f      = block_ct_dim;
+        const std::uint32_t inner_loop_2f      = 1;
+        static constexpr std::uint32_t start_op_2f      = TT_OP_REPLAY(0, 2, 0, 0);
+        static constexpr std::uint32_t inner_loop_op_2f = TT_OP_NOP;
+        static constexpr std::uint32_t end_op_1_2f      = TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        static constexpr std::uint32_t end_op_2_2f      = TT_OP_NOP;
+
+        ckernel::ckernel_template mop_template(outer_loop_2f, inner_loop_2f, inner_loop_op_2f);
+        mop_template.set_start_op(start_op_2f);
+        mop_template.set_end_ops(end_op_1_2f, end_op_2_2f);
+        mop_template.program();
+        return;
+    }
+
     // See _llk_math_reduce_max_row_ for a full algorithm explanation
     // Put the following 15 instructions in a REPLAY buffer
     lltt::record(0, 15);
@@ -150,8 +211,25 @@ inline void _llk_math_reduce_block_max_row_mop_config_runtime_(std::uint32_t blo
  * Use when the MOP was clobbered (e.g., by eltwise binary ops) but the replay buffer is intact.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint32_t block_ct_dim)
+inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint32_t block_ct_dim, std::uint32_t num_faces = 4)
 {
+    if (num_faces == 2)
+    {
+        // Single face-row: reduce F0&F1 only, no F2 jump, no second reduce.
+        const std::uint32_t outer_loop_2f      = block_ct_dim;
+        const std::uint32_t inner_loop_2f      = 1;
+        static constexpr std::uint32_t start_op_2f      = TT_OP_REPLAY(0, 2, 0, 0);
+        static constexpr std::uint32_t inner_loop_op_2f = TT_OP_NOP;
+        static constexpr std::uint32_t end_op_1_2f      = TT_OP_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+        static constexpr std::uint32_t end_op_2_2f      = TT_OP_NOP;
+
+        ckernel::ckernel_template mop_template(outer_loop_2f, inner_loop_2f, inner_loop_op_2f);
+        mop_template.set_start_op(start_op_2f);
+        mop_template.set_end_ops(end_op_1_2f, end_op_2_2f);
+        mop_template.program();
+        return;
+    }
+
     const std::uint32_t outer_loop = block_ct_dim;
     const std::uint32_t inner_loop = 4;
 
@@ -182,7 +260,7 @@ inline void _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_(std::uint
  * _llk_math_reduce_() calls in a loop for general-purpose block reduction.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim)
+inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_dim, std::uint32_t num_faces = 4)
 {
     if constexpr (is_fp32_dest_acc_en)
     {
@@ -195,7 +273,7 @@ inline void _llk_math_reduce_block_max_row_init_runtime_(std::uint32_t block_ct_
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
+    _llk_math_reduce_block_max_row_mop_config_runtime_<is_fp32_dest_acc_en>(block_ct_dim, num_faces);
 }
 
 inline void _llk_math_reduce_block_max_row_uninit_runtime_()
@@ -219,10 +297,29 @@ inline void _llk_math_reduce_block_max_row_uninit_runtime_()
  * for general-purpose block reduction across multiple tiles.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index)
+inline void _llk_math_reduce_block_max_row_runtime_(const std::uint32_t dst_index, std::uint32_t num_faces = 4)
 {
+    if constexpr (is_fp32_dest_acc_en)
+    {
+        LLK_ASSERT(num_faces != 2, "16x32 (num_faces=2) reduce_block_max_row is not yet supported in FP32 dest-accumulation mode");
+    }
+    // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
+    if (num_faces == 2)
+    {
+        // Single face-row (16x32 tiny tile): reduce F0&F1 and transpose only the one recorded
+        // face-row. The 2-face record has no ADDR_MOD_3 F2 jump, so no spurious DEST advance occurs.
+        // Run the MOP (emits the GMPOOLs); the transpose is replayed below.
+        ckernel::ckernel_template::run();
+
+        // Replay the 7 instructions (slots 2-8) to transpose the single reduced face-row + CLR_B.
+        // FP32 dest + num_faces==2 is guarded as unsupported by the LLK_ASSERT above.
+        lltt::replay(2, 7);
+        return;
+    }
+
+    // num_faces == 4 (32x32): behavior preserved byte-identical to the ssinghal 32x32-only path.
     if constexpr (is_fp32_dest_acc_en)
     {
         // Run the MOP, performing a column reduce across all 4 faces
@@ -267,10 +364,10 @@ inline void _llk_math_reduce_block_max_row_reinit_runtime_()
  * after a matmul operation in an SDPA inner loop.
  */
 template <bool is_fp32_dest_acc_en = false>
-inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim)
+inline void _llk_math_reduce_block_max_row_reinit_short_runtime_(std::uint32_t block_ct_dim, std::uint32_t num_faces = 4)
 {
     reduce_max_row_configure_addrmod();
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
-    _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_<is_fp32_dest_acc_en>(block_ct_dim);
+    _llk_math_reduce_block_max_row_mop_reprogram_only_runtime_<is_fp32_dest_acc_en>(block_ct_dim, num_faces);
 }

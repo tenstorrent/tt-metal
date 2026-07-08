@@ -22,12 +22,16 @@ inline void llk_math_eltwise_binary_sub_bcast_cols_init_custom(
 }
 
 template <bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary_sub_bcast_cols_custom(const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
+inline void llk_math_eltwise_binary_sub_bcast_cols_custom(
+    const std::uint32_t operandA, const std::uint32_t dst_index, const std::uint32_t ct_dim = 1) {
     LLK_ASSERT(
         (dst_index < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()),
         "dst_index out of range");
 
-    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
-    _llk_math_sub_bcast_cols_reuse_custom_(ct_dim);
-    math::clear_dst_reg_addr();
+    const std::uint32_t operand_id = get_operand_id(operandA);
+    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+
+    // dst_index is the absolute base dest tile slot; the LLK helper writes ct_dim
+    // consecutive tiles from there and restores the dest base on exit.
+    _llk_math_sub_bcast_cols_reuse_custom_(ct_dim, num_faces, dst_index);
 }
