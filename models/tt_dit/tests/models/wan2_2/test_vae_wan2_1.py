@@ -491,7 +491,12 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation,
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, dtype, reset_seeds, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanAttentionBlock as TorchWanAttentionBlock
 
@@ -588,7 +593,12 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_conv3d(
     mesh_device,
     B,
@@ -728,7 +738,12 @@ def test_wan_conv3d(
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_residual_block(
     mesh_device, B, in_dim, out_dim, T, H, W, cache_len, mean, std, h_axis, w_axis, num_links, dtype, request
 ):
@@ -891,7 +906,12 @@ def test_wan_residual_block(
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_mid_block(
     mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axis, w_axis, num_links, dtype, MIN_PCC, MAX_RMSE, request
 ):
@@ -1048,7 +1068,12 @@ def test_wan_mid_block(
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_resample(
     mesh_device, B, dim, T, H, W, mode, resample_out_dim, cache_len, mean, std, h_axis, w_axis, num_links, request
 ):
@@ -1228,7 +1253,12 @@ def test_wan_resample(
     [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32],
     ids=["bf16", "f32"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_upblock(
     mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blocks, mean, std, h_axis, w_axis, num_links, dtype, request
 ):
@@ -1429,7 +1459,12 @@ def test_wan_upblock(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_decoder3d(
     mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, dtype, MIN_PCC, MAX_RMSE, request
 ):
@@ -1593,7 +1628,12 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_decoder(
     mesh_device,
     B,
@@ -1715,7 +1755,12 @@ def test_wan_decoder(
     ids=["2x4h0w1nl1", "4x8h0w1nl2"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_decoder_production_blocking(
     mesh_device,
     B,
@@ -1863,7 +1908,12 @@ def test_wan_decoder_production_blocking(
     ids=["4x8h0w1nl2"],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_encoder_production_blocking(
     mesh_device,
     B,
@@ -2024,7 +2074,12 @@ def test_wan_encoder_production_blocking(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_decoder_chunked_consistency(
     mesh_device,
     B,
@@ -2173,7 +2228,12 @@ def test_wan_decoder_chunked_consistency(
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanEncoder3d as TorchWanEncoder3D
 
@@ -2323,7 +2383,12 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links", MESH_CONFIGS_WITH_LINKS, ids=MESH_CONFIG_IDS, indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], ids=["line"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "require_exact_physical_num_devices": True}],
+    ids=["line"],
+    indirect=True,
+)
 def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, request):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
