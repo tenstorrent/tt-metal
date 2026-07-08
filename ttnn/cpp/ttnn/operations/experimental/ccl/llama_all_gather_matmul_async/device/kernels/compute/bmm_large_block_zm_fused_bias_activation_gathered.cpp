@@ -8,6 +8,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
@@ -18,21 +19,22 @@ enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
-    uint32_t mm_partials_cb_id,
+    CircularBuffer& cb_mm_partials,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
+    const uint32_t mm_partials_cb_id = cb_mm_partials.get_cb_id();
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-    cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
+    cb_mm_partials.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
     copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-    cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
+    cb_mm_partials.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_cb_id, in1_cb_id);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -179,6 +181,11 @@ void kernel_main() {
     const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
     rt_args_idx += ring_size;
 
+    CircularBuffer cb_in0(in0_cb_id);
+    CircularBuffer cb_in1(in1_cb_id);
+    CircularBuffer cb_sync(sync_cb);
+    CircularBuffer cb_sync2(sync_cb2);
+
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -212,6 +219,8 @@ void kernel_main() {
 #endif
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
+        CircularBuffer cb_mm_out(mm_out_cb_id);
+        CircularBuffer cb_mm_partials(mm_partials_cb_id);
 
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -228,8 +237,8 @@ void kernel_main() {
         }
 
         // Wait to receive in1
-        cb_wait_front(sync_cb2, 1);
-        cb_pop_front(sync_cb2, 1);
+        cb_sync2.wait_front(1);
+        cb_sync2.pop_front(1);
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx - block + ring_size) % ring_size;
@@ -238,7 +247,7 @@ void kernel_main() {
 
             // Wait for in1 block
             if constexpr (in1_is_dram) {
-                cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                cb_in1.wait_front(in1_block_num_tiles);
             }
 
             // const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
@@ -253,7 +262,8 @@ void kernel_main() {
 #endif
 
             // Wait to receive in0 block
-            cb_wait_front(input0_cb_id, in0_block_num_tiles);
+            // input0_cb_id == in0_cb_id (see assignment above).
+            cb_in0.wait_front(in0_block_num_tiles);
 
 #ifdef ENABLE_GLOBAL_CB
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
@@ -282,7 +292,7 @@ void kernel_main() {
                         reload_from_cb_to_dst(
                             input0_cb_id,
                             in1_cb_id,
-                            mm_partials_cb_id,
+                            cb_mm_partials,
                             in1_transpose_tile,
                             out_subblock_num_tiles,
                             out_subblock_w,
@@ -329,7 +339,7 @@ void kernel_main() {
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
-                        cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
+                        cb_mm_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
@@ -352,12 +362,12 @@ void kernel_main() {
                         if constexpr (untilize_out) {
                             pack_untilize_uninit(mm_out_cb_id);
                         }
-                        cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+                        cb_mm_out.push_back(out_subblock_num_tiles);
 
                     } else if (spill) {
                         tile_regs_commit();
                         // Move partial result to interm buffer
-                        cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
+                        cb_mm_partials.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -372,7 +382,7 @@ void kernel_main() {
                         pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
-                        cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
+                        cb_mm_partials.push_back(out_subblock_num_tiles);
                     }
 
                     in1_index_subblock_offset += out_subblock_w;
@@ -384,8 +394,8 @@ void kernel_main() {
 
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
-                cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
-                cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
+                cb_mm_partials.wait_front(out_block_num_tiles);
+                cb_mm_partials.pop_front(out_block_num_tiles);
             }
             if (block == num_blocks - 2 && spill) {
                 enable_reload = true;
@@ -396,9 +406,10 @@ void kernel_main() {
             }
 #endif
 
-            cb_pop_front(input0_cb_id, in0_block_num_tiles);
+            // input0_cb_id == in0_cb_id (see assignment above).
+            cb_in0.pop_front(in0_block_num_tiles);
             if constexpr (in1_is_dram) {
-                cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                cb_in1.pop_front(in1_block_num_tiles);
             }
 #ifdef ENABLE_GLOBAL_CB
             curr_in1_block_index = next_in1_block_index;
@@ -408,8 +419,8 @@ void kernel_main() {
 
 #ifdef ENABLE_GLOBAL_CB
         // Release in1
-        cb_reserve_back(sync_cb, 1);
-        cb_push_back(sync_cb, 1);
+        cb_sync.reserve_back(1);
+        cb_sync.push_back(1);
         UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
         UNPACK((update_rd_ptr_to_ring_index(
             in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr

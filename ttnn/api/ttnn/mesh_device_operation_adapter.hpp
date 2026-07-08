@@ -581,22 +581,31 @@ public:
                     apply_dynamic_runtime_args_if_declared(
                         program, attrs, tensor_args, tensor_return_value, coordinate_range);
                 } else {
-                    // ProgramDescriptor variant — simple per-coord factory.  Fast-path only
-                    // when the factory declared rt-arg buffer bindings via
-                    // emplace_runtime_args().  Without those, the factory may be
-                    // mixing `.buffer = ...` CBs with OLD-style raw uint32 rt-args
-                    // that are not registered as bindings; patching CBs alone
-                    // would leave those rt-args pointing at stale addresses.  Fall
-                    // through to the slow-path rebuild instead.
-                    if (!sv.resolved_bindings.rt_args.empty()) {
+                    // ProgramDescriptor variant — simple per-coord factory.  Fast-path when the factory
+                    // declared rt-arg buffer bindings via emplace_runtime_args(), OR the op declares
+                    // get_dynamic_runtime_args() to re-apply its per-dispatch args — in which case the
+                    // framework also patches the op's `.buffer = ...` CB bindings (covers CB-bound sharded
+                    // ops).  With neither, a `.buffer` CB mixed with raw uint32 rt-args could go stale, so
+                    // fall through to the slow-path rebuild instead. (#48928)
+                    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+                    if constexpr (requires {
+                                      DeviceOperation::get_dynamic_runtime_args(
+                                          attrs,
+                                          tensor_args,
+                                          tensor_return_value,
+                                          std::optional<ttnn::MeshCoordinate>{});
+                                  }) {
+                        dynamic_args = DeviceOperation::get_dynamic_runtime_args(
+                            attrs,
+                            tensor_args,
+                            tensor_return_value,
+                            std::optional<ttnn::MeshCoordinate>(coordinate_range.start_coord()));
+                    }
+                    if (!sv.resolved_bindings.rt_args.empty() || !dynamic_args.empty()) {
                         auto collected =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, collected.buffers);
-                        // Fast path doesn't rebuild the descriptor, so re-apply any declared dynamic
-                        // non-Buffer runtime args (the slow-path else-branch below rebuilds
-                        // create_descriptor() and so already re-derives them).
-                        apply_dynamic_runtime_args_if_declared(
-                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
+                        tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);

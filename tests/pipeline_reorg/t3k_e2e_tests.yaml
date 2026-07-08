@@ -129,7 +129,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and line" -vvv --tb=short
   skus:
     wh_llmbox:
-      timeout: 25
+      timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill

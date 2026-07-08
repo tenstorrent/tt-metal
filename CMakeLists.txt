@@ -169,6 +169,13 @@ else()
     add_subdirectory(tt_metal/third_party SYSTEM)
 endif()
 
+option(TT_METAL_SKIP_LINKING "Replace the linker with a no-op touch for clang-tidy builds" OFF)
+if(TT_METAL_SKIP_LINKING)
+    set(CMAKE_CXX_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_C_LINK_EXECUTABLE "cmake -E touch <TARGET>")
+    set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+endif()
+
 ############################################################################################################################
 # Constructing interface libs for common compiler flags, header directories, and libraries
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level

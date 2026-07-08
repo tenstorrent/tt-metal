@@ -23,6 +23,11 @@ class DeepSeekV4FlashConfig:
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 6
     NUM_SHARED_EXPERTS = 1
+    # V4 drops V3's expert-group routing: a single group means the gate collapses to a plain top-k.
+    NUM_EXPERT_GROUPS = 1
+    NUM_LIMITED_GROUPS = 1
+    # V4 replaces V3/Kimi's sigmoid router affinity with sqrt(softplus(.)).
+    SCORE_FUNC = "sqrtsoftplus"
 
     # Model architecture
     NUM_LAYERS = 43

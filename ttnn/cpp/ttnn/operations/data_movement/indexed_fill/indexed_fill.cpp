@@ -81,7 +81,7 @@ Tensor indexed_fill(
 
     // Permute fallback: bring target dim to front, run the primitive at dim=0, permute back.
     // Build perm = [dim, 0, 1, ..., dim-1, dim+1, ..., rank-1]
-    SmallVector<int64_t> perm;
+    ttsl::SmallVector<int64_t> perm;
     perm.reserve(rank);
     perm.push_back(dim);
     for (int64_t i = 0; i < rank; ++i) {
@@ -90,7 +90,7 @@ Tensor indexed_fill(
         }
     }
 
-    SmallVector<int64_t> inv_perm(rank);
+    ttsl::SmallVector<int64_t> inv_perm(rank);
     for (int64_t i = 0; i < rank; ++i) {
         inv_perm[perm[i]] = i;
     }
