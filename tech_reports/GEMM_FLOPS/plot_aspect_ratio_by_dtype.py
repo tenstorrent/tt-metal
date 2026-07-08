@@ -9,11 +9,21 @@ Usage:
 4. Run this script from the tt-metal root directory
 """
 
+import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from math import gcd
 from functools import reduce
+
+
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
 
 
 def gcd_of_three(a, b, c):
@@ -35,48 +45,53 @@ def calculate_aspect_ratio(m, k, n, grid_x, grid_y):
     return f"{ratio_m}:{ratio_k}:{ratio_n}"
 
 
+def extract_grid_dims(df):
+    """Parse grid_x and grid_y from the grid_size column, e.g. '(12, 10)' → (12, 10)."""
+    raw = df["grid_size"].iloc[0]
+    cleaned = str(raw).strip("() ")
+    parts = [int(x.strip()) for x in cleaned.split(",")]
+    return parts[0], parts[1]
+
+
 # Load N150 and P150 data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-df_n150["source"] = "N150"
-df_n150["grid_x"] = 8
-df_n150["grid_y"] = 8
+df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
+if not df_n150.empty:
+    df_n150["source"] = "N150"
+    gx, gy = extract_grid_dims(df_n150)
+    df_n150["grid_x"] = gx
+    df_n150["grid_y"] = gy
+    print(f"N150 grid: {gx}x{gy}")
 
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-df_p150["source"] = "P150"
-df_p150["grid_x"] = 13
-df_p150["grid_y"] = 10
+df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
+if not df_p150.empty:
+    df_p150["source"] = "P150"
+    gx, gy = extract_grid_dims(df_p150)
+    df_p150["grid_x"] = gx
+    df_p150["grid_y"] = gy
+    print(f"P150 grid: {gx}x{gy}")
 
-# Standardize column names
-if "TFLOPs (avg)" in df_n150.columns:
-    df_n150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-if "TFLOPs (avg)" in df_p150.columns:
-    df_p150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-
-df_n150["tflops"] = pd.to_numeric(df_n150["tflops"], errors="coerce")
-df_p150["tflops"] = pd.to_numeric(df_p150["tflops"], errors="coerce")
-
-# Create dtype_fidelity column
-df_n150["dtype_fidelity"] = (
-    df_n150["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df_n150["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
-df_p150["dtype_fidelity"] = (
-    df_p150["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df_p150["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
-
-# Calculate aspect ratios
+# Standardize column names and derive computed columns per device
 print("Calculating aspect ratios...")
-df_n150["aspect_ratio"] = df_n150.apply(
-    lambda row: calculate_aspect_ratio(row["m"], row["k"], row["n"], row["grid_x"], row["grid_y"]), axis=1
-)
-df_p150["aspect_ratio"] = df_p150.apply(
-    lambda row: calculate_aspect_ratio(row["m"], row["k"], row["n"], row["grid_x"], row["grid_y"]), axis=1
-)
+for _df in [df_n150, df_p150]:
+    if _df.empty:
+        continue
+    if "TFLOPs (avg)" in _df.columns:
+        _df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+    _df["tflops"] = pd.to_numeric(_df["tflops"], errors="coerce")
+    _df["dtype_fidelity"] = (
+        _df["dtype"].astype(str).str.replace("DataType.", "")
+        + "_"
+        + _df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
+    )
+    _df["aspect_ratio"] = _df.apply(
+        lambda row: calculate_aspect_ratio(row["m"], row["k"], row["n"], row["grid_x"], row["grid_y"]), axis=1
+    )
 
 df = pd.concat([df_n150, df_p150], ignore_index=True)
+
+if df.empty:
+    print("ERROR: No data available for any device. Exiting.")
+    raise SystemExit(1)
 
 # Define dtype-fidelity pairs and aspect ratios (colors match scatter/bar plots)
 dtype_configs = [
@@ -88,8 +103,9 @@ dtype_configs = [
 aspect_ratios = ["1:1:1", "1:2:4"]
 aspect_labels = {"1:1:1": "Square\n(1:1:1)", "1:2:4": "Rectangular\n(1:2:4)"}
 
-# Create plot for each device
-for source in ["N150", "P150"]:
+# Create plot for each device that has data
+available_sources = [s for s in ["N150", "P150"] if s in df["source"].values]
+for source in available_sources:
     device_data = df[df["source"] == source].copy()
 
     if device_data.empty:

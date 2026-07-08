@@ -9,16 +9,41 @@ Usage:
 4. Run this script from the tt-metal root directory
 """
 
+import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 
-# Load N150 and P150 data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-df_n150["source"] = "N150"
 
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-df_p150["source"] = "P150"
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
+
+
+# Load N150 and P150 data
+df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
+if not df_n150.empty:
+    df_n150["source"] = "N150"
+
+df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
+if not df_p150.empty:
+    df_p150["source"] = "P150"
+
+if df_n150.empty or df_p150.empty:
+    missing = []
+    if df_n150.empty:
+        missing.append("n150-manual.csv")
+    if df_p150.empty:
+        missing.append("p150-manual.csv")
+    print(
+        f"NOTE: plot_bar.py produces a paired N150/P150 comparison chart and "
+        f"requires both device CSVs. Missing: {', '.join(missing)}. Skipping."
+    )
+    raise SystemExit(0)
 
 # Standardize column names
 if "TFLOPs (avg)" in df_n150.columns:

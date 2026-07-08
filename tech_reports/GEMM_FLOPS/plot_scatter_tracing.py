@@ -9,9 +9,20 @@ Usage:
 4. Run this script from the tt-metal root directory
 """
 
+import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+
+
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
+
 
 dtype_configs = [
     ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#2ca02c"),  # Green
@@ -19,20 +30,25 @@ dtype_configs = [
     ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)", "#1f77b4"),  # Blue
 ]
 
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-df_n150["source"] = "n150"
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-df_p150["source"] = "p150"
+df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
+if not df_n150.empty:
+    df_n150["source"] = "n150"
+df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
+if not df_p150.empty:
+    df_p150["source"] = "p150"
 
-if "TFLOPs (avg)" in df_n150.columns:
-    df_n150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-if "TFLOPs (avg)" in df_p150.columns:
-    df_p150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-
-df_n150["tflops"] = pd.to_numeric(df_n150["tflops"], errors="coerce")
-df_p150["tflops"] = pd.to_numeric(df_p150["tflops"], errors="coerce")
+for _df in [df_n150, df_p150]:
+    if not _df.empty:
+        if "TFLOPs (avg)" in _df.columns:
+            _df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+        _df["tflops"] = pd.to_numeric(_df["tflops"], errors="coerce")
 
 df = pd.concat([df_n150, df_p150], ignore_index=True)
+
+if df.empty:
+    print("ERROR: No data available for any device. Exiting.")
+    raise SystemExit(1)
+
 df["dtype_fidelity"] = (
     df["dtype"].astype(str).str.replace("DataType.", "")
     + "_"
@@ -49,7 +65,8 @@ if df["use_trace"].dtype == object:
 df = df[~((df["m"] == 3328) & (df["k"] == 2560) & (df["n"] == 2560))].copy()  # N150 square
 df = df[~((df["m"] == 4160) & (df["k"] == 4160) & (df["n"] == 4160))].copy()  # P150 square
 
-for source in ["n150", "p150"]:
+available_sources = [s for s in ["n150", "p150"] if s in df["source"].values]
+for source in available_sources:
     fig, ax = plt.subplots(figsize=(16, 10))
     device_data = df[df["source"] == source].copy()
 

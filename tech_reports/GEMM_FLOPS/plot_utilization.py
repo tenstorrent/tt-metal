@@ -12,10 +12,21 @@ Usage:
 4. Run this script from the tt-metal root directory
 """
 
+import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
+
+
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if os.path.exists(path):
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
+
 
 # Configuration
 dtype_configs = [
@@ -30,15 +41,21 @@ device_configs = [
 ]
 
 # Load data
-df_n150 = pd.read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-df_p150 = pd.read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
+df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
+df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 
 # Add device column
-df_n150["device"] = "N150"
-df_p150["device"] = "P150"
+if not df_n150.empty:
+    df_n150["device"] = "N150"
+if not df_p150.empty:
+    df_p150["device"] = "P150"
 
 # Combine data
 df = pd.concat([df_n150, df_p150], ignore_index=True)
+
+if df.empty:
+    print("ERROR: No data available for any device. Exiting.")
+    raise SystemExit(1)
 
 # Filter: only non-traced data for clarity
 df = df[df["use_trace"] == False]
