@@ -41,48 +41,49 @@ from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, p
 # Expected metrics
 # =============================================================================
 
-# Expected accuracy metrics from PERF.md for Llama-3.1-8B (top1, top5 only).
+# Expected accuracy metrics from measuring TTTv1 for Llama-3.1-8B (top1, top5 only).
 # Decode-throughput targets are measured TTTv1 parity numbers from the old tt_transformers demo
-# sweep recorded in consolidated_git_status_markdown.md.
+# sweep recorded in consolidated_git_status_markdown.md. Batch-32 TTFT uses the corresponding
+# batch-1 wall-clock guardrail until we have direct batch-32 wall-clock baselines.
 EXPECTED_METRICS = {
     "performance": {
         "N150": {
             "top1": 90,
             "top5": 97,
-            "batch-1": {"tok_s_u": 9.49, "ttft_ms": 109},
-            "batch-32": {"tok_s_u": 8.81, "ttft_ms": 108},
+            "batch-1": {"tok_s_u": 9.49, "ttft_ms": 177.1},
+            "batch-32": {"tok_s_u": 8.81, "ttft_ms": 177.1},
         },
         "N300": {
             "top1": 90,
             "top5": 97,
-            "batch-1": {"tok_s_u": 25.4, "ttft_ms": 74},
-            "batch-32": {"tok_s_u": 22.2, "ttft_ms": 73},
+            "batch-1": {"tok_s_u": 25.4, "ttft_ms": 90.4},
+            "batch-32": {"tok_s_u": 22.2, "ttft_ms": 90.4},
         },
         "T3K": {
             "top1": 90,
             "top5": 98,
-            "batch-1": {"tok_s_u": 70.3, "ttft_ms": 53},
-            "batch-32": {"tok_s_u": 56.1, "ttft_ms": 53},
+            "batch-1": {"tok_s_u": 70.3, "ttft_ms": 39.9},
+            "batch-32": {"tok_s_u": 56.1, "ttft_ms": 39.9},
         },
     },
     "accuracy": {
         "N150": {
             "top1": 96,
             "top5": 100,
-            "batch-1": {"tok_s_u": 9.11, "ttft_ms": 138},
-            "batch-32": {"tok_s_u": 8.49, "ttft_ms": 138},
+            "batch-1": {"tok_s_u": 9.11, "ttft_ms": 206.8},
+            "batch-32": {"tok_s_u": 8.49, "ttft_ms": 206.8},
         },
         "N300": {
             "top1": 96,
             "top5": 100,
-            "batch-1": {"tok_s_u": 23.4, "ttft_ms": 109},
-            "batch-32": {"tok_s_u": 20.6, "ttft_ms": 79},
+            "batch-1": {"tok_s_u": 23.4, "ttft_ms": 96.3},
+            "batch-32": {"tok_s_u": 20.6, "ttft_ms": 96.3},
         },
         "T3K": {
             "top1": 97,
             "top5": 100,
-            "batch-1": {"tok_s_u": 64.4, "ttft_ms": 81},
-            "batch-32": {"tok_s_u": 52.2, "ttft_ms": 81},
+            "batch-1": {"tok_s_u": 64.4, "ttft_ms": 41.9},
+            "batch-32": {"tok_s_u": 52.2, "ttft_ms": 41.9},
         },
     },
 }

@@ -1654,12 +1654,12 @@ class TracedLLMExecutor:
                     wu_logits,
                     sampling_params,
                     tt_out_tok=wu_tokens if self._benchmark_device_decode_feedback else None,
-                    history_output=self._benchmark_sampled_token_history
-                    if self._benchmark_device_decode_feedback
-                    else None,
-                    history_positions=self._benchmark_sampled_token_positions
-                    if self._benchmark_device_decode_feedback
-                    else None,
+                    history_output=(
+                        self._benchmark_sampled_token_history if self._benchmark_device_decode_feedback else None
+                    ),
+                    history_positions=(
+                        self._benchmark_sampled_token_positions if self._benchmark_device_decode_feedback else None
+                    ),
                 )
                 if self._benchmark_device_decode_feedback and hasattr(self.model, "increment_positions"):
                     self.model.increment_positions(wu_current_pos, wu_rot_mat_idxs)
@@ -1972,8 +1972,11 @@ class PerfBenchmarkResult:
 
     @property
     def ttft_ms(self) -> float:
-        """Average time-to-first-token per user (ms)."""
-        return self.prefill_time_s / self.batch_size * 1000
+        """Wall-clock time until the first token is available for any user.
+
+        In a batched prefill, this is not amortized by batch size.
+        """
+        return self.prefill_time_s * 1000
 
     @property
     def tok_s_u(self) -> float:
