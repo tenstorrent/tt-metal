@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <limits>
 #include <map>
 #include <memory>
 #include <cstddef>
@@ -719,20 +718,22 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
             mesh_device, core_range_set, 0, 0);  // Kernel isn't run here.
         auto& program = workload.get_programs().at(device_range);
 
-        // The enforced TENSIX ceiling is bounded by the uint16_t RTA offset field (see
-        // Kernel::validate_runtime_args_size). Mirror that here.
-        const uint32_t tensix_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
+        // A count comfortably above the enforced TENSIX ceiling (see Kernel::validate_runtime_args_size).
+        // The RTA-offset field is a uint16_t region size in bytes, so its hard maximum is 65535 B = 16383 words;
+        // 16384 words (65536 B) is one word past that, so it exceeds any valid TENSIX ceiling regardless of the
+        // exact enforced cap.
+        constexpr uint32_t over_tensix_ceiling_rt_args = 16384;
 
         // Set 100 unique args, then try to set enough common args to overflow the combined ceiling and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(tensix_max_rt_args + 1);
+        std::vector<uint32_t> common_runtime_args(over_tensix_ceiling_rt_args);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
         // Set 100 common args, then try to set enough unique args to overflow the combined ceiling and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(tensix_max_rt_args + 1);
+        std::vector<uint32_t> more_unique_args(over_tensix_ceiling_rt_args);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }
