@@ -7,16 +7,17 @@ from models.common.models import executor as executor_module
 def test_easy_trace_prefill_replay_copies_only_mutable_inputs(monkeypatch):
     engine = executor_module.TracedLLMExecutor.__new__(executor_module.TracedLLMExecutor)
     engine.mesh_device = "mesh"
-    engine.trace_id_prefill = {128: 7}
+    trace_key = (128, 1)
+    engine.trace_id_prefill = {trace_key: 7}
     engine.trace_inputs_prefill = {
-        128: ("device_tokens", "device_cos", "device_sin", "device_page_table", None),
+        trace_key: ("device_tokens", "device_cos", "device_sin", "device_page_table", None),
     }
-    engine.trace_output_prefill = {128: "trace_output"}
+    engine.trace_output_prefill = {trace_key: "trace_output"}
 
     monkeypatch.setattr(
         engine,
         "_prepare_prefill_trace_inputs_host",
-        lambda tokens, page_table, last_token_idx: (
+        lambda tokens, page_table, last_token_idx, batch_size: (
             "host_tokens",
             "device_cos_slice",
             "device_sin_slice",

@@ -68,12 +68,45 @@ def get_padded_prefill_len(seq_len: int) -> int:
     return 2 ** (seq_len - 1).bit_length()
 
 
+MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
+SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+
+
 def get_block_size(kv_cache):
     return kv_cache[0][0].shape[2]
 
 
 def num_blocks_in_seq(seq_len, block_size):
     return math.ceil(seq_len / block_size)
+
+
+def _next_supported_prefill_batch_size(batch_size: int, max_batch_size: int) -> int | None:
+    for supported in SUPPORTED_PREFILL_BATCH_SIZES:
+        if supported >= batch_size:
+            return supported if supported <= max_batch_size else None
+    return max_batch_size if batch_size <= max_batch_size else None
+
+
+def _batched_prefill_plan(batch_size, prefill_seq_lens, num_cached_per_user, max_batch_size, max_prefill_chunk_size):
+    """Return padded batch size for TTTv1-style batched prefill, or None."""
+    if batch_size <= 1:
+        return None
+    if len(set(prefill_seq_lens)) != 1:
+        return None
+    if any(n != 0 for n in num_cached_per_user):
+        return None
+    prefill_seq_len = prefill_seq_lens[0]
+    if prefill_seq_len != 128:
+        return None
+    if prefill_seq_len > max_prefill_chunk_size:
+        return None
+
+    padded_batch = _next_supported_prefill_batch_size(batch_size, max_batch_size)
+    if padded_batch is None:
+        return None
+    if padded_batch * prefill_seq_len >= MAX_BATCHED_PREFILL_SEQ_LEN:
+        return None
+    return padded_batch
 
 
 def get_max_prefill_chunk_size(seq_len, max_prefill_seq_len):
@@ -409,7 +442,7 @@ class EagerLLMExecutor:
     # =========================================================================
 
     def _prepare_prefill_device_inputs(
-        self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None
+        self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None, batch_size=1
     ):
         """Prepare eager prefill device inputs. Returns (tokens_embd, cos, sin, page_table_tt, chunk_page_table_tt).
 
@@ -421,8 +454,8 @@ class EagerLLMExecutor:
             last_token_idx: Index of last token for output extraction.
         """
         assert tokens.dim() == 2, "tokens must be 2D"
+        per_user_seq_len = tokens.shape[-1]
         tokens_reshaped = tokens.reshape(1, 1, 1, -1)
-        S = tokens_reshaped.shape[-1]
         tokens_tt = ttnn.from_torch(
             tokens_reshaped,
             device=self.mesh_device,
@@ -437,10 +470,10 @@ class EagerLLMExecutor:
         rope = self.model.rope_setup
         rope.load_device_weights()
         mat_len = rope.cos_matrix.shape[2]
-        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        seq_len = last_token_idx + 1 if isinstance(last_token_idx, int) else per_user_seq_len
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        required_end = start_pos + S
+        required_end = start_pos + per_user_seq_len
         pad_len = max(0, required_end - mat_len)
 
         prefill_start = start_pos
@@ -747,6 +780,29 @@ class EagerLLMExecutor:
             empty_slots = list(range(batch_size))
         sampling_on_device = sampling_params is not None and getattr(self.model, "sampling", None) is not None
 
+        num_cached_per_user = [int(start_pos[i]) if start_pos is not None else 0 for i in range(batch_size)]
+        prefill_seq_lens = [
+            get_padded_prefill_len(int(prompt_lens[i]) - num_cached_per_user[i]) for i in range(batch_size)
+        ]
+        max_prefill_chunk_size = self.model_args.max_prefill_chunk_size if self.model_args else max(prefill_seq_lens)
+        padded_batch = _batched_prefill_plan(
+            batch_size,
+            prefill_seq_lens,
+            num_cached_per_user,
+            self.model_config.max_batch_size if self.model_config else batch_size,
+            max_prefill_chunk_size,
+        )
+        if padded_batch is not None and empty_slots == list(range(batch_size)):
+            return self._prefill_batched(
+                tokens,
+                page_table=page_table,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                sampling_params=sampling_params,
+                padded_batch=padded_batch,
+                prefill_seq_len=prefill_seq_lens[0],
+            )
+
         prefill_results = []
 
         for idx, user_id in enumerate(empty_slots):
@@ -818,6 +874,74 @@ class EagerLLMExecutor:
                 )
 
         return (output_tokens, None) if sampling_on_device else output_tensor
+
+    def _prefill_batched(
+        self,
+        tokens,
+        page_table,
+        prompt_lens,
+        empty_slots,
+        sampling_params,
+        padded_batch,
+        prefill_seq_len,
+    ):
+        """Run one TTTv1-style batched prefill for same-length uncached prompts."""
+        batch_size = tokens.shape[0]
+        output_tokens = torch.zeros(batch_size, dtype=torch.long)
+        output_tensor = torch.zeros(batch_size, 1, self.model.vocab_size)
+        prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
+        last_token_idx = [0] * padded_batch
+        for idx, slot in enumerate(empty_slots):
+            seq_len = int(prompt_lens[idx])
+            prefill_ids[slot, :seq_len] = tokens[idx, :seq_len]
+            last_token_idx[slot] = seq_len - 1
+
+        page_table_batched = _get_batched_prefill_page_table(
+            page_table,
+            self._kv_cache,
+            prefill_seq_len,
+            empty_slots,
+            padded_batch,
+        )
+        prefill_input, cos, sin, page_table_tt, _ = self._prepare_prefill_device_inputs(
+            prefill_ids,
+            page_table=page_table_batched,
+            batch_size=padded_batch,
+        )
+        hidden_states = self.model.prefill_forward(
+            prefill_input,
+            [cos, sin],
+            user_id=empty_slots,
+            page_table=page_table_tt,
+            get_last_token=-1,
+            batch_size=padded_batch,
+        )
+        logits = self.model.post_process_batched_prefill_output(
+            hidden_states,
+            last_token_idx,
+            padded_batch,
+            prefill_seq_len,
+        )
+
+        if sampling_params is not None and getattr(self.model, "sampling", None) is not None:
+            tt_toks, _ = self._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+            tt_toks_host = tt_toks.cpu(blocking=False)
+            ttnn.synchronize_device(self.mesh_device)
+            sampled = _process_output_decode_tokens(tt_toks_host, batch_size, self.cluster_shape)
+            output_tokens[:] = sampled[:batch_size].to(torch.long)
+            return output_tokens, None
+
+        logits = ttnn.untilize(logits, use_multicore=True)
+        logits_host = logits.cpu(blocking=False)
+        ttnn.synchronize_device(self.mesh_device)
+        for idx, slot in enumerate(empty_slots):
+            output_tensor[idx] = _process_output_prefill(
+                logits_host,
+                slot,
+                self.model.vocab_size,
+                self.cluster_shape,
+            )
+        return output_tensor
 
     def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
         """Prefill a single user with chunked prefill support.
@@ -1033,10 +1157,10 @@ class TracedLLMExecutor:
 
         # todo)) we cannot save many traces in memory! Gotta limit the number of traces! --> lru_cache?
         #        but the warmup_model_prefill() traces must be kept around forever!
-        # Prefill traces: keyed by padded seq_len
-        self.trace_id_prefill: dict[int, int | None] = defaultdict(lambda: None)
-        self.trace_inputs_prefill: dict[int, tuple | None] = defaultdict(lambda: None)
-        self.trace_output_prefill: dict[int, ttnn.Tensor | None] = defaultdict(lambda: None)
+        # Prefill traces: keyed by (padded seq_len, batch_size).
+        self.trace_id_prefill: dict[tuple[int, int], int | None] = defaultdict(lambda: None)
+        self.trace_inputs_prefill: dict[tuple[int, int], tuple | None] = defaultdict(lambda: None)
+        self.trace_output_prefill: dict[tuple[int, int], ttnn.Tensor | None] = defaultdict(lambda: None)
 
         # Decode traces: keyed by sampling_on_device (bool)
         self.trace_ids_decode: dict[bool, int | None] = defaultdict(lambda: None)
@@ -1104,16 +1228,16 @@ class TracedLLMExecutor:
     # Trace Key Computation
     # =========================================================================
 
-    def _get_prefill_trace_key(self, tokens: torch.Tensor) -> int:
-        """Prefill trace key = padded seq_len."""
-        return get_padded_prefill_len(tokens.shape[-1])
+    def _get_prefill_trace_key(self, tokens: torch.Tensor) -> tuple[int, int]:
+        """Prefill trace key = (padded seq_len, batch_size)."""
+        return get_padded_prefill_len(tokens.shape[-1]), tokens.shape[0]
 
     def _get_decode_trace_key(self, sampling_params) -> bool:
         """Decode trace key = whether sampling is on device."""
         return sampling_params is not None
 
     def _prepare_prefill_trace_inputs_host(
-        self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None
+        self, tokens, page_table, start_pos=0, chunk_page_table=None, last_token_idx=None, batch_size=1
     ):
         """Prepare traced prefill host inputs for copy_host_to_device replay.
 
@@ -1125,8 +1249,8 @@ class TracedLLMExecutor:
             last_token_idx: Index of last token for output extraction.
         """
         assert tokens.dim() == 2, "tokens must be 2D"
+        per_user_seq_len = tokens.shape[-1]
         tokens_reshaped = tokens.reshape(1, 1, 1, -1)
-        S = tokens_reshaped.shape[-1]
         tokens_tt = ttnn.from_torch(
             tokens_reshaped,
             device=None,
@@ -1138,15 +1262,14 @@ class TracedLLMExecutor:
         rope = self.model.rope_setup
         rope.load_device_weights()
         mat_len = rope.cos_matrix.shape[2]
-        seq_len = last_token_idx + 1 if last_token_idx is not None else S
+        seq_len = last_token_idx + 1 if isinstance(last_token_idx, int) else per_user_seq_len
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
-        required_end = start_pos + S
+        required_end = start_pos + per_user_seq_len
         pad_len = max(0, required_end - mat_len)
-        max_seq_len = self.model_config.max_seq_len if self.model_config else mat_len
 
-        cos_slice = rope.cos_matrix[:, :, 0:max_seq_len, :]
-        sin_slice = rope.sin_matrix[:, :, 0:max_seq_len, :]
+        cos_slice = rope.cos_matrix[:, :, start_pos:required_end, :]
+        sin_slice = rope.sin_matrix[:, :, start_pos:required_end, :]
 
         if pad_len > 0:
             padding = [(0, 0)] * 4
@@ -1345,6 +1468,29 @@ class TracedLLMExecutor:
             empty_slots = list(range(batch_size))
         sampling_on_device = sampling_params is not None and getattr(self.model, "sampling", None) is not None
 
+        num_cached_per_user = [int(start_pos[i]) if start_pos is not None else 0 for i in range(batch_size)]
+        prefill_seq_lens = [
+            get_padded_prefill_len(int(prompt_lens[i]) - num_cached_per_user[i]) for i in range(batch_size)
+        ]
+        max_prefill_chunk_size = self.model_args.max_prefill_chunk_size if self.model_args else max(prefill_seq_lens)
+        padded_batch = _batched_prefill_plan(
+            batch_size,
+            prefill_seq_lens,
+            num_cached_per_user,
+            self.model_config.max_batch_size if self.model_config else batch_size,
+            max_prefill_chunk_size,
+        )
+        if padded_batch is not None and empty_slots == list(range(batch_size)):
+            return self._prefill_batched(
+                tokens,
+                page_table=page_table,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                sampling_params=sampling_params,
+                padded_batch=padded_batch,
+                prefill_seq_len=prefill_seq_lens[0],
+            )
+
         prefill_results = []
 
         for idx, user_id in enumerate(empty_slots):
@@ -1437,32 +1583,98 @@ class TracedLLMExecutor:
 
         return (output_tokens, None) if sampling_on_device else output_tensor
 
-    def _easy_trace_prefill(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
+    def _prefill_batched(
+        self,
+        tokens,
+        page_table,
+        prompt_lens,
+        empty_slots,
+        sampling_params,
+        padded_batch,
+        prefill_seq_len,
+    ):
+        """Run one traced TTTv1-style batched prefill for same-length uncached prompts."""
+        batch_size = tokens.shape[0]
+        output_tokens = torch.zeros(batch_size, dtype=torch.long)
+        output_tensor = torch.zeros(batch_size, 1, self.model.vocab_size)
+        prefill_ids = torch.zeros(padded_batch, prefill_seq_len, dtype=torch.long, device=tokens.device)
+        last_token_idx = [0] * padded_batch
+        for idx, slot in enumerate(empty_slots):
+            seq_len = int(prompt_lens[idx])
+            prefill_ids[slot, :seq_len] = tokens[idx, :seq_len]
+            last_token_idx[slot] = seq_len - 1
+
+        page_table_batched = _get_batched_prefill_page_table(
+            page_table,
+            self._kv_cache,
+            prefill_seq_len,
+            empty_slots,
+            padded_batch,
+        )
+        hidden_states = self._easy_trace_prefill(
+            prefill_ids,
+            page_table=page_table_batched,
+            user_id=empty_slots,
+            last_token_idx=last_token_idx,
+            prefill_seq_len=prefill_seq_len,
+            batch_size=padded_batch,
+        )
+        logits = self.model.post_process_batched_prefill_output(
+            hidden_states,
+            last_token_idx,
+            padded_batch,
+            prefill_seq_len,
+        )
+
+        if sampling_params is not None and getattr(self.model, "sampling", None) is not None:
+            tt_toks, _ = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+            tt_toks_host = tt_toks.cpu(blocking=False)
+            ttnn.synchronize_device(self.mesh_device)
+            sampled = _process_output_decode_tokens(tt_toks_host, batch_size, self.cluster_shape)
+            output_tokens[:] = sampled[:batch_size].to(torch.long)
+            return output_tokens, None
+
+        logits = ttnn.untilize(logits, use_multicore=True)
+        logits_host = logits.cpu(blocking=False)
+        ttnn.synchronize_device(self.mesh_device)
+        for idx, slot in enumerate(empty_slots):
+            output_tensor[idx] = _process_output_prefill(
+                logits_host,
+                slot,
+                self.model.vocab_size,
+                self.cluster_shape,
+            )
+        return output_tensor
+
+    def _easy_trace_prefill(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len, batch_size=1):
         """Lazy trace capture for prefill. Captures on first call per seq_len."""
-        if self.trace_id_prefill[prefill_seq_len] is None:
+        trace_key = (prefill_seq_len, batch_size)
+        if self.trace_id_prefill[trace_key] is None:
             return self._capture_and_run_prefill_trace(
                 tokens,
                 page_table,
                 user_id,
                 last_token_idx,
                 prefill_seq_len,
+                batch_size=batch_size,
             )
 
         host_inputs = self._prepare_prefill_trace_inputs_host(
             tokens,
             page_table=page_table,
             last_token_idx=last_token_idx,
+            batch_size=batch_size,
         )
-        trace_inputs = self.trace_inputs_prefill[prefill_seq_len]
+        trace_inputs = self.trace_inputs_prefill[trace_key]
         copy_host_to_device(
             host_tensors=(host_inputs[0], host_inputs[3], host_inputs[4]),
             device_tensors=(trace_inputs[0], trace_inputs[3], trace_inputs[4]),
         )
 
-        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill[prefill_seq_len], cq_id=0, blocking=False)
-        return self.trace_output_prefill[prefill_seq_len]
+        ttnn.execute_trace(self.mesh_device, self.trace_id_prefill[trace_key], cq_id=0, blocking=False)
+        return self.trace_output_prefill[trace_key]
 
-    def _run_prefill_trace_body(self, device_inputs, user_id):
+    def _run_prefill_trace_body(self, device_inputs, user_id, batch_size=1):
         tokens_embd = self.model.embed_prefill(device_inputs[0])
         rot_mats = [device_inputs[1], device_inputs[2]]
         tt_page_table = device_inputs[3]
@@ -1475,46 +1687,52 @@ class TracedLLMExecutor:
             page_table=tt_page_table,
             chunk_page_table=tt_chunk_page_table,
             get_last_token=-1,
+            batch_size=batch_size,
         )
 
-    def _capture_and_run_prefill_trace(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
+    def _capture_and_run_prefill_trace(
+        self, tokens, page_table, user_id, last_token_idx, prefill_seq_len, batch_size=1
+    ):
         """Compile + capture trace for a specific prefill seq_len."""
-        # todo)) should just assert the expected trace is already there (look up by prefill_seq_len)
-        self._eager._prefill_single_user(
-            tokens,
-            page_table=page_table,
-            user_id=user_id,
-            last_token_idx=last_token_idx,
-        )
+        # todo)) should just assert the expected trace is already there (look up by trace key)
+        if batch_size == 1:
+            self._eager._prefill_single_user(
+                tokens,
+                page_table=page_table,
+                user_id=user_id,
+                last_token_idx=last_token_idx,
+            )
         ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Compiled prefill for seq_len={prefill_seq_len}")
+        logger.info(f"Compiled prefill for seq_len={prefill_seq_len}, batch_size={batch_size}")
 
         host_inputs = self._prepare_prefill_trace_inputs_host(
             tokens,
             page_table=page_table,
             last_token_idx=last_token_idx,
+            batch_size=batch_size,
         )
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
         with suspend_module_input_validation():
-            trace_warmup_output = self._run_prefill_trace_body(device_inputs, user_id)
+            trace_warmup_output = self._run_prefill_trace_body(device_inputs, user_id, batch_size=batch_size)
         ttnn.synchronize_device(self.mesh_device)
         cleanup_ttnn_value(trace_warmup_output)
         ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Compiled trace-compatible prefill for seq_len={prefill_seq_len}")
+        logger.info(f"Compiled trace-compatible prefill for seq_len={prefill_seq_len}, batch_size={batch_size}")
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         with suspend_module_input_validation():
-            logits = self._run_prefill_trace_body(device_inputs, user_id)
+            logits = self._run_prefill_trace_body(device_inputs, user_id, batch_size=batch_size)
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
 
-        self.trace_id_prefill[prefill_seq_len] = trace_id
-        self.trace_inputs_prefill[prefill_seq_len] = device_inputs
-        self.trace_output_prefill[prefill_seq_len] = logits
+        trace_key = (prefill_seq_len, batch_size)
+        self.trace_id_prefill[trace_key] = trace_id
+        self.trace_inputs_prefill[trace_key] = device_inputs
+        self.trace_output_prefill[trace_key] = logits
 
-        logger.info(f"Captured prefill trace for seq_len={prefill_seq_len}")
+        logger.info(f"Captured prefill trace for seq_len={prefill_seq_len}, batch_size={batch_size}")
         return logits
 
     # =========================================================================
@@ -1804,6 +2022,46 @@ def _compile_prefill_and_decode(
         prefill_page_table.dim() == 2
     ), f"prefill_page_table must be [batch_size, max_blocks], got {prefill_page_table.dim()}D"
 
+    batch_size = prefill_tokens.shape[0]
+    decode_start_pos = torch.full(
+        (batch_size,),
+        prefill_tokens.shape[-1],
+        dtype=torch.long,
+        device=prefill_tokens.device,
+    )
+
+    if _is_traced_executor(executor) and sampling_params is not None:
+        # Capture decode before prefill for traced on-device sampling. Decode capture
+        # materializes persistent sampling state, and capturing it after prefill can
+        # leave the subsequent timed prefill replay reading corrupted sampled tokens.
+        # The placeholder token is overwritten by the first real decode replay.
+        decode_context = (
+            _get_validation_context(executor, mode="decode") if validate_configs else contextlib.nullcontext()
+        )
+        with decode_context:
+            executor.compile_decode(
+                tokens=torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device),
+                start_pos=decode_start_pos,
+                page_table=prefill_page_table,
+                kv_cache=kv_cache,
+                sampling_params=sampling_params,
+            )
+
+        prefill_context = (
+            _get_validation_context(executor, mode="prefill") if validate_configs else contextlib.nullcontext()
+        )
+        with prefill_context:
+            executor.compile_prefill(
+                tokens=prefill_tokens,
+                page_table=prefill_page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                start_pos=start_pos,
+                sampling_params=sampling_params,
+            )
+        return
+
     prefill_context = (
         _get_validation_context(executor, mode="prefill") if validate_configs else contextlib.nullcontext()
     )
@@ -1818,18 +2076,11 @@ def _compile_prefill_and_decode(
             sampling_params=sampling_params,
         )
 
-    batch_size = prefill_tokens.shape[0]
     decode_tokens = torch.zeros(batch_size, dtype=torch.long, device=prefill_tokens.device)
     if isinstance(logits, tuple):
         decode_tokens = logits[0].view(-1)[:batch_size].to(dtype=torch.long, device=prefill_tokens.device)
     elif logits is not None:
         decode_tokens = torch.argmax(logits[:, -1:, :], dim=-1).view(-1)
-    decode_start_pos = torch.full(
-        (batch_size,),
-        prefill_tokens.shape[-1],
-        dtype=torch.long,
-        device=prefill_tokens.device,
-    )
 
     decode_context = _get_validation_context(executor, mode="decode") if validate_configs else contextlib.nullcontext()
     with decode_context:
@@ -2102,14 +2353,17 @@ def run_perf_benchmark(
     sampled_host_tokens = None
 
     def consume_sampled_tokens(host_tokens):
-        next_tok = _process_output_decode_tokens(host_tokens, batch_size, cluster_shape)
-        next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
+        if isinstance(host_tokens, torch.Tensor):
+            next_tok = host_tokens.view(-1)[:batch_size].detach().cpu()
+        else:
+            next_tok = _process_output_decode_tokens(host_tokens, batch_size, cluster_shape)
+            next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
         for user_id, tok in enumerate(next_tok.tolist()):
             generated_token_ids[user_id].append(int(tok))
 
     for i in range(num_decode_tokens):
         t0 = time.perf_counter()
-        read_decode_output = sampling_params is None
+        read_decode_output = sampling_params is None or not can_pipeline_readback
         if sampling_params is not None and i == 1:
             sampled_decode_start = t0
         logits, _ = executor.decode_forward(
@@ -2149,6 +2403,8 @@ def run_perf_benchmark(
             for user_id, tok in enumerate(next_tok.tolist()):
                 generated_token_ids[user_id].append(int(tok))
             current_tokens[:batch_size] = next_tok
+        elif not can_pipeline_readback:
+            consume_sampled_tokens(logits)
         current_pos[:batch_size] += 1
 
     if sampling_params is not None:
@@ -2207,6 +2463,17 @@ def _process_output_decode_tokens(tt_out, B, cluster_shape):
     padded_batch_size = 32
     tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
     return _concat_host_output(tt_out, cluster_shape)[0, 0, :B, 0]
+
+
+def _get_batched_prefill_page_table(page_table, kv_cache, prefill_seq_len, empty_slots, padded_batch):
+    """Build a slot-indexed page table for batched prefill."""
+    block_size = get_block_size(kv_cache)
+    num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+    page_table = page_table[:, :num_blocks]
+    padded_page_table = torch.ones(padded_batch, num_blocks, dtype=torch.int32) * -1
+    for idx, slot in enumerate(empty_slots):
+        padded_page_table[slot, :] = page_table[idx, :]
+    return padded_page_table
 
 
 def _get_prefill_user_page_table(page_table, kv_cache, prefill_len):

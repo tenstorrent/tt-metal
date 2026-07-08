@@ -286,12 +286,14 @@ class TransformerBlock1D(LightweightModule):
         return out
 
     def prefill_forward(
-        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx
+        self, x: ttnn.Tensor, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size: int = 1
     ) -> ttnn.Tensor:
         residual = x
 
         attn_in = self.attention_norm.prefill_forward(x)
         attn_in = _all_gather_rmsnorm_tensor(self.attention_norm, attn_in)
+        if batch_size > 1:
+            attn_in = ttnn.reshape(attn_in, [batch_size, 1, attn_in.shape[-2] // batch_size, -1])
         attn_out = self.attention.prefill_forward(
             attn_in,
             rot_mats,
@@ -300,6 +302,8 @@ class TransformerBlock1D(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
         )
+        if batch_size > 1:
+            residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
         attn_out = ttnn.to_memory_config(attn_out, self.prefill_residual_memcfg)
 
         hidden_states = ttnn.add(residual, attn_out, memory_config=self.prefill_residual_memcfg)
@@ -329,9 +333,10 @@ class TransformerBlock1D(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        batch_size: int = 1,
     ):
         if mode == "prefill":
-            return self.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
+            return self.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
         return self.decode_forward(x, current_pos, rot_mats, page_table)
 
 
@@ -485,6 +490,7 @@ class Llama3Transformer1D(LightweightModule):
         chunk_page_table: ttnn.Tensor | None = None,
         chunk_start_idx: int | None = None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         """Prefill forward. x_embed is already embedded and unsqueezed to 4D."""
         x = x_embed
@@ -496,7 +502,7 @@ class Llama3Transformer1D(LightweightModule):
                 x = ttnn.typecast(x, activation_dtype)
                 ttnn.deallocate(old)
 
-            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx)
+            x = layer.prefill_forward(x, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, batch_size)
 
         if get_last_token == -1:
             return x
@@ -533,6 +539,31 @@ class Llama3Transformer1D(LightweightModule):
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         return x
 
+    def post_process_batched_prefill_output(
+        self,
+        hidden_states: ttnn.Tensor,
+        last_token_idx_list: list[int],
+        padded_batch: int,
+        prefill_seq_len: int,
+    ) -> ttnn.Tensor:
+        """Convert batched prefill hidden states into one logits row per slot."""
+        x = self.norm.prefill_forward(hidden_states)
+        x = _all_gather_rmsnorm_tensor(self.norm, x)
+        x_split = ttnn.split(x, prefill_seq_len, dim=2)
+        x = ttnn.concat(
+            [
+                x_user[:, :, last_token_idx : last_token_idx + 1, :]
+                for x_user, last_token_idx in zip(x_split, last_token_idx_list)
+            ],
+            dim=2,
+        )
+        lm_head_memcfg = self.lm_head.config.input_memcfg
+        if lm_head_memcfg is not None and lm_head_memcfg.is_sharded():
+            x = ttnn.interleaved_to_sharded(x, lm_head_memcfg)
+        x = self.lm_head.forward(x)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        return x
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -545,6 +576,7 @@ class Llama3Transformer1D(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token: int = -1,
+        batch_size: int = 1,
     ) -> ttnn.Tensor:
         """Dispatcher for backward compatibility. Llama 3.1-8B has no local rope."""
         rot_mats = rot_mats_global
@@ -557,6 +589,7 @@ class Llama3Transformer1D(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 get_last_token=get_last_token,
+                batch_size=batch_size,
             )
         return self.decode_forward(
             x,
@@ -1426,6 +1459,13 @@ def build_llama3_transformer_1d_config(
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
             pad_to_power_of_2=pad_logits_to_power_of_2,
+            # Llama-3.1-8B's perf recipe is greedy (temperature=0, formatted as
+            # k=1/p=0/temp=1). Route that case through the TTTv1 force-argmax path;
+            # non-greedy requests still provide k/p/temp tensors and use top-k sampling.
+            allow_force_argmax=True,
+            num_argmax_gather_links=4 if num_devices >= 8 else 1,
+            ag_topology=ttnn.Topology.Ring if num_devices >= 8 else ttnn.Topology.Linear,
+            argmax_num_workers_per_link=2,
         )
 
     rope_config = make_rope_config()
