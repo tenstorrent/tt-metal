@@ -25,6 +25,9 @@ Typical workflow (from tests/python_tests):
     python3 helpers/tensor_shape_coverage_parser.py harvest <label>
     python3 helpers/tensor_shape_coverage_parser.py emit
     python3 helpers/tensor_shape_coverage_parser.py summary
+
+Harvest state defaults to tests/python_tests/tensor_shape_coverage/coverage.json
+(override with --coverage-json). That path is gitignored.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ PYTHON_TESTS_DIR = HELPERS_DIR.parent
 LLK_ROOT = PYTHON_TESTS_DIR.parent.parent
 COMMON_DIR = LLK_ROOT / "common"
 
-DEFAULT_COVERAGE_JSON = Path("/tmp/ts-coverage/parsed/coverage.json")
+DEFAULT_COVERAGE_JSON = PYTHON_TESTS_DIR / "tensor_shape_coverage" / "coverage.json"
 DEFAULT_MATH_HEADER = COMMON_DIR / "tensor_shape_coverage_math.h"
 DEFAULT_UNPACK_HEADER = COMMON_DIR / "tensor_shape_coverage_unpack.h"
 DEFAULT_PACK_HEADER = COMMON_DIR / "tensor_shape_coverage_pack.h"

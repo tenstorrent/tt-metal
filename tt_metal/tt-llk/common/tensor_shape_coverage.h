@@ -14,6 +14,8 @@
 //   python3 helpers/tensor_shape_coverage_parser.py harvest <label>
 //   python3 helpers/tensor_shape_coverage_parser.py emit
 // Optional: `seed` bootstraps coverage.json from the checked-in headers first.
+// Harvest state defaults to tests/python_tests/tensor_shape_coverage/coverage.json
+// (override with --coverage-json).
 //
 
 #pragma once

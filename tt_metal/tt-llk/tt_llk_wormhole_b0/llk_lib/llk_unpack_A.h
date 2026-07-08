@@ -331,7 +331,7 @@ inline void _llk_unpack_A_init_(
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
- *       @ref _llk_unpack_A_uninit_ after it to restore modified state.
+ *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <
