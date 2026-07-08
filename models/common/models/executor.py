@@ -973,7 +973,11 @@ class TracedLLMExecutor:
         # (correct first token + start position). Set after every prefill and at init; cleared once
         # the device has been seeded, after which steady-state steps carry state on device.
         self._decode_needs_reseed: dict[bool, bool] = defaultdict(lambda: True)
-        self._prev_decode_page_table: torch.Tensor | None = None
+        # Keyed per sampling-mode (True=on-device sampling, False=host), matching the per-key
+        # decode trace + device page_table buffer in trace_inputs_decode. A single shared tensor
+        # would let one mode's page-table update mask a needed copy on the other mode's trace
+        # (whose device buffer is separate), leaving it stale.
+        self._prev_decode_page_table: dict[bool, torch.Tensor | None] = defaultdict(lambda: None)
 
         self.mode = None
         self.already_warmed_up_prefill = False
@@ -1260,8 +1264,10 @@ class TracedLLMExecutor:
         self._eager._assert_kv_cache_identity(kv_cache)
         # A prefill breaks decode continuity: the next decode step must re-seed the persistent
         # on-device buffers from host (correct first token + start position) before the device
-        # can carry state on its own. Mark all sampling modes stale.
+        # can carry state on its own. Mark all sampling modes stale, and drop the cached page
+        # tables so the first post-prefill step always re-copies (device buffers are reused).
         self._decode_needs_reseed = defaultdict(lambda: True)
+        self._prev_decode_page_table = defaultdict(lambda: None)
 
         batch_size, batch_seq_len = tokens.shape
         vocab_size = self.model.vocab_size
@@ -1497,11 +1503,12 @@ class TracedLLMExecutor:
             # (in-place plus_one) and wrote the sampled token back into the persistent token buffer
             # on the previous replay, so tokens/positions need NO host staging. Refresh only the
             # page table, and only when it actually changed (block boundaries crossed).
-            if self._prev_decode_page_table is None or not torch.equal(self._prev_decode_page_table, page_table):
+            prev_page_table = self._prev_decode_page_table[sampling_on_device]
+            if prev_page_table is None or not torch.equal(prev_page_table, page_table):
                 host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
                 device_inputs = self.trace_inputs_decode[sampling_on_device]
                 ttnn.copy_host_to_device_tensor(host_inputs[3], device_inputs[3])  # page_table only
-                self._prev_decode_page_table = page_table.clone()
+                self._prev_decode_page_table[sampling_on_device] = page_table.clone()
         else:
             # Reseed (first step after prefill, or loop disabled): full host refresh of all inputs.
             host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
@@ -1509,7 +1516,7 @@ class TracedLLMExecutor:
                 host_tensors=host_inputs,
                 device_tensors=self.trace_inputs_decode[sampling_on_device],
             )
-            self._prev_decode_page_table = page_table.clone()
+            self._prev_decode_page_table[sampling_on_device] = page_table.clone()
             if loop_active:
                 self._decode_needs_reseed[sampling_on_device] = False
 
