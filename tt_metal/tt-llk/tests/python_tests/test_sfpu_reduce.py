@@ -20,6 +20,7 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
+from helpers.logger import logger
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     parametrize,
@@ -36,6 +37,8 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
+
+from conftest import skip_for_blackhole
 
 max_tiles = 4
 
@@ -602,9 +605,13 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
             for i in idxs[:12]
         ]
         detail = "\n".join(lines)
-        print(
-            f"\n{reduce_pool} {mathop} injected={int(injected_value)}: "
-            f"{num_mismatch} mismatched lanes\n{detail}"
+        logger.info(
+            "\n{} {} injected={}: {} mismatched lanes\n{}",
+            reduce_pool,
+            mathop,
+            int(injected_value),
+            num_mismatch,
+            detail,
         )
 
     assert num_mismatch == 0, (
