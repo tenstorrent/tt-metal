@@ -16,20 +16,9 @@ Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& output_tensor,
-    const std::optional<Tensor>& history_output_tensor,
-    const std::optional<Tensor>& history_positions_tensor) {
+    const std::optional<Tensor>& output_tensor) {
     return ttnn::prim::sampling(
-        input_values_tensor,
-        input_indices_tensor,
-        k,
-        p,
-        temp,
-        seed,
-        sub_core_grids,
-        output_tensor,
-        history_output_tensor,
-        history_positions_tensor);
+        input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
 }
 
 }  // namespace ttnn

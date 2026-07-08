@@ -360,6 +360,8 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
             else None
         )
         logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+        pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
+        logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
 
         result = run_perf_benchmark(
             traced_executor,
@@ -370,6 +372,7 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            pipeline_readback=pipeline_readback,
         )
         logger.info(
             f"Performance — TTFT: {result.ttft_ms:.1f}ms, "

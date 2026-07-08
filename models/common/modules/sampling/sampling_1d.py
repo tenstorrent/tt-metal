@@ -231,8 +231,6 @@ class Sampling1D(LightweightModule):
         temp: ttnn.Tensor | None = None,
         seeds: ttnn.Tensor | None = None,
         tt_out_tok: ttnn.Tensor | None = None,
-        history_output: ttnn.Tensor | None = None,
-        history_positions: ttnn.Tensor | None = None,
         enable_log_probs: bool | list[bool] = False,
     ):
         """Sample tokens from logits.
@@ -269,7 +267,7 @@ class Sampling1D(LightweightModule):
         if k is None or p is None or temp is None:
             raise ValueError("k, p, temp must all be provided, or all be None (for argmax)")
 
-        return self._sample_topk(logits, k, p, temp, seeds, tt_out_tok, history_output, history_positions)
+        return self._sample_topk(logits, k, p, temp, seeds, tt_out_tok)
 
     def forward(self, logits, **kwargs):
         """Dispatcher."""
@@ -364,7 +362,7 @@ class Sampling1D(LightweightModule):
 
     # -- Top-k sampling (port from tt_sampling.py:343-481) --------------------
 
-    def _sample_topk(self, logits, k, p, temp, seeds, tt_out_tok, history_output=None, history_positions=None):
+    def _sample_topk(self, logits, k, p, temp, seeds, tt_out_tok):
         cfg = self.config
 
         x_bf16 = ttnn.typecast(logits, dtype=ttnn.bfloat16, sub_core_grids=cfg.sub_core_grids)
@@ -412,8 +410,6 @@ class Sampling1D(LightweightModule):
             temp=temp,
             sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
-            history_output_tensor=history_output,
-            history_positions_tensor=history_positions,
         )
 
         ttnn.deallocate(topk_values)

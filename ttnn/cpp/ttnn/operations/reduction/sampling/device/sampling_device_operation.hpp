@@ -38,7 +38,5 @@ ttnn::Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<Tensor>& preallocated_output_tensor = std::nullopt,
-    const std::optional<Tensor>& history_output_tensor = std::nullopt,
-    const std::optional<Tensor>& history_positions_tensor = std::nullopt);
+    const std::optional<Tensor>& preallocated_output_tensor = std::nullopt);
 }  // namespace ttnn::prim
