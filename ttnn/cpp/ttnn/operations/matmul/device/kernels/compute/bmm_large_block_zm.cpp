@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 
 void kernel_main() {
@@ -35,18 +36,17 @@ void kernel_main() {
         compute_kernel_lib::OutputCBLayout::SubblockMajor;
 #endif
 
-    // Boot-time matmul init. Mirrors the precedent of every other migrated kernel
-    // (bmm_large_block_zm_fused_bias_activation.cpp, conv_bmm_tilize.cpp, ccl
-    // all_gather_minimal_matmul_async/compute.cpp, etc.): one mm_block_init at the top
-    // of kernel_main does the unpack/math/pack hw_configure as the first compute API
-    // call, then the helper is invoked with InitMode::None so it reuses LLK state
-    // across the batch loop. Per-batch re-init was found to corrupt state on
-    // heterogeneous-tile-shape DRAM-sharded configs — see commit 76e99730d2e for the
-    // analogous fix in bmm_large_block_zm_fused_bias_activation.cpp, which preserves
-    // a kernel-side batch loop because it interleaves bias-add / untilize phases per
-    // batch. This simpler bmm has no per-batch phase work, so helper-batched is the
-    // right shape.
-    mm_block_init(cb_in0, cb_in1, cb_intermed0, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
+    // Boot-time matmul init. mm_block_init/mm_block_init_short are deprecated: boot with
+    // compute_kernel_hw_startup (the single hw_configure MMIO, first compute API call at
+    // kernel start) then matmul_block_init (unpack/math matmul init). The helper is then
+    // invoked with InitMode::None so it reuses LLK state across the batch loop. Per-batch
+    // re-init was found to corrupt state on heterogeneous-tile-shape DRAM-sharded configs —
+    // see commit 76e99730d2e for the analogous fix in
+    // bmm_large_block_zm_fused_bias_activation.cpp, which preserves a kernel-side batch loop
+    // because it interleaves bias-add / untilize phases per batch. This simpler bmm has no
+    // per-batch phase work, so helper-batched is the right shape.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_intermed0);
+    matmul_block_init(cb_in0, cb_in1, /*transpose=*/false, out_subblock_w, out_subblock_h, in0_block_w);
 
     compute_kernel_lib::matmul_block<
         /*transpose=*/false,

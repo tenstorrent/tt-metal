@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
@@ -419,11 +420,12 @@ void kernel_main() {
     // Boot-time matmul + activation init. The helper invocation below uses
     // InitMode::None so it doesn't re-init each call; the per-batch
     // pack_reconfig_data_format re-binds the packer to the current batch's
-    // partials CB without disturbing the unpacker matmul state.
-    // ActivationInitHelper::init() is a compile-time no-op when activation_type
-    // == KernelActivation::NONE.
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_ids[0], in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // partials CB without disturbing the unpacker matmul state. mm_block_init is
+    // deprecated: boot with compute_kernel_hw_startup (hw_configure) then
+    // matmul_block_init (unpack/math init). ActivationInitHelper::init() is a
+    // compile-time no-op when activation_type == KernelActivation::NONE.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     if constexpr (activation_type != KernelActivation::NONE) {
         ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
     }

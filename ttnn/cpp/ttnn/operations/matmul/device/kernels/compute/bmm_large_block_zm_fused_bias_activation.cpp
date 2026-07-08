@@ -51,6 +51,7 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/transpose.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 #ifdef SFPU_ACTIVATION
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
@@ -238,11 +239,13 @@ void kernel_main() {
     // ── Init ────────────────────────────────────────────────────────────
     // matmul_block is invoked with InitMode::None (avoids re-init corruption on
     // heterogeneous-tile-shape DRAM-sharded configs — see
-    // test_matmul_batched_dram_sharded[wkv_b2] tile_h=4), so the kernel calls the
-    // matmul init AND the activation init explicitly. ActivationInitHelper::init() is
-    // a compile-time no-op when activation_type == KernelActivation::NONE.
-    mm_block_init(
-        in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+    // test_matmul_batched_dram_sharded[wkv_b2] tile_h=4), so the kernel boots the matmul
+    // init AND the activation init explicitly. mm_block_init is deprecated: boot with
+    // compute_kernel_hw_startup (hw_configure) then matmul_block_init (unpack/math init).
+    // ActivationInitHelper::init() is a compile-time no-op when activation_type ==
+    // KernelActivation::NONE.
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     if constexpr (activation_type != KernelActivation::NONE) {
         ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
     }
