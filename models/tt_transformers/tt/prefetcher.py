@@ -481,6 +481,7 @@ class Prefetcher(LightweightModule):
         # op (observed as a device timeout in the following prefill) (#47820).
         ttnn.synchronize_device(self.mesh_device)
         self._prev_global_cb_address = self.global_cb.buffer_address()
+        self._prev_global_cb_config_address = self.global_cb.config_address()
         self.global_cb.deallocate()
         self.global_cb = None
         # NOTE: the L1 address tensor is intentionally KEPT allocated (small, on the sender
@@ -508,14 +509,18 @@ class Prefetcher(LightweightModule):
             self.global_cb_size,
         )
         new_addr = self.global_cb.buffer_address()
+        new_cfg = self.global_cb.config_address()
         prev_addr = getattr(self, "_prev_global_cb_address", None)
-        if prev_addr is not None and new_addr != prev_addr:
+        prev_cfg = getattr(self, "_prev_global_cb_config_address", None)
+        logger.info(
+            f"[DRAM Prefetcher] Re-allocated global CB: data addr {new_addr} (prev {prev_addr}), "
+            f"config addr {new_cfg} (prev {prev_cfg})"
+        )
+        if prev_addr is not None and (new_addr != prev_addr or new_cfg != prev_cfg):
             logger.warning(
-                f"[DRAM Prefetcher] global CB re-allocated at {new_addr} but decode trace baked {prev_addr} "
-                f"— address mismatch will corrupt trace replay (#47820)"
+                f"[DRAM Prefetcher] global CB address drift vs decode-trace-baked "
+                f"(data {prev_addr}->{new_addr}, config {prev_cfg}->{new_cfg}) — will corrupt trace replay (#47820)"
             )
-        else:
-            logger.info(f"[DRAM Prefetcher] Re-allocated global CB at {new_addr} (matches capture)")
 
     def create_address_tensor(self):
         """

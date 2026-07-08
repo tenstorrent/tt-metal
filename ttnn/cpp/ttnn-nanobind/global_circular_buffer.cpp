@@ -22,6 +22,7 @@ void py_module_types(nb::module_& mod) {
         .def("deallocate", &GlobalCircularBuffer::deallocate)
         .def("is_allocated", &GlobalCircularBuffer::is_allocated)
         .def("buffer_address", &GlobalCircularBuffer::buffer_address)
+        .def("config_address", &GlobalCircularBuffer::config_address)
         .def("sender_cores", &GlobalCircularBuffer::sender_cores, nb::rv_policy::reference_internal)
         .def("receiver_cores", &GlobalCircularBuffer::receiver_cores, nb::rv_policy::reference_internal)
         .def("sender_core_type", [](const GlobalCircularBuffer& gcb) {
