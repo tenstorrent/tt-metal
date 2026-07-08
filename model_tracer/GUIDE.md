@@ -54,12 +54,34 @@ export SNOWFLAKE_ROLE=SELF_SERVE_READER_TTNN_OPS_V6   # reader = read-only; owne
 
 ### 1. Create / recreate the tables (owner role)
 
-Run the DDL under the owner role — e.g. paste into a Snowsight worksheet:
+The schema itself is provisioned by Data Central; this only (re)creates the 10 tables
+inside it, so it must run under the **owner** role. Pick one:
 
-```sql
-USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;
--- then run the contents of model_tracer/create_ttnn_ops_schema_v6_snowflake.sql
+```bash
+# a) Snowflake CLI (SSO connection, e.g. the one from `snow connection add`)
+snow sql -c myconn --role SELF_SERVE_OWNER_TTNN_OPS_V6 \
+  -f model_tracer/create_ttnn_ops_schema_v6_snowflake.sql
+
+# b) headless with a service-account keypair (no browser)
+python - <<'PY'
+import os
+from cryptography.hazmat.primitives import serialization
+import snowflake.connector
+pk = serialization.load_pem_private_key(
+    open(os.environ["SNOWFLAKE_PRIVATE_KEY_PATH"], "rb").read(), password=None
+).private_bytes(serialization.Encoding.DER, serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption())
+c = snowflake.connector.connect(
+    account="TLUIIGS-MN66866", user=os.environ["SNOWFLAKE_USER"], private_key=pk,
+    role="SELF_SERVE_OWNER_TTNN_OPS_V6", warehouse="PUBLIC", database="SELF_SERVE")
+for _ in c.execute_string(open("model_tracer/create_ttnn_ops_schema_v6_snowflake.sql").read()):
+    pass
+print("tables created")
+PY
 ```
+
+Or, in **Snowsight**, run `USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;` then paste the file's
+contents into a worksheet.
 
 ### 2. Load traces into the DB (owner role — writes)
 
