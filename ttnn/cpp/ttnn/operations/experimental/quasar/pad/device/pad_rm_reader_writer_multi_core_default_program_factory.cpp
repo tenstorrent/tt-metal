@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>

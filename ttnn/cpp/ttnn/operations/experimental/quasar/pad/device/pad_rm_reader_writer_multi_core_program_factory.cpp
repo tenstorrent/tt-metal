@@ -13,7 +13,6 @@
 
 #include <cmath>
 #include <filesystem>
-#include <functional>
 #include <set>
 #include <tuple>
 #include <vector>

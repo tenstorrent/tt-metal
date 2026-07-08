@@ -5,7 +5,6 @@
 #include "pad_rm_sharded_width_only_program_factory.hpp"
 
 #include <filesystem>
-#include <functional>
 #include <vector>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>

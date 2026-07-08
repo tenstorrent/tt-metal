@@ -6,7 +6,6 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"

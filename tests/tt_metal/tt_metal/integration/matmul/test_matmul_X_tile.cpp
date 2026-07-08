@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <functional>
 #include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>

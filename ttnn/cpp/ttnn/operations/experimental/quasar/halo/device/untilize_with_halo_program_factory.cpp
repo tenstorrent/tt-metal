@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <cmath>
 #include <vector>

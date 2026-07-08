@@ -14,7 +14,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 #include <algorithm>
-#include <functional>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 using namespace tt::constants;

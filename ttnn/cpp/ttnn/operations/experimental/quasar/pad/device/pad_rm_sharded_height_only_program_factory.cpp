@@ -5,7 +5,6 @@
 #include "pad_rm_sharded_height_only_program_factory.hpp"
 
 #include <filesystem>
-#include <functional>
 #include <map>
 #include <utility>
 #include <vector>
