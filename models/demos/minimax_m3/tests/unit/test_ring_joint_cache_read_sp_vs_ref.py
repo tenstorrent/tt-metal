@@ -183,8 +183,19 @@ def test_ring_joint_cache_read_sp(mesh_device, device_params, n_chunks, cap_chun
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
+@pytest.mark.parametrize(
+    "chunk_list",
+    # Two successive cache-read calls sharing ONE ccl + buffer, processing these chunk indices:
+    #   grow      : chunk 1 (logical_n=10240) then chunk 2 (logical_n=15360) — logical_n GROWS.
+    #   same15360 : chunk 2 (logical_n=15360) twice — logical_n IDENTICAL across the two calls.
+    # If grow HANGS but same15360 PASSES -> the bug is the logical_n CHANGE across calls (stale
+    # ring/mask/all-gather state). If same15360 ALSO hangs -> it's reuse-invariant (any 2nd call
+    # at 15360), i.e. op-internal state not reset per dispatch regardless of logical_n.
+    [[1, 2], [2, 2]],
+    ids=["grow", "same15360"],
+)
 @pytest.mark.parametrize("reset_between", [False, True], ids=["noreset", "reset"])
-def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_between, reset_seeds):
+def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_between, chunk_list, reset_seeds):
     """Multi-call REUSE repro of the 50k chunked-prefill hang, op-level (no model/weights).
 
     The single-call test above PASSES even at logical_n=15360 with an oversize buffer. The model
@@ -258,9 +269,10 @@ def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_b
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
     )
 
-    # Write chunk 0 so chunk 1's cache-read has a prior prefix.
-    write(cache_k, k[0], 0)
-    write(cache_v, v[0], 0)
+    # Pre-write chunks 0 and 1 so ANY cache-read call (incl. chunk 2 at logical_n=15360) has a valid prefix.
+    for pc in (0, 1):
+        write(cache_k, k[0], pc * chunk_global)
+        write(cache_v, v[0], pc * chunk_global)
     ttnn.synchronize_device(mesh_device)
 
     all_sems = (
@@ -270,9 +282,9 @@ def test_ring_joint_cache_read_sp_accumulate(mesh_device, device_params, reset_b
         + list(ccl.barrier_semaphore)
     )
 
-    # Successive cache-read chunks 1,2 — SHARED ccl + persistent buffer (cache_global=cap_global fixed).
-    for c in (1, 2):
-        if reset_between and c != 1:
+    # Successive cache-read calls — SHARED ccl + persistent buffer (cache_global=cap_global fixed).
+    for idx, c in enumerate(chunk_list):
+        if reset_between and idx != 0:
             for sem in all_sems:
                 ttnn.reset_global_semaphore_value(sem, 0)
             ttnn.synchronize_device(mesh_device)
