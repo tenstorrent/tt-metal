@@ -488,7 +488,7 @@
   model: mixtral-8x7b
   skus:
     wh_llmbox_perf:
-      timeout: 90
+      timeout: 60
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
