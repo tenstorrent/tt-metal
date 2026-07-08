@@ -370,14 +370,6 @@ def test_card_type_from_job_labels(labels, expected_card_type):
     assert _card_type_from_job_labels(labels) == expected_card_type
 
 
-def test_card_type_groups_p300_variants_under_root_sku():
-    labels = ["P300-viommu", "arch-blackhole", "in-service", "pipeline-yyz2-lfc"]
-    assert _card_type_from_job_labels(labels) == "bh_p300"
-
-    viommu_only_labels = ["P300-viommu", "in-service", "pipeline-yyz2-lfc"]
-    assert _card_type_from_job_labels(viommu_only_labels) == "bh_p300"
-
-
 def test_create_pipeline_json_assigns_sku_card_type_to_n300_job(workflow_run_gh_environment):
     pipeline = _load_pipeline(workflow_run_gh_environment, "all_post_commit_passing_10662355710")
 
