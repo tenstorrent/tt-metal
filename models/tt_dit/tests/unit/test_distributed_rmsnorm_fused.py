@@ -1437,68 +1437,118 @@ _SWEEP_IDS = ["tp1", "tp4_line", "tp4_ring"]
 
 
 def _sweep_points(tp: int) -> list[dict]:
-    """Curated families covering each axis; widths chosen to span the resident /
-    streaming / block-major POST bands AND block_size-divisible vs not."""
+    """Exhaustive curated families covering every axis. Widths densely span the
+    resident / streaming / block-major POST bands (block_size-divisible AND not);
+    crossed with norm, affine (none/w/wb/per-token/per-batch), seqlen (incl.
+    non-tile-aligned), fused RoPE (broadcast-heads & per-head, head_dim 64/128,
+    broadcast & per-batch cos), per-head norm, head-split output (nh 2..), batch
+    (1..8), and bf16/fp32 dtypes. Invalid combos are validity-filtered (skipped)."""
     if tp == 1:
-        # per-device tile-cols = dim/32: 16,32,64,96,160 (div) + 15,38 (non-div)
-        widths = [512, 1024, 2048, 3072, 5120, 480, 1216]
-        rope_widths = [1024, 2048]  # heads = dim/128 = 8, 16
+        # per-device tile-cols = dim/32
+        widths = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120]  # 16,24,32,48,64,80,96,112,128,144,160
+        widths_nondiv = [480, 608, 1216, 1600]  # cols 15,19,38,50 (not a multiple of block_size)
+        rope_dims = [1024, 2048, 4096]  # heads(hd=128) = 8,16,32
         mid = 2048
     else:  # tp == 4: per-device tile-cols = (dim/4)/32
-        # Up to 6144 (FLUX's full dim, 48 tile-cols/device) — the widest real shape on the AG
-        # path. dim=8192 (64 cols) RMS+affine marginally overflows L1 on the AG path (the AG
-        # stats/packet CBs + weight+bias CBs clash by ~3 KB) and is beyond any real model width.
-        widths = [2048, 4096, 6144, 1920, 2432]  # 16,32,48 (div) + 15,19 (non-div)
-        rope_widths = [2048, 4096]  # heads/dev = (dim/4)/128 = 4, 8
+        # <= 6144 (FLUX full dim = 48 tile-cols/dev): the widest real AG-path shape. dim=8192
+        # (64 cols) RMS+affine marginally overflows L1 on the AG path (~3 KB) — beyond real widths.
+        widths = [2048, 3072, 4096, 5120, 6144]  # cols 16,24,32,40,48
+        widths_nondiv = [1920, 2432, 4864]  # cols 15,19,38
+        rope_dims = [2048, 4096, 6144]  # heads/dev(hd=128) = 4,8,12
         mid = 4096
+    all_widths = widths + widths_nondiv
+    feat = lambda dim: dim // tp  # noqa: E731
 
     def pt(**kw):
         base = dict(
-            norm="rms", dim=mid, rows=128, batch=1, head_dim=None, rope=False,
+            fam="?", norm="rms", dim=mid, rows=128, batch=1, head_dim=None, rope=False,
             bcast_rope=False, per_head_norm=False, affine="none", in_dtype="bf16",
             out_dtype="bf16", rope_perbatch=False,
         )
         base.update(kw)
         return base
 
+    def rope_ok(dim, hd, need_split=True):
+        # RoPE needs whole heads per device; test the head-split regime (>=2 heads/dev).
+        return dim % hd == 0 and feat(dim) % hd == 0 and (feat(dim) // hd) >= (2 if need_split else 1)
+
     pts = []
-    # F1 width x norm x affine (nh=1, no rope) — the POST-path-selection stressor.
-    for dim in widths:
+    # A. width x norm x affine (nh=1, no rope) — the POST-path-selection stressor (densest axis).
+    for dim in all_widths:
+        for norm in ("rms", "layernorm"):
+            for affine in ("none", "w", "wb"):
+                pts.append(pt(fam="width", norm=norm, dim=dim, affine=affine))
+    # B. width x seqlen (a wider row count crossed with width) — every other width, both norms.
+    for dim in all_widths[::2]:
         for norm in ("rms", "layernorm"):
             for affine in ("none", "wb"):
-                pts.append(pt(fam="width", norm=norm, dim=dim, affine=affine))
-    # F2 seqlen x norm
-    for rows in (32, 128, 512, 2048):
+                pts.append(pt(fam="widthxseq", norm=norm, dim=dim, rows=512, affine=affine))
+    # C. seqlen sweep incl. non-tile-aligned (33, 100) and tiny/large.
+    for rows in (16, 32, 64, 96, 128, 256, 512, 1024, 2048, 33, 100):
         for norm in ("rms", "layernorm"):
             pts.append(pt(fam="seqlen", norm=norm, rows=rows))
-    # F3 fused RoPE (RMS): broadcast-heads & per-head, no/with broadcast weight
-    for dim in rope_widths:
+    for rows in (128, 512):
+        pts.append(pt(fam="seqlen", norm="rms", rows=rows, affine="wb"))
+    # D. fused RoPE (RMS): head_dim {64,128} x broadcast-heads/per-head x affine {none,w}.
+    for dim in rope_dims:
+        for hd in (64, 128):
+            if not rope_ok(dim, hd):
+                continue
+            for bcast in (True, False):
+                for affine in ("none", "w"):
+                    pts.append(pt(fam="rope", norm="rms", dim=dim, head_dim=hd, rope=True, bcast_rope=bcast, affine=affine))
+    # E. RoPE x seqlen.
+    for rows in (32, 256, 1024):
         for bcast in (True, False):
-            pts.append(pt(fam="rope", norm="rms", dim=dim, head_dim=128, rope=True, bcast_rope=bcast, affine="none"))
-    pts.append(pt(fam="rope", norm="rms", dim=rope_widths[0], head_dim=128, rope=True, bcast_rope=True, affine="w"))
-    # F4 per-head norm (RMS, no AG regardless of TP)
-    for dim in rope_widths:
-        pts.append(pt(fam="perhead", norm="rms", dim=dim, head_dim=128, per_head_norm=True))
-    # F5 dtypes
-    for aff in ("none", "wb"):
-        pts.append(pt(fam="dtype", norm="rms", affine=aff, in_dtype="fp32", out_dtype="fp32"))
-        pts.append(pt(fam="dtype", norm="rms", affine=aff, in_dtype="fp32", out_dtype="bf16"))
-        pts.append(pt(fam="dtype", norm="layernorm", affine=aff, in_dtype="bf16", out_dtype="fp32"))  # LN needs bf16 in
-    # F6 per-token affine (LN, batch=1)
-    pts.append(pt(fam="pertoken", norm="layernorm", dim=mid, affine="pertoken"))
-    pts.append(pt(fam="pertoken", norm="layernorm", dim=rope_widths[-1], affine="pertoken"))
-    # F7 batch>1
-    for batch in (2, 3):
-        # LayerNorm nh=1: plain fold, broadcast affine, per-batch adaLN
-        for dim in (widths[1], widths[3] if tp == 1 else widths[2]):
+            pts.append(pt(fam="ropeseq", norm="rms", dim=rope_dims[0], rows=rows, head_dim=128, rope=True, bcast_rope=bcast))
+    # F. per-head norm (RMS, no AG): head_dim {64,128} x affine {none,w}.
+    # per_head_norm has a RESIDENT-ONLY POST (it never auto-streams — the head-block reduce path
+    # only handles whole-row-resident), so it caps out around ~64 tile-cols/device before the
+    # whole-row input_cb + per-head stat tiles overflow L1. Cap its widths accordingly (dim=4096
+    # at TP=1 = 128 cols OOMs); the streaming/block-major widths are covered by the whole-row
+    # norm families above.
+    perhead_dims = [d for d in rope_dims if feat(d) // 32 <= 64]
+    for dim in perhead_dims:
+        for hd in (64, 128):
+            if not rope_ok(dim, hd):
+                continue
+            for affine in ("none", "w"):
+                pts.append(pt(fam="perhead", norm="rms", dim=dim, head_dim=hd, per_head_norm=True, affine=affine))
+    # G. head-split output (nh>1) is exercised WITH RoPE (family D/E) and by per-head norm
+    # (family F) above. NOTE/FINDING: plain head-split RMSNorm WITHOUT rope on the is_tp_1 path
+    # (TP=1) sits at ~99.65% PCC vs a whole-row reference (not garbage) — head-split+RoPE and
+    # per-head-norm both pass, so this is specific to head-split-no-rope on the local (is_tp_1)
+    # reduce path and is left as a separate investigation rather than swept here.
+    #
+    # H. dtypes: fp32 RMS (+/- rope) and bf16-in/fp32-out LN. Widths kept block_size-divisible:
+    # a non-divisible wide fp32 shard can't block-major (that path needs divisibility) so it is
+    # forced resident, and fp32 input (2x bytes) then overflows L1 (e.g. dim=1600 = 50 cols).
+    for dim in (widths[0], mid):
+        for aff in ("none", "w", "wb"):
+            pts.append(pt(fam="dtype", norm="rms", dim=dim, affine=aff, in_dtype="fp32", out_dtype="fp32"))
+            pts.append(pt(fam="dtype", norm="rms", dim=dim, affine=aff, in_dtype="fp32", out_dtype="bf16"))
+            pts.append(pt(fam="dtype", norm="layernorm", dim=dim, affine=aff, in_dtype="bf16", out_dtype="fp32"))
+    if rope_ok(rope_dims[0], 128):
+        pts.append(pt(fam="dtype", norm="rms", dim=rope_dims[0], head_dim=128, rope=True, bcast_rope=True, in_dtype="fp32", out_dtype="fp32"))
+    # I. per-token affine (LN, batch=1).
+    for dim in (widths[0], mid, all_widths[-1]):
+        pts.append(pt(fam="pertoken", norm="layernorm", dim=dim, affine="pertoken"))
+    # J. batch > 1.
+    for batch in (2, 3, 4, 8):
+        # LayerNorm nh=1: plain fold / broadcast affine / per-batch adaLN, over a couple widths.
+        for dim in (widths[1], all_widths[-1]):
             for affine in ("none", "wb", "perbatch"):
-                pts.append(pt(fam="batchLN", norm="layernorm", dim=dim, batch=batch, affine=affine))
-        # RMS batched RoPE (head-split): broadcast cos and per-batch cos
-        for pb in (False, True):
-            pts.append(
-                pt(fam="batchRope", norm="rms", dim=rope_widths[0], rows=64, batch=batch, head_dim=128,
-                   rope=True, bcast_rope=True, affine="none", rope_perbatch=pb)
-            )
+                pts.append(pt(fam="batchLN", norm="layernorm", dim=dim, batch=batch, rows=96, affine=affine))
+        # RMS whole-row (nh=1) batched fold + broadcast weight.
+        for affine in ("none", "w"):
+            pts.append(pt(fam="batchRMS", norm="rms", dim=widths[2], batch=batch, rows=96, affine=affine))
+        # RMS batched RoPE (head-split): broadcast-heads & per-head, broadcast & per-batch cos.
+        # (This covers the batch>1 head-split OUTPUT path; head-split-no-rope is scoped out — see G.)
+        if rope_ok(rope_dims[0], 128):
+            for bcast in (True, False):
+                for pb in (False, True):
+                    pts.append(pt(fam="batchRope", norm="rms", dim=rope_dims[0], rows=64, batch=batch,
+                                  head_dim=128, rope=True, bcast_rope=bcast, affine="none", rope_perbatch=pb))
     return pts
 
 
@@ -1614,6 +1664,7 @@ def _sweep_id(p: dict) -> str:
     return s
 
 
+@pytest.mark.timeout(3600)  # exhaustive: hundreds of points/config; Ring is slower and exceeds the 300s default
 @pytest.mark.parametrize(
     ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
     [pytest.param(*p, id=i) for p, i in zip(_SWEEP_PARAMS, _SWEEP_IDS)],
