@@ -463,6 +463,8 @@ def run_sparse_mla_rotated_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     shard_dims = [None, None]
     shard_dims[tp_axis], shard_dims[sp_axis] = -1, -2
