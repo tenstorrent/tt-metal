@@ -232,7 +232,7 @@ void kernel_main() {
             ckl::InputLifecycle::Streaming,
             ckl::OutputLifecycle::Streaming,
             ckl::CopyTileReconfig::None,
-            ckl::PackTileReconfig::None>(total_a_tiles);
+            ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(total_a_tiles));
 
         // Phase 2: In-place op on cb_work (reconfig handles format transition)
         if constexpr (op_code == 4) {
@@ -258,7 +258,7 @@ void kernel_main() {
             cb_out,
             ckl::InputLifecycle::Streaming,
             ckl::OutputLifecycle::Streaming,
-            ckl::CopyTileReconfig::None>(total_a_tiles);
+            ckl::CopyTileReconfig::None>(ckl::EltwiseShape::tiles(total_a_tiles));
 
     } else {
         // === NORMAL (NON-IN-PLACE) MODE ===
@@ -273,7 +273,7 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::OutputLifecycle::Streaming,
                 ckl::CopyTileReconfig::None,
-                ckl::PackTileReconfig::None>(total_a_tiles);
+                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(total_a_tiles));
         } else if constexpr (op_code == 3) {
             // FPU SQUARE: cb_out = cb_input * cb_input
             ckl::square<cb_input, cb_out>(shape);
