@@ -433,6 +433,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (skip_in0_read_env != nullptr && skip_in0_read_env[0] == '1') {
             defines["SKIP_IN0_DRAM_READ"] = "1";
         }
+        // Timing-isolation knob: SKIP_IN1_DRAM_READ=1 makes the in1 injector skip the DRAM read
+        // (semaphores still fire) to measure the read's contribution. PCC is garbage under this flag.
+        const char* skip_in1_read_env = std::getenv("SKIP_IN1_DRAM_READ");
+        if (skip_in1_read_env != nullptr && skip_in1_read_env[0] == '1') {
+            defines["SKIP_IN1_DRAM_READ"] = "1";
+        }
         if (fused_op_signaler->read_local_slice_from_input) {
             in0_injector_defines = defines;
             in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
