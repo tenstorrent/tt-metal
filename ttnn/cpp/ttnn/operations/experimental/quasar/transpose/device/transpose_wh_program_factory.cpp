@@ -178,7 +178,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
-        ttnn::ComputeKernelConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ttnn::ComputeKernelConfig compute_cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         if (src_is_float32) {
             // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
             // on the unpack-to-dest path; both feed the transpose.
@@ -266,7 +267,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             .hw_config = ttnn::create_writer_datamovement_config(device->arch()),
         };
 
-        ttnn::ComputeKernelConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ttnn::ComputeKernelConfig compute_cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         if (src_is_float32) {
             compute_cfg.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }

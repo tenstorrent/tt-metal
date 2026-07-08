@@ -136,7 +136,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .hw_config = ttnn::create_writer_datamovement_config(input_tensor.device()->arch()),
     };
 
-    ttnn::ComputeKernelConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_cfg{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         compute_cfg.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
     }

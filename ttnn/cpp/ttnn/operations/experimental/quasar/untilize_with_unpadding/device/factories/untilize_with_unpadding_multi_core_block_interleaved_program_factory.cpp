@@ -236,7 +236,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     }
 
     auto make_compute_hw = [&]() {
-        ttnn::ComputeKernelConfig cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+        ttnn::ComputeKernelConfig cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
             cfg.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }

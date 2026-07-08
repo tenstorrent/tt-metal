@@ -158,7 +158,11 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
             .compile_time_args =
                 {{"per_core_block_cnt", per_core_block_cnt}, {"per_core_block_tile_cnt", tiles_per_channel_dim}},
             .hw_config = ttnn::to_compute_hardware_config(
-                device->arch(), ttnn::ComputeKernelConfig{.fp32_dest_acc_en = fp32_dest_acc_en}),
+                device->arch(),
+                ttnn::ComputeKernelConfig{
+                    .math_fidelity = MathFidelity::HiFi4,
+                    .math_approx_mode = false,
+                    .fp32_dest_acc_en = fp32_dest_acc_en}),
         };
     };
     KernelSpec compute_main = make_compute(COMPUTE_MAIN, nblocks_per_core * tiles_per_width_dim);

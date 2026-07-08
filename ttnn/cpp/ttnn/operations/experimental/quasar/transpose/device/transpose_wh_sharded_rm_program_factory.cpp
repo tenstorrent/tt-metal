@@ -166,7 +166,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .hw_config = ttnn::create_reader_datamovement_config(input_tensor.device()->arch()),
     };
 
-    ttnn::ComputeKernelConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};
+    ttnn::ComputeKernelConfig compute_cfg{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.

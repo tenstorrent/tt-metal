@@ -261,7 +261,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
-        ttnn::ComputeKernelConfig compute_config{.fp32_dest_acc_en = fp32_llk_acc};
+        ttnn::ComputeKernelConfig compute_config{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
         if (fp32_llk_acc) {
             compute_config.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32);
         }

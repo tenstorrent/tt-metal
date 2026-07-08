@@ -134,7 +134,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
 
     // ---- Compute (Metal 2.0 fork; full + cliff) ----
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
-        ttnn::ComputeKernelConfig cfg{.fp32_dest_acc_en = fp32_llk_acc};
+        ttnn::ComputeKernelConfig cfg{
+            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
         if (fp32_llk_acc) {
             cfg.unpack_to_dest_mode.emplace(IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }

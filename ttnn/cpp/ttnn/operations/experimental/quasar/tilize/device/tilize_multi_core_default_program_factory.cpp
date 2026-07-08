@@ -135,7 +135,8 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     };
 
     // -- Compute kernels (preserved multiplicity: per-group CTAs) --
-    ttnn::ComputeKernelConfig compute_config{.fp32_dest_acc_en = fp32_llk_acc};
+    ttnn::ComputeKernelConfig compute_config{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
     if (fp32_llk_acc) {
         compute_config.unpack_to_dest_mode.emplace(MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32);
     }
