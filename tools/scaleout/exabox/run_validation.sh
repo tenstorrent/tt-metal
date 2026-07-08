@@ -279,15 +279,10 @@ run_board_reset() {
     local output_file="$2"
     local msg_prefix="$3"
 
-    # Convert host list to array
-    IFS=',' read -ra host_array <<< "$host_list"
-
-    # Run reset
     mpirun --host "$host_list" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        --tag-output \
-        bash -c 'tt-smi -glx_reset > /dev/null 2>&1; echo "RESET_EXIT_CODE=$?"' > "$output_file"
+        bash -c 'set -o pipefail; h=$(hostname); script -qefc "tt-smi -glx_reset" /dev/null | tr -d "\000" | sed -u "s/\r$//; s/.*\r//; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d" | awk "{ cb=\$0; gsub(/\033\[[0-9;]*[a-zA-Z]/,\"\",cb); sub(/[0-9]+[[:space:]]*\$/,\"\",cb); if (have && cb==bb) { buf=\$0 } else { if (have) print buf; buf=\$0; bb=cb; have=1 } } END { if (have) print buf }" | while IFS= read -r line; do printf "[%s][%(%H:%M:%S)T] %s\n" "$h" -1 "$line"; done >&2; ec=${PIPESTATUS[0]}; echo "RESET_RESULT|$h|$ec"' > "$output_file"
     mpirun_exit_code=$?
 
    # Check if mpirun failed
@@ -297,25 +292,17 @@ run_board_reset() {
         return 1  # Signal mpirun infrastructure failure
     fi
 
-    # Parse and display results, collect failures
+    # Parse per-host results (RESET_RESULT|<host>|<exit_code>), collect failures
     local failed_hosts=()
     while IFS= read -r line; do
-        if [[ $line =~ ^\[([0-9]+),([0-9]+)\]\<stdout\>:RESET_EXIT_CODE=([0-9]+)$ ]]; then
-            local job_id="${BASH_REMATCH[1]}"
-            local mpi_rank="${BASH_REMATCH[2]}"
-            local exit_code="${BASH_REMATCH[3]}"
-
-            # Use mpi_rank to index host_array
-            if [[ $mpi_rank -lt ${#host_array[@]} ]]; then
-                local hostname="${host_array[$mpi_rank]}"
-                if [[ $exit_code -eq 0 ]]; then
-                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset completed successfully" >&2
-                else
-                    echo "[$job_id,$mpi_rank]$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
-                    failed_hosts+=("$hostname")
-                fi
+        if [[ $line =~ ^RESET_RESULT\|(.+)\|([0-9]+)$ ]]; then
+            local hostname="${BASH_REMATCH[1]}"
+            local exit_code="${BASH_REMATCH[2]}"
+            if [[ $exit_code -eq 0 ]]; then
+                echo "$hostname: ${msg_prefix}Reset completed successfully" >&2
             else
-                echo "Warning: MPI rank $mpi_rank exceeds host array size ${#host_array[@]}" >&2
+                echo "$hostname: ${msg_prefix}Reset failed | Exit code: $exit_code" >&2
+                failed_hosts+=("$hostname")
             fi
         fi
     done < "$output_file"
