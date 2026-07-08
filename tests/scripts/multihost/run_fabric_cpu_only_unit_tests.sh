@@ -651,11 +651,12 @@ done
 # dual_bh_galaxy_1x2 (8x8 device, 64 ASIC, 8x8_Mesh PGD) — needs 16x8 pod mock, not single-galaxy single-pod mocks
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_bh_galaxy_1x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/quad_bh_galaxy_1x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
-# TODO(tt-metal#49313): TestPipelineBuilderCheck omitted for quad_bh_galaxy_2x2 on the 16x8 pod mock.
-# resolve_graph_layout's SAT solve for this 8x16 / 128-node mesh passes locally (<4 min) but is
-# pathologically slow on the cpu_medium CI runner (>20 min for this single combo, blocking the shard).
-# Layout + corner-pin checks still run and pass; re-add the pipeline builder once the SAT scaling is fixed.
-run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/quad_bh_galaxy_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
+# TODO(tt-metal#49313): DISABLED on CI. quad_bh_galaxy_2x2 on the 16x8 pod mock (8x16 / 128-node mesh)
+# passes locally (<4 min) but wedges in tt-run setup (control-plane init / rank-binding for the 128-node
+# mesh) for >20 min on the cpu_medium runner — it never reaches a gtest and blocks the whole shard
+# (0 progress at 30/50/35-min timeouts). Removing only the pipeline-builder check did not help since the
+# slowness is pre-gtest. Re-enable once large-mesh control-plane init / SAT solve is fast enough for CI.
+# run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/quad_bh_galaxy_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 
 # Llama 8b pod MGDs (tt-blaze issue #46935): 40-host, 2-mesh (M0 8 hosts + M1 32 hosts) decode pods.
 # These only map onto a SINGLE pod (4-host mocks); on a full 16-host system mock the 40-host pod has no
