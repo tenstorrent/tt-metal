@@ -1,0 +1,18 @@
+# Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for this
+# domain here without touching ttnn/CMakeLists.txt.
+add_subdirectory(combine)
+add_subdirectory(dispatch)
+add_subdirectory(extract)
+add_subdirectory(inbound_socket_service_sync)
+add_subdirectory(insert)
+add_subdirectory(masked_bincount)
+add_subdirectory(moe_grouped_topk)
+add_subdirectory(moe_hash_gate)
+add_subdirectory(offset_cumsum)
+add_subdirectory(outbound_socket_service_sync)
+add_subdirectory(per_token_cast_back)
+add_subdirectory(per_token_cast_to_fp8)
+add_subdirectory(post_combine_reduce)
+add_subdirectory(rotary_embedding_indexed)
+add_subdirectory(update_padded_kv_cache)
+add_subdirectory(zero_padded_kv_cache)
