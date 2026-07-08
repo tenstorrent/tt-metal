@@ -719,8 +719,9 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
         auto& program = workload.get_programs().at(device_range);
 
         // A count comfortably above the enforced TENSIX ceiling (see Kernel::validate_runtime_args_size).
-        // 16384 words = the uint16_t RTA-offset field's hard maximum, so it exceeds any valid TENSIX ceiling
-        // regardless of the exact enforced cap.
+        // The RTA-offset field is a uint16_t region size in bytes, so its hard maximum is 65535 B = 16383 words;
+        // 16384 words (65536 B) is one word past that, so it exceeds any valid TENSIX ceiling regardless of the
+        // exact enforced cap.
         constexpr uint32_t over_tensix_ceiling_rt_args = 16384;
 
         // Set 100 unique args, then try to set enough common args to overflow the combined ceiling and fail.
