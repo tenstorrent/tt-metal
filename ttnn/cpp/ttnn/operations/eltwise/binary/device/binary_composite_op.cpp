@@ -20,6 +20,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include <variant>
@@ -625,7 +626,14 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
     const uint64_t batch = std::max<uint64_t>(leading_volume(input_a), leading_volume(input_b));
     const bool use_matmul = !is_integer && !is_fp32 && batch == 1;
     if (use_matmul) {
-        return ttnn::matmul(a_unsq, b_unsq, /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
+        // matmul requires TILE inputs and, unlike the binary_ng multiply path,
+        // does not tilize row-major inputs on the way in. Tilize here so the
+        // documented "any layout" contract holds for the matmul dispatch.
+        const auto to_tile = [](const Tensor& t) {
+            return t.layout() == Layout::TILE ? t : ttnn::to_layout(t, Layout::TILE);
+        };
+        return ttnn::matmul(
+            to_tile(a_unsq), to_tile(b_unsq), /*transpose_a=*/false, /*transpose_b=*/false, output_mem_config);
     }
     return ttnn::multiply(a_unsq, b_unsq, std::nullopt, output_mem_config);
 }
