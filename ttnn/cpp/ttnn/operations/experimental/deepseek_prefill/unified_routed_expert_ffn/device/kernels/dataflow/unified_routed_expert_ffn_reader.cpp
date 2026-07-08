@@ -256,6 +256,11 @@ void kernel_main() {
     // exact source rebase ttnn::extract used to perform. Must agree with the
     // writer's row_offset_tiles so x is read and y is written to the same region.
     uint32_t x_start_tile_idx = 0;
+    // Row-major stick (token-row) base for this expert's region. TILE mode uses
+    // x_start_tile_idx (tile-page offset); row-major mode uses x_start_stick to
+    // offset the token-row stick page. Both derive from start[global_id] (a
+    // tile-aligned token row) and must agree with the writer's row_offset_tiles.
+    uint32_t x_start_stick = 0;
     if constexpr (read_x_at_offset != 0) {
         cb_start_scratch_obj.reserve_back(1);
         const uint32_t start_l1 = cb_start_scratch_obj.get_write_ptr();
@@ -264,7 +269,9 @@ void kernel_main() {
         noc_read.async_read_barrier();
         cb_start_scratch_obj.push_back(1);
         const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_l1);
-        x_start_tile_idx = (start_ptr[global_expert_id] / 32) * K_gate_tiles;
+        const uint32_t start_value = start_ptr[global_expert_id];
+        x_start_tile_idx = (start_value / 32) * K_gate_tiles;
+        x_start_stick = start_value;
     }
 
     // Per-chunk pre-zero bookkeeping. For each chunk we decide whether
@@ -406,7 +413,10 @@ void kernel_main() {
                         const uint32_t tile_row = this_core_first_row + m;
                         if (tile_row < count_tiles) {
                             for (uint32_t r = 0; r < 32; ++r) {
-                                const uint32_t stick = tile_row * 32 + r;
+                                // x_start_stick offsets into this expert's region
+                                // of the shared row-major buffer (0 when x is a
+                                // standalone per-expert buffer).
+                                const uint32_t stick = x_start_stick + tile_row * 32 + r;
                                 noc_read.async_read(
                                     x_acc_rm,
                                     CoreLocalMem<uint32_t>(l1_x),
