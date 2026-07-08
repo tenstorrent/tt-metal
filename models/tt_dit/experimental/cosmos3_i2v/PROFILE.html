@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cosmos3-I2V — Execution &amp; Time Profile</title>
+</head>
+<body>
+<style>
+  :root{
+    --bg:#0d131e; --bg2:#131b29; --bg3:#1a2436; --line:#263449; --line2:#31425c;
+    --ink:#e9eef7; --dim:#93a1b8; --faint:#5f6f88;
+    --host:#4db8c9; --device:#f2a63b; --ccl:#b57ce8; --xfer:#6b8fd6; --vae:#5cc98a; --warn:#ff6f6f;
+    --sans:ui-sans-serif,-apple-system,"SF Pro Text","Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(1200px 600px at 80% -10%,#16223a 0%,transparent 60%);}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 22px 100px}
+  a{color:var(--host);text-decoration:none;border-bottom:1px solid #4db8c955}
+  a:focus-visible,button:focus-visible{outline:2px solid var(--host);outline-offset:2px}
+  code,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  .eyebrow{font-family:var(--mono);text-transform:uppercase;letter-spacing:.22em;
+    font-size:11px;color:var(--faint);font-weight:600}
+  h1,h2,h3{text-wrap:balance;font-weight:680;letter-spacing:-0.01em;margin:0}
+
+  /* ---- masthead ---- */
+  header.mast{padding:64px 0 30px;border-bottom:1px solid var(--line)}
+  .mast .kicker{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--dim);border:1px solid var(--line2);
+    padding:4px 9px;border-radius:100px;background:#0f1826}
+  h1{font-size:clamp(30px,5vw,46px);line-height:1.04}
+  h1 .accent{color:var(--device)}
+  .sub{color:var(--dim);font-size:15.5px;max-width:70ch;margin-top:16px}
+  .provbar{margin-top:18px;font-family:var(--mono);font-size:11.5px;color:var(--faint);
+    display:flex;flex-wrap:wrap;gap:6px 18px}
+  .provbar b{color:var(--dim);font-weight:600}
+
+  /* ---- kpi strip ---- */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:30px 0 6px}
+  @media(max-width:760px){.kpis{grid-template-columns:repeat(2,1fr)}}
+  .kpi{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px 16px 14px}
+  .kpi .n{font-family:var(--mono);font-size:27px;font-weight:600;letter-spacing:-0.02em;
+    font-variant-numeric:tabular-nums}
+  .kpi .l{font-size:12px;color:var(--dim);margin-top:5px}
+  .kpi .s{font-size:11px;color:var(--faint);margin-top:2px;font-family:var(--mono)}
+  .kpi.hot .n{color:var(--device)} .kpi.warn .n{color:var(--warn)}
+  .kpi.cool .n{color:var(--host)} .kpi.ccl .n{color:var(--ccl)}
+
+  /* ---- section scaffolding ---- */
+  section{padding:46px 0 6px;border-top:1px solid var(--line);margin-top:40px}
+  section:first-of-type{border-top:none;margin-top:0}
+  .lvl{display:flex;align-items:baseline;gap:14px;margin-bottom:6px}
+  .lvl .tag{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--bg);
+    background:var(--dim);padding:3px 8px;border-radius:6px;letter-spacing:.04em}
+  section h2{font-size:23px}
+  .lede{color:var(--dim);font-size:14.5px;max-width:78ch;margin:12px 0 26px}
+  .lede code{color:var(--ink);font-size:12.5px}
+
+  /* ---- flow bar (proportional) ---- */
+  .flow{display:flex;width:100%;border-radius:10px;overflow:hidden;border:1px solid var(--line);
+    background:var(--bg2)}
+  .flow .seg{position:relative;padding:14px 12px;min-height:66px;border-right:1px solid #0d131e88;
+    display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
+  .flow .seg:last-child{border-right:none}
+  .flow .seg .t{font-family:var(--mono);font-size:11px;color:#0b0f17;font-weight:700;opacity:.9}
+  .flow .seg .v{font-family:var(--mono);font-size:15px;color:#0b0f17;font-weight:700;
+    font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+  .flow .seg .p{font-family:var(--mono);font-size:10.5px;color:#0b0f1799;font-weight:600;margin-top:1px}
+  .barnote{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;
+    color:var(--faint);margin-top:8px}
+
+  /* segment fills */
+  .s-host{background:var(--host)} .s-device{background:var(--device)}
+  .s-ccl{background:var(--ccl)} .s-xfer{background:var(--xfer)} .s-vae{background:var(--vae)}
+  .s-prep{background:#3a4a63} .s-prep .t,.s-prep .v,.s-prep .p{color:#cdd8ea}
+
+  /* ---- legend ---- */
+  .legend{display:flex;flex-wrap:wrap;gap:8px 20px;margin:18px 0 4px;font-size:12.5px;color:var(--dim)}
+  .legend span{display:inline-flex;align-items:center;gap:8px}
+  .sw{width:13px;height:13px;border-radius:4px;display:inline-block}
+
+  /* ---- op bars (horizontal ranked) ---- */
+  .ops{display:flex;flex-direction:column;gap:9px;margin-top:6px}
+  .op{display:grid;grid-template-columns:172px 1fr 62px;align-items:center;gap:14px}
+  @media(max-width:640px){.op{grid-template-columns:120px 1fr 52px}}
+  .op .name{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .op .name small{color:var(--faint);display:block;font-size:10.5px;margin-top:1px}
+  .op .track{height:20px;background:var(--bg3);border-radius:5px;overflow:hidden;position:relative}
+  .op .fill{height:100%;border-radius:5px}
+  .op .pct{font-family:var(--mono);font-size:13px;text-align:right;font-variant-numeric:tabular-nums;color:var(--dim)}
+  .op .pct b{color:var(--ink)}
+
+  /* ---- generic panel & grid ---- */
+  .panel{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:20px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .mini{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .mini h4{margin:0 0 12px;font-size:13px;color:var(--dim);font-weight:600;
+    text-transform:uppercase;letter-spacing:.1em;font-family:var(--mono)}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px dashed var(--line);
+    font-size:13px}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--dim);font-family:var(--mono);font-size:12px}
+  .kv .v{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+  .kv .v em{font-style:normal;color:var(--faint);font-size:11px}
+  .hi{color:var(--device)!important} .hicool{color:var(--host)!important}
+
+  /* ---- decoder layer schematic ---- */
+  .layer{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--line2);
+    border-radius:12px;overflow:hidden;margin-top:6px}
+  @media(max-width:640px){.layer{grid-template-columns:1fr}}
+  .expert{padding:16px;background:var(--bg2)}
+  .expert.gen{background:#141d2e;border-left:1px solid var(--line)}
+  @media(max-width:640px){.expert.gen{border-left:none;border-top:1px solid var(--line)}}
+  .expert .hd{font-family:var(--mono);font-size:12px;letter-spacing:.05em;margin-bottom:12px;
+    display:flex;align-items:center;gap:8px}
+  .expert.und .hd{color:var(--host)} .expert.gen .hd{color:var(--device)}
+  .stack{display:flex;flex-direction:column;gap:7px}
+  .node{border:1px solid var(--line2);border-radius:7px;padding:8px 10px;background:#0f1826;
+    font-family:var(--mono);font-size:11.5px;color:var(--ink);display:flex;justify-content:space-between;gap:8px}
+  .node .loc{color:var(--faint);font-size:10px}
+  .node.ccl{border-color:#b57ce855;background:#1a1526;color:#d9b8f5}
+  .node.ccl .loc{color:#9a78c0}
+  .node.join{border-color:#f2a63b55;background:#241c10;color:#f2c98a;text-align:center;justify-content:center}
+  .joinband{grid-column:1/-1;background:#1c1710;border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);padding:11px 16px;font-family:var(--mono);font-size:11.5px;
+    color:#f2c98a;display:flex;align-items:center;gap:10px;justify-content:center;text-align:center}
+  .cclsummary{grid-column:1/-1;background:#150f1f;padding:11px 16px;font-family:var(--mono);
+    font-size:11.5px;color:#c9a8ec;display:flex;gap:8px;align-items:center;justify-content:center;
+    border-top:1px solid var(--line)}
+
+  /* ---- levers ---- */
+  .levers{display:flex;flex-direction:column;gap:12px;margin-top:6px}
+  .lever{display:grid;grid-template-columns:34px 1fr auto;gap:14px;align-items:start;
+    background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:15px 17px}
+  .lever .rk{font-family:var(--mono);font-size:20px;font-weight:700;color:var(--faint);text-align:center}
+  .lever h4{margin:0 0 4px;font-size:15px}
+  .lever p{margin:0;color:var(--dim);font-size:13px}
+  .lever p code{color:var(--ink);font-size:11.5px}
+  .lever .badge{font-family:var(--mono);font-size:11px;padding:4px 9px;border-radius:100px;white-space:nowrap;
+    align-self:center}
+  .b-struct{background:#1a1526;color:#c9a8ec;border:1px solid #b57ce840}
+  .b-block{background:#241414;color:#ff9a9a;border:1px solid #ff6f6f40}
+  .b-open{background:#10231a;color:#7fe0a8;border:1px solid #5cc98a40}
+  .b-shape{background:#241c10;color:#f2c98a;border:1px solid #f2a63b40}
+
+  /* ---- code map ---- */
+  .codemap{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  .codemap th{text-align:left;font-family:var(--mono);font-size:10.5px;text-transform:uppercase;
+    letter-spacing:.12em;color:var(--faint);padding:8px 10px;border-bottom:1px solid var(--line2)}
+  .codemap td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  .codemap td.f{font-family:var(--mono);font-size:11.5px;color:var(--host)}
+  .codemap td.c{color:var(--dim)}
+  .codemap tr:hover td{background:#111a29}
+  .scroll{overflow-x:auto}
+
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--line);
+    font-family:var(--mono);font-size:11.5px;color:var(--faint);line-height:1.8}
+
+  .callout{border-left:3px solid var(--warn);background:#1a1112;padding:12px 16px;border-radius:0 8px 8px 0;
+    margin:18px 0 2px;font-size:13.5px;color:#e9d3d3}
+  .callout b{color:var(--warn)}
+
+  @media(prefers-reduced-motion:no-preference){
+    .reveal{opacity:0;transform:translateY(12px);animation:rise .6s ease forwards}
+    @keyframes rise{to{opacity:1;transform:none}}
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="kicker">
+      <span class="eyebrow">Execution &amp; Time Profile</span>
+      <span class="chip">Blackhole Galaxy · 32 chips</span>
+    </div>
+    <h1>Cosmos3&#8209;I2V&nbsp;— where the <span class="accent">time</span> goes,<br>and what code owns it.</h1>
+    <p class="sub">A single image-to-video generation traced end to end: host preprocessing, the 64-layer
+      Mixture-of-Transformers trunk replayed on device, the joint-attention collectives across the mesh,
+      and the causal 3D VAE decode. Each panel zooms one level deeper and carries the measured cost plus the
+      source file that runs it.</p>
+    <div class="provbar">
+      <span><b>config</b> 720×1280 · 189 frames · 35 UniPC steps · native-cfg (cfg=2/tp=8/sp=2)</span>
+      <span><b>branch</b> pshah/cosmos3-i2v-port</span>
+      <span><b>data</b> tracy + TT_COSMOS3_TIMING captures, 2026-06-23 → 07-03 · L2 device % from real profiler capture 2026-07-08</span>
+    </div>
+  </header>
+
+  <div class="kpis">
+    <div class="kpi hot">
+      <div class="n">411<span style="font-size:16px;color:var(--dim)">s</span></div>
+      <div class="l">Denoise + VAE decode wall</div>
+      <div class="s">348s denoise · 63s decode</div>
+    </div>
+    <div class="kpi warn">
+      <div class="n">2.9×</div>
+      <div class="l">Slower than 8×H200</div>
+      <div class="s">139.6s reference wall</div>
+    </div>
+    <div class="kpi cool">
+      <div class="n">~8.8<span style="font-size:16px;color:var(--dim)">s</span></div>
+      <div class="l">Per denoise step (steady)</div>
+      <div class="s">×35 + 16s warmup step&#8203;0</div>
+    </div>
+    <div class="kpi ccl">
+      <div class="n">512</div>
+      <div class="l">CCL ops / trunk forward</div>
+      <div class="s">4 RS + 4 AG × 64 layers</div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i class="sw s-device"></i> Device compute (trunk / VAE)</span>
+    <span><i class="sw s-host"></i> Host PyTorch (CPU)</span>
+    <span><i class="sw s-ccl"></i> Interconnect / CCL</span>
+    <span><i class="sw s-xfer"></i> Host↔device transfer</span>
+    <span><i class="sw s-vae"></i> VAE</span>
+  </div>
+
+  <!-- L0 -->
+  <section class="reveal">
+    <div class="lvl"><span class="tag">L0</span><span class="eyebrow">Whole run</span></div>
+    <h2>The full generation, one image → 189 frames</h2>
+    <p class="lede">Only the 64 decoder layers, the two final RMSNorms, and the VAE run on device; tokenization,
+      text embed, patchify, mRoPE, CFG combine and the UniPC scheduler stay on host PyTorch. The denoise loop
+      dominates — VAE decode is the second-largest block and the single worst ratio vs. the H200 reference (8.3×).
+      Widths are proportional to wall-clock seconds.</p>
+
+    <div class="flow" role="img" aria-label="End-to-end timeline: prep under 1s, VAE encode 10s, denoise 348s, VAE decode 63s">
+      <div class="seg s-prep" style="flex:1 1 0.24%"><span class="t">prep</span><span class="v">&lt;1s</span></div>
+      <div class="seg s-vae"  style="flex:1 1 2.4%"><span class="t">VAE encode</span><span class="v">~10s</span><span class="p">device</span></div>
+      <div class="seg s-device" style="flex:1 1 82.7%"><span class="t">Denoise loop · 35 steps</span><span class="v">~348s</span><span class="p">device trunk + host · 84.7%</span></div>
+      <div class="seg s-vae"  style="flex:1 1 15.0%"><span class="t">VAE decode</span><span class="v">63s</span><span class="p">device · 15.3%</span></div>
+    </div>
+    <div class="barnote"><span>image → frame-0 condition latent · noise elsewhere</span><span>latents → 189×720×1280 RGB → MP4</span></div>
+
+    <div class="grid2" style="margin-top:22px">
+      <div class="mini">
+        <h4>Denoise loop</h4>
+        <div class="kv"><span class="k">steps</span><span class="v">35 <em>UniPC bh2</em></span></div>
+        <div class="kv"><span class="k">step wall (steady)</span><span class="v hi">~8.8 s</span></div>
+        <div class="kv"><span class="k">step 0 (trace capture)</span><span class="v">~16 s <em>one-time</em></span></div>
+        <div class="kv"><span class="k">passes / step</span><span class="v">2 <em>cond + uncond, dual submesh</em></span></div>
+        <div class="kv"><span class="k">vs H200 / step</span><span class="v">2.4× <em>3.74 s ref</em></span></div>
+      </div>
+      <div class="mini">
+        <h4>VAE decode — the 8.3× gap</h4>
+        <div class="kv"><span class="k">TT decode</span><span class="v hi">63 s</span></div>
+        <div class="kv"><span class="k">H200 decode</span><span class="v">8.9 s</span></div>
+        <div class="kv"><span class="k">t_chunk sweep</span><span class="v">1:63s · 4:74s · 8:86s</span></div>
+        <div class="kv"><span class="k">root cause</span><span class="v" style="font-size:11.5px">conv3d blocking fallback</span></div>
+        <div class="kv"><span class="k">dominant op</span><span class="v">Conv3d <em>18.8 device-s</em></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- L1 -->
+  <section class="reveal">
+    <div class="lvl"><span class="tag">L1</span><span class="eyebrow">One denoise step</span></div>
+    <h2>Anatomy of a single step</h2>
+    <p class="lede">Each step runs cond and uncond concurrently on two 2×8 submeshes via a
+      <code>ThreadPoolExecutor(max_workers=2)</code>. On the critical thread the time splits between device trunk
+      replay, host PyTorch, and the host↔device transfers. Composition measured on the 720×1072×81 smoke shape
+      (step wall 3046 ms, post device-<code>proj_out</code>); proportions carry to the 189-frame production step.</p>
+
+    <div class="flow" role="img" aria-label="Per-step split: device trunk 63%, host PyTorch 34%, uploads 1.7%, transfers under 1%">
+      <div class="seg s-device" style="flex:1 1 63%"><span class="t">Device trunk · trace replay</span><span class="v">1920 ms</span><span class="p">64 layers · 63%</span></div>
+      <div class="seg s-host" style="flex:1 1 34%"><span class="t">Host PyTorch · PRE + POST</span><span class="v">1046 ms</span><span class="p">34%</span></div>
+      <div class="seg s-xfer" style="flex:1 1 3%"><span class="t">up/downloads</span><span class="v">57 ms</span><span class="p">&lt;2%</span></div>
+    </div>
+    <div class="barnote"><span>embed · patchify · proj_in · time-embed · mRoPE →</span><span>← slice · unpatchify · CFG combine · scheduler.step (&lt;10 ms)</span></div>
+
+    <div class="grid2" style="margin-top:22px">
+      <div class="mini">
+        <h4>Host PRE breakdown <span style="text-transform:none;letter-spacing:0">(189f)</span></h4>
+        <div class="kv"><span class="k">proj_in (host linear)</span><span class="v hicool">~100 ms</span></div>
+        <div class="kv"><span class="k">patchify + pack</span><span class="v">~10 ms</span></div>
+        <div class="kv"><span class="k">apply timestep embed</span><span class="v">~8 ms <em>was 350</em></span></div>
+        <div class="kv"><span class="k">time embed</span><span class="v">~7 ms</span></div>
+        <div class="kv"><span class="k">gen-seq build</span><span class="v">0 ms <em>was 82</em></span></div>
+      </div>
+      <div class="mini">
+        <h4>Recent host wins <span style="text-transform:none;letter-spacing:0">(this branch)</span></h4>
+        <div class="kv"><span class="k">device proj_out</span><span class="v">download 316→5 ms</span></div>
+        <div class="kv"><span class="k">scatter→binary mask</span><span class="v">350→155 ms</span></div>
+        <div class="kv"><span class="k">in-place slice add</span><span class="v">155→8 ms</span></div>
+        <div class="kv"><span class="k">step wall</span><span class="v hi">9181→8800 ms</span></div>
+        <div class="kv"><span class="k">still on host</span><span class="v">proj_in <em>PCC blocks port</em></span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- L2 -->
+  <section class="reveal">
+    <div class="lvl"><span class="tag">L2</span><span class="eyebrow">Inside the device trunk</span></div>
+    <h2>What the 64-layer replay actually computes</h2>
+    <p class=”lede”>Device-firmware time within the trunk, from a real per-op profiler capture (3-step native-cfg,
+      720×1280×61, trace OFF, 2026-07-08). Numbers are % of trunk device time, excluding VAE (Conv3d = 13.5% of
+      total device time, captured separately). Capture is partial due to profiler ring overflow — ~6–7% of expected
+      AllGather/ReduceScatter/SDPA calls were captured — but op-type ratios are drawn from actual device timings,
+      not trace-mode reconstruction. LayerNorm, NLPConcatHeads, Reshape, and Tilize emerge as significant — all
+      absent or underrepresented in the prior stale data.</p>
+
+    <div class=”ops”>
+      <div class=”op”><div class=”name”>LayerNorm<small>6768 calls · RMSNorm</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:100%”></div></div><div class=”pct”><b>10.9%</b></div></div>
+      <div class=”op”><div class=”name”>RingJointSDPA<small>384 captured · gen attention · 12ms avg</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:100%”></div></div><div class=”pct”><b>10.9%</b></div></div>
+      <div class=”op”><div class=”name”>NLPConcatHeads<small>1040 calls · GQA head concat</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:96.3%”></div></div><div class=”pct”><b>10.5%</b></div></div>
+      <div class=”op”><div class=”name”>MinimalMatmul<small>5024 calls · q/k/v/mlp</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:83.5%”></div></div><div class=”pct”><b>9.1%</b></div></div>
+      <div class=”op”><div class=”name”>ReshapeView<small>1408 calls · pack/unpack</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:81.7%”></div></div><div class=”pct”><b>8.9%</b></div></div>
+      <div class=”op”><div class=”name”>BinaryNg<small>6384 calls · elementwise</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:74.3%”></div></div><div class=”pct”><b>8.1%</b></div></div>
+      <div class=”op”><div class=”name”>Tilize<small>1840 calls · layout convert</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:72.5%”></div></div><div class=”pct”><b>7.9%</b></div></div>
+      <div class=”op”><div class=”name”>Slice<small>5856 calls · GQA / pad</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:67.0%”></div></div><div class=”pct”><b>7.3%</b></div></div>
+      <div class=”op”><div class=”name”>AllGather<small>1664 captured · TP + SP-exit</small></div>
+        <div class=”track”><div class=”fill s-ccl” style=”width:65.1%”></div></div><div class=”pct”><b>7.1%</b></div></div>
+      <div class=”op”><div class=”name”>ReduceScatter<small>1606 captured · TP</small></div>
+        <div class=”track”><div class=”fill s-ccl” style=”width:64.2%”></div></div><div class=”pct”><b>7.0%</b></div></div>
+      <div class=”op”><div class=”name”>Permute<small>800 calls · transpose</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:28.4%”></div></div><div class=”pct”>3.1%</div></div>
+      <div class=”op”><div class=”name”>RotaryEmbedding<small>2416 calls · mRoPE</small></div>
+        <div class=”track”><div class=”fill s-device” style=”width:6.4%”></div></div><div class=”pct”>0.7%</div></div>
+    </div>
+
+    <div class=”callout”><b>What changed vs. the old data:</b> prior L2 numbers were reconstructed from a trace-mode
+      capture (BinaryNg 29%, SDPA 24%, Matmul 20% — all inflated or deflated by the reconstruction). The real capture
+      shows a flatter distribution: LayerNorm, NLPConcatHeads, Reshape, and Tilize each take ~8–11% of trunk device
+      time. The “utilization” gap (trunk device time vs. step wall) is still ~32% — dispatch and CCL round-trips
+      dominate.</div>
+  </section>
+
+  <!-- L3 -->
+  <section class="reveal">
+    <div class="lvl"><span class="tag">L3</span><span class="eyebrow">One decoder layer</span></div>
+    <h2>Dual-expert layer &amp; its collectives</h2>
+    <p class="lede">Every layer carries two disjoint weight sets — an <b style="color:var(--host)">und</b> (text) expert
+      and a <b style="color:var(--device)">gen</b> (diffusion) expert — that interact only inside a two-way joint
+      softmax. Each RowParallel projection reduce-scatters then all-gathers back, so every TP linear is an
+      AllReduce in disguise: <b>4 RS + 4 AG per layer</b>.</p>
+
+    <div class="layer" role="img" aria-label="Decoder layer: und and gen experts, joint SDPA, MLP, four reduce-scatter and four all-gather collectives">
+      <div class="expert und">
+        <div class="hd">◐ UND expert · text · replicated</div>
+        <div class="stack">
+          <div class="node">input RMSNorm<span class="loc">decoder_layer</span></div>
+          <div class="node">to_q / to_k / to_v <span class="loc">ColParallel</span></div>
+          <div class="node">q/k RMSNorm + mRoPE<span class="loc">attention:184</span></div>
+        </div>
+      </div>
+      <div class="expert gen">
+        <div class="hd">◑ GEN expert · diffusion · sp-sharded</div>
+        <div class="stack">
+          <div class="node">input RMSNorm + modulation<span class="loc">modulation</span></div>
+          <div class="node">add_q / add_k / add_v <span class="loc">ColParallel</span></div>
+          <div class="node">q/k RMSNorm + mRoPE<span class="loc">attention:192</span></div>
+        </div>
+      </div>
+
+      <div class="joinband">⟡ two-way joint SDPA — und is joint tensor (replicated); gen K/V ring-gathered across sp_axis inside the op &nbsp;·&nbsp; <code>attention:552</code></div>
+
+      <div class="expert und">
+        <div class="stack">
+          <div class="node ccl">to_out → RS + AG<span class="loc">linear:409 / attention:390</span></div>
+          <div class="node">+ residual · post-norm<span class="loc">decoder_layer:152</span></div>
+          <div class="node">mlp: gate‖up → SwiGLU → down<span class="loc">mlp (fused)</span></div>
+          <div class="node ccl">down_proj → RS + AG<span class="loc">mlp:157</span></div>
+        </div>
+      </div>
+      <div class="expert gen">
+        <div class="stack">
+          <div class="node ccl">to_add_out → RS + AG<span class="loc">linear:409 / attention:390</span></div>
+          <div class="node">+ residual · post-norm<span class="loc">decoder_layer:159</span></div>
+          <div class="node">mlp_moe_gen: gate‖up → SwiGLU → down<span class="loc">mlp (fused)</span></div>
+          <div class="node ccl">down_proj → RS + AG<span class="loc">mlp:157</span></div>
+        </div>
+      </div>
+
+      <div class="cclsummary">⇄ per layer: 4 ReduceScatter + 4 AllGather (TP axis) &nbsp;·&nbsp; ×64 layers = 512 CCL ops / forward &nbsp;·&nbsp; +1 SP-exit all-gather amortized at <code>transformer:191</code></div>
+    </div>
+  </section>
+
+  <!-- levers -->
+  <section class="reveal">
+    <div class="lvl"><span class="tag">↑</span><span class="eyebrow">Where the wins are</span></div>
+    <h2>Ranked levers</h2>
+    <p class="lede">By recoverable wall-clock, hardest-to-cheapest. The device trunk owns 63% of the step but its two
+      biggest costs are structural; the cheap host wins are largely spent.</p>
+
+    <div class="levers">
+      <div class="lever">
+        <div class="rk">1</div>
+        <div><h4>CCL collectives — 4 RS + 4 AG per layer</h4>
+          <p>Every RowParallel linear reduce-scatters then all-gathers to re-replicate the residual. Collapsible only
+          by keeping the residual <code>TP-fractured</code> to trunk exit — the reverted <code>d9558a9 / be0347 / ec524f2</code>
+          experiment. Multi-day, needs PCC root-cause.</p></div>
+        <div class="badge b-struct">structural</div>
+      </div>
+      <div class="lever">
+        <div class="rk">2</div>
+        <div><h4>BinaryNg 29% — cut call count, not kernel</h4>
+          <p>1.3 ms × 6688 dispatch-bound calls: residual adds (4/block), <code>gelu_decomposed</code> binaries per Linear,
+          k-mask add. Fusion/elimination wins here. <code>gelu_decomposed</code> is load-bearing for LoRA — risky to touch.</p></div>
+        <div class="badge b-struct">fusion</div>
+      </div>
+      <div class="lever">
+        <div class="rk">3</div>
+        <div><h4>Ring-joint SDPA 24% — shape-bound</h4>
+          <p>Mean 8.8 ms × 819 calls; grew from 2.3% at 128² to 24% at 720p×81f. Kernel-tuning lever (HiFi4 + fp32 accum
+          is forced — bf16 accum NaNs at this scale), not call-count.</p></div>
+        <div class="badge b-shape">kernel</div>
+      </div>
+      <div class="lever">
+        <div class="rk">4</div>
+        <div><h4>Host proj_in → device (Phase B)</h4>
+          <p>~100 ms/step still on CPU. Ported version shrank uploads 6× but landed at <code>PCC 0.83</code> (ttnn.multiply
+          broadcast suspected). Reverted, gated behind a flag for debug.</p></div>
+        <div class="badge b-block">blocked · PCC</div>
+      </div>
+      <div class="lever">
+        <div class="rk">5</div>
+        <div><h4>VAE decode 63s = 8.3× H200</h4>
+          <p>Conv3d “no known best blocking” fallback on the 10×10 grid. <code>t_chunk=1</code> already the sweep winner;
+          needs a conv3d blocking heuristic tuned for these shapes.</p></div>
+        <div class="badge b-open">open</div>
+      </div>
+      <div class="lever">
+        <div class="rk">6</div>
+        <div><h4>sp=2 vs NVIDIA cp=4</h4>
+          <p>Per-step gap tracks the SP factor. <code>sp_factor=4</code> produces noise on full 4×8 BH Galaxy, so production
+          falls back to dual 2×8 submeshes at sp=2 — a ~2× trunk ceiling if the bisect lands.</p></div>
+        <div class="badge b-block">known-broken</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- code map -->
+  <section class="reveal">
+    <div class="lvl"><span class="tag">{}</span><span class="eyebrow">What runs where</span></div>
+    <h2>Code map</h2>
+    <p class="lede">All paths under <code>models/tt_dit/experimental/cosmos3_i2v/</code> unless a full
+      <code>models/tt_dit/…</code> path is shown. Verified on branch <code>pshah/cosmos3-i2v-port</code>.</p>
+    <div class="scroll">
+    <table class="codemap">
+      <thead><tr><th>Stage / concern</th><th>File</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td>Denoise loop, prepare_latents, tokenize</td><td class="f">reference/pipeline_cosmos3_omni.py:1619</td><td class="c">Vendored NVIDIA <code>__call__</code>, untouched; host CFG combine + scheduler.step</td></tr>
+        <tr><td>CFG dual-submesh dispatch</td><td class="f">pipelines/pipeline_cosmos3_native_cfg.py:183</td><td class="c">DualSubmeshProxy, ThreadPoolExecutor, per-branch packed_static</td></tr>
+        <tr><td>Host↔device boundary (proxy)</td><td class="f">pipelines/pipeline_cosmos3_native_cfg.py:432</td><td class="c">Host PRE/POST: embed, patchify, proj_in, mRoPE, uploads/downloads</td></tr>
+        <tr><td>Device trunk forward</td><td class="f">model/transformer.py:165</td><td class="c">proj_in → 64-layer loop → norms → SP-exit AG → proj_out</td></tr>
+        <tr><td>Decoder layer (dual expert)</td><td class="f">model/decoder_layer.py:152</td><td class="c">Residual sites; und + gen pathways for norm/attn/mlp</td></tr>
+        <tr><td>Attention + joint SDPA + TP AG</td><td class="f">model/attention.py:390 · 552</td><td class="c">GQA broadcast, ring-joint SDPA, attention-out all-gather</td></tr>
+        <tr><td>MLP (fused gate‖up SwiGLU)</td><td class="f">model/mlp.py:157</td><td class="c">down_proj RowParallel + MLP-out all-gather</td></tr>
+        <tr><td>Col/RowParallel + fused_addcmul</td><td class="f">models/tt_dit/layers/linear.py:409</td><td class="c">RS inside RowParallel; the un-used fusion opportunity</td></tr>
+        <tr><td>CCL backends (AG / RS)</td><td class="f">models/tt_dit/parallel/manager.py:454 · 502</td><td class="c">all_gather_async / reduce_scatter_minimal_async</td></tr>
+        <tr><td>VAE decode/encode (conv3d)</td><td class="f">models/tt_dit/models/vae/vae_wan2_1.py:2068</td><td class="c">Causal 3D VAE, temporal chunking, upsample blocks</td></tr>
+        <tr><td>VAE Cosmos3 adapters</td><td class="f">tokenizer/vae_cosmos3.py:270 · 400</td><td class="c">Spatial patchify/unpatchify, normalization neutralize</td></tr>
+        <tr><td>Scheduler workaround (UniPC)</td><td class="f">pipelines/pipeline_cosmos3_native.py:742</td><td class="c">linspace flow-sigmas, eps guard, flow_shift override</td></tr>
+        <tr><td>Model config</td><td class="f">model_config.py:23</td><td class="c">64 layers, hidden 5120, 64 heads, GQA 8, SwiGLU 25600</td></tr>
+        <tr><td>CLI demo</td><td class="f">demo/generate.py:320</td><td class="c">Entry: builds pipeline, run_cosmos3(...)</td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <footer>
+    Sources — L2 device op %: real profiler capture (ops_perf_results_2026_07_08_16_39_54.csv, 3-step native-cfg
+    trace-OFF, 720×1280×61, tt-metal@30f7c2fbc19, 2026-07-08); partial due to profiler ring overflow — ~6–7%
+    of CCL/SDPA calls captured, op-type ratios drawn from real device timings · per-step split: TT_COSMOS3_TIMING
+    instrumented run (540dd5f, 2026-06-25) · wall-clock: cosmos3-i2v-baseline-h200 &amp; cosmos3-i2v-speedup
+    (903d667 → ad48051, 2026-06-30 → 07-03).<br>
+    Structure verified against source on pshah/cosmos3-i2v-port, 2026-07-08. Companion doc: ARCHITECTURE.md.
+  </footer>
+
+</div>
+
+<script>
+  if (window.matchMedia && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    var els = document.querySelectorAll('.reveal');
+    var io = new IntersectionObserver(function(es){
+      es.forEach(function(e){ if(e.isIntersecting){ e.target.style.animationPlayState='running'; io.unobserve(e.target);} });
+    }, {threshold:0.08});
+    els.forEach(function(el){ el.style.animationPlayState='paused'; io.observe(el); });
+  }
+</script>
+</body>
+</html>
