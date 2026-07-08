@@ -89,6 +89,12 @@ def main():
         help="limit layer capture to first N layers (default: all layers)",
     )
     ap.add_argument(
+        "--zero-sinks",
+        action="store_true",
+        help="DIAGNOSTIC: zero every attention layer's `sinks` parameter before running "
+        "the reference forward pass.  Matches the --zero-sinks flag on kv_cache_prefill.py.",
+    )
+    ap.add_argument(
         "--check-kv-rope",
         action="store_true",
         help=(
@@ -120,6 +126,16 @@ def main():
         model_path, trust_remote_code=True, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True
     ).eval()
     print("[oracle] model loaded", flush=True)
+
+    if args.zero_sinks:
+        n_zeroed = 0
+        with torch.no_grad():
+            for layer in model.model.layers:
+                attn = layer.self_attn
+                if hasattr(attn, "sinks") and attn.sinks is not None:
+                    attn.sinks.zero_()
+                    n_zeroed += 1
+        print(f"[oracle] DIAGNOSTIC: zeroed attention sinks on {n_zeroed} layer(s)", flush=True)
 
     class FullKVCapture(DynamicCache):
         """DynamicCache subclass that snapshots the full pre-truncation K,V per layer.

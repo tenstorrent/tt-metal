@@ -181,6 +181,13 @@ def main():
         "buckets [0..15], [16..127], [128..end].  Isolates attention-sink-sensitive "
         "short-context tokens from the rest of the row.",
     )
+    ap.add_argument(
+        "--zero-sinks",
+        action="store_true",
+        help="DIAGNOSTIC: zero the per-head attention-sink logits on every attention "
+        "layer before running.  Requires oracle generated with matching zeroed sinks "
+        "to make the comparison meaningful (see --zero-sinks in hf_reference_oracle.py).",
+    )
     args = ap.parse_args()
 
     if args.prompt_file is not None:
@@ -290,6 +297,18 @@ def main():
         del state_dict
         gc.collect()
         print("[kv_cache] model built; weights on device", flush=True)
+
+        if args.zero_sinks:
+            # Overwrite each attention layer's `weights.sinks` with a zeros tensor of
+            # matching shape/dtype/layout/mesh-mapping.  AttentionWeights is a frozen
+            # dataclass, so bypass via object.__setattr__.
+            n_zeroed = 0
+            for decoder_layer in model.layers:
+                w = decoder_layer.self_attn.weights
+                sinks_zero = ttnn.zeros_like(w.sinks)
+                object.__setattr__(w, "sinks", sinks_zero)
+                n_zeroed += 1
+            print(f"[kv_cache] DIAGNOSTIC: zeroed attention sinks on {n_zeroed} layer(s)", flush=True)
 
         emb = _sp_shard_embed(mesh, model, padded, sp, isl_per_row)
 
