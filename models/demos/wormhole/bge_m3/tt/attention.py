@@ -55,6 +55,8 @@ class BgeM3AttentionConfig:
     # Program and compute knobs
     qkv_prg_config: object | None = None
     output_prg_config: object | None = None
+    qkv_minimal_config: object | None = None
+    output_minimal_config: object | None = None
     qkv_compute_kernel_cfg: object | None = None
     score_compute_kernel_cfg: object | None = None
     output_compute_kernel_cfg: object | None = None
@@ -137,16 +139,28 @@ class BgeM3Attention(LightweightModule):
             )
 
         # Stage 1: fused QKV projection
-        qkv_fused = ttnn.linear(
-            hidden_states,
-            self.wqkv,
-            memory_config=self.config.qkv_memcfg,
-            dtype=self.config.qkv_dtype,
-            bias=self.bqkv,
-            program_config=self.config.qkv_prg_config,
-            compute_kernel_config=self.config.qkv_compute_kernel_cfg,
-            core_grid=qkv_core_grid,
-        )
+        if self.config.qkv_minimal_config is not None and self.config.qkv_prg_config is None:
+            qkv_fused = ttnn.experimental.minimal_matmul(
+                input_tensor=hidden_states,
+                weight_tensor=self.wqkv,
+                bias_tensor=self.bqkv,
+                fused_activation=None,
+                config=self.config.qkv_minimal_config,
+                memory_config=self.config.qkv_memcfg,
+                dtype=self.config.qkv_dtype,
+                compute_kernel_config=self.config.qkv_compute_kernel_cfg,
+            )
+        else:
+            qkv_fused = ttnn.linear(
+                hidden_states,
+                self.wqkv,
+                memory_config=self.config.qkv_memcfg,
+                dtype=self.config.qkv_dtype,
+                bias=self.bqkv,
+                program_config=self.config.qkv_prg_config,
+                compute_kernel_config=self.config.qkv_compute_kernel_cfg,
+                core_grid=qkv_core_grid,
+            )
         if seq_len > _MAX_QKV_MM_CHUNK_SEQ_LEN:
             qkv_fused = ttnn.reshape(qkv_fused, [batch_size, 1, seq_len, -1])
 
@@ -248,16 +262,28 @@ class BgeM3Attention(LightweightModule):
             )
 
         # Stage 6: output projection
-        output = ttnn.linear(
-            context,
-            self.wo_weight,
-            memory_config=self.config.output_memcfg,
-            dtype=self.config.output_dtype,
-            bias=self.wo_bias,
-            program_config=self.config.output_prg_config,
-            compute_kernel_config=self.config.output_compute_kernel_cfg,
-            core_grid=output_core_grid,
-        )
+        if self.config.output_minimal_config is not None and self.config.output_prg_config is None:
+            output = ttnn.experimental.minimal_matmul(
+                input_tensor=context,
+                weight_tensor=self.wo_weight,
+                bias_tensor=self.wo_bias,
+                fused_activation=None,
+                config=self.config.output_minimal_config,
+                memory_config=self.config.output_memcfg,
+                dtype=self.config.output_dtype,
+                compute_kernel_config=self.config.output_compute_kernel_cfg,
+            )
+        else:
+            output = ttnn.linear(
+                context,
+                self.wo_weight,
+                memory_config=self.config.output_memcfg,
+                dtype=self.config.output_dtype,
+                bias=self.wo_bias,
+                program_config=self.config.output_prg_config,
+                compute_kernel_config=self.config.output_compute_kernel_cfg,
+                core_grid=output_core_grid,
+            )
         ttnn.deallocate(context)
 
         if seq_len > _MAX_WO_MM_CHUNK_SEQ_LEN:

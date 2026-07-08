@@ -55,6 +55,8 @@ class AttentionOptimizations:
     core_grid: ttnn.CoreGrid | None = None
     qkv_prg_config: object | None = None
     output_prg_config: object | None = None
+    qkv_minimal_config: object | None = None
+    output_minimal_config: object | None = None
 
 
 @dataclass
@@ -161,6 +163,10 @@ class Optimizations:
         # ── Attention ────────────────────────────────────────────────────
 
         qkv_out_dim = 3 * hidden_size
+        qkv_minimal = _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch, hidden_size=hidden_size)
+        out_minimal = _attention_output_minimal_matmul_config(
+            mesh_device, max_seq_len, max_batch, hidden_size=hidden_size
+        )
         attn_opts = AttentionOptimizations(
             qkv_compute_kernel_cfg=attention_qkv_compute_kernel_config(
                 mesh_device, max_seq_len, max_batch, dtype=dtype
@@ -174,9 +180,17 @@ class Optimizations:
             score_memcfg=act_mem,
             output_memcfg=_attention_output_memory_config(max_seq_len, max_batch, mesh_device),
             core_grid=core_grid,
-            qkv_prg_config=_qkv_program_config(max_seq_len, max_batch, hidden_size, qkv_out_dim, mesh_device),
+            qkv_prg_config=(
+                None
+                if qkv_minimal is not None
+                else _qkv_program_config(max_seq_len, max_batch, hidden_size, qkv_out_dim, mesh_device)
+            ),
+            qkv_minimal_config=qkv_minimal,
+            output_minimal_config=out_minimal,
             output_prg_config=(
-                _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                None
+                if out_minimal is not None
+                else _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
                 if tuned_b1
                 else _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
                 if tuned_b16
@@ -329,7 +343,9 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     # 2x HiFi4 throughput. fp32_dest_acc_en=False lifts subblock h*w cap to 8
     # (needed for the minimal_matmul 4x2 subblock winner).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
+        return _make_compute_kernel(
+            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
+        )
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -343,7 +359,9 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     # N300 B12/S8192: HiFi2 lossless for bf8xbf8. fp32_dest_acc_en=False for the
     # minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
+        return _make_compute_kernel(
+            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
+        )
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -355,7 +373,9 @@ def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch
     # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
     # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
+        return _make_compute_kernel(
+            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
+        )
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -367,7 +387,9 @@ def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_ba
     # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
     # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False)
+        return _make_compute_kernel(
+            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
+        )
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -576,8 +598,11 @@ def _mlp_wi_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
         g = mesh_device.compute_with_storage_grid_size()
         if g.x >= 8 and g.y >= 8:
             return ttnn.MinimalMatmulConfig(
-                M_block_size=16, K_block_size=8, N_block_size=4,
-                subblock_h=4, subblock_w=2,
+                M_block_size=16,
+                K_block_size=8,
+                N_block_size=4,
+                subblock_h=4,
+                subblock_w=2,
                 compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             )
     if max_seq_len != 512 or max_batch != 32:
@@ -608,8 +633,11 @@ def _mlp_wo_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, h
         g = mesh_device.compute_with_storage_grid_size()
         if g.x >= 8 and g.y >= 8:
             return ttnn.MinimalMatmulConfig(
-                M_block_size=16, K_block_size=16, N_block_size=4,
-                subblock_h=4, subblock_w=2,
+                M_block_size=16,
+                K_block_size=16,
+                N_block_size=4,
+                subblock_h=4,
+                subblock_w=2,
                 compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             )
     if max_seq_len != 512 or max_batch != 32:
@@ -700,6 +728,44 @@ def _attention_output_program_config(max_seq_len, max_batch_size, hidden_size, m
         fused_activation=None,
         mcast_in0=False,
     )
+
+
+def _attention_qkv_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size):
+    """N300 B12/S8192 QKV (M=98304 K=1024 N=3072). Sweep winner m16/k4/n4 sb4x2
+    = 9.3ms vs 22.8ms default (2.5x). minimal_matmul streams M."""
+    if hidden_size != 1024:
+        return None
+    if max_seq_len == 8192 and mesh_device is not None and not ttnn_is_blackhole(mesh_device):
+        g = mesh_device.compute_with_storage_grid_size()
+        if g.x >= 8 and g.y >= 8:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=16,
+                K_block_size=4,
+                N_block_size=4,
+                subblock_h=4,
+                subblock_w=2,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+    return None
+
+
+def _attention_output_minimal_matmul_config(mesh_device, max_seq_len, max_batch_size, *, hidden_size):
+    """N300 B12/S8192 AttnOut (M=98304 K=1024 N=1024). Sweep winner m16/k8/n4
+    sb4x2 = 6.25ms vs 7.6ms default. minimal_matmul streams M."""
+    if hidden_size != 1024:
+        return None
+    if max_seq_len == 8192 and mesh_device is not None and not ttnn_is_blackhole(mesh_device):
+        g = mesh_device.compute_with_storage_grid_size()
+        if g.x >= 8 and g.y >= 8:
+            return ttnn.MinimalMatmulConfig(
+                M_block_size=16,
+                K_block_size=8,
+                N_block_size=4,
+                subblock_h=4,
+                subblock_w=2,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════════

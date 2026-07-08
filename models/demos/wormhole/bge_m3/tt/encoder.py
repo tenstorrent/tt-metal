@@ -194,6 +194,8 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
             core_grid=attn_opts.core_grid,
             qkv_prg_config=attn_opts.qkv_prg_config,
             output_prg_config=attn_opts.output_prg_config,
+            qkv_minimal_config=attn_opts.qkv_minimal_config,
+            output_minimal_config=attn_opts.output_minimal_config,
         )
     return config
 
