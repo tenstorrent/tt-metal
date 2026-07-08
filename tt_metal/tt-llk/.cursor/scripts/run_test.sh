@@ -20,8 +20,8 @@
 #                     (contains tests/ and tt_llk_<arch>/ as direct children)
 #   --arch     ARCH   Target architecture (quasar, blackhole, ...)
 #   --test     FILE   Test file name, e.g. test_sfpu_square_quasar.py.
-#                    Additional trailing test file names are accepted for
-#                    count/compile/simulate/run.
+#                     Additional trailing test file names are accepted for
+#                     count/compile/simulate/run.
 #
 # Optional:
 #   --maxfail  N      Stop after N failures (simulate/run; omit for verification)
@@ -86,7 +86,6 @@ shift 2>/dev/null || true
 
 WORKTREE=""
 ARCH=""
-TEST_FILE=""
 TEST_FILES=()
 MAXFAIL=""
 K_FILTER=""
@@ -105,7 +104,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --worktree)      WORKTREE="$2";      shift 2 ;;
     --arch)          ARCH="$2";          shift 2 ;;
-    --test)          TEST_FILE="$2"; TEST_FILES+=("$2"); shift 2 ;;
+    --test)          TEST_FILES+=("$2"); shift 2 ;;
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
@@ -129,7 +128,6 @@ while [[ $# -gt 0 ]]; do
         exit 4
       fi
       TEST_FILES+=("$1")
-      [[ -z "$TEST_FILE" ]] && TEST_FILE="$1"
       shift
       ;;
   esac
@@ -170,7 +168,6 @@ _validate() {
     ((errors++))
   }
   [[ $errors -gt 0 ]] && exit 4
-  TEST_FILE="${TEST_FILES[0]}"
 
   VENV="${WORKTREE}/tests/.venv"
   # Test layout is arch-dependent:
