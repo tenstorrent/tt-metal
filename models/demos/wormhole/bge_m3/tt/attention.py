@@ -273,6 +273,11 @@ class BgeM3Attention(LightweightModule):
 
 def _sdpa_chunks_for_seq_len(seq_len, batch_size=None):
     if seq_len % 128 == 0:
+        # N300 B12/S8192: sweep winner q=512 k=128 (sweep_sdpa_b12_s8192.py):
+        # 165.5us vs 249us default (q128 k256) — 34% faster. Larger q-chunk +
+        # smaller k-chunk on a 32-core grid gives best K/V reuse at S8192.
+        if seq_len == 8192:
+            return 512, 128
         # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
         # ~0.27ms under the B32-inherited 256x512). B32 keeps 256x512.
         # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512, same as B8).
