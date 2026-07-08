@@ -175,30 +175,32 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
+            .dfb_bindings = {DFBBinding{
+                .dfb_spec_name = DFBSpecName{kSWShardDfbName},
+                .accessor_name = kSWShardDfbName,
+                .endpoint_type = endpoint,
+            }},
+            .tensor_bindings =
+                {TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSWRemoteTensorParam},
+                     .accessor_name = kSWRemoteTensorParam},
+                 TensorBinding{
+                     .tensor_parameter_name = TensorParamName{kSWLocalTensorParam},
+                     .accessor_name = kSWLocalTensorParam}},
+            .compile_time_args = compile_time_args,
+            .runtime_arg_schema = {.runtime_arg_names = {off_name, count_name}},
             .hw_config = std::move(hw_config),
+            .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kSWRemoteTensorParam}, .accessor_name = kSWRemoteTensorParam});
-        k.tensor_bindings.push_back(TensorBinding{
-            .tensor_parameter_name = TensorParamName{kSWLocalTensorParam}, .accessor_name = kSWLocalTensorParam});
-        k.dfb_bindings.push_back(DFBBinding{
-            .dfb_spec_name = DFBSpecName{kSWShardDfbName},
-            .accessor_name = kSWShardDfbName,
-            .endpoint_type = endpoint,
-        });
+        // The unaligned staging path adds the scratch DFB binding and the UNALIGNED kernel define.
         if (use_scratch) {
             k.dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFBSpecName{kSWScratchDfbName},
                 .accessor_name = kSWScratchDfbName,
                 .endpoint_type = endpoint,
             });
-        }
-        k.compile_time_args = compile_time_args;
-        if (use_scratch) {
             k.compiler_options.defines.emplace("UNALIGNED", "1");
         }
-        k.runtime_arg_schema.runtime_arg_names = {off_name, count_name};
-        k.advanced_options.num_runtime_varargs = num_varargs;
         return k;
     };
 
