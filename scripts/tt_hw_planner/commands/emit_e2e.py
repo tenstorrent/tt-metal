@@ -1069,6 +1069,12 @@ def _emit_e2e_phase_a(args) -> int:
     print(sep)
 
     _pc = _planned_parallelism(model_id, args)
+    if getattr(args, "mesh", None) and (_pc is None or _pc.chips <= 1):
+        print(
+            f"  WARNING: --mesh {args.mesh!r} did not resolve to a multi-chip plan "
+            f"(parse failure, single-chip mesh, or a probe/kernel-eval error) — proceeding "
+            f"WITHOUT multi-chip placement guidance; the builder will target a single device."
+        )
     _parallel_note = _parallelism_prompt_block(_pc)
     if _pc is not None and _pc.chips > 1:
         print(f"  chip placement: {_pc.chips}-chip mesh → TP={_pc.tp} x DP={_pc.dp} (kernel-viability selected)")
@@ -1490,13 +1496,17 @@ ambiguous, it is a FAIL with a hole describing the ambiguity."""
 
 
 def _mesh_chip_count(mesh_arg) -> int:
+    """Chip count for a `--mesh` argument. Reuses `_parse_mesh`'s tolerant 'rows,cols' /
+    'rowsxcols' parsing (both `,` and `x` accepted) so this accepts the SAME `--mesh` formats as
+    bring-up (`auto-up`/`promote`) instead of only understanding 'x' and silently mis-parsing the
+    ',' form those commands document as equivalent (e.g. '2,2' was silently treated as 1 chip)."""
     if not mesh_arg:
         return 1
     try:
-        prod = 1
-        for tok in str(mesh_arg).lower().split("x"):
-            prod *= int(tok)
-        return max(prod, 1)
+        from ..cli import _parse_mesh
+
+        rows, cols = _parse_mesh(str(mesh_arg))
+        return max(rows * cols, 1)
     except Exception:
         return 1
 

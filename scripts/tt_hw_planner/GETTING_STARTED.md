@@ -227,6 +227,7 @@ python -m scripts.tt_hw_planner promote <org>/<model> --box QB2 --mesh 2,2
 python -m scripts.tt_hw_planner emit-e2e <org>/<model>
 ```
 Once all components are graduated, a BUILDER agent wires them into the end-to-end task pipeline and an independent GRADER re-verifies it on device (a FIXER closes any gaps). **When to use:** after everything is graduated, to produce a working end-to-end model. Handy flags: `--task <t>` / `--all-tasks` (multi-task models), `--max-iter`, `--pcc-target`.
+- **`--mesh`** — pass the SAME value you used for bring-up (e.g. `--mesh 2,2`) if any component was tensor-parallel sharded. Without it, the builder plans for a single chip and won't be told to open a mesh or preserve sharding, even though the graduated `_stubs/` already contain the sharded code.
 
 ### Overlays — save & replay a model's graduated work
 An **overlay** is the captured set of file changes a bring-up produced — the per-component `_stubs/` (the graduated native-TTNN code) plus any patches. When a run is worktree-isolated the tool **auto-captures** them, so a model can be **replayed later without re-running the LLM**.
