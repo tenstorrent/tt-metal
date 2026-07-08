@@ -13,6 +13,7 @@
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_op_params.hpp"  // Approx
 
 namespace compute_kernel_lib {
 
