@@ -2111,6 +2111,8 @@ def run_perf_benchmark(
             reset_batch=(i == 0),
         )
         if sampling_params is not None and i == 0 and hasattr(executor, "mesh_device"):
+            # The first sampled decode replay is excluded from steady-state throughput.
+            # Sync here so the timed i=1..N window does not inherit queued work from i=0.
             ttnn.synchronize_device(executor.mesh_device)
         elapsed = time.perf_counter() - t0
 
