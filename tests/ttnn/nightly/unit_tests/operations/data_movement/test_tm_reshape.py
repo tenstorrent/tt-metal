@@ -5,14 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-# Shared sharded-memory-config builder lives in the sibling reshape test file; importing
-# it (instead of duplicating ~80 LoC of identical grid/alignment logic) keeps the two
-# reshape suites aligned when those rules change.
-from tests.ttnn.nightly.unit_tests.operations.data_movement.test_universal_input_tm_reshape import (
-    make_sharded_memory_config,
-)
+from tests.ttnn.utils_for_testing import assert_with_pcc, make_sharded_memory_config
 
 
 # ---------------------------------------------------------------------------
