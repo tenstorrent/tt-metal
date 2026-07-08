@@ -12,14 +12,11 @@
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/impl/internal/disaggregation/noc_addr.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
 
 namespace {
-
-// noc_addr encoding (set by kv_cache_utils.py): (bank_id << 32) | local_addr
-uint32_t addr_channel(uint64_t noc_addr) { return static_cast<uint32_t>(noc_addr >> 32); }
-uint32_t addr_local(uint64_t noc_addr) { return static_cast<uint32_t>(noc_addr & 0xFFFFFFFFull); }
 
 tt::tt_metal::IDevice* resolve_device(const tt::tt_fabric::FabricNodeId& node_id) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
