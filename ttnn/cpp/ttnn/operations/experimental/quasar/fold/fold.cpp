@@ -14,6 +14,7 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -339,8 +340,17 @@ static Tensor apply_halo_padding(
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
         /*default_l1_acc=*/false);
-    auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    // The standard ttnn::halo builds a legacy DataMovementKernel (ProgramDescriptor path), which is
+    // rejected on Quasar (Gen2 requires QuasarDataMovementKernel / Metal-2.0). Use the Metal-2.0 quasar
+    // halo op there, matching the standard call's flags (pad_val=0, remote_read=false,
+    // transpose_mcast=false, is_out_tiled=false). WH/BH keep the standard halo (unchanged).
+    Tensor halo_output;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+        halo_output = ttnn::operations::experimental::quasar::halo(
+            reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    } else {
+        halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    }
 
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(
