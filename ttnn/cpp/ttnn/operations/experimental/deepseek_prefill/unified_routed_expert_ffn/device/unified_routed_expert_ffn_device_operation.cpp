@@ -172,8 +172,15 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(out.storage_type() == tt::tt_metal::StorageType::DEVICE, "optional_output must be on device");
         TT_FATAL(out.layout() == tt::tt_metal::Layout::TILE, "optional_output must be TILE layout");
         TT_FATAL(is_dram_interleaved(out), "optional_output must be DRAM-interleaved");
+        // Output dtype must match x EXCEPT in row-major mode: there x is bf16
+        // ROW_MAJOR but the tilized output is bf8_b TILE (for downstream
+        // combine), so the two legitimately differ. The tilize/down-matmul packs
+        // to the output's dtype regardless.
         TT_FATAL(
-            out.dtype() == t.x.dtype(), "optional_output dtype ({}) must match x dtype ({})", out.dtype(), t.x.dtype());
+            op.x_is_row_major || out.dtype() == t.x.dtype(),
+            "optional_output dtype ({}) must match x dtype ({})",
+            out.dtype(),
+            t.x.dtype());
         const auto& out_shape = out.padded_shape();
         TT_FATAL(
             out_shape.rank() == x_shape.rank(),
