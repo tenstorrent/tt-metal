@@ -4,6 +4,8 @@
 
 #include "kv_sdpa_device_operation.hpp"
 
+#include <algorithm>
+
 #include "tt-metalium/constants.hpp"
 #include "tt-metalium/work_split.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -52,9 +54,18 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t Kt = prefix_Kt + suffix_Kt;
     const bool use_provided_mask = ta.mask.has_value();
 
-    // KV chunk size: largest small divisor of Kt (matches prod's k_chunk≈96 -> 3 tiles for Kt=33).
+    // KV chunk size (tiles per flash chunk). This op is compute-bound on the per-chunk fixed overhead
+    // (matmul re-init + the reduce/exp reconfig_data_format churn in sdpa_inner_loop), so we want the
+    // FEWEST chunks: pick the largest divisor of Kt whose double-buffered per-chunk K/V CBs still fit a
+    // modest L1 budget. Any divisor is correctness-safe -- the compute derives its subblock/granularity
+    // from Sk_chunk_t at build time (determine_largest_subblock_size / find_valid_granularity both fall
+    // back gracefully), and dividing Kt exactly keeps every chunk full (no ragged tail to mask).
+    // E.g. Kt=33 now picks 11 (3 chunks) instead of the old {4,3,2}-capped 3 (11 chunks).
+    // Cap chunk tiles so cb_k_in/cb_v_in (each Sk_chunk_t*DHt*2 tiles, double-buffered) stay bounded in
+    // L1 regardless of head_dim: keep Sk_chunk_t*DHt <= 128 tiles per (single-buffered) K/V chunk.
+    const uint32_t max_chunk_tiles = std::max<uint32_t>(1u, 128u / DHt);
     uint32_t Sk_chunk_t = 1;
-    for (uint32_t cand : {4u, 3u, 2u}) {
+    for (uint32_t cand = std::min(Kt, max_chunk_tiles); cand >= 1; --cand) {
         if (Kt % cand == 0) {
             Sk_chunk_t = cand;
             break;
