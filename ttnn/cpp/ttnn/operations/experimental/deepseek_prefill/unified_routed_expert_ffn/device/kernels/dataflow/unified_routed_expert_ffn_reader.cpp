@@ -123,6 +123,11 @@ void kernel_main() {
     // reads start at row 0. cb_start_scratch holds the fetched `start` page.
     constexpr uint32_t read_x_at_offset = get_compile_time_arg_val(25);
     constexpr uint32_t cb_start_scratch = get_compile_time_arg_val(26);
+    // x_is_row_major: x is ROW_MAJOR bf16 — stream sticks into cb_x_rm for the
+    // compute kernel to tilize. 0 => x is TILE bf8_b, read directly. (Consumed
+    // by the row-major read path added in a later commit; unused when 0.)
+    constexpr uint32_t x_is_row_major = get_compile_time_arg_val(27);
+    constexpr uint32_t cb_x_rm = get_compile_time_arg_val(28);
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
@@ -133,7 +138,7 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 27;
+    constexpr uint32_t x_accessor_offset = 29;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
 
