@@ -42,19 +42,20 @@
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
     PIPELINE_HOSTS=$(awk 'NF {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
     TTRUN_MPI_ARGS="--host $PIPELINE_HOSTS --map-by rankfile:file=${TTRUN_DIR}/rankfile --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}"
+    RANK_BINDING="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c/one_galaxy/spsg_single_galaxy_rank_bindings.yaml"
 
     export MLA_CHUNKED_TRACE_PATH=/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/kimi_metal_56320_sdpa_mla/
     export KIMI_K2_6_HF_MODEL=/data/nbabin/Kimi-K2_6-dequantized
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --rank-binding "${RANK_BINDING}" \
       --mpi-args "${TTRUN_MPI_ARGS}" \
       python3 -m pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
 
     TT_METAL_ALLOCATOR_MODE_HYBRID=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --rank-binding "${TTRUN_DIR}/rank_bindings.yaml" \
+      --rank-binding "${RANK_BINDING}" \
       --mpi-args "${TTRUN_MPI_ARGS}" \
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k '8x4 and line and trace and kimi and deep-50k+5k' -vvv --tb=short
   skus:
