@@ -40,14 +40,18 @@ void kernel_main() {
     uint32_t temp_addr = get_arg_val<uint32_t>(1);
     uint32_t k_addr = get_arg_val<uint32_t>(2);
     uint32_t p_addr = get_arg_val<uint32_t>(3);
+    uint32_t history_addr = get_arg_val<uint32_t>(4);
+    uint32_t history_positions_addr = get_arg_val<uint32_t>(5);
 
     uint32_t arg_id = 0;
     constexpr auto dst_args = TensorAccessorArgs<0>();
     constexpr auto temp_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
     constexpr auto k_args = TensorAccessorArgs<temp_args.next_compile_time_args_offset()>();
     constexpr auto p_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto history_args = TensorAccessorArgs<p_args.next_compile_time_args_offset()>();
+    constexpr auto history_positions_args = TensorAccessorArgs<history_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t args_base = p_args.next_compile_time_args_offset();
+    constexpr uint32_t args_base = history_positions_args.next_compile_time_args_offset();
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(args_base + 0);
     constexpr uint32_t cb_id_mask = get_compile_time_arg_val(args_base + 1);
     constexpr uint32_t scaler_max_cb_id = get_compile_time_arg_val(args_base + 2);
@@ -70,6 +74,7 @@ void kernel_main() {
     // Number of running cores / users. The final-indices CB holds one stick per user (no longer
     // hard-coded to 32), so this kernel waits/pops exactly `num_users` sticks.
     constexpr uint32_t num_users = get_compile_time_arg_val(args_base + 17);
+    constexpr bool write_history = get_compile_time_arg_val(args_base + 18) == 1;
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -244,5 +249,29 @@ void kernel_main() {
         4,
         {.offset_bytes = core_id * 4},
         {.page_id = 0, .offset_bytes = core_id * 4});
+    if constexpr (write_history) {
+        const auto pos_in = TensorAccessor(history_positions_args, history_positions_addr);
+        uint32_t pos_l1_addr = cb_k.get_write_ptr();
+        noc.async_read(pos_in, CoreLocalMem<uint32_t>(pos_l1_addr), 4, {.page_id = 0, .offset_bytes = core_id * 4}, {});
+        noc.async_read_barrier();
+        CoreLocalMem<volatile int32_t> pos_ptr(pos_l1_addr);
+        int32_t history_page_id = pos_ptr[0];
+        if (history_page_id >= 0) {
+            const auto history_out = TensorAccessor(history_args, history_addr);
+            noc.async_write(
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out),
+                history_out,
+                4,
+                {.offset_bytes = core_id * 4},
+                {.page_id = static_cast<uint32_t>(history_page_id), .offset_bytes = core_id * 4});
+            pos_ptr[0] = history_page_id + 1;
+            noc.async_write(
+                CoreLocalMem<uint32_t>(pos_l1_addr),
+                pos_in,
+                4,
+                {.offset_bytes = core_id * 4},
+                {.page_id = 0, .offset_bytes = core_id * 4});
+        }
+    }
     noc.async_write_barrier();
 }

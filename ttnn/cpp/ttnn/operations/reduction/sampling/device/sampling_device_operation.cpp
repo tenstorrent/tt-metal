@@ -25,6 +25,8 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
     const auto& p = tensor_args.p;
     const auto& temp = tensor_args.temp;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
+    const auto& history_output_tensor = tensor_args.history_output;
+    const auto& history_positions_tensor = tensor_args.history_positions;
 
     // WH/BH support both UINT32 and INT32 for the index/k/output dtypes. Every other architecture
     // (e.g. Quasar, which lacks UInt16/UInt32 tile (DFB) metadata support) runs the kernels in the
@@ -139,6 +141,43 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
             sampling_pre_out_shape[3]);
     }
 
+    TT_FATAL(
+        history_output_tensor.has_value() == history_positions_tensor.has_value(),
+        "Sampling history_output and history_positions must be provided together");
+    if (history_output_tensor.has_value()) {
+        const auto& history = history_output_tensor.value();
+        TT_FATAL(
+            history.dtype() == DataType::UINT32 || history.dtype() == DataType::INT32,
+            "Only UINT32 & INT32 dtypes are supported for sampling history outputs!");
+        TT_FATAL(
+            history.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Only INTERLEAVED memory layout is supported for sampling history outputs!");
+        TT_FATAL(history.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for sampling history!");
+        const auto& history_shape = history.logical_shape();
+        TT_FATAL(
+            history_shape.rank() == 4, "Sampling history output must be rank-4, got rank {}", history_shape.rank());
+        TT_FATAL(
+            history_shape[0] == 1 && history_shape[1] == 1 && history_shape[3] >= input_shape[2],
+            "Sampling history output logical shape must be [1,1,S,>=num_users], got [{},{},{},{}] for num_users {}",
+            history_shape[0],
+            history_shape[1],
+            history_shape[2],
+            history_shape[3],
+            input_shape[2]);
+
+        const auto& positions = history_positions_tensor.value();
+        TT_FATAL(positions.dtype() == DataType::INT32, "Sampling history positions must have datatype INT32");
+        TT_FATAL(positions.layout() == Layout::ROW_MAJOR, "Sampling history positions must use ROW_MAJOR layout");
+        TT_FATAL(
+            positions.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Sampling history positions must be INTERLEAVED");
+        TT_FATAL(
+            positions.logical_volume() >= input_shape[2],
+            "Sampling history positions must contain at least one entry per user; got {} entries for {} users",
+            positions.logical_volume(),
+            input_shape[2]);
+    }
+
     // Check size, layout and dtype of k, p, temp
     TT_FATAL(
         k.dtype() == DataType::UINT32 || k.dtype() == DataType::INT32,
@@ -197,7 +236,9 @@ ttnn::Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    const std::optional<Tensor>& preallocated_output_tensor) {
+    const std::optional<Tensor>& preallocated_output_tensor,
+    const std::optional<Tensor>& history_output_tensor,
+    const std::optional<Tensor>& history_positions_tensor) {
     return ttnn::device_operation::launch<SamplingDeviceOperation>(
         SamplingParams{.seed = seed, .sub_core_grids = sub_core_grids},
         SamplingInputs{
@@ -206,7 +247,9 @@ ttnn::Tensor sampling(
             .k = k,
             .p = p,
             .temp = temp,
-            .preallocated_output = preallocated_output_tensor});
+            .preallocated_output = preallocated_output_tensor,
+            .history_output = history_output_tensor,
+            .history_positions = history_positions_tensor});
 }
 
 }  // namespace ttnn::prim

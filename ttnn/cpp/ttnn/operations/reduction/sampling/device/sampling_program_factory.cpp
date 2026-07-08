@@ -26,6 +26,11 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     const auto& k = tensor_args.k.mesh_tensor();
     const auto& p = tensor_args.p.mesh_tensor();
     const auto& temp = tensor_args.temp.mesh_tensor();
+    const auto& history_output = tensor_args.history_output.has_value() ? tensor_args.history_output->mesh_tensor()
+                                                                        : output_tensor.mesh_tensor();
+    const auto& history_positions =
+        tensor_args.history_positions.has_value() ? tensor_args.history_positions->mesh_tensor() : k;
+    const bool write_history = tensor_args.history_output.has_value();
 
     const auto& seed = operation_attributes.seed;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -382,6 +387,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         tt::tt_metal::TensorAccessorArgs(temp).append_to(writer_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(k).append_to(writer_compile_time_args);
         tt::tt_metal::TensorAccessorArgs(p).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(history_output).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(history_positions).append_to(writer_compile_time_args);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(),
             {
@@ -403,6 +410,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
                 num_cores,
                 static_cast<uint32_t>(use_32bit_index),
                 num_users,
+                static_cast<uint32_t>(write_history),
             });
 
         KernelDescriptor writer_desc;
@@ -412,7 +420,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         writer_desc.core_ranges = single_core;
         writer_desc.compile_time_args = writer_compile_time_args;
         writer_desc.config = WriterConfigDescriptor{};
-        writer_desc.emplace_runtime_args(core, {output_mesh, temp, k, p});
+        writer_desc.emplace_runtime_args(core, {output_mesh, temp, k, p, history_output, history_positions});
         desc.kernels.push_back(std::move(writer_desc));
 
         std::vector<uint32_t> compute_args = {

@@ -447,7 +447,10 @@ class Llama3Transformer1D(LightweightModule):
             self.layers
         ), f"kv_cache has {len(kv_cache)} entries but model has {len(self.layers)} layers"
         for i, layer in enumerate(self.layers):
-            layer.attention.config.kv_cache = tuple(kv_cache[i])
+            cache_pair = tuple(kv_cache[i])
+            layer.attention.config.kv_cache = cache_pair
+            if hasattr(layer.attention, "kv_cache"):
+                layer.attention.kv_cache = cache_pair
 
     # =========================================================================
     # Forward methods — take pre-embedded tensors

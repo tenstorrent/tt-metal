@@ -29,7 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.common.device_utils import get_device_name
-from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
+from models.common.models.executor import cleanup_ttnn_value, run_perf_benchmark, run_teacher_forcing
 from models.common.models.llama3_8b.executor import EagerLlamaExecutor, TracedLlamaExecutor
 from models.common.models.llama3_8b.hf_adaptor import from_pretrained
 from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
@@ -41,28 +41,49 @@ from models.common.tests.demos.llama3_8b.demo_utils import load_input_prompts, p
 # Expected metrics
 # =============================================================================
 
-# Expected accuracy metrics from PERF.md for Llama-3.1-8B (top1, top5 only)
-# Performance metrics (tok_s_u, ttft_ms) are case-specific when measured directly in this demo.
+# Expected accuracy metrics from PERF.md for Llama-3.1-8B (top1, top5 only).
+# Decode-throughput targets are measured TTTv1 parity numbers from the old tt_transformers demo
+# sweep recorded in consolidated_git_status_markdown.md.
 EXPECTED_METRICS = {
     "performance": {
         "N150": {
             "top1": 90,
             "top5": 97,
-            "batch-1": {"tok_s_u": 12.0, "ttft_ms": 109},
-            "batch-32": {"tok_s_u": 11.7, "ttft_ms": 108},
+            "batch-1": {"tok_s_u": 9.49, "ttft_ms": 109},
+            "batch-32": {"tok_s_u": 8.81, "ttft_ms": 108},
         },
         "N300": {
             "top1": 90,
             "top5": 97,
-            "batch-1": {"tok_s_u": 32.0, "ttft_ms": 74},
-            "batch-32": {"tok_s_u": 30.5, "ttft_ms": 73},
+            "batch-1": {"tok_s_u": 25.4, "ttft_ms": 74},
+            "batch-32": {"tok_s_u": 22.2, "ttft_ms": 73},
         },
-        "T3K": {"top1": 90, "top5": 98, "tok_s_u": 64.3, "ttft_ms": 53},
+        "T3K": {
+            "top1": 90,
+            "top5": 98,
+            "batch-1": {"tok_s_u": 70.3, "ttft_ms": 53},
+            "batch-32": {"tok_s_u": 56.1, "ttft_ms": 53},
+        },
     },
     "accuracy": {
-        "N150": {"top1": 96, "top5": 100, "tok_s_u": 25.2, "ttft_ms": 138},
-        "N300": {"top1": 96, "top5": 100, "tok_s_u": 38.8, "ttft_ms": 79},
-        "T3K": {"top1": 97, "top5": 100, "tok_s_u": 60.8, "ttft_ms": 81},
+        "N150": {
+            "top1": 96,
+            "top5": 100,
+            "batch-1": {"tok_s_u": 9.11, "ttft_ms": 138},
+            "batch-32": {"tok_s_u": 8.49, "ttft_ms": 138},
+        },
+        "N300": {
+            "top1": 96,
+            "top5": 100,
+            "batch-1": {"tok_s_u": 23.4, "ttft_ms": 109},
+            "batch-32": {"tok_s_u": 20.6, "ttft_ms": 79},
+        },
+        "T3K": {
+            "top1": 97,
+            "top5": 100,
+            "batch-1": {"tok_s_u": 64.4, "ttft_ms": 81},
+            "batch-32": {"tok_s_u": 52.2, "ttft_ms": 81},
+        },
     },
 }
 
@@ -301,6 +322,7 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
     runtime_config = llm.runtime_config
     attention_config = _attention_config(model)
     traced_executor = TracedLlamaExecutor(model, mesh_device, model_args=runtime_config)
+    kv_cache = None
     try:
         block_size = 32
         max_batch_size = model_config.max_batch_size
@@ -353,21 +375,10 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
             f"tok/s: {result.tok_s:.1f}, "
             f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
         )
-        if sampling_params is None:
-            log_generated_text(prompts, result.generated_token_ids, tokenizer)
-        else:
-            logger.info("Running untimed host-read text replay for generated output logging")
-            text_result = run_perf_benchmark(
-                traced_executor,
-                tokens=input_tokens,
-                kv_cache=kv_cache,
-                page_table=page_table,
-                num_decode_tokens=128,
-                max_batch_size=max_batch_size,
-                prompt_lens=prompt_lens,
-                sampling_params=None,
-            )
-            log_generated_text(prompts, text_result.generated_token_ids, tokenizer)
+        log_generated_text(prompts, result.generated_token_ids, tokenizer)
+
+        cleanup_ttnn_value(kv_cache)
+        kv_cache = None
 
         top1, top5 = _measure_teacher_forcing_accuracy(llm, mesh_device, log_text=False)
         logger.info(f"Performance-side teacher forcing — top1: {top1:.1f}%, top5: {top5:.1f}%")
@@ -386,4 +397,6 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
                 failures.append(f"ttft_ms {result.ttft_ms:.1f} above target {expected['ttft_ms']}")
             assert not failures, f"{case_name}: " + "; ".join(failures)
     finally:
-        traced_executor.cleanup()
+        cleanup_ttnn_value(kv_cache)
+        if traced_executor is not None:
+            traced_executor.cleanup()

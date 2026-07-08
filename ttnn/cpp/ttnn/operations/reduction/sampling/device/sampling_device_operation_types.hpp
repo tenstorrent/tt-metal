@@ -23,6 +23,8 @@ struct SamplingInputs {
     Tensor p;
     Tensor temp;
     std::optional<Tensor> preallocated_output;
+    std::optional<Tensor> history_output;
+    std::optional<Tensor> history_positions;
 };
 
 }  // namespace ttnn::prim

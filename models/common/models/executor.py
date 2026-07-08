@@ -349,7 +349,14 @@ class EagerLLMExecutor:
     # On-device sampling routing (argmax vs top-k op path)
     # =========================================================================
 
-    def _sampling_decode_forward(self, logits, sampling_params, tt_out_tok=None):
+    def _sampling_decode_forward(
+        self,
+        logits,
+        sampling_params,
+        tt_out_tok=None,
+        history_output=None,
+        history_positions=None,
+    ):
         """Run ``model.sampling`` on device, choosing the path that matches PERF.md.
 
         Routing depends on the model's ``allow_force_argmax``:
@@ -370,7 +377,15 @@ class EagerLLMExecutor:
         if kpt is None:
             return self.model.sampling.decode_forward(logits, tt_out_tok=tt_out_tok)
         k_tt, p_tt, temp_tt = kpt
-        return self.model.sampling.decode_forward(logits, k=k_tt, p=p_tt, temp=temp_tt, tt_out_tok=tt_out_tok)
+        return self.model.sampling.decode_forward(
+            logits,
+            k=k_tt,
+            p=p_tt,
+            temp=temp_tt,
+            tt_out_tok=tt_out_tok,
+            history_output=history_output,
+            history_positions=history_positions,
+        )
 
     def _get_decode_sampling_kpt(self, sampling_params):
         """Lazily build + cache (k, p, temp) device tensors, or None for force-argmax."""
@@ -1015,6 +1030,8 @@ class TracedLLMExecutor:
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self._benchmark_device_decode_feedback = False
+        self._benchmark_sampled_token_history = None
+        self._benchmark_sampled_token_positions = None
         self._prev_decode_page_table = None
 
         self.mode = None
@@ -1537,11 +1554,16 @@ class TracedLLMExecutor:
                 host_tensors=host_inputs,
                 device_tensors=self.trace_inputs_decode[sampling_on_device],
             )
+            if (
+                sampling_on_device
+                and self._benchmark_device_decode_feedback
+                and self._benchmark_sampled_token_positions is not None
+            ):
+                host_history_positions = self._prepare_sampled_token_positions_host(start_pos)
+                ttnn.copy_host_to_device_tensor(host_history_positions, self._benchmark_sampled_token_positions)
         elif page_table_changed:
             host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
-            host_page_table = host_inputs[3]
-            device_page_table = self.trace_inputs_decode[sampling_on_device][3]
-            ttnn.copy_host_to_device_tensor(host_page_table, device_page_table)
+            ttnn.copy_host_to_device_tensor(host_inputs[3], self.trace_inputs_decode[sampling_on_device][3])
 
         if page_table_changed:
             self._prev_decode_page_table = page_table.clone()
@@ -1606,6 +1628,9 @@ class TracedLLMExecutor:
         host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
+        if sampling_on_device and self._benchmark_device_decode_feedback:
+            self._prepare_sampled_token_history(start_pos)
+
         # On-device sampling: materialise sampling buffers AND JIT-compile the sampling program
         # BEFORE trace capture. Both buffer materialisation (Sampling1D LazyBuffers + the
         # LogProbsCalculator's ttnn.as_tensor scratch) and a first-run program compile issue device
@@ -1625,9 +1650,28 @@ class TracedLLMExecutor:
                 wu_rot_mats = self.model.rope_setup.get_rot_mats(wu_rot_mat_idxs)
                 wu_embed = self.model.embed_decode(wu_tokens)
                 wu_logits = self.model.decode_forward(wu_embed, wu_current_pos, wu_rot_mats, page_table=wu_page_table)
-                wu_toks, _ = self._eager._sampling_decode_forward(wu_logits, sampling_params, tt_out_tok=None)
+                wu_toks, _ = self._eager._sampling_decode_forward(
+                    wu_logits,
+                    sampling_params,
+                    tt_out_tok=wu_tokens if self._benchmark_device_decode_feedback else None,
+                    history_output=self._benchmark_sampled_token_history
+                    if self._benchmark_device_decode_feedback
+                    else None,
+                    history_positions=self._benchmark_sampled_token_positions
+                    if self._benchmark_device_decode_feedback
+                    else None,
+                )
+                if self._benchmark_device_decode_feedback and hasattr(self.model, "increment_positions"):
+                    self.model.increment_positions(wu_current_pos, wu_rot_mat_idxs)
             ttnn.synchronize_device(self.mesh_device)
-            cleanup_ttnn_value(wu_toks)
+            if not self._benchmark_device_decode_feedback:
+                cleanup_ttnn_value(wu_toks)
+            copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs)
+            if self._benchmark_device_decode_feedback:
+                ttnn.copy_host_to_device_tensor(
+                    self._prepare_sampled_token_positions_host(start_pos),
+                    self._benchmark_sampled_token_positions,
+                )
             ttnn.synchronize_device(self.mesh_device)
             logger.info("Compiled on-device sampling")
 
@@ -1647,8 +1691,17 @@ class TracedLLMExecutor:
 
             if sampling_on_device and self.model.sampling is not None:
                 tt_out_tok = tt_tokens if self._benchmark_device_decode_feedback else None
+                history_output = None
+                history_positions = None
+                if self._benchmark_device_decode_feedback:
+                    history_output = self._benchmark_sampled_token_history
+                    history_positions = self._benchmark_sampled_token_positions
                 tt_toks, tt_log_probs = self._eager._sampling_decode_forward(
-                    logits, sampling_params, tt_out_tok=tt_out_tok
+                    logits,
+                    sampling_params,
+                    tt_out_tok=tt_out_tok,
+                    history_output=history_output,
+                    history_positions=history_positions,
                 )
                 if self._benchmark_device_decode_feedback and hasattr(self.model, "increment_positions"):
                     self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
@@ -1665,6 +1718,33 @@ class TracedLLMExecutor:
         self.trace_output_decode[sampling_on_device] = output
 
         logger.info("Captured decode trace")
+
+    def _prepare_sampled_token_positions_host(self, start_pos):
+        padded_positions = torch.full((32,), -1, dtype=torch.int32)
+        active = min(start_pos.numel(), 32)
+        padded_positions[:active] = start_pos[:active].to(torch.int32)
+        return ttnn.from_torch(
+            padded_positions,
+            device=None,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+    def _prepare_sampled_token_history(self, start_pos) -> None:
+        if self._benchmark_sampled_token_history is None:
+            max_seq_len = self.model_config.max_seq_len if self.model_config is not None else 1024
+            self._benchmark_sampled_token_history = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, max_seq_len, 32]),
+                ttnn.uint32,
+                ttnn.ROW_MAJOR_LAYOUT,
+                self.mesh_device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if self._benchmark_sampled_token_positions is None:
+            self._benchmark_sampled_token_positions = ttnn.to_device(
+                self._prepare_sampled_token_positions_host(start_pos),
+                device=self.mesh_device,
+            )
 
     # =========================================================================
     # Cleanup
@@ -1691,6 +1771,10 @@ class TracedLLMExecutor:
             self.trace_ids_decode[key] = None
             self.trace_inputs_decode[key] = None
             self.trace_output_decode[key] = None
+        cleanup_ttnn_value(self._benchmark_sampled_token_history)
+        self._benchmark_sampled_token_history = None
+        cleanup_ttnn_value(self._benchmark_sampled_token_positions)
+        self._benchmark_sampled_token_positions = None
 
         self._eager._kv_cache = None
         self._cleaned_up = True
@@ -1951,11 +2035,13 @@ def run_perf_benchmark(
     assert _is_traced_executor(executor), "run_perf_benchmark() expects a traced executor during this transition"
     # PERF.md decode loops keep sampled tokens and positions device-resident between trace replays.
     # This is only enabled here because the benchmark page table is static across decode steps.
-    executor._benchmark_device_decode_feedback = sampling_params is not None
+    engine = getattr(executor, "_engine", executor)
+    engine._benchmark_device_decode_feedback = sampling_params is not None
 
     batch_size = tokens.shape[0]
     prompt_len = tokens.shape[1]
     max_batch_size = max(max_batch_size, batch_size)
+    cluster_shape = getattr(executor, "cluster_shape", list(executor.mesh_device.shape))
     # todo)) prompt_lens should be always passed in!
     prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([prompt_len] * batch_size)
 
@@ -2008,10 +2094,13 @@ def run_perf_benchmark(
 
     compile_time = None
     decode_times = []
+    sampled_decode_start = None
 
     for i in range(num_decode_tokens):
         t0 = time.perf_counter()
-        read_decode_output = not (sampling_params is not None and i > 0)
+        read_decode_output = sampling_params is None
+        if sampling_params is not None and i == 1:
+            sampled_decode_start = t0
         logits, _ = executor.decode_forward(
             current_tokens,
             current_pos,
@@ -2021,14 +2110,16 @@ def run_perf_benchmark(
             sampling_params=sampling_params,
             reset_batch=(i == 0),
         )
+        if sampling_params is not None and i == 0 and hasattr(executor, "mesh_device"):
+            ttnn.synchronize_device(executor.mesh_device)
         elapsed = time.perf_counter() - t0
 
         if i == 0:
             compile_time = elapsed
-        else:
+        elif sampling_params is None:
             decode_times.append(elapsed)
 
-        if read_decode_output:
+        if sampling_params is None:
             if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
                 next_tok = torch.argmax(logits[:, -1, :], dim=-1)
             else:
@@ -2038,6 +2129,22 @@ def run_perf_benchmark(
                 generated_token_ids[user_id].append(int(tok))
             current_tokens[:batch_size] = next_tok
         current_pos[:batch_size] += 1
+
+    if sampling_params is not None:
+        if sampled_decode_start is not None and hasattr(executor, "mesh_device"):
+            ttnn.synchronize_device(executor.mesh_device)
+            sampled_decode_time = time.perf_counter() - sampled_decode_start
+            decode_times = [sampled_decode_time / (num_decode_tokens - 1)] * (num_decode_tokens - 1)
+        history = getattr(engine, "_benchmark_sampled_token_history", None)
+        if history is not None:
+            history_host = history.cpu()
+            if hasattr(executor, "mesh_device"):
+                ttnn.synchronize_device(executor.mesh_device)
+            history_torch = _concat_host_output(history_host, cluster_shape)
+            for step in range(num_decode_tokens):
+                for user_id in range(batch_size):
+                    pos = int(prompt_lens[user_id].item()) + step
+                    generated_token_ids[user_id].append(int(history_torch[0, 0, pos, user_id].item()))
 
     return PerfBenchmarkResult(
         prefill_time_s=prefill_time,
