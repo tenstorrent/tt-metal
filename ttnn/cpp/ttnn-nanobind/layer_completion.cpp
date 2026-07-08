@@ -27,7 +27,7 @@
 
 namespace nb = nanobind;
 
-NB_MODULE(_layer_completion, mod) {
+NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-param)
     using tt::tests::prefill_test::LayerCompletionConsumer;
     using tt::tt_metal::distributed::LayerCompletionMessage;
     using tt::tt_metal::distributed::LayerCompletionQueue;
