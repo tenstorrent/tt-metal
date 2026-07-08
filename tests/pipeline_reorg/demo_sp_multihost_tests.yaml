@@ -39,7 +39,7 @@
 - name: "Single Galaxy - Kimi MLA Chunked Prefill (Trace, deep-50k+5k)"
   cmd: |
     export MLA_CHUNKED_TRACE_PATH=/mnt/models/deepseek-prefill-cache/golden/mla_sdpa_traces/kimi_metal_56320_sdpa_mla/
-    export KIMI_K2_6_HF_MODEL=/data/nbabin/Kimi-K2_6-dequantized
+    export KIMI_K2_6_HF_MODEL=/mnt/models/Kimi-K2_6-dequantized
     export TT_METAL_ALLOCATOR_MODE_HYBRID=1
 
     mpirun --pernode --tag-output bash -lc '
