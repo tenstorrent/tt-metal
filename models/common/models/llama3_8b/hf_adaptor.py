@@ -386,6 +386,18 @@ def _max_prefill_chunk_size(mesh_device) -> int:
     return {"N150": 4, "N300": 64, "T3K": 128}[get_device_name(mesh_device)] * 1024
 
 
+def _trace_prefill_supported_seq_lens(
+    device_name: str, max_prefill_chunk_size: int, max_seq_len: int
+) -> tuple[int, ...]:
+    supported_seq_lens_by_device = {
+        "N150": (128, 1024),
+        "N300": (128, 1024, 2048, 4096, 8192),
+        "T3K": (128, 1024, 2048, 4096, 8192),
+    }
+    supported_seq_lens = supported_seq_lens_by_device[device_name]
+    return tuple(seq_len for seq_len in supported_seq_lens if seq_len <= min(max_prefill_chunk_size, max_seq_len))
+
+
 def _weight_cache_path(model_cache_path: Path, *, instruct: bool, dtype):
     if instruct:
         return (
@@ -470,8 +482,10 @@ def from_pretrained(
         ),
     )
     max_prefill_chunk_size = _max_prefill_chunk_size(mesh_device)
-    trace_prefill_supported_seq_lens = tuple(
-        seq_len for seq_len in (128, 1024) if seq_len <= min(max_prefill_chunk_size, max_seq_len)
+    trace_prefill_supported_seq_lens = _trace_prefill_supported_seq_lens(
+        get_device_name(mesh_device),
+        max_prefill_chunk_size,
+        max_seq_len,
     )
     runtime_config = Llama3RuntimeConfig(
         model_name=model_name,
