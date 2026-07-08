@@ -124,3 +124,31 @@ gemma4 decode sparse-MoE still governs the paged/vLLM sequential commit (#47488)
 - 2026-07-08: baseline captured (traced 233 ms/step); op audit from whole_gen_opprofile; levers prioritized.
 - 2026-07-08: block-time split → commit (~31 s, 256 sequential decodes) dominates. Batched commit verified 24.8× faster but KV PCC fails (232/240, layer-0-exact then compounds). Next: route commit through chunked_prefill (preferred) or debug commit_batched attention.
 - 2026-07-08 (session B): retracted the "attention bug" diagnosis. `probe_attn_only.py` (MoE off, both paths) → attention-only KV PCC 0.9977 @ 4L (PASS), 0.494 @ L29 (bf16 prefill-vs-decode compounding, not a bug). `probe_moe_vs_torch.py` re-run → batched 0.856 vs torch, sequential 0.579 → **sequential MoE is the defective kernel**. `verify_commit_batching.py` is an invalid non-gate (correct-batched vs defective-sequential; also unreachable at 0.997/30L for any non-bit-identical pair). No `commit_batched.py` fix; recommend gating on `probe_moe_vs_torch.py`.
+
+## Multi-step trace batching @48 — measured, REJECTED as default (2026-07-08)
+
+Direction: **maintain current precision, optimize speed** (no dtype/step changes). Evaluated the one
+remaining precision-neutral in-repo @48 lever, multi-step trace batching (`DG_DENOISE_TRACED_MULTISTEP`),
+via `sweep_at48.py` at 30L, 48 steps, 3 blocks (device, main build). Steady-block t/s:
+
+| config | steps | t/s | block s | committed_sha | verdict |
+|---|---|---:|---:|---|---|
+| traced_tuned_s48 (single-step, current default) | 48 | 17.82 | 14.365 | a9f0d18709b07d1e | baseline |
+| multistep_g12_s48 (bounded window G=12, 4 replays/block) | 48 | 17.87 | 14.328 | **a9f0d18709b07d1e** | **bit-exact**, +0.3% (noise) |
+| multistep_wb_s48 (whole-block, 1 replay) | 48 | — | — | — | **crash**: TT_FATAL buffer region overflow (traced_denoise_multistep_block) |
+| traced_tuned_s12 (ref, fewer steps) | 12 | 42.55 | 6.017 | 24393ba7aad6077c | — |
+
+**Verdict:** at 48 steps the block is **compute-bound** (48 × 30-layer MoE); multi-step batching only
+removes per-replay host dispatch, which is negligible at @48 (+0.3%, bit-exact sha match confirms it
+changes nothing numerically). Whole-block window overflows the trace buffer. **NOT made default** — no
+@48 benefit, and wb crashes. It stays opt-in (it helps only the low-step regime where dispatch matters).
+
+## Campaign conclusion (current precision, model-faithful @48)
+
+The precision-neutral in-repo speed levers are **exhausted**: matmul-geometry (landed, verified
+exhausted), terminal trim (landed), traced denoise loop (landed, 2.72×), multi-step batching (measured,
+no @48 gain). **Model-faithful @48 ceiling ≈ 17.8 t/s.** Benchmark 100 t/s is already cleared at low step
+counts (@4=104, @12=42.5). Closing the gap to model-faithful 100 t/s requires OUT-OF-GATE work: fewer
+denoise steps by design (blocked by #48291 sparse-MoE fidelity → early-halt can't fire) and/or an
+upstream fused MoE kernel and/or lower precision (bf8) — all excluded by the "maintain precision / no
+shared-gemma4 edits" constraints.
