@@ -229,6 +229,7 @@ class TransformerBlock(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         batch_size=1,
+        cq_id=0,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
         residual = x
@@ -263,6 +264,7 @@ class TransformerBlock(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
+            cq_id=cq_id,
         )
         # To match the batch-related reshape inside the attention module
         # Use the batch_size parameter instead of inferring from shape[-3]
@@ -309,7 +311,7 @@ class TransformerBlock(LightweightModule):
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.args.get_mlp_act_mem_config(mode))
         # MLP takes replicated inputs and produces fractured outputs
 
-        hidden_states = self.feed_forward.forward(hidden_states, mode)
+        hidden_states = self.feed_forward.forward(hidden_states, mode, cq_id=cq_id)
 
         activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION

@@ -76,6 +76,14 @@ def pytest_addoption(parser):
         help="Whether to use DRAM prefetcher for prefetching weights into L1 during decode (only available on BH)",
     )
     parser.addoption(
+        "--prefetcher_type",
+        action="store",
+        default=None,
+        type=str,
+        help="Prefetcher backend for decode: 'none' | 'worker' (DRAM prefetcher) | 'tensor' (DRAM-core tensor prefetcher). "
+        "Overrides --use_prefetcher. Also settable via TT_TRANSFORMERS_PREFETCHER. Only available on Blackhole.",
+    )
+    parser.addoption(
         "--use_hf_rope",
         action="store_true",
         default=False,

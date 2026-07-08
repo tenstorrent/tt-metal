@@ -53,6 +53,21 @@ class Mode(Enum):
     PREFILL = "prefill"
 
 
+def decode_matmul(prefetcher, mode, input_tensor_a, weight, *, program_config, cq_id=None, **linear_kwargs):
+    """Run a decode linear, dispatching to the active prefetcher backend when one is set.
+
+    In decode with a prefetcher, this routes through ``prefetcher.linear(...)`` — the worker
+    backend adds ``global_cb``/``sub_device_id`` and ignores ``cq_id``; the tensor backend issues
+    a coupled ``prefetch_and_linear`` on ``cq_id``. Otherwise (prefill, or no prefetcher) it is a
+    plain ``ttnn.linear``. This is the single switch point between the two prefetcher backends.
+    """
+    if prefetcher is not None and mode == Mode.DECODE:
+        return prefetcher.linear(
+            input_tensor_a, weight, program_config=program_config, cq_id=cq_id, **linear_kwargs
+        )
+    return ttnn.linear(input_tensor_a, weight, program_config=program_config, **linear_kwargs)
+
+
 class HostEmbedding(torch.nn.Module):
     def __init__(self, model_args):
         super().__init__()
@@ -885,14 +900,24 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
     use_prefetcher=False,
+    prefetcher_type=None,
     use_hf_rope=False,
 ):
     from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.prefetcher import Prefetcher
+    from models.tt_transformers.tt.tensor_prefetcher import TensorPrefetcher
 
-    num_tensors = 5 if use_prefetcher else 0
-    prefetcher = Prefetcher(mesh_device, num_tensors, num_layers) if use_prefetcher else None
+    # Backend select: explicit prefetcher_type ("none"|"worker"|"tensor") wins; otherwise fall
+    # back to the legacy use_prefetcher flag (which means the worker DRAM prefetcher).
+    prefetcher_kind = prefetcher_type or ("worker" if use_prefetcher else "none")
+    num_tensors = 5 if prefetcher_kind != "none" else 0
+    if prefetcher_kind == "worker":
+        prefetcher = Prefetcher(mesh_device, num_tensors, num_layers)
+    elif prefetcher_kind == "tensor":
+        prefetcher = TensorPrefetcher(mesh_device, num_tensors, num_layers)
+    else:
+        prefetcher = None
 
     tt_model_args = ModelArgs(
         mesh_device,

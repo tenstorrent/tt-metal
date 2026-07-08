@@ -242,7 +242,7 @@ def prepare_generator_args(
     page_params,
     paged_attention,
     num_layers,
-    use_prefetcher,
+    prefetcher_type,
     use_hf_rope,
 ):
     all_submesh_devices = create_submeshes(mesh_device, data_parallel)
@@ -287,7 +287,7 @@ def prepare_generator_args(
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
             num_layers=num_layers,
-            use_prefetcher=use_prefetcher,
+            prefetcher_type=prefetcher_type,
             use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
@@ -900,12 +900,20 @@ def test_demo_text(
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
-    if use_prefetcher and not is_blackhole():
-        logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
-        use_prefetcher = False
-    use_prefetcher = (
-        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+    # Resolve the prefetcher backend: --prefetcher_type / TT_TRANSFORMERS_PREFETCHER override the
+    # legacy --use_prefetcher flag (which maps to the "worker" DRAM prefetcher).
+    prefetcher_type = request.config.getoption("--prefetcher_type") or os.getenv("TT_TRANSFORMERS_PREFETCHER")
+    if prefetcher_type is None:
+        prefetcher_type = "worker" if use_prefetcher else "none"
+    prefetcher_supported = (
+        is_blackhole() and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
+    if prefetcher_type != "none" and not prefetcher_supported:
+        logger.warning(
+            f"prefetcher_type='{prefetcher_type}' requested but a prefetcher is only supported on Blackhole "
+            f"Llama-8B for this config; disabling."
+        )
+        prefetcher_type = "none"
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")
     is_device_perf_test = "device-perf" in test_id
@@ -1006,7 +1014,7 @@ def test_demo_text(
         page_params=page_params,
         paged_attention=paged_attention,
         num_layers=num_layers,
-        use_prefetcher=use_prefetcher,
+        prefetcher_type=prefetcher_type,
         use_hf_rope=use_hf_rope,
     )
 
@@ -1344,6 +1352,11 @@ def test_demo_text(
 
     # Finish profiling at the end of inference for all repeated batches
     profiler.end("run")
+
+    # Release any long-lived prefetcher device state (tensor prefetcher's DRISC kernels)
+    # before the mesh device is torn down. Idempotent no-op for the worker/none backends.
+    for m in model:
+        m.close()
 
     # Quick sanity check that the model doesn't produce special tokens=garbage output
     is_special_tokens_produced = [False] * len(all_outputs)

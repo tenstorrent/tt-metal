@@ -805,6 +805,7 @@ class Transformer(LightweightModule):
             page_table=page_table,
             kv_cache=kv_cache,
             page_tables_per_layer=page_tables_per_layer,
+            cq_id=0,  # decode dispatches (incl. tensor-prefetcher requests) run on CQ 0, matching trace capture
         )
 
         if on_device_logits:
@@ -849,6 +850,13 @@ class Transformer(LightweightModule):
             self.prefetcher.init(mode)
             self.prefetcher.prefetch()
 
+    def close(self):
+        """Release any long-lived prefetcher device state (e.g. the tensor prefetcher's
+        DRISC kernels via stop_tensor_prefetcher). Idempotent; safe to call if unused.
+        Must run before the mesh device is torn down."""
+        if self.prefetcher is not None:
+            self.prefetcher.close()
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -864,6 +872,7 @@ class Transformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
         page_tables_per_layer=None,
+        cq_id=0,
     ):
         if mode == Mode.DECODE:
             # Run prefetcher if it is enabled
@@ -918,6 +927,7 @@ class Transformer(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
+                cq_id=cq_id,
             )
 
         if mode == Mode.DECODE:

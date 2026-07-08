@@ -1287,6 +1287,7 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
+                        stream_in1=getattr(prefetcher, "stream_in1", False),
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1338,6 +1339,7 @@ class ModelArgs:
                         self.dim,  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
+                        stream_in1=getattr(prefetcher, "stream_in1", False),
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1636,6 +1638,7 @@ class ModelArgs:
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
                     untilize_out=True,
+                    stream_in1=getattr(prefetcher, "stream_in1", False),
                 )
             else:
                 return self.dram_matmul_config(
@@ -1899,6 +1902,7 @@ class ModelArgs:
                     n_wo,
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
+                    stream_in1=getattr(prefetcher, "stream_in1", False),
                 )
             else:
                 if self.use_fused_all_gather_matmul:
@@ -1960,6 +1964,7 @@ class ModelArgs:
                     n_wo,
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
+                    stream_in1=getattr(prefetcher, "stream_in1", False),
                 )
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
@@ -3338,6 +3343,7 @@ class ModelArgs:
         num_global_cb_receivers,
         prefetch=True,
         untilize_out=False,
+        stream_in1=False,
     ):
         M *= B  # Fuse batch always enabled
 
@@ -3387,6 +3393,7 @@ class ModelArgs:
             hop_cores=hop_core_range_set,
             num_global_cb_receivers=num_global_cb_receivers if prefetch else 1,
             untilize_out=untilize_out,
+            stream_in1=stream_in1,
         )
 
         return program_config

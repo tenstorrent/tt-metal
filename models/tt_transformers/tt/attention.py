@@ -11,7 +11,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, decode_matmul
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 
@@ -240,6 +240,11 @@ class Attention(LightweightModule):
         wqkv_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
+        # Tensor prefetcher: same per-device (K, N), receiver-contiguous ND-shard instead of WIDTH_SHARDED.
+        if getattr(self.prefetcher, "kind", "") == "tensor" and not self.TG:
+            wqkv_mem_config = self.prefetcher.weight_mem_config(
+                configuration.dim, configuration.qkv_size // configuration.num_devices
+            )
 
         qkv_list = []
         for i in range(self.num_devices_per_group):
@@ -334,12 +339,19 @@ class Attention(LightweightModule):
             return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
         if self.prefetcher is not None:
+            # Tensor prefetcher: same per-device (K, N) as the ring mem config, receiver-contiguous.
+            if getattr(self.prefetcher, "kind", "") == "tensor":
+                wo_ring_mem_config = self.prefetcher.weight_mem_config(
+                    self.args.dim // self.args.cluster_shape[0], self.args.dim // self.args.cluster_shape[1]
+                )
+            else:
+                wo_ring_mem_config = self.args.get_sharded_wo_ring_mem_config()
             self.wo_sharded_ring = ttnn.as_tensor(
                 pt_wo,
                 dtype=self.wo_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
-                memory_config=self.args.get_sharded_wo_ring_mem_config(),
+                memory_config=wo_ring_mem_config,
                 mesh_mapper=get_wo_mesh_mapper(),
                 cache_file_name=(cache_name("wo_sharded_ring")),
             )
@@ -580,7 +592,9 @@ class Attention(LightweightModule):
 
         return q_heads_1QSD, k_heads_1KSD
 
-    def forward_decode(self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None) -> ttnn.Tensor:
+    def forward_decode(
+        self, x: ttnn.Tensor, current_pos, rot_mats=None, page_table=None, kv_cache=None, cq_id=None
+    ) -> ttnn.Tensor:
         """
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
@@ -590,15 +604,16 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        xqkv_fused_sharded = ttnn.linear(
+        xqkv_fused_sharded = decode_matmul(
+            self.prefetcher,
+            Mode.DECODE,
             x,
             self.wqkv,
-            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
             program_config=self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher),
+            cq_id=cq_id,
+            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
             compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
             dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
@@ -785,14 +800,15 @@ class Attention(LightweightModule):
                     num_buffers_per_channel=2,
                     subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
-                dense_out_sharded = ttnn.linear(
+                dense_out_sharded = decode_matmul(
+                    self.prefetcher,
+                    Mode.DECODE,
                     all_gather_output,
                     self.wo_sharded_ring if self.prefetcher is not None else self.wo,
-                    memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
                     program_config=self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher),
+                    cq_id=cq_id,
+                    memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
                     compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                    global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-                    sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
                 )
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
@@ -829,16 +845,17 @@ class Attention(LightweightModule):
                 )
 
             # TODO: Fix this once self.TG supports dram-sharded matmuls
-            dense_out_sharded = ttnn.linear(
+            dense_out_sharded = decode_matmul(
+                self.prefetcher,
+                Mode.DECODE,
                 attn_output,
                 self.wo,
-                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
+                cq_id=cq_id,
+                core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
             ttnn.deallocate(attn_output_cat)
@@ -1192,6 +1209,7 @@ class Attention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        cq_id=0,
     ):
         if mode == Mode.PREFILL:
             return self.forward_prefill(
@@ -1204,7 +1222,9 @@ class Attention(LightweightModule):
                 kv_cache=kv_cache,
             )
         else:
-            return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_decode(
+                x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache, cq_id=cq_id
+            )
 
     def prefill_prepare_tensor_for_kv_cache(self, key_or_value_layer, user_id):
         tensor_copy = ttnn.clone(key_or_value_layer)

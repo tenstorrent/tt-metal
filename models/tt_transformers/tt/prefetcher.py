@@ -514,3 +514,25 @@ class Prefetcher(LightweightModule):
         ttnn.deallocate(self.garbage)
         self.garbage = None
         return
+
+    def close(self):
+        # Uniform teardown hook; the worker prefetcher has no long-lived device state to release.
+        return
+
+    # Discriminator so callers/model_config can tell the two backends apart; the worker
+    # prefetcher consumes weights via ttnn.linear(global_cb=...), not stream_in1.
+    kind = "worker"
+    stream_in1 = False
+
+    def linear(self, input_tensor_a, weight, *, program_config, cq_id=None, **linear_kwargs):
+        """Run a decode matmul that drains the prefetched global CB. ``cq_id`` is accepted
+        for interface parity with the tensor backend but unused here (the worker prefetcher's
+        weights are already resident in ``global_cb``)."""
+        return ttnn.linear(
+            input_tensor_a,
+            weight,
+            program_config=program_config,
+            global_cb=self.global_cb,
+            sub_device_id=self.worker_sub_device_id,
+            **linear_kwargs,
+        )

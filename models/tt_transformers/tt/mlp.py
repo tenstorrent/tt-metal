@@ -7,7 +7,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
-from models.tt_transformers.tt.common import Mode, pad_to_size
+from models.tt_transformers.tt.common import Mode, decode_matmul, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
 
@@ -50,6 +50,11 @@ class MLP(LightweightModule):
 
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        # The tensor prefetcher needs receiver-contiguous ND-sharded weights (not WIDTH_SHARDED),
+        # with the identical per-device (K, N) as the worker path above so the ring matmul matches.
+        if getattr(prefetcher, "kind", "") == "tensor" and not args.is_galaxy:
+            w1_w3_mem_config = prefetcher.weight_mem_config(args.dim, args.hidden_dim // args.num_devices)
+            w2_mem_config = prefetcher.weight_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
@@ -115,7 +120,7 @@ class MLP(LightweightModule):
 
             self.prefetcher.register_callback(register_weights)
 
-    def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode: Mode, cq_id=None) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -142,31 +147,29 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
-        w1_out = ttnn.linear(
+        w1_out = decode_matmul(
+            self.prefetcher,
+            mode,
             x,
             self.w1,
+            program_config=pc_1,
+            cq_id=cq_id,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
             memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
         )
-        w3_out = ttnn.linear(
+        w3_out = decode_matmul(
+            self.prefetcher,
+            mode,
             x,
             self.w3,
+            program_config=pc_3,
+            cq_id=cq_id,
             dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
             memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-            sub_device_id=self.prefetcher.worker_sub_device_id
-            if self.prefetcher is not None and mode == Mode.DECODE
-            else None,
         )
         ttnn.deallocate(x)
 
@@ -280,18 +283,17 @@ class MLP(LightweightModule):
                 config=pc_2,
             )
         else:
-            w2_out = ttnn.linear(
+            w2_out = decode_matmul(
+                self.prefetcher,
+                mode,
                 w2_in,
                 self.w2,
+                program_config=pc_2,
+                cq_id=cq_id,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                program_config=pc_2,
                 memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
             )
         ttnn.deallocate(w2_in)
 
