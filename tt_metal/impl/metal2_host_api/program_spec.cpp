@@ -828,6 +828,19 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "DataMovementGen1Config. Supply a Gen1 config (e.g. "
                     "CreateReaderGen1DataMovementConfig()/CreateWriterGen1DataMovementConfig()).",
                     kernel.unique_id);
+
+                // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
+                // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
+                // CreateDataMovementKernel "DM0 or DM1 only" guard. Resolving is safe now: the check
+                // above guarantees a role hint or an explicit Gen1 config is present.
+                const DataMovementProcessor processor =
+                    std::get<DataMovementGen1Config>(data_movement_config).processor;
+                TT_FATAL(
+                    processor == DataMovementProcessor::RISCV_0 || processor == DataMovementProcessor::RISCV_1,
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but requests DM processor RISCV_{}. Gen1 has only "
+                    "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
+                    kernel.unique_id,
+                    static_cast<int>(processor));
             } else if (is_gen2_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovementGen2Config>(data_movement_config),
@@ -852,18 +865,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig does not hold a "
                     "ComputeGen2Config. Supply a Gen2 config (ComputeGen2Config).",
                     kernel.unique_id);
-
-                // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
-                // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
-                // CreateDataMovementKernel "DM0 or DM1 only" guard. Resolving is safe now: the check
-                // above guarantees a role hint or an explicit Gen1 config is present.
-                const DataMovementProcessor processor = std::get<DataMovementGen1Config>(data_movement_config).processor;
-                TT_FATAL(
-                    processor == DataMovementProcessor::RISCV_0 || processor == DataMovementProcessor::RISCV_1,
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but requests DM processor RISCV_{}. Gen1 has only "
-                    "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
-                    kernel.unique_id,
-                    static_cast<int>(processor));
             }
         }
     }
