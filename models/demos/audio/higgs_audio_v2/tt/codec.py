@@ -14,6 +14,7 @@ Tensors flow channel-last [1, L, C] (the conv ops' NHWC-style layout).
 """
 from __future__ import annotations
 
+import torch
 import ttnn
 
 
@@ -189,16 +190,8 @@ class TtDacDecoder:
         x, L = self._res_unit(blk.res_unit3, x, L)
         return x, L
 
-    def forward(self, quantized_acoustic):
-        """quantized_acoustic: torch [1, C0, T] -> torch waveform [1, 1, T*960]."""
-        B, C0, T = quantized_acoustic.shape
-        assert B == 1
-        x = ttnn.from_torch(
-            quantized_acoustic.transpose(1, 2).contiguous().float(),  # [1, T, C0]
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-        )
+    def _run_conv(self, x, T):
+        """x: ttnn channel-last [1, T, C0] ROW_MAJOR -> torch waveform [1, 1, T*960]."""
         L = T
         x, L = self._conv1d(self.dec.conv1, x, L)
         for blk in self.dec.block:
@@ -209,18 +202,90 @@ class TtDacDecoder:
         wave = ttnn.to_torch(ttnn.from_device(x)).reshape(1, -1, 1)[:, :L, :]
         return wave.transpose(1, 2)  # [1, 1, L]
 
+    def forward_ttnn(self, x, T):
+        """Run the conv stack on an already-on-device channel-last [1, T, C0] tensor
+        (used by the fully-on-device path where RVQ+fc2 produced x on device)."""
+        return self._run_conv(x, T)
 
-def tt_decode(device, hf_model, audio_codes, ttdec=None):
-    """Full codec decode: audio_codes [1, K, T] (0..1023) -> waveform [1, 1, T*960].
+    def forward(self, quantized_acoustic):
+        """quantized_acoustic: torch [1, C0, T] -> torch waveform [1, 1, T*960]."""
+        B, C0, T = quantized_acoustic.shape
+        assert B == 1
+        x = ttnn.from_torch(
+            quantized_acoustic.transpose(1, 2).contiguous().float(),  # [1, T, C0]
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+        return self._run_conv(x, T)
 
-    RVQ dequant (codebook lookup + project_out) and the fc2 projection run on host
-    (a few small matmuls, ~0.1% of codec FLOPs); the DacDecoder conv stack — the
-    compute-dominant part — runs on TTNN. Mirrors HiggsAudioV2TokenizerModel.decode.
+
+class TtRvqDequant:
+    """On-device RVQ dequant + fc2: audio_codes [1, K, T] (0..1023) -> ttnn channel-last
+    [1, T, 256] (the DacDecoder's input, so it feeds the conv stack with no host round-trip).
+
+    Mirrors HiggsAudioV2TokenizerResidualVectorQuantization.decode + fc2: per codebook,
+    codebook lookup (`ttnn.embedding`) -> project_out (`ttnn.linear`, 64->1024); sum the 8
+    codebooks; fc2 (`ttnn.linear`, 1024->256). Weights read live from the HF quantizer/fc2
+    (host) and prepped to device once. PCC 0.99998 vs host fp32.
     """
-    import torch as _t
 
-    with _t.no_grad():
-        quantized = hf_model.quantizer.decode(audio_codes.transpose(0, 1))  # [1, 1024, T]
-        quantized_acoustic = hf_model.fc2(quantized.transpose(1, 2)).transpose(1, 2)  # [1, 256, T]
+    def __init__(self, device, quantizer, fc2):
+        self.device = device
+        self.K = len(quantizer.quantizers)
+        rep = ttnn.ReplicateTensorToMesh(device)
+
+        def _tile(w):
+            return ttnn.from_torch(
+                w.contiguous().float(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=rep
+            )
+
+        # embedding weight tables must be ROW_MAJOR bf16 [codebook_size, codebook_dim]
+        self.embed = [
+            ttnn.from_torch(
+                quantizer.quantizers[k].codebook.embed.contiguous().float(),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                mesh_mapper=rep,
+            )
+            for k in range(self.K)
+        ]
+        # torch Linear y = x @ W.T; ttnn.linear(x, Wtt) = x @ Wtt, so Wtt = W.T
+        self.po_w = [_tile(quantizer.quantizers[k].project_out.weight.t()) for k in range(self.K)]
+        self.po_b = [_tile(quantizer.quantizers[k].project_out.bias.view(1, 1, -1)) for k in range(self.K)]
+        self.fc2_w = _tile(fc2.weight.t())
+        self.fc2_b = _tile(fc2.bias.view(1, 1, -1))
+
+    def __call__(self, audio_codes):
+        """audio_codes: torch [1, K, T] -> ttnn channel-last [1, T, 256] ROW_MAJOR, and T."""
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        T = audio_codes.shape[-1]
+        acc = None
+        for k in range(self.K):
+            ck = ttnn.from_torch(
+                audio_codes[:, k, :].to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                mesh_mapper=rep,
+            )
+            ek = ttnn.to_layout(ttnn.embedding(ck, self.embed[k]), ttnn.TILE_LAYOUT)  # [1, T, 64]
+            pk = ttnn.linear(ek, self.po_w[k], bias=self.po_b[k])  # [1, T, 1024]
+            acc = pk if acc is None else ttnn.add(acc, pk)
+        qa = ttnn.linear(acc, self.fc2_w, bias=self.fc2_b)  # [1, T, 256] channel-last
+        return ttnn.to_layout(qa, ttnn.ROW_MAJOR_LAYOUT), T
+
+
+def tt_decode(device, hf_model, audio_codes, ttdec=None, rvq=None):
+    """Full codec decode, FULLY ON DEVICE: audio_codes [1, K, T] (0..1023) -> waveform
+    [1, 1, T*960].
+
+    RVQ dequant + fc2 (`TtRvqDequant`) and the DacDecoder conv stack (`TtDacDecoder`) both
+    run on TTNN; the RVQ output feeds the conv stack channel-last with no host round-trip.
+    Nothing stays on host. Mirrors HiggsAudioV2TokenizerModel.decode. PCC ~0.999 vs HF.
+    """
     ttdec = ttdec or TtDacDecoder(device, hf_model.acoustic_decoder)
-    return ttdec.forward(quantized_acoustic.float())
+    rvq = rvq or TtRvqDequant(device, hf_model.quantizer, hf_model.fc2)
+    x, T = rvq(audio_codes)  # on-device [1, T, 256]
+    return ttdec.forward_ttnn(x, T)

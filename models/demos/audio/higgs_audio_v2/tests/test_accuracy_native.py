@@ -36,11 +36,12 @@ from models.demos.audio.higgs_audio_v2.tt.audio_decode import (
 )
 from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
 from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs
+from models.demos.audio.higgs_audio_v2.demo.generator import resolve_model_dir
 from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
-HIGGS_MODEL_DIR = "/data/hf_cache/higgs"
+HIGGS_MODEL_DIR = resolve_model_dir()
 FIXTURE = pathlib.Path(__file__).resolve().parent / "fixtures" / "baseline_tts_short.json"
 ACCURACY_MIN_TOKEN_ACCURACY = 0.95
 

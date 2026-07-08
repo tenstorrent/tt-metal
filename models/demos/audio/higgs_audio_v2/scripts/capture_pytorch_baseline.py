@@ -31,8 +31,10 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 
+from models.demos.audio.higgs_audio_v2.demo.generator import resolve_model_dir
+
 MODEL_DIR = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_MODEL = "/data/hf_cache/higgs"
+DEFAULT_MODEL = resolve_model_dir()  # $HIGGS_MODEL_DIR / pre-staged dir, else HF-hub snapshot
 
 
 def main():

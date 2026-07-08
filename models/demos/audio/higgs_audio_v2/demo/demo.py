@@ -74,6 +74,8 @@ def run(
     top_p=0.95,
     seed=1234,
     silence_patience=32,
+    ondevice_sample=True,
+    model_dir=None,
 ):
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -84,7 +86,7 @@ def run(
     l1_small = 98304 if os.environ.get("HIGGS_TTNN_CODEC") == "1" else 32768
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1), l1_small_size=l1_small)
     try:
-        gen = HiggsAudioTTSGenerator(mesh_device, precision=precision)
+        gen = HiggsAudioTTSGenerator(mesh_device, precision=precision, model_dir=model_dir)
 
         if mode == "tts":
             conv = _tts_conversation(text or TTS_TEXT)
@@ -98,6 +100,14 @@ def run(
             raise ValueError(mode)
 
         logger.info(f"=== MODE: {mode} ===")
+        # Greedy (temperature<=0) collapses on the bf8/bf4 `performance` preset — the audio argmax
+        # is razor-margin and a bf8-rounded flip loops the decode to silence. Greedy needs the bf16
+        # `accuracy` preset; otherwise keep sampling (temperature>0).
+        if precision == "performance" and temperature is not None and temperature <= 0:
+            logger.warning(
+                "greedy (temperature<=0) collapses on the 'performance' (bf8/bf4) preset. "
+                "Use --precision accuracy for greedy, or use sampling (temperature>0)."
+            )
         audio_seq = gen.generate(
             conv,
             max_new_tokens=max_new_tokens,
@@ -106,6 +116,7 @@ def run(
             top_p=top_p,
             seed=seed,
             silence_patience=silence_patience,
+            ondevice_sample=ondevice_sample,
         )
         out_path = out_dir / f"higgs_{mode}.wav"
         out_path, dur = gen.save(audio_seq, out_path)
@@ -118,6 +129,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["tts", "multispeaker", "voiceclone"], default="tts")
     ap.add_argument("--out-dir", default="./higgs_demo_out")
+    ap.add_argument(
+        "--model-dir",
+        default=None,
+        help="Higgs assets dir (config.json, weights, tokenizer/). Overrides $HIGGS_MODEL_DIR. "
+        "If unset, auto-fetches bosonai/higgs-audio-v2-generation-3B-base into the HF cache ($HF_HOME).",
+    )
     ap.add_argument("--ref-audio", default=None, help="reference clip (voiceclone, or speaker A for multispeaker)")
     ap.add_argument("--ref-audio-b", default=None, help="speaker B reference clip (multispeaker)")
     ap.add_argument("--text", default=None)
@@ -133,6 +150,18 @@ def main():
         default=32,
         help="stop after this many identical repeated rows (silent-tail guard)",
     )
+    # On-device sampling is the DEFAULT: forward + top-k + temperature + gumbel-max draw +
+    # delay-pattern stuffing + feedback all run on device; the host reads back only the 8
+    # chosen tokens/step (no per-step logit readback or host sampling). Pass --host-sample to
+    # fall back to the hybrid path (host reads logits and samples in Python each step).
+    ap.add_argument(
+        "--host-sample",
+        dest="ondevice_sample",
+        action="store_false",
+        help="use the hybrid path (host-side logit readback + sampling) instead of the default "
+        "fully-on-device sampler",
+    )
+    ap.set_defaults(ondevice_sample=True)
     args = ap.parse_args()
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -149,6 +178,8 @@ def main():
         top_p=args.top_p,
         seed=args.seed,
         silence_patience=args.silence_patience,
+        ondevice_sample=args.ondevice_sample,
+        model_dir=args.model_dir,
     )
 
 

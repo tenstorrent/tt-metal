@@ -347,6 +347,7 @@ class HiggsAudioTTModel(LightweightModule):
         audio_input_ids=None,
         audio_input_ids_mask=None,
         audio_token_id: int = 128016,
+        user_id: int = 0,
     ):
         """Run prefill over a 1-D sequence of input ids.
 
@@ -355,6 +356,9 @@ class HiggsAudioTTModel(LightweightModule):
                 multiple of 128 internally.
             rope_setup: HfRotarySetup instance used to slice prefill cos/sin.
             start_pos: starting position offset (0 for fresh context).
+            user_id: KV-cache batch row to fill. Batched serving prefills each
+                stream into its own row (user_id=0..B-1); the per-row cache is
+                then read back independently during batched decode.
             audio_input_ids: optional [1, F, K] reference-audio codes (voice
                 cloning). Embedded (sum over codebooks) and scattered into the
                 ``audio_token_id`` placeholder positions of ``input_ids`` — the
@@ -460,6 +464,7 @@ class HiggsAudioTTModel(LightweightModule):
                 h,
                 current_pos=None,
                 rot_mats=rot_mats,
+                user_id=user_id,
                 mode=Mode.PREFILL,
                 is_audio_token=False,
                 audio_mask=audio_mask_dev,
