@@ -290,8 +290,21 @@ from .tst_attention import tst_cross_attention_with_kv  # noqa: E402  (used abov
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _update_causal_mask(device: ttnn.Device, mask_tensor: ttnn.Tensor, step: int, T_max: int) -> None:
-    """Update the shared causal mask buffer in-place for the given step."""
+def _update_causal_mask(device: ttnn.Device, mask_tensor: ttnn.Tensor, step: int, T_max: int, cq_id: int = 0) -> None:
+    """
+    Update the shared causal mask buffer in-place for the given step.
+
+    PERF/CORRECTNESS FIX: previously hardcoded cq_id=0 unconditionally, so in
+    the use_2cq=True path this write landed on the COMPUTE queue (CQ0)
+    instead of the WRITER queue (CQ1/CQ_WRITE) that every other per-step
+    write (input, K/V cache) uses. It produced correct output only because
+    same-queue FIFO ordering happened to sequence it before execute_trace --
+    but it forced CQ0 to block on a host->device copy synchronously, which
+    defeats the entire purpose of the 2CQ split (CQ1 writes overlap with
+    CQ0 finishing the PREVIOUS step's trace). Callers now pass cq_id=CQ_WRITE
+    explicitly, matching how the input buffer and K/V caches are already
+    written on CQ_WRITE in run_traced_generation_cached.
+    """
     mask = torch.full((1, 1, 1, T_max), _NEG_INF)
     mask[:, :, :, : step + 1] = 0.0
     new_tt = ttnn.from_torch(
@@ -300,7 +313,7 @@ def _update_causal_mask(device: ttnn.Device, mask_tensor: ttnn.Tensor, step: int
         layout=ttnn.TILE_LAYOUT,
         device=None,
     )
-    ttnn.copy_host_to_device_tensor(new_tt, mask_tensor, cq_id=0)
+    ttnn.copy_host_to_device_tensor(new_tt, mask_tensor, cq_id=cq_id)
 
 
 def _build_causal_mask_1tok(device: ttnn.Device, step: int, T_max: int) -> ttnn.Tensor:
@@ -698,6 +711,31 @@ def run_traced_generation_cached(
     # the very first step too (mirrors the tech report's "dummy record an
     # op event ... since we wait on this first in the loop" pattern).
     if use_2cq:
+        # CORRECTNESS FIX (hardware-verified this session): an op's kernel
+        # binary must be resident on a queue BEFORE it is dispatched near a
+        # trace-execute handoff, or the first real call absorbs a JIT-compile
+        # stall -- confirmed via isolated probe (ttnn.sum failed inside
+        # trace capture until warmed up untraced first; identical mechanism
+        # applies here to _extract_and_write_kv / _update_causal_mask on
+        # CQ_WRITE, which -- unlike the compute-side ops -- have NEVER been
+        # run on CQ_WRITE before this point; the existing warmup block above
+        # only exercises CQ0). Warming up against real step=0 is harmless:
+        # the actual step 0 of the loop below immediately overwrites
+        # position 0 with the correct value before it's ever read.
+        for layer_idx in range(num_layers):
+            w_self = weights[f"decoder.layers.{layer_idx}"]["self_attn"]
+            k_cache, v_cache = ctx.kv_caches[layer_idx]
+            _extract_and_write_kv(
+                ctx.captured_dec_input,
+                w_self,
+                k_cache,
+                v_cache,
+                step=0,
+                cq_id=CQ_WRITE,
+            )
+        _update_causal_mask(device, ctx.shared_causal_mask, step=0, T_max=ctx.T_max, cq_id=CQ_WRITE)
+        ttnn.synchronize_device(device, cq_id=CQ_WRITE)
+
         op_event = ttnn.record_event(device, CQ_COMPUTE)
 
     for step in range(prediction_length):
@@ -746,7 +784,7 @@ def run_traced_generation_cached(
                     step,
                     cq_id=CQ_WRITE,
                 )
-            _update_causal_mask(device, ctx.shared_causal_mask, step, ctx.T_max)
+            _update_causal_mask(device, ctx.shared_causal_mask, step, ctx.T_max, cq_id=CQ_WRITE)
             # Signal that this step's writes are complete.
             write_event = ttnn.record_event(device, CQ_WRITE)
 
@@ -771,7 +809,7 @@ def run_traced_generation_cached(
                     step,
                     cq_id=CQ_WRITE,
                 )
-            _update_causal_mask(device, ctx.shared_causal_mask, step, ctx.T_max)
+            _update_causal_mask(device, ctx.shared_causal_mask, step, ctx.T_max, cq_id=CQ_WRITE)
             ttnn.execute_trace(device, ctx.trace_ids[0], cq_id=CQ_COMPUTE, blocking=True)
 
         device_enqueue_time += time.perf_counter() - t_dev0

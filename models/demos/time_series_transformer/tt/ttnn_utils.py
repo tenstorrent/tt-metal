@@ -27,10 +27,17 @@ def layer_norm_padded(x, weight, bias, orig_dim):
     #      with begins=/ends= kwargs — those no longer exist.
     #      Use slice_start=/slice_end= instead.
     x_unpadded = ttnn.slice(x, slice_start=[0, 0, 0], slice_end=[x.shape[0], x.shape[1], orig_dim])
-    w_unpadded = ttnn.slice(weight, slice_start=[0], slice_end=[orig_dim])
-    b_unpadded = ttnn.slice(bias, slice_start=[0], slice_end=[orig_dim])
 
-    out = ttnn.layer_norm(x_unpadded, weight=w_unpadded, bias=b_unpadded)
+    # PERF FIX (confirmed on hardware): weight/bias are loaded at native
+    # HF width (orig_dim, e.g. 26) by _build_layer_norm in tst_model.py --
+    # they are NEVER padded to padded_dim, unlike qkv/out_proj/ffn weights.
+    # Slicing an already-orig_dim tensor to orig_dim is a numeric no-op that
+    # still costs a real device dispatch. Confirmed via hardware shape check:
+    # weight.shape == Shape([orig_dim]) already. Removing these two dead
+    # slices saves 2 dispatches x 3 layernorms/layer x N layers per step,
+    # with zero change to output (bit-identical -- same tensor, no-op slice
+    # removed, not a numeric change).
+    out = ttnn.layer_norm(x_unpadded, weight=weight, bias=bias)
 
     pad_amount = last_dim - orig_dim
     if pad_amount > 0:
