@@ -698,11 +698,11 @@ def test_reshard_aligned_channels_height_sharded(device, channels, tt_dtype, inp
     that are multiples of 8 give 16-byte (L1-aligned) input rows.
 
     When at least one buffer is in L1 this uses the height->height same-width factory (reader
-    path when the output is in L1, writer path otherwise). With both buffers in DRAM it routes
-    to the ND reshard path instead. Whether a width lands on the contiguous fast path or the
+    path when the output is in L1, writer path otherwise); with both buffers in DRAM it uses the
+    ND copy-pages path. Whether a same-width transfer lands on the contiguous fast path or the
     row-by-row re-stride path depends on the buffer alignments (L1 is 16B; DRAM is 32B on
     Wormhole, 64B on Blackhole) -- e.g. a 16-byte row is not DRAM-aligned, so it re-strides --
-    but all paths produce correct data for these aligned widths.
+    but all paths produce correct data.
     """
     grid_size = device.compute_with_storage_grid_size()
     if grid_size.x < 3:
@@ -743,9 +743,9 @@ def test_reshard_unaligned_channels_height_sharded(device, channels, tt_dtype, i
     shard at its aligned page stride and writing only the unit_size real bytes to the remote
     shard at the remote's aligned page stride, preserving the per-row padding to_torch expects.
 
-    With both buffers in DRAM the reshard instead routes to the ND path, which requires
-    L1-aligned widths; validate rejects these unaligned shards there, so that combination is
-    expected to raise.
+    With both buffers in DRAM the reshard routes to the ND copy-pages path, which copies each
+    page whole at its aligned_page_size, so the per-row DRAM padding is carried along and the
+    unaligned width is handled transparently.
     """
     grid_size = device.compute_with_storage_grid_size()
     if grid_size.x < 3:
