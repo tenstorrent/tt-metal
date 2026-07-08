@@ -186,14 +186,11 @@ class LTXDistilledPipeline(LTXPipeline):
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
 
-            # JIT-compile on-device audio decode at the real latent shape so the first real decode
-            # loads from cache instead of building from the checkpoint (cold ~64s).
-            logger.info("warmup audio decode (on-device)")
-            self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
-            # BWE trace captures on the first post-cold decode (emitting clipped audio); a second
-            # warmup decode absorbs the capture so the first real generate is a clean replay.
-            if self._traced:
-                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+            # Warm the on-device audio decode eagerly at the real latent shape: compiles kernels,
+            # initializes lazy device state, and frees back to a deterministic allocator free-list,
+            # so the first real (traced) decode captures cleanly on warm state.
+            logger.info("warmup audio decode (on-device, eager)")
+            self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
 
             self._prepare_transformer(0)
 

@@ -41,10 +41,6 @@ _VOCODER_CONFIG_KEYS = (
     "use_bias_at_final",
 )
 
-# Cap resident per-shape traces per decoder so a long-lived server decoding many clip
-# lengths bounds trace-region memory instead of growing without limit.
-_AUDIO_TRACE_CACHE_MAX = 8
-
 _TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
 _FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
 
@@ -154,7 +150,6 @@ class LTXAudioDecoderAdapter:
             mel_bins=mel_bins,
             mesh_device=self._mesh_device,
             dtype=ttnn.bfloat16,
-            max_traces=_AUDIO_TRACE_CACHE_MAX,
         )
 
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
@@ -218,7 +213,6 @@ class LTXAudioDecoderAdapter:
             dtype=ttnn.float32,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
-            max_traces=_AUDIO_TRACE_CACHE_MAX,
         )
 
     def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:

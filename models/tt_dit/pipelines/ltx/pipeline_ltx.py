@@ -716,6 +716,20 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
+    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> None:
+        """Eager (untraced) audio decode at the real shape: compiles kernels, warms lazy device
+        state, and frees back to a deterministic allocator free-list so a later traced decode
+        captures cleanly. No-op if the audio decoder is not configured."""
+        if self.tt_mel_decoder is None or self.tt_vocoder_with_bwe is None:
+            return
+        mel_d, voc = self.tt_mel_decoder, self.tt_vocoder_with_bwe
+        saved = (mel_d.use_trace, voc.use_trace, voc.use_trace_bwe)
+        mel_d.use_trace = voc.use_trace = voc.use_trace_bwe = False
+        try:
+            self.decode_audio(audio_latent, num_frames, fps=fps)
+        finally:
+            mel_d.use_trace, voc.use_trace, voc.use_trace_bwe = saved
+
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""
         if getattr(self, "_cached_trans_mat", None) is None:
