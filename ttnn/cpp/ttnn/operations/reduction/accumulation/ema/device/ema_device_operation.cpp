@@ -80,7 +80,12 @@ TensorSpec EmaDeviceOperation::compute_output_specs(
     }
     const auto& old_spec = tensor_args.input.tensor_spec();
     return TensorSpec(
-        old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(operation_attributes.output_mem_config));
+        old_spec.logical_shape(),
+        TensorLayout(
+            old_spec.tensor_layout().get_data_type(),
+            old_spec.tensor_layout().get_page_config(),
+            operation_attributes.output_mem_config,
+            old_spec.tensor_layout().get_alignment()));
 }
 
 Tensor EmaDeviceOperation::create_output_tensors(
