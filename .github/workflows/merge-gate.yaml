@@ -337,7 +337,12 @@ jobs:
     uses: ./.github/workflows/models-smoke-tests-impl.yaml
     with:
       enabled-skus: wh_galaxy_merge_gate
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      # The wh_galaxy_merge_gate runner is labeled 'dedicated-merge-gate', and
+      # models-smoke-tests-impl.yaml uses inputs.docker-image verbatim for those
+      # runners (the galaxy lab can't resolve harbor.ci.tenstorrent.net). Pass the
+      # RAW GHCR image from build; the impl applies harbor-prefix itself for
+      # non-dedicated runners.
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
