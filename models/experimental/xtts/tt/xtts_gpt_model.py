@@ -112,3 +112,41 @@ class TtXttsGptModel(LightweightModule):
         text_logits = ttnn.linear(text_part, self.text_head_weight, bias=self.text_head_bias)
         mel_logits = ttnn.linear(mel_part, self.mel_head_weight, bias=self.mel_head_bias)
         return text_logits, mel_logits
+
+    # ------------------------------------------------------------------ #
+    # Autoregressive KV-cache decode (see tt/xtts_generator.py).
+    # Prefill covers only [cond | text]; the start_audio token is fed as the first
+    # decode step, so mel positions match the reference (start=0, code_i=i+1).
+    # ------------------------------------------------------------------ #
+    def prefill(self, text_ids, cond_latents):
+        """Populate the KV cache from the prompt ``[cond_latents | text]``.
+
+        ``text_ids`` is a torch int tensor ``[b, text_len]``; ``cond_latents`` is a
+        ttnn tensor ``[b, n_cond, hidden]`` (TILE). Returns the per-layer KV list.
+        No logits are produced here — see the note above."""
+        text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
+        prefix = ttnn.concat([cond_latents, text_emb], dim=1)  # [b, n_cond + text_len, hidden]
+        _, kv = self.stack.forward_prefill(prefix)
+        return kv
+
+    def decode(self, token_id, mel_pos, kv):
+        """One decode step for a single mel token.
+
+        ``token_id`` / ``mel_pos`` are Python ints. Returns
+        ``(logits [b, 1, NUM_AUDIO_TOKENS], latent [b, 1, hidden], kv)`` where
+        ``latent`` is the post-``final_norm`` hidden state (the HiFiGAN decoder input)
+        and ``logits`` are the ``mel_head`` outputs for greedy selection."""
+        ids = torch.tensor([[token_id]], dtype=torch.int32)
+        pos = torch.tensor([[mel_pos]], dtype=torch.int32)
+        ids_tt = ttnn.from_torch(ids, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32)
+        pos_tt = ttnn.from_torch(pos, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32)
+        tok = ttnn.to_layout(ttnn.embedding(ids_tt, self.mel_emb_weight), ttnn.TILE_LAYOUT)
+        posn = ttnn.to_layout(ttnn.embedding(pos_tt, self.mel_pos_weight), ttnn.TILE_LAYOUT)
+        x = ttnn.add(tok, posn)  # [b, 1, hidden]
+
+        hidden, kv = self.stack.forward_decode(x, kv)
+        latent = ttnn.layer_norm(
+            hidden, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS
+        )
+        logits = ttnn.linear(latent, self.mel_head_weight, bias=self.mel_head_bias)
+        return logits, latent, kv
