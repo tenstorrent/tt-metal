@@ -2270,6 +2270,15 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             persistent_speedy_receiver_state_vc2);
 #endif
         while (continue_running_main_run_loop<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr, state_manager_l1)) {
+#if defined(ARCH_BLACKHOLE)
+            // [WAS_RETRAINED / FREEZE-PROBE] Gate FIRST, before any checkpoint: after N post-retrain
+            // iterations have run (was_retrained climbs 1..N at the bottom), freeze here so the
+            // resume-phase word / tx_count hold where the loop got to (completed all N, or stuck within them).
+            if (was_retrained > WAS_RETRAINED_FREEZE_AFTER_N_ITERS) {
+                return;
+            }
+            fabric_dbg_set_resume_phase(RESUME_PHASE_LOOP_TOP);
+#endif
             did_something = false;
 
             uint32_t tx_progress = 0;
@@ -2592,6 +2601,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
             }
 
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_CTX_SWITCH);  // [FREEZE-PROBE] entering ctx-switch region
+#endif
             if constexpr (enable_context_switch) {
                 // shouldn't do noc counter sync since we are not incrementing them
                 if constexpr (IDLE_CONTEXT_SWITCHING) {
@@ -2623,6 +2635,16 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_LOOP_BOTTOM);  // [FREEZE-PROBE] iteration completed
+            // [WAS_RETRAINED] Advance the freeze counter only after a retrain has been seen (>= 1), so
+            // this never trips at startup. It climbs 1..N over the N allowed iterations; once it exceeds
+            // N (== N+1) the top-of-loop gate freezes on the next pass. Naturally capped: the gate
+            // returns before this increment once it's past N, so it never runs away.
+            if (was_retrained >= 1) {
+                was_retrained++;
+            }
+#endif
         }
 
         speedy_state_copy_out<super_speedy_mode, 0>(

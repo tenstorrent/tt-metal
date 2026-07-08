@@ -109,6 +109,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     LocalTelemetryT& local_fabric_telemetry,
     SpeedySenderState& sender_state) {
     bool progress = false;
+#if defined(ARCH_BLACKHOLE)
+    fabric_dbg_set_resume_phase(RESUME_PHASE_TX_STEP_ENTER);  // [FREEZE-PROBE]
+#endif
 
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
@@ -140,6 +143,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
                     busy = internal_::eth_txq_is_busy(sender_txq_id);
                 }
             }
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_TX_ISSUE);  // [FREEZE-PROBE] about to push payload
+#endif
             internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
             // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload
@@ -154,6 +160,9 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
 
             record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
+#if defined(ARCH_BLACKHOLE)
+            fabric_dbg_set_resume_phase(RESUME_PHASE_TX_POSTSEND_DRAIN);  // [FREEZE-PROBE] prime spin suspect
+#endif
             while (busy) {
                 busy = internal_::eth_txq_is_busy(sender_txq_id);
             };
@@ -162,6 +171,8 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             // first post-retrain TX. Conditional advance -> only writes once, then a read+compare no-op.
 #if defined(ARCH_BLACKHOLE)
             fabric_dbg_advance_resume_phase(RESUME_PHASE_RETRAIN_DONE, RESUME_PHASE_FIRST_TX);
+            fabric_dbg_set_resume_phase(RESUME_PHASE_TX_SEND_DONE);  // [FREEZE-PROBE] payload out + count bumped
+            fabric_dbg_inc_tx_pkt_count();  // [TX-COUNT] one successful eth-link send by ERISC0
 #endif
         }
         sender_state.sender_amort_counter++;
@@ -252,6 +263,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
     LocalTelemetryT& local_fabric_telemetry,
     SpeedyReceiverState<VC_ID>& receiver_state) {
     bool progress = false;
+#if defined(ARCH_BLACKHOLE)
+    fabric_dbg_set_resume_phase(RESUME_PHASE_RX_STEP_ENTER);  // [FREEZE-PROBE]
+#endif
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received = get_ptr_val<to_receiver_pkts_sent_id>();
     bool unwritten_packets = pkts_received != 0;
@@ -267,6 +281,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         // instead of two separate uncached L1 reads.
         auto packed = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load(packet_header);
 
+#if defined(ARCH_BLACKHOLE)
+        fabric_dbg_set_resume_phase(RESUME_PHASE_RX_LOCAL_WRITE);  // [FREEZE-PROBE] about to NoC-write local
+#endif
         execute_chip_unicast_to_local_chip_impl(
             packet_header,
             packed.payload_size_bytes,
@@ -307,6 +324,9 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         receiver_state.has_pending_flush = true;
     }
     if (receiver_state.has_pending_flush) {
+#if defined(ARCH_BLACKHOLE)
+        fabric_dbg_set_resume_phase(RESUME_PHASE_RX_FLUSH_POLL);  // [FREEZE-PROBE] polling per-trid NoC flush
+#endif
         bool flushed = ncrisc_noc_nonposted_write_with_transaction_id_sent(
             tt::tt_fabric::edm_to_local_chip_noc, receiver_state.pending_flush_trid);
 

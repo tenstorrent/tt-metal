@@ -240,10 +240,12 @@
 #define MEM_ERISC_APP_SYNC_INFO_BASE (MEM_ERISC_APP_ROUTING_INFO_BASE - MEM_ERISC_SYNC_INFO_SIZE)
 #define MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE (MEM_ERISC_APP_SYNC_INFO_BASE - MEM_ERISC_FABRIC_ROUTER_RESERVED_SIZE)
 
-// Single debug code word (first uint32; region 16B for alignment) tracking the ERISC context-switch /
-// link-recovery RESUME PHASE. Written by active ERISC0; read back post-mortem from L1. Carved just
-// below the fabric router reserved region; shrinks the app's usable L1 (MEM_ERISC_MAX_SIZE) by 16B and
-// moves no existing region. Phase codes live in eth_fw_api.h (RESUME_PHASE_*).
+// ERISC debug slot (16B, 4 uint32 words) for the fabric-router recovery probes. Written by active
+// ERISC0; read back live/post-mortem from L1. Carved just below the fabric router reserved region;
+// shrinks the app's usable L1 (MEM_ERISC_MAX_SIZE) by 16B and moves no existing region.
+//   word[0] (+0) = RESUME PHASE code (eth_fw_api.h RESUME_PHASE_*)
+//   word[1] (+4) = count of successful packets sent by ERISC0 over the eth link (TX liveness)
+//   word[2..3]   = spare
 #define MEM_AERISC_RESUME_PHASE_SIZE 16
 #define MEM_AERISC_RESUME_PHASE_BASE (MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE - MEM_AERISC_RESUME_PHASE_SIZE)
 

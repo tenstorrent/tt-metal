@@ -13,8 +13,8 @@
 #include "dev_mem_map.h"
 
 #if defined(COMPILE_FOR_AERISC)
-// For WATCHER_RING_BUFFER_PUSH(), used by recover_eth_link_if_down(). The macro is a no-op unless the
-// watcher is enabled (TT_METAL_WATCHER), so this costs nothing in production. Guarded to device builds
+// For WATCHER_RING_BUFFER_PUSH(), used by fabric_dbg_ringbuf_push_tx_count(). The macro is a no-op
+// unless the watcher is enabled (TT_METAL_WATCHER), so this costs nothing in production. Guarded to device builds
 // because host translation units (e.g. the HAL) also include this header and lack the ring-buffer
 // include path / build flags.
 #include "api/debug/ring_buffer.h"
@@ -367,27 +367,9 @@ static void update_boot_results_eth_link_status_check() {
 #endif
 }
 
-// Marker pushed to the watcher ring buffer when ERISC0 detects its link is down and invokes FW
-// recovery. The 0xD0... prefix reads as "link DOWN" in the watcher dump (cf. the existing
-// MEM_SYSENG_ETH_MSG_DONE 0xD0E5 convention). One entry is pushed per recovery invocation, so a
-// persistently-down link shows repeated codes. The ring buffer is per-eth-core, so the watcher log
-// already identifies which core observed the down event.
-constexpr uint32_t ETH_LINK_DOWN_RING_BUF_CODE = 0xD09D0000;
-
-// Marker pushed once when ERISC0 observes its link transition back UP after having been down (i.e. FW
-// recovery succeeded). 0x600D reads as "GOOD" in the watcher dump, pairing with the 0xD09D "DOWN"
-// marker above, so a down->recovered cycle reads as ... D09D D09D ... 600D in the per-core ring buffer.
-constexpr uint32_t ETH_LINK_UP_RING_BUF_CODE = 0x600D0000;
-
-// Pushed immediately before ERISC0 actually invokes the FW link-recovery entry point (i.e. the pointer
-// was non-null). 0xCA11ED reads as "CALLED" in the watcher dump, confirming the recovery function was
-// reached. Seeing this interleaved with 0xD09D means we are calling recovery on every down poll.
-constexpr uint32_t ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE = 0xCA11ED00;
-
-// Pushed when the FW link-recovery pointer is null (recovery unsupported on this FW), so the call is
-// skipped. 0xDEAD reads as "dead/absent pointer" in the watcher dump. If this shows up instead of
-// 0xCA11ED, the FW API table never populated eth_link_recovery_ptr.
-constexpr uint32_t ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE = 0xDEAD0000;
+// NOTE: the recovery / link-status ring-buffer marker codes (formerly 0xD09D/0x600D/0xCA11ED/0xDEAD)
+// were removed. The watcher ring buffer is now used to log the live TX packet count on every context
+// switch instead (see fabric_dbg_ringbuf_push_tx_count below), so we can watch TX advance during a run.
 
 // ---- Resume-phase debug word ----------------------------------------------------------------------
 // A single uint32 in a reserved L1 slot (MEM_AERISC_RESUME_PHASE_BASE) that active ERISC0 stamps as it
@@ -403,6 +385,55 @@ constexpr uint32_t RESUME_PHASE_RETRAIN_ENTER = 0x5E5E0001;  // about to call th
 constexpr uint32_t RESUME_PHASE_RETRAIN_DONE = 0x5E5E0002;   // FW recovery returned (link retrained)
 constexpr uint32_t RESUME_PHASE_FIRST_TX = 0x5E5E0003;       // first packet sent after retrain
 constexpr uint32_t RESUME_PHASE_FIRST_RX = 0x5E5E0004;       // first packet received after the first post-retrain TX
+
+// [FREEZE-PROBE] Dense post-retrain checkpoints. Unlike the FIRST_TX/RX advances above, these are
+// UNCONDITIONAL set_resume_phase overwrites, so the word always holds the LAST checkpoint the single
+// allowed post-retrain iteration reached -- a hang parks the word at the stuck point.
+//   TX (sender speedy step): 0x...11-18   RX (receiver speedy step): 0x...21-26   main loop: 0x...31-33
+constexpr uint32_t RESUME_PHASE_TX_STEP_ENTER = 0x5E5E0011;      // entered sender step
+constexpr uint32_t RESUME_PHASE_TX_ISSUE = 0x5E5E0014;           // about to issue eth_send_packet (payload)
+constexpr uint32_t RESUME_PHASE_TX_POSTSEND_DRAIN = 0x5E5E0015;  // about to spin on eth_txq drain (prime suspect)
+constexpr uint32_t RESUME_PHASE_TX_SEND_DONE = 0x5E5E0017;       // payload out + remote sent-count bumped
+constexpr uint32_t RESUME_PHASE_RX_STEP_ENTER = 0x5E5E0021;      // entered receiver step
+constexpr uint32_t RESUME_PHASE_RX_LOCAL_WRITE = 0x5E5E0023;     // about to NoC-write packet to local chip
+constexpr uint32_t RESUME_PHASE_RX_FLUSH_POLL = 0x5E5E0024;      // about to poll per-trid NoC-write flush
+constexpr uint32_t RESUME_PHASE_LOOP_TOP = 0x5E5E0031;           // top of a main-loop iteration
+constexpr uint32_t RESUME_PHASE_CTX_SWITCH = 0x5E5E0032;         // about to enter coordinated context switch
+constexpr uint32_t RESUME_PHASE_LOOP_BOTTOM = 0x5E5E0033;        // reached bottom of a main-loop iteration
+
+// [WAS_RETRAINED] Edge-triggered freeze flag (per-core; only ERISC0's recovery sets it).
+//   0 = normal running; 1 = a retrain just succeeded (link came UP after being DOWN);
+//   the main loop advances 1 -> 2 after exactly one iteration, then freezes -- snapshotting the
+//   resume-phase word right after retrain so we can see where the loop is stuck.
+// volatile so the main loop reliably observes the recovery-set value.
+inline volatile uint32_t was_retrained = 0;
+
+// Number of post-retrain main-loop iterations to allow before the freeze gate stops the loop.
+// was_retrained is 1 on the retrain edge and ++ each iteration bottom, so it takes values 1..N across
+// the N allowed iterations; the gate freezes once it exceeds N (i.e. at N+1). Bump this to watch more
+// post-retrain iterations (does TX sustain?) at the cost of more state being overwritten before the snapshot.
+constexpr uint32_t WAS_RETRAINED_FREEZE_AFTER_N_ITERS = 5;
+
+// [TX-COUNT] Free-running 32-bit count of successful packets sent by ERISC0 over the eth link, stored
+// in word[1] of the debug slot (MEM_AERISC_RESUME_PHASE_BASE + 4). Poll it via brxy (read 2 words at
+// the slot base -> [resume_phase, tx_count]) to see whether TX is actually flowing after a retrain:
+// a changing value = packets going out, a frozen value = TX stalled. ERISC0-only; single L1 store.
+constexpr uint32_t MEM_AERISC_TX_PKT_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 4;
+inline void fabric_dbg_inc_tx_pkt_count() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR);
+    *p = *p + 1;
+#endif
+}
+// Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
+// per-core ring buffer becomes a time series of the counter -- if the values keep changing across
+// dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status
+// marker pushes. No-op unless the watcher is enabled.
+inline void fabric_dbg_ringbuf_push_tx_count() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    WATCHER_RING_BUFFER_PUSH(*reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR));
+#endif
+}
 
 // Unconditionally stamp the resume-phase word. ERISC0-only; no-op elsewhere and on the host, so call
 // sites need no guard beyond ARCH_BLACKHOLE for the macro to exist. A single direct L1 store (not a
@@ -430,6 +461,23 @@ static void recover_eth_link_if_down() {
     // Per-core down/up edge state (single firmware TU -> one instance per eth core). Constant-
     // initialized to false, so no static-init guard variable is emitted.
     static bool eth_link_was_down = false;
+    // [WAS_RETRAINED] Independent rising-edge detector for a *successful* retrain: PCS link observed
+    // UP after having been seen DOWN. Reads PCS_STATUS directly (no is_link_up() debounce, whose
+    // ERISC0 down-path burns billions of cycles). Sets was_retrained=1 exactly once on the down->up
+    // edge; the guard on ==0 makes it a one-shot so a later drop won't re-arm the freeze.
+    {
+        const uint32_t pcs_status =
+            *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR);
+        static bool link_down_seen = false;
+        if (pcs_status != 1) {
+            link_down_seen = true;
+        } else if (link_down_seen) {
+            link_down_seen = false;
+            if (was_retrained == 0) {
+                was_retrained = 1;  // edge-triggered: retrain succeeded
+            }
+        }
+    }
     // if (!is_link_up()) {
     if (true) {
         // volatile eth_status_t* eth_status = (volatile eth_status_t*)(MEM_SYSENG_ETH_STATUS);
@@ -442,8 +490,6 @@ static void recover_eth_link_if_down() {
         //         link_train_status_e::LINK_TRAIN_TIMEOUT_MANUAL_EQ;  // LINK_TRAIN_TIMEOUT_MANUAL_EQ
         //     eth_status->port_status = port_status_e::PORT_UP;
         // }
-        // Record the down-link/recovery event for the watcher (no-op unless the watcher is enabled).
-        WATCHER_RING_BUFFER_PUSH(ETH_LINK_DOWN_RING_BUF_CODE);
         eth_link_was_down = true;
         // The link-recovery entry point is optional in the FW API table: base/older FW may leave it
         // null. Gate on a non-zero pointer -- calling through a null here would jump to address 0 and
@@ -454,16 +500,10 @@ static void recover_eth_link_if_down() {
             // Resume-phase: about to enter FW recovery. If the word stays here, we wedged in the call.
             fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_ENTER);
             reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
-            WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE);
             // Resume-phase: recovery returned (link retrained). The TX/RX paths advance from here.
             fabric_dbg_set_resume_phase(RESUME_PHASE_RETRAIN_DONE);
-        } else {
-            // FW does not provide a recovery entry point; record that we skipped the call.
-            WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE);
         }
     } else if (eth_link_was_down) {
-        // Link came back up after a down/recovery sequence -- record the recovery edge once.
-        WATCHER_RING_BUFFER_PUSH(ETH_LINK_UP_RING_BUF_CODE);
         eth_link_was_down = false;
     }
 #endif

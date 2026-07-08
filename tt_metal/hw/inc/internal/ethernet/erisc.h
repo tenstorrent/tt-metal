@@ -64,6 +64,9 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
     // its shadow counters after. (TEST-ONLY: this makes the "without_noc_sync" path do a full sync.)
     update_boot_results_eth_link_status_check();
     recover_eth_link_if_down();
+    // On every context switch, log the live TX packet count to the watcher ring buffer so we can watch
+    // TX advance (or stall) across watcher dumps during the test.
+    fabric_dbg_ringbuf_push_tx_count();
 #endif
 #endif
 }
