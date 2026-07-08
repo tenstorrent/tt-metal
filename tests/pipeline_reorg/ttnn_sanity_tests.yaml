@@ -1,0 +1,277 @@
+# This file defines TTNN unit test groups used by:
+#   - ttnn-sanity-tests-impl.yaml (hardware CI + ttsim simulator coverage)
+# Merge-gate tests live in ttnn_merge_gate_tests.yaml.
+#
+# Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
+# Optional: fast_runtime_mode_off.
+#
+# sim_wormhole_b0 / sim_blackhole SKUs run the same cmd under the ttsim simulator
+# on ubuntu-latest; ttnn-sanity-tests-impl.yaml invokes setup-ttsim for these.
+# See .github/actions/setup-ttsim/action.yml.
+
+- name: "ttnn data movement group"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_test
+    tests/ttnn/unit_tests/operations/data_movement/test_tilize.py::test_tilize_fp32_lossless
+    tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py::test_run_tilize_with_val_padding_test
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
+    tests/ttnn/unit_tests/operations/data_movement/test_untilize_with_unpadding.py::test_untilize_with_unpadding_height_sharded
+    tests/ttnn/unit_tests/operations/data_movement/test_pad.py::test_pad
+    tests/ttnn/unit_tests/operations/data_movement/test_fill_pad.py::test_fill_pad_complex_sharding
+    tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
+    tests/ttnn/unit_tests/operations/data_movement/test_permute.py::test_permute_identity
+    tests/ttnn/unit_tests/operations/data_movement/test_slice.py::test_slice_usecase1
+    tests/ttnn/unit_tests/operations/data_movement/test_repeat.py::test_pc_with_different_shapes_in_sequence
+    tests/ttnn/unit_tests/operations/data_movement/test_embedding.py::test_base_case
+    tests/ttnn/unit_tests/operations/data_movement/test_backward_embedding.py::test_embedding_bw_with_program_cache
+    tests/ttnn/unit_tests/operations/data_movement/test_gather.py::test_gather_general
+    tests/ttnn/unit_tests/operations/data_movement/test_tosa_scatter.py::test_tosa_scatter_normal
+    tests/ttnn/unit_tests/operations/data_movement/test_clone.py::test_clone_callback
+    tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_indices
+    tests/ttnn/unit_tests/operations/data_movement/test_interleaved_to_sharded.py::test_interleaved_to_sharded_nd_with_equivalent_2d
+    tests/ttnn/unit_tests/operations/data_movement/test_sharded_to_interleaved_oob.py::test_s2i_dram_height_sharded
+    tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py::test_convert_to_hwc_dram_uneven_sharding
+    tests/ttnn/unit_tests/operations/data_movement/test_full.py::test_full_int
+    tests/ttnn/unit_tests/operations/data_movement/test_dropout.py::test_dopout
+    tests/ttnn/unit_tests/operations/data_movement/test_non_zero_indices.py::test_non_zero_indices_ttnn
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+
+- name: "ttnn eltwise group 1"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 1 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+
+- name: "ttnn eltwise group 2"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 2 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+
+- name: "ttnn eltwise group 3"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 3 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+
+- name: "ttnn eltwise group 4"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 4 -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+
+- name: "ttnn conv group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 60
+    sim_blackhole:
+      timeout: 60
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+
+- name: "ttnn pool group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+
+- name: "ttnn matmul group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 60
+    sim_blackhole:
+      timeout: 60
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 1"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 60
+    sim_blackhole:
+      timeout: 60
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 2"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 60
+    sim_blackhole:
+      timeout: 60
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn misc ops group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug tests/ttnn/unit_tests/operations/point_to_point tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+
+- name: "ttnn sdpa group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+
+# indexer_score is Blackhole-only (the nightly suite has the full coverage); this reuses the accuracy
+# test's sp_rank-7 GLM5.1/DSv32 deployment cases (8h/16h, bf16 + bfp8 q, deployed bfp8 k) so post-commit/
+# sanity catches deployment regressions and the op gets watcher coverage, without re-running them nightly.
+- name: "ttnn indexer_score group"
+  cmd: 'pytest --timeout 300 tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py -k "accuracy and rank7" -xv'
+  skus:
+    wh_n300_civ2:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+
+- name: "ttnn reduce group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "core ttnn unit test group"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+    sim_wormhole_b0:
+      timeout: 40
+    sim_blackhole:
+      timeout: 40
+  team: ttnn
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev

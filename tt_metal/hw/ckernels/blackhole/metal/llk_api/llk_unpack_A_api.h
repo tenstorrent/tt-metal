@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
 
@@ -24,10 +25,6 @@ inline void llk_unpack_A_init(
 
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
     const std::uint32_t operand_unpack_dst_format = unpack_dst_format[operand_id];
-    // TODO NC: Move to TRISC1 tt-metal#36411
-    if (unpack_to_dest && is_32bit_input(operand_unpack_src_format, operand_unpack_dst_format)) {
-        llk_unpack_dbg_feature_disable();
-    }
 
     LLK_ASSERT_BLOCK((is_unpacker_A_configured_correctly<
                       UnpackerProgramType::ProgramByTile,
@@ -86,7 +83,7 @@ inline void llk_unpack_A_block(
 
     LLK_ASSERT(cb_access_within_bounds(operand_id, start_tile_index, ntiles), "Block tile read exceeds CB boundary");
 
-    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+    for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         _llk_unpack_A_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
             address, unpack_src_format[operand_id], unpack_dst_format[operand_id]);

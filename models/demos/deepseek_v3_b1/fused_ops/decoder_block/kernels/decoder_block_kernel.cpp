@@ -3792,15 +3792,6 @@ void kernel_main() {
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
             setup_mla_sharded_buffers();
         }
-        {
-            volatile tt_l1_ptr uint32_t* risc_sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_named_compile_time_arg_val("risc_sync_semaphore_addr"));
-            unified_kernels::sync_riscs_enter(risc_sync_sem);
-            unified_kernels::sync_riscs_exit(risc_sync_sem);
-        }
-#if defined(COMPILE_FOR_TRISC)
-        deepseek_compute_kernel_init();
-#endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_sender_core) {

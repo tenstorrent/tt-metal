@@ -11,6 +11,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include "device/unified_routed_expert_ffn_types.hpp"  // RoutedExpertActivation
+
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
 // Single-op fused per-expert FFN for DeepSeek V3 prefill on Blackhole.
@@ -38,8 +40,15 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //      actual token count.
 //   local_expert_id: index into global_expert_idx_table.
 //   compute_kernel_config: optional matmul math fidelity / accumulator config.
-//   output: optional pre-allocated (M_max, K=emb) DRAM-interleaved output
-//      tensor to write into. Must match x.dtype() and shape.
+//   output: optional pre-allocated DRAM-interleaved output tensor to write
+//      into. Must match x.dtype(); shape must match x unless
+//      expert_region_offsets is set (direct-write mode), in which case it is
+//      the larger shared destination buffer.
+//   expert_region_offsets: optional UINT32 per-global-expert region start
+//      offsets (the same `start` tensor ttnn::insert consumes). When set, the
+//      writer places this expert's output directly into `output` (the shared
+//      buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert
+//      step (no temp-buffer DRAM round-trip). Requires `output` to be set.
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -49,14 +58,18 @@ ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    const std::optional<ttnn::Tensor>& output = std::nullopt);
+    const std::optional<ttnn::Tensor>& output = std::nullopt,
+    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
-//   extract -> unified_routed_expert_ffn -> insert
-// per expert. NOT a single fused device op across experts (per-expert FFN
-// entries still appear in tt-perf-report); Python sees one call, the device
-// sees N.
+//   extract -> unified_routed_expert_ffn (direct-write)
+// per expert. The FFN writer places each expert's output directly into the
+// shared output buffer at its region offset (the old per-expert ttnn::insert
+// is fused into the FFN writer — no temp buffer, no second DRAM round-trip).
+// NOT a single fused device op across experts (per-expert FFN entries still
+// appear in tt-perf-report); Python sees one call, the device sees N.
 //
 // The unified FFN reads counts on-device so each expert's work scales to its
 // actual count. No host-side counts/idx read, no per-expert Python loop.
@@ -69,11 +82,13 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
 namespace ttnn {
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe;
 }  // namespace ttnn

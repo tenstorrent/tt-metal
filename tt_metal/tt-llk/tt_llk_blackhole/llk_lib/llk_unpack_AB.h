@@ -206,13 +206,11 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
 }
 
 /**
- * @brief Uninitialize unpacker after AB unpacking operations
+ * @brief No-op teardown after AB (two-operand) unpacking.
  *
- * Resets the unpacker address counters for both SrcA and SrcB to their default
- * tile element counts based on the provided tensor shapes.
+ * The SrcA/SrcB unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each
+ * operation's init (see tt-llk#1036), so there is nothing to restore here.
  *
- * @param unpA_tensor_shape: Tensor shape for source A operand
- * @param unpB_tensor_shape: Tensor shape for source B operand
  * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
 inline void _llk_unpack_AB_uninit_()

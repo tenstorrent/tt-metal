@@ -3,9 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_grouped_topk.hpp"
+
+#include <cstdint>
+#include <string>
+
+#include <tt_stl/assert.hpp>
 #include "device/moe_grouped_topk_device_operation.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk {
+
+namespace {
+ScoreFunc parse_score_func(const std::string& score_func) {
+    if (score_func == "sigmoid") {
+        return ScoreFunc::Sigmoid;
+    }
+    if (score_func == "sqrtsoftplus") {
+        return ScoreFunc::SqrtSoftplus;
+    }
+    TT_THROW("Unsupported score_func '{}'. Expected 'sigmoid' or 'sqrtsoftplus'.", score_func);
+}
+}  // namespace
 
 std::array<Tensor, 2> moe_grouped_topk(
     const Tensor& scores,
@@ -17,7 +34,9 @@ std::array<Tensor, 2> moe_grouped_topk(
     float route_scale,
     float epsilon,
     bool stable_sort,
-    const std::optional<MemoryConfig>& output_mem_config) {
+    const std::string& score_func,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& padding_config) {
     return ttnn::prim::moe_grouped_topk(
         scores,
         bias,
@@ -28,7 +47,9 @@ std::array<Tensor, 2> moe_grouped_topk(
         route_scale,
         epsilon,
         stable_sort,
-        output_mem_config);
+        parse_score_func(score_func),
+        output_mem_config,
+        padding_config);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk

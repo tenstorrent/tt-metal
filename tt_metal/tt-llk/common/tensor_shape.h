@@ -85,19 +85,30 @@ constexpr TensorShape make_tensor_shape(
 }
 
 /**
+ * @brief Build a TensorShape from a flat face count and face row dimension.
+ *
+ * Bridges legacy APIs that still carry a flat num_faces / face_r_dim (e.g. CB metadata) into a
+ * TensorShape. Uses the canonical face-grid decomposition for tile-dependent ops, which are
+ * constrained to num_faces in {1, 2, 4}: 1 -> 1x1, 2 -> 1x2, 4 -> 2x2. The face column dimension
+ * is always 16 in hardware.
+ *
+ * @param num_faces: Total number of faces in the tile (1, 2, or 4).
+ * @param face_r_dim: Row dimension of each face (defaults to the full 16-row face).
+ */
+constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t num_faces, const std::uint32_t face_r_dim = MAX_FACE_R_DIM)
+{
+    const std::uint8_t num_faces_r_dim = (num_faces == 4) ? 2 : 1;
+    const std::uint8_t num_faces_c_dim = (num_faces == 4) ? 2 : static_cast<std::uint8_t>(num_faces);
+    return TensorShape {static_cast<std::uint8_t>(face_r_dim), MAX_FACE_C_DIM, num_faces_r_dim, num_faces_c_dim};
+}
+
+/**
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
- *
- * Maps the historical scalar parameters used across LLK call sites:
- * - num_faces == 1: 1x1 face grid (face_r_dim × 16)
- * - num_faces == 2: 1x2 face grid (face_r_dim × 32)
- * - num_faces == 4: 2x2 face grid (face_r_dim*2 × 32; 32x32 when face_r_dim == 16)
- *
- * @note Caller must pass num_faces in {1, 2, 4}.
  */
 inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be one of the valid values: 1, 2, or 4");
-    return TensorShape {face_r_dim, MAX_FACE_C_DIM, static_cast<std::uint8_t>(num_faces == 4 ? 2 : 1), static_cast<std::uint8_t>(num_faces == 1 ? 1 : 2)};
+    return tensor_shape_from_num_faces(num_faces, face_r_dim);
 }
 
 /**

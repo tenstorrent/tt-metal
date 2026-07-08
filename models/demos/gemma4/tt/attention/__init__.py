@@ -17,7 +17,7 @@ from models.demos.gemma4.config import MeshConfig, Mode
 
 from .weights import AttentionWeights, load_attention_weights
 from .kv_cache import init_kv_cache
-from .decode import decode_forward
+from .decode import decode_forward, packed_decode_forward
 from .prefill import prefill_forward
 
 
@@ -117,6 +117,11 @@ class Gemma4Attention:
         else:
             self.kv_cache = None
 
+        # Persistent hot-block staging for the packed-verify loop-free KV write.
+        # Allocated lazily by the spec-decode driver (see tt/spec_decode.py);
+        # None means packed_decode_forward falls back to the per-position loop.
+        self.kv_staging = None
+
     def __call__(
         self,
         hidden_states,
@@ -134,6 +139,8 @@ class Gemma4Attention:
         user_id=0,
         valid_seq_len=None,
         sequential_kv_write=False,
+        rope_presliced=False,
+        packed=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -149,9 +156,35 @@ class Gemma4Attention:
             shared_kv: optional (tt_k, tt_v) from source layer for KV sharing (prefill only)
             keep_kv: if True, keep K/V alive for sharing with later layers (prefill only)
             is_kv_shared: if True, this layer shares KV from source (skip K/V proj + cache update)
+            packed: optional packed-verify dict (decode only) — keys packed_p,
+                position_idx, kv_write_idxs, attn_mask, rope_packed, embed_idx,
+                hot_pt; routes to packed_decode_forward (P positions, one pass)
         """
         cache = kv_cache or self.kv_cache
         cos_cache, sin_cache = rope_mats
+
+        if is_decode and packed is not None:
+            return packed_decode_forward(
+                hidden_states=hidden_states,
+                cos_cache=cos_cache,
+                sin_cache=sin_cache,
+                weights=self.weights,
+                kv_cache=cache,
+                config=self.config,
+                mesh_config=self.mesh_config,
+                mesh_device=self.mesh_device,
+                position_idx=packed["position_idx"],
+                kv_write_idxs=packed.get("kv_write_idxs"),
+                attn_mask=packed["attn_mask"],
+                packed_p=packed["packed_p"],
+                page_table=page_table,
+                ccl_manager=self.ccl_manager,
+                is_kv_shared=is_kv_shared,
+                rope_packed=packed.get("rope_packed"),
+                kv_staging=self.kv_staging,
+                embed_idx=packed.get("embed_idx"),
+                hot_pt=packed.get("hot_pt"),
+            )
 
         if is_decode:
             return decode_forward(
@@ -170,6 +203,7 @@ class Gemma4Attention:
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
                 sequential_kv_write=sequential_kv_write,
+                rope_presliced=rope_presliced,
             )
         else:
             tt_out, kept_kv = prefill_forward(

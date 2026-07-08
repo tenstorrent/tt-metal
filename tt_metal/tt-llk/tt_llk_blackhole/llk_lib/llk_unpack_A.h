@@ -147,6 +147,7 @@ inline void _llk_unpack_A_mop_config_(
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
+        tmp.set_start_op(unpack_srca_set_dvalid);
         tmp.program();
     }
     else
@@ -323,8 +324,8 @@ inline void _llk_unpack_A_init_(
 /**
  * @brief No-op teardown after single-operand (A) unpacking.
  *
- * The unpacker X counter is transient and reprogrammed by each operation's init, so there is
- * nothing to restore here.
+ * The unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each operation's
+ * init (see tt-llk#1036), so there is nothing to restore here.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
@@ -436,7 +437,7 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
     {
         if (is_32bit_input(unpack_src_format, unpack_dst_format))
         {
-            unpack_to_dest_tile_done(unp_cfg_context);
+            unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
 

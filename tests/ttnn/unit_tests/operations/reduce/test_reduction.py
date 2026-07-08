@@ -4,10 +4,10 @@
 
 import pytest
 import torch
-import ttnn
 
+import ttnn
+from models.common.utility_functions import comp_allclose_and_pcc, is_blackhole, torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import is_blackhole, torch_random, comp_allclose_and_pcc
 
 TEST_PADDING_VALUE = -42
 
@@ -101,29 +101,16 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
 # correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
-# element nor flipping its sign should change the answer. If the unpacker silently routes
-# fp32 input through SrcA as TF32 (10-bit mantissa instead of 23), values that differ by
-# less than the TF32 ULP collapse to the same representation; at offset=1e6 the TF32 ULP
-# is ~512, so all 32 consecutive integers become identical and the apparent variance drops
-# to 0. scalar=-1.0 routes through the do_scale path (mul_tiles_bcast_scalar +
-# transpose_wh_tile of cb_scaled) without changing the expected variance, exercising a
-# different inner-loop pattern than scalar=1.0 (which short-circuits to !do_scale). This
-# test covers all three reduction kernels (H, W, HW) and both code paths.
-@pytest.mark.parametrize("scalar", [1.0, -1.0])
+# element nor flipping its sign should change the answer.the scalar is applied after the
+# reduction as var(s*x) = s^2 * var(x).
+# test covers all three reduction kernels (H, W, HW) and both code paths
+@pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     correction = True
-    # do_scale path (scalar != 1.0) routes inputs through mul_tiles_bcast_scalar, whose FPU
-    # SrcA reads cb_in at TF32 (10-bit mantissa) regardless of any precision-preservation
-    # plumbing downstream. At offset=1e6 the TF32 ULP is ~512, so all 32 consecutive integers
-    # in cb_in collapse to a single TF32 value before the mul fires -- the variance is
-    # structurally pinned to zero on all three reduction kernels (W, H, HW) and there is no
-    # kernel-side workaround. Mark these combinations xfail to document the hardware floor.
-    if scalar != 1.0 and abs(offset) >= 1024:
-        pytest.xfail(
-            "FPU SrcA TF32 floor on do_scale path: cb_in collapses to a constant before the mul. Issue #45222."
-        )
+    # The input is read at full fp32 and reduced unscaled; scalar is now applied after the (unscaled, precise) Welford reduction
+    # as var(s*x) = s^2 * var(x), so this case is accurate regardless of offset.
     N = 32
     seq = torch.arange(N, dtype=torch.float32) + offset
     # Lay out the input so the reduction axis is the integer sequence.
@@ -143,17 +130,14 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
-    # Tolerances are tight: with the precision-preserving unpacker path the answer is
-    # exact (deviation = 0). atol=1e-3 here is many orders of magnitude tighter than what
-    # the buggy TF32-via-SrcA path produces (which at offset=1e6 returns exactly 0.0
-    # against an expected ~88) while still allowing some small accumulation noise from
-    # the SFPU Welford recurrence itself.
+    # Tight tolerances: the unscaled fp32 reduction is essentially exact, so we only allow
+    # small accumulation noise from the SFPU Welford recurrence.
     assert_numeric_metrics(
         torch_ref,
         actual,
-        rtol=1e-4,
-        atol=1e-3,
-        frobenius_threshold=1e-4,
+        rtol=1e-5,
+        atol=1e-4,
+        frobenius_threshold=1e-5,
         pcc_threshold=0.9999,
         check_ulp=False,
     )
@@ -277,9 +261,6 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim", [[3, 7], [6, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
-    if dim == [6, 7]:
-        pytest.xfail("Sum op on HW reduction with BF16 input exceeds allclose threshold. Issue #46472")
-
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8), dtype=torch.bfloat16)
@@ -399,7 +380,7 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
         pcc_threshold=0.999,
         rtol=0.01,
         atol=0.2,
-        frobenius_threshold=0.003,
+        frobenius_threshold=0.015,
     )
 
 

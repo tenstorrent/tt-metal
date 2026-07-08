@@ -318,18 +318,20 @@ void bind_unary_operation_overload_complex_return_complex(
 template <ttnn::unique_string OpName, auto Func>
 void bind_unary_operation_with_fast_and_approximate_mode(
     nb::module_& mod,
+    const std::string& description = "",
+    const std::string& math_equation = "",
     const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
-        Applies {0} to :attr:`input_tensor` element-wise.
+        {2}
 
         .. math::
-            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+            {3}
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor. {2}
+            input_tensor (ttnn.Tensor): the input tensor. {4}
 
         Keyword Args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
@@ -348,13 +350,15 @@ void bind_unary_operation_with_fast_and_approximate_mode(
 
                * - Dtypes
                  - Layouts
-               * - {3}
+               * - {5}
                  - TILE, ROW_MAJOR
 
-            {4}
+            {6}
         )doc",
         std::string(OpName),
         std::string("ttnn.") + std::string(OpName),
+        description,
+        math_equation,
         range,
         supported_dtype,
         info_doc);
@@ -934,6 +938,87 @@ void bind_sigmoid_accurate(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("output_tensor") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
+}
+
+void bind_gelu(nb::module_& mod) {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            variant (ttnn.GeluVariant, optional): Select GELU implementation. Defaults to `GeluVariant.Accurate`.
+                - `Accurate`: piecewise CDF (BF16) or FP32 erf — matches torch.nn.functional.gelu (exact).
+                - `FastLut`: 6-segment piecewise-linear LUT — fastest, ~1% absolute error.
+                - `Tanh`: 0.5*x*(1 + tanh(sqrt(2/pi)*(x + 0.044715*x^3))) in FP32 — matches torch.nn.functional.gelu(approximate="tanh").
+            fast_and_approximate_mode (bool, optional): Legacy alias. `True` maps to `variant=FastLut`, `False` to `variant=Accurate`. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE, ROW_MAJOR
+        )doc",
+        "gelu",
+        "ttnn.gelu");
+
+    mod.attr("GeluVariant") =
+        nb::enum_<GeluVariant>(mod, "GeluVariant")
+            .value("Accurate", GeluVariant::ACCURATE, "Exact GELU. Matches torch.nn.functional.gelu().")
+            .value(
+                "FastLut",
+                GeluVariant::FAST_LUT,
+                "6-segment piecewise-linear LUT approximation of exact GELU. Fastest, ~1% absolute error.")
+            .value(
+                "Tanh",
+                GeluVariant::TANH,
+                "FP32 Hendrycks tanh approximation. Matches torch.nn.functional.gelu(approximate=\"tanh\").");
+
+    ttnn::bind_function<"gelu">(
+        mod,
+        doc.c_str(),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                GeluVariant,
+                const std::optional<tt::tt_metal::MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::gelu),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("variant") = GeluVariant::ACCURATE,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                bool,
+                const std::optional<tt::tt_metal::MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::gelu),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 void bind_sigmoid(nb::module_& mod) {
@@ -1708,7 +1793,7 @@ void py_module(nb::module_& mod) {
         &ttnn::relu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16, UINT8)doc");
     bind_unary_operation_subcoregrids<"relu6">(
         mod,
         &ttnn::relu6,
@@ -1822,24 +1907,63 @@ void py_module(nb::module_& mod) {
 
     //  Unaries with fast_and_approximate_mode
     bind_unary_operation_with_fast_and_approximate_mode<"sqrt", &ttnn::sqrt>(
-        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise square root operation on the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \sqrt{{\mathrm{{input\_tensor}}_i}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"rsqrt", &ttnn::rsqrt>(
-        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise reciprocal (inverse) square root operation on the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \frac{{1}}{{\sqrt{{\mathrm{{input\_tensor}}_i}}}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"exp", &ttnn::exp>(
-        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation_with_fast_and_approximate_mode<"erf", &ttnn::erf>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+        mod,
+        R"doc(Performs the element-wise exponential operation on the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = e^{{\mathrm{{input\_tensor}}_i}})doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_with_fast_and_approximate_mode<"erf", &ttnn::erf>(
+        mod,
+        R"doc(Performs the element-wise Gaussian error function of the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \frac{{2}}{{\sqrt{{\pi}}}} \int_0^{{\mathrm{{input\_tensor}}_i}} e^{{-t^2}}\, dt)doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_subcoregrids<"erfc">(mod, &ttnn::erfc, "", "", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation_with_fast_and_approximate_mode<"gelu", &ttnn::gelu>(mod, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_gelu(mod);
     bind_unary_operation_with_fast_and_approximate_mode<"log", &ttnn::log>(
-        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise natural logarithm (base e) operation on the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \ln(\mathrm{{input\_tensor}}_i))doc",
+        "[Supported range: input > 0]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"log10", &ttnn::log10>(
-        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise base-10 logarithm operation on the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \log_{{10}}(\mathrm{{input\_tensor}}_i))doc",
+        "[Supported range: input > 0]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"log2", &ttnn::log2>(
-        mod, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise base-2 logarithm operation on the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \log_{{2}}(\mathrm{{input\_tensor}}_i))doc",
+        "[Supported range: input > 0]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"log1p", &ttnn::log1p>(
-        mod, R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise natural logarithm operation of one plus the :attr:`input_tensor`.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \ln(1 + \mathrm{{input\_tensor}}_i))doc",
+        "[Supported range: input > -1]",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_operation_with_fast_and_approximate_mode<"mish", &ttnn::mish>(
-        mod, "[Supported range -20 to inf]", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+        mod,
+        R"doc(Performs the element-wise Mish activation function on the :attr:`input_tensor`.
+        Mish is a smooth, non-monotonic self-regularizing activation function that allows small negative outputs to pass through.)doc",
+        R"doc(\mathrm{{output\_tensor}}_i &= \mathrm{{input\_tensor}}_i \cdot \tanh(\mathrm{{softplus}}(\mathrm{{input\_tensor}}_i)) \\
+            &= \mathrm{{input\_tensor}}_i \cdot \tanh\left(\ln(1 + e^{{\mathrm{{input\_tensor}}_i}})\right))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     // Unaries with float parameter
     bind_unary_operation_with_float_parameter_default<"elu", &ttnn::elu>(
         mod, "alpha", "The alpha parameter for the ELU function", 1.0f, "", R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -1898,7 +2022,7 @@ void py_module(nb::module_& mod) {
         "Dimension to split input tensor. Supported only for last dimension (dim = -1 or 3)",
         "Split the tensor into two parts, apply the ReLU function on the second tensor, and then perform "
         "multiplication with the first tensor.",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(BFLOAT16, BFLOAT8_B, UINT32, UINT16)doc",
         R"doc(System memory is not supported.
 
            Last dimension of input tensor should be divisible by 64.

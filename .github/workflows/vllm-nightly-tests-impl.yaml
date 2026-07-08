@@ -46,6 +46,7 @@ jobs:
           # Tomasz Cheda (U091SNDA4TS) - Structured output tests
           # Radoica Draskic (U08BH66EXAL) - DP tests
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
+          # Aniruddha Tupe (U08HL8X1ECD) - Qwen3.6 models
 
           # Note: This matrix must be kept in sync with the original static matrix
           #
@@ -79,6 +80,31 @@ jobs:
           #     "mesh-device": "P150x4",
           #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
           #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #
+          # The WH-T3K Gemma4-26B-A4B entry below is temporarily disabled —
+          # DRAM OOM during KV cache allocation (layer 25/30) causes EngineCore
+          # init failure on WH-T3K. Full unquantized KV cache no longer fits.
+          # Re-enable once hybrid KV cache is enabled (which will size the
+          # sliding-window layers' KV cache to the window instead of the full
+          # sequence length, freeing the DRAM needed to fit the full model).
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49257
+          #
+          # Disabled entry preserved verbatim for the re-enable:
+          #
+          #   {
+          #     "name": "[WH-T3K] Gemma4-26B-A4B",
+          #     "model": "google/gemma-4-26B-A4B-it",
+          #     "coherence-test": true,
+          #     "server-timeout": 30,
+          #     "benchmark-timeout": 10,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "T3K",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
+          #     "additional-server-args": "--max_num_seqs 1 --async-scheduling",
           #     "multimodal": false,
           #     "owner_id": "U08TJ70UFRT"
           #   },
@@ -136,9 +162,9 @@ jobs:
             {
               "name": "[WH-N150] Gemma4-E2B",
               "model": "google/gemma-4-E2B-it",
+              "server-timeout": 30,
+              "benchmark-timeout": 12,
               "coherence-test": true,
-              "server-timeout": 10,
-              "benchmark-timeout": 5,
               "runner-label": "N150",
               "arch": "arch-wormhole_b0",
               "mesh-device": "N150",
@@ -155,21 +181,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
-              "multimodal": false,
-              "owner_id": "U08TJ70UFRT"
-            },
-            {
-              "name": "[WH-T3K] Gemma4-26B-A4B",
-              "model": "google/gemma-4-26B-A4B-it",
-              "coherence-test": true,
-              "server-timeout": 30,
-              "benchmark-timeout": 5,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -179,14 +191,29 @@ jobs:
               "model": "google/gemma-4-26B-A4B-it",
               "coherence-test": true,
               "server-timeout": 30,
-              "benchmark-timeout": 5,
+              "benchmark-timeout": 10,
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 300000000}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Qwen3.6-27B",
+              "model": "Qwen/Qwen3.6-27B",
+              "coherence-test": true,
+              "server-timeout": 30,
+              "benchmark-timeout": 10,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 268435456}",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "default-chat-template-kwargs": "{\"enable_thinking\": false}",
+              "multimodal": false,
+              "owner_id": "U08HL8X1ECD"
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
@@ -369,13 +396,13 @@ jobs:
               "co-owner-1-id": "U08H31YMN4Q"
             },
             {
-              "name": "[WH-T3K] NoOp test model (vLLM overhead)",
+              "name": "[WH-GLX] NoOp test model (vLLM overhead)",
               "model": "models/vllm_test_utils/no_op_test",
               "server-timeout": 2,
               "benchmark-timeout": 2,
-              "runner-label": "config-t3000",
+              "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
-              "mesh-device": "(1, 2)",
+              "mesh-device": "(1, 1)",
               "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
@@ -517,6 +544,13 @@ jobs:
             ADDITIONAL_SERVER_ARGS=()
           fi
 
+          DEFAULT_CHAT_TEMPLATE_KWARGS_RAW='${{ matrix.test-group.default-chat-template-kwargs }}'
+          if [ -n "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW" ]; then
+            DEFAULT_CHAT_TEMPLATE_KWARGS=(--default-chat-template-kwargs "$DEFAULT_CHAT_TEMPLATE_KWARGS_RAW")
+          else
+            DEFAULT_CHAT_TEMPLATE_KWARGS=()
+          fi
+
           export MESH_DEVICE="${{ matrix.test-group.mesh-device }}"
           if [ -n "${{ matrix.test-group.tt-llama-text-ver }}" ]; then
             export TT_LLAMA_TEXT_VER="${{ matrix.test-group.tt-llama-text-ver }}"
@@ -537,10 +571,29 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
+          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
+          # single-stream max_num_seqs=1):
+          #   * The prefill trace bucket sweep (128..4096) is the dominant trace
+          #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
+          #     100-token prompt only ever replays the 128 bucket. Limit it so the
+          #     trace region stays small and startup is fast.
+          #   * Decode warmup captures one resident trace per sampling-param
+          #     permutation; the full penalties×logprobs sweep is unused by the
+          #     default-sampling benchmark. Warm only plain/greedy/None.
+          # Both shrink the required trace_region_size (validated to fit <200 MB
+          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          case "$HF_MODEL" in
+            google/gemma-4-*)
+              export TT_LEAN_DECODE_WARMUP=1
+              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              ;;
+          esac
+
           # Build the VLLM server arguments array
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
+          VLLM_SERVER_ARGS+=("${DEFAULT_CHAT_TEMPLATE_KWARGS[@]}")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"

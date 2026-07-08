@@ -5,9 +5,11 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/experimental/quasar/pad/device/pad_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
-#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/experimental/quasar/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
 #include <ttnn/tensor/types.hpp>
 
@@ -27,7 +29,7 @@ using ttnn::operations::data_movement::squeeze_or_unsqueeze_shape_to_ND;
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
-    ttnn::SmallVector<uint32_t> updated_shape;
+    ttsl::SmallVector<uint32_t> updated_shape;
     size_t input_rank = input_shape.rank();
     for (size_t i = 0; i < input_rank - 2; i++) {
         updated_shape.push_back(input_shape[i]);
@@ -110,7 +112,7 @@ ttnn::Tensor pad_impl(
             if (height_distinct(input_logical_shape, output_padded_shape)) {
                 // we will decompose the padding into two parts and run two
                 // separate pads.
-                ttnn::SmallVector<uint32_t> adjusted_input_tensor_start{0, 0, 0, input_tensor_start[3]};
+                ttsl::SmallVector<uint32_t> adjusted_input_tensor_start{0, 0, 0, input_tensor_start[3]};
 
                 TT_FATAL(
                     not(height_distinct(input_logical_shape, output_shape_width_padded) and
@@ -166,16 +168,16 @@ ttnn::Tensor pad_impl(
 
 ttnn::Tensor pad_impl(
     const ttnn::Tensor& input_tensor,
-    ttnn::SmallVector<PadSpecDim> padding,
+    ttsl::SmallVector<PadSpecDim> padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     if (input_tensor.dtype() == DataType::BFLOAT8_B && input_tensor.layout() == Layout::TILE) {
-        auto bfloat16_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
+        auto bfloat16_tensor = ttnn::operations::experimental::quasar::typecast(input_tensor, DataType::BFLOAT16);
         auto padded_tensor =
             pad_impl(bfloat16_tensor, padding, value, use_multicore, memory_config_arg, sub_core_grids);
-        return ttnn::typecast(padded_tensor, DataType::BFLOAT8_B);
+        return ttnn::operations::experimental::quasar::typecast(padded_tensor, DataType::BFLOAT8_B);
     }
     const int original_rank = input_tensor.logical_shape().rank();
 
@@ -223,7 +225,7 @@ ttnn::Tensor pad_impl(
 }
 
 std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
-    const ttnn::Shape& input_logical_shape, const ttnn::SmallVector<PadSpecDim>& pad_spec) {
+    const ttnn::Shape& input_logical_shape, const ttsl::SmallVector<PadSpecDim>& pad_spec) {
     if (std::all_of(pad_spec.begin(), pad_spec.end(), [](auto& p) {
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
@@ -231,7 +233,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
     }
 
     const auto rank = input_logical_shape.rank();
-    ttnn::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
+    ttsl::SmallVector<uint32_t> requested_logical_shape_vec(rank, 0);
 
     std::transform(
         input_logical_shape.cbegin(),
@@ -246,7 +248,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
 
 ttnn::Tensor invoke_rm(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding_vec,
+    const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -258,18 +260,19 @@ ttnn::Tensor invoke_rm(
 
     // output_tensor is currently 4D. We have to squeeze back to the original rank
     if (original_rank <= 4) {
-        auto to_vec = [](const auto& span) { return ttnn::SmallVector<uint32_t>{span.begin(), span.end()}; };
+        auto to_vec = [](const auto& span) { return ttsl::SmallVector<uint32_t>{span.begin(), span.end()}; };
         auto output_shape = to_vec(output_tensor.padded_shape().view());
         auto padded_shape = to_vec(output_tensor.padded_shape().view());
         if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
             auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
             remove_prefix(output_shape, rank_diff);
             remove_prefix(padded_shape, rank_diff);
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
-            output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
+            output_tensor = ttnn::operations::experimental::quasar::reshape(
+                output_tensor, ttnn::Shape(output_shape), ttnn::Shape(padded_shape));
+            output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, ttnn::Shape(padded_shape));
         }
     } else {
-        output_tensor = ttnn::reshape(
+        output_tensor = ttnn::operations::experimental::quasar::reshape(
             output_tensor, update_original_shape(output_tensor.padded_shape(), input_tensor.logical_shape()));
     }
     return output_tensor;
@@ -277,7 +280,7 @@ ttnn::Tensor invoke_rm(
 
 ttnn::Tensor invoke_tile(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<PadSpecDim>& padding_vec,
+    const ttsl::SmallVector<PadSpecDim>& padding_vec,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -294,7 +297,7 @@ ttnn::Tensor invoke_tile(
 
     // Consistent with behavior expected by callers
     if (input_tensor.storage_type() != StorageType::DEVICE) {
-        ttnn::Shape zeros(ttnn::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
+        ttnn::Shape zeros(ttsl::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
         return input_tensor.pad(requested_padded_shape, zeros, value);
     }
 
@@ -315,7 +318,7 @@ ttnn::Tensor invoke_tile(
     } else {
         // need to align the requested padding to tile size. Note that begin padding is not supported so now just
         // set to zero
-        ttnn::SmallVector<PadSpecDim> padded_padding_vec;
+        ttsl::SmallVector<PadSpecDim> padded_padding_vec;
         padded_padding_vec.reserve(requested_rank);
         std::transform(
             requested_padded_shape.cbegin(),
@@ -337,7 +340,8 @@ ttnn::Tensor invoke_tile(
     if (output_tensor.memory_config().shard_spec().has_value() !=
         memory_config_arg.value_or(input_tensor.memory_config()).shard_spec().has_value()) {
         if (memory_config_arg.has_value()) {
-            output_tensor = ttnn::to_memory_config(output_tensor, memory_config_arg.value(), std::nullopt);
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, memory_config_arg.value(), std::nullopt);
         } else {
             // memory_config_arg is nullopt → condition can only be true if input is sharded
             // (interleaved input + nullopt config → both sides false → condition false)
@@ -347,7 +351,8 @@ ttnn::Tensor invoke_tile(
                 input_tensor.shard_spec()->grid,
                 ShardStrategy::HEIGHT,
                 ShardOrientation::ROW_MAJOR);
-            output_tensor = ttnn::to_memory_config(output_tensor, sharded_mem_config, std::nullopt);
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, sharded_mem_config, std::nullopt);
         }
     }
     return output_tensor;
@@ -361,7 +366,7 @@ namespace ttnn::operations::experimental::quasar {
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<operations::experimental::quasar::PadSpecDim>& padding,
+    const ttsl::SmallVector<operations::experimental::quasar::PadSpecDim>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
@@ -369,7 +374,7 @@ ttnn::Tensor pad(
     using PadSpecDim = operations::experimental::quasar::PadSpecDim;
     const int original_rank = input_tensor.logical_shape().rank();
 
-    ttnn::SmallVector<PadSpecDim> working_padding = padding;
+    ttsl::SmallVector<PadSpecDim> working_padding = padding;
 
     if (int diff = original_rank - padding.size(); diff != 0) {
         TT_FATAL(diff > 0, "ttnn.pad: padding len can't be larger than input tensor rank");
@@ -404,13 +409,13 @@ ttnn::Tensor pad(
 
 ttnn::Tensor pad(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
+    const ttsl::SmallVector<std::array<uint32_t, 2>>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using PadSpecDim = operations::experimental::quasar::PadSpecDim;
-    ttnn::SmallVector<PadSpecDim> padding_impl;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
     std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
         return PadSpecDim(p[0], p[1]);
     });
@@ -427,7 +432,7 @@ ttnn::Tensor pad(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using PadSpecDim = operations::experimental::quasar::PadSpecDim;
-    ttnn::SmallVector<PadSpecDim> padding_impl;
+    ttsl::SmallVector<PadSpecDim> padding_impl;
     const auto& log_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < output_padded_shape.size(); ++i) {
         padding_impl.emplace_back(

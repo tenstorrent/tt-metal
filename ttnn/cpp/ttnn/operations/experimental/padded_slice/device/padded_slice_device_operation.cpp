@@ -70,7 +70,7 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
 TensorSpec PaddedSliceDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
+    ttsl::SmallVector<uint32_t> out_shape(input_tensor.logical_shape().rank());
 
     TT_FATAL(out_shape.size() == 4, "Only 4D tensors are supported for padded_slice");
     auto output_dim_i = [&args](size_t i) {
@@ -103,18 +103,6 @@ Tensor PaddedSliceDeviceOperation::create_output_tensors(
         return *tensor_args.preallocated_output;
     }
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
-}
-
-ttsl::hash::hash_t PaddedSliceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "PaddedSliceDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(args, tensor_args);
-
-    // Include input shape last dimension as it affects pad_output_row decision (RM factory)
-    // and max_num_tiles_per_row calculation (Tile factory), which affect kernel selection and CB configs
-    return tt::tt_metal::operation::hash_operation<PaddedSliceDeviceOperation>(
-        args, tensor_args, program_factory.index());
 }
 
 }  // namespace ttnn::experimental::prim

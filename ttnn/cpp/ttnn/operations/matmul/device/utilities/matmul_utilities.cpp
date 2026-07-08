@@ -142,7 +142,7 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the vector matmul case: if a_rank == 1, remove the second-to-last dimension
     if (a_rank == 1 && output_shape.rank() > 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         // Copy all elements except the second-to-last dimension
         size_t dst_idx = 0;
         for (size_t src_idx = 0; src_idx < output_shape.rank(); ++src_idx) {
@@ -155,20 +155,23 @@ ttnn::Shape compute_matmul_output_shape(
 
     // Handle the case where b_rank == 1, remove the last dimension
     if (b_rank == 1) [[unlikely]] {
-        ttnn::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
+        ttsl::SmallVector<uint32_t> new_shape(output_shape.rank() - 1);
         for (auto index = 0; index < output_shape.rank() - 1; ++index) {
             new_shape[index] = output_shape[index];
         }
         output_shape = ttnn::Shape(new_shape);
     }
 
-    // Optimization: Reuse input A (in0) across batches when A's batch dimension is 1
-    // and B's batch dimension is > 1. For matmul shapes BxHaxMxK / BxHbxKxN where Ha=1 and Hb>1,
-    // the same A tensor can be reused for each batch element of B rather than reading A repeatedly.
-    // Restrict to rank-4 tensors to ensure dim 1 is correctly identified as the batch dimension
-    // and to prevent out-of-bounds indexing with lower-rank shapes.
-    if (a_rank == 4 && b_rank == 4 && input_shape_a[1] == 1 && input_shape_b[1] > 1) {
-        output_shape[1] = input_shape_b[1];
+    // Optimization: Reuse input A (in0) across batches when A's batch dimensions are all 1
+    // and B's corresponding batch dimensions are > 1. The same A tensor is reused for each
+    // batch element of B rather than reading A repeatedly. Supported for rank >= 3 tensors
+    // with matching ranks and interleaved (non-sharded) memory layout.
+    if (a_rank >= 3 && b_rank == a_rank) {
+        for (int i = 0; i < static_cast<int>(a_rank) - 2; i++) {
+            if (input_shape_a[i] == 1 && input_shape_b[i] > 1) {
+                output_shape[i] = input_shape_b[i];
+            }
+        }
     }
     return output_shape;
 }

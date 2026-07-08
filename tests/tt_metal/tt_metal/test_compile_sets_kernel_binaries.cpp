@@ -83,7 +83,7 @@ void construct_program(Program& program, IDevice* device, CoreCoord& core) {
 
     CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

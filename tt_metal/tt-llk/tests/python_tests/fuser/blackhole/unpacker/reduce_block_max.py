@@ -6,7 +6,7 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_loop import FusedLoop, LoopTileByTile
 from fuser.fused_operation import FusedOperation
 from fuser.fused_unpacker import Unpacker
@@ -22,7 +22,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -33,7 +33,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -51,7 +51,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         return f"_llk_unpack_AB_reduce_block_max_row_uninit_();\n"
@@ -60,7 +60,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -77,7 +77,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         ct_dim = block.block_tiles_x
@@ -98,6 +98,6 @@ class ReduceBlockMaxUnpacker(Unpacker):
         tensor_b: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode = None,
+        compute_unit: FpuNode = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return tensor_a, tensor_b

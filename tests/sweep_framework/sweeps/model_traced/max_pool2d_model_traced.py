@@ -14,6 +14,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_tensor_on_mesh,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
+    shard_grid_bounds,
 )
 
 # Import V2 master config loader for traced model configurations
@@ -75,12 +76,52 @@ def run(
 
     # V2 loader uses input_tensor_* naming for this op; fall back to named params
     input_a_dtype = kwargs.get("input_tensor_dtype", input_a_dtype)
+    # ttnn.max_pool2d only accepts a BFLOAT16 input (TT_FATAL "input.dtype() ==
+    # DataType::BFLOAT16"). The model necessarily fed it bf16; a traced bf8_b/other
+    # dtype is a storage/trace artifact, so run the op on bf16 (the golden is
+    # computed in float32 regardless, so the comparison is unaffected).
+    if input_a_dtype != ttnn.bfloat16:
+        input_a_dtype = ttnn.bfloat16
     input_a_layout = kwargs.get("input_tensor_layout", input_a_layout)
     input_a_memory_config = kwargs.get("input_tensor_memory_config", input_a_memory_config)
     input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement", kwargs.get("input_a_tensor_placement"))
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
+
+    # A traced sharded input/output memory config may pin a core grid from the
+    # source architecture (e.g. a Blackhole ufld_v2 trace shards across an 11x10
+    # grid: cores up to x=10,y=9). N300 Wormhole only exposes an 8x8 worker grid
+    # (cores 0..7), so placing the tensor on x=10,y=9 is an "in_worker_grid"
+    # TT_FATAL. The pool itself is device-agnostic — re-shard onto this device:
+    # feed the input INTERLEAVED from DRAM, drop the oversized output shard
+    # config, and let max_pool2d auto-shard. We deliberately do NOT carry over
+    # applied_shard_scheme here: with an explicit scheme the op's
+    # determine_parallel_config reuses the source grid width (11 cols -> still
+    # exceeds 8x8), whereas omitting it routes through
+    # determine_pool_config_for_auto_shard, which lays the shard out within the
+    # device's compute grid. DRAM (not L1) input avoids OOMing L1 on the large
+    # re-sharded tensors.
+    def _grid_exceeds_device(mc, dev):
+        mx, my = shard_grid_bounds(mc)
+        if mx is None and my is None:
+            return False
+        try:
+            g = dev.compute_with_storage_grid_size()
+            gx, gy = g.x - 1, g.y - 1
+        except Exception:
+            gx, gy = 7, 7
+        return (mx is not None and mx > gx) or (my is not None and my > gy)
+
+    # Check BOTH the input and output traced memory configs: the oversized grid
+    # can appear on either (and the framework may drop the unparseable input
+    # config to None while the output config still carries the source grid).
+    _regrid_auto_shard = _grid_exceeds_device(input_a_memory_config, device) or _grid_exceeds_device(
+        output_memory_config, device
+    )
+    if _regrid_auto_shard:
+        input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
+        output_memory_config = None
 
     # Exclude pool-specific params already handled above so they don't leak via op_kwargs
     _pool_keys = {
@@ -136,8 +177,12 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(torch_input_shape)
 
+    # Match the op's ceil_mode (the model traces ceil_mode=True for some pools);
+    # without it the golden uses floor output dims and disagrees with ttnn's
+    # ceil-rounded output (e.g. 13x13 vs 14x14) -> shape mismatch on reshape.
+    ceil_mode = bool(kwargs.get("ceil_mode", False))
     torch_output_tensor = torch.nn.functional.max_pool2d(
-        torch_input_tensor_a, (kH, kW), stride=(stride_h, stride_w), padding=pad_h, dilation=dil_h
+        torch_input_tensor_a, (kH, kW), stride=(stride_h, stride_w), padding=pad_h, dilation=dil_h, ceil_mode=ceil_mode
     )
 
     # Convert to ttnn format: [NHW, C] -> [1, 1, N*H*W, C]
@@ -193,9 +238,14 @@ def run(
         "memory_config": output_memory_config,
     }
 
-    if not input_is_sharded:
+    # When re-gridding an oversized (cross-arch) shard config, omit
+    # applied_shard_scheme so max_pool2d auto-shards onto this device's grid.
+    if not input_is_sharded and not _regrid_auto_shard:
         if applied_shard_scheme is None:
             applied_shard_scheme = "BLOCK_SHARDED"
+        # The trace may record the full enum repr ("TensorMemoryLayout.BLOCK_SHARDED"
+        # or "...::BLOCK_SHARDED"); reduce to the bare name the checks below expect.
+        applied_shard_scheme = str(applied_shard_scheme).rsplit(".", 1)[-1].rsplit("::", 1)[-1]
 
         if applied_shard_scheme == "BLOCK_SHARDED":
             applied_shard_scheme_ttnn = ttnn.TensorMemoryLayout.BLOCK_SHARDED
@@ -210,15 +260,39 @@ def run(
         pool_kwargs["applied_shard_scheme"] = applied_shard_scheme_ttnn
 
     pool_kwargs.update(op_kwargs)
-    result = ttnn.max_pool2d(**pool_kwargs)
+    try:
+        result = ttnn.max_pool2d(**pool_kwargs)
+    except Exception as e:
+        # A traced shard scheme/grid that came from another architecture can be
+        # unplaceable on N300: the source's HEIGHT/BLOCK split lays cores beyond
+        # the 8x8 worker grid ("in_worker_grid"/"exceeds device compute grid").
+        # This also happens when the framework couldn't parse the (oversized)
+        # traced shard memory config and dropped it to None, so the scheme fell
+        # back to the BLOCK_SHARDED default. Let max_pool2d auto-shard instead —
+        # determine_pool_config_for_auto_shard lays the shard within this device's
+        # grid — but only retry the device-grid placement failures.
+        _msg = str(e).lower()
+        if ("applied_shard_scheme" in pool_kwargs) and (
+            "in_worker_grid" in _msg or "compute grid" in _msg or "core range" in _msg
+        ):
+            # Safety net: drop a still-unplaceable traced output shard config and
+            # let the op auto-shard onto this device's grid.
+            pool_kwargs.pop("applied_shard_scheme", None)
+            pool_kwargs["memory_config"] = None
+            result = ttnn.max_pool2d(**pool_kwargs)
+        else:
+            raise
 
     result = mesh_tensor_to_torch(result, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Convert TTNN output back to [N, C, H, W] format for PCC comparison.
     # TTNN max_pool2d returns [1, 1, N*outH*outW, C] — reshape to [N, outH, outW, C] then permute.
-    out_h = (H + 2 * pad_h - dil_h * (kH - 1) - 1) // stride_h + 1
-    out_w = (W + 2 * pad_w - dil_w * (kW - 1) - 1) // stride_w + 1
+    import math as _math
+
+    _round = _math.ceil if ceil_mode else _math.floor
+    out_h = _round((H + 2 * pad_h - dil_h * (kH - 1) - 1) / stride_h) + 1
+    out_w = _round((W + 2 * pad_w - dil_w * (kW - 1) - 1) / stride_w) + 1
     if result.ndim == 4 and result.shape[0] == 1 and result.shape[1] == 1:
         result = result.reshape(N, out_h, out_w, C)
     output_tensor = torch.permute(result, (0, 3, 1, 2))

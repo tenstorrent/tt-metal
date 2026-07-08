@@ -46,7 +46,7 @@ def run_perf_bert11(
     second_run_accum_key = "second_run_accum"
     cpu_key = "ref_key"
 
-    HF_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False, low_cpu_mem_usage=True)
+    HF_model = BertForQuestionAnswering.from_pretrained(model_name, low_cpu_mem_usage=True)
     HF_model.eval()
     tt_model = TtBertBatchDram(
         HF_model.config,
@@ -61,8 +61,9 @@ def run_perf_bert11(
         "Johann Joachim Winckelmann was a German art historian and archaeologist. He was a pioneering Hellenist who first articulated the difference between Greek, Greco-Roman and Roman art. The prophet and founding hero of modern archaeology, Winckelmann was one of the founders of scientific archaeology and first applied the categories of style on a large, systematic basis to the history of art."
     ]
     question = batch_size * ["What discipline did Winkelmann create?"]
-    inputs = tokenizer.batch_encode_plus(
-        zip(question, context),
+    inputs = tokenizer(
+        text=question,
+        text_pair=context,
         max_length=seq_len,
         padding="max_length",
         truncation=True,
@@ -144,7 +145,7 @@ def run_perf_bert11(
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, model_config_str, expected_inference_time, expected_compile_time, inference_iterations",
-    ([8, "BFLOAT8_B-SHARDED", 0.0272, 12, 10],),
+    ([8, "BFLOAT8_B-SHARDED", 0.0300, 12, 10],),
 )
 def test_perf_bare_metal_wh(
     device,

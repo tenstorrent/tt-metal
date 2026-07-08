@@ -14,6 +14,8 @@
 #include "api/compute/add_int_sfpu.h"
 #include "api/compute/copy_dest_values.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 #define DEBUG_PRINT 0
 
@@ -36,59 +38,54 @@
 void kernel_main() {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
+    constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
+    constexpr uint32_t window_size_hw = get_arg(args::window_size_hw);
 
-    constexpr uint32_t max_out_sticks_per_core = get_compile_time_arg_val(3);
-    constexpr uint32_t in_c = get_compile_time_arg_val(4);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
-    constexpr uint32_t max_sticks_for_reduction = get_compile_time_arg_val(6);
+    constexpr uint32_t max_out_sticks_per_core = get_arg(args::max_out_sticks_per_core);
+    constexpr uint32_t in_c = get_arg(args::in_c);
+    constexpr uint32_t in_nblocks_c = get_arg(args::in_nblocks_c);
+    constexpr uint32_t max_sticks_for_reduction = get_arg(args::max_sticks_for_reduction);
 
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-    constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
-    constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
-    constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
-    // ct_arg(16) is force_max_tiles_per_reduction_4 (consumed by compute_pool_2d.cpp only)
+    // CB ids are Metal 2.0 DFB tokens (dfb::<name> converts implicitly to uint32_t). Legacy
+    // variable names are preserved so the rest of the kernel is unchanged.
+    constexpr auto in_cb_id_0 = dfb::in_cb_0;
+    constexpr auto in_scalar_cb_id_0 = dfb::in_scalar_cb_0;
+    constexpr bool one_scalar_per_core = get_arg(args::one_scalar_per_core);
     // MPWI-specific args start here
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(23);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(24);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(25);
-    constexpr uint32_t in_h_padded = get_compile_time_arg_val(26);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(27);
-    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
-    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(30);
-    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(31);
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(32);
-    constexpr uint32_t compute_tmp_idx_cb_id = get_compile_time_arg_val(33);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(34);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(35);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(36);
-    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(37);
+    constexpr auto in_idx_cb_id = dfb::in_idx_cb;
+    constexpr auto pack_tmp_cb_id = dfb::pack_tmp_cb;
+    constexpr auto pack_idx_tmp_cb_id = dfb::pack_idx_tmp_cb;
+    constexpr auto right_inc_cb_id = dfb::right_inc_cb;
+    constexpr auto down_left_wrap_inc_cb_id = dfb::down_left_wrap_inc_cb;
+    constexpr auto up_left_wrap_inc_cb_id = dfb::up_left_wrap_inc_cb;
+    constexpr uint32_t stride_h = get_arg(args::stride_h);
+    constexpr uint32_t stride_w = get_arg(args::stride_w);
+    constexpr uint32_t in_h_padded = get_arg(args::in_h_padded);
+    constexpr uint32_t in_w_padded = get_arg(args::in_w_padded);
+    constexpr uint32_t eff_kernel_h = get_arg(args::eff_kernel_h);
+    constexpr uint32_t eff_kernel_w = get_arg(args::eff_kernel_w);
+    constexpr uint32_t pad_l = get_arg(args::pad_l);
+    constexpr auto intra_kernel_right_inc_cb_id = dfb::intra_kernel_right_inc_cb;
+    constexpr auto intra_kernel_down_left_wrap_inc_cb_id = dfb::intra_kernel_down_left_wrap_inc_cb;
+    constexpr auto compute_tmp_idx_cb_id = dfb::compute_tmp_idx_cb;
+    constexpr auto clear_value_cb_id = dfb::clear_value_cb;
+    constexpr uint32_t kernel_h = get_arg(args::kernel_h);
+    constexpr uint32_t kernel_w = get_arg(args::kernel_w);
+    constexpr uint32_t indexes_32_bit = get_arg(args::indexes_32_bit);
 
-    // experimental::CB wrappers for CB operations
-    experimental::CB in_scalar_cb(in_scalar_cb_id_0);
-    experimental::CB in_idx_cb(in_idx_cb_id);
-    experimental::CB pack_tmp_cb(pack_tmp_cb_id);
-    experimental::CB pack_idx_tmp_cb(pack_idx_tmp_cb_id);
-    experimental::CB right_inc_cb(right_inc_cb_id);
-    experimental::CB down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
-    experimental::CB up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
-    experimental::CB out_idx_cb(out_idx_cb_id);
-    experimental::CB intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
-    experimental::CB intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
-    experimental::CB compute_tmp_idx_cb(compute_tmp_idx_cb_id);
-    experimental::CB clear_value_cb(clear_value_cb_id);
-    experimental::CB in_cb_0(in_cb_id_0);
+    // DataflowBuffer wrappers for CB operations
+    DataflowBuffer in_scalar_cb(in_scalar_cb_id_0);
+    DataflowBuffer in_idx_cb(in_idx_cb_id);
+    DataflowBuffer pack_tmp_cb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_cb(pack_idx_tmp_cb_id);
+    DataflowBuffer right_inc_cb(right_inc_cb_id);
+    DataflowBuffer down_left_wrap_inc_cb(down_left_wrap_inc_cb_id);
+    DataflowBuffer up_left_wrap_inc_cb(up_left_wrap_inc_cb_id);
+    DataflowBuffer intra_kernel_right_inc_cb(intra_kernel_right_inc_cb_id);
+    DataflowBuffer intra_kernel_down_left_wrap_inc_cb(intra_kernel_down_left_wrap_inc_cb_id);
+    DataflowBuffer compute_tmp_idx_cb(compute_tmp_idx_cb_id);
+    DataflowBuffer clear_value_cb(clear_value_cb_id);
+    DataflowBuffer in_cb_0(in_cb_id_0);
 
     constexpr DataFormat copy_format = indexes_32_bit ? DataFormat::UInt32 : DataFormat::UInt16;
 
@@ -125,8 +122,8 @@ void kernel_main() {
 
     uint32_t current_idx_col;
     uint32_t current_idx_row;
-    const uint32_t start_row = get_arg_val<uint32_t>(2);
-    const uint32_t start_col = get_arg_val<uint32_t>(3);
+    const uint32_t start_row = get_arg(args::start_row);
+    const uint32_t start_col = get_arg(args::start_col);
     current_idx_col = start_col;
     current_idx_row = start_row;
 
@@ -146,7 +143,8 @@ void kernel_main() {
     // if max out sticks is non-zero then this will be used as the number of out sticks for every core
     // otherwise the runtime args are referenced for core-specific number of out sticks, for Pool2D
     // runtime args are used while for grid sample the max out sticks is set
-    uint32_t num_out_sticks_this_core = max_out_sticks_per_core ? max_out_sticks_per_core : get_arg_val<uint32_t>(0);
+    uint32_t num_out_sticks_this_core =
+        max_out_sticks_per_core ? max_out_sticks_per_core : get_arg(args::out_nhw_this_core);
 
     bool first_iteration = true;
     for (uint32_t n = 0; n < num_out_sticks_this_core; ++n) {

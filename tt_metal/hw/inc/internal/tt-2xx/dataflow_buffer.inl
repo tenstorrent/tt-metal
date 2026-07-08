@@ -25,6 +25,8 @@ inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interf
 
 inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.stride_size; }
 
+inline uint32_t DataflowBuffer::get_total_num_entries() const { return local_dfb_interface_.num_entries; }
+
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
     WAYPOINT("RBW");
     dfb::PackedTileCounter packed_tc =
@@ -145,10 +147,17 @@ inline void DataflowBuffer::finish_impl() {
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
             dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
             uint8_t tc_id = dfb::get_counter_id(packed_tc);
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_UNPACK)
+#if defined(COMPILE_FOR_TRISC) && (defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK))
+            // TRISC drain: finish() must not return until this TC is empty (posted == 0) -
+            // covers the consumer (UNPACK), the Tensix->DM producer (PACK), and both sides of
+            // an INTRA self-loop. The consumer also skips TCs this TRISC doesn't own via
+            // tensix_trisc_mask, which exists only in the UNPACK-side LocalDFBInterface, so the
+            // gate sits under an inner UNPACK guard (the PACK struct has no such member).
+#ifdef UCK_CHLKC_UNPACK
             if ((local_dfb_interface_.tensix_trisc_mask & (1u << ckernel::csr_read<ckernel::CSR::TRISC_ID>())) == 0) {
                 continue;
             }
+#endif
             all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
@@ -240,7 +249,9 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     // different threads' checks, causing some to enter the barrier and others to skip
     // it. Once past this point, tiles_to_process on the tail txn_id reflects the
     // contributions of all producers / consumers for this collective batch.
-    sync_threads();
+    // Producer and consumer kernels co-reside with different thread counts, so each
+    // side uses its own barrier (0 = producer, 1 = consumer) — sharing one deadlocks.
+    sync_threads(is_producer ? 0 : 1);
 
     // ISR already handled the collective batch — modular check (see WTP1).
     if (static_cast<int16_t>(read_actual_slot0() - expected_slot0) >= 0) {

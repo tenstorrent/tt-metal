@@ -18,6 +18,12 @@ from tracy import signpost
 import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -96,55 +102,40 @@ def run_torch_routed_experts(
     return expert_outputs
 
 
-# dispatch_buffer_capacity_factor below is the most conservative integer such
-# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
-    [
-        # fmt: off
-        (320, 1024, 512, 64, 2, 9, True),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
-        # fmt: on
-    ],
-    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [
-        pytest.param(
-            1,
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            id="single-1",
-        ),
-        pytest.param(
-            (4, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
-            id="linear-4",
-        ),
-        pytest.param(
-            (8, 1),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
-            id="mesh-2x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
-def test_ttnn_routed_expert(
+ROUTED_EXPERT_MESH_PARAMS = [
+    pytest.param(
+        1,
+        {"fabric_config": ttnn.FabricConfig.DISABLED},
+        id="single-1",
+    ),
+    pytest.param(
+        (4, 1),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
+        id="linear-4",
+    ),
+    pytest.param(
+        (8, 1),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+        id="linear-8",
+    ),
+    pytest.param(
+        (4, 2),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+        id="mesh-4x2",
+    ),
+    pytest.param(
+        (2, 4),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-4x2"),
+        id="mesh-2x4",
+    ),
+]
+
+
+def run_routed_expert(
     mesh_device,
     device_params,
     seq_len_per_chip,
@@ -156,12 +147,9 @@ def test_ttnn_routed_expert(
     run_pcc_check,
     use_predictable_data,
 ):
-    """
-    Test TtRoutedExpert with DeepSeek V3 dimensions on various mesh configurations.
-
-    Validates that the TTNN routed expert FFN computation matches torch reference.
-    Each device processes its local experts independently (no CCL needed).
-    """
+    """Run TtRoutedExpert against the torch reference and (optionally) PCC-check it. Shared body
+    for the per-model test entrypoints below — they differ only on the (emb_dim, hidden_dim)
+    shape axis. Each device processes its local experts independently (no CCL needed)."""
     profiler.clear()
     profiler.start("test_ttnn_routed_expert")
     num_devices = mesh_device.get_num_devices()
@@ -368,6 +356,7 @@ def test_ttnn_routed_expert(
         torch_weights=torch_weights_list,  # None when run_pcc_check=False
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.Silu,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_routed_expert_creation")
@@ -426,6 +415,15 @@ def test_ttnn_routed_expert(
                     ttnn_expert = ttnn_chip[inter_chip_offset : inter_chip_offset + token_count]
                     _, pcc = comp_pcc(torch_expert, ttnn_expert)
                     pcc_values.append(pcc)
+                    # NaN/Inf is checked on the WRITTEN rows only (same slice as PCC).
+                    # The unified op writes each expert's ceil_tile(count) rows and leaves
+                    # the rest of the dispatch-shaped buffer (zero-count regions, the tail
+                    # of the capacity-padded buffer) uninitialized — that padding is never
+                    # read by `combine`, which is bounded by expert_token_counts/offsets.
+                    # Asserting over the full buffer would flag harmless uninitialized
+                    # padding (the op allocates the output with ttnn::empty).
+                    assert not torch.isnan(ttnn_expert).any(), f"NaN in written rows of expert {global_expert_idx}"
+                    assert not torch.isinf(ttnn_expert).any(), f"Inf in written rows of expert {global_expert_idx}"
                     logger.debug(
                         f"Chip (dg={dg},ds={ds}), Local Expert {expert_idx} (Global {global_expert_idx}) PCC: {pcc:.6f}"
                     )
@@ -440,9 +438,10 @@ def test_ttnn_routed_expert(
     pcc_threshold = 0.97
     assert min_pcc >= pcc_threshold, f"PCC {min_pcc:.6f} below threshold {pcc_threshold}"
 
-    # Verify no NaN/Inf
-    assert not torch.isnan(ttnn_outputs_torch).any(), "Output contains NaN"
-    assert not torch.isinf(ttnn_outputs_torch).any(), "Output contains Inf"
+    # NaN/Inf is verified per-expert on the written rows above (the op's actual
+    # output contract). The padding rows of the capacity-sized buffer are
+    # uninitialized by design (ttnn::empty) and not part of the contract — see the
+    # per-expert check above and the comment in unified_routed_expert_ffn.cpp.
 
     # Print timing summary
     profiler.end("test_ttnn_routed_expert")
@@ -450,3 +449,143 @@ def test_ttnn_routed_expert(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
     logger.debug("TtRoutedExpert PCC Test PASSED!")
+
+
+# dispatch_buffer_capacity_factor below is the most conservative integer such
+# that dgs*seq*factor >= theoretical worst-case required dispatch buffer.
+#
+# Model-independent correctness shape — small emb/hidden that validates PCC without tying to
+# any model's dimensions. Kept in a single test so it is not duplicated per model. The per-model
+# entrypoints below run the larger model dims with PCC skipped (full-dim PCC is too expensive).
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    [(320, 1024, 512, 64, 2, 9, True)],
+    ids=["small-dims-validate-pcc"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )
+
+
+# Per-model dims as (id_prefix, config, extended_model), PCC skipped (full-dim PCC is too
+# expensive). Each model runs seq 640 at its own (emb_dim, MOE_INTERMEDIATE_SIZE), with
+# num_routed_experts = NUM_ROUTED_EXPERTS // 4, topk 2, capacity 3. DeepSeek V3 is the baseline
+# and runs by default; every other model is gated behind @pytest.mark.extended_model.
+ROUTED_EXPERT_MODELS = [
+    ("dsv3", DeepSeekV3Config, False),
+    ("glm_51", GLM51Config, True),
+    ("kimi_k26", KimiK26Config, True),
+    ("minimax_m27", MiniMaxM27Config, True),
+    ("dsv4_pro", DeepSeekV4ProConfig, True),
+    ("dsv4_flash", DeepSeekV4FlashConfig, True),
+    ("gptoss_120b", GptOss120BConfig, True),
+]
+
+
+# Routed-expert combinations the op does not yet pass on BH, keyed by model name -> the mesh layouts
+# that still fail (ids from ROUTED_EXPERT_MESH_PARAMS) and the tracking issue. Applied as strict xfail
+# per (model, mesh) by _xfail_known_routed_expert_failures, so a layout that starts passing turns CI
+# red. Drop a layout once it passes; drop the whole entry once all of its layouts do.
+XFAIL_ROUTED_EXPERT = {
+    "gptoss_120b": {
+        "reason": "GPT-OSS 120B routed expert — https://github.com/tenstorrent/tt-metal/issues/47604",
+        "mesh_ids": {"linear-4"},
+    },
+}
+
+
+@pytest.fixture(autouse=True)
+def _xfail_known_routed_expert_failures(request):
+    """Strict-xfail the exact (model, mesh-layout) routed-expert combinations in XFAIL_ROUTED_EXPERT.
+    Marking the combination rather than the whole model keeps already-passing layouts green and lets
+    strict xfail flag any layout that newly passes."""
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is None:
+        return
+    test_id = f"-{callspec.id}-"
+    for model_name, entry in XFAIL_ROUTED_EXPERT.items():
+        if f"{model_name}-dims" not in test_id:
+            continue
+        if any(f"-{mesh_id}-" in test_id for mesh_id in entry["mesh_ids"]):
+            request.applymarker(pytest.mark.xfail(reason=entry["reason"], strict=True))
+
+
+def routed_expert_shape_params():
+    """Build the per-model shape parametrization. Non-baseline models carry the extended_model
+    marker on their params so they stay gated exactly as the separate tests were."""
+    params = []
+    for name, config, extended in ROUTED_EXPERT_MODELS:
+        marks = (pytest.mark.extended_model,) if extended else ()
+        params.append(
+            pytest.param(
+                640,
+                config.EMB_SIZE,
+                config.MOE_INTERMEDIATE_SIZE,
+                config.NUM_ROUTED_EXPERTS // 4,
+                2,
+                3,
+                False,
+                marks=marks,
+                id=f"{name}-dims-skip-pcc",
+            )
+        )
+    return params
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    routed_expert_shape_params(),
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", ROUTED_EXPERT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+def test_ttnn_routed_expert_models(
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    use_predictable_data,
+):
+    run_routed_expert(
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        use_predictable_data,
+    )

@@ -8,7 +8,6 @@
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
-#include "tilize_multi_core_width_sharded_program_factory.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
@@ -28,8 +27,18 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    // The optimized factory aliases CBs directly to the input and output shard buffers (zero-copy).
+    // CBs can only reside in L1, so any DRAM-backed input or output is always incompatible.
+    if (input_tensor.memory_config().buffer_type() != BufferType::L1) {
+        return false;
+    }
+    if (operation_attributes.output_mem_config.buffer_type() != BufferType::L1) {
+        return false;
+    }
+
     auto memory_layout = input_tensor.memory_config().memory_layout();
-    if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
+    if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
+        memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         return false;
     }
 
@@ -41,31 +50,49 @@ bool can_use_sharded_optimized_factories(
         if (operation_attributes.output_mem_config.shard_spec().value().shape[1] % tt::constants::TILE_WIDTH != 0) {
             return false;
         }
-        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] != tt::constants::TILE_HEIGHT) {
-            return false;
-        }
-        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
+        if (operation_attributes.output_mem_config.shard_spec().value().shape[0] % tt::constants::TILE_HEIGHT != 0) {
             return false;
         }
     }
 
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
-        operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-        return false;
+    // HEIGHT_SHARDED supports both same-layout sharded output and INTERLEAVED L1 output.
+    // The INTERLEAVED output path uses a contiguous tile-start-id assignment, which is only
+    // correct for ROW_MAJOR shard orientation (shards are ordered row-wise matching the output).
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        const auto& shard = input_tensor.shard_spec().value();
+        if (shard.shape[0] % tt::constants::TILE_HEIGHT != 0 || shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+            return false;  // Non-tile-aligned shard: num_tiles_per_shard would silently truncate.
+        }
+        const auto out_layout = operation_attributes.output_mem_config.memory_layout();
+        if (out_layout == TensorMemoryLayout::INTERLEAVED) {
+            if (shard.orientation != ShardOrientation::ROW_MAJOR) {
+                return false;
+            }
+        } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
+            return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
+        }
     }
 
-    if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
-        return false;
+    if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        // WIDTH_SHARDED and BLOCK_SHARDED only support same-layout sharded output.
+        if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
+            return false;
+        }
     }
 
-    if (input_tensor.shard_spec().value().orientation != ShardOrientation::ROW_MAJOR) {
-        return false;
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        const auto& out_shard = operation_attributes.output_mem_config.shard_spec().value();
+        if (out_shard.shape[0] % tt::constants::TILE_HEIGHT != 0 ||
+            out_shard.shape[1] % tt::constants::TILE_WIDTH != 0) {
+            return false;
+        }
     }
+
     if (operation_attributes.sub_core_grids.has_value()) {
         return false;  // Sharded tilize does not support sub core grid specification
     }
 
-    // The sharded factories place kernels on every core in the shard grid.
+    // The sharded factory places kernels on every core in the shard grid.
     // If the grid extends beyond the compute grid (e.g. includes dispatch cores),
     // kernel placement will fail.  Fall back to the default factory which
     // distributes work across the compute grid and accesses shards via NoC.
@@ -111,10 +138,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
             input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
         "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
-    TT_FATAL(
-        input_tensor_a.dtype() != DataType::FP8_E4M3 || (operation_attributes.output_dtype == DataType::BFLOAT8_B),
-        "FP8_E4M3 input requires output_dtype=BFLOAT8_B for tilize; the default output dtype would produce an "
-        "invalid TILE output specification");
+    // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
+    // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
+    {
+        const DataType out_dt = operation_attributes.output_dtype;
+        // Valid TILE float output = a float dtype other than FP8_E4M3 (which is itself ROW_MAJOR-only).
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::FP8_E4M3 || (is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3),
+            "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+    }
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 
@@ -144,7 +176,12 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     const TilizeDeviceOperation::operation_attributes_t& operation_attributes,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
+    // The legacy shard-spec override only applies when the output is also sharded (same layout).
+    // For the HEIGHT_SHARDED → INTERLEAVED path the output_mem_config is respected as-is.
+    const bool output_is_sharded =
+        operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::INTERLEAVED &&
+        operation_attributes.output_mem_config.memory_layout() != TensorMemoryLayout::ND_SHARDED;
+    if (output_is_sharded && can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
         log_warning(
             tt::LogOp,
             "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
@@ -186,9 +223,6 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     if (input_tensor_a.memory_config().is_sharded()) {
         if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
-            if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-                return ttnn::prim::TilizeMultiCoreWidthShardedProgramFactory{};
-            }
             return ttnn::prim::TilizeMultiCoreShardedProgramFactory{};
         }
         return ttnn::prim::TilizeMultiCoreDefaultProgramFactory{};
@@ -231,6 +265,26 @@ TilizeDeviceOperation::tensor_return_value_t TilizeDeviceOperation::create_outpu
     const TilizeDeviceOperation::operation_attributes_t& args,
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> TilizeDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Only the sharded factory is CB-bound (in/out addresses ride on the sharded CBs, no Buffer* rt-arg).
+    // Re-apply reader arg0 (num_tiles_per_shard, unchanged) on the first core to trip the fast-path so
+    // apply_resolved_bindings re-patches the CB base addresses instead of rebuilding create_descriptor.
+    if (!std::holds_alternative<TilizeMultiCoreShardedProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        return {};
+    }
+    const auto& shard_spec = tensor_args.input_tensor.shard_spec().value();
+    return {tt::tt_metal::DynamicRuntimeArg{
+        /*kernel_idx=*/0,
+        corerange_to_cores(shard_spec.grid).front(),
+        /*arg_idx=*/0,
+        shard_spec.shape[0] * shard_spec.shape[1] / tt::constants::TILE_HW}};
 }
 
 ttnn::Tensor tilize(

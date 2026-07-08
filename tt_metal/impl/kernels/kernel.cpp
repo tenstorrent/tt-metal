@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 #include <set>
 #include <string_view>
 #include <type_traits>
@@ -182,10 +183,10 @@ Kernel::Kernel(
 void Kernel::register_kernel_with_watcher() {
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
-        // Watcher server should always be available... unless the target is a mock device
+        // Null for mock and emulated targets (no watcher created); nothing to register.
         TT_FATAL(
-            MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock,
-            "Watcher server is unavailable, and the target is not a mock device");
+            MetalContext::instance().get_cluster().is_mock_or_emulated(),
+            "Watcher server is unavailable, and the target is not a mock or emulated device");
         this->watcher_kernel_id_ = -1;
         return;
     }
@@ -198,7 +199,7 @@ void Kernel::register_kernel_with_watcher() {
 }
 
 void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const {
-    // Skip if watcher server not available (e.g., during mock device testing)
+    // Skip if watcher server not available (e.g. mock or emulated targets)
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
         return;
@@ -326,6 +327,14 @@ void Kernel::process_tensor_binding_handles(const std::function<void(
                                                 uint32_t num_runtime_field_crta_words)> callback) const {
     for (const auto& handle : this->tensor_binding_handles_) {
         callback(handle.accessor_name, handle.cta_offset, handle.addr_crta_offset, handle.num_runtime_field_crta_words);
+    }
+}
+
+void Kernel::process_scratchpad_binding_handles(
+    const std::function<void(const std::string& accessor_name, uint32_t size_bytes, uint32_t addr_crta_word)> callback)
+    const {
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        callback(handle.accessor_name, handle.size_bytes, handle.addr_crta_word);
     }
 }
 
@@ -546,6 +555,16 @@ uint64_t Kernel::compute_hash() const {
         hasher.update(static_cast<uint64_t>(handle.addr_crta_offset));
         hasher.update(static_cast<uint64_t>(handle.num_runtime_field_crta_words));
     }
+    // Scratchpad binding handles: like tensor bindings, stored in order and emitted by genfiles in
+    // the same order. Hash accessor_name + size_bytes + addr_crta_word — the accessor's compile-time
+    // inputs (size_bytes is baked into the generated header, so it MUST be in the cache key).
+    // allocated_address is a per-execution allocation, not part of the binary, so it is omitted.
+    hasher.update(static_cast<uint64_t>(this->scratchpad_binding_handles_.size()));
+    for (const auto& handle : this->scratchpad_binding_handles_) {
+        hasher.update(handle.accessor_name);
+        hasher.update(static_cast<uint64_t>(handle.size_bytes));
+        hasher.update(static_cast<uint64_t>(handle.addr_crta_word));
+    }
     // Named RTA/CRTA schema: order matters (determines byte offsets), so hash the sequence.
     // Named RTA and CRTA counts also need to be hashed!
     // Otherwise, RTAs ["a", "b"] could hash the same as ["ab"].
@@ -604,13 +623,23 @@ std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runti
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
+// num_unique_rt_args and num_common_rt_args are user-visible arg counts (excluding any watcher count words).
 void Kernel::validate_runtime_args_size(
     size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     uint32_t expected_max_rt_args = 0;
 
+    // The enforced ceiling is no longer the conservative public floor (kernel_types.hpp:max_runtime_args).
+    // Large unique RTAs are dispatched via CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST, so they are no longer
+    // bounded by a single dispatch page. The RTA/CRTA region offset is stored in a uint16_t launch-message
+    // field (dev_msgs.h rta_offset_t), which caps the region at uint16_t max bytes.
     switch (this->get_kernel_programmable_core_type()) {
-        case HalProgrammableCoreType::TENSIX: expected_max_rt_args = max_runtime_args; break;
+        case HalProgrammableCoreType::TENSIX:
+            // The TENSIX kernel-config L1 size is device-dependent (derived from the allocator at program
+            // finalize, not available from the HAL here), so bound only by the uint16_t RTA offset field.
+            // The actual L1 fit is enforced later against the kernel-config ring buffer.
+            expected_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
+            break;
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH:
         case HalProgrammableCoreType::DRAM:
@@ -620,6 +649,13 @@ void Kernel::validate_runtime_args_size(
             break;
         default: TT_THROW("Invalid programmable core type: {}", this->get_kernel_programmable_core_type());
     }
+
+    // Reserve the watcher count words unconditionally so the usable limit does not depend on whether watcher
+    // asserts are enabled. When enabled the device prepends one count word to the unique RTA region and one to
+    // the common RTA region ([count | args]); reserving them even when disabled keeps the user-visible limit stable.
+    constexpr uint32_t watcher_reserved_count_words = 2;
+    expected_max_rt_args =
+        expected_max_rt_args > watcher_reserved_count_words ? expected_max_rt_args - watcher_reserved_count_words : 0;
 
     if (total_rt_args > expected_max_rt_args) {
         TT_THROW(
@@ -650,13 +686,15 @@ void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uin
         // When watcher assert is enabled, we store [arg count | args]
         size_t effective_limit = runtime_args.size() + watcher_count_word_offset_;
 
-        // Validate against hardware limit (341 words)
-        this->validate_runtime_args_size(effective_limit, this->common_runtime_args_.size(), logical_core);
+        // Validate user-visible arg counts; the watcher count-word reservation is applied inside
+        // validate_runtime_args_size so the limit is identical whether or not watcher asserts are enabled.
+        size_t common_user_args =
+            this->common_runtime_args_.empty() ? 0 : this->common_runtime_args_.size() - watcher_count_word_offset_;
+        this->validate_runtime_args_size(runtime_args.size(), common_user_args, logical_core);
 
-        // Track maximum dispatch size for CRTA validation
-        // Note: max_runtime_args_per_core_ stores effective size (includes count word if watcher enabled)
-        if (effective_limit > max_runtime_args_per_core_) {
-            max_runtime_args_per_core_ = effective_limit;
+        // Track the max user-visible unique arg count for the later combined CRTA validation.
+        if (runtime_args.size() > max_runtime_args_per_core_) {
+            max_runtime_args_per_core_ = runtime_args.size();
             core_with_max_runtime_args_ = logical_core;
         }
 
@@ -697,9 +735,11 @@ void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_ar
 
     size_t effective_crta_limit = common_runtime_args.size() + watcher_count_word_offset_;
 
-    // Validate combined RTA + CRTA size doesn't exceed hardware limit (341 words)
-    // max_runtime_args_per_core_ already includes count word if watcher enabled
-    this->validate_runtime_args_size(max_runtime_args_per_core_, effective_crta_limit, core_with_max_runtime_args_);
+    // Validate combined user-visible RTA + CRTA size. max_runtime_args_per_core_ holds the max user-visible
+    // unique arg count; the watcher count-word reservation is applied inside validate_runtime_args_size so the
+    // limit does not depend on whether watcher asserts are enabled.
+    this->validate_runtime_args_size(
+        max_runtime_args_per_core_, common_runtime_args.size(), core_with_max_runtime_args_);
 
     // Prepend count when watcher enabled for device-side bounds checking
     if (watcher_assert_enabled_) {
@@ -1336,6 +1376,7 @@ void QuasarComputeKernel::set_build_options(JitBuildOptions& build_options) cons
     build_options.unpack_to_dest_mode = this->config_.unpack_to_dest_mode;
     build_options.bfp8_pack_precise = this->config_.bfp8_pack_precise;
     build_options.enable_2x_src_format = this->config_.enable_2x_src_format;
+    build_options.unpack_to_dest_en = this->config_.unpack_to_dest_en;
 }
 
 }  // namespace experimental::quasar

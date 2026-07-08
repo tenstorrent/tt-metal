@@ -212,9 +212,9 @@ void run_single_dfb_program(
     const auto consumer_pattern =
         is_all ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
 
-    // Per-DM-kernel disable_implicit_sync_for entries below mirror the boolean derived from
-    // dfb_config.enable_producer_implicit_sync (the lower-level legacy config still drives the value;
-    // each DM endpoint votes per-DFB on the spec side).
+    // Per-DM-kernel disable_dfb_implicit_sync_for_all flags below mirror the boolean derived from
+    // dfb_config.enable_producer_implicit_sync (the lower-level legacy config still drives the value).
+    // Each DM kernel here binds exactly one DFB, so opting out for all bound DFBs opts out for that DFB.
     experimental::DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size,
@@ -318,15 +318,15 @@ void run_single_dfb_program(
         };
     }
 
-    // Each DM endpoint votes per-DFB on opting out of implicit sync.
+    // Each DM endpoint votes on opting out of implicit sync (for the single DFB it binds).
     const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
     if (producer_type == DFBPorCType::DM && disable_isync) {
         std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
     }
     if (consumer_type == DFBPorCType::DM && disable_isync) {
         std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(DFB_NAME);
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::WorkUnitSpec wu{
@@ -669,7 +669,7 @@ void run_concurrent_dfbs_program(
         });
         if (disable_isync) {
             std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for_all = true;
         }
         kernel_names.push_back(producer_name);
 
@@ -696,7 +696,7 @@ void run_concurrent_dfbs_program(
         });
         if (disable_isync) {
             std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for_all = true;
         }
         kernel_names.push_back(consumer_name);
     }
@@ -862,7 +862,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         });
         if (!dfb_config.enable_producer_implicit_sync) {
             std::get<experimental::DataMovementHardwareConfig>(kernel_specs.back().hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for_all = true;
         }
         kernel_names.push_back(consumer_name);
     }
@@ -1067,9 +1067,9 @@ void run_sequential_dfbs_program(
         const bool disable_isync = !configs[i].enable_producer_implicit_sync;
         if (disable_isync) {
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for.push_back(dfb_name);
             std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-                .gen2_config->disable_implicit_sync_for.push_back(dfb_name);
+                .gen2_config->disable_dfb_implicit_sync_for.push_back(dfb_name);
         }
         tensor_parameters.push_back(experimental::TensorParameter{
             .unique_id = in_tensor_name,
@@ -1232,7 +1232,7 @@ void run_in_dfb_out_dfb_program(
     };
     if (!dm2tensix_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(IN_DFB);
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::KernelSpec compute_spec{
@@ -1292,7 +1292,7 @@ void run_in_dfb_out_dfb_program(
     };
     if (!tensix2dm_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(OUT_DFB);
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
     }
 
     experimental::WorkUnitSpec wu{
@@ -1363,6 +1363,16 @@ void run_in_dfb_out_dfb_program(
     }
 
 #define DFB_NO_EXTRA_SKIP ((void)0)
+
+// A DM->DM config consumes (num_p + num_c) DM cores; Quasar exposes only 6 usable DM cores per
+// node (QUASAR_USER_DM_CORES_PER_NODE), so any DM->DM config needing more can never be launched
+// there and ValidateProgramSpec would FATAL. Skip it explicitly. (DM<->Tensix configs are exempt:
+// the Tensix endpoint is not a DM core.)
+#define DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(num_p, num_c)                                             \
+    if (devices_.at(0)->arch() == ARCH::QUASAR && ((num_p) + (num_c)) > 6) {                        \
+        GTEST_SKIP() << "DM->DM config needs " << ((num_p) + (num_c))                               \
+                     << " DM cores, exceeds the Quasar per-node budget of 6";                       \
+    }
 
 constexpr uint32_t dfb_default_num_entries(uint32_t num_p, uint32_t num_c) {
     const uint32_t m = (num_p / std::gcd(num_p, num_c)) * num_c;
@@ -1511,7 +1521,7 @@ DFB_TEST    (DM,       4Sx1S, DM,     DM,     4, STRIDED, 1, STRIDED, DFB_NO_EXT
 DFB_TEST    (DMTensix, 4Sx1S, DM,     TENSIX, 4, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx1S, TENSIX, DM,     4, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 
-DFB_TEST_BUF(DM,       4Sx4S, DM,     DM,     4, STRIDED, 4, STRIDED, DFB_NO_EXTRA_SKIP, 29)
+DFB_TEST_BUF(DM,       4Sx4S, DM,     DM,     4, STRIDED, 4, STRIDED, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4), 29)
 DFB_TEST    (DMTensix, 4Sx4S, DM,     TENSIX, 4, STRIDED, 4, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx4S, TENSIX, DM,     4, STRIDED, 4, STRIDED, DFB_NO_EXTRA_SKIP)
 
@@ -1558,7 +1568,7 @@ DFB_TEST    (TensixDM, 2Sx1S, TENSIX, DM,     2, STRIDED, 1, STRIDED, DFB_NO_EXT
 DFB_TEST    (TensixDM, 1Sx2S, TENSIX, DM,     1, STRIDED, 2, STRIDED, DFB_NO_EXTRA_SKIP)
 // 3-DM consumer
 DFB_TEST    (TensixDM, 1Sx3S, TENSIX, DM,     1, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (TensixDM, 2Sx3S, TENSIX, DM,     2, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP)
+// DFB_TEST    (TensixDM, 2Sx3S, TENSIX, DM,     2, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP) // non-integer C/P ratio (3 % 2 != 0); a strided producer requires num_consumers % num_producers == 0 (use ALL/BLOCKED for 2->3), mirrors the commented-out DM->DM 2Sx3S above
 // DFB_TEST    (TensixDM, 4Sx3S, TENSIX, DM,     4, STRIDED, 3, STRIDED, DFB_NO_EXTRA_SKIP) // needs BLOCKED access pattern
 // 6-DM consumer
 DFB_TEST    (TensixDM, 1Sx6S, TENSIX, DM,     1, STRIDED, 6, STRIDED, DFB_NO_EXTRA_SKIP)
@@ -1577,7 +1587,7 @@ DFB_TEST    (DM,       4Sx1A, DM,     DM,     4, STRIDED, 1, ALL, DFB_SKIP_DM_DM
 DFB_TEST    (DMTensix, 4Sx1A, DM,     TENSIX, 4, STRIDED, 1, ALL, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx1A, TENSIX, DM,     4, STRIDED, 1, ALL, DFB_NO_EXTRA_SKIP)
 
-DFB_TEST    (DM,       4Sx4A, DM,     DM,     4, STRIDED, 4, ALL, DFB_SKIP_DM_DM_ALL_IMPLICIT_SYNC)
+DFB_TEST    (DM,       4Sx4A, DM,     DM,     4, STRIDED, 4, ALL, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4))
 DFB_TEST    (DMTensix, 4Sx4A, DM,     TENSIX, 4, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 4Sx4A, TENSIX, DM,     4, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 
@@ -1633,6 +1643,259 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_RingPressure_1Sx1S) {
     run_single_dfb_program(
         this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM,
         CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0))), /*num_entries_in_buffer=*/64);
+}
+
+// Streams `workload` entries through a single-core DM->DM STRIDED DFB ring and applies a sequence of
+// size overrides across successive launches.
+struct DfbSizeOverride {
+    std::optional<uint32_t> entry_size = std::nullopt;
+    std::optional<uint32_t> num_entries = std::nullopt;
+};
+
+static void run_dfb_size_override_test(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    bool implicit_sync_param,
+    uint32_t data_entry_size,   // bound-tensor page size == effective entry_size for every launch
+    uint32_t entry_size_spec,   // DFB-declared entry_size
+    uint32_t num_entries_spec,  // DFB-declared ring depth
+    uint32_t workload,          // entries streamed (CTAs / entries_per_core)
+    const std::vector<DfbSizeOverride>& launches,
+    uint8_t num_producers = 1,
+    uint8_t num_consumers = 1) {
+    IDevice* device = mesh_device->get_devices()[0];
+    const bool implicit_sync = (device->arch() == ARCH::QUASAR) && implicit_sync_param;
+
+    // Per-thread compile-time loop bounds; the strided kernels split `workload` across the threads
+    // (ceiling division, with a runtime entries_per_core bound to skip the tail).
+    const uint32_t entries_per_producer = (workload + num_producers - 1) / num_producers;
+    const uint32_t entries_per_consumer = (workload + num_consumers - 1) / num_consumers;
+
+    const experimental::DFBSpecName DFB_NAME{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+
+    const auto tensor_spec = make_flat_dram_tensor_spec(data_entry_size, workload);
+    MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+
+    const experimental::DataMovementHardwareConfig dm_producer_cfg{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+    const experimental::DataMovementHardwareConfig dm_consumer_cfg{
+        .gen1_config =
+            experimental::DataMovementHardwareConfig::Gen1Config{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+    };
+
+    experimental::KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
+        .num_threads = num_producers,
+        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
+        .compile_time_args =
+            {{"num_entries_per_producer", entries_per_producer},
+             {"implicit_sync", static_cast<uint32_t>(implicit_sync ? 1u : 0u)},
+             {"num_producers", static_cast<uint32_t>(num_producers)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
+        .hw_config = dm_producer_cfg,
+    };
+    experimental::KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
+        .num_threads = num_consumers,
+        .dfb_bindings = {{
+            .dfb_spec_name = DFB_NAME,
+            .accessor_name = "in",
+            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+        }},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .compile_time_args =
+            {{"num_entries_per_consumer", entries_per_consumer},
+             {"blocked_consumer", 0u},
+             {"implicit_sync", static_cast<uint32_t>(implicit_sync ? 1u : 0u)},
+             {"num_consumers", static_cast<uint32_t>(num_consumers)}},
+        .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
+        .hw_config = dm_consumer_cfg,
+    };
+    if (!implicit_sync) {
+        std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config)
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
+        std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config)
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
+    }
+
+    const CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
+    experimental::WorkUnitSpec wu{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = core_range_set};
+
+    experimental::DataflowBufferSpec dfb_spec{
+        .unique_id = DFB_NAME,
+        .entry_size = entry_size_spec,
+        .num_entries = num_entries_spec,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "dfb_size_override",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {dfb_spec},
+        .tensor_parameters =
+            {{.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+             {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    const auto input =
+        tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
+
+    using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    uint32_t eff_entry_size = entry_size_spec;
+    uint32_t eff_num_entries = num_entries_spec;
+
+    for (const auto& step : launches) {
+        if (step.entry_size.has_value()) {
+            eff_entry_size = *step.entry_size;
+        }
+        if (step.num_entries.has_value()) {
+            eff_num_entries = *step.num_entries;
+        }
+        // The bound tensors' page size is fixed, so the effective entry_size must match it each launch.
+        ASSERT_EQ(eff_entry_size, data_entry_size)
+            << "test setup error: effective entry_size must equal the bound tensor page size";
+
+        experimental::ProgramRunArgs run_params;
+        experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel = PRODUCER};
+        producer_params.runtime_arg_values = {
+            NodeRuntimeArgs{experimental::NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", workload}}}};
+        experimental::ProgramRunArgs::KernelRunArgs consumer_params{.kernel = CONSUMER};
+        consumer_params.runtime_arg_values = {
+            NodeRuntimeArgs{experimental::NodeCoord{0, 0}, {{"chunk_offset", 0u}, {"entries_per_core", workload}}}};
+        run_params.kernel_run_args = {producer_params, consumer_params};
+        run_params.tensor_args = {
+            {IN_TENSOR, experimental::TensorArgument{in_tensor}},
+            {OUT_TENSOR, experimental::TensorArgument{out_tensor}}};
+        // At most one dfb_run_overrides entry per DFB; carry whichever of entry_size/num_entries is set.
+        if (step.entry_size.has_value() || step.num_entries.has_value()) {
+            run_params.dfb_run_overrides.push_back(
+                {.dfb = DFB_NAME, .entry_size = step.entry_size, .num_entries = step.num_entries});
+        }
+        experimental::SetProgramRunArgs(program, run_params);
+
+        // Overrides are reflected in host-side state immediately.
+        auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_NAME));
+        EXPECT_EQ(dfb->config.entry_size, eff_entry_size);
+        EXPECT_EQ(dfb->config.num_entries, eff_num_entries);
+
+        detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
+        if (device->arch() == ARCH::QUASAR) {
+            // TODO #38042: barrier not yet uplifted for Quasar; wait for the DRAM write to land.
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::vector<uint32_t> rdback;
+            detail::ReadFromBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), rdback);
+            tt_driver_atomics::mfence();
+            ASSERT_EQ(rdback, input);
+        }
+        detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
+
+        std::vector<uint32_t> output;
+        detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), output);
+        EXPECT_EQ(output, input);
+    }
+}
+
+// Re-entry ring-depth override: spec ring=8, workload=8, overridden to 4 (ring pressure) then 16
+// (headroom) across relaunches. Exercises capacity/total-size recompute, L1 reallocation, and (with
+// implicit sync) in-place txn-descriptor recompute while preserving the TC assignment.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry) {
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 4}, DfbSizeOverride{.num_entries = 16}});
+}
+
+// entry_size override: the DFB is declared at entry_size=32, but the bound tensors
+// use page size 64; the override raises entry_size to 64 (matching the tensors) before launch.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_EntrySizeOverride) {
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/32,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{.entry_size = 64}});
+}
+
+// Both parameters at once: entry_size 32->64 (tensors sized to 64) AND ring depth
+// 8->4 in a single override, exercising base/limit recompute with simultaneously changed entry_size and
+// capacity, plus reallocation for the new total_size.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_BothOverride) {
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/32,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{.entry_size = 64, .num_entries = 4}});
+}
+
+// Symmetric 3P/3C: ring 6 -> 12 (1 TC per side).
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_3Sx3S) {
+    DFB_SKIP_IF_UNSUPPORTED(3, 3);
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/6,
+        /*workload=*/6,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 12}},
+        /*num_producers=*/3,
+        /*num_consumers=*/3);
+}
+
+// Asymmetric 1P/4C: ring 8 -> 16.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_1Sx4S) {
+    DFB_SKIP_IF_UNSUPPORTED(1, 4);
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 16}},
+        /*num_producers=*/1,
+        /*num_consumers=*/4);
+}
+
+// Asymmetric 4P/1C: ring 8 -> 16.
+TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_4Sx1S) {
+    DFB_SKIP_IF_UNSUPPORTED(4, 1);
+    run_dfb_size_override_test(
+        this->devices_.at(0),
+        GetParam(),
+        /*data_entry_size=*/64,
+        /*entry_size_spec=*/64,
+        /*num_entries_spec=*/8,
+        /*workload=*/8,
+        {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 16}},
+        /*num_producers=*/4,
+        /*num_consumers=*/1);
 }
 
 // 3 strided DM producers, 3 strided DM consumers, num_entries=3 -> capacity=1.
@@ -2088,7 +2351,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     };
     if (!remapper_dfb_config.enable_producer_implicit_sync) {
         std::get<experimental::DataMovementHardwareConfig>(dm_producer_spec.hw_config)
-            .gen2_config->disable_implicit_sync_for.push_back(REMAPPER_DFB);
+            .gen2_config->disable_dfb_implicit_sync_for_all = true;
     }
 
     // Combined compute kernel: BLOCKED consumer of remapper DFB ("remapper_in"),

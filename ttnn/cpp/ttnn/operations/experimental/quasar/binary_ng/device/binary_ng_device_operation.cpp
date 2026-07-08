@@ -233,7 +233,7 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() co
         binary_op_type,
         lhs_activations,
         rhs_activations,
-        (is_where_op || is_quant_op) ? ttnn::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
+        (is_where_op || is_quant_op) ? ttsl::SmallVector<unary::EltwiseUnaryWithParam>{} : post_activations,
         memory_config,
         get_dtype(),
         compute_kernel_config,
@@ -490,11 +490,30 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 
     TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
+    // The Metal 2.0 factory's ProgramSpec (shard grid, per-core tile counts, DFB sizing) depends on
+    // the shard volumes and total tile count — functions of logical shape, which is deliberately
+    // excluded from the default hash. For ops routed to that factory we fold those in so
+    // differently-shaped ops get distinct cache entries. This branch is skipped (so the hash is
+    // unchanged) for every op on the descriptor path.
+    const bool metal_v2 = select_program_factory(attributes, tensor_args).index() != 0;
+
     if (input_tensor_b.has_value()) {
         TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
 
-        const auto shard_volumes = get_shard_volumes(
-            input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
+        const auto output_spec = compute_output_specs(attributes, tensor_args);
+        const auto shard_volumes =
+            get_shard_volumes(input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), output_spec);
+
+        if (metal_v2) {
+            return operation::hash_operation<BinaryNgDeviceOperation>(
+                attributes,
+                input_tensor_a.dtype(),
+                input_tensor_a.memory_config(),
+                input_tensor_b->dtype(),
+                input_tensor_b->memory_config(),
+                shard_volumes,
+                output_spec.logical_shape().volume());
+        }
 
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
@@ -514,6 +533,115 @@ bool BinaryNgDeviceOperation::skip_launch(
     const tensor_args_t& /*tensor_args*/,
     const tensor_return_value_t& tensor_return_value) {
     return tensor_return_value.logical_shape().volume() == 0;
+}
+
+bool BinaryNgDeviceOperation::matches_metal_v2_slice(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // The Metal 2.0 factory covers one slice (see binary_ng_metal_v2_factory.cpp): fully-sharded
+    // (height/block L1) no-bcast ADD on the DFB kernels (bf8/bf16, optional fused RELU, in-place) —
+    // the ResNet50 residual config. Everything else falls through to the descriptor path; this
+    // predicate is the correctness boundary.
+    using tt::tt_metal::BufferType;
+    using tt::tt_metal::TensorMemoryLayout;
+
+    // ADD, FPU path only (no sfpu / quant / where), tensor-tensor, no scalar.
+    if (attributes.binary_op_type != BinaryOpType::ADD) {
+        return false;
+    }
+    if (attributes.is_sfpu || attributes.is_quant_op || attributes.is_where_op) {
+        return false;
+    }
+    if (!tensor_args.input_tensor_b.has_value() || attributes.scalar.has_value()) {
+        return false;
+    }
+    // Equal shapes (no subtile broadcast).
+    if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
+        return false;
+    }
+    // TILE layout (32x32) in and out.
+    if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
+        attributes.output_layout != Layout::TILE) {
+        return false;
+    }
+    const auto& a = tensor_args.input_tensor_a;
+    const auto& b = *tensor_args.input_tensor_b;
+    const auto& tile = a.tensor_spec().tile();
+    if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        return false;
+    }
+
+    // Fully-sharded (height/block) L1 no-bcast ADD, bf8/bf16, optional fused RELU.
+    auto is_l1_height_or_block_sharded = [](const tt::tt_metal::MemoryConfig& mc) {
+        return mc.is_sharded() && mc.buffer_type() == BufferType::L1 &&
+               (mc.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+                mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+    };
+    const bool sharded_inputs =
+        a.memory_config().is_sharded() || b.memory_config().is_sharded() || attributes.memory_config.is_sharded();
+    if (sharded_inputs) {
+        // Only the activation set ResNet uses: no lhs/rhs activations; post = empty or a single RELU.
+        if (!attributes.lhs_activations.empty() || !attributes.rhs_activations.empty()) {
+            return false;
+        }
+        if (attributes.post_activations.size() > 1) {
+            return false;
+        }
+        if (attributes.post_activations.size() == 1 &&
+            attributes.post_activations[0].type() != unary::UnaryOpType::RELU) {
+            return false;
+        }
+
+        // bf8 or bf16 inputs and output.
+        auto is_bf8_or_bf16 = [](DataType dt) { return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B; };
+        if (!is_bf8_or_bf16(a.dtype()) || !is_bf8_or_bf16(b.dtype()) || !is_bf8_or_bf16(attributes.get_dtype())) {
+            return false;
+        }
+
+        // a, b, and the output must ALL be height/block-sharded L1 (fully-sharded fast path).
+        if (!is_l1_height_or_block_sharded(a.memory_config()) || !is_l1_height_or_block_sharded(b.memory_config()) ||
+            !is_l1_height_or_block_sharded(attributes.memory_config)) {
+            return false;
+        }
+        if (tensor_args.output_tensor.has_value() &&
+            !is_l1_height_or_block_sharded(tensor_args.output_tensor->memory_config())) {
+            return false;
+        }
+
+        // Identical shard specs across a, b, and output (no-broadcast, native L1 sharding): the DFB
+        // fast path assumes one matching shard per core for all three.
+        if (!a.is_sharded() || !b.is_sharded()) {
+            return false;
+        }
+        const auto& a_shard = a.shard_spec();
+        const auto& b_shard = b.shard_spec();
+        if (!a_shard.has_value() || !b_shard.has_value()) {
+            return false;
+        }
+        if (a_shard->grid != b_shard->grid || a_shard->shape != b_shard->shape) {
+            return false;
+        }
+        const auto& out_shard_mc = attributes.memory_config.shard_spec();
+        if (!out_shard_mc.has_value()) {
+            return false;
+        }
+        if (a_shard->grid != out_shard_mc->grid || a_shard->shape != out_shard_mc->shape) {
+            return false;
+        }
+        return true;
+    }
+
+    // Not fully-sharded: fall through to the descriptor path.
+    return false;
+}
+
+BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
+    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
+    // DFB / Metal 2.0 is the default for the matching slice (arch-portable: CB-backed on WH/BH,
+    // overlay-backed on Quasar). Everything else uses the descriptor path.
+    if (matches_metal_v2_slice(attributes, tensor_args)) {
+        return ProgramFactoryMetalV2{};
+    }
+    return ProgramFactory{};
 }
 
 }  // namespace ttnn::operations::experimental::quasar::binary_ng

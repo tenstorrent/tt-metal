@@ -16,6 +16,7 @@ from transformers.cache_utils import DynamicCache
 from ttnn.device import is_blackhole
 
 import ttnn
+from models.common.utility_functions import hf_cache_layer_kv
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
@@ -84,6 +85,10 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
+        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
+        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
+        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
@@ -262,7 +267,7 @@ def run_model(
                     use_cache=True,
                 )
 
-            ref_kvpe = ref_cache.key_cache[0]  # layer 0
+            ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
 
             if not (is_ci_env or is_ci_v2_env):
                 # Save to cache for future runs
@@ -723,7 +728,6 @@ def _run_chunked_prefill(
                 rope_tensors=indexed_rope,
                 kvpe_cache=tt_kvpe_cache,
                 actual_start=kv_actual,
-                actual_end=valid_end,
                 cache_user_id=u,
             )
             out_flat = ttnn.to_torch(

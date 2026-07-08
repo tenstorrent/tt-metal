@@ -86,8 +86,7 @@ void RunTest(
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)

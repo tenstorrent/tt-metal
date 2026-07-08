@@ -17,7 +17,8 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/device.hpp"
 #include <variant>
 #include <tt-metalium/sub_device_types.hpp>
@@ -430,9 +431,9 @@ Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<M
         s_a[1]);
     Tensor b = input_b;
     if (s_a.rank() > 2) {
-        SmallVector<uint32_t> reshape(s_a.rank(), 1);
+        ttsl::SmallVector<uint32_t> reshape(s_a.rank(), 1);
         reshape[1] = s_a[1];
-        b = ttnn::reshape(input_b, ttnn::Shape(reshape));
+        b = ttnn::operations::experimental::quasar::reshape(input_b, ttnn::Shape(reshape));
     }
 
     Tensor result = ttnn::where(ttnn::ltz(input_a, output_mem_config), multiply(input_a, b), input_a);
@@ -570,14 +571,16 @@ Tensor outer(const Tensor& input_a, const Tensor& input_b, const std::optional<M
 
     if (!skip_reshape_a) {
         uint32_t a_volume = s_a[0] * s_a[1] * s_a[2] * s_a[3];
-        a_slim = ttnn::reshape(input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, a_volume, 1}});
+        a_slim = ttnn::operations::experimental::quasar::reshape(
+            input_a, ttnn::Shape{std::array<uint32_t, 4>{1, 1, a_volume, 1}});
     }
     if (!skip_reshape_b) {
         uint32_t b_volume = s_b[0] * s_b[1] * s_b[2] * s_b[3];
-        b_slim = ttnn::reshape(input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, b_volume}});
+        b_slim = ttnn::operations::experimental::quasar::reshape(
+            input_b, ttnn::Shape{std::array<uint32_t, 4>{1, 1, 1, b_volume}});
     }
-    a_slim = ttnn::to_layout(a_slim, ttnn::TILE_LAYOUT);
-    b_slim = ttnn::to_layout(b_slim, ttnn::TILE_LAYOUT);
+    a_slim = ttnn::operations::experimental::quasar::to_layout(a_slim, ttnn::TILE_LAYOUT);
+    b_slim = ttnn::operations::experimental::quasar::to_layout(b_slim, ttnn::TILE_LAYOUT);
 
     auto* device = ttnn::GetDefaultDevice();
     if (device != nullptr) {
