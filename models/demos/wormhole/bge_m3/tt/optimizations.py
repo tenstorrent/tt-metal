@@ -404,10 +404,11 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
         # HiFi2 (vs HiFi4) speeds up SDPA without dropping PCC below 0.94.
         fid = ttnn.MathFidelity.HiFi2 if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
-    # N300 B12/S8192: SDPA is 66% of runtime. HiFi2 halves the QK^T/softmax@V
-    # matmul cost (bf16 q/k/v, discards lowest bits); PCC headroom is large (0.961).
+    # N300 B12/S8192: SDPA is 73% and COMPUTE-bound (33 TFLOP/s, mask read fully
+    # overlapped in-model). LoFi ~2x the QK^T/PV matmul phase vs HiFi2. PCC-gated
+    # (headroom 0.961 vs 0.94). Roofline says fidelity is the only real SDPA lever.
     if max_seq_len == 8192:
-        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch)
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
 
