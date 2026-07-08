@@ -74,11 +74,15 @@ class XttsReferenceGptModel(nn.Module):
         self.text_head = nn.Linear(HIDDEN_SIZE, NUM_TEXT_TOKENS)
         self.mel_head = nn.Linear(HIDDEN_SIZE, NUM_AUDIO_TOKENS)
 
-    def forward(self, text_ids, mel_ids, cond_latents=None):
+    def forward(self, text_ids, mel_ids, cond_latents=None, return_latent=False):
         """``cond_latents`` (optional) are the audio conditioning latents
         ``[b, n_cond, hidden]`` prepended as the GPT prompt (coqui ``get_logits``
         with ``prompt``). They condition the stream but are stripped (via
-        ``offset``) before the heads."""
+        ``offset``) before the heads.
+
+        ``return_latent`` returns the mel-span latents ``enc[:, text_len:]``
+        (post-``final_norm``, pre-``mel_head``) — the ``[b, mel_len, hidden]``
+        hidden states the HiFiGAN decoder consumes — instead of the logits."""
         text_len, mel_len = text_ids.shape[1], mel_ids.shape[1]
         text_pos = torch.arange(text_len, device=text_ids.device)
         mel_pos = torch.arange(mel_len, device=mel_ids.device)
@@ -95,6 +99,9 @@ class XttsReferenceGptModel(nn.Module):
         enc = self.stack(emb)  # 30 blocks + ln_f
         enc = enc[:, offset:]  # strip the conditioning prompt
         enc = self.final_norm(enc)
+
+        if return_latent:
+            return enc[:, text_len:]
 
         text_logits = self.text_head(enc[:, :text_len])
         mel_logits = self.mel_head(enc[:, text_len:])
