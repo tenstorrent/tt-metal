@@ -16,7 +16,12 @@ from loguru import logger
 import ttnn
 
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
-from ...models.transformers.ltx.transformer_ltx import LTX_DIT_PREP_RUN, LTXTransformerModel, build_audio_masks, build_video_pad_mask
+from ...models.transformers.ltx.transformer_ltx import (
+    LTX_DIT_PREP_RUN,
+    LTXTransformerModel,
+    build_audio_masks,
+    build_video_pad_mask,
+)
 from ...models.vae.vae_ltx import upsample_latent
 from ...utils import walltime
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
@@ -44,6 +49,26 @@ def _sigma_override(env_name: str, default: list[float]) -> list[float]:
 
 DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S1_SIGMAS", _DEFAULT_S1_SIGMAS)
 STAGE_2_DISTILLED_SIGMA_VALUES = _sigma_override("LTX_S2_SIGMAS", _DEFAULT_S2_SIGMAS)
+
+# Interior (non-edge) keyframe i2v on a few-step schedule: a full-strength pin injects a noise-free
+# latent into one interior frame whose two-sided neighbors start from noise, and the coarse stage
+# can't reconcile that wall on nodes that are off the distilled 8-step trajectory — the neighbors
+# land off-distribution and chromatically scramble (worse, non-monotonically, on medium's off-trajectory
+# 6-step). Stage 1 for such gens uses a strict subset of the high sigma nodes and a looser interior
+# pin; stage 2 re-locks image identity at full strength (PCC stays ~0.99). Only engages below the
+# shipped node count — the 8-step high schedule already carries the reconciliation budget.
+_KEYFRAME_S1_ALIGNED = [1.0, 0.909375, 0.725, 0.421875, 0.0]
+_KEYFRAME_S1_ALIGNED_LONG = [1.0, 0.975, 0.909375, 0.725, 0.421875, 0.0]
+KEYFRAME_S1_STRENGTH = float(os.environ.get("LTX_KEYFRAME_S1_STRENGTH", "0.5"))
+
+
+def _keyframe_s1_sigmas(latent_frames: int) -> list[float]:
+    """Trajectory-aligned S1 nodes for a non-frame-0 keyframe. A longer clip's interior pin has more
+    neighbors to reconcile, so a clip past ~6s gets one extra aligned node. LTX_KEYFRAME_S1_SIGMAS
+    overrides both."""
+    if os.environ.get("LTX_KEYFRAME_S1_SIGMAS", "").strip():
+        return _sigma_override("LTX_KEYFRAME_S1_SIGMAS", _KEYFRAME_S1_ALIGNED)
+    return _KEYFRAME_S1_ALIGNED_LONG if latent_frames > 20 else _KEYFRAME_S1_ALIGNED
 
 
 def pixel_to_latent_frame(pixel_idx: int, num_frames: int) -> int:
@@ -767,8 +792,17 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Encoding ({'cache' if cached else 'device'}): {t_encode:.1f}s")
 
         s1_image_conds = full_image_conds = None
+        s1_sigmas = DISTILLED_SIGMA_VALUES
         if images:
             assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
+            latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+            # A non-frame-0 keyframe (interior or last) on a below-high schedule triggers the
+            # aligned-node + looser-pin path. Frame-0 i2v is the training-dominant case and stays
+            # full-strength on its normal schedule.
+            nonzero_kf = any(pixel_to_latent_frame(im[1], num_frames) != 0 for im in images)
+            kf_fix = nonzero_kf and len(DISTILLED_SIGMA_VALUES) < len(_DEFAULT_S1_SIGMAS)
+            if kf_fix:
+                s1_sigmas = _keyframe_s1_sigmas(latent_frames)
             # Each image conditions the latent frame owning its pixel time (0 -> first,
             # num_frames-1 -> last, any value -> a keyframe). A later image at the same latent slot
             # wins — one encoded frame owns each slot. Tuple: (path, frame_idx, s1[, s2] strength); a
@@ -778,6 +812,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 lat_idx = pixel_to_latent_frame(img[1], num_frames)
                 s1s = img[2] if len(img) > 2 else 1.0
                 s2s = img[3] if len(img) > 3 else s1s
+                if kf_fix and lat_idx != 0:
+                    s1s = min(s1s, KEYFRAME_S1_STRENGTH)  # soften the coarse non-frame-0 pin; s2 re-locks
                 by_slot[lat_idx] = (img[0], s1s, s2s)
             # The conditioning latent depends only on (image, resolution), so encode once and memoize.
             # This skips re-running the eager VAE encoder on later gens (e.g. the traced steady-state
@@ -817,7 +853,10 @@ class LTXDistilledPipeline(LTXPipeline):
         if self.dynamic_load:
             logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
 
-        logger.info(f"Stage 1: {s1_height}x{s1_width}, {len(DISTILLED_SIGMA_VALUES) - 1} steps")
+        logger.info(
+            f"Stage 1: {s1_height}x{s1_width}, {len(s1_sigmas) - 1} steps"
+            + (" [interior-keyframe aligned]" if s1_sigmas is not DISTILLED_SIGMA_VALUES else "")
+        )
         t0 = time.time()
         s1_video, s1_audio = self._denoise_no_guidance(
             v_embeds,
@@ -825,7 +864,7 @@ class LTXDistilledPipeline(LTXPipeline):
             num_frames=num_frames,
             height=s1_height,
             width=s1_width,
-            sigma_values=DISTILLED_SIGMA_VALUES,
+            sigma_values=s1_sigmas,
             seed=seed,
             image_conds=s1_image_conds,
             traced=self._traced and "s1" not in eager_stages,
