@@ -38,11 +38,18 @@ struct MatmulDecodeDeviceOperation {
         int M;
         int N;
         int K;
-        MemoryConfig output_mem_config;
+        std::optional<MemoryConfig> output_mem_config;
         std::optional<DataType> output_dtype;
         // Selects the program factory: true -> PartialWidthSharded (B sharded along both
         // K and N with a cross-core K-reduction); false -> FullWidthSharded (B width(N)-sharded).
+        // Ignored when A is rank-3 (batched), which always dispatches to BatchedWidthSharded.
         bool partial_width_sharded = false;
+        // Batched (rank-3) geometry. A is [batch, M, K] and the weights are folded along
+        // BOTH the batch (B) and N dimensions across b_blocks * n_blocks cores. Unused for the
+        // rank-2 factories (kept at 1). See BatchedWidthSharded for the fold layout.
+        int batch = 1;
+        int b_blocks = 1;
+        int n_blocks = 1;
     };
 
     // Tensors passed in/out of the operation.
@@ -84,7 +91,25 @@ struct MatmulDecodeDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    using program_factory_t = std::variant<FullWidthSharded, PartialWidthSharded>;
+    // Batched width-sharded: a batched matmul C[b] = A[b] @ B[b] for a rank-3 activation
+    // A ([batch, M, K]). Unlike PartialWidthSharded (which folds the weights along K and N and
+    // reduces the K-partials across cores), this folds the weights along BOTH the batch (B) and
+    // N dimensions: the batch is split across b_blocks and N across n_blocks, so a single core
+    // owns a [Bc, K, Nc] block of the weights (Bc = batch / b_blocks, Nc = N / n_blocks),
+    // expressed as a width-sharded tensor [Bc * K, b_blocks * N] with shard [Bc * K, Nc] laid out
+    // b-major (core c owns b_idx = c / n_blocks, n_idx = c % n_blocks). The batched matmul is
+    // block-diagonal, so there is NO cross-core reduction: each core independently computes its
+    // own [Bc, M, Nc] output block. The output mirrors the weight fold -- a width-sharded tensor
+    // [Bc * M, b_blocks * N] with shard [Bc * M, Nc] -- which the caller unfolds back to
+    // [batch, M, N].
+    struct BatchedWidthSharded {
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value);
+    };
+
+    using program_factory_t = std::variant<FullWidthSharded, PartialWidthSharded, BatchedWidthSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -102,5 +127,6 @@ ttnn::operations::experimental::matmul_decode::MatmulDecodeDeviceOperation::tens
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
-    std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 }  // namespace ttnn::prim

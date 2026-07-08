@@ -19,10 +19,15 @@ namespace ttnn::experimental {
 //   - default: B is width(N)-sharded; the full A is gathered onto every core.
 //   - partial_width_sharded: B is sharded along both K and N, with a cross-core
 //     K-reduction onto the output cores (see PartialWidthSharded for the B layout).
+//   - batched (rank-3 A [batch, M, K]): B is folded along both batch and N across
+//     b_blocks * n_blocks cores; each core computes an independent [Bc, M, Nc] block
+//     (block-diagonal, no reduction). The fold geometry (Bc, b_blocks, N, n_blocks) is
+//     inferred from the operand shapes. See BatchedWidthSharded for the B layout.
 Tensor matmul_decode(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
-    std::optional<const DataType> dtype = std::nullopt);
+    std::optional<const DataType> dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
 }  // namespace ttnn::experimental

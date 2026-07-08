@@ -139,9 +139,12 @@ void kernel_main() {
 
         // Signal completion to every core: increment the others via multicast
         // (source is excluded, so num_receivers - 1 destinations) plus self.
+
+        const uint32_t self_noc_x = is_hub0 ? hub0_noc_x : hub1_noc_x;
+        const uint32_t self_noc_y = is_hub0 ? hub0_noc_y : hub1_noc_y;
         done_sem.inc_multicast(noc, mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, 1, num_receivers - 1);
+        done_sem.up(noc, self_noc_x, self_noc_y, 1);
         noc.async_atomic_barrier();
-        done_sem.up(1);
     }
 
     // Wait until both hubs have finished broadcasting their halves.
@@ -149,4 +152,7 @@ void kernel_main() {
 
     // The full A matrix is now resident on this core; hand it to compute.
     full_in0_cb.push_back(full_num_tiles);
+
+    noc.async_write_barrier();
+    noc.async_read_barrier();
 }
