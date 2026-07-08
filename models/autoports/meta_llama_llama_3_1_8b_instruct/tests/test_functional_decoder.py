@@ -104,12 +104,12 @@ def _rope(config, hidden_states, seq_len):
     return rotary(hidden_states, position_ids)
 
 
-def _run_compare(config, state_dict, mesh_device, seq_len, pcc_threshold):
+def _run_compare(config, state_dict, mesh_device, seq_len, pcc_threshold, layer_idx=LAYER_IDX):
     torch.manual_seed(1234 + seq_len)
     hidden = torch.randn(EMITTED_BATCH, seq_len, config.hidden_size, dtype=torch.bfloat16)
     cos, sin = _rope(config, hidden, seq_len)
 
-    ref = _reference_layer(config, state_dict)
+    ref = _reference_layer(config, state_dict, layer_idx=layer_idx)
     attention_mask = torch.full((EMITTED_BATCH, 1, seq_len, seq_len), torch.finfo(torch.float32).min)
     attention_mask = torch.triu(attention_mask, diagonal=1).to(torch.bfloat16)
     with torch.no_grad():
@@ -118,7 +118,7 @@ def _run_compare(config, state_dict, mesh_device, seq_len, pcc_threshold):
     decoder = FunctionalDecoder.from_state_dict(
         state_dict,
         hf_config=config,
-        layer_idx=LAYER_IDX,
+        layer_idx=layer_idx,
         mesh_device=mesh_device,
         batch=EMITTED_BATCH,
     )
@@ -136,10 +136,18 @@ def test_synthetic_weight_prefill_real_shapes(hf_config, mesh_device, seq_len):
     print(f"SYNTHETIC_PREFILL_SEQ_{seq_len}_PCC={measured:.6f}")
 
 
+@pytest.mark.parametrize("layer_idx", [0, 31])
 @pytest.mark.parametrize("seq_len", [4])
-def test_real_weight_single_layer_prefill_pcc(hf_config, mesh_device, seq_len):
-    measured = _run_compare(hf_config, _real_layer_state_dict(), mesh_device, seq_len, 0.99)
-    print(f"REAL_WEIGHT_PREFILL_SEQ_{seq_len}_PCC={measured:.6f}")
+def test_real_weight_single_layer_prefill_pcc(hf_config, mesh_device, seq_len, layer_idx):
+    measured = _run_compare(
+        hf_config,
+        _real_layer_state_dict(layer_idx),
+        mesh_device,
+        seq_len,
+        0.99,
+        layer_idx=layer_idx,
+    )
+    print(f"REAL_WEIGHT_LAYER_{layer_idx}_PREFILL_SEQ_{seq_len}_PCC={measured:.6f}")
 
 
 def test_decode_forward_documents_pending_emit(hf_config, mesh_device, expect_error):

@@ -20,8 +20,8 @@ the repo-local functional prefill decoder and intentionally leaves decode pendin
 ## Translated Semantics
 
 - RMSNorm epsilon is Llama/HF `1e-5`; the Qwen-style `1e-6` and q/k norm notes do not apply to this emit.
-- QKV is fused from HF weights. The actual Llama emit uses `[Q, V, K]` for layers 0-30 and a layer-31 decode reorder to `[Q, K, V]`; this functional single-layer prefill uses layer-0 `[Q, V, K]`.
-- RoPE uses HF Llama-3 scaled RoPE tables built outside runtime and applied in TTNN runtime with the Llama `rotate_half` formula.
+- QKV is fused from canonical HF q/k/v weights into a consistent `[Q, V, K]` runtime tensor. The forge decode emit has a layer-31 packing reorder artifact in `consteval.py`; the functional prefill path validates both layer 0 and layer 31 against HF with the normalized runtime packing.
+- RoPE uses HF Llama-3 scaled RoPE tables built outside runtime and `ttnn.experimental.rotary_embedding` inside runtime, matching the emitted op family and slicing the op's padded result back to the logical prefill `seq_len`.
 - Attention uses GQA with 32 Q heads, 8 KV heads, head_dim 128, and SDPA scale `1/sqrt(128)`.
 - MLP is SwiGLU: `down_proj(silu(gate_proj(x)) * up_proj(x))`.
 
@@ -31,15 +31,16 @@ the repo-local functional prefill decoder and intentionally leaves decode pendin
 | --- | --- |
 | `timeout 60 tt-smi -ls --local` | unavailable: `tt-smi` not on PATH |
 | `timeout 120 python - <<'PY' ... open_mesh_device(MeshShape(1, 1)) ... PY` | `MESH_SMOKE_OK` |
-| `timeout 600 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s` | 5 passed |
+| `timeout 900 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s` | 6 passed |
 
 PCC results from the full test command:
 
 | Test | PCC |
 | --- | ---: |
 | Synthetic weights, batch 32, seq 1 | 0.998992 |
-| Synthetic weights, batch 32, seq 8 | 0.998662 |
+| Synthetic weights, batch 32, seq 8 | 0.998670 |
 | Real weights, layer 0, batch 32, seq 4 | 0.999998 |
+| Real weights, layer 31, batch 32, seq 4 | 0.999874 |
 
 ## Limitations
 
@@ -49,6 +50,6 @@ PCC results from the full test command:
 - The forge source graph is decode-shaped, not prefill-shaped.
 - HF advertises context 131072; this stage only validated single-layer prefill through seq 8.
 - `doc/context_contract.json` records `current_supported_context=8` for the current evidence. The repo-local checker currently fails non-DRAM context reductions; this is recorded as a checker/stage-contract mismatch rather than hidden by overstating support.
-- `ttnn.experimental.rotary_embedding` padded prefill sequence to 32 on this path, so the runtime uses an equivalent TTNN rotate-half formula for arbitrary prefill sequence correctness.
+- `ttnn.experimental.rotary_embedding` pads prefill sequence internally on this path; runtime slices the result back to the logical sequence length.
 
 `forge_sharding_recommendations.json` records emitted layout/program-config provenance for the future optimize stage; those sharding choices are not copied into the functional runtime.

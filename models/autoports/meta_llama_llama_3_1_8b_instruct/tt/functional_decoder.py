@@ -144,20 +144,18 @@ class FunctionalDecoder(LightweightModule):
         return _to_tt_hidden(mask, mesh_device)
 
     def _apply_rotary(self, tensor, position_cos, position_sin, num_heads: int, seq_len: int):
-        half = self.config.head_dim // 2
-        x1 = ttnn.slice(tensor, [0, 0, 0, 0], [self.batch, num_heads, seq_len, half], [1, 1, 1, 1], memory_config=DRAM)
-        x2 = ttnn.slice(
+        rotated = ttnn.experimental.rotary_embedding(
             tensor,
-            [0, 0, 0, half],
-            [self.batch, num_heads, seq_len, self.config.head_dim],
-            [1, 1, 1, 1],
+            position_cos,
+            position_sin,
+            None,
             memory_config=DRAM,
         )
-        rotated = ttnn.concat([ttnn.neg(x2, memory_config=DRAM), x1], dim=3, memory_config=DRAM)
-        return ttnn.add(
-            ttnn.multiply(tensor, position_cos, memory_config=DRAM),
-            ttnn.multiply(rotated, position_sin, memory_config=DRAM),
-            dtype=BF16,
+        return ttnn.slice(
+            rotated,
+            [0, 0, 0, 0],
+            [self.batch, num_heads, seq_len, self.config.head_dim],
+            [1, 1, 1, 1],
             memory_config=DRAM,
         )
 

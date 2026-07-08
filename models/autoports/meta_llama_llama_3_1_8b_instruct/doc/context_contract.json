@@ -13,10 +13,20 @@
     ".agents/scripts/check_context_contract.py currently treats any below-HF context as a failure unless DRAM-limited; this stage is below advertised because validation scope is short prefill, not because of a proven DRAM limit."
   ],
   "evidence": {
-    "test_command": "timeout 600 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s",
+    "test_command": "timeout 900 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s",
     "largest_validated_command": "timeout 300 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py::test_synthetic_weight_prefill_real_shapes --tb=short -s",
-    "real_weight_pcc": 0.999998,
-    "real_weight_seq_len": 4,
+    "real_weight_prefill": [
+      {
+        "layer_idx": 0,
+        "seq_len": 4,
+        "pcc": 0.999998
+      },
+      {
+        "layer_idx": 31,
+        "seq_len": 4,
+        "pcc": 0.999874
+      }
+    ],
     "synthetic_seq_lens": [1, 8]
   }
 }

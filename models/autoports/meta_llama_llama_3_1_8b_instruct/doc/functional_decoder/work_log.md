@@ -19,8 +19,8 @@ The emit is batch 32, active decode seq 1, cached length 128. The functional dec
 - Runtime validates that the input batch matches the configured emitted batch.
 - Decode raises `NotImplementedError` with pending emitted-decode text.
 - Llama-3.1 has no q/k norm weights; RMSNorm epsilon is `1e-5`.
-- The actual emit QKV order is `[Q,V,K]` for layers 0-30.
-- `ttnn.experimental.rotary_embedding` was tested and found to pad prefill sequence to 32; runtime uses an equivalent TTNN rotate-half formula.
+- Runtime QKV is packed from canonical HF q/k/v weights as `[Q,V,K]` for all validated layers. The forge decode emit has a layer-31 packing reorder artifact, but layer 31 is validated against HF through the normalized functional prefill path.
+- Runtime RoPE uses `ttnn.experimental.rotary_embedding`, matching the emitted op family, and slices the op's padded output back to the logical prefill sequence length.
 
 ## Commands
 
@@ -42,16 +42,17 @@ PY
 Result: `MESH_SMOKE_OK`.
 
 ```bash
-timeout 600 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s
+timeout 900 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s
 ```
 
-Result: 5 passed.
+Result: 6 passed.
 
 Measured PCC:
 
 - `SYNTHETIC_PREFILL_SEQ_1_PCC=0.998992`
-- `SYNTHETIC_PREFILL_SEQ_8_PCC=0.998662`
-- `REAL_WEIGHT_PREFILL_SEQ_4_PCC=0.999998`
+- `SYNTHETIC_PREFILL_SEQ_8_PCC=0.998670`
+- `REAL_WEIGHT_LAYER_0_PREFILL_SEQ_4_PCC=0.999998`
+- `REAL_WEIGHT_LAYER_31_PREFILL_SEQ_4_PCC=0.999874`
 
 ## Stage Review
 
@@ -68,7 +69,14 @@ Remediation:
 
 Note: `.agents/scripts/check_context_contract.py --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct` fails with the honest context contract because the checker currently requires DRAM evidence for every below-HF context. This functional stage is below advertised due to validation scope, not a proven DRAM limit.
 
-Rereview after remediation returned `clean-pass` with no required work. The reviewer classified the context-checker conflict and decode-shaped source graph as controlled anomalies.
+Historical rereview after remediation returned `clean-pass` with no required work. The reviewer classified the context-checker conflict and decode-shaped source graph as controlled anomalies.
+
+Current review after switching runtime RoPE to `ttnn.experimental.rotary_embedding` returned `more-work-needed` for:
+
+- the context checker conflict described below;
+- insufficient layer-31 evidence.
+
+Layer-31 remediation: added a real-weight layer-31 prefill test at seq 4. The command above now passes 6 tests and records `REAL_WEIGHT_LAYER_31_PREFILL_SEQ_4_PCC=0.999874`.
 
 ## AutoFix Follow-Up: Context Checker
 
@@ -103,7 +111,16 @@ The only mechanical JSON edits that pass are to overstate supported context as 1
 ## Checkpoint Commit
 
 - Repo: `/localdev/mvasiljevic/tt-metal`
-- Branch: `mvasiljevic/llama-forge-seed-rerun`
+- Branch: `mvasiljevic/llama-forge-seed-rerun-graph-rewrite`
 - Implementation checkpoint commit: `77600fb40a5`
-- Context-checker diagnostic commit: pending
+- Current base before RoPE/layer-31 remediation: `e434552c8c15da28b342c83ce40fc8b590fe67cb`
+- Context-checker diagnostic commit: `69e7c191c71`
+- RoPE/layer-31 remediation commit: pending
 - Push: not pushed
+
+## Final Status
+
+- Functional decoder implementation and tests are in place for prefill-only scope.
+- Latest functional decoder command passes 6 tests with real-weight layer 0 and layer 31 PCC above 0.99.
+- Independent rereview after layer-31 remediation reports P2 fixed.
+- Remaining blocker is P1: the context checker requires full HF context or DRAM-limit evidence, while the honest functional-stage contract records `current_supported_context=8` due to validation scope. AutoFix found no truthful model-dir-only patch that satisfies both requirements.
