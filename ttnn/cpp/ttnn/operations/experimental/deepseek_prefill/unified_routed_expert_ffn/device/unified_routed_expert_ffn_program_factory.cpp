@@ -150,6 +150,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // below. Bounds the short-seq GRID_X search to the known-good 2D footprint
     // so we never risk an L1 OOM.
     const uint32_t x_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.x.dtype()));
+    // Matmul input CB (cb_in0_x). On the row-major path the compute kernel
+    // tilizes bf16 x into it and packs bf8_b — keeping x bf8 through the matmul
+    // (as the TILE path does) instead of bf16, which halves this CB and frees L1
+    // for a larger per_core_M. cb_x_rm stays bf16 (the mcast/tilize source).
+    const uint32_t in0_x_ts = op.x_is_row_major ? tt::tile_size(tt::DataFormat::Bfp8_b) : x_ts;
     const uint32_t w_ts = tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(t.gate_proj.dtype()));
     const uint32_t p_ts = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t im_ts = tt::tile_size(tt::DataFormat::Bfp8_b);
@@ -159,7 +164,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t pcN_d = (N_down_tiles_full + gx - 1) / gx;
         const uint32_t ibw_d = pcN_gu;
         uint64_t b = 0;
-        b += 2ull * pcM * ibw_gu * x_ts;     // CB_IN0_X (double-buffered)
+        b += 2ull * pcM * ibw_gu * in0_x_ts;  // CB_IN0_X (double-buffered)
         if (op.x_is_row_major) {
             b += 2ull * pcM * ibw_gu * p_ts;  // CB_X_RM bf16 staging (row-major only)
         }
@@ -277,7 +282,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const tt::DataFormat partials_gu_df = tt::DataFormat::Float16_b;
     const tt::DataFormat partials_d_df = tt::DataFormat::Float16_b;
 
-    const uint32_t x_tile_size = tt::tile_size(x_df);
+    // See in0_x_ts above: cb_in0_x is bf8_b on the row-major path (tilize output),
+    // else it matches x's dtype (bf8_b on the TILE path).
+    const tt::DataFormat in0_x_df = op.x_is_row_major ? tt::DataFormat::Bfp8_b : x_df;
+    const uint32_t in0_x_tile_size = tt::tile_size(in0_x_df);
     const uint32_t gate_tile_size = tt::tile_size(gate_df);
     const uint32_t up_tile_size = tt::tile_size(up_df);
     const uint32_t down_tile_size = tt::tile_size(down_df);
@@ -302,7 +310,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // in the "circular buffers" section below; keep the two in sync.
     const auto cb_footprint_bytes = [&](uint32_t M, uint32_t w_gu) -> uint64_t {
         uint64_t total = 0;
-        total += static_cast<uint64_t>(M * w_gu * 2) * x_tile_size;                               // cb_in0_x
+        total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
             total += static_cast<uint64_t>(M * w_gu * 2) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
         }
@@ -505,7 +513,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // while compute consumes K-block N. PM FPU util = 0 today says we're
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
-    make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles * 2, x_tile_size);
+    make_cb(CB_IN0_X, in0_x_df, /*tiles=*/gu_in0_block_num_tiles * 2, in0_x_tile_size);
     // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
     // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
     // while N's posted mcast still drains — single-buffering reuses the slot
