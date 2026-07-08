@@ -931,7 +931,12 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
     int non_worker_cores_idx = 0;
-    bool skip_physical = cluster_.arch() == ARCH::BLACKHOLE and hal_.is_coordinate_virtualization_enabled();
+    // Skip the physical PCIE/DRAM/ETH addressable cores when this arch virtualizes them (they are set as
+    // virtual cores below). Gate on the HAL capability instead of a hard-coded arch: BLACKHOLE and QUASAR
+    // virtualize DRAM/PCIE, WORMHOLE_B0 does not. This mirrors the dram_is_virtualized check above and
+    // covers future arches automatically.
+    bool skip_physical = hal_.is_coordinate_virtualization_enabled() and
+                         hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM);
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             set_addressable_core(
@@ -948,6 +953,19 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     }
 
     if (hal_.is_coordinate_virtualization_enabled()) {
+        // Guard the fixed-size virtual_non_worker_cores mailbox array (MAX_VIRTUAL_NON_WORKER_CORES,
+        // hand-sized for Blackhole's topology). ETH is always written; PCIE/DRAM are written when this
+        // arch virtualizes DRAM. Fail loudly at config time rather than silently overrunning the array
+        // into adjacent mailbox fields on an arch whose core count exceeds the constant.
+        const bool dram_virtualized =
+            hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM);
+        const size_t num_virtual_non_worker_cores =
+            eth_cores.size() + (dram_virtualized ? pcie_cores.size() + dram_cores.size() : 0);
+        TT_FATAL(
+            num_virtual_non_worker_cores <= core_info.virtual_non_worker_cores().size(),
+            "Virtual non-worker cores ({}) exceed the mailbox capacity ({}) for this architecture",
+            num_virtual_non_worker_cores,
+            core_info.virtual_non_worker_cores().size());
         uint32_t virtual_non_worker_cores_idx = 0;
         for (tt::umd::CoreCoord core : eth_cores) {
             auto virtual_core = cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
@@ -957,7 +975,9 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 dev_msgs::AddressableCoreType::ETH);
         }
 
-        if (cluster_.arch() == ARCH::BLACKHOLE) {
+        // Set virtual PCIE/DRAM cores for arches that virtualize them (BLACKHOLE, QUASAR). ETH is handled
+        // for all virtualized arches above; WORMHOLE_B0 does not virtualize PCIE/DRAM.
+        if (dram_virtualized) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core =
                     cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});

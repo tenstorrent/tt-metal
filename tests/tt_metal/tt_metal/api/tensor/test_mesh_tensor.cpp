@@ -49,6 +49,7 @@
 #include <tt_stl/aligned_allocator.hpp>
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tt_metal/tt_metal/common/device_fixture.hpp"
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "impl/context/metal_context.hpp"
@@ -123,6 +124,35 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
     EXPECT_EQ(tensor.dtype(), DataType::BFLOAT16);
     EXPECT_EQ(tensor.layout(), Layout::ROW_MAJOR);
     EXPECT_EQ(tensor.logical_shape(), Shape({1, 32}));
+}
+
+// ============================================================================
+// Quasar arch-enablement: FP8_E4M3 tensors must be allocatable on Quasar (and
+// Blackhole), not just Blackhole. Exercises the arch guard in
+// MeshTensor::allocate_on_device. On Wormhole it must still FATAL (no regression).
+// ============================================================================
+// Uses MeshDeviceSingleCardFixture rather than GenericMeshDeviceFixture so it can run on the
+// single-card Quasar emulator (which cannot host fast-dispatch cores). NOTE: this fixture GTEST_SKIPs
+// unless TT_METAL_SLOW_DISPATCH_MODE is set, so this device-level check only executes on slow-dispatch
+// runners (e.g. the Quasar emu). The arch-guard logic itself is covered on every runner by the host-side
+// DataFormatFp8ArchGuard.Fp8E4m3PackSrcFormatPerArch test.
+TEST_F(MeshDeviceSingleCardFixture, AllocateFp8E4m3OnDevice) {
+    auto& mesh_device = *devices_[0];
+    const auto arch = mesh_device.arch();
+    // FP8_E4M3 requires ROW_MAJOR layout (enforced by TensorSpec).
+    auto tensor_layout = TensorLayout(
+        DataType::FP8_E4M3,
+        PageConfig(Layout::ROW_MAJOR),
+        MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
+    auto spec = TensorSpec(Shape{1, 32}, tensor_layout);
+
+    if (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR) {
+        MeshTensor tensor = MeshTensor::allocate_on_device(mesh_device, spec, TensorTopology());
+        EXPECT_EQ(tensor.dtype(), DataType::FP8_E4M3);
+    } else {
+        EXPECT_ANY_THROW(
+            { [[maybe_unused]] auto tensor = MeshTensor::allocate_on_device(mesh_device, spec, TensorTopology()); });
+    }
 }
 
 TEST_F(MeshTensorDeviceTest, MoveConstructionTransfersOwnership) {
