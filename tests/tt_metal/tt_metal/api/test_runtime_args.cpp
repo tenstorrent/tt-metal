@@ -65,9 +65,6 @@ uint32_t get_runtime_arg_addr(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t num_dm = hal.get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(tt::tt_metal::HalProcessorClassType::DM));
-    const uint32_t uncached_l1_offset = (hal.get_arch() == tt::ARCH::QUASAR)
-                                            ? hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE)
-                                            : 0;
 
     switch (processor_class) {
         case tt::tt_metal::HalProcessorClassType::DM:
@@ -87,7 +84,9 @@ uint32_t get_runtime_arg_addr(
     // Common args go after all unique arg slots
     uint32_t total_processors = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
     uint32_t offset = is_common ? total_processors * runtime_args_space : 0;
-    return (result_base + offset + uncached_l1_offset);
+    // Always return the cached L1 address. Host reads/writes go over the NOC (no cache) and must use
+    // the cached address; only DM cores access the uncached alias, which they add device-side.
+    return (result_base + offset);
 };
 
 distributed::MeshWorkload initialize_program_data_movement_rta(
