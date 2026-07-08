@@ -18,16 +18,16 @@
 #include <vector>
 #include <algorithm>
 
-#include "experimental/disaggregation/kv_chunk_address_table.hpp"
+#include "tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp"
 #include "experimental/fabric/fabric_types.hpp"
 
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
 using tt::tt_fabric::MeshId;
-using tt::tt_metal::experimental::disaggregation::KvCacheLocation;
-using tt::tt_metal::experimental::disaggregation::KvChunkAddressTable;
-using tt::tt_metal::experimental::disaggregation::KvChunkAddressTableConfig;
+using tt::tt_metal::internal::disaggregation::KvCacheLocation;
+using tt::tt_metal::internal::disaggregation::KvChunkAddressTable;
+using tt::tt_metal::internal::disaggregation::KvChunkAddressTableConfig;
 
 constexpr uint32_t kPageSizeBytes = 1088 * 18;  // bfp8 KV chunk size
 

@@ -143,6 +143,21 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         # hybrid ``SlidingWindowSpec`` path.
         self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "0") != "0"
 
+    @classmethod
+    def get_max_tokens_all_users(cls, model_name: str = "", **kwargs) -> int:
+        # The all-user KV-cache pool size is a per-device / per-model tuning knob,
+        # not a model constant: with hybrid KV groups disabled every layer
+        # allocates a full-length KV buffer, so the pool that fits in DRAM is
+        # hardware-specific (e.g. ~49K on QB2/P300x2 for 31B, ~131K for 12B).
+        # Keep that value OUT of the model code — set ``GEMMA4_MAX_TOKENS_ALL_USERS``
+        # from the tt-inference-server model spec's per-device ``env_vars`` block
+        # (gated there by device + model). This generic, value-free hook just
+        # honors that override and otherwise defers to the default.
+        override = os.environ.get("GEMMA4_MAX_TOKENS_ALL_USERS")
+        if override:
+            return int(override)
+        return super().get_max_tokens_all_users(model_name=model_name, **kwargs)
+
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 

@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/socket_api.h"
 
 ///////////////////////////////////////////////////
@@ -21,20 +22,21 @@ constexpr uint32_t aligned_partial_packet_size = get_compile_time_arg_val(6);
 constexpr uint32_t whole_packet_size = get_compile_time_arg_val(7);
 constexpr bool is_dram = get_compile_time_arg_val(8);
 
-template <uint32_t cb_id, bool is_dram>
+template <bool is_dram>
 FORCE_INLINE void write_data_to_remote_core(
+    CircularBuffer& cb,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     uint64_t dst_addr,
     uint32_t packet_size,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr) {
-    cb_wait_front(cb_id, 1);
-    auto l1_read_addr = get_read_ptr(cb_id);
+    cb.wait_front(1);
+    auto l1_read_addr = cb.get_read_ptr();
     data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, packet_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(l1_read_addr, packet_size);
     fabric_connection.send_payload_flush_blocking_from_address(
         (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
-    cb_pop_front(cb_id, 1);
+    cb.pop_front(1);
 }
 
 void kernel_main() {
@@ -53,14 +55,17 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
+    CircularBuffer cb_fabric_packet_header(fabric_packet_header_cb_id);
+    CircularBuffer cb_data(data_cb_id);
+
     // This kernel relies on two fabric headers stored in fabric_packet_header_cb:
     //  - data_packet_header: Used for issuing writes to downstream data cores
     //  - socket_packet_header: Used by socket APIs for control flow
     volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
+        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(cb_fabric_packet_header.get_write_ptr());
     volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
         reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
+            cb_fabric_packet_header.get_write_ptr() + sizeof(PACKET_HEADER_TYPE));
     fabric_connection.open();
 
     // Create Socket Interface
@@ -81,8 +86,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_whole_packets; ++i) {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
-            write_data_to_remote_core<data_cb_id, is_dram>(
-                fabric_connection, dst_addr, full_packet_size, data_packet_header_addr);
+            write_data_to_remote_core<is_dram>(
+                cb_data, fabric_connection, dst_addr, full_packet_size, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
@@ -90,8 +95,8 @@ void kernel_main() {
         if (num_pages_remainder > 0) {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
-            write_data_to_remote_core<data_cb_id, is_dram>(
-                fabric_connection, dst_addr, remainder_packet_size, data_packet_header_addr);
+            write_data_to_remote_core<is_dram>(
+                cb_data, fabric_connection, dst_addr, remainder_packet_size, data_packet_header_addr);
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
         }
@@ -103,13 +108,13 @@ void kernel_main() {
             socket_reserve_pages(sender_socket, 1);
             uint64_t dst_addr = receiver_noc_coord_addr + sender_socket.write_ptr + sender_socket.downstream_fifo_addr;
             for (uint32_t j = 0; j < num_whole_packets_per_page; ++j) {
-                write_data_to_remote_core<data_cb_id, is_dram>(
-                    fabric_connection, dst_addr, whole_packet_size, data_packet_header_addr);
+                write_data_to_remote_core<is_dram>(
+                    cb_data, fabric_connection, dst_addr, whole_packet_size, data_packet_header_addr);
                 dst_addr += whole_packet_size;
             }
             if constexpr (aligned_partial_packet_size > 0) {
-                write_data_to_remote_core<data_cb_id, is_dram>(
-                    fabric_connection, dst_addr, aligned_partial_packet_size, data_packet_header_addr);
+                write_data_to_remote_core<is_dram>(
+                    cb_data, fabric_connection, dst_addr, aligned_partial_packet_size, data_packet_header_addr);
             }
             socket_push_pages(sender_socket, 1);
             fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);

@@ -25,6 +25,29 @@ from models.tt_transformers.tt.model_config import determine_device_name
 GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 
 
+def _load_text_tokenizer(model_path):
+    # The 12B tokenizer config can advertise multimodal extra_special_tokens as
+    # a list (for example ["<|video|>"]), while this transformers version expects
+    # a dict. The text-only demo does not need those model-specific aliases.
+    try:
+        return AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, extra_special_tokens={})
+    except (ValueError, OSError, EnvironmentError) as e:
+        # The whole Gemma4 family shares one identical tokenizer, but some
+        # checkpoints (e.g. gemma-4-31B-it) ship without local tokenizer files.
+        # On an offline box AutoTokenizer can't fetch them and raises a misleading
+        # "need sentencepiece/tiktoken" error. Fall back to an explicit source
+        # (GEMMA4_TOKENIZER) or the 12B tokenizer, which is byte-identical.
+        fallback = os.environ.get("GEMMA4_TOKENIZER", "google/gemma-4-12B-it")
+        if os.path.normpath(str(fallback)) == os.path.normpath(str(model_path)):
+            raise
+        logger.warning(
+            f"Tokenizer load from '{model_path}' failed ({type(e).__name__}: {e}); "
+            f"falling back to the shared Gemma4 tokenizer '{fallback}'. "
+            f"Override with GEMMA4_TOKENIZER."
+        )
+        return AutoTokenizer.from_pretrained(fallback, trust_remote_code=True, extra_special_tokens={})
+
+
 def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding):
     """Padded prefill buckets for which capturing a prefill trace is correct AND
     a net win for Gemma4.
@@ -334,7 +357,7 @@ class Gemma4Generator(Generator):
         paged_attention_config=None,
         bounded_sliding_kv_cache=False,
     ):
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
             tokenizer.stop_tokens = [tokenizer.eos_token_id]
 

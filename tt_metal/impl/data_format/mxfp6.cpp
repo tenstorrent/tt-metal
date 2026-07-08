@@ -62,32 +62,32 @@ constexpr tt::tt_metal::mx::FormatParams kMxFp6PParams = {
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp6r_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxFp6RParams);
 }
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxfp6p_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxFp6PParams);
 }
 
 // Explicit instantiations — keep in sync with the supported input element types.
 template std::vector<uint32_t> pack_as_mxfp6r_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 template std::vector<uint32_t> pack_as_mxfp6p_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 
 std::vector<float> unpack_mxfp6r_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxfp6_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const uint32_t> mxfp6_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxfp6_tiles, row_major_output, tile, kMxFp6RParams);
 }
 
 std::vector<float> unpack_mxfp6p_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxfp6_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const uint32_t> mxfp6_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxfp6_tiles, row_major_output, tile, kMxFp6PParams);
 }

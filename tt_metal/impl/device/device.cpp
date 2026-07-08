@@ -81,7 +81,7 @@ Device::Device(
     const uint8_t num_hw_cqs,
     size_t l1_small_size,
     size_t trace_region_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal,
     uint32_t /*worker_thread_core*/,
     uint32_t /*completion_queue_reader_core*/,
@@ -113,10 +113,6 @@ bool Device::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return inactive_ethernet_cores.contains(logical_core);
 }
 
-uint32_t Device::num_virtual_eth_cores(SubDeviceId sub_device_id) {
-    return this->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id);
-}
-
 std::tuple<ChipId, CoreCoord> Device::get_connected_ethernet_core(CoreCoord eth_core) const {
     return MetalEnvAccessor(*env_).impl().get_cluster().get_connected_ethernet_core(
         std::make_tuple(this->id_, eth_core));
@@ -144,7 +140,7 @@ std::unique_ptr<AllocatorImpl> Device::initialize_allocator(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_unreserved_start,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    ttsl::Span<const std::uint32_t> l1_bank_remap) {
     ZoneScoped;
     const metal_SocDescriptor& soc_desc = MetalEnvAccessor(*env_).impl().get_cluster().get_soc_desc(this->id_);
     auto& dispatch_core_manager = context_->get_dispatch_core_manager();
@@ -440,7 +436,7 @@ bool Device::initialize(
     size_t l1_small_size,
     size_t trace_region_size,
     size_t worker_l1_size,
-    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    ttsl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     ZoneScoped;
     // Every initialization call should enable program cache
@@ -755,7 +751,7 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
 }
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(
-    tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) const {
+    ttsl::Span<const SubDeviceId> /*sub_device_ids*/) const {
     return default_allocator_->get_lowest_occupied_l1_address(0);
 }
 
@@ -801,23 +797,6 @@ void Device::mark_allocations_unsafe() { this->allocator_impl()->mark_allocation
 // NOLINTNEXTLINE(readability-make-member-function-const)
 void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
 
-bool Device::has_noc_mcast_txns(SubDeviceId /*sub_device_id*/) const {
-    TT_FATAL(false, "has_noc_mcast_txns is deprecated for device");
-    return false;
-}
-
-uint8_t Device::num_noc_unicast_txns(SubDeviceId /*sub_device_id*/) const {
-    TT_FATAL(false, "num_noc_unicast_txns is deprecated for device");
-    return 0U;
-}
-
-uint8_t Device::noc_data_start_index(SubDeviceId /*sub_device_id*/, bool unicast_data) const {
-    if (unicast_data) {
-        TT_FATAL(false, "noc_data_start_index is deprecated for unicast mode for device");
-    }
-    return 0U;
-}
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
         return CoreCoord{0, 0};  // Return default for mock devices
@@ -836,7 +815,7 @@ SubDeviceManagerId Device::create_sub_device_manager(
 }
 
 SubDeviceManagerId Device::create_sub_device_manager(
-    tt::stl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
+    ttsl::Span<const SubDevice> /*sub_devices*/, DeviceAddr /*local_l1_size*/) {
     TT_FATAL(false, "create_sub_device_manager is deprecated for device");
     return SubDeviceManagerId{0U};
 }
@@ -865,7 +844,7 @@ const std::vector<SubDeviceId>& Device::get_sub_device_stall_group() const {
     return ids;
 }
 
-void Device::set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> /*sub_device_ids*/) {
+void Device::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> /*sub_device_ids*/) {
     TT_FATAL(false, "set_sub_device_stall_group is deprecated for device");
 }
 

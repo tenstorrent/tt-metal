@@ -344,3 +344,23 @@ def init_kvpe_cache(
     tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return tt_kvpe_cache
+
+
+def allocate_mla_kvpe_cache(*, mesh_device, hf_config, max_seq_len, mesh_shape, sp_axis, num_layers, num_users):
+    """Allocate the MLA KVPE cache for one runtime from the HF config.
+
+    The MLA per-token cache row is ``qk_rope_head_dim + kv_lora_rank`` wide; ONE
+    shared cache holds ``num_users * num_layers`` user-major slots of
+    ``max_seq_len`` each. Shared by ``TtPrefillRuntime`` (its default allocator)
+    and the MLA model adapter, so the MLA KV layout has one definition.
+    """
+    kvpe_head_dim = hf_config.qk_rope_head_dim + hf_config.kv_lora_rank
+    return init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_head_dim,
+        mesh_device=mesh_device,
+        seq_len=max_seq_len,
+        mesh_shape=list(mesh_shape),
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=num_users,
+    )

@@ -54,7 +54,7 @@ DramPrefetcherValidatorDeviceOperation::create_output_tensors(const operation_at
     return std::vector<ttnn::Tensor>{};
 }
 
-tt::stl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     // GlobalCircularBuffer / Tensor aren't reflection-hashable here; pick the bits that
     // determine Program shape: scalar attrs, GCB identity, the source tensor's DRAM

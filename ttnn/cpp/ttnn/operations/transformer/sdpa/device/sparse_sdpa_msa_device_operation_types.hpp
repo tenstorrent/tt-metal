@@ -18,7 +18,14 @@ struct SparseSDPAMsaParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // Selects one [B,n_kv,T,*] cache slot. The value is patched as runtime K/V tile offsets and is not hashed.
     std::optional<uint32_t> cache_batch_idx = std::nullopt;
+    // Global position of query row 0.
+    // Set -> enforce a token-level causal mask on the diagonal block (the query's own block, whose later tokens are
+    // future). Unset -> no token-level causality; the op attends the full selected blocks.
+    std::optional<uint32_t> chunk_start_idx = std::nullopt;
+    // SP mesh axis used to derive the per-device chunk_start (chunk_start_idx + rank*S); host-side only.
+    std::optional<uint32_t> cluster_axis = std::nullopt;
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    bool causal_enabled() const { return chunk_start_idx.has_value(); }
 };
 
 struct SparseSDPAMsaInputs {

@@ -124,6 +124,16 @@ def _prefill_forward_single(
         k_cache, v_cache = kv_cache
         tt_sdpa = chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0)
     else:
+        # HiFi4 + FP32 dest-acc SDPA: restore the softmax-reduce precision #47311 removed
+        # (it dropped the reduce's forced-FP32 accumulation). fp32_dest_acc is safe on the
+        # prefill SDPA op (unlike the decode op, where it halves dest for head_dim=512).
+        sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
             tt_q,
             tt_k,
@@ -132,6 +142,7 @@ def _prefill_forward_single(
             scale=1.0,
             sliding_window_size=sliding_window,
             program_config=prefill_sdpa_program_config(config.head_dim, seq_len),
+            compute_kernel_config=sdpa_compute_kernel_config,
         )
     tt_q.deallocate(True)
     kept_kv = None
@@ -267,6 +278,15 @@ def prefill_forward(
                 ttnn.fill_cache(v_cache, tt_v[slot_idx : slot_idx + 1], batch_idx=slot_idx)
 
     sliding_window = config.sliding_window if config.is_sliding else None
+    # HiFi4 + FP32 dest-acc SDPA: restore softmax-reduce precision lost after #47311
+    # (forced-FP32 reduce accumulation removed).
+    sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        tt_q.device().arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
     tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,
@@ -274,6 +294,7 @@ def prefill_forward(
         is_causal=True,
         scale=1.0,
         sliding_window_size=sliding_window,
+        compute_kernel_config=sdpa_compute_kernel_config,
     )
     tt_q.deallocate(True)
     kept_kv = None

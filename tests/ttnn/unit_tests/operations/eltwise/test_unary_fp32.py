@@ -2,15 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
 import ttnn
 
-import pytest
 from tests.ttnn.utils_for_testing import (
     assert_with_pcc,
     assert_with_ulp,
-    generate_all_bfloat16_bitpatterns,
     flush_subnormal_values_to_zero,
+    generate_all_bfloat16_bitpatterns,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -211,7 +211,35 @@ def test_exp(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_tanh(device, h, w):
-    run_unary_test(device, h, w, ttnn.tanh, pcc_check=True, pcc=0.993)
+    run_unary_test(device, h, w, ttnn.tanh, ulp=3)
+
+
+@pytest.mark.parametrize(
+    "base_bits,pad_bits",
+    [
+        (0x7F800000, 0x7FC00000),
+        (-0x800000, -0x400000),
+    ],
+    ids=["positive_nan_payloads", "negative_nan_payloads"],
+)
+def test_tanh_fp32_all_nan_payloads_propagate(device, base_bits, pad_bits):
+    mantissas = torch.arange(1, 0x800000, dtype=torch.int32)
+    input_bits = base_bits + mantissas
+    input_bits = torch.cat([input_bits, torch.tensor([pad_bits], dtype=torch.int32)])
+    torch_input_tensor = input_bits.view(torch.float32).reshape(8192, 1024)
+    assert torch.isnan(torch_input_tensor).all()
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+    )
+
+    output_tensor = ttnn.to_torch(ttnn.tanh(input_tensor))
+
+    assert torch.isnan(output_tensor).all()
 
 
 @pytest.mark.parametrize("h", [64])
@@ -256,8 +284,19 @@ def test_acosh(device, h, w):
     run_unary_test(device, h, w, ttnn.acosh, ulp=1, allow_nonfinite=True)
 
 
-@pytest.mark.skip("The current version doesn’t work with float32, but this will be fixed in issue #231689.")
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asinh(device, h, w):
+    # Default [0, 1) input includes the small-x region where the log1p form fixes
+    # the catastrophic cancellation of the old log(|x| + sqrt(x^2 + 1)) chain.
+    # |x| < 0.75 uses a direct degree-6 polynomial (<=1 ulp); |x| >= 0.75 uses the
+    # cancellation-free log1p(|x| + x^2 / (1 + sqrt(1+x^2))) form (<=1.5 ulp).
+    run_unary_test(device, h, w, ttnn.asinh, ulp=2)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_atanh(device, h, w):
+    # The log1p reformulation makes the fp32 path stable on (-1, 1); the default
+    # [0, 1) input exercises the small-x stable region.
     run_unary_test(device, h, w, ttnn.atanh, ulp=2)

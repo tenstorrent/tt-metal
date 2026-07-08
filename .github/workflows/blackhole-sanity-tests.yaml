@@ -193,7 +193,7 @@ jobs:
     needs: [resolve-docker-pull-refs, build-artifact, check-harbor]
     if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && toJSON(inputs.schedule-runs-all-tests) != 'false')) }}
     secrets: inherit
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     with:
       enabled-skus: "bh_p150b_civ2"
       docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
@@ -222,7 +222,7 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-sanity-tests-impl.yaml
     with:
-      enabled-skus: "bh_quietbox_2,bh_p300"
+      enabled-skus: "bh_quietbox_2,bh_p300,bh_quietbox_2_iommu"
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

@@ -1321,6 +1321,71 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
         << "DFB base addr should refresh to the new MeshTensor's address after UpdateTensorArgs";
 }
 
+// Guard: resizing a borrowed-memory DFB on the partial-update path without supplying its backing
+// tensor is rejected — otherwise the per-bank fit check in AttachBorrowedDFBBuffers never re-runs
+// against the new size, and a grown DFB could silently overflow its borrowed buffer at execution.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithoutTensorFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    // Partial update resizes the borrowed DFB but omits its (would-be enqueue-invariant) backing tensor.
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("its backing TensorParameter 'borrowed_tensor' was not supplied")));
+}
+
+// Supplying the backing tensor alongside the resize is accepted: the fit check re-runs and the new
+// size (48 B) still fits the 64 B backing.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithTensorSucceeds) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    // num_entries must stay divisible by this DFB's txn/producer/tc divisor (2 here); 4 grows the DFB
+    // to 16 * 4 = 64 B, which still fits the 64 B backing exactly.
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
+    upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+}
+
+// The payoff: with the backing tensor supplied, an over-large resize is now caught by the per-bank fit
+// check on the partial path (16 * 64 = 1024 B >> the 64 B backing) — the overflow the guard keeps checkable.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBBeyondBackingFails) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    ProgramRunArgs setup = MakeBorrowedDFBRunArgs();
+    setup.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    SetProgramRunArgs(program, setup);
+
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 64});
+    upd.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, upd); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("exceeds the borrowed")));
+}
+
 // Regression: a kernel that binds a tensor but declares no scalar args (no named/vararg RTAs or
 // CRTAs) may be omitted from kernel_run_args. SetProgramRunArgs must still validate, and must write
 // the binding's base address into that kernel's CRTA buffer via its second pass — the binding
@@ -2384,6 +2449,46 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_OmittingAllInvariantKernel
     EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
     EXPECT_EQ(program.impl().get_kernel_by_spec_name("dm_kernel")->common_runtime_args_data().data()[0], 7u)
         << "invariant CRTA retained even when its kernel is omitted entirely";
+}
+
+// --- DFB size overrides on the fast path (mock fixture: inspects config, no enqueue) ---
+
+// UpdateProgramRunArgs applies a DFB size override, mirroring the SetProgramRunArgs path.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_AppliesDFBSizeOverride) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // A full set must precede any partial update.
+    SetProgramRunArgs(program, MakeRunArgsForMinimalSpec(node, {}, {}));
+
+    ProgramRunArgs upd;
+    upd.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.entry_size, 1024u);  // unchanged
+    EXPECT_EQ(dfb->config.num_entries, 4u);    // overridden via UpdateProgramRunArgs
+}
+
+// DFB size overrides are stateful: a DFB not re-specified in a later update keeps its current
+// size rather than reverting to the ProgramSpec default.
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_RetainsDFBSizeOverrideWhenUnspecified) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    // Establish an override (the spec default num_entries is 2).
+    auto params = MakeRunArgsForMinimalSpec(node, {}, {});
+    params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb_0"}, .num_entries = 4});
+    SetProgramRunArgs(program, params);
+
+    // A subsequent update that omits the DFB must not reset it to the spec default.
+    ProgramRunArgs upd;
+    EXPECT_NO_THROW(UpdateProgramRunArgs(program, upd));
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    EXPECT_EQ(dfb->config.num_entries, 4u) << "override must persist across an update that omits it";
 }
 
 // --- MergeProgramRunArgs (pure data helper; no device needed) ---

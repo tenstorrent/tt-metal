@@ -17,7 +17,8 @@ void kernel_main() {
     constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
 
     constexpr uint32_t cb_id_in2 = tt::CBIndex::c_2;
-    generate_mm_scaler(cb_id_in2, scaler);
+    CircularBuffer cb_in2(cb_id_in2);
+    generate_mm_scaler(cb_in2, scaler);
 
     constexpr uint32_t cb_id_mask_w = tt::CBIndex::c_3;
 #ifdef DO_MASK_W

@@ -22,7 +22,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
-  # (sparse_sdpa is Blackhole-only via run_for_blackhole, so it is skipped on WH already -- see blackhole section.)
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
@@ -31,13 +30,6 @@ wormhole_b0:
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
-
-  # MOVD2B failures
-  # https://github.com/tenstorrent/tt-metal/issues/47164
-  - tests/ttnn/unit_tests/operations/sdpa/test_windowed_sdpa.py::test_windowed_sdpa_smoke
-
-  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py
 
 blackhole:
   # Job-level timeouts
@@ -65,18 +57,6 @@ blackhole:
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
-  # MOVD2B failures
-  # https://github.com/tenstorrent/tt-metal/issues/41286
-  # https://github.com/tenstorrent/tt-metal/issues/40583
-  # https://github.com/tenstorrent/tt-metal/issues/43295
-  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm.py
-  - tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py
-  - tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm_row_major
-  - tests/ttnn/unit_tests/operations/fused/test_softmax.py
-  - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
-  - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
-
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
@@ -85,6 +65,3 @@ blackhole:
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
   - tests/ttnn/unit_tests/operations/reduce/test_sum.py
-
-  # ERROR: UnsupportedFunctionality: tensix_gmpool: src_b_val=0x0 must be 1.0f
-  - tests/ttnn/unit_tests/operations/reduce/test_moe.py

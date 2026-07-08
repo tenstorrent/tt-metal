@@ -54,8 +54,8 @@ inline void calculate_mish() {
             }
 
             // denominator = (1 + u)^2 + 1 = u^2 + 2u + 2
-            sfpi::vFloat one_plus_u = u + sfpi::vConst1;
-            sfpi::vFloat denom = one_plus_u * one_plus_u + sfpi::vConst1;
+            sfpi::vFloat one_plus_u = u + 1.0f;
+            sfpi::vFloat denom = one_plus_u * one_plus_u + 1.0f;
 
             sfpi::vFloat inv_denom;
             if constexpr (APPROXIMATION_MODE) {

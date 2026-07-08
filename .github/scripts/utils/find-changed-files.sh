@@ -141,7 +141,7 @@ while IFS= read -r FILE; do
             MODELS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml|.github/workflows/ttsim.yaml)
+        .github/workflows/build-artifact.yaml|.github/workflows/build-docker-artifact.yaml)
             BUILD_WORKFLOWS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;

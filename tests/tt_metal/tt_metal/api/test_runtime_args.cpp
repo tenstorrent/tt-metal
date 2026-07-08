@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <memory>
 #include <cstddef>
@@ -64,9 +65,6 @@ uint32_t get_runtime_arg_addr(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     uint32_t num_dm = hal.get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(tt::tt_metal::HalProcessorClassType::DM));
-    const uint32_t uncached_l1_offset = (hal.get_arch() == tt::ARCH::QUASAR)
-                                            ? hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE)
-                                            : 0;
 
     switch (processor_class) {
         case tt::tt_metal::HalProcessorClassType::DM:
@@ -86,7 +84,9 @@ uint32_t get_runtime_arg_addr(
     // Common args go after all unique arg slots
     uint32_t total_processors = hal.get_num_risc_processors(HalProgrammableCoreType::TENSIX);
     uint32_t offset = is_common ? total_processors * runtime_args_space : 0;
-    return (result_base + offset + uncached_l1_offset);
+    // Always return the cached L1 address. Host reads/writes go over the NOC (no cache) and must use
+    // the cached address; only DM cores access the uncached alias, which they add device-side.
+    return (result_base + offset);
 };
 
 distributed::MeshWorkload initialize_program_data_movement_rta(
@@ -719,16 +719,20 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
             mesh_device, core_range_set, 0, 0);  // Kernel isn't run here.
         auto& program = workload.get_programs().at(device_range);
 
-        // Set 100 unique args, then try to set max_runtime_args + 1 common args and fail.
+        // The enforced TENSIX ceiling is bounded by the uint16_t RTA offset field (see
+        // Kernel::validate_runtime_args_size). Mirror that here.
+        const uint32_t tensix_max_rt_args = std::numeric_limits<uint16_t>::max() / sizeof(uint32_t);
+
+        // Set 100 unique args, then try to set enough common args to overflow the combined ceiling and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(tt::tt_metal::max_runtime_args + 1);
+        std::vector<uint32_t> common_runtime_args(tensix_max_rt_args + 1);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
-        // Set 100 common args, then try to set another tt::tt_metal::max_runtime_args + 1 unique args and fail.
+        // Set 100 common args, then try to set enough unique args to overflow the combined ceiling and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(tt::tt_metal::max_runtime_args + 1);
+        std::vector<uint32_t> more_unique_args(tensix_max_rt_args + 1);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }
@@ -812,8 +816,13 @@ TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
 // Test that active ethernet cores correctly validate max runtime args
 TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Mirror the enforced ceiling in Kernel::validate_runtime_args_size: 2 words are reserved for the watcher
+    // count words (one for the unique RTA region, one for the common) unconditionally, whether or not watcher
+    // asserts are enabled, so the usable max is the kernel-config size minus those 2 words.
+    constexpr uint32_t watcher_reserved_count_words = 2;
     uint32_t active_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
+        watcher_reserved_count_words;
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
@@ -893,8 +902,13 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
 // Test that idle ethernet cores correctly validate max runtime args using IDLE_ETH kernel config size
 TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    // Mirror the enforced ceiling in Kernel::validate_runtime_args_size: 2 words are reserved for the watcher
+    // count words (one for the unique RTA region, one for the common) unconditionally, whether or not watcher
+    // asserts are enabled, so the usable max is the kernel-config size minus those 2 words.
+    constexpr uint32_t watcher_reserved_count_words = 2;
     uint32_t idle_eth_max_runtime_args =
-        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t);
+        hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
+        watcher_reserved_count_words;
     for (unsigned int id = 0; id < num_devices_; id++) {
         auto mesh_device = this->devices_.at(id);
         auto* device = mesh_device->get_devices()[0];
