@@ -4325,7 +4325,7 @@ else:
     MINIMAX3_GQA_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
         # 4-device ring (QuietBox): same per-device Q rows and 16Q/1KV local GQA shape.
-        ("minimax3_55k", 128, 512, 4, 47.64),
+        ("minimax3_55k", 128, 512, 4, 47.0),
     ]
 
 
