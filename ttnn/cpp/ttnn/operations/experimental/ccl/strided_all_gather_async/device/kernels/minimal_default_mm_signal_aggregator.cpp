@@ -22,6 +22,13 @@
 
 using ttnn::ccl::Topology;
 
+// Each AG writer worker fires this many per-worker incs per chunk (one per row-band). The aggregator
+// waits for all of them (event_target advances by IN0_SUB_CHUNKS per chunk) before signaling the
+// matmul once per chunk. Default 1 = single inc per chunk (legacy). Must match the writer.
+#ifndef IN0_SUB_CHUNKS
+#define IN0_SUB_CHUNKS 1
+#endif
+
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
@@ -99,7 +106,9 @@ void kernel_main() {
                     if (!receive_this_chunk) {
                         continue;
                     }
-                    event_target++;
+                    // Writer fires IN0_SUB_CHUNKS per-worker incs per chunk (one per row-band); wait
+                    // for all of them so the whole chunk has landed before signaling the matmul.
+                    event_target += IN0_SUB_CHUNKS;
                     // Wait for all N workers' portions of this k-block to land.
                     {
                         DeviceZoneScopedN("AGG-WAIT-N");

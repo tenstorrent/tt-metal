@@ -122,66 +122,76 @@ FORCE_INLINE uint32_t read_chunk(
     uint32_t input_tensor_Ht,
     uint32_t output_tensor_Wt,
     uint32_t actual_sender_chip_id,
-    bool read_output) {
-    uint32_t worker_tiles_in_curr_chunk =
-        (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
-    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
-    uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
-    uint32_t chunk_tile_iter = 0;
-
+    bool read_output,
+    // Must mirror write_chunk's band decomposition exactly: this reader is the CB producer feeding
+    // write_chunk (the consumer) on the same core, so the per-band tile order must match or the relay
+    // maps source tiles to the wrong output addresses. mm_sub_chunks==1 => whole-chunk (baseline).
+    uint32_t mm_cores_y = 1,
+    uint32_t mm_sub_chunks = 1) {
     // Chunk values (chunk spans all mm cores)
     // convert chunk start from linear index into row and col coord, still in input tensor space
     uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
-    uint32_t chunk_start_col = chunk_start_tile % input_tensor_Wt;
-
-    // Subchunk values (subchunk spans just 1 mm core)
-    uint32_t subchunk_start_row = chunk_start_row;  // initialize the subchunk tracker (start and end)
-    uint32_t subchunk_end_row = chunk_start_row + subchunk_height - 1;
-
-    // Worker chunk values
-    uint32_t worker_chunk_start_row_chunk_space = worker_tile_offset / chunk_width;
-    uint32_t worker_chunk_start_col_chunk_space = worker_tile_offset % chunk_width;
-    uint32_t worker_chunk_row = chunk_start_row + worker_chunk_start_row_chunk_space;
-    uint32_t worker_chunk_col = chunk_start_col + worker_chunk_start_col_chunk_space;
-    if (worker_chunk_row > subchunk_end_row) {
-        advance_subchunk(worker_chunk_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
-    }
-    if (read_output) {
-        worker_chunk_col = worker_chunk_col + actual_sender_chip_id * input_tensor_Wt;
-        chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
-    }
+    uint32_t chunk_start_col_base = chunk_start_tile % input_tensor_Wt;
+    uint32_t chunk_start_col =
+        read_output ? (chunk_start_col_base + actual_sender_chip_id * input_tensor_Wt) : chunk_start_col_base;
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
-    for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
-        uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
-        uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
 
-        cb_reserve_back(cb_output_id, max_tiles_per_packet);
-        size_t l1_write_addr = get_write_ptr(cb_output_id);
-        for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
-            int32_t tile_id = get_chunk_tile(
-                worker_chunk_row,
-                worker_chunk_col,
-                ag_worker_cores,
-                subchunk_start_row,
-                subchunk_end_row,
-                subchunk_height_stride,
-                chunk_start_col,
-                chunk_end_col,
-                chunk_width,
-                read_output ? output_tensor_Wt : input_tensor_Wt,
-                input_tensor_Ht);
-            if (tile_id >= 0) {
-                uint64_t noc_read_addr =
-                    get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
-                noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+    uint32_t band_rows = (subchunk_height + mm_sub_chunks - 1) / mm_sub_chunks;
 
-                l1_write_addr += input_tensor_page_size;
-            }
-            chunk_tile_iter++;
+    for (uint32_t band = 0; band < mm_sub_chunks; band++) {
+        uint32_t band_lo = band * band_rows;
+        if (band_lo >= subchunk_height) {
+            break;
+        }
+        uint32_t band_h = std::min(band_rows, subchunk_height - band_lo);
+        uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
+        uint32_t worker_tiles_in_band =
+            (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
+        uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
+        uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
+        uint32_t band_tile_iter = 0;
+
+        uint32_t band_start_row = chunk_start_row + band_lo;
+        uint32_t subchunk_start_row = band_start_row;
+        uint32_t subchunk_end_row = band_start_row + band_h - 1;
+        uint32_t worker_chunk_row = band_start_row + (worker_tile_offset / chunk_width);
+        uint32_t worker_chunk_col = chunk_start_col + (worker_tile_offset % chunk_width);
+        if (worker_chunk_row > subchunk_end_row) {
+            advance_subchunk(worker_chunk_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
         }
 
-        noc_async_read_barrier();
-        cb_push_back(cb_output_id, max_tiles_per_packet);
+        for (uint32_t packet_idx = 0; packet_idx < packets_in_band; packet_idx++) {
+            uint32_t tiles_left_in_band = worker_tiles_in_band - band_tile_iter;
+            uint32_t tiles_to_read_in_packet = std::min(tiles_left_in_band, num_tiles_per_packet);
+
+            cb_reserve_back(cb_output_id, max_tiles_per_packet);
+            size_t l1_write_addr = get_write_ptr(cb_output_id);
+            for (uint32_t j = 0; j < tiles_to_read_in_packet; ++j) {
+                int32_t tile_id = get_chunk_tile(
+                    worker_chunk_row,
+                    worker_chunk_col,
+                    ag_worker_cores,
+                    subchunk_start_row,
+                    subchunk_end_row,
+                    subchunk_height_stride,
+                    chunk_start_col,
+                    chunk_end_col,
+                    chunk_width,
+                    read_output ? output_tensor_Wt : input_tensor_Wt,
+                    input_tensor_Ht);
+                if (tile_id >= 0) {
+                    uint64_t noc_read_addr =
+                        get_noc_addr(tile_id, read_output ? output_tensor_addrgen : input_tensor_addrgen);
+                    noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+
+                    l1_write_addr += input_tensor_page_size;
+                }
+                band_tile_iter++;
+            }
+
+            noc_async_read_barrier();
+            cb_push_back(cb_output_id, max_tiles_per_packet);
+        }
     }
 
     uint32_t new_chunk_start_tile = chunk_start_tile + chunk_width;
@@ -191,7 +201,7 @@ FORCE_INLINE uint32_t read_chunk(
     } else {
         chunk_start_tile = new_chunk_start_tile;
     }
-    return chunk_tile_iter;
+    return 0;  // return value is unused by callers
 }
 
 template <typename AddrGenType, uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
@@ -220,61 +230,63 @@ FORCE_INLINE uint32_t write_chunk(
     const bool direction,
     const uint32_t num_targets_forward_direction,
     const uint32_t num_targets_backward_direction,
-    bool write_local) {
-    uint32_t worker_tiles_in_curr_chunk =
-        (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
-    uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
-    uint32_t packets_in_curr_chunk = div_up(worker_tiles_in_curr_chunk, num_tiles_per_packet);
-    uint32_t chunk_tile_iter = 0;
-
+    bool write_local,
+    // Streaming matmul signal (Option W, M sub-chunking). The chunk's subchunk_height M-rows are
+    // delivered as mm_sub_chunks row-bands: for each band the walk sweeps band_rows rows of EVERY
+    // injector (injector-major, same as the whole-chunk walk but height-limited), then fires one
+    // matmul-aggregator inc. Because a band is band_rows rows of all injectors, "band s landed" is
+    // true for every injector at once -- the invariant the injector reader relies on. The out_ready
+    // sem and chunk_start advance stay per-chunk (the AG receiver counts one per chunk).
+    // mm_sub_chunks==1 => a single band spanning the whole chunk => byte-identical to no sub-chunking.
+    uint32_t mm_cores_y = 1,
+    uint32_t mm_sub_chunks = 1,
+    bool mm_signal_enabled = false,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_mm_sem_inc = nullptr,
+    uint64_t mm_agg_sem_noc_addr = 0) {
     // Chunk values (chunk spans all mm cores)
     // convert chunk start from linear index into row and col coord, still in input tensor space
     uint32_t chunk_start_row = chunk_start_tile / input_tensor_Wt;
-    uint32_t chunk_start_col = chunk_start_tile % input_tensor_Wt;
-
-    // Subchunk values (subchunk spans just 1 mm core)
-    uint32_t subchunk_start_row = chunk_start_row;  // initialize the subchunk tracker (start and end)
-    uint32_t subchunk_end_row = chunk_start_row + subchunk_height - 1;
-
-    // Worker chunk values
-    uint32_t worker_chunk_start_row_chunk_space = worker_tile_offset / chunk_width;
-    uint32_t worker_chunk_start_col_chunk_space = worker_tile_offset % chunk_width;
-    uint32_t worker_chunk_row = chunk_start_row + worker_chunk_start_row_chunk_space;
-    uint32_t worker_chunk_col = chunk_start_col + worker_chunk_start_col_chunk_space;
-    if (worker_chunk_row > subchunk_end_row) {
-        advance_subchunk(worker_chunk_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
-    }
-    worker_chunk_col = worker_chunk_col + actual_sender_chip_id * input_tensor_Wt;
-    chunk_start_col = chunk_start_col + actual_sender_chip_id * input_tensor_Wt;
+    uint32_t chunk_start_col_base = chunk_start_tile % input_tensor_Wt;
+    uint32_t chunk_start_col = chunk_start_col_base + actual_sender_chip_id * input_tensor_Wt;
     uint32_t chunk_end_col = chunk_start_col + chunk_width - 1;
 
-    for (uint32_t packet_idx = 0; packet_idx < packets_in_curr_chunk; packet_idx++) {
-        uint32_t tiles_left_in_chunk = worker_tiles_in_curr_chunk - chunk_tile_iter;
-        uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_chunk, num_tiles_per_packet);
+    uint32_t band_rows = (subchunk_height + mm_sub_chunks - 1) / mm_sub_chunks;
 
-        cb_wait_front(cb_output_id, max_tiles_per_packet);
-        size_t l1_read_addr = get_read_ptr(cb_output_id);
-
-        uint32_t padded_tiles = 0;
-        int32_t tile_one_id = get_chunk_tile(
-            worker_chunk_row,
-            worker_chunk_col,
-            ag_worker_cores,
-            subchunk_start_row,
-            subchunk_end_row,
-            subchunk_height_stride,
-            chunk_start_col,
-            chunk_end_col,
-            chunk_width,
-            output_tensor_Wt,
-            input_tensor_Ht);
-        if (tile_one_id < 0) {
-            padded_tiles++;
+    for (uint32_t band = 0; band < mm_sub_chunks; band++) {
+        uint32_t band_lo = band * band_rows;
+        if (band_lo >= subchunk_height) {
+            break;  // more bands than rows (only when mm_sub_chunks > subchunk_height)
         }
-        chunk_tile_iter++;
-        int32_t tile_two_id = tile_one_id;
-        if (tiles_to_write_in_packet == 2) {
-            tile_two_id = get_chunk_tile(
+        uint32_t band_h = std::min(band_rows, subchunk_height - band_lo);
+        uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
+        uint32_t worker_tiles_in_band =
+            (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
+        uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_band);
+        uint32_t packets_in_band = div_up(worker_tiles_in_band, num_tiles_per_packet);
+        uint32_t band_tile_iter = 0;
+
+        // Subchunk tracker for this band: band_h rows of injector 0, starting band_lo rows into the
+        // chunk; advance_subchunk jumps subchunk_height_stride (== M_tiles_per_core) to the next
+        // injector's same band. Injector-major within the band.
+        uint32_t band_start_row = chunk_start_row + band_lo;
+        uint32_t subchunk_start_row = band_start_row;
+        uint32_t subchunk_end_row = band_start_row + band_h - 1;
+
+        uint32_t worker_chunk_row = band_start_row + (worker_tile_offset / chunk_width);
+        uint32_t worker_chunk_col = chunk_start_col + (worker_tile_offset % chunk_width);
+        if (worker_chunk_row > subchunk_end_row) {
+            advance_subchunk(worker_chunk_row, subchunk_start_row, subchunk_end_row, subchunk_height_stride);
+        }
+
+        for (uint32_t packet_idx = 0; packet_idx < packets_in_band; packet_idx++) {
+            uint32_t tiles_left_in_band = worker_tiles_in_band - band_tile_iter;
+            uint32_t tiles_to_write_in_packet = std::min(tiles_left_in_band, num_tiles_per_packet);
+
+            cb_wait_front(cb_output_id, max_tiles_per_packet);
+            size_t l1_read_addr = get_read_ptr(cb_output_id);
+
+            uint32_t padded_tiles = 0;
+            int32_t tile_one_id = get_chunk_tile(
                 worker_chunk_row,
                 worker_chunk_col,
                 ag_worker_cores,
@@ -286,61 +298,87 @@ FORCE_INLINE uint32_t write_chunk(
                 chunk_width,
                 output_tensor_Wt,
                 input_tensor_Ht);
-            if (tile_two_id < 0) {
+            if (tile_one_id < 0) {
                 padded_tiles++;
             }
-            chunk_tile_iter++;
-        }
+            band_tile_iter++;
+            int32_t tile_two_id = tile_one_id;
+            if (tiles_to_write_in_packet == 2) {
+                tile_two_id = get_chunk_tile(
+                    worker_chunk_row,
+                    worker_chunk_col,
+                    ag_worker_cores,
+                    subchunk_start_row,
+                    subchunk_end_row,
+                    subchunk_height_stride,
+                    chunk_start_col,
+                    chunk_end_col,
+                    chunk_width,
+                    output_tensor_Wt,
+                    input_tensor_Ht);
+                if (tile_two_id < 0) {
+                    padded_tiles++;
+                }
+                band_tile_iter++;
+            }
 
-        tiles_to_write_in_packet = tiles_to_write_in_packet - padded_tiles;
-        // Will have more cases once scatter-write supports more than 2 distinct addresses
-        switch (tiles_to_write_in_packet) {
-            case 2: {
-                auto noc_address0 =
-                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
-                auto noc_address1 =
-                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
-                if ((direction == 1 && num_targets_backward_direction) ||
-                    (direction == 0 && num_targets_forward_direction)) {
-                    fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
-                        &mux_connection,
-                        pkt_scatter_hdr,
-                        l1_read_addr,
-                        NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {0}));
-                }
-                if (direction == 1 && write_local) {
-                    uint64_t local_noc0_dest_noc_addr_tile_one = output_addrgen.get_noc_addr(tile_one_id);
-                    uint64_t local_noc0_dest_noc_addr_tile_two = output_addrgen.get_noc_addr(tile_two_id);
+            tiles_to_write_in_packet = tiles_to_write_in_packet - padded_tiles;
+            // Will have more cases once scatter-write supports more than 2 distinct addresses
+            switch (tiles_to_write_in_packet) {
+                case 2: {
+                    auto noc_address0 =
+                        tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
+                    auto noc_address1 =
+                        tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_two_id, 0);
+                    if ((direction == 1 && num_targets_backward_direction) ||
+                        (direction == 0 && num_targets_forward_direction)) {
+                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
+                            &mux_connection,
+                            pkt_scatter_hdr,
+                            l1_read_addr,
+                            NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {0}));
+                    }
+                    if (direction == 1 && write_local) {
+                        uint64_t local_noc0_dest_noc_addr_tile_one = output_addrgen.get_noc_addr(tile_one_id);
+                        uint64_t local_noc0_dest_noc_addr_tile_two = output_addrgen.get_noc_addr(tile_two_id);
 
-                    noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
-                    noc_async_write(
-                        l1_read_addr + output_page_size, local_noc0_dest_noc_addr_tile_two, output_page_size);
-                    noc_async_write_barrier();
+                        noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
+                        noc_async_write(
+                            l1_read_addr + output_page_size, local_noc0_dest_noc_addr_tile_two, output_page_size);
+                        noc_async_write_barrier();
+                    }
+                    break;
                 }
-                break;
-            }
-            case 1: {
-                auto noc_address0 =
-                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
-                if ((direction == 1 && num_targets_backward_direction) ||
-                    (direction == 0 && num_targets_forward_direction)) {
-                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                        &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
+                case 1: {
+                    auto noc_address0 =
+                        tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_one_id, 0);
+                    if ((direction == 1 && num_targets_backward_direction) ||
+                        (direction == 0 && num_targets_forward_direction)) {
+                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                            &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
+                    }
+                    if (direction == 1 && write_local) {
+                        uint64_t local_noc0_dest_noc_addr = output_addrgen.get_noc_addr(tile_one_id);
+                        noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
+                        noc_async_write_barrier();
+                    }
+                    break;
                 }
-                if (direction == 1 && write_local) {
-                    uint64_t local_noc0_dest_noc_addr = output_addrgen.get_noc_addr(tile_one_id);
-                    noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
-                    noc_async_write_barrier();
+                case 0:
+                default: {
+                    break;
                 }
-                break;
             }
-            case 0:
-            default: {
-                break;
-            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_output_id, max_tiles_per_packet);
         }
-        noc_async_writes_flushed();
-        cb_pop_front(cb_output_id, max_tiles_per_packet);
+        // One matmul-aggregator inc per band, ordered after this band's writes on the fabric.
+        if (mm_signal_enabled) {
+            fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                &mux_connection,
+                pkt_hdr_mm_sem_inc,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{mm_agg_sem_noc_addr, 0, 0});
+        }
     }
     // Write the semaphore packet
     if ((direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction)) {
@@ -357,5 +395,5 @@ FORCE_INLINE uint32_t write_chunk(
     } else {
         chunk_start_tile = new_chunk_start_tile;
     }
-    return chunk_tile_iter;
+    return 0;  // return value is unused by callers
 }

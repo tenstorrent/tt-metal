@@ -461,6 +461,16 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
 
     std::map<std::string, std::string> reader_compute_defines;
     std::map<std::string, std::string> writer_compute_defines;
+    std::map<std::string, std::string> agg_defines;
+
+    // Streaming matmul signal: deliver each chunk's M-rows as IN0_SUB_CHUNKS row-bands, one
+    // aggregator inc per band. All three kernels must agree on the count. Default 1 = legacy (one
+    // inc per chunk). The reader is the CB producer, so it must band-split identically to the writer.
+    const char* in0_sub_chunks_env = std::getenv("IN0_SUB_CHUNKS");
+    const std::string in0_sub_chunks_str = (in0_sub_chunks_env != nullptr) ? in0_sub_chunks_env : "1";
+    reader_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
+    writer_compute_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
+    agg_defines["IN0_SUB_CHUNKS"] = in0_sub_chunks_str;
 
     // KERNEL CREATION
     /* All gather fusion */
@@ -761,7 +771,8 @@ StridedAllGatherAsyncProgramFactory::strided_all_gather_async_minimal_default_he
                 tt::tt_metal::DataMovementConfig{
                     .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt::tt_metal::NOC::RISCV_0_default,
-                    .compile_args = agg_ct_args});
+                    .compile_args = agg_ct_args,
+                    .defines = agg_defines});
 
             std::vector<uint32_t> agg_rt_args = {
                 ring_size,
