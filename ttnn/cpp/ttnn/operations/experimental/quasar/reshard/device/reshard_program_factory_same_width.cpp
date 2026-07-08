@@ -192,7 +192,6 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
             .hw_config = std::move(hw_config),
             .advanced_options = {.num_runtime_varargs = num_varargs},
         };
-        // The unaligned staging path adds the scratch DFB binding and the UNALIGNED kernel define.
         if (use_scratch) {
             k.dfb_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFBSpecName{kSWScratchDfbName},

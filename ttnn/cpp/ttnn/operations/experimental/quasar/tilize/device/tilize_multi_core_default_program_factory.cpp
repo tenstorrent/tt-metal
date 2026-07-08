@@ -139,7 +139,6 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     if (fp32_llk_acc) {
         compute_config.unpack_to_dest_mode.emplace(MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32);
     }
-    ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(device->arch(), compute_config);
     const char* compute_src = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {
         return KernelSpec{
@@ -158,8 +157,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
                  }},
             .compile_time_args =
                 {{"per_core_block_cnt", nblocks_per_core_arg}, {"per_core_block_tile_cnt", ntiles_per_block}},
-            .hw_config = compute_hw,
-        };
+            .hw_config = ttnn::to_compute_hardware_config(device->arch(), compute_config)};
     };
 
     bool has_cliff = !core_range_cliff.empty();
