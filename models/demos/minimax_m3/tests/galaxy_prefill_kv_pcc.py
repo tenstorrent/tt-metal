@@ -15,6 +15,7 @@ Env:
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs; also auto-sets
                       M3_LOAD_NLAYERS so only those layers' weight shards are read)          [default: all]
+  EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8" (cache holds both)      [default bf4]
   HF_MODEL            real MiniMax-M3 weights dir (read by ModelArgs)
 
 Run (after weights are present on disk):
@@ -203,7 +204,13 @@ def main():
         #   M3_FORCE_LOAD_WEIGHTS=1  force the source read (to (re)populate the cache / first run)
         #   M3_WEIGHTS_FROM_CACHE=1  force cache-only even if the completeness check is unsure
         cache_path = model_args.weight_cache_path(ttnn.bfloat8_b)
-        expert_dtype = ttnn.bfloat8_b  # must match TtPrefillRuntimeConfig.expert_weight_dtype (default)
+        # EXPERT_DTYPE selects the MoE routed-expert weight dtype (bf4 default / bf8). The tilized
+        # cache holds both, so either stays on the fast cache path. Same knob name as the generate
+        # harnesses (galaxy_generate_m3*.py). It feeds TtPrefillRuntimeConfig.expert_weight_dtype below.
+        expert_dtype = ttnn.bfloat8_b if os.getenv("EXPERT_DTYPE", "bf4") == "bf8" else ttnn.bfloat4_b
+        print(
+            f"[prefill-pcc] expert_dtype={expert_dtype} (EXPERT_DTYPE={os.getenv('EXPERT_DTYPE', 'bf4')})", flush=True
+        )
         force_load = os.getenv("M3_FORCE_LOAD_WEIGHTS") == "1"
         cache_only = not force_load and (
             os.getenv("M3_WEIGHTS_FROM_CACHE") == "1"
