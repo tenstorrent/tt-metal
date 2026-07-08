@@ -342,10 +342,11 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
         prompts_path = DEMO_DIR / "sample_prompts" / "input_data_questions_prefill_128.json"
         prompts = load_input_prompts(prompts_path, batch_size)
         tokenizer = llm.tokenizer
+        num_decode_tokens = 200
         input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
             prompts,
             llm,
-            reserve_decode_tokens=128,
+            reserve_decode_tokens=num_decode_tokens,
         )
 
         sampling_mode = os.environ.get("SAMPLING_MODE", "on_device_topk").lower()
@@ -365,7 +366,7 @@ def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name):
             tokens=input_tokens,
             kv_cache=kv_cache,
             page_table=page_table,
-            num_decode_tokens=128,
+            num_decode_tokens=num_decode_tokens,
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
