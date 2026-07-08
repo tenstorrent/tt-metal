@@ -27,50 +27,6 @@ CI_PIPELINE_FILES = (
 )
 HF_MODEL_RE = re.compile(r"HF_MODEL=([^\s]+)")
 
-# Multi-trace models kept on fixed sizes until #48869 is fixed in runtime.
-BLOCKED_ON_48869_MODEL_KEYS = frozenset(
-    {
-        "llama3.1-8b",
-        "llama3.1-70b",
-        "llama3.3-70b",
-        "llama3.1-70b-legacy",
-        "llama3.2-1b",
-        "llama3.2-3b",
-        "llama3.2-90b-vision",
-        "llama3.2-11b-vision",
-        "qwen3-32b",
-        "qwen2.5-72b",
-        "qwen2.5-32b",
-        "qwen2.5-vl-7b",
-        "qwen2.5-vl-32b",
-        "qwen2.5-vl-72b",
-        "qwen2.5-7b",
-        "qwen2.5-coder-32b",
-        "qwq-32b",
-        "qwen3-vl",
-        "gpt-oss-20b",
-        "gpt-oss-120b",
-        "mistral-7b",
-        "phi-3-mini",
-        "mixtral-8x7b",
-        "mistral-small-3.1-24b",
-        "gemma-3-4b",
-        "gemma-3-27b-vision",
-        "gemma-4-e2b",
-        "gemma-4-e4b",
-        "gemma-4-12b",
-        "gemma-4-26b-a4b",
-        "gemma-4-31b",
-        "gemma-3-27b",
-        "deepseek-r1-distill-llama-70b",
-        "llama3.3-70b-galaxy",
-        "llama3.3-70b-galaxy-decode",
-        "llama3.3-70b-galaxy-qwen",
-        "qwen3-32b-galaxy",
-        "qwen3-32b-galaxy-decode",
-    }
-)
-
 
 def _iter_yaml_trace_region_entries():
     doc = load_trace_region_sizes()
@@ -186,16 +142,6 @@ def test_resolve_deepseek_v3_dynamic_allocation():
 
 def test_resolve_informer_dynamic_allocation():
     assert resolve_trace_region_size("informer", "wh_n150") == TRACE_REGION_SIZE_DYNAMIC
-
-
-def test_resolve_qwen3_vl_32b_hf_model_alias():
-    assert (
-        resolve_trace_region_size_for_candidates(
-            hf_model_name_candidates("Qwen/Qwen3-VL-32B-Instruct"),
-            "wh_llmbox_perf",
-        )
-        == 28467200
-    )
 
 
 def test_resolve_qwen3_6_27b_dynamic_allocation():
