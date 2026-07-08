@@ -353,9 +353,13 @@ void get_max_page_size_and_num_pages(
         noc_max_page_size = 8192;
     } else if (device->arch() == tt::ARCH::BLACKHOLE) {
         noc_max_page_size = 16384;
+    } else if (device->arch() == tt::ARCH::QUASAR) {
+        // Quasar NOC_MAX_BURST_SIZE = NOC_MAX_BURST_WORDS(256) * NOC_WORD_BYTES(256) = 65536.
+        noc_max_page_size = 65536;
     } else {
         TT_THROW(
-            "Unsupported architecture for DRAM sharded matmul. Only Wormhole and Blackhole are supported. Got: {}",
+            "Unsupported architecture for DRAM sharded matmul. Only Wormhole, Blackhole and Quasar are supported. "
+            "Got: {}",
             device->arch());
     }
 
