@@ -500,14 +500,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // memory-bound; bigger input CBs let the kernel pipeline DRAM I/O with
     // compute instead of serialising.
     make_cb(CB_IN0_X, x_df, /*tiles=*/gu_in0_block_num_tiles * 2, x_tile_size);
-    // Row-major bf16 x staging (x_is_row_major only). One per-K-block block,
-    // single-buffered for stage 1 to bound L1. Skipped entirely when x is TILE
-    // so the bf8_b path's L1 footprint is unchanged.
+    // Row-major bf16 x staging (x_is_row_major only). Double-buffered like
+    // cb_in0_x: it is a MULTICAST SOURCE, so the sender must fill K-block N+1
+    // while N's posted mcast still drains — single-buffering reuses the slot
+    // mid-mcast and deadlocks. Skipped when x is TILE so the bf8_b path's L1 is
+    // unchanged.
     if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
-            /*tiles=*/gu_in0_block_num_tiles,
+            /*tiles=*/gu_in0_block_num_tiles * 2,
             tt::tile_size(tt::DataFormat::Float16_b));
     }
     make_cb(CB_IN1_GATE, gate_df, /*tiles=*/gu_in1_block_num_tiles * 2, gate_tile_size);
