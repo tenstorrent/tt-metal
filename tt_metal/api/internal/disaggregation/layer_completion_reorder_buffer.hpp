@@ -24,9 +24,9 @@
 #include <map>
 #include <vector>
 
-#include "layer_completion_message.hpp"
+#include <internal/disaggregation/layer_completion_message.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::internal {
 
 class LayerCompletionReorderBuffer {
 public:
@@ -46,4 +46,4 @@ private:
     std::map<uint64_t, LayerCompletionMessage> pending_;
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::internal

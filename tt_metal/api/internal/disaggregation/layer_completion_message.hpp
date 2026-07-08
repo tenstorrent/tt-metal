@@ -13,7 +13,7 @@
 
 #include <cstdint>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::internal {
 
 // Fixed ring capacity (slots). Power of two so index = pos & mask. Sized
 // well above the in-flight completion count; the consumer drains
@@ -50,4 +50,4 @@ inline bool is_layer_completion_sentinel(const LayerCompletionMessage& m) noexce
     return m.reserved == kLayerCompletionSentinel;
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::internal

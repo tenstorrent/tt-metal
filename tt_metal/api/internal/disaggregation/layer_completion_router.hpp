@@ -33,9 +33,14 @@
 #include <thread>
 
 namespace tt::tt_metal::distributed {
+class InterProcessCounterChannel;  // fwd — defined in api/internal/service/inter_process_counter_channel.hpp
+}  // namespace tt::tt_metal::distributed
 
-class LayerCompletionQueue;
-class InterProcessCounterChannel;
+namespace tt::tt_metal::internal {
+
+using tt::tt_metal::distributed::InterProcessCounterChannel;  // api/internal/service/
+
+class LayerCompletionQueue;  // fwd — defined in layer_completion_queue.hpp
 
 struct LayerCompletionRouterConfig {
     int rank = 0;
@@ -75,4 +80,4 @@ private:
     std::atomic<uint64_t> processed_{0};
 };
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::internal

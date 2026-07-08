@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layer_completion_queue.hpp"
+#include <internal/disaggregation/layer_completion_queue.hpp>
 
 #include <chrono>
 #include <cstring>
@@ -16,7 +16,9 @@
 #include "layer_completion_ring_layout.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::internal {
+
+using tt::tt_metal::distributed::NamedShm;
 
 namespace {
 bool shm_path_exists(const std::string& shm_name) {
@@ -138,4 +140,4 @@ void LayerCompletionQueue::shutdown() {
     shm_->close();
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::internal

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "layer_completion_reorder_buffer.hpp"
+#include <internal/disaggregation/layer_completion_reorder_buffer.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::internal {
 
 uint32_t LayerCompletionReorderBuffer::insert(
     const LayerCompletionMessage& msg, std::vector<LayerCompletionMessage>& drained) {
@@ -41,4 +41,4 @@ uint32_t LayerCompletionReorderBuffer::insert(
     return static_cast<uint32_t>(drained.size());
 }
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::internal

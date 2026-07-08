@@ -20,19 +20,19 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unique_ptr.h>
 
-#include "tt_metal/distributed/layer_completion/layer_completion_consumer.hpp"
-#include "tt_metal/distributed/layer_completion/layer_completion_message.hpp"
-#include "tt_metal/distributed/layer_completion/layer_completion_queue.hpp"
-#include "tt_metal/distributed/layer_completion/layer_completion_router.hpp"
+#include <internal/disaggregation/layer_completion_consumer.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_queue.hpp>
+#include <internal/disaggregation/layer_completion_router.hpp>
 
 namespace nb = nanobind;
 
 NB_MODULE(_layer_completion, mod) {  // NOLINT(performance-unnecessary-value-param)
     using tt::tests::prefill_test::LayerCompletionConsumer;
-    using tt::tt_metal::distributed::LayerCompletionMessage;
-    using tt::tt_metal::distributed::LayerCompletionQueue;
-    using tt::tt_metal::distributed::LayerCompletionRouter;
-    using tt::tt_metal::distributed::LayerCompletionRouterConfig;
+    using tt::tt_metal::internal::LayerCompletionMessage;
+    using tt::tt_metal::internal::LayerCompletionQueue;
+    using tt::tt_metal::internal::LayerCompletionRouter;
+    using tt::tt_metal::internal::LayerCompletionRouterConfig;
 
     mod.doc() = "Pipelined-prefill layer-completion ring/router/consumer. Not a ttnn API.";
 

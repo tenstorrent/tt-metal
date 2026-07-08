@@ -20,9 +20,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "layer_completion_message.hpp"
+#include <internal/disaggregation/layer_completion_message.hpp>
 
-namespace tt::tt_metal::distributed {
+namespace tt::tt_metal::internal {
 
 inline constexpr std::size_t kLayerCompletionCacheLine = 64;
 inline constexpr uint32_t kLayerCompletionRingMagic = 0x4C435131u;  // 'LCQ1'
@@ -55,4 +55,4 @@ inline constexpr std::size_t kLayerCompletionRingBytes =
     layer_completion_cells_offset() +
     static_cast<std::size_t>(kLayerCompletionRingCapacity) * sizeof(LayerCompletionCell);
 
-}  // namespace tt::tt_metal::distributed
+}  // namespace tt::tt_metal::internal
