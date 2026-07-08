@@ -26,17 +26,17 @@ void kernel_main() {
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 
-    // Initialize once before the loop
-    compute_kernel_lib::untilize_init<tiles_per_row, src_cb_id, out_cb_id0>();
-
     for (uint32_t block_idx = 0; block_idx < total_blocks; block_idx++) {
-        // Use unified untilize with Neither mode since we handle init/uninit outside the loop
+        // InitAndUninit per block: even blocks -> out_cb_id0, odd -> out_cb_id1. On Quasar the untilize/pack
+        // OUTPUT buffer descriptor is bound at init and is NOT re-derived from the ocb per call, so a single
+        // outer init + in-loop Neither would make the odd blocks silently write out_cb_id0. Re-init+uninit each
+        // block so the descriptor is rebound to THIS block's output CB (odd blocks correctly land in out_cb_id1).
         if (block_idx % 2 == 0) {
             compute_kernel_lib::untilize<
                 tiles_per_row,
                 src_cb_id,
                 out_cb_id0,
-                compute_kernel_lib::untilize_config::InitUninitMode::Neither,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
         } else {
@@ -44,12 +44,9 @@ void kernel_main() {
                 tiles_per_row,
                 src_cb_id,
                 out_cb_id1,
-                compute_kernel_lib::untilize_config::InitUninitMode::Neither,
+                compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
         }
     }
-
-    // Uninit after loop
-    compute_kernel_lib::untilize_uninit<tiles_per_row, src_cb_id, out_cb_id0>();
 }
