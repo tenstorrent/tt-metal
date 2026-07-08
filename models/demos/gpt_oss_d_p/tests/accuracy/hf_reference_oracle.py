@@ -361,11 +361,23 @@ def main():
         # which would overwrite the prefill snapshot.
         generation: list[dict] = []
         if args.gen_tokens > 0:
+            # generation[i] is the token at position (last+1+i) in the extended
+            # sequence.  Element 0 is the argmax of the last-prompt-position
+            # logits (already computed above); we prepend it so the list is the
+            # full generated stream starting from the first output token.
+            generation.append(
+                {
+                    "pos": last + 1,
+                    "argmax_id": argmax,
+                    "argmax_text": tok.decode([argmax]),
+                    "top5": [{"id": i, "text": t, "logit": l} for i, t, l in top5],
+                }
+            )
             gen_cache = out.past_key_values
             next_tok = argmax
             print(f"[oracle] generating {args.gen_tokens} tokens greedily...", flush=True)
             with torch.no_grad():
-                for step in range(args.gen_tokens):
+                for step in range(1, args.gen_tokens):
                     step_out = model(
                         input_ids=torch.tensor([[next_tok]], dtype=torch.long),
                         past_key_values=gen_cache,
