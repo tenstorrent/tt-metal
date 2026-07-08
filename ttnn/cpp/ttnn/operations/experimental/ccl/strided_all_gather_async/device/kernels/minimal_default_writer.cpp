@@ -253,6 +253,11 @@ void kernel_main() {
                 uint32_t actual_chunk_h = next_mm_aligned_chunk_height(
                     input_chunk_start_tile, M_tiles_per_core, input_tensor_Wt, mm_block_ht);
                 uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
+                bool mm_sig_local = fuse_op && writer_signals_mm && has_remote_target;
+                uint64_t agg_sem_noc_addr_local =
+                    mm_sig_local ? safe_get_noc_addr(
+                                       (uint8_t)agg_core_noc_x, (uint8_t)agg_core_noc_y, agg_per_worker_sem_addr, 0)
+                                 : 0;
                 write_chunk(
                     input_chunk_start_tile,
                     batch_output_tile_offset,
@@ -278,22 +283,14 @@ void kernel_main() {
                     direction,
                     num_targets_forward_direction,
                     num_targets_backward_direction,
-                    true && !read_local_slice_from_input);
+                    true && !read_local_slice_from_input,
+                    mm_sig_local,
+                    pkt_hdr_mm_sem_inc,
+                    agg_sem_noc_addr_local);
                 if (fuse_op && direction == 1 && !read_local_slice_from_input) {
                     DeviceZoneScopedN("AG-MM-SIGNAL");
                     // Synchronize and signal that the local tensor slice is available
                     op_signaler_sender.synchronize_workers_and_signal_op(my_chip_id);
-                }
-                // This device's local slice just landed on the remote device's output tensor above;
-                // signal this worker's per-worker semaphore on the remote direction's aggregation core.
-                if (fuse_op && writer_signals_mm && has_remote_target) {
-                    DeviceZoneScopedN("AG-MM-SIGNAL-FABRIC");
-                    uint64_t agg_sem_noc_addr =
-                        safe_get_noc_addr((uint8_t)agg_core_noc_x, (uint8_t)agg_core_noc_y, agg_per_worker_sem_addr, 0);
-                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                        &mux_connection,
-                        pkt_hdr_mm_sem_inc,
-                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{agg_sem_noc_addr, 0, 0});
                 }
             }
 
@@ -325,6 +322,11 @@ void kernel_main() {
                     DeviceZoneScopedN("AG-FWD-SEND");
                     uint32_t tiles_in_current_chunk = actual_chunk_w * actual_chunk_h * mm_cores_y;
 
+                    bool mm_sig_fwd = fuse_op && writer_signals_mm && has_remote_target;
+                    uint64_t agg_sem_noc_addr_fwd =
+                        mm_sig_fwd ? safe_get_noc_addr(
+                                         (uint8_t)agg_core_noc_x, (uint8_t)agg_core_noc_y, agg_per_worker_sem_addr, 0)
+                                   : 0;
                     write_chunk(
                         input_chunk_start_tile,
                         batch_output_tile_offset,
@@ -350,18 +352,10 @@ void kernel_main() {
                         direction,
                         num_targets_forward_direction,
                         num_targets_backward_direction,
-                        false);
-                    // Forwarded chunk (from actual_sender_chip_id) just landed on the remote device;
-                    // signal this worker's per-worker semaphore on the remote direction's aggregation core.
-                    if (fuse_op && writer_signals_mm && has_remote_target) {
-                        DeviceZoneScopedN("AG-MM-SIGNAL-FABRIC");
-                        uint64_t agg_sem_noc_addr = safe_get_noc_addr(
-                            (uint8_t)agg_core_noc_x, (uint8_t)agg_core_noc_y, agg_per_worker_sem_addr, 0);
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            &mux_connection,
-                            pkt_hdr_mm_sem_inc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{agg_sem_noc_addr, 0, 0});
-                    }
+                        false,
+                        mm_sig_fwd,
+                        pkt_hdr_mm_sem_inc,
+                        agg_sem_noc_addr_fwd);
                 }
                 slice_writes++;
             }

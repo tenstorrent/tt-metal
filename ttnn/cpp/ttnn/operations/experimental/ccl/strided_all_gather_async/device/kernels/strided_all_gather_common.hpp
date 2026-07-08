@@ -220,7 +220,12 @@ FORCE_INLINE uint32_t write_chunk(
     const bool direction,
     const uint32_t num_targets_forward_direction,
     const uint32_t num_targets_backward_direction,
-    bool write_local) {
+    bool write_local,
+    // Signal the matmul aggregator right after this chunk's data, before out_ready, rather than from
+    // the caller after write_chunk returns -- gives the matmul its go one fabric-inc earlier per chunk.
+    bool mm_signal_enabled = false,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_mm_sem_inc = nullptr,
+    uint64_t mm_agg_sem_noc_addr = 0) {
     uint32_t worker_tiles_in_curr_chunk =
         (tiles_in_chunk / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_chunk % ag_worker_cores)) ? 1 : 0);
     uint32_t num_tiles_per_packet = std::min(max_tiles_per_packet, worker_tiles_in_curr_chunk);
@@ -341,6 +346,13 @@ FORCE_INLINE uint32_t write_chunk(
         }
         noc_async_writes_flushed();
         cb_pop_front(cb_output_id, max_tiles_per_packet);
+    }
+    // Matmul-aggregator signal, fired before out_ready so the matmul is released one inc sooner.
+    if (mm_signal_enabled) {
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            &mux_connection,
+            pkt_hdr_mm_sem_inc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{mm_agg_sem_noc_addr, 0, 0});
     }
     // Write the semaphore packet
     if ((direction == 1 && num_targets_backward_direction) || (direction == 0 && num_targets_forward_direction)) {
