@@ -39,21 +39,21 @@ FORCE_INLINE float perform_reduction(float input, uint16_t source_value, Scatter
 // performs scatter on data loaded to cb with load_to_cb
 template <typename index_type>
 FORCE_INLINE void scatter_along_chunk(
-    const uint32_t& input_cb,
-    const uint32_t& index_cb,
-    const uint32_t& source_cb,
-    const uint32_t& output_cb,
-    const uint32_t& fp32_temp_cb,
+    const CircularBuffer& input_cb,
+    const CircularBuffer& index_cb,
+    const CircularBuffer& source_cb,
+    const CircularBuffer& output_cb,
+    const CircularBuffer& fp32_temp_cb,
     const uint32_t& input_stick_size,
     const index_type& input_offset,
     const uint32_t& input_chunk_size,
     const uint32_t& index_chunk_size,
     const ScatterReductionType& scatter_reduction_type = ScatterReductionType::INVALID) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t index_l1_read_addr = get_read_ptr(index_cb);
-    const uint32_t source_l1_read_addr = get_read_ptr(source_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
-    const uint32_t fp32_temp_l1_write_addr = get_write_ptr(fp32_temp_cb);
+    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
+    const uint32_t index_l1_read_addr = index_cb.get_read_ptr();
+    const uint32_t source_l1_read_addr = source_cb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
+    const uint32_t fp32_temp_l1_write_addr = fp32_temp_cb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr index_type* index_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr index_type*>(index_l1_read_addr);
@@ -83,9 +83,10 @@ FORCE_INLINE void scatter_along_chunk(
 }
 
 // copies source stick to destination stick (first phase of scatter)
-FORCE_INLINE void copy_input_to_fp32_temp(uint32_t input_cb, uint32_t fp32_temp_cb, uint32_t input_chunk_size) {
-    const uint32_t input_l1_read_addr = get_read_ptr(input_cb);
-    const uint32_t fp32_temp_l1_write_addr = get_write_ptr(fp32_temp_cb);
+FORCE_INLINE void copy_input_to_fp32_temp(
+    const CircularBuffer& input_cb, const CircularBuffer& fp32_temp_cb, uint32_t input_chunk_size) {
+    const uint32_t input_l1_read_addr = input_cb.get_read_ptr();
+    const uint32_t fp32_temp_l1_write_addr = fp32_temp_cb.get_write_ptr();
     volatile tt_l1_ptr uint16_t* input_l1_read_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_read_addr);
     volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
@@ -94,9 +95,10 @@ FORCE_INLINE void copy_input_to_fp32_temp(uint32_t input_cb, uint32_t fp32_temp_
     }
 }
 
-FORCE_INLINE void copy_fp32_temp_to_output(uint32_t fp32_temp_cb, uint32_t output_cb, uint32_t chunk_size) {
-    const uint32_t fp32_temp_l1_read_addr = get_read_ptr(fp32_temp_cb);
-    const uint32_t output_l1_write_addr = get_write_ptr(output_cb);
+FORCE_INLINE void copy_fp32_temp_to_output(
+    const CircularBuffer& fp32_temp_cb, const CircularBuffer& output_cb, uint32_t chunk_size) {
+    const uint32_t fp32_temp_l1_read_addr = fp32_temp_cb.get_read_ptr();
+    const uint32_t output_l1_write_addr = output_cb.get_write_ptr();
     volatile tt_l1_ptr float* fp32_temp_l1_read_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_read_addr);
     volatile tt_l1_ptr uint16_t* output_l1_write_ptr =
@@ -167,7 +169,7 @@ void kernel_main() {
             input_cb.wait_front(ONE_PAGE);
             fp32_temp_cb.reserve_back(ONE_PAGE);
 
-            copy_input_to_fp32_temp(ctas.input_cb, ctas.fp32_temp_cb, input_chunk_length);
+            copy_input_to_fp32_temp(input_cb, fp32_temp_cb, input_chunk_length);
 
             if (in_bounds<N>(coord, index_dims)) {
                 const uint32_t index_stick_id = to_id<N>(coord, index_strides);
@@ -199,11 +201,11 @@ void kernel_main() {
                     index_cb.wait_front(ONE_PAGE);
                     source_cb.wait_front(ONE_PAGE);
                     scatter_along_chunk<index_std_type>(
-                        ctas.input_cb,
-                        ctas.index_cb,
-                        ctas.source_cb,
-                        ctas.output_cb,
-                        ctas.fp32_temp_cb,
+                        input_cb,
+                        index_cb,
+                        source_cb,
+                        output_cb,
+                        fp32_temp_cb,
                         ctas.input_stick_size,
                         input_offset,
                         input_chunk_length,
@@ -220,7 +222,7 @@ void kernel_main() {
             output_cb.reserve_back(ONE_PAGE);
 
             // third phase: push to the output cb with fp32->bf16 conversion
-            copy_fp32_temp_to_output(ctas.fp32_temp_cb, ctas.output_cb, input_chunk_length);
+            copy_fp32_temp_to_output(fp32_temp_cb, output_cb, input_chunk_length);
             fp32_temp_cb.pop_front(ONE_PAGE);
             output_cb.push_back(ONE_PAGE);
         }

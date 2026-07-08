@@ -746,6 +746,25 @@ int Cluster::get_device_aiclk(const ChipId& chip_id) const {
     return this->driver_->get_chip(chip_id)->get_clock();
 }
 
+uint32_t Cluster::get_arc_timer_heartbeat(const ChipId& chip_id) const {
+    auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
+    if (!tt_device) {
+        return 0;
+    }
+
+    auto* fw = tt_device->get_firmware_info_provider();
+    if (!fw) {
+        return 0;
+    }
+
+    return fw->get_heartbeat();  // ← THIS is the correct call path
+}
+
+bool Cluster::is_arc_telemetry_available(const ChipId& chip_id) const {
+    auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
+    return tt_device && tt_device->get_firmware_info_provider();
+}
+
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->get_cluster_desc()->get_bus_id(chip); }
 
 std::optional<int> Cluster::get_physical_slot(ChipId chip) const {

@@ -85,6 +85,10 @@ def run_mla_inference(
         tp_axis=tp_axis,
         is_balanced=is_balanced,
         topology=topology,
+        # Match the single-layer test cache (num_kvpe_cache_layers=1): the sparse single-shot write now
+        # goes through update_padded_kv_cache, which asserts cache_batch % layer_num == 0. Dense is
+        # unaffected (its single-shot write uses fill_cache_for_user_, which ignores layer_num).
+        layer_num=1,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)

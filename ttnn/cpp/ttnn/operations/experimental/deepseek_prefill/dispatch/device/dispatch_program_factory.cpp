@@ -83,6 +83,40 @@ void create_tensor_cb(
 
 namespace {
 
+// Pick a routing-plane link index that is VALID for each dispatch-axis neighbor's own forwarding
+// direction. get_forwarding_link_indices resolves the forwarding direction first and returns links in
+// that direction, so on a ring the wrap-direction neighbor may not share the line direction's valid
+// link index. Broadcasting a single {core_link} to every connection would land the wrap connection on
+// an EDM plane that never services it -> the worker hangs in open_finish. Indexing core_link into each
+// neighbor's own valid-link set keeps the choice valid for that direction while still spreading sender
+// cores across links where more than one plane exists. (Shared by the tile and row-major paths below;
+// kept file-local because the natural shared home, ccl/common, is outside this op's code ownership.)
+std::vector<uint32_t> compute_per_neighbor_forwarding_links(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const std::vector<tt::tt_fabric::FabricNodeId>& dst_nodes,
+    uint32_t core_link,
+    const char* axis_label) {
+    std::vector<uint32_t> per_conn_links;
+    per_conn_links.reserve(dst_nodes.size());
+    for (const auto& dst_node : dst_nodes) {
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(src_fabric_node_id, dst_node);
+        TT_FATAL(
+            !links.empty(), "No forwarding links from {} to {} neighbor {}", src_fabric_node_id, axis_label, dst_node);
+        log_debug(
+            tt::LogOp,
+            "FABRIC_2D {} link select: src={} dst={} dir={} core_link={} valid_links={} -> {}",
+            axis_label,
+            src_fabric_node_id,
+            dst_node,
+            tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node).value(),
+            core_link,
+            links.size(),
+            links[core_link % links.size()]);
+        per_conn_links.push_back(links[core_link % links.size()]);
+    }
+    return per_conn_links;
+}
+
 // Tile-layout path: TILE inputs, fused untilize across N untilize cores per sender
 // (num_untilizers_per_sender, u1..uN); sender is fabric-only.
 tt::tt_metal::ProgramDescriptor create_at_tile_layout(
@@ -830,7 +864,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race where a fast peer's exit-inc lands during the post-init
         // set(0) window).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+        writer_runtime_args.push_back(
+            (uint32_t)exit_semaphore.address());  // smuggled-rta-ok: persistent GlobalSemaphore (created once in
+                                                  // TT_CCL, reused) — L1 address stable across program-cache hits
 
         // ===== Sender writer (tile-layout): handshake + per-entry fabric send + credit =====
         // Shared single-id semaphores (one per-core slot on each untilizer): pushed once.
@@ -864,14 +900,17 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args.
+                //
+                // Pick a forwarding link valid for each neighbor's own direction (see
+                // compute_per_neighbor_forwarding_links above for why a single broadcast {core_link} hangs).
+                const std::vector<uint32_t> per_conn_links =
+                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,
@@ -1370,12 +1409,17 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         // Reader-only: padding_config address at index 13 (right after the 13 base args). The
         // promote helper rebinds it to a Buffer* so it refreshes on cache hit.
         if (has_padding_config) {
-            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value().buffer()->address());
+            reader_runtime_args.push_back((uint32_t)tensor_args.padding_config.value()
+                                              .buffer()
+                                              ->address());  // smuggled-rta-ok: promoted to a Buffer* binding at reader
+                                                             // index 13 below — refreshes on cache hit
         }
 
         // Writer-only: exit semaphore address (separate from init_semaphore to avoid
         // init/exit reuse race; mirrors the combine fix).
-        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+        writer_runtime_args.push_back(
+            (uint32_t)exit_semaphore.address());  // smuggled-rta-ok: persistent GlobalSemaphore (created once in
+                                                  // TT_CCL, reused) — L1 address stable across program-cache hits
 
         if (operation_attributes.num_links > 0) {
             // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
@@ -1392,14 +1436,15 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
                 // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
                 // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
                 // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
-                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
-                // this sender core's connections, spreading sender cores across links (matches the
-                // FABRIC_1D path & broadcast).
+                // appended args. Pick a forwarding link valid for each neighbor's own direction (see
+                // compute_per_neighbor_forwarding_links above) rather than broadcasting one {core_link}.
+                const std::vector<uint32_t> per_conn_links =
+                    compute_per_neighbor_forwarding_links(src_fabric_node_id, dst_nodes, core_link, "dispatch-axis");
                 writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
                 tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
                     dst_nodes,
-                    {core_link},
+                    per_conn_links,
                     desc,
                     writer_kernel_id,
                     sender_core,

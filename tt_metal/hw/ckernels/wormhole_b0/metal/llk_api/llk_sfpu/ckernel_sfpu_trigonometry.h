@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
@@ -478,7 +479,7 @@ inline void calculate_acos() {
 // fp32 path: exhaustively validated maxulperr < 0.94 for normal fp32 2^-126 <= x <= 2^103.
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_reciprocal_gt0_(sfpi::vFloat x) {
-    constexpr uint MAGIC_SEED = 0xfef392e0;
+    constexpr std::uint32_t MAGIC_SEED = 0xfef392e0;
 
     // initial estimate y = -reciprocal(x)
     sfpi::vFloat y = sfpi::as<sfpi::vFloat>(MAGIC_SEED - sfpi::as<sfpi::vInt>(x));
@@ -583,7 +584,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
         r = 8.361816406e-03f;
         r = r * f + 4.177856445e-02f;
-        s = f * f; // hide SFPMAD latency
+        s = f * f;  // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         c0 = 0.5f;
         r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
@@ -596,7 +597,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
         r = r * f + 1.393107930e-3f;
         r = r * f + 8.333439939e-3f;
         r = r * f + 4.166680202e-2f;
-        s = f * f; // hide SFPMAD latency
+        s = f * f;  // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         r = r * f + 4.999999702e-1f;
     }
@@ -686,8 +687,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void cosh_init() {
     sfpi::vConstFloatPrgm0 = 1.442695f;  // log2(e) == 1 / ln(2)
     if constexpr (is_fp32_dest_acc_en) {
-        sfpi::vConstFloatPrgm1 = -0.693145752f;    // -ln(2)_hi
-        sfpi::vConstFloatPrgm2 = 4.99999851e-1f;   // c2
+        sfpi::vConstFloatPrgm1 = -0.693145752f;   // -ln(2)_hi
+        sfpi::vConstFloatPrgm2 = 4.99999851e-1f;  // c2
     } else {
         sfpi::vConstFloatPrgm1 = -0.6931471805599453f;  // -ln(2)
         sfpi::vConstFloatPrgm2 = 0.500122011f;          // c2
@@ -898,7 +899,7 @@ inline void calculate_acosh() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
@@ -972,7 +973,7 @@ inline void calculate_asinh() {
         res = sfpi::copysgn(res, inp);
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
@@ -1021,7 +1022,7 @@ inline void calculate_atanh() {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::NearestEven);
+            res = sfpi::convert<sfpi::vFloat16b>(res, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;

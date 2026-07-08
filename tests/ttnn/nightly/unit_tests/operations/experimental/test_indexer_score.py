@@ -1616,6 +1616,138 @@ def test_indexer_score_qb_both_axes_seq(mesh_device, case_id, heads, expect_erro
         ttnn.experimental.indexer_score_dsa(q_dev, k_dev, w_dev, cluster_axis=0, **kw)
 
 
+# ---- Mid-slab-boundary STRADDLE (drives the need for the straddle geometry, #48500 slice #2) ----
+# A NON-slab-aligned chunk_start makes each device's queries cross a cache-slab boundary, so the causal
+# diagonal must JUMP by (chunk_global - cl) at q-row (cl - offset). Scaled-down stand-in for the maxedge
+# iter2 case in test_mla (iters_isl=[2560,2592,5120] -> chunk_start 5152, offset 32): here sp=2,
+# chunk_global=1280, cl=640, chunk_start=704 (= cumulative 384+320) -> offset 64 (2 tiles), so q-tiles 18-19
+# straddle. The CURRENT op has no straddle (linear diagonal) -> this FAILS until the straddle is carved in.
+ST_CHUNK = 1280  # global chunk (tokens); per-shard cl = ST_CHUNK/sp
+ST_CS = 704  # mid-slab chunk_start (704 % 640 = 64 offset); the 384+320 cumulative of the maxedge stand-in
+ST_T = 3840  # cache length: whole chunks (3*1280) covering the fullest device's straddled window
+ST_MSA_T = 5120  # block-pool straddle cache: 4*1280 whole chunks AND a whole number of k_chunk=1024 (bs=128)
+
+
+def _straddle_ref(q_g, k_nat, w_g, sp, chunk_global, chunk_start, t_len):
+    """Per-SP-rank reference over natural-order K, mirroring the update_padded_kv_cache WRITER rotation
+    (== rotated_chip_positions): each token has a FIXED, ISL-independent block-cyclic home. Device r's
+    local query row s sits at pos(r, s) = (lr // cl)*chunk_global + r*cl + (lr % cl) with lr = update_idxt(r)
+    + s. This is NOT the linear chunk_start + r*Sq: a mid-slab chunk_start rotates which chip owns which
+    block (boundary_chip), so a token's placement must not depend on the cumulative ISL. Only the boundary
+    chip is mid-slab (its rows straddle a slab boundary); the others are block-aligned."""
+    heads, gq = q_g.shape[1], q_g.shape[2]
+    sq = gq // sp  # per-device query rows (== cl in the SP-only block-cyclic layout)
+    cl = chunk_global // sp
+    boundary_slab = chunk_start // chunk_global
+    boundary_chip = (chunk_start // cl) % sp
+    offset = chunk_start % cl
+    refs = []
+    for r in range(sp):
+        update_idxt = (
+            (boundary_slab + 1) * cl
+            if r < boundary_chip
+            else (boundary_slab * cl + offset if r == boundary_chip else boundary_slab * cl)
+        )
+        sl = slice(r * sq, (r + 1) * sq)
+        qh, kh, wh = q_g[:, :, sl, :].float(), k_nat[:, 0].float(), w_g[:, :, sl, :].float()
+        score = torch.zeros(1, sq, t_len)
+        for h in range(heads):
+            score += torch.relu(qh[:, h] @ kh.transpose(-2, -1)) * wh[:, h]
+        lr = update_idxt + torch.arange(sq)
+        pos = (lr // cl) * chunk_global + r * cl + (lr % cl)  # block-cyclic home (writer rotation)
+        future = torch.arange(t_len).unsqueeze(0) > pos.unsqueeze(1)
+        refs.append(score.masked_fill(future, float("-inf")).unsqueeze(1))
+    return torch.cat(refs, dim=2)
+
+
+def _straddle_msa_pooled_ref(q_g, k_nat, sp, chunk_global, chunk_start, t_len, scale, block_size):
+    """Per-SP-rank straddled MSA block-pool reference: raw dot (NO relu), constant `scale` gate, head-summed,
+    causal-masked over the STRADDLED natural position, then block-max-pooled with the forced-local +inf stamp
+    on each query's OWN (straddled) block. Mirrors _straddle_ref but for the block-pool path the writer's
+    forced-local straddle jump lives on -- concatenated per-SP-rank along seq. cl / chunk_global / block_size
+    are block-aligned, so a slab boundary is also a block boundary and the jump moves whole blocks."""
+    heads = q_g.shape[1]
+    sq = q_g.shape[2] // sp
+    cl = chunk_global // sp
+    nb = t_len // block_size
+    boundary_slab = chunk_start // chunk_global
+    boundary_chip = (chunk_start // cl) % sp
+    offset = chunk_start % cl
+    refs = []
+    for r in range(sp):
+        # Writer rotation (== _straddle_ref / update_padded_kv_cache): each token's block-cyclic home is
+        # ISL-independent, so device r starts at its true logical block (update_idxt), NOT chunk_start + r*Sq.
+        update_idxt = (
+            (boundary_slab + 1) * cl
+            if r < boundary_chip
+            else (boundary_slab * cl + offset if r == boundary_chip else boundary_slab * cl)
+        )
+        sl = slice(r * sq, (r + 1) * sq)
+        qh, kh = q_g[:, :, sl, :].float(), k_nat[:, 0].float()
+        score = torch.zeros(1, sq, t_len)
+        for h in range(heads):
+            score += (qh[:, h] @ kh.transpose(-2, -1)) * scale  # MSA: raw dot, no relu
+        lr = update_idxt + torch.arange(sq)
+        pos = (lr // cl) * chunk_global + r * cl + (lr % cl)  # block-cyclic home (writer rotation)
+        future = torch.arange(t_len).unsqueeze(0) > pos.unsqueeze(1)
+        pooled = score.masked_fill(future, float("-inf")).reshape(1, sq, nb, block_size).amax(dim=-1)
+        pooled[:, torch.arange(sq), pos // block_size] = float("inf")  # forced-local: own block
+        refs.append(pooled.unsqueeze(1))
+    return torch.cat(refs, dim=2)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], ids=["sp2"], indirect=True)
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_qb_straddle(mesh_device, case_id, heads):
+    """Mid-slab-boundary straddle + block-cyclic chip rotation on a REAL SP mesh: block-cyclic K + a
+    non-slab-aligned chunk_start (704) makes each device's queries straddle a slab boundary AND (when the
+    start block index isn't a multiple of sp) rotates which chip owns which block. The causal diagonal must
+    use the writer's rotation (rotated_chip_positions), not the linear chunk_start + r*Sq (sp2 here: cl=640,
+    boundary_chip=1, offset=64). Geometry is sp-generic (sp derived from the mesh); also verified locally at
+    sp=8 (cl=160, boundary_chip=4 mid-ring) to guard against overfitting to sp=2 -- kept at sp=2 in CI to
+    avoid an 8-chip reservation. Scaled stand-in for the maxedge rotated-prefill case (test_mla).
+
+    Also a PROGRAM-CACHE regression: chunk_start (and the derived per-device chunk_start_tiles / straddle)
+    are hash-EXCLUDED runtime args, re-patched by override_runtime_arguments on a hit. Two chunk_starts with
+    a DIFFERENT boundary_chip run through ONE cached program -- ST_CS (mid-slab: rotation + straddle) then 0
+    (aligned: linear) -- so the second call must be a cache hit (no recompile) yet still correct, exercising
+    the re-patch and not just create_at."""
+    sp = mesh_device.shape[0]
+    q_g, k_nat, w_g = _global_inputs(heads, ST_CHUNK, ST_T, seed=42)
+    k_bc = _to_slab(k_nat, sp, ST_CHUNK)
+    mesh_shape = tuple(mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    w_dev = _to_mesh(mesh_device, w_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=128, head_group_size=0)
+
+    def run(chunk_start):
+        out = ttnn.experimental.indexer_score_dsa(
+            q_dev,
+            k_dev,
+            w_dev,
+            chunk_start_idx=chunk_start,
+            cluster_axis=0,
+            block_cyclic_sp_axis=0,
+            block_cyclic_chunk_local=ST_CHUNK // sp,
+            program_config=cfg,
+        )
+        out_t = ttnn.to_torch(
+            out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1))
+        )
+        ref = _straddle_ref(q_g, k_nat, w_g, sp, ST_CHUNK, chunk_start, ST_T)
+        assert_indexer_match(out_t, ref, ST_CHUNK, ST_T, check_neg=True)
+
+    mesh_device.enable_program_cache()
+    run(ST_CS)  # miss: boundary_chip=1 (sp2), offset 64 -> rotation + straddle
+    entries = mesh_device.num_program_cache_entries()
+    run(0)  # hit: boundary_chip=0, offset 0 -> linear; must re-patch the geometry, not recompile
+    assert (
+        mesh_device.num_program_cache_entries() == entries
+    ), "switching boundary_chip recompiled -- chunk_start / straddle must be hash-excluded runtime args"
+
+
 @pytest.mark.parametrize("mesh_device", [(QB_SP, 1)], ids=["sp4"], indirect=True)
 def test_indexer_score_qb_msa_block_cyclic(mesh_device):
     """MSA (raw dot, constant scale, num_groups=1) over a REAL SP=4 block-cyclic K cache: sp read from
@@ -1643,6 +1775,40 @@ def test_indexer_score_qb_msa_block_cyclic(mesh_device):
     out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)))
     ref = _msa_per_sp_ref(q_g, k_nat, QB_SP, QB_HISTORY)
     assert_indexer_match(out_t, ref, QB_CHUNK, QB_T, check_neg=True)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 1)], ids=["sp2"], indirect=True)
+def test_indexer_score_qb_msa_block_cyclic_straddle(mesh_device):
+    """Mid-slab-boundary straddle on the MSA BLOCK-POOL path (real sp=2 mesh): block-cyclic K + a non-slab-
+    aligned chunk_start (704, offset 64) makes each device's queries straddle a slab boundary. The DSA straddle
+    test above covers the compute-side causal diagonal (full-strip write); THIS pins the writer's block-pool
+    forced-local +inf stamp, which must jump to the query's OWN block ACROSS the boundary -- a path the DSA
+    (write_strip) test never exercises. Fails on the pre-straddle op (linear diagonal -> +inf stamped on the
+    wrong block)."""
+    sp = 2
+    bs = BLOCK_POOL_BS  # 128; cl (640) / chunk_global (1280) / bs all block-aligned -> jump moves whole blocks
+    q_g, k_nat, _ = _global_inputs(M3_QB_HEADS, ST_CHUNK, ST_MSA_T, seed=42)
+    k_bc = _to_slab(k_nat, sp, ST_CHUNK)
+    mesh_shape = tuple(mesh_device.shape)
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, None))
+    q_dev = _to_mesh(mesh_device, q_g, ttnn.bfloat16, shard)
+    k_dev = _to_mesh(mesh_device, k_bc, ttnn.bfloat8_b, ttnn.ReplicateTensorToMesh(mesh_device))
+
+    out = ttnn.experimental.indexer_score_msa(
+        q_dev,
+        k_dev,
+        chunk_start_idx=ST_CS,  # explicit, mid-slab -> offset 64 -> straddle
+        cluster_axis=0,
+        scale=M3_QB_SCALE,
+        num_groups=1,
+        block_size=bs,
+        block_cyclic_sp_axis=0,
+        block_cyclic_chunk_local=ST_CHUNK // sp,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
+    )
+    out_t = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=(2, 1)))
+    ref = _straddle_msa_pooled_ref(q_g, k_nat, sp, ST_CHUNK, ST_CS, ST_MSA_T, M3_QB_SCALE, bs)
+    assert_pooled_match(out_t, ref, 1, ST_CHUNK, ST_MSA_T // bs, pcc_floor=0.995)
 
 
 def test_indexer_score_rejects_partial_block_cyclic_args(device, expect_error):

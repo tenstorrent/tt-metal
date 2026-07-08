@@ -41,6 +41,7 @@ struct DFBTCSlot {
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
+    uint16_t num_entries;
     uint16_t wr_entry_ptr;
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
@@ -49,7 +50,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 87, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 89, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -65,6 +66,7 @@ struct DFBTCSlot {
 struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
+    uint16_t num_entries;
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
@@ -73,7 +75,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 86, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -90,6 +92,7 @@ struct DFBTCSlot {
 struct LocalDFBInterface {
     uint32_t entry_size;
     uint32_t stride_size;
+    uint16_t num_entries;
 
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
@@ -106,7 +109,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 123, "LocalDFBInterface size is incorrect");
 
 #endif
 

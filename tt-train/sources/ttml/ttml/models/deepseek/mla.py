@@ -19,18 +19,18 @@ import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer
 
 from .transformer import RMSNormLayer
-from .autograd_ops import autograd_slice, autograd_concat, autograd_split, split_heads
+from .autograd_ops import autograd_split
 
 
 class MultiHeadLatentAttention(AbstractModuleBase):
     """Multi-head Latent Attention (MLA) layer.
 
     Follows the DeepSeek-V3 naive-mode attention:
-      Q (q_lora_rank > 0): x -> wq_a -> norm -> wq_b -> split_heads
-      Q (q_lora_rank == 0): x -> wq -> split_heads   (direct, no LoRA bottleneck)
-      Both: -> [q_nope, q_pe] -> RoPE(q_pe) -> cat
-      KV: x -> wkv_a -> [kv_latent, k_pe] -> norm(kv_latent) -> wkv_b -> split_heads
-          -> [k_nope, v] + RoPE(k_pe) broadcast -> cat(k_nope, k_pe)
+      Q (q_lora_rank > 0): x -> wq_a -> norm -> wq_b
+      Q (q_lora_rank == 0): x -> wq (direct, no LoRA bottleneck)
+      KV: x -> wkv_a -> split(kv_latent, k_pe) -> norm(kv_latent) -> wkv_b
+          -> RoPE(k_pe) broadcast
+      Q/K/V assembly: qkv_assemble + mla_q_rope on Q
       Attention: fused causal SDPA(Q, K, V) -> fuse_heads -> wo
 
     Causal-only: the fused SDPA generates the causal mask on chip, so this layer
@@ -75,48 +75,28 @@ class MultiHeadLatentAttention(AbstractModuleBase):
         self.wo = LinearLayer(config.n_heads * config.v_head_dim, config.dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        B, _, S, _ = list(x.get_value().shape)
         n_heads = self.n_heads
         qk_nope = self.qk_nope_head_dim
         qk_rope = self.qk_rope_head_dim
-        qk_head = self.qk_head_dim
         v_dim = self.v_head_dim
 
         # ── Q path ──
         if self.q_lora_rank == 0:
-            q = self.wq(x)  # [B, 1, S, n_heads * qk_head]
+            q_pre = self.wq(x)  # [B, 1, S, n_heads * qk_head]
         else:
-            q = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
-        q = split_heads(q, n_heads)  # [B, n_heads, S, qk_head]
-
-        q_nope = autograd_slice(q, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        q_pe = autograd_slice(q, [0, 0, 0, qk_nope], [B, n_heads, S, qk_head])
-        q_pe = ttml.ops.rope.rope(q_pe, self.rope_params)
+            q_pre = self.wq_b(self.q_norm(self.wq_a(x)))  # [B, 1, S, n_heads * qk_head]
 
         # ── KV path ──
         kv_full = self.wkv_a(x)  # [B, 1, S, kv_lora_rank + qk_rope]
-        kv_lora = self.kv_lora_rank
-
-        # Single split (one concat in backward) instead of two autograd_slice
-        # (which each rebuild a full-width grad with zeros + concat, then sum).
-        kv, k_pe = autograd_split(kv_full, [kv_lora, qk_rope], dim=3)
+        kv, k_pe = autograd_split(kv_full, [self.kv_lora_rank, qk_rope], dim=3)
 
         # RoPE on k_pe (shared across heads, shape [B, 1, S, qk_rope])
         k_pe = ttml.ops.rope.rope(k_pe, self.rope_params)
 
-        # Expand k_pe to all heads: [B, 1, S, qk_rope] -> [B, n_heads, S, qk_rope]
-        k_pe = autograd_concat([k_pe] * n_heads, dim=1)
-
-        # Up-project KV latent and split into per-head k_nope and v
         kv_up = self.wkv_b(self.kv_norm(kv))  # [B, 1, S, n_heads * (qk_nope + v_dim)]
-        kv_up = split_heads(kv_up, n_heads)  # [B, n_heads, S, qk_nope + v_dim]
 
-        k_nope = autograd_slice(kv_up, [0, 0, 0, 0], [B, n_heads, S, qk_nope])
-        v = autograd_slice(kv_up, [0, 0, 0, qk_nope], [B, n_heads, S, qk_nope + v_dim])
-
-        # Assemble full Q and K
-        q_full = autograd_concat([q_nope, q_pe], dim=3)  # [B, H, S, qk_head]
-        k_full = autograd_concat([k_nope, k_pe], dim=3)  # [B, H, S, qk_head]
+        q, k_full, v = ttml.ops.mla.qkv_assemble(q_pre, kv_up, k_pe, n_heads, qk_nope, qk_rope, v_dim)
+        q_full = ttml.ops.rope.mla_q_rope(q, self.rope_params, qk_nope, qk_rope)
 
         # ── Attention (causal-only) ──
         # None -> fused SDPA generates the causal mask on chip and takes the faster
