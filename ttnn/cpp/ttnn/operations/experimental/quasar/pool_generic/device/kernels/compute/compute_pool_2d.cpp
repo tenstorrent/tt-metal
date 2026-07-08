@@ -248,6 +248,18 @@ void kernel_main() {
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce)));
                 }
             }
+            // QSR split-reader fix: the strided reduce-col unpack (_llk_unpack_reduce_col_tilizeA_strided_)
+            // binds its input buffer descriptor at init time (tilizeA_B_reduce_init used in_cb_0). On Quasar
+            // that descriptor is NOT re-derived from the CB id passed to unpack_tilizeA_B_block below, so the
+            // odd (reader1) sticks otherwise keep reading in_cb_0 and march past its filled page into zeros
+            // (proven on craq-sim: SrcA into the reduce is all-zero for reader1). Re-bind the tilize-reduce
+            // unpack to THIS stick's actual input CB so reader1's in_cb_1 is the source for odd sticks.
+#ifdef ARCH_QUASAR
+            if constexpr (use_split_reader) {
+                UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                    curr_in_cb_id, in_scalar_cb_id_0, tiles_to_reduce)));
+            }
+#endif
             MATH(WATCHER_RING_BUFFER_PUSH(0xC0FFEE11u));
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
@@ -380,6 +392,17 @@ void kernel_main() {
                 // serializes per stick: stick N+1 can't reserve until the DM reader pops stick N's whole
                 // tile, so the full-tile pack never overlaps a still-unread tile.
                 curr_scratch_cb.reserve_back(scratch_npages);
+#ifdef ARCH_QUASAR
+                // FIX (pack-side analog of the unpack rebind above): on Quasar, pack_untilize_dest(ocb) does
+                // NOT re-derive the packer's OUTPUT buffer descriptor from the ocb passed at call time -- it
+                // stays bound to whatever pack_untilize_dest_init set (done once with scratch_cb_0). So the
+                // odd (reader1) stick, packed with scratch_cb_1, would write scratch_cb_0's L1 and leave
+                // scratch_cb_1 unwritten -> reader1 reads zeros. Re-init the pack descriptor to THIS stick's
+                // scratch CB so the odd stick actually lands in scratch_cb_1.
+                if constexpr (use_split_reader) {
+                    pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
+                }
+#endif
 #if DEBUG_PRINT == 1
                 // Which scratch CB and where does compute pack THIS stick? Compare wptr to the reader's
                 // rdptr: same address + reader reads 0 => reduce produced 0 (input); differ => routing.
