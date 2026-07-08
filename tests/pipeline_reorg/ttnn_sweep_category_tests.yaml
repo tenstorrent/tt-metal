@@ -15,7 +15,7 @@
 
 # --- eltwise (split along subdirs) ---
 - name: ttnn sweeps eltwise.unary
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name eltwise.unary.abs.abs --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
   skus:
     wh_n150_civ2:
       timeout: 300

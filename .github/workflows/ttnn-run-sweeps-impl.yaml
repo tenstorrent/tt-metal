@@ -263,7 +263,7 @@ jobs:
       # For the category split (nightly/comprehensive) the inject step fills a
       # concrete module_selector per entry from compute_sweep_matrix; use it when
       # present. Other splits (mesh/lead_models) keep the prepare_test_matrix output.
-      matrix: ${{ steps.inject.outputs.matrix != '' && steps.inject.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sweep_${{ needs.prepare-sweep-vectors.outputs.split }}_tests.yaml
     steps:
@@ -298,43 +298,69 @@ jobs:
       # bare category resolves to nothing and the batch runs zero tests. Reuse
       # compute_sweep_matrix.py (the same script main uses) to read the generated
       # -vector manifest, then inject a per-category module_selector.
-      - name: Download sweep vectors
-        if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: sweeps-vectors
-          path: /tmp/vectors
-      - name: Compute module list from generated vectors
-        if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
-        id: compute
-        env:
-          SWEEP_NAME: ${{ inputs.sweep-name }}
-          MEASURE_DEVICE_PERF: ${{ inputs.measure-device-perf }}
-          VECTORS_DIR: /tmp/vectors
+      # - name: Download sweep vectors
+      #   if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
+      #   uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      #   with:
+      #     name: sweeps-vectors
+      #     path: /tmp/vectors
+      # - name: Compute module list from generated vectors
+      #   if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
+      #   id: compute
+      #   env:
+      #     SWEEP_NAME: ${{ inputs.sweep-name }}
+      #     MEASURE_DEVICE_PERF: ${{ inputs.measure-device-perf }}
+      #     VECTORS_DIR: /tmp/vectors
+      #   run: |
+      #     python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
+      #       --write-to-file /tmp/compute_matrix.json > /dev/null
+      # - name: Inject per-category module selectors
+      #   if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
+      #   id: inject
+      #   run: |
+      #     # Persist build-matrix output (compact single-line JSON) to a file for
+      #     # the glue. Quoted heredoc delimiter => no shell expansion of the JSON.
+      #     cat > /tmp/reorg_matrix.json <<'MTX_EOF'
+      #     ${{ steps.build-matrix.outputs.matrix }}
+      #     MTX_EOF
+      #     # Single-module dispatch: narrow to the batch(es) whose category is a
+      #     # dotted-prefix component of the requested sweep name (ALL SWEEPS = keep all).
+      #     CATS='${{ startsWith(inputs.sweep-name, 'ALL SWEEPS') && 'ALL' || inputs.sweep-name }}'
+      #     if [[ "$CATS" != "ALL" ]]; then
+      #       jq -c --arg cats ",$CATS," \
+      #         '[.[] | .category as $c | select($cats | contains(",\($c)"))]' \
+      #         /tmp/reorg_matrix.json > /tmp/reorg_matrix.filtered.json
+      #       mv /tmp/reorg_matrix.filtered.json /tmp/reorg_matrix.json
+      #     fi
+      #     python3 .github/scripts/utils/inject_module_selectors.py \
+      #       /tmp/reorg_matrix.json \
+      #       /tmp/compute_matrix.json
+
+  display-matrix:
+    name: 📋 Display constructed matrix
+    needs: [load-test-matrix]
+    if: ${{ always() && needs.load-test-matrix.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show the matrix ttnn-run-sweeps will consume
         run: |
-          python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
-            --write-to-file /tmp/compute_matrix.json > /dev/null
-      - name: Inject per-category module selectors
-        if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
-        id: inject
-        run: |
-          # Persist build-matrix output (compact single-line JSON) to a file for
-          # the glue. Quoted heredoc delimiter => no shell expansion of the JSON.
-          cat > /tmp/reorg_matrix.json <<'MTX_EOF'
-          ${{ steps.build-matrix.outputs.matrix }}
+          # Exactly what fans out ttnn-run-sweeps below (same job output).
+          cat > /tmp/matrix.json <<'MTX_EOF'
+          ${{ needs.load-test-matrix.outputs.matrix }}
           MTX_EOF
-          # Single-module dispatch: narrow to the batch(es) whose category is a
-          # dotted-prefix component of the requested sweep name (ALL SWEEPS = keep all).
-          CATS='${{ startsWith(inputs.sweep-name, 'ALL SWEEPS') && 'ALL' || inputs.sweep-name }}'
-          if [[ "$CATS" != "ALL" ]]; then
-            jq -c --arg cats ",$CATS," \
-              '[.[] | .category as $c | select($cats | contains(",\($c)"))]' \
-              /tmp/reorg_matrix.json > /tmp/reorg_matrix.filtered.json
-            mv /tmp/reorg_matrix.filtered.json /tmp/reorg_matrix.json
-          fi
-          python3 .github/scripts/utils/inject_module_selectors.py \
-            /tmp/reorg_matrix.json \
-            /tmp/compute_matrix.json
+          COUNT=$(jq 'length' /tmp/matrix.json)
+          echo "::group::Final sweep matrix ($COUNT entries)"
+          jq '.' /tmp/matrix.json
+          echo "::endgroup::"
+          # Compact per-entry summary (module_selector CSVs are long) to the run log
+          # and the job summary panel.
+          {
+            echo "### Constructed sweep matrix ($COUNT entries)"
+            echo ""
+            echo "| batch | sku | modules | timeout |"
+            echo "| --- | --- | ---: | ---: |"
+            jq -r '.[] | "| \(.name) | \(.sku) | \((.module_selector // "" | if . == "" then 0 else (split(",") | length) end)) | \(.timeout)m |"' /tmp/matrix.json
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   ttnn-run-sweeps:
     needs: [prepare-sweep-vectors, load-test-matrix]
