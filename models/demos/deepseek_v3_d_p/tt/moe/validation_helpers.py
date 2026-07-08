@@ -96,19 +96,6 @@ def hash_gate_golden_act(
     )
 
 
-def gpt_topk_softmax_golden(logits, bias, n_activated_experts):
-    """GPT-OSS router golden: topk on (logits + bias), softmax over the selected top-k values.
-
-    Matches the reference GptOssTopKRouter: the bias is folded into the logits before selection, and
-    the weights are a softmax over only the chosen experts (no per-expert activation / sum-normalize).
-    Returns ``(indices, weights)`` shaped ``[tokens, n_activated_experts]``.
-    """
-    biased = logits.float() + bias.float()
-    top_vals, top_idx = torch.topk(biased, n_activated_experts, dim=-1)
-    weights = torch.softmax(top_vals, dim=-1)
-    return top_idx, weights
-
-
 def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
     """Calculate average recall of predicted expert selections vs reference."""
     recall = 0

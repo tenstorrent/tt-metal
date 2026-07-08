@@ -23,29 +23,29 @@ from typing import Optional
 import torch
 from torch import nn
 from torch.nn import functional as F
-
-from ... import initialization as init
-from ...cache_utils import Cache, DynamicCache
-from ...generation import GenerationMixin
-from ...integrations import (
+from transformers import initialization as init
+from transformers.cache_utils import Cache, DynamicCache
+from transformers.generation import GenerationMixin
+from transformers.integrations import (
     use_experts_implementation,
     use_kernel_forward_from_hub,
     use_kernel_func_from_hub,
     use_kernelized_func,
 )
-from ...masking_utils import create_causal_mask, create_sliding_window_causal_mask
-from ...modeling_layers import (
+from transformers.masking_utils import create_causal_mask, create_sliding_window_causal_mask
+from transformers.modeling_layers import (
     GenericForSequenceClassification,
     GenericForTokenClassification,
     GradientCheckpointingLayer,
 )
-from ...modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
-from ...modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
-from ...modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
-from ...processing_utils import Unpack
-from ...utils import TransformersKwargs, auto_docstring, can_return_tuple
-from ...utils.generic import maybe_autocast, merge_with_config_defaults
-from ...utils.output_capturing import OutputRecorder, capture_outputs
+from transformers.modeling_outputs import MoeCausalLMOutputWithPast, MoeModelOutputWithPast
+from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS, dynamic_rope_update
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS, PreTrainedModel
+from transformers.processing_utils import Unpack
+from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
+from transformers.utils.generic import maybe_autocast, merge_with_config_defaults
+from transformers.utils.output_capturing import OutputRecorder, capture_outputs
+
 from .configuration_gpt_oss import GptOssConfig
 
 

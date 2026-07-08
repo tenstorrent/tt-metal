@@ -17,8 +17,10 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
+from models.demos.deepseek_v3_d_p.reference.gpt_oss.modeling_gpt_oss import GptOssTopKRouter
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.minimax_m2_7.modeling_minimax_m2 import MiniMaxM2SparseMoeBlock
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
@@ -32,7 +34,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
     compare_pcc,
     compare_recall,
-    gpt_topk_softmax_golden,
     grouped_gate_golden_act,
     score_activation,
     validate_composed,
@@ -334,13 +335,38 @@ def test_forward_pass(
     # gate (single group -> plain top-k, matching the V4 reference router); V3/Kimi use the V3 gate.
     reference_logits = torch_input @ gate_w["weight"].T
     if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE):
-        # GPT-OSS: top-k on (x@W + bias) raw logits, then softmax over the selected top-k values.
-        logits_fp32 = torch_input.float() @ gate_w["weight"].float().T
-        reference_topk_indices, reference_topk_scores = gpt_topk_softmax_golden(
-            logits_fp32,
-            gate_w["e_score_correction_bias"],
-            config.n_activated_experts,
+        # GPT-OSS golden from the actual reference router: top-k on (x@W + bias), then softmax over the
+        # selected top-k values. torch.topk (sorted=True, descending) matches _device_gpt_gate's order,
+        # so no reordering is needed for the position-wise scores PCC.
+        ref_config = SimpleNamespace(
+            num_experts_per_tok=config.n_activated_experts,
+            num_local_experts=config.n_routed_experts,
+            hidden_size=config.dim,
         )
+        router = GptOssTopKRouter(ref_config)
+        router.weight.data = gate_w["weight"].float()  # (n_experts, dim), HF layout
+        router.bias.data = gate_w["e_score_correction_bias"].float()
+        router.eval()
+        with torch.no_grad():
+            _, reference_topk_scores, reference_topk_indices = router(torch_input.float())
+    elif gate_model == "minimax_m2_7":
+        # MiniMax golden from the actual reference routing (route_tokens_to_experts): sigmoid, add
+        # correction bias for selection, top-k, gather unbiased sigmoid, sum-normalize (no route scale).
+        # Called unbound with a duck-typed self so the 256-expert block is never constructed.
+        router_logits = torch_input.float() @ gate_w["weight"].float().T  # gate is bias-free
+        router_shim = SimpleNamespace(
+            top_k=config.n_activated_experts,
+            e_score_correction_bias=gate_w["e_score_correction_bias"].float(),
+        )
+        minimax_indices, minimax_scores = MiniMaxM2SparseMoeBlock.route_tokens_to_experts(router_shim, router_logits)
+        # route_tokens_to_experts uses topk(sorted=False); reorder to descending selection score so the
+        # weights line up with the device/golden order for the position-wise scores PCC.
+        selection_scores = (torch.sigmoid(router_logits) + router_shim.e_score_correction_bias).gather(
+            1, minimax_indices
+        )
+        order = selection_scores.argsort(dim=-1, descending=True)
+        reference_topk_indices = minimax_indices.gather(1, order)
+        reference_topk_scores = minimax_scores.gather(1, order)
     elif config.score_func == "sqrtsoftplus":
         logits_fp32 = torch_input.float() @ gate_w["weight"].float().T
         reference_topk_indices, reference_topk_scores = grouped_gate_golden_act(
