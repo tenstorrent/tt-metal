@@ -96,9 +96,9 @@ SC4_REVAB_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTE
 # Full 20-host SC20 revC subtorus galaxy (system-110, hosts bh-glx-110-c01..c10). Used for the 80-stage Blitz
 # decode ring, which needs the subtorus wrap-around to close (the revAB subtorus mock above cannot).
 SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC20_32x4_revC_subtorus_aisleC_mapping.yaml"
-# Full 20-host non-subtorus SC20 galaxy (revAB, Aisle C). Same 20-host / 80-mesh scale as the subtorus
-# mock above but without the torus wrap-around links.
-SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revAB_aisleC/SC20_32x4_revAB_aisleC_mapping.yaml"
+# (The non-subtorus flat SC20 revAB Aisle C mock was removed: real revAB systems are subtorus, and the
+# flat mock only exposes 12 physical meshes, so the SC20 rings can't map onto it. Use the revAB subtorus
+# mock (SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING) instead.)
 # SC16 revC subtorus, Aisle C (16-host / 64-mesh subset of the SC20 revC subtorus Aisle C set).
 SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC16_32x4_revC_subtorus_aisleC_mapping.yaml"
 SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml"
@@ -513,21 +513,27 @@ fi # bh-subtorus-sc16
 
 ######################################
 # BH Galaxy: SC20 (20-host) subtorus — same ring tests as bh-subtorus-sc16, scaled to 20 hosts.
-# Run on both the revC subtorus mock and the revAB (non-subtorus) SC20 mock.
+# Run on both 20-host SUBTORUS mocks (revC subtorus and revAB subtorus); the non-subtorus (flat) revAB
+# SC20 mock is not used for these rings (it lacks the torus wrap — see the loop comment below).
 ######################################
 if run_group "bh-subtorus-sc20"; then
 
-# 2x4 = 80-stage ring (8 ASICs/stage), 4x4 = 40-stage ring (16 ASICs/stage), 8x4 = 20-stage ring (32 ASICs/stage)
-for mock in "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" "${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}"; do
+# 2x4 = 80-stage ring (8 ASICs/stage), 4x4 = 40-stage ring (16 ASICs/stage), 8x4 = 20-stage ring
+# (32 ASICs/stage), plus the full 32x4 5-group torus ring.
+#
+# Run on both 20-host SUBTORUS mocks: revC subtorus and revAB subtorus. Both provide the torus
+# wrap-around links, so the physical grouping packs the full 40 meshes and the rings map (verified: each
+# yields "found 40 PSD placement(s)"). The non-subtorus (flat) revAB SC20 mock is intentionally NOT used
+# for the rings — it exposes only 12 physical meshes, so e.g. the 40-stage ring (40 logical meshes) fails
+# inter-mesh mapping ("target graph is larger with 40 nodes, but global graph only has 12 nodes").
+for mock in "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" "${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}"; do
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_BLITZ_80}" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_2X4_PIPELINE}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_4x4_pipeline_40stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_4X4_PIPELINE}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_8x4_pipeline_20stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
-  # Full SC20 torus: five 32x4 groups wired as a ring (20 hosts)
-  # TODO(tt-metal#49275): TestPipelineBuilderCheck is omitted here: the 5-group 32x4 ring fails
-  # resolve_graph_layout ("no valid submesh assignment found") the same way as subtorus_32x4. Unlike the
-  # single-pod 32x4 case, SC20 is a full 20-host subtorus where the wrap should exist, so this may be a
-  # distinct/real pipeline-builder bug worth investigating (not just a missing single-pod wrap link).
-  # Layout + corner-pin checks still run and pass.
+  # Full SC20 torus: five 32x4 groups wired as a ring (20 hosts).
+  # TODO(tt-metal#49275): TestPipelineBuilderCheck omitted: the 5-group 32x4 ring fails resolve_graph_layout
+  # ("no valid submesh assignment found") on the subtorus mocks — a distinct pipeline-builder bug worth
+  # investigating. Layout + corner-pin checks still run and pass.
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
 done
 
@@ -607,7 +613,6 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # host-minimization SAT pass intermittently fails to assign -- "No inter-mesh connection mesh 62->63").
 for entry in \
     "SC16_revAB_aisleD:${SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING}:16 48 64" \
-    "SC20_revAB_aisleC:${SC20_REVAB_AISLEC_CLUSTER_DESC_MAPPING}:16 48 64 80" \
     "SC20_revAB_subtorus_aisleC:${SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
     "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" \
     "SC16_revC_subtorus_aisleD:${SC16_REVC_SUBTORUS_AISLED_CLUSTER_DESC_MAPPING}:16 48 64" \
