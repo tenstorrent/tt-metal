@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
 #include "llk_unpack_common_api.h"
 
@@ -13,8 +14,8 @@
 
 inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {
     const std::uint32_t operandA_id = get_operand_id(operandA);
-    const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
-    _llk_unpack_AB_sub_bcast_col_init_custom_(num_faces);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
+    _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
 }
 
 inline void llk_unpack_AB_sub_bcast_col_custom(

@@ -11,8 +11,10 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_math_common.h"
 #include "lltt.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -101,15 +103,15 @@ inline void reduce_max_row_configure_addrmod()
  * This function should NOT be used as a substitute for native reduce LLK MOP configuration.
  * Use the standard reduce MOP configuration with _llk_math_reduce_init_ for general-purpose reduction.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, std::uint32_t num_faces = 4>
-inline void _llk_math_reduce_block_max_row_mop_config_()
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_mop_config_(const ckernel::TensorShape& tensor_shape)
 {
     // Constraint on the outerloop and innerloop dim
     static_assert(block_ct_dim < 128, "block_ct_dim must be less than 128");
-    static_assert(num_faces == 4 || num_faces == 2, "reduce_block_max_row supports 32x32 (num_faces=4) or 16x32 (num_faces=2) tiles only");
-    static_assert(!(num_faces == 2 && is_fp32_dest_acc_en), "16x32 (num_faces=2) reduce_block_max_row is not yet supported in FP32 dest-accumulation mode");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
-    if constexpr (num_faces == 2)
+    if (tensor_shape.num_faces_r_dim == 1)
     {
         // Single face-row (16x32 tiny tile): only F0&F1 exist. Reduce them, transpose once, no F2 jump.
         if constexpr (is_fp32_dest_acc_en)
@@ -249,8 +251,8 @@ inline void _llk_math_reduce_block_max_row_mop_config_()
  * Use the standard _llk_math_reduce_init_<PoolType::MAX, ReduceDim::REDUCE_ROW>() with multiple
  * _llk_math_reduce_() calls in a loop for general-purpose block reduction.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, std::uint32_t num_faces = 4>
-inline void _llk_math_reduce_block_max_row_init_()
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_init_(const ckernel::TensorShape& tensor_shape)
 {
     reduce_max_row_configure_addrmod();
 
@@ -258,7 +260,7 @@ inline void _llk_math_reduce_block_max_row_init_()
 
     math::reset_counters(p_setrwc::SET_ABD_F);
 
-    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en, num_faces>();
+    _llk_math_reduce_block_max_row_mop_config_<block_ct_dim, is_fp32_dest_acc_en>(tensor_shape);
 }
 
 template <bool is_fp32_dest_acc_en = false>
@@ -281,11 +283,11 @@ inline void _llk_math_reduce_block_max_row_uninit_()
  * Use the standard _llk_math_reduce_<PoolType::MAX, ReduceDim::REDUCE_ROW>() in a loop
  * for general-purpose block reduction across multiple tiles.
  */
-template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false, std::uint32_t num_faces = 4>
-inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index)
+template <std::uint32_t block_ct_dim, bool is_fp32_dest_acc_en = false>
+inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
-    static_assert(num_faces == 4 || num_faces == 2, "reduce_block_max_row supports 32x32 (num_faces=4) or 16x32 (num_faces=2) tiles only");
-    static_assert(!(num_faces == 2 && is_fp32_dest_acc_en), "16x32 (num_faces=2) reduce_block_max_row is not yet supported in FP32 dest-accumulation mode");
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(!(tensor_shape.num_faces_r_dim == 1 && is_fp32_dest_acc_en), "16x32 reduce_block_max_row not supported in FP32 dest mode yet");
 
     // Packer indexes at the 32x32 slot stride regardless of the operand's face count.
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
@@ -295,7 +297,7 @@ inline void _llk_math_reduce_block_max_row_(const std::uint32_t dst_index)
     // replayed below.
     ckernel::ckernel_template::run();
 
-    if constexpr (num_faces == 2)
+    if (tensor_shape.num_faces_r_dim == 1)
     {
         // Single face-row: transpose only the one recorded face-row. The 2-face record has no
         // ADDR_MOD_3 F2 jump, so no spurious DEST advance occurs.

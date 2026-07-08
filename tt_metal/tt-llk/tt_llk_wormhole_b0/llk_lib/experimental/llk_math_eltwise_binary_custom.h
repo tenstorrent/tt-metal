@@ -12,6 +12,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -78,16 +79,18 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 // Each 16x16 face pair (one face-row) is processed by four ELWSUBs (two per
 // face; each ELWSUB covers an aligned 8x16 block). A full 32x32 tile has two
 // face-rows (F0/F1 and F2/F3); a 16x32 tiny tile has a single face-row (F0/F1).
-// @param ct_dim    Number of SrcA tiles that reuse the single broadcast SrcB tile.
-// @param num_faces Number of faces per tile (2 for 16x32 tiny tiles, 4 for full 32x32 tiles).
-// @param dst_index Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
-//                  callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
-//                  lands on its own dest slots; single-tile-row callers leave it at 0.
+// @param ct_dim       Number of SrcA tiles that reuse the single broadcast SrcB tile.
+// @param tensor_shape Shape of the operand tile (2 faces for 16x32 tiny tiles, 4 faces for full 32x32 tiles).
+// @param dst_index    Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
+//                     callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
+//                     lands on its own dest slots; single-tile-row callers leave it at 0.
 inline void _llk_math_sub_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
+    const std::uint32_t ct_dim = 1, const ckernel::TensorShape& tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE, const std::uint32_t dst_index = 0)
 {
+    LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
-    const std::uint32_t num_face_rows = num_faces / 2;
+    const std::uint32_t num_face_rows = tensor_shape.num_faces_r_dim;
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);
 
