@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -25,10 +25,10 @@ void kernel_main() {
     const uint32_t stick_size_bytes = W_size_bytes;
 
     Noc noc;
-    CircularBuffer cb_src(cb_in0);
-    CircularBuffer cb_dst(cb_in);
+    DataflowBuffer dfb_src(cb_in0);
+    DataflowBuffer dfb_dst(cb_in);
 
-    uint32_t src_addr = cb_src.get_read_ptr();
+    uint32_t src_addr = dfb_src.get_read_ptr();
 
     noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
         UnicastEndpoint{},
@@ -37,8 +37,8 @@ void kernel_main() {
 
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {
-            cb_dst.reserve_back(Wt);
-            uint32_t l1_write_addr = cb_dst.get_write_ptr();
+            dfb_dst.reserve_back(Wt);
+            uint32_t l1_write_addr = dfb_dst.get_write_ptr();
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
                 CoreLocalMem<uint32_t> dst(l1_write_addr);
@@ -54,7 +54,7 @@ void kernel_main() {
                 src_addr += stick_size_bytes;
             }
             noc.async_read_barrier();
-            cb_dst.push_back(Wt);
+            dfb_dst.push_back(Wt);
         }
     }
 }

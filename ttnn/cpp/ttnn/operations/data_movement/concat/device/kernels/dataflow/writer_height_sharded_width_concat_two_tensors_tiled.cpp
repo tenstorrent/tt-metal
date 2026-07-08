@@ -6,7 +6,7 @@
 #include <api/debug/dprint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -34,16 +34,16 @@ void kernel_main() {
     constexpr uint32_t width_len_bytes = tile_size * (input0_num_tiles_width + input1_num_tiles_width);
 
     Noc noc;
-    CircularBuffer output_cb(output_cb_id);
-    CircularBuffer output_transpose_cb(output_transpose_cb_id);
+    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer output_transpose_dfb(output_transpose_cb_id);
 
-    const uint32_t base_l1_write_addr = output_cb.get_write_ptr();
+    const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
     uint32_t l1_write_addr = base_l1_write_addr;
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
-        output_cb.reserve_back(input0_num_tiles_width + input1_num_tiles_width);
-        output_transpose_cb.wait_front(input0_num_tiles_width + input1_num_tiles_width);
+        output_dfb.reserve_back(input0_num_tiles_width + input1_num_tiles_width);
+        output_transpose_dfb.wait_front(input0_num_tiles_width + input1_num_tiles_width);
 
-        const uint32_t base_l1_read_addr_0 = output_transpose_cb.get_read_ptr();
+        const uint32_t base_l1_read_addr_0 = output_transpose_dfb.get_read_ptr();
         CoreLocalMem<uint32_t> dst(l1_write_addr);
         noc.async_read(
             UnicastEndpoint{},
@@ -57,7 +57,7 @@ void kernel_main() {
 
         noc.async_read_barrier();
 
-        output_transpose_cb.pop_front(input0_num_tiles_width + input1_num_tiles_width);
-        output_cb.push_back(input0_num_tiles_width + input1_num_tiles_width);
+        output_transpose_dfb.pop_front(input0_num_tiles_width + input1_num_tiles_width);
+        output_dfb.push_back(input0_num_tiles_width + input1_num_tiles_width);
     }
 }

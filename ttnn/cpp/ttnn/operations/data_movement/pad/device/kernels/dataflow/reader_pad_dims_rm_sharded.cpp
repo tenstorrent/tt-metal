@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -23,14 +23,14 @@ void kernel_main() {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
-    CircularBuffer cb_in0_exp(cb_in0);
-    CircularBuffer cb_out0_exp(cb_out0);
+    DataflowBuffer dfb_in0_exp(cb_in0);
+    DataflowBuffer dfb_out0_exp(cb_out0);
 
     Noc noc;
 
-    cb_out0_exp.reserve_back(num_sticks_padded);
-    uint32_t l1_read_addr = cb_in0_exp.get_write_ptr();
-    uint32_t l1_write_addr = cb_out0_exp.get_write_ptr();
+    dfb_out0_exp.reserve_back(num_sticks_padded);
+    uint32_t l1_read_addr = dfb_in0_exp.get_write_ptr();
+    uint32_t l1_write_addr = dfb_out0_exp.get_write_ptr();
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
@@ -66,5 +66,5 @@ void kernel_main() {
     }
 
     noc.async_read_barrier();
-    cb_out0_exp.push_back(num_sticks_padded);
+    dfb_out0_exp.push_back(num_sticks_padded);
 }

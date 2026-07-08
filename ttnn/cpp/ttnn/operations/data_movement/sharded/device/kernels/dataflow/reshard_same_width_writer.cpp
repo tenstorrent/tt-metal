@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -30,11 +30,11 @@ void kernel_main() {
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
-    CircularBuffer shard_cb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_cb_id);
     Noc noc;
     AllocatorBank<bank_type> bank;
 
-    uint32_t l1_read_addr = shard_cb.get_read_ptr() + read_offset;
+    uint32_t l1_read_addr = shard_dfb.get_read_ptr() + read_offset;
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = args[args_idx++];
         uint32_t addr = dst_addr + args[args_idx++];

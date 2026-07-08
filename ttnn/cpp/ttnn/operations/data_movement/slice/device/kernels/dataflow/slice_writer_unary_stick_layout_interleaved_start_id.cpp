@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -27,14 +27,14 @@ void kernel_main() {
     const auto s0 = TensorAccessor(dst_args, dst_addr, page_size_override);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out0(cb_id_out0);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer dfb_out0(cb_id_out0);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        cb_out0.wait_front(num_read_per_barrier);
-        uint32_t l1_read_addr = cb_out0.get_read_ptr();
+        dfb_out0.wait_front(num_read_per_barrier);
+        uint32_t l1_read_addr = dfb_out0.get_read_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
@@ -46,6 +46,6 @@ void kernel_main() {
             i_stick += 1;
         }
         noc.async_write_barrier();
-        cb_out0.pop_front(num_read_per_barrier);
+        dfb_out0.pop_front(num_read_per_barrier);
     }
 }

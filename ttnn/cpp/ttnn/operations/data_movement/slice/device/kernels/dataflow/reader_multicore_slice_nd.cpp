@@ -50,7 +50,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -94,8 +94,8 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out(cb_id_out);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer dfb_out(cb_id_out);
 
     // Multi-core work distribution using iterative approach with explicit coordinate tracking
     // Track current position in N-dimensional space
@@ -134,8 +134,8 @@ void kernel_main() {
                 }
             }
 
-            cb_out.reserve_back(1);
-            uint32_t l1_write_addr = cb_out.get_write_ptr();
+            dfb_out.reserve_back(1);
+            uint32_t l1_write_addr = dfb_out.get_write_ptr();
 
             // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
             // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
@@ -163,7 +163,7 @@ void kernel_main() {
                 }
             }
 
-            cb_out.push_back(1);
+            dfb_out.push_back(1);
             rows_processed++;
         }
 

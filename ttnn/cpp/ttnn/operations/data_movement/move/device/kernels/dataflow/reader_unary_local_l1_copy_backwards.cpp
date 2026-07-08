@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -24,11 +24,11 @@ void kernel_main() {
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
 
     Noc noc;
-    CircularBuffer src_cb(src_cb_id);
-    CircularBuffer dst_cb(dst_cb_id);
+    DataflowBuffer src_dfb(src_cb_id);
+    DataflowBuffer dst_dfb(dst_cb_id);
 
-    uint32_t src_cb_base_addr = src_cb.get_read_ptr();
-    uint32_t dst_cb_base_addr = dst_cb.get_write_ptr();
+    uint32_t src_cb_base_addr = src_dfb.get_read_ptr();
+    uint32_t dst_cb_base_addr = dst_dfb.get_write_ptr();
 
     // Copy from top of src cb to top of dst cb (backwards)
     uint32_t src_cb_addr = src_cb_base_addr + total_size_bytes;

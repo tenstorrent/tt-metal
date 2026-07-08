@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 using namespace tt::data_movement::common;
 
@@ -38,10 +38,10 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
     const auto d = TensorAccessor(dst_args, dst_addr);
 
-    CircularBuffer cb(cb_id_in0);
-    cb.reserve_back(1);
-    const uint32_t cb_slot = cb.get_write_ptr();
-    cb.push_back(1);
+    DataflowBuffer dfb(cb_id_in0);
+    dfb.reserve_back(1);
+    const uint32_t cb_slot = dfb.get_write_ptr();
+    dfb.push_back(1);
 
     for (uint32_t h = higher_dim_start; h < higher_dim_end; h++) {
         const uint32_t h_offset = h * LOWER_DIMS_TIMES_REP_DIM;

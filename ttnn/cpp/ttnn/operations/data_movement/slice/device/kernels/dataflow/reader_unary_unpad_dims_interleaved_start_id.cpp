@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -26,20 +26,20 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     // Create objects for Device 2.0 API
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(cb_id_in0);
     Noc noc;
 
     // Get tile size from CB interface
-    const uint32_t tile_size = cb_in0.get_tile_size();
+    const uint32_t tile_size = dfb_in0.get_entry_size();
 
     uint32_t src_tile_id = start_id;
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
         // Copy Input
-        cb_in0.reserve_back(1);
-        noc.async_read(s0, cb_in0, tile_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+        dfb_in0.reserve_back(1);
+        noc.async_read(s0, dfb_in0, tile_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        cb_in0.push_back(1);
+        dfb_in0.push_back(1);
         src_tile_id++;
         for (uint32_t j = 0; j < num_dims; ++j) {
             id_per_dim[j]++;
