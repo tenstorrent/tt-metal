@@ -28,7 +28,7 @@ template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, sfpi::DataLayout LAYOUT,
 inline void relu_clamp_uint(uint threshold) {
     static_assert(
         LAYOUT == sfpi::DataLayout::U16 || LAYOUT == sfpi::DataLayout::U32,
-        "relu_clamp_uint requires an unsigned DataLayout (U16 or U32 which also covers uint8)");
+        "relu_clamp_uint requires DataLayout::U16 or U32 (uint8 dispatches through U32)");
     const vUInt t = static_cast<unsigned>(threshold);
     const vUInt t_hi = t >> 16;
     const vUInt t_lo = t & 0xFFFF;

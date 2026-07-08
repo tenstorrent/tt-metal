@@ -1994,13 +1994,13 @@ void py_module(nb::module_& mod) {
         "Passes non-negative inputs through unchanged and scales negative inputs by negative_slope.",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, UINT32, UINT16, UINT8)doc",
         "",
-        R"doc(\mathrm{{output\_tensor}}_i = \max(0, \mathrm{{input\_tensor}}_i) + \verb|negative_slope| \cdot \min(0, \mathrm{{input\_tensor}}_i))doc");
+        R"doc(\mathrm{output\_tensor}_i = \max(0, \mathrm{input\_tensor}_i) + \verb|negative_slope| \cdot \min(0, \mathrm{input\_tensor}_i))doc");
     bind_unary_operation_with_scalar_parameter<"relu_max", &ttnn::relu_max>(
         mod,
         "upper_limit",
         "The max value for ReLU function.",
         "This function caps off the input to a max value and a min value of 0.",
-        R"doc(BFLOAT16, BFLOAT8_B, UINT32, UINT16, UINT8)doc",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8)doc",
         R"doc(System memory is not supported.)doc",
         R"doc(\mathrm{output\_tensor}_i = \min(\max(\mathrm{input\_tensor}_i, 0), \verb|upper_limit|))doc");
     bind_unary_operation_with_scalar_parameter<"relu_min", &ttnn::relu_min>(
@@ -2008,7 +2008,7 @@ void py_module(nb::module_& mod) {
         "lower_limit",
         "The min value for ReLU function.",
         "This will carry out ReLU operation at min value instead of the standard 0.",
-        R"doc(BFLOAT16, FLOAT32, UINT32, UINT16, UINT8)doc",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8)doc",
         R"doc(System memory is not supported.)doc",
         R"doc(\mathrm{output\_tensor}_i = \max(\mathrm{input\_tensor}_i, \verb|lower_limit|))doc");
     bind_unary_operation_with_float_parameter<"rpow", &ttnn::rpow>(

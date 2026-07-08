@@ -16,8 +16,8 @@ namespace sfpu {
 
 // Full-range unsigned clamp against a threshold, shared by relu_min and relu_max/relu6.
 // IS_LOWER_BOUND selects the direction using the user-facing op's semantics:
-//   IS_LOWER_BOUND == true  -> relu_min:        result = max(x, threshold)
-//   IS_LOWER_BOUND == false -> relu_max/relu6:  result = min(x, threshold)
+//   IS_LOWER_BOUND == true -> relu_min: result = max(x, threshold)
+//   IS_LOWER_BOUND == false -> relu_max/relu6: result = min(x, threshold)
 //
 // The compare is done on two 16-bit halves instead of a single 32-bit compare because sfpi's vUInt
 // compare does a subtract-and-test-sign, which overflows when the two operands are >= 2^31
@@ -28,7 +28,7 @@ template <bool APPROXIMATION_MODE, bool IS_LOWER_BOUND, sfpi::DataLayout LAYOUT,
 inline void relu_clamp_uint(uint threshold) {
     static_assert(
         LAYOUT == sfpi::DataLayout::U16 || LAYOUT == sfpi::DataLayout::U32,
-        "relu_clamp_uint requires an unsigned DataLayout (U16 or U32 which also covers uint8)");
+        "relu_clamp_uint requires DataLayout::U16 or U32 (uint8 dispatches through U32)");
     const vUInt t = static_cast<unsigned>(threshold);
     const vUInt t_hi = t >> 16;
     const vUInt t_lo = t & 0xFFFF;
