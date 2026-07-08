@@ -251,10 +251,10 @@ void run_single_core_transpose(
     const bool fp32_dest_acc_en =
         (test_config.data_format == tt::DataFormat::Float32 || test_config.data_format == tt::DataFormat::Int32);
     experimental::ComputeHardwareConfig compute_hw_config;
-    auto unpack_modes =
-        fp32_dest_acc_en
-            ? experimental::ComputeUnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-            : experimental::ComputeUnpackToDestModes{};
+    experimental::ComputeUnpackToDestModes unpack_modes{};
+    if (fp32_dest_acc_en) {
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+    }
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fp32_dest_acc_en = fp32_dest_acc_en,

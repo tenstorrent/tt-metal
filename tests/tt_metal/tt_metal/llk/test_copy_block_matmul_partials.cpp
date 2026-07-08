@@ -160,10 +160,10 @@ void run_single_core_copy_block_matmul_partials(
         // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
         // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
         // Default is unpack via SrcA/B, ~19-bit precision.
-        auto unpack_modes =
-            test_config.fp32_dest_acc_en
-                ? experimental::ComputeUnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                : experimental::ComputeUnpackToDestModes{};
+        experimental::ComputeUnpackToDestModes unpack_modes{};
+        if (test_config.fp32_dest_acc_en) {
+            unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}};
+        }
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
             compute_hw_config = experimental::ComputeGen2Config{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,

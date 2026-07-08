@@ -31,6 +31,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "experimental/metal2_host_api/compute_hardware_config.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -460,10 +461,10 @@ bool reader_datacopy_writer(
                                   (test_config.l1_input_data_format == tt::DataFormat::Int32) ||
                                   (test_config.l1_input_data_format == tt::DataFormat::UInt32);
     experimental::ComputeHardwareConfig compute_hw_config;
-    auto unpack_modes =
-        (test_config.l1_input_data_format == tt::DataFormat::Float32)
-            ? experimental::ComputeUnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-            : experimental::ComputeUnpackToDestModes{};
+    experimental::ComputeUnpackToDestModes unpack_modes{};
+    if (test_config.l1_input_data_format == tt::DataFormat::Float32) {
+        unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
+    }
     if (is_quasar) {
         compute_hw_config = experimental::ComputeGen2Config{
             .fp32_dest_acc_en = fp32_dest_acc_en,

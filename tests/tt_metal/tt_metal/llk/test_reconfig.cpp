@@ -830,14 +830,12 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
              dfb_binding(OUT1_DFB, DFBEndpoint::PRODUCER),
              dfb_binding(OUT2_DFB, DFBEndpoint::PRODUCER)},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                experimental::ComputeGen2Config{
-                    .math_fidelity = MathFidelity::HiFi4,
-                    .fp32_dest_acc_en = true,
-                    .unpack_to_dest_mode =
-                        {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
-                         {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
-                },
+            experimental::ComputeGen2Config{
+                .math_fidelity = MathFidelity::HiFi4,
+                .fp32_dest_acc_en = true,
+                .unpack_to_dest_mode =
+                    {{INP2_DFB, tt::tt_metal::UnpackToDestMode::Default},
+                     {INP3_DFB, tt::tt_metal::UnpackToDestMode::Default}},
             },
     };
 
