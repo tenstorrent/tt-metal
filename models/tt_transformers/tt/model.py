@@ -270,9 +270,14 @@ class Transformer(LightweightModule):
         x = self.norm(
             x, mode=norm_mode, norm_config=self.args.get_norm_config("lm_head", norm_mode, self.prefetcher)
         )
+        # Mirror model.forward's mode-aware reshard: PREFILL norm output is interleaved
+        # (needs interleaved_to_sharded); DECODE norm output is already width-sharded on the
+        # prefetcher worker grid (needs to_memory_config to the ring lm_head input) (#47820).
         lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(norm_mode, norm_prefetcher)
-        if lm_head_input_mem_cfg.is_sharded():
+        if norm_mode == Mode.PREFILL and lm_head_input_mem_cfg.is_sharded():
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
+        elif norm_mode == Mode.DECODE and norm_prefetcher is not None:
+            x = ttnn.to_memory_config(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
