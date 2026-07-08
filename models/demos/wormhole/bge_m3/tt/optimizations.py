@@ -343,9 +343,8 @@ def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     # 2x HiFi4 throughput. fp32_dest_acc_en=False lifts subblock h*w cap to 8
     # (needed for the minimal_matmul 4x2 subblock winner).
     if max_seq_len == 8192:
-        return _make_compute_kernel(
-            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
-        )
+        # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -359,9 +358,8 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     # N300 B12/S8192: HiFi2 lossless for bf8xbf8. fp32_dest_acc_en=False for the
     # minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(
-            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
-        )
+        # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -373,9 +371,8 @@ def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch
     # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
     # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(
-            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
-        )
+        # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
@@ -387,9 +384,8 @@ def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_ba
     # N300 B12/S8192: HiFi2 (2x HiFi4 throughput). fp32_dest_acc_en=False for
     # the minimal_matmul 4x2 subblock (h*w=8 > 4 cap).
     if max_seq_len == 8192:
-        return _make_compute_kernel(
-            mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch, fp32_dest_acc_en=False
-        )
+        # LoFi (bf8xbf8): matmuls are compute-bound per roofline; LoFi ~2x HiFi2.
+        return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
 
