@@ -229,11 +229,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
-    // Accurate fp32 mean: define REDUCE_SFPU_FP32 to route Float32 SUM through the SFPU (needs 32-bit DEST).
+    // Accurate fp32 mean: route Float32 SUM through the SFPU (needs 32-bit DEST)
     const bool fp32_sfpu_reduce = is_sfpu_reduce && a.dtype() == DataType::FLOAT32 && fp32_dest_acc_en;
-    if (fp32_sfpu_reduce) {
-        reduce_defines["REDUCE_SFPU_FP32"] = "1";
-    }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     // UnpackToDestFp32 unpacks c_0 straight into the fp32 DEST, bypassing the SrcA tf32 truncation.
@@ -278,10 +275,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, ht_per_core_group_1, post_mul_scaler_bits);
     } else {
         compute_kernel_args_group_1 = {
-            ht_per_core_group_1,   // Ht
-            Wt,                    // Wt
-            1,                     // NC
-            post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            ht_per_core_group_1,         // Ht
+            Wt,                          // Wt
+            1,                           // NC
+            post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+            fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
         };
     }
 
@@ -310,10 +308,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
             compute_kernel_args_group_2 = build_rm_compute_ct_args(plan, ht_per_core_group_2, post_mul_scaler_bits);
         } else {
             compute_kernel_args_group_2 = {
-                ht_per_core_group_2,   // Ht
-                Wt,                    // Wt
-                1,                     // NC
-                post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+                ht_per_core_group_2,         // Ht
+                Wt,                          // Wt
+                1,                           // NC
+                post_mul_scaler_bits,        // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
+                fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
             };
         }
 

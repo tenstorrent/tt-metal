@@ -14,23 +14,24 @@
  * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
  * MIN is pre-lowered to MAX + negate and dispatched via reduce_{h,w}_neg.
  *
- * Float32 SUM additionally opts into the SFPU path when the host defines REDUCE_SFPU_FP32
- * (for accurate ttnn.mean)
+ * Float32 SUM additionally opts into the SFPU path when the caller passes enable_fp32_sfpu=true
+ * (accurate ttnn.mean); the host threads that flag in from the kernel's compile-time args.
  */
-template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim, DataFormat data_format>
+template <
+    ckernel::PoolType pool_type,
+    ckernel::ReduceDim reduce_dim,
+    DataFormat data_format,
+    bool enable_fp32_sfpu = false>
 constexpr bool is_sfpu_reduce_path() {
     if constexpr (pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM) {
         return false;
     }
     if constexpr (data_format != DataFormat::Int32) {
-#ifdef REDUCE_SFPU_FP32
-        // Opt-in accurate fp32 path: only Float32 SUM (mean is SUM + 1/N post-mul on the host).
-        if constexpr (data_format != DataFormat::Float32 || pool_type != ckernel::PoolType::SUM) {
+        // Float32 opts into the SFPU path only when enabled, and only for SUM (accurate ttnn.mean,
+        // which the host lowers to SUM + a 1/N post-mul). Everything else non-Int32 stays on the FPU.
+        if constexpr (!enable_fp32_sfpu || data_format != DataFormat::Float32 || pool_type != ckernel::PoolType::SUM) {
             return false;
         }
-#else
-        return false;
-#endif
     }
     if constexpr (reduce_dim == ckernel::ReduceDim::REDUCE_SCALAR) {
         return false;
