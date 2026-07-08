@@ -82,14 +82,21 @@ void read_in0_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // When false, issue the async reads but skip the completion barrier, so a caller reading the
+    // block in M-row bands can keep band s's reads in flight while it waits for band s+1's data and
+    // barrier once after the last band.
+    bool issue_barrier = true,
+    // Tile offset from the block's CB base at which this call starts writing. Lets a band-streaming
+    // caller place band s at its M-row slot within the one reserved block (0 => block base).
+    uint32_t write_tile_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_tile_offset * tile_size_bytes;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -116,7 +123,11 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    if (issue_barrier) {
+        noc_async_read_barrier();
+    }
+    // Unconditional even on the streaming path: the caller's post-band read barrier covers the DRAM
+    // reads but not these local L1 zero-fills, so the K-padding tiles must be flushed here per band.
     noc.write_zeros_l1_barrier();
 }
 

@@ -106,18 +106,18 @@ void kernel_main() {
                     if (!receive_this_chunk) {
                         continue;
                     }
-                    // Writer fires IN0_SUB_CHUNKS per-worker incs per chunk (one per row-band); wait
-                    // for all of them so the whole chunk has landed before signaling the matmul.
-                    event_target += IN0_SUB_CHUNKS;
-                    // Wait for all N workers' portions of this k-block to land.
-                    {
-                        DeviceZoneScopedN("AGG-WAIT-N");
-                        for (uint32_t w = 0; w < num_ag_workers; w++) {
-                            noc_semaphore_wait_min(per_worker_sem_ptrs[w], event_target);
+                    // Writer fires IN0_SUB_CHUNKS per-worker incs per chunk (one per row-band). Signal
+                    // the matmul once per band as it lands, so the injector can read band s while band
+                    // s+1 is still on the fabric.
+                    for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
+                        event_target++;
+                        // Wait for all N workers' portion of this band to land.
+                        {
+                            DeviceZoneScopedN("AGG-WAIT-N");
+                            for (uint32_t w = 0; w < num_ag_workers; w++) {
+                                noc_semaphore_wait_min(per_worker_sem_ptrs[w], event_target);
+                            }
                         }
-                    }
-                    // Signal every matmul core's direction semaphore exactly once.
-                    {
                         for (uint32_t c = 0; c < num_mm_cores; c++) {
                             uint64_t mm_sem_noc_addr = get_noc_addr(
                                 mm_core_noc_coords[c * 2], mm_core_noc_coords[c * 2 + 1], mm_signal_sem_addr);
