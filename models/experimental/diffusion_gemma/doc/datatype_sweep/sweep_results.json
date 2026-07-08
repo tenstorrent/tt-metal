@@ -1,0 +1,109 @@
+{
+  "stage": "dg-07 datatype sweep (#47475 quant / #47465 perf)",
+  "date": "2026-07-08",
+  "hardware": "QB2 / bh-qbge-06 / P150x4 (2 Blackhole PCIe cards, 4 Tensix)",
+  "mesh": {"shape": [1, 4], "tensor_parallel": 4, "data_parallel": 1},
+  "lever": "MoE expert gate/up/down weight dtype (bf16 -> bfloat8_b). Experts are ~88.6% of weight DRAM (~11.6 GiB/chip) and a large fraction of the compute-bound denoise step.",
+  "knob": "DG-local, no shared-backbone edits: models/experimental/diffusion_gemma/tt/precision_build.py::create_tt_model_dg, routed as the default create_model_fn in checkpoint.py::build_tt_model_from_checkpoint_inputs. Env: DG_EXPERTS_BFP8=1 or DG_EXPERTS_DTYPE=bfp8. With no knob it delegates to the shared create_tt_model unchanged.",
+
+  "decision_agreement_bar": {
+    "rationale": "Accuracy = the diffusion DECISION, not teacher-forcing top-1/top-5. Diffusion commits the CLEAN argmax (no temperature/top-p cushion) and #48291 already leaves the bf16/MoE/TP=4 model at ~50% argmax agreement vs HF, so there is NO fidelity headroom. A reduced-precision candidate must be near decision-NEUTRAL vs the bf16 reference. Entropy PCC is the small-probability-drift-sensitive metric — exactly the risk bfp8 poses (small-prob drift can flip an accept/renoise decision even when the argmax is unchanged).",
+    "committed_argmax_agreement_min": 0.95,
+    "mean_per_step_entropy_pcc_min": 0.95,
+    "mean_accept_renoise_iou_min": 0.90,
+    "must_pass": "ALL three, AND generated text no less coherent than bf16."
+  },
+
+  "measurement_regime": {
+    "decision_agreement": "Deterministic single-block trajectory: fixed seeded initial canvas (seed 0), fixed per-step renoise tokens, CLEAN ARGMAX sampling (gumbel_noise=None), early-halt disabled (entropy_stop_threshold=-1.0) so both dtypes run exactly 16 steps. The ONLY difference between the bf16 and bfp8 runs is the expert weight dtype. Full 30 layers. Metrics via tests/trajectory_pcc.compare_trajectories(ref=bf16, cand=bfp8).",
+    "throughput": "TRACED single-step serving denoise loop (DG_SPARSE_MOE=1 DG_SPARSE_MOE_TUNED=1 DG_DEDUP_ARGMAX=1 DG_DENOISE_TRACED=1, DG_TRACE_REGION_SIZE=10 GiB). Steady block latency = mean(blocks[1:]); block 0 pays prefill + trace capture. t/s = 256 / steady_block_s. Full 30 layers. Ranking axis = TRACED per-block latency (never eager).",
+    "commands": {
+      "decision_agreement_run": "python models/experimental/diffusion_gemma/doc/datatype_sweep/decision_agreement.py run --max-denoising-steps 16 --canvas-length 256 --seed 0 --label <bf16|bfp8> --output <traj.pt>   (prefix DG_EXPERTS_BFP8=1 for the bfp8 run)",
+      "decision_agreement_compare": "python .../decision_agreement.py compare --ref traj_bf16.pt --cand traj_bfp8.pt --output agreement.json",
+      "throughput": "python models/experimental/diffusion_gemma/doc/datatype_sweep/sweep_dtype.py --steps 48,24,12   (prefix DG_EXPERTS_BFP8=1 for the bfp8 run; DG_TRACE_REGION_SIZE=10737418240)"
+    }
+  },
+
+  "configs": [
+    {
+      "id": "cfg_bf16_experts",
+      "status": "SELECTED (reference / shipping policy)",
+      "dtype_policy": {
+        "experts": "bfloat16", "router": "bfloat16", "attention": "bfloat16",
+        "shared_mlp": "bfloat16", "embedding": "bfloat16", "lm_head": "bfloat16",
+        "kv_cache": "bfloat16", "activations_residual": "bfloat16", "ccl": "bfloat16",
+        "canvas_scratch": "bfloat16", "logits_to_probability_entropy": "float32"
+      },
+      "compute_fidelity": "unchanged from full-model bring-up (decision path HiFi4 fp32_dest_acc; MoE matmul existing fidelity). Compute fidelity was NOT swept in this stage — only expert weight dtype.",
+      "dram_used_gib_per_chip": 13.268,
+      "decision_agreement_vs_bf16_reference": {
+        "committed_argmax_agreement": 1.0, "mean_per_step_argmax_agreement": 1.0,
+        "mean_per_step_entropy_pcc": 1.0, "mean_accept_iou": 1.0,
+        "note": "1.0 by construction — this IS the reference."
+      },
+      "traced_throughput": {
+        "s48": {"tps": 18.18, "steady_block_s": 14.079, "ttft_s": 124.7, "committed_sha": "a9f0d18709b07d1e"},
+        "s24": {"tps": 31.49, "steady_block_s": 8.128, "ttft_s": 63.0, "committed_sha": "020e7c76945390ad"},
+        "s12": {"tps": 54.58, "steady_block_s": 4.690, "ttft_s": 32.5, "committed_sha": "24393ba7aad6077c"}
+      },
+      "pass": true
+    },
+    {
+      "id": "cfg_bfp8_experts",
+      "status": "REJECTED (fails decision-agreement gate)",
+      "dtype_policy": {
+        "experts": "bfloat8_b", "router": "bfloat16", "attention": "bfloat16",
+        "shared_mlp": "bfloat16", "embedding": "bfloat16", "lm_head": "bfloat16",
+        "kv_cache": "bfloat16", "activations_residual": "bfloat16", "ccl": "bfloat16",
+        "canvas_scratch": "bfloat16", "logits_to_probability_entropy": "float32",
+        "note": "ONLY the expert gate/up/down proj weights change; the decision path (router/logits/entropy/argmax/accept) stays bf16/fp32."
+      },
+      "compute_fidelity": "unchanged (weight-dtype-only change).",
+      "dram_used_gib_per_chip": 7.830,
+      "dram_saved_gib_per_chip": 5.438,
+      "consumption_evidence": "90 bfp8 expert cache files written (gate/up/down x 30 layers, dtype BFLOAT8_B, 294 MB each); post-build DRAM dropped 13.268 -> 7.830 GiB/chip; [dg-precision] override log line emitted.",
+      "decision_agreement_vs_bf16_reference": {
+        "committed_argmax_agreement": 0.2266,
+        "mean_per_step_argmax_agreement": 0.604,
+        "min_per_step_argmax_agreement": 0.2266,
+        "step0_argmax_agreement": 0.949,
+        "mean_per_step_entropy_pcc": 0.631,
+        "min_per_step_entropy_pcc": 0.036,
+        "mean_accept_iou": 0.501,
+        "min_accept_iou": 0.0,
+        "mean_canvas_agreement": 0.906,
+        "per_step_argmax_agreement": [0.949,0.926,0.883,0.871,0.703,0.801,0.559,0.699,0.719,0.523,0.449,0.371,0.332,0.375,0.277,0.227],
+        "per_step_accept_iou": [0.0,0.0,0.0,0.0,0.545,0.421,0.529,0.718,0.75,0.878,0.886,0.844,0.867,0.656,0.46,0.456],
+        "per_step_entropy_pcc": [0.888,0.38,0.205,0.036,0.759,0.783,0.881,0.826,0.871,0.823,0.778,0.788,0.759,0.42,0.417,0.481]
+      },
+      "sample_text_coherent": "wash — bfp8 produces an equally-coherent opening sentence then degenerates into multilingual noise, same #48291 regime as bf16 (coherence is NOT destroyed by bfp8, but the decision trajectory diverges massively).",
+      "traced_throughput": {
+        "s48": {"tps": 19.83, "steady_block_s": 12.907, "ttft_s": 123.9, "committed_sha": "61ddc6c7c86c2b47", "speedup_vs_bf16": 1.091},
+        "s24": {"tps": 33.99, "steady_block_s": 7.532, "ttft_s": 62.7, "committed_sha": "9b67e01bc8ab1a73", "speedup_vs_bf16": 1.079},
+        "s12": {"tps": 57.84, "steady_block_s": 4.426, "ttft_s": 32.6, "committed_sha": "1b332e580395613a", "speedup_vs_bf16": 1.060}
+      },
+      "pass": false,
+      "fail_reasons": [
+        "committed clean-argmax agreement 0.2266 << 0.95 bar (bfp8 changes ~77% of committed tokens vs the bf16 reference).",
+        "mean per-step entropy PCC 0.631 << 0.95 bar (min 0.036 at step 3) — the small-probability drift the bar was designed to catch.",
+        "mean accept/renoise IoU 0.501 << 0.90 bar (min 0.0 — full accept-mask flips at several steps).",
+        "step-0 pure-logits argmax agreement 0.949 => ~5% of positions flip from bfp8 logit drift alone, then compound over the trajectory."
+      ]
+    }
+  ],
+
+  "throughput_speedup_summary": "bfp8 experts buy ~6-9% traced throughput (s48 +9.1%, s24 +7.9%, s12 +6.0%). Modest because the denoise step is NOT purely weight-bound: the MoE batched matmul is launch/overhead-limited (~46 GB/s effective per path_to_100tps) so halving the expert bytes only partly speeds it, and the MoE is ~35% of the step while the terminal/fixed overhead is unchanged.",
+
+  "hundred_tps_reachability": {
+    "bfp8_block_model_s": "block ~= 1.60 + 0.2356 * steps (fit over s12/s24/s48)",
+    "bf16_block_model_s": "block ~= 1.56 + 0.2608 * steps",
+    "bfp8_100tps_step_count": 4.1,
+    "bf16_100tps_step_count": 3.8,
+    "verdict": "100 t/s (block <= 2.56 s) requires ~4 denoise steps at BOTH bf16 and bfp8; bfp8's ~8% gain shifts the crossover from ~3.8 to ~4.1 steps — negligible. 4 steps is FAR below any quality-acceptable step count (the model needs >=16-32 steps for even the first coherent sentence). So bfp8 does NOT make 100 t/s reachable at a quality-acceptable step count."
+  },
+
+  "bfp4_note": "BFP4 was NOT swept. bfp8 (weaker reduction) already fails the decision-agreement gate; BFP4 experts (strictly lower precision) would fail worse. A BFP4+LoFi candidate is therefore not worth device time until #48291 fidelity headroom exists. Recorded as an explicit scoping decision, not a missing candidate.",
+
+  "selected": "cfg_bf16_experts",
+  "conclusion": "bfp8 experts FAIL the diffusion-decision-fidelity gate. DG keeps bf16 experts. The 17.9-18.2 t/s @48 bf16 baseline stands. The DG-local bfp8 knob is landed OFF-by-default (opt-in) for reuse if #48291 fidelity headroom is created."
+}

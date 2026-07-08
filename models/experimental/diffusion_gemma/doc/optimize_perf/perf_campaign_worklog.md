@@ -152,3 +152,26 @@ counts (@4=104, @12=42.5). Closing the gap to model-faithful 100 t/s requires OU
 denoise steps by design (blocked by #48291 sparse-MoE fidelity → early-halt can't fire) and/or an
 upstream fused MoE kernel and/or lower precision (bf8) — all excluded by the "maintain precision / no
 shared-gemma4 edits" constraints.
+
+## 2026-07-08 — bfp8 MoE experts (dg-07 datatype sweep): measured, FAILS fidelity gate, NOT landed
+
+The campaign conclusion above flagged "lower precision (bf8)" as an excluded lever. It has now been
+**measured** (full detail: `doc/datatype_sweep/`). DG-local knob `DG_EXPERTS_BFP8=1`
+(`tt/precision_build.py`) flips ONLY the MoE expert gate/up/down weights bf16 → `bfloat8_b`; the
+decision path (router/logits/entropy/argmax/accept) stays bf16/fp32. No `models/demos/gemma4/` edits.
+
+**Decision agreement (bf16 vs bfp8, deterministic 16-step trajectory, 30L):** committed clean-argmax
+agreement **0.227** (bar ≥0.95), mean entropy PCC **0.631** (min 0.036), mean accept/renoise IoU
+**0.501** (min 0.0). Step-0 pure-logits argmax agreement 0.949 (~5% flip) compounds to 0.227 committed
+(~77% of committed tokens change). Sample text a wash (coherent opening then #48291 degeneration, both
+dtypes). **Fails all three bars.**
+
+**DRAM:** 13.268 → **7.830 GiB/chip** (−5.44 GiB, −41%). **Traced throughput:** @48 18.18→**19.83**
+(+9.1%), @24 31.49→**33.99**, @12 54.58→**57.84** — only ~6–9% (step not weight-bound; MoE matmul
+launch/overhead-limited). 100 t/s crossover ~4.1 steps (bfp8) vs ~3.8 (bf16): negligible shift, and
+4 steps is far below quality-acceptable.
+
+**Verdict:** bfp8 experts **REJECTED** on diffusion-decision fidelity. bf16 experts stay selected; the
+model-faithful **@48 ≈ 17.8–18.2 t/s ceiling stands**. The ~8% bfp8 speed win is not worth ~77% commit
+divergence given #48291 leaves no fidelity headroom. Knob landed OFF-by-default for reuse if #48291 is
+resolved.

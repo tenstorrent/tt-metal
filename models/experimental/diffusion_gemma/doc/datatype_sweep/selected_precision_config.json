@@ -1,0 +1,45 @@
+{
+  "model": "google/diffusiongemma-26B-A4B-it",
+  "stage": "dg-07 datatype sweep (#47475)",
+  "date": "2026-07-08",
+  "hardware": "QB2 / bh-qbge-06 / P150x4",
+  "mesh": {"shape": [1, 4], "tensor_parallel": 4, "data_parallel": 1},
+  "selected_config_id": "cfg_bf16_experts",
+  "summary": "No reduced-precision reduction is adopted. The one candidate reduction evaluated (MoE experts bf16 -> bfloat8_b) FAILED the diffusion-decision-fidelity gate, so the shipping policy stays all-bf16 weights with the fp32 decision path. bf16 is selected on FIDELITY grounds (bfp8 fits DRAM comfortably and is ~8% faster).",
+
+  "weight_groups": {
+    "experts": {"dtype": "bfloat16", "evidence": "cache files layer_*/moe/experts/{gate,up,down}_proj_tp4_bf16_dtype_BFLOAT16_layout_TILE.tensorbin; post-build DRAM 13.268 GiB/chip", "bfp8_evaluated": true, "bfp8_verdict": "REJECTED — committed-argmax agreement 0.227, entropy PCC 0.631, accept IoU 0.501 vs bf16 reference"},
+    "router": {"dtype": "bfloat16", "evidence": "MoEBlock router_dtype default bf16 (moe.py); router is on the decision path, kept high precision, NOT swept"},
+    "attention": {"dtype": "bfloat16", "evidence": "layer_*/self_attn/*_dtype_BFLOAT16 cache files"},
+    "shared_mlp": {"dtype": "bfloat16", "evidence": "layer_*/mlp/*_dtype_BFLOAT16 cache files"},
+    "embedding": {"dtype": "bfloat16"},
+    "lm_head": {"dtype": "bfloat16", "note": "produces the logits on the decision path; kept high precision, NOT swept"}
+  },
+  "layer_exceptions": "none — the sweep was model-uniform (all 30 layers same policy).",
+  "compute_fidelities": {
+    "decision_path": "HiFi4, fp32_dest_acc_en=True (denoise_forward.default_self_conditioning_compute_kernel_config; entropy/gumbel fp32)",
+    "moe_matmul": "existing full-model fidelity (unchanged)",
+    "note": "Compute fidelity was NOT swept in this stage — only expert weight dtype. LoFi/BFP4 matmul groups were not explored because the bf16->bfp8 weight reduction already fails the fidelity gate."
+  },
+  "activation_residual_dtype": "bfloat16",
+  "ccl_dtype": "bfloat16 (backbone TP=4 all-reduce/all-gather via gemma4 CCL; sparse-MoE dispatch scratch bf16, cumsum fp32)",
+  "kv_cache_dtype": "bfloat16 (models/demos/gemma4/tt/model.py cache_dtype=ttnn.bfloat16) — NOT swept (capacity unchanged)",
+  "canvas_scratch_dtype": "bfloat16 (per-step recomputed canvas K/V) — NOT swept (capacity unchanged)",
+  "logits_to_probability_entropy_dtype": "float32 (tt/sampling.py token_entropy, gumbel_max, sample_gumbel_noise all fp32) — high-sensitivity decision path, kept fp32, explicitly validated as unchanged by the knob",
+
+  "capacity_impact": {
+    "kv_cache_or_canvas_scratch_changed": false,
+    "context_contract_recompute_required": false,
+    "note": "The sweep changed ONLY expert WEIGHT dtype, not KV-cache or canvas-scratch dtype, so max_model_len / context_contract capacity is unaffected. (For the record, bfp8 experts WOULD free ~5.44 GiB/chip of weight DRAM — favourable for the 256K-KV fit — but is rejected on fidelity.)"
+  },
+
+  "consumption_proof": "Both the perf sweep and the decision-agreement harness build through checkpoint.build_tt_model_from_checkpoint_inputs -> precision_build.create_tt_model_dg, which passes Gemma4Precision({'experts': <dtype>}) into Gemma4Model. bf16 (default, no knob) loads *_dtype_BFLOAT16 expert caches at 13.268 GiB/chip; bfp8 (DG_EXPERTS_BFP8=1) loads *_dtype_BFLOAT8_B expert caches at 7.830 GiB/chip. The runtime path demonstrably consumes the selected dtype.",
+
+  "knob": {
+    "landed": true,
+    "default": "OFF (bf16 experts) — no behaviour change vs pre-sweep",
+    "enable": "DG_EXPERTS_BFP8=1 or DG_EXPERTS_DTYPE=bfp8",
+    "location": "models/experimental/diffusion_gemma/tt/precision_build.py",
+    "reuse": "opt-in for future work once #48291 creates decision-fidelity headroom; DO NOT enable by default"
+  }
+}

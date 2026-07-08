@@ -1,0 +1,3 @@
+config_id,status,experts_dtype,decision_path_dtype,dram_gib_per_chip,committed_argmax_agreement,mean_entropy_pcc,mean_accept_iou,step0_argmax_agreement,tps_s48,block_s_s48,tps_s24,block_s_s24,tps_s12,block_s_s12,measurement,hardware,mesh,pass
+cfg_bf16_experts,SELECTED,bfloat16,bf16/fp32,13.268,1.000,1.000,1.000,1.000,18.18,14.079,31.49,8.128,54.58,4.690,traced-single-step-serving,QB2/P150x4,1x4-TP4,PASS
+cfg_bfp8_experts,REJECTED,bfloat8_b,bf16/fp32,7.830,0.2266,0.631,0.501,0.949,19.83,12.907,33.99,7.532,57.84,4.426,traced-single-step-serving,QB2/P150x4,1x4-TP4,FAIL

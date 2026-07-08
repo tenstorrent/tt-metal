@@ -4,7 +4,6 @@
   "hf_model_type": "diffusion_gemma",
   "tt_vllm_architecture": "TTDiffusionGemmaForBlockDiffusion",
   "tt_vllm_adapter": "models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM",
-
   "max_model_len": 262144,
   "max_model_len_provenance": "HF config text_config.max_position_embeddings = 262144 (256K). Equals canvas_length(256) * max_blocks(1024). This is the capacity limit for prompt + generated, NOT a requirement that prompts be 262144 tokens (HF DiffusionGemmaGenerationMixin.generate computes max_length = input_len + max_new_tokens).",
   "max_model_len_physical_limit_evidence": {
@@ -13,39 +12,42 @@
     "sampler_constraint": "Full-vocab (262144) on-device Gumbel/noise materialization OOMs in the fragmented DRAM remaining after 256K-KV allocation (ttnn.rand asks for ~1 GiB; largest free block ~101 MiB/bank). The chunked/no-materialize Gumbel sampler (tt/sampling.py::gumbel_max_with_chunked_noise, --chunked-gumbel-sampling) fits full-depth 256K + canvas_length=256: DG_TEXT_DEMO_SUCCESS at 29.704 GiB/chip used.",
     "verdict": "262144 is the advertised and servable context. No reduction below the HF-advertised context. Serving must use the chunked-Gumbel sampler (or argmax RUN-first sampler) at full 256K to stay within DRAM."
   },
-
   "output_block_granularity": {
     "canvas_length": 256,
     "note": "DiffusionGemma emits a 256-token BLOCK per decode step (one denoised+committed canvas), not one token. This is the OUTPUT block granularity; it is intrinsic to block-diffusion generation and is NOT an input-alignment constraint.",
     "input_alignment": "Prompt length may be any valid length up to max_model_len. There is no requirement that prompt length be divisible by 256, by a prefill tile (32), by block_size, or by a page. prefill_prompt_tokens pads the prompt to a 32-tile multiple internally and reports the logical/aligned lengths; the intrinsic 256-token output block granularity does not constrain the prompt length."
   },
-
   "datatype_policy": {
-    "source": "Current full-model bring-up policy (create_tt_model default). The dg-07 datatype-sweep stage has NOT been run for DiffusionGemma; no reduced-precision selection has been recorded, so serving uses the full-model policy.",
+    "source": "dg-07 datatype sweep RUN 2026-07-08 (doc/datatype_sweep/). One reduction evaluated: MoE experts bf16 -> bfloat8_b. REJECTED on diffusion-decision fidelity (committed clean-argmax agreement 0.227, entropy PCC 0.631, accept IoU 0.501 vs the bf16 reference). Shipping policy stays all-bf16 weights + fp32 decision path.",
     "weights": "ttnn.bfloat16",
     "activations_residual": "ttnn.bfloat16",
     "kv_cache": "ttnn.bfloat16",
     "ccl": "ttnn.bfloat16 (backbone TP=4 all-reduce/all-gather via gemma4 CCL)",
     "self_conditioning": "ttnn.bfloat16 tensors; softmax/soft-embedding accumulate with fp32 (WormholeComputeKernelConfig HiFi4, fp32_dest_acc_en=True) per denoise_forward.default_self_conditioning_compute_kernel_config",
-    "matches_gemma4_vllm_bridge": "Yes — models/demos/gemma4/tt/generator_vllm.py serves bfloat16 weights + bfloat16 KV cache. fp32 experts do not fit QB2 DRAM and fp32-faithful router top-k is blocked by ttnn.topk TT_FATAL on FLOAT32 (plan.md), so bf16/MoE is the fastest policy that fits."
+    "matches_gemma4_vllm_bridge": "Yes \u2014 bf16 weights + bf16 KV cache. bf16 experts are now selected on FIDELITY grounds (bfp8 fits and is faster but fails the diffusion-decision gate); fp32 experts also do not fit and fp32 router top-k is blocked by ttnn.topk TT_FATAL.",
+    "experts_bfp8_evaluated": "bfp8 experts FIT (post-build 7.830 GiB/chip, frees 5.44 GiB vs bf16 13.268) and are ~6-9% faster traced, but change ~77% of committed tokens vs bf16 and collapse entropy PCC to 0.631 (min 0.036). Rejected on fidelity, not fit. DG-local knob DG_EXPERTS_BFP8 landed OFF-by-default for reuse if #48291 creates headroom."
   },
-
   "mesh": {
     "device": "QB2 / P150x4",
     "tt_data_parallel": 1,
     "tensor_parallel": 4,
-    "mesh_shape": [1, 4],
+    "mesh_shape": [
+      1,
+      4
+    ],
     "batch_size_default": 1,
     "max_num_seqs_note": "Batch-1 single-user latency is the headline target. Larger batch/concurrency (up to 32) is bounded by the 256K-KV per-request footprint; the block-diffusion per-step canvas K/V scratch (#47474 storage class ii) is additional per-request memory. Record the largest tested max_num_seqs in the serving evidence."
   },
-
   "sampling": {
     "mode": "on-device canvas sampling (sample_on_device_mode=all). No host greedy/top-1 argmax path, no full-logits readback. Per-step decision tensors ([B,L] argmax/entropy/sampled/accept) are read back only for the data-dependent halt check; the full [B,L,vocab] logits stay on device.",
     "procedure": "Per denoise step: temperature-scale (linear 0.8->0.4) -> Gumbel-max argmax(logits/T + gumbel) -> entropy-budget acceptance (sort/cumsum/scatter) -> renoise rejected positions to random tokens. Commit = clean argmax. RUN-first: --argmax-sampling routes clean argmax (gumbel_noise=None) to avoid full-vocab noise allocation at 256K.",
-    "eos_token_ids": [1, 106, 50],
+    "eos_token_ids": [
+      1,
+      106,
+      50
+    ],
     "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core (sampling.argmax_last_dim; bit-identical to TILE argmax, 1240ms->14.4ms/op, 2x/step); accept/renoise constants are preallocated once outside the trace (denoise_loop.make_denoise_constants: budget_t/accept_zeros/renoise_ones, a few KB persistent, replacing per-step ttnn.full/zeros_like host writes that are illegal during trace capture). Trace-safe fixed-step loop denoise_loop.run_fixed_denoise_steps (fixed <=48-step count, device canvas feedback, no host readback of the cutoff). Traced full 30-layer denoise step ~4176 ms; per block (48 steps + commit) ~232 s. No dtype/mesh/max_model_len change."
   },
-
   "generation_config": {
     "max_denoise_steps": 48,
     "temperature_start": 0.8,
