@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Spatial (H/W) parallel helpers for the HunyuanImage-3.0 VAE decoder on a 2x2 mesh.
+# Spatial (H/W) parallel helpers for the HunyuanImage-3.0 VAE on a 2×2 mesh.
 #
 # The decoder shards feature-map height on `h_mesh_axis` and width on `w_mesh_axis`
 # (BTHWC: H=dim2, W=dim3). Convs stay sharded and exchange a halo at the boundary
@@ -18,6 +18,29 @@
 import os
 
 import ttnn
+
+
+def mesh_mapper_hw_spatial(
+    mesh_device: ttnn.MeshDevice,
+    *,
+    h_mesh_axis: int | None = None,
+    w_mesh_axis: int | None = None,
+) -> ttnn.ShardTensor2dMesh:
+    """Build a 2D mesh mapper that shards H (dim 2) and/or W (dim 3)."""
+    mesh_shape = tuple(mesh_device.shape)
+    dims: list[int | None] = [None, None]
+    if h_mesh_axis is not None:
+        dims[h_mesh_axis] = 2
+    if w_mesh_axis is not None:
+        dims[w_mesh_axis] = 3
+    # Unused mesh axis must still reference a distinct tensor dim (see pipeline decode).
+    filled = [d if d is not None else (3 if 2 in dims else 2) for d in dims]
+    return ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=filled)
+
+
+def encoder_w_spatial_enabled() -> bool:
+    return os.environ.get("HY_ENCODER_W_SPATIAL", "0").strip().lower() in ("1", "true", "yes")
+
 
 # GroupNorm mode for the spatially-sharded VAE decoder:
 #   "dist"   -> distributed group_norm (per-shard fp32 stats + all-reduce, normalize local);

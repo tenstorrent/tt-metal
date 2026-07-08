@@ -33,18 +33,7 @@ from models.experimental.hunyuan_image_3_0.tt.vae.encoder_weights import (
 )
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.layers.normalization import GroupNorm3D
-from models.tt_dit.utils.conv3d import aligned_channels, register_conv3d_configs
-
-register_conv3d_configs(
-    {
-        (32, 128, (3, 3, 3)): (32, 32, 1, 2, 2),
-        (128, 64, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (256, 128, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (512, 128, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (1024, 128, (3, 3, 3)): (64, 32, 1, 2, 2),
-        (1024, 64, (3, 3, 3)): (64, 32, 1, 2, 2),
-    }
-)
+from models.tt_dit.utils.conv3d import aligned_channels
 
 
 class EncoderConvInTTNN(Module):
@@ -308,7 +297,7 @@ class EncoderHeadTTNN(Module):
         shortcut = encoder_head_shortcut_bthwc(x_bthwc, self.out_channels, self.group_size)
 
         h = self.norm_out(x_bthwc)
-        h = ttnn.mul(h, ttnn.sigmoid(h, memory_config=ttnn.DRAM_MEMORY_CONFIG), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv_out = self.conv_out(h)
         ttnn.deallocate(h, force=False)
 
@@ -318,7 +307,13 @@ class EncoderHeadTTNN(Module):
 
 
 class VAEEncoderTTNN(Module):
-    """Full VAE encoder: conv_in -> down -> mid -> head on replicated mesh."""
+    """Full VAE encoder: conv_in -> down -> mid -> head.
+
+    Default: replicated 2×2 mesh, DRAM interleaved activations.
+    Set ``HY_ENCODER_W_SPATIAL=1`` (or pass ``w_mesh_axis=1``) to shard width across
+    the mesh — convs use neighbor-pad halos; norms use distributed group_norm.
+    Input must be uploaded with ``mesh_mapper_hw_spatial(..., w_mesh_axis=1)``.
+    """
 
     def __init__(
         self,
@@ -328,6 +323,9 @@ class VAEEncoderTTNN(Module):
         pixel_t: int = PIXEL_T,
         pixel_h: int = PIXEL_H,
         pixel_w: int = PIXEL_W,
+        ccl_manager=None,
+        h_mesh_axis: int | None = None,
+        w_mesh_axis: int | None = None,
     ) -> None:
         super().__init__()
         self.mesh_device = mesh_device
@@ -335,11 +333,23 @@ class VAEEncoderTTNN(Module):
         self.pixel_t = pixel_t
         self.pixel_h = pixel_h
         self.pixel_w = pixel_w
+
+        from models.experimental.hunyuan_image_3_0.tt.vae.spatial import enable_vae_spatial, encoder_w_spatial_enabled
+
+        if w_mesh_axis is None and encoder_w_spatial_enabled():
+            w_mesh_axis = 1
+        self.w_mesh_axis = w_mesh_axis
+        self.h_mesh_axis = h_mesh_axis
+        self.ccl = ccl_manager
+
         enc_kw = dict(pixel_t=pixel_t, pixel_h=pixel_h, pixel_w=pixel_w)
         self.conv_in = EncoderConvInTTNN(mesh_device, dtype=dtype, **enc_kw)
         self.down = EncoderDownTTNN(mesh_device, dtype=dtype, **enc_kw)
         self.mid = EncoderMidBlockTTNN(mesh_device, dtype=dtype, **enc_kw)
         self.head = EncoderHeadTTNN(mesh_device, dtype=dtype, **enc_kw)
+
+        if self.ccl is not None and (self.h_mesh_axis is not None or self.w_mesh_axis is not None):
+            enable_vae_spatial(self, self.ccl, h_mesh_axis=self.h_mesh_axis, w_mesh_axis=self.w_mesh_axis)
 
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         """BTHWC device tensor in -> BTHWC device tensor out."""
