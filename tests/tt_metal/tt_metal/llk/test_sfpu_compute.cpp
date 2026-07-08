@@ -1425,52 +1425,6 @@ bool run_sfpu_typecast(
 
 }  // namespace unit_tests::compute::sfpu
 
-void run_quasar_sfpu_unpack_to_dest_fp32(
-    const std::shared_ptr<distributed::MeshDevice>& dev,
-    size_t num_tiles,
-    const std::string& sfpu_op,
-    bool dst_full_sync_en) {
-    CoreRange core_range({0, 0}, {0, 0});
-    CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig cfg{
-        .num_tiles = num_tiles,
-        .tile_byte_size = 4 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float32,
-        .l1_output_data_format = tt::DataFormat::Float32,
-        .cores = core_range_set,
-        .sfpu_op = sfpu_op,
-        .approx_mode = false,
-        .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_fp32 = true,
-    };
-    log_info(
-        tt::LogTest, "Quasar SFPU FP32: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
-    EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
-}
-
-void run_quasar_sfpu_unpack_to_dest_16b(
-    const std::shared_ptr<distributed::MeshDevice>& dev,
-    size_t num_tiles,
-    const std::string& sfpu_op,
-    bool dst_full_sync_en) {
-    CoreRange core_range({0, 0}, {0, 0});
-    CoreRangeSet core_range_set({core_range});
-    unit_tests::compute::sfpu::SfpuConfig cfg{
-        .num_tiles = num_tiles,
-        .tile_byte_size = 2 * 32 * 32,
-        .l1_input_data_format = tt::DataFormat::Float16_b,
-        .l1_output_data_format = tt::DataFormat::Float16_b,
-        .cores = core_range_set,
-        .sfpu_op = sfpu_op,
-        .approx_mode = false,
-        .dst_full_sync_en = dst_full_sync_en,
-        .unpack_to_dest_en = true,  // 16-bit operand unpack-to-dest via the explicit flag (fp32_dest_acc_en stays false)
-    };
-    log_info(
-        tt::LogTest, "Quasar SFPU 16b->DEST: op={} num_tiles={} dst_full_sync_en={}", sfpu_op, num_tiles, dst_full_sync_en);
-    EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_all_same_buffer(dev, cfg));
-}
-
 // Unary SFPU ops with no Quasar compute-API implementation yet: their
 // compute_kernel_api.h / eltwise_unary headers are wrapped in #ifndef ARCH_QUASAR,
 // so building the kernel would fail with "not declared in this scope". Skip them on
@@ -1832,32 +1786,6 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<std::tuple<size_t, std::string>>& info) {
         return std::get<1>(info.param) + "_" + std::to_string(std::get<0>(info.param)) + "tiles";
     });
-
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
-    // 1 and 4-tile, SyncFull and SyncHalf
-    for (const uint32_t num_tiles : {1u, 4u}) {
-        for (const bool dst_full_sync_en : {true, false}) {
-            SCOPED_TRACE(
-                std::string("num_tiles=") + std::to_string(num_tiles) + (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
-            run_quasar_sfpu_unpack_to_dest_fp32(this->devices_.at(0), num_tiles, "relu", dst_full_sync_en);
-        }
-    }
-}
-
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuUnpackToDest16b) {
-    // 16-bit operand explicitly unpack_to_dest_en, impossible before the
-    // unpack-to-dest decision was decoupled from 32-bit format.
-    for (const bool dst_full_sync_en : {true, false}) {
-        for (uint32_t num_tiles : {1u, 4u}) {
-            log_info(
-                tt::LogTest,
-                "Quasar SFPU 16b->DEST: num_tiles={} {}",
-                num_tiles,
-                dst_full_sync_en ? "SyncFull" : "SyncHalf");
-            run_quasar_sfpu_unpack_to_dest_16b(this->devices_.at(0), num_tiles, "relu", dst_full_sync_en);
-        }
-    }
-}
 
 // Typecast test fixture: one (in_format -> out_format) pair per instance, covering the Quasar typecast
 // matrix over Float16_b, Float32, Int32, Int16 (SMAG16), UInt8, and MX (MxFp8P / MxFp8R). UInt16 maps to

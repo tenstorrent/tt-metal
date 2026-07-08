@@ -599,25 +599,4 @@ TEST_F(MeshDeviceFixture, TensixSingleCoreDirectDramReaderDatacopyWriter) {
     }
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDatacopyToDestWriter) {
-    // Int32/Float32 x SyncFull/SyncHalf
-    for (const tt::DataFormat data_format : {tt::DataFormat::Int32, tt::DataFormat::Float32}) {
-        for (const bool dst_full_sync_en : {true, false}) {
-            SCOPED_TRACE(
-                std::string(data_format == tt::DataFormat::Int32 ? "Int32" : "Float32") +
-                (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
-            unit_tests::dram::direct::ReaderDatacopyWriterConfig test_config = {
-                .num_tiles = 4,
-                .tile_byte_size = sizeof(uint32_t) * constants::TILE_HEIGHT * constants::TILE_WIDTH,
-                .l1_input_data_format = data_format,
-                .l1_output_data_format = data_format,
-                .node = experimental::NodeCoord(0, 0),
-                .dst_full_sync_en = dst_full_sync_en};
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(unit_tests::dram::direct::reader_datacopy_writer(devices_.at(id), test_config));
-            }
-        }
-    }
-}
-
 }  // namespace tt::tt_metal

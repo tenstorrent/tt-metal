@@ -755,21 +755,15 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
 
-void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH arch) {
+void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& options, tt::ARCH /*arch*/) {
     fmt::format_to(
         std::ostreambuf_iterator<char>(out),
         "constexpr bool DST_ACCUM_MODE = {};\n"
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // (Quasar only) Explicit op-writer unpack-to-dest flag, baked here like DST_ACCUM_MODE so it is
-    // visible to the compute/LLK headers that consume it (all included after this descriptor file).
-    // WH/BH keep UnpackToDestEn hardcoded in their llk_defs.h (format-inferred routing), so we do not emit it
-    // for them doing so would redefine their constexpr.
-    if (arch == tt::ARCH::QUASAR) {
-        fmt::format_to(
-            std::ostreambuf_iterator<char>(out), "constexpr bool UnpackToDestEn = {};\n", options.unpack_to_dest_en);
-    }
+    // Quasar no longer emits UnpackToDestEn: it hardcodes it false in llk_defs.h and drives
+    // unpack-to-dest per operand via copy_tile_to_dst. WH/BH hardcode it in their own llk_defs.h.
 }
 
 void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {

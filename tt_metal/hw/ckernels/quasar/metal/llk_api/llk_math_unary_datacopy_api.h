@@ -43,8 +43,12 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     _configure_default_alu_data_format_state_<false /* IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format);
 
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
-        // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
-        if constexpr (!unpack_to_dest) {
+        if constexpr (unpack_to_dest) {
+            // Unpack-to-dest: math runs no MOP (the unpacker writes DEST). Initialize the UNPACK_MATH
+            // semaphore here. Depth mirrors MATH_PACK: N=1 in SyncFull, N=2 in SyncHalf.
+            constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
+            _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
+        } else {
             _llk_math_eltwise_unary_datacopy_init_<type, EN_32BIT_DEST>(
                 num_rows /*num_rows_per_matrix*/, 1 /*num_matrices*/);
         }
@@ -83,11 +87,17 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
         _llk_math_eltwise_unary_broadcast_<src_b_bcast_type, false, EN_32BIT_DEST>(dst_index, tensor_shape);
+    } else if constexpr (unpack_to_dest) {
+        // Unpack-to-dest: math is a sync-only forwarder (the unpacker writes DEST), no MOP to run.
+        // This is the consumer half of the unpack->math handshake wait for the unpacker's UNPACK_MATH post, then
+        // consume it. Mark the section unpack-to-dest so tile_regs_commit skips math's SEC1 advance and
+        // tile_regs_release takes the unpack-to-dest pack path. The unpacker owns SEC0 and its bank flip.
+        _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
+            semaphore::UNPACK_MATH);
+        _llk_sync_get_(semaphore::UNPACK_MATH);
+        ckernel::trisc::dest_filled_by_unpack = true;
     } else {
-        // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
-        if constexpr (!unpack_to_dest) {
-            _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
-        }
+        _llk_math_eltwise_unary_datacopy_(num_faces * face_r_dim, dst_index);
     }
 }
 

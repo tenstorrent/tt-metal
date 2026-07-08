@@ -99,15 +99,15 @@ inline void llk_math_set_dvalid() {
 /**
  * @brief Waits until destination register space is available.
  * Blocks on the MATH_PACK semaphore until the packer gets the semaphore.
+ *
+ * @note The unpack-to-dest UNPACK_MATH consumer handshake lives inside the per-operand
+ * copy_tile_to_dst math call, not here, so this gate is identical for every op.
+ * @note Clears the per-section dest_filled_by_unpack flag: each acquire starts a fresh section that
+ * math owns until a copy_tile_to_dst on this thread marks it unpack-to-dest.
  */
 inline void llk_math_wait_for_dest_available() {
     _llk_math_wait_for_dest_available_();
-
-    if constexpr (UnpackToDestEn) {
-        _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
-            semaphore::UNPACK_MATH);
-        _llk_sync_get_(semaphore::UNPACK_MATH);
-    }
+    ckernel::trisc::dest_filled_by_unpack = false;
 }
 
 /**
@@ -120,23 +120,27 @@ inline void llk_math_dest_section_done() {
     // Always post MATH_PACK, the math thread is in the chain for every op, including the
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
-        _llk_sync_advance_dest_section_<ckernel::math::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
+    // Advance math's own section only when math is dest producer. In an unpack-to-dest section the
+    // unpacker owns SEC0 and its flip, and (frozen access_id) math's SEC1 is not read, so math must
+    // not advance.
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+        if (!ckernel::trisc::dest_filled_by_unpack) {
+            _llk_sync_advance_dest_section_<
+                ckernel::math::TRISC_ID,
+                EN_32BIT_DEST,
+                p_stall::WAIT_SFPU,
+                p_stall::MATH>();
+        }
     }
 }
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.
  * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ *
+ * @note The unpack-to-dest UNPACK_MATH semaphore seed now lives inside copy_tile_to_dst_init.
  */
-inline void llk_math_pack_sync_init() {
-    _llk_math_pack_sync_init_<DST_SYNC_MODE>();
-
-    if constexpr (UnpackToDestEn) {
-        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
-    }
-}
+inline void llk_math_pack_sync_init() { _llk_math_pack_sync_init_<DST_SYNC_MODE>(); }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h

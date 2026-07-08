@@ -83,8 +83,10 @@ tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)T
 // Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
 #ifdef ENV_LLK_INFRA
 static std::uint32_t dest_register_offset = 0;
+static bool dest_filled_by_unpack         = false;
 #else
 extern thread_local std::uint32_t dest_register_offset;
+extern thread_local bool dest_filled_by_unpack;
 #endif
 
 /**

@@ -16,6 +16,10 @@
 #ifdef TRISC_UNPACK
 #include "llk_unpack_A_api.h"
 #endif
+#if defined(TRISC_PACK) && defined(ARCH_QUASAR)
+// copy_tile_to_dst_init marks the pack thread's dest sections unpack-to-dest (Quasar only).
+#include "llk_pack_common_api.h"
+#endif
 namespace ckernel {
 
 // clang-format off
@@ -114,6 +118,57 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
+
+#ifdef ARCH_QUASAR
+// clang-format off
+/**
+ * (Quasar) Init for copy_tile_to_dst. Configures the unpacker to write directly to DEST (UNP_DEST),
+ * seeds the unpack->math (UNPACK_MATH) handshake on the math thread, and marks the pack thread's
+ * dest sections as unpack-to-dest. This is the operand-based signal that replaces the program-wide
+ * unpack_to_dest_en flag: call it once before the copy loop (in place of copy_tile_init). The
+ * generic tile_regs_acquire/commit/release then need no mode argument — the regime is carried by
+ * section-local trisc state set here and in copy_tile_to_dst.
+ *
+ * | Argument | Description                                      | Type     | Valid Range | Required |
+ * |----------|--------------------------------------------------|----------|-------------|----------|
+ * | cbid     | The identifier of the input circular buffer (CB) | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void copy_tile_to_dst_init(uint32_t cbid) {
+    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true /*unpack_to_dest*/>(
+        0 /*transpose*/, 0 /*transpose_within_16x16_face*/, cbid)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          true /*unpack_to_dest*/>(cbid)));
+    PACK((llk_pack_mark_dest_filled_by_unpack()));
+}
+
+// clang-format off
+/**
+ * (Quasar) Copy a tile from in_cb_id[in_tile_index] straight into DEST[dst_tile_index] via the
+ * unpacker (UNP_DEST) with no FPU pass. The math thread consumes the unpack->math handshake and
+ * forwards to pack (it runs no MOP). This is the operand-based unpack-to-dest entry point; the DST
+ * register must be in acquired state (tile_regs_acquire) and copy_tile_to_dst_init must have run.
+ *
+ * | Argument       | Description                                       | Type     | Valid Range           | Required |
+ * |----------------|---------------------------------------------------|----------|-----------------------|----------|
+ * | in_cb_id       | The identifier of the source circular buffer (CB) | uint32_t | 0 to 31               | True     |
+ * | in_tile_index  | The index of the tile to copy from the input CB   | uint32_t | < size of the CB      | True     |
+ * | dst_tile_index | The index of the tile in the DST register         | uint32_t | < size of DST (16)    | True     |
+ */
+// clang-format on
+ALWI void copy_tile_to_dst(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true /*unpack_to_dest*/>(
+        in_cb_id, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<
+          DataCopyType::A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          true /*unpack_to_dest*/>(dst_tile_index, in_cb_id)));
+}
+#endif  // ARCH_QUASAR
 
 ALWI void copy_block_matmul_partials(
     uint32_t in_cb_id, uint32_t start_in_tile_index, uint32_t start_dst_tile_index, uint32_t ntiles) {

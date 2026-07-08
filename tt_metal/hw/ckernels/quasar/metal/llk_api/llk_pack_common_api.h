@@ -114,7 +114,9 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
-    if constexpr (UnpackToDestEn) {
+    if (ckernel::trisc::dest_filled_by_unpack) {
+        // Unpack-to-dest: the unpacker owns the dest section base, so the packer just releases math
+        // via MATH_PACK and follows the bank flip; no ZEROACC/THCON-offset dance.
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
             _llk_sync_advance_dest_section_<ckernel::pack::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
@@ -125,9 +127,31 @@ inline void llk_pack_dest_section_done() {
 }
 
 /**
- * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ * @brief Mark the pack thread's dest sections as unpack-to-dest.
+ * Called from copy_tile_to_dst_init so tile_regs_release takes the unpack-to-dest section-done path
+ * (packer follows the unpacker's bank via MATH_PACK) instead of the regular ZEROACC + THCON path.
+ * @note Program-scoped: the pack thread cannot observe per-section which copy op ran (unlike math,
+ * which sets its flag in the copy_tile_to_dst math call). A program that mixes copy_tile and
+ * copy_tile_to_dst sections would need finer per-section signaling on the pack thread.
  */
-inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
+inline void llk_pack_mark_dest_filled_by_unpack() {
+    ckernel::trisc::dest_filled_by_unpack = true;
+    // Seed the packer's dest section base to bank 0 (PACR addresses dest via SEC{pack::TRISC_ID}).
+    // Moved here from llk_pack_init so it follows the per-operand copy_tile_to_dst_init.
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+        ckernel::trisc::_reset_dest_register_offset_();
+        ckernel::trisc::_set_dest_section_base_<ckernel::pack::TRISC_ID>(ckernel::trisc::_get_dest_buffer_base_());
+    }
+}
+
+/**
+ * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ * @note Also clears dest_filled_by_unpack; copy_tile_to_dst_init re-marks it if the program unpacks to dest.
+ */
+inline void llk_pack_dest_init() {
+    ckernel::trisc::dest_filled_by_unpack = false;
+    _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>();
+}
 
 /**
  * @brief Configure packer ReLU at runtime from a packed uint32.

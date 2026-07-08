@@ -64,6 +64,9 @@ struct TransposeConfig {
     TransposeType transpose_type;
     tt::DataFormat data_format = tt::DataFormat::Float16_b;
     bool dst_full_sync_en = false;
+    // Optional compute-kernel path override; when set, dispatched instead of the transpose_dest/
+    // transpose_wh default (used by the Quasar copy_tile_to_dst kernel).
+    const char* compute_kernel_override = nullptr;
 };
 
 // Tiled dimensions derived from a 4-D NCHW tensor shape, with shared validation.
@@ -240,9 +243,10 @@ void run_single_core_transpose(
         compute_defines.emplace("SHORT_INIT", "1");
     }
 
-    const char* compute_kernel_path = test_config.transpose_dest
-                                          ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
-                                          : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp";
+    const char* compute_kernel_path =
+        test_config.compute_kernel_override != nullptr ? test_config.compute_kernel_override
+        : test_config.transpose_dest ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
+                                     : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp";
 
     // Enable 32-bit dest accumulate for the 32-bit formats (Float32/Int32); the compute kernel forwards
     // DST_ACCUM_MODE as the transpose-dest EN_32BIT_DEST template arg, so the two must agree.
@@ -271,7 +275,6 @@ void run_single_core_transpose(
             experimental::ComputeHardwareConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_en = fp32_dest_acc_en,
                 .unpack_to_dest_mode =
                     fp32_dest_acc_en
                         ? experimental::ComputeHardwareConfig::
@@ -393,38 +396,29 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
 }
 
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
-    // Tests SyncHalf and SyncFull
-    for (const bool dst_full_sync_en : {false, true}) {
-        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
-        unit_tests::compute::transpose::TransposeConfig test_config = {
-            .short_init = false,
-            .transpose_dest = true,
-            .single_tile_size = constants::TILE_HW * sizeof(uint32_t),
-            .shape = {1, 1, 64, 64},
-            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
-            .data_format = tt::DataFormat::Float32,
-            .dst_full_sync_en = dst_full_sync_en,
-        };
-        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
-    }
-}
-
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat16b) {
-    // 16-bit dest (EN_32BIT_DEST=false): exercises the implied-math-format-disabled config path.
-    // Tests SyncHalf and SyncFull
-    for (const bool dst_full_sync_en : {false, true}) {
-        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
-        unit_tests::compute::transpose::TransposeConfig test_config = {
-            .short_init = false,
-            .transpose_dest = true,
-            .single_tile_size = constants::TILE_HW * sizeof(uint16_t),
-            .shape = {1, 1, 64, 64},
-            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
-            .data_format = tt::DataFormat::Float16_b,
-            .dst_full_sync_en = dst_full_sync_en,
-        };
-        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestUnpackToDest) {
+    // Operand-based unpack-to-dest via the copy_tile_to_dst kernel: intent is expressed at the call
+    // site, and tile_regs_acquire/commit/release are mode-agnostic. Covers 16-bit and 32-bit formats,
+    // SyncHalf and SyncFull.
+    for (const tt::DataFormat data_format : {tt::DataFormat::Float16_b, tt::DataFormat::Float32}) {
+        const uint32_t single_tile_size =
+            constants::TILE_HW * (data_format == tt::DataFormat::Float32 ? sizeof(uint32_t) : sizeof(uint16_t));
+        for (const bool dst_full_sync_en : {false, true}) {
+            SCOPED_TRACE(
+                std::string(data_format == tt::DataFormat::Float32 ? "Float32" : "Float16_b") +
+                (dst_full_sync_en ? " SyncFull" : " SyncHalf"));
+            unit_tests::compute::transpose::TransposeConfig test_config = {
+                .short_init = false,
+                .transpose_dest = true,
+                .single_tile_size = single_tile_size,
+                .shape = {1, 1, 64, 64},
+                .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
+                .data_format = data_format,
+                .dst_full_sync_en = dst_full_sync_en,
+                .compute_kernel_override = "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest_quasar.cpp",
+            };
+            unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
+        }
     }
 }
 

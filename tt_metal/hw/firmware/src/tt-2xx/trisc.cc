@@ -76,6 +76,8 @@ thread_local uint32_t op_info_offset __attribute__((used)) = 0;
 namespace trisc {
 // Flip between 0 and 1 to keep dest pointer between kernel calls
 thread_local uint32_t dest_register_offset __attribute__((used)) = 0;
+// Unpack-to-dest section flag; see ckernel_trisc_common.h for the contract.
+thread_local bool dest_filled_by_unpack __attribute__((used)) = false;
 }  // namespace trisc
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE);

@@ -84,8 +84,6 @@ ALWI void tile_regs_commit() { MATH((llk_math_dest_section_done<DST_ACCUM_MODE>(
 /**
  * Release lock on DST register by PACK thread. The lock had to be previously acquired with tile_regs_wait.
  */
-ALWI void tile_regs_release() {
-    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
-}
+ALWI void tile_regs_release() { PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>())); }
 
 }  // namespace ckernel
