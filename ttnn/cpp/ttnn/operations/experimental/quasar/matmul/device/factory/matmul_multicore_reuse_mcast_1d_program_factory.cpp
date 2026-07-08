@@ -5139,6 +5139,18 @@ namespace {
 
 namespace m2 = tt::tt_metal::experimental;
 
+namespace CMAKE_UNIQUE_NAMESPACE {
+// Create a generation-agnostic data movement hardware config: Gen1 (WH/BH) takes the given
+// processor & NOC; Gen2 (Quasar) uses the default config.
+m2::DataMovementHardwareConfig make_datamovement_hardware_config(
+    tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
+    if (arch == tt::ARCH::QUASAR) {
+        return m2::DataMovementGen2Config{};
+    }
+    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+
 const m2::DFBSpecName RO_IN0_DFB{"cb_in0"};
 const m2::DFBSpecName RO_IN1_DFB{"cb_in1"};
 const m2::DFBSpecName RO_BIAS_DFB{"cb_bias"};
@@ -5867,17 +5879,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
 
     m2::Group<m2::KernelSpec> kernels;
 
-    // Pin the DM processor + NOC on Gen1 (WH/BH); on Quasar (Gen2) core/NOC selection is automatic,
-    // so the requested processor/noc are ignored and a default Gen2 config is used.
-    auto pinned_dm = [arch = device->arch()](
-                         tt::tt_metal::DataMovementProcessor processor,
-                         tt::tt_metal::NOC noc) -> m2::DataMovementHardwareConfig {
-        if (arch == tt::ARCH::QUASAR) {
-            return m2::DataMovementGen2Config{};
-        }
-        return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
-    };
-
     // in0 sender (work cores in receiver grid).
     kernels.push_back(m2::KernelSpec{
         .unique_id = RO_IN0_SENDER_KERNEL,
@@ -5901,7 +5902,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         // issue on in0_noc; a READER hint resolves to NOC0, inverts the rectangle into a degenerate
         // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
         // Matches the working mcast_2d factory.
-        .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+        .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+            device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
     });
 
     const bool has_no_work_in_recv =
@@ -5927,7 +5929,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .compile_time_args = make_in0_sender_cta(0, 1),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         });
     }
     if (has_no_work_not_in_recv) {
@@ -5949,7 +5952,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .compile_time_args = make_in0_sender_cta(0, 0),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         });
     }
 
@@ -5983,7 +5987,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
             // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
             // sender_sem.up to the sender must use the same NOC as the mcast geometry).
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in0_noc),
         });
     }
 
@@ -6095,7 +6100,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             // reads/output-writes run on the opposite NOC from the in0 mcast (NOC1) — legacy parity.
             // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
             // (npw_sent=0), hanging the final barrier.
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         });
     }
 
@@ -6747,17 +6753,6 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
 
     m2::Group<m2::KernelSpec> kernels;
 
-    // Pin the DM processor + NOC on Gen1 (WH/BH); on Quasar (Gen2) core/NOC selection is automatic,
-    // so the requested processor/noc are ignored and a default Gen2 config is used.
-    auto pinned_dm = [arch = device->arch()](
-                         tt::tt_metal::DataMovementProcessor processor,
-                         tt::tt_metal::NOC noc) -> m2::DataMovementHardwareConfig {
-        if (arch == tt::ARCH::QUASAR) {
-            return m2::DataMovementGen2Config{};
-        }
-        return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
-    };
-
     // in0 sender (SKIP_MCAST; on all_cores). Uses the sender_padding fork.
     {
         std::vector<m2::DFBBinding> b = {
@@ -6941,7 +6936,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
             // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
             // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         });
     }
 
@@ -7019,7 +7015,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
             // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
             // the sender's multicast geometry.
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         });
     }
 
@@ -7096,12 +7093,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .unique_id = RO_NOOP_BRISC_KERNEL,
             .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
             .dfb_bindings = std::move(noop_dm_dfb),
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_0, in1_noc),
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_NCRISC_KERNEL,
             .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
-            .hw_config = pinned_dm(tt::tt_metal::DataMovementProcessor::RISCV_1, in1_noc),
+            .hw_config = CMAKE_UNIQUE_NAMESPACE::make_datamovement_hardware_config(
+                device->arch(), tt::tt_metal::DataMovementProcessor::RISCV_1, in1_noc),
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,
