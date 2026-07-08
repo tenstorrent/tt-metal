@@ -242,7 +242,7 @@ void TensorSpec::populate_sharding_specs() {
             tensor_layout_ = TensorLayout(
                 tensor_layout_.get_data_type(),
                 tensor_layout_.get_page_config(),
-                *upd_mem_config,
+                std::move(*upd_mem_config),
                 tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
