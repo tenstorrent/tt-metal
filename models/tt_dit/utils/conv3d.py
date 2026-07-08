@@ -434,6 +434,24 @@ _BLOCKINGS = {
     (2, 4, 1024, 1024, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # post-upsample res
     (2, 4, 1024, 128, (3, 3, 3), 21, 18, 16): (64, 32, 1, 2, 2),  # final_conv
     # ===================================================================
+    # LTX-2.3 704x1280 (720p) decoder, BH Loud Box 2x4 (h_factor=2, w_factor=4). Per-device (H,W):
+    # s1(22,20) s2/s3(44,40) s4(88,80). Each blocking is transplanted from the nearest
+    # same-(Cin,Cout,kernel) 1080p 2x4 entry above — all H_out*W_out=32 to stay off the BH
+    # non-32-hw conv3d hang path. Blocking is a math-invariant re-tiling (byte-identical decode,
+    # md5-verified on device), so this only recovers the off-1080p VAE-decode regression: 2x4 720p
+    # was collapsing to the (Cin,32,1,1,1) H=W=1 channel fallback (~9s eager decode). Cached-T
+    # chunk lengths (T=3/4) reuse these via the T-relaxed lookup (T_out_block clamped to T_out).
+    # The deep 1024-ch s0 stages (s0_res/s0_up/s0_conv_in) stay on the conservative channel
+    # fallback pending a full sweep (OOM-sensitive at 4096-ch width) — mirrors the 4x8 720p block.
+    # ===================================================================
+    (2, 4, 512, 512, (3, 3, 3), 39, 22, 20): (64, 256, 1, 4, 8),  # s1_res
+    (2, 4, 512, 4096, (3, 3, 3), 39, 22, 20): (128, 64, 5, 2, 16),  # s1_up
+    (2, 4, 512, 512, (3, 3, 3), 75, 44, 40): (64, 256, 1, 8, 4),  # s2_res
+    (2, 4, 256, 256, (3, 3, 3), 147, 44, 40): (64, 256, 1, 8, 4),  # s3_res
+    (2, 4, 256, 512, (3, 3, 3), 147, 44, 40): (64, 256, 1, 8, 4),  # s3_chg
+    (2, 4, 128, 128, (3, 3, 3), 147, 88, 80): (64, 128, 6, 4, 8),  # s4_res
+    (2, 4, 128, 48, (3, 3, 3), 147, 88, 80): (128, 64, 6, 4, 8),  # s4_out
+    # ===================================================================
     # LTX-2.3 22B Video VAE decoder, BH Galaxy 4x8 (h_factor=4, w_factor=8), 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
     # ===================================================================
