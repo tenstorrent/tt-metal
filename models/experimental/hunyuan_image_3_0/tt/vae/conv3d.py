@@ -173,10 +173,10 @@ class HunyuanSymmetricConv3d(Module):
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4
             if (is_blackhole() and dtype == ttnn.float32)
-            else ttnn.MathFidelity.HiFi2,
+            else ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
         )
 
         weight_elems = self.kernel_size[0] * self.kernel_size[1] * self.kernel_size[2] * self.in_channels
