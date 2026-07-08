@@ -409,7 +409,17 @@ class TtIndexer:
             ttnn.deallocate(cache_i)
         return full
 
-    def write_k(self, hidden_states, seq_len, start_pos, rope_tensors=None, cache_user_id=0, index_kbuf=None):
+    def write_k(
+        self,
+        hidden_states,
+        seq_len,
+        start_pos,
+        rope_tensors=None,
+        cache_user_id=0,
+        index_kbuf=None,
+        cache_layer_idx=0,
+        num_cache_layers=1,
+    ):
         """Device K stem (wk + TP all-reduce + k_norm + device rope) written into the device index-key
         cache. forward() calls this on every chunk so the key-cache stays complete — else later chunks
         score against missing keys for the early prefix. (Dense v3.1 binds a NullIndexer, so write_k never
@@ -441,12 +451,14 @@ class TtIndexer:
             k = self._bc_rope_pe(k, rope_tensors, start_pos)  # [1, 1, S/sp, D_idx] bf16
             if k.dtype != index_kbuf.dtype:  # write dtype must match the cache (update_padded_kv_cache asserts)
                 k = ttnn.typecast(k, index_kbuf.dtype)
+            # Per-layer slot: layer_idx/num_layers fold this layer into user*num_layers + layer, matching
+            # ttMLA's KVPE cache write, so a shared multi-layer index cache keeps each layer's keys separate.
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 index_kbuf,
                 k,
                 slot_idx=cache_user_id,
-                layer_idx=0,
-                num_layers=1,
+                layer_idx=cache_layer_idx,
+                num_layers=num_cache_layers,
                 kv_actual_global=start_pos,
                 cluster_axis=self.sp_axis,
             )
@@ -490,6 +502,8 @@ class TtIndexer:
         rope_tensors: dict = None,
         cache_user_id: int = 0,
         index_kv_cache: ttnn.Tensor = None,
+        cache_layer_idx: int = 0,
+        num_cache_layers: int = 1,
     ) -> ttnn.Tensor:
         """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
         on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
@@ -525,6 +539,8 @@ class TtIndexer:
             rope_tensors=rope_tensors,
             cache_user_id=cache_user_id,
             index_kbuf=index_kv_cache,
+            cache_layer_idx=cache_layer_idx,
+            num_cache_layers=num_cache_layers,
         )
 
         # Q stem: the shared q_a latent (qr) -> indexer wq_b.
@@ -589,7 +605,11 @@ class TtIndexer:
             # It also needs the logits sliced to [0, end_pos) before top-k (that path validated correct at the
             # OP level, but is deferred). Investigate: slice-vs-stale-tail interaction + whether the extra
             # slice/copy is cheaper than the saved score/top-k work before turning this on.
-            k_full = self._gather_index_kbuf(index_kv_cache)  # [num_users, 1, T, D_idx] bf16 TILE, block-cyclic
+            k_full = self._gather_index_kbuf(
+                index_kv_cache
+            )  # [num_users*num_layers, 1, T, D_idx] bf16 TILE, block-cyclic
+            # User-major slot select: this layer's cache lives at user*num_layers + layer (same folding as
+            # write_k and ttMLA's KVPE cache_batch_idx), so a multi-layer model's layers don't clobber slot 0.
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,
                 k_full,
@@ -597,7 +617,7 @@ class TtIndexer:
                 chunk_start_idx=start_pos,
                 program_config=cfg,
                 cluster_axis=self.sp_axis,
-                cache_batch_idx=cache_user_id,
+                cache_batch_idx=cache_user_id * num_cache_layers + cache_layer_idx,
                 block_cyclic_sp_axis=self.sp_axis,
                 block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp
             )

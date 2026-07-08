@@ -651,12 +651,18 @@ def main() -> None:
     # The engine owns the KV cache: allocate it once (the adapter defines the layout), pass it into
     # every runtime call, and let it free with the mesh at shutdown.
     kv_cache = ADAPTER.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
-    runtime.compile(kv_cache)
+    # Sparse-attention (DSA) models also own an index-key cache; it is None for dense models. The runtime
+    # holds it (from compile) and passes it into every forward; the migration table also merges both caches
+    # into one (see _serve_request / build_kv_chunk_table).
+    index_kv_cache = ADAPTER.allocate_index_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
+    runtime.compile(kv_cache, index_kv_cache=index_kv_cache)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         _serve_standalone(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
     else:
-        _serve_request(runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank)
+        _serve_request(
+            runtime, kv_cache, mesh_device, hf_config, rank, num_ranks, is_first_rank, index_kv_cache=index_kv_cache
+        )
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
@@ -697,7 +703,9 @@ def _serve_standalone(
         gc.collect()
 
 
-def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
+def _serve_request(
+    runtime, kv_cache, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool, *, index_kv_cache=None
+) -> None:
     """Production serving: token chunks + PrefillMetadata arrive over the H2D socket from an external
     producer (prefill_h2d_producer.py / the scheduler); unbounded (runs to SIGTERM). Same pipeline
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
@@ -759,9 +767,10 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             # Full migration bring-up: the runtime builds the model-specific KV chunk table from
             # its device cache layout; the runner publishes it (+ device map) to the worker and blocks
             # on WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+            # A sparse model passes its index cache too, so the table describes BOTH caches in one (merged).
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
             wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
-            runtime.build_kv_chunk_table(kv_cache, path=table_path)
+            runtime.build_kv_chunk_table(kv_cache, path=table_path, index_kv_cache=index_kv_cache)
             publish_table_and_wait_ready(
                 mesh_device=mesh_device,
                 mesh_shape=GLOBAL_MESH_SHAPE,

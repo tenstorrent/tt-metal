@@ -1039,6 +1039,10 @@ class ttMLA:
             rope_tensors=rope_tensors,
             cache_user_id=cache_user_id,
             index_kv_cache=index_kv_cache,
+            # Per-layer index-cache slot: the indexer folds (user, layer) the same way the KVPE cache does,
+            # so one shared index cache holds all layers without clobbering. (NullIndexer ignores these.)
+            cache_layer_idx=cache_layer_idx,
+            num_cache_layers=self.layer_num,
         )
 
         tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local)

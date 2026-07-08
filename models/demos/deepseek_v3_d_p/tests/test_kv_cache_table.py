@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     create_kv_chunk_address_table_ds,
     create_kv_chunk_address_table_kimi,
     init_kvpe_cache,
+    populate_kv_chunk_address_table_kimi,
 )
 from tests.ttnn.utils_for_testing import assert_equal
 
@@ -562,34 +563,65 @@ def test_glm_kv_cache_table(
     ttnn.synchronize_device(mesh_device)
     logger.info(f"[glm] forward complete: out shape {tuple(tt_out.shape)}")
 
-    # Build a KV chunk address table over the indexer's block-cyclic key cache and read it back. The
-    # index cache is [num_users*num_layers, 1, S/sp, index_head_dim] bfp8, ND-sharded 32-tokens-per-bank
-    # (round-robin over the DRAM banks) — the same layout create_kv_chunk_address_table_kimi addresses.
+    # Build ONE multi-config KV chunk address table (commit 7a5be3a5e76) holding BOTH caches instead of
+    # two separate tables. config 0 = the block-cyclic index-key cache (bfp8 TILE, index_head_dim wide);
+    # config 1 = the MLA KVPE cache (bf16 ROW_MAJOR, kvpe_head_dim wide). The two configs share the
+    # device-group / fabric-host side table but each carries its own grid + chunk_size_bytes and is
+    # addressed by config_id on every accessor (set / read_device_chunk). Both caches are
+    # [num_users*num_layers, 1, S/sp, head_dim], ND-sharded 32-tokens-per-bank (round-robin over the DRAM
+    # banks) — the layout populate_kv_chunk_address_table_kimi addresses.
     index_kbuf = tt_index_cache
     index_head_dim = mla_tt._indexer.index_args.index_head_dim  # 128
-    num_index_layers = 1
-    num_index_users = 1
+    kvpe_head_dim = config.kv_lora_rank + config.qk_rope_head_dim  # 576
 
-    # [1, 1, 32, 128] bfp8 = (32/32)*(128/32) = 4 tiles; a 32x32 bfp8 tile is 1024 data + 64 exponent bytes.
+    # index config: [1, 1, 32, 128] bfp8 = (32/32)*(128/32) = 4 tiles; a 32x32 bfp8 tile is 1024 data + 64
+    # exponent bytes. kvpe config: bf16 ROW_MAJOR, [1, 1, 32, 576] = 32*576*2 bytes contiguous.
     INDEX_CHUNK_SIZE_BYTES = 4 * 1088  # 4352
-    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-    lookup_table_config.num_layers = num_index_layers
-    lookup_table_config.max_sequence_length = seq_len
-    lookup_table_config.num_slots = num_index_users
-    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    lookup_table_config.chunk_size_bytes = INDEX_CHUNK_SIZE_BYTES
+    KVPE_CHUNK_SIZE_BYTES = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * kvpe_head_dim * 2  # 36864
+    INDEX_CONFIG_ID, KVPE_CONFIG_ID = 0, 1
 
-    lookup_table = create_kv_chunk_address_table_kimi(
-        config=lookup_table_config,
+    def _table_config(chunk_size_bytes):
+        c = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
+        c.num_layers = 1
+        c.max_sequence_length = seq_len
+        c.num_slots = 1
+        c.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+        c.chunk_size_bytes = chunk_size_bytes
+        return c
+
+    index_config = _table_config(INDEX_CHUNK_SIZE_BYTES)
+    kvpe_config = _table_config(KVPE_CHUNK_SIZE_BYTES)
+
+    # A list of configs -> config i is named "i" (id i). config 0 = index, config 1 = kvpe.
+    lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable([index_config, kvpe_config])
+    assert lookup_table.num_configs() == 2, f"expected 2 configs, got {lookup_table.num_configs()}"
+
+    populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=index_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
         seq_len=seq_len,
         sp_axis=sp_axis,
         tt_kvpe_cache=index_kbuf,
         chunk_size_bytes=INDEX_CHUNK_SIZE_BYTES,
-        num_users=num_index_users,
+        num_users=1,
+        config_id=INDEX_CONFIG_ID,
+    )
+    populate_kv_chunk_address_table_kimi(
+        lookup_table=lookup_table,
+        config=kvpe_config,
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        seq_len=seq_len,
+        sp_axis=sp_axis,
+        tt_kvpe_cache=tt_kvpe_cache,
+        chunk_size_bytes=KVPE_CHUNK_SIZE_BYTES,
+        num_users=1,
+        config_id=KVPE_CONFIG_ID,
     )
 
+    # --- readback config 0: index cache (bfp8 TILE) ---
     # Gather the index cache to a single [1, 1, seq_len, index_head_dim] torch tensor (SP-concat on seq,
     # TP is replicated so take the first column group), then compare every 32-token chunk to the readback.
     index_kbuf_torch = ttnn.to_torch(
@@ -600,36 +632,17 @@ def test_glm_kv_cache_table(
     chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, index_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0, config_id=INDEX_CONFIG_ID)
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         expected_chunk = index_kbuf_torch[:, :, position:pos_end, :]
         assert_equal(chunk_torch, expected_chunk)
-    logger.info(f"[glm] index-cache address-table readback verified over {seq_len} tokens")
+    logger.info(f"[glm] index-cache (config {INDEX_CONFIG_ID}) address-table readback verified over {seq_len} tokens")
 
-    # Same readback for the MLA KVPE cache — but it is UNCOMPRESSED bf16 ROW_MAJOR (not bfp8 TILE), so a
-    # 32-token DRAM-bank chunk is [1, 1, 32, kvpe_head_dim] bf16 = 32*kvpe_head_dim*2 bytes contiguous, and
-    # the readback decodes via tensor_from_bf16_bytes (the RM/bf16 analogue of tensor_from_bfp8_bytes).
-    kvpe_head_dim = config.kv_lora_rank + config.qk_rope_head_dim  # 576
-    KVPE_CHUNK_SIZE_BYTES = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * kvpe_head_dim * 2  # [32, 576] bf16 = 36864
-    kvpe_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-    kvpe_table_config.num_layers = 1
-    kvpe_table_config.max_sequence_length = seq_len
-    kvpe_table_config.num_slots = 1
-    kvpe_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    kvpe_table_config.chunk_size_bytes = KVPE_CHUNK_SIZE_BYTES
-
-    kvpe_lookup_table = create_kv_chunk_address_table_kimi(
-        config=kvpe_table_config,
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        seq_len=seq_len,
-        sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
-        chunk_size_bytes=KVPE_CHUNK_SIZE_BYTES,
-        num_users=1,
-    )
-
+    # --- readback config 1: MLA KVPE cache (bf16 ROW_MAJOR) ---
+    # The KVPE cache is UNCOMPRESSED bf16 ROW_MAJOR (not bfp8 TILE), so a 32-token DRAM-bank chunk is
+    # [1, 1, 32, kvpe_head_dim] bf16 = 32*kvpe_head_dim*2 bytes contiguous, decoded via tensor_from_bf16_bytes
+    # (the RM/bf16 analogue of tensor_from_bfp8_bytes).
     tt_kvpe_cache_torch = ttnn.to_torch(
         tt_kvpe_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
@@ -638,9 +651,11 @@ def test_glm_kv_cache_table(
     kvpe_chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_head_dim]
     for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
         pos_end = position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-        raw_bytes = kvpe_lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0, config_id=KVPE_CONFIG_ID)
         chunk_tt = ttnn.experimental.disaggregation.tensor_from_bf16_bytes(raw_bytes, kvpe_chunk_shape)
         chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
         expected_chunk = tt_kvpe_cache_torch[:, :, position:pos_end, :]
         assert_equal(chunk_torch, expected_chunk)
-    logger.info(f"[glm] kvpe-cache (bf16 RM) address-table readback verified over {seq_len} tokens")
+    logger.info(
+        f"[glm] kvpe-cache (config {KVPE_CONFIG_ID}, bf16 RM) address-table readback verified over {seq_len} tokens"
+    )

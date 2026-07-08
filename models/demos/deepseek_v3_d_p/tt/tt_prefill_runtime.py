@@ -92,6 +92,9 @@ class TtPrefillRuntime:
         assert config.model_cfg is not None, "TtPrefillRuntimeConfig.model_cfg must be set by the model adapter"
         # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
         self._on_layer_complete = None
+        # Secondary (sparse/DSA) index-key cache, handed in via compile() and passed to every forward.
+        # None for dense models. Engine-owned lifetime (like kv_cache); the runtime only holds a reference.
+        self._index_kv_cache = None
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -198,10 +201,14 @@ class TtPrefillRuntime:
             )
         return self.make_placeholder_activation()
 
-    def compile(self, kv_cache: ttnn.Tensor) -> None:
+    def compile(self, kv_cache: ttnn.Tensor, index_kv_cache: ttnn.Tensor | None = None) -> None:
         """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine
-        passes the cache it owns; the warm-up writes into it (slot 0) and is harmless."""
+        passes the cache(s) it owns; the warm-up writes into them (slot 0) and is harmless.
+
+        `index_kv_cache` (sparse/DSA models): the secondary index-key cache. Stored here and passed to
+        every subsequent forward — the per-chunk loop only carries the primary `kv_cache`. None for dense."""
         assert self.model_built
+        self._index_kv_cache = index_kv_cache
         chunk = self.config.chunk_size
         logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
@@ -271,6 +278,7 @@ class TtPrefillRuntime:
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
+            index_kv_cache=self._index_kv_cache,
         )
         ttnn.deallocate(input_tensor)
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
@@ -297,7 +305,7 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
-    def build_kv_chunk_table(self, kv_cache: ttnn.Tensor, path: str) -> str:
+    def build_kv_chunk_table(self, kv_cache: ttnn.Tensor, path: str, index_kv_cache: ttnn.Tensor | None = None) -> str:
         """Build + serialize the KV-chunk address table for the engine-owned `kv_cache` to
         `path` and return it.
 
@@ -305,7 +313,11 @@ class TtPrefillRuntime:
         (the MLA chunked-prefill cache layout), so the migration worker copies the right chunks.
         The runner publishes the serialized table to the worker — this method only describes the
         cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
-        full model)."""
+        full model).
+
+        `index_kv_cache` (sparse/DSA models only): when given, the result is a single MERGED table
+        describing BOTH caches — config 0 = the KVPE cache, config 1 = the index-key cache. None
+        (dense models) → the usual single-config table over the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         return build_and_serialize_kv_chunk_table(
@@ -318,6 +330,7 @@ class TtPrefillRuntime:
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
+            index_kv_cache=index_kv_cache,
         )
 
     def kv_cache_pcc_check(

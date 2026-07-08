@@ -48,6 +48,45 @@ class GLM51Adapter(MLAPrefillAdapter):
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_hf_config(max_seq=max_seq)
 
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+        """GLM is sparse (DSA): sparse_sdpa reads the KVPE cache natively and requires it UNCOMPRESSED —
+        bf16 ROW_MAJOR — not the dense bf8/TILE cache the base MLA adapter allocates. Same shape/layout
+        otherwise (one shared cache of num_users * num_layers user-major slots)."""
+        import ttnn
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=hf_config.qk_rope_head_dim + hf_config.kv_lora_rank,
+            mesh_device=mesh_device,
+            seq_len=params.max_seq_len,
+            mesh_shape=list(params.mesh_shape),
+            sp_axis=params.sp_axis,
+            num_kvpe_cache_layers=params.num_layers,
+            num_users=params.num_users,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    def allocate_index_kv_cache(self, *, mesh_device, hf_config, params):
+        """GLM is sparse (DSA): the lightning-indexer keeps a per-user block-cyclic KEY cache
+        (bfp8 TILE, ``index_head_dim`` wide) alongside the MLA KVPE cache. Allocate it with the same
+        block-cyclic layout as the KVPE cache (one shared cache of ``num_users * num_layers``
+        user-major slots) so the merged migration table can address both caches identically. The
+        engine owns it, exactly like the KVPE cache."""
+        import ttnn
+        from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+
+        return init_kvpe_cache(
+            kvpe_cache_head_dim=hf_config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=params.max_seq_len,
+            mesh_shape=list(params.mesh_shape),
+            sp_axis=params.sp_axis,
+            num_kvpe_cache_layers=params.num_layers,
+            num_users=params.num_users,
+            dtype=ttnn.bfloat8_b,
+        )
+
     # --- test metadata (HF download coordinates + PCC thresholds + golden trace) ---
     hf_repo_id = "zai-org/GLM-5.1-FP8"
     env_var = "GLM51_HF_MODEL"

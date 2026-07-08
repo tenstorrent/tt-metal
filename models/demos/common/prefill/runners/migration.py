@@ -57,8 +57,19 @@ def serialize_kv_chunk_table(
     cfg.chunk_n_tokens = chunk_n_tokens
     cfg.chunk_size_bytes = chunk_size_bytes
     table = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
-    disagg.export_to_protobuf_file(table, path)
-    logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
+    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+
+
+def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
+    """Serialize an already-built KvChunkAddressTable (single- OR multi-config) to a protobuf file for
+    the worker's SET_TABLE, log it, and return `path`. This is the model-agnostic serialize step;
+    callers that need to build a multi-config table (e.g. a sparse model merging its KVPE + index
+    caches) construct the table themselves and hand it here."""
+    ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
+    logger.info(
+        f"[migration] KV chunk address table serialized to {path} "
+        f"(configs={table.num_configs()}, entries={table.total_entries()})"
+    )
     return path
 
 

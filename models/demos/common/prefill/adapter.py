@@ -132,6 +132,17 @@ class PrefillModelAdapter(ABC):
         and frees it with the mesh at shutdown. ``params`` carries the per-rank knobs
         (max_seq_len, mesh_shape, this rank's num_layers, num_users, …)."""
 
+    def allocate_index_kv_cache(
+        self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams
+    ) -> "ttnn.Tensor | None":
+        """Allocate the SECONDARY KV cache a sparse-attention (DSA) model needs, or return
+        ``None`` for dense models (the default). GLM-5.1 keeps a lightning-indexer block-cyclic
+        key cache alongside the MLA KVPE cache; the engine allocates it here so it can build a
+        single MERGED migration table describing both caches (config 0 = KVPE, config 1 = index)
+        and — once sparse serving is wired — pass it into the forward. ``None`` means the model has
+        only the primary KV cache, so the migration table stays single-config."""
+        return None
+
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):
         """Construct the model for this rank and return a runtime handle. The runtime
