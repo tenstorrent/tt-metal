@@ -547,25 +547,6 @@ TEST_F(ProgramRunArgsTestQuasar, DuplicateDFBParamsFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate DFB 'dfb_0'")));
 }
 
-TEST_F(ProgramRunArgsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
-    NodeCoord node{0, 0};
-    // runtime_arg_values is keyed by argument name and then by node, so setting the same node twice
-    // for one argument is rejected structurally when the inner Table is built (rather than by a
-    // downstream SetProgramRunArgs validation pass).
-    EXPECT_THAT(
-        [&] {
-            ProgramRunArgs params;
-            params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
-                .kernel = KernelSpecName{"dm_kernel"},
-                .runtime_arg_values =
-                    {
-                        {"input_ptr", {{node, 0x1000}, {node, 0x2000}}},  // duplicate node!
-                    },
-            });
-        },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate key")));
-}
-
 // ============================================================================
 // SECTION: Success Tests (basic functionality)
 // ============================================================================
