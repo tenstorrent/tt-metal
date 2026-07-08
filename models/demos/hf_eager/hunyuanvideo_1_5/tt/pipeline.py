@@ -44,6 +44,7 @@ import importlib.util
 import os
 
 import ttnn
+from models.tt_dit.parallel.manager import CCLManager
 
 # --------------------------------------------------------------------------- #
 # Package locations
@@ -173,6 +174,17 @@ class HunyuanVideo15Pipeline:
         self.invoked = set()
         self._rot_M = _rotate_matrix(device, self.dim_head)
 
+        # Mesh sharding (QB2): a real multi-device mesh gets one CCLManager, used
+        # only by the transformer_block stub (flat tensor-parallel across all
+        # mesh devices -- see real_weights/README.md "RESUME ON QB2"). A plain
+        # device or a trivial 1x1 mesh takes tp=1 / ccl_manager=None and every
+        # stub behaves exactly as it did single-device.
+        self.is_mesh = isinstance(device, ttnn.MeshDevice) and device.get_num_devices() > 1
+        self.tp = device.get_num_devices() if self.is_mesh else 1
+        self.ccl_manager = (
+            CCLManager(mesh_device=device, num_links=2, topology=ttnn.Topology.Linear) if self.is_mesh else None
+        )
+
         def wrap(name, fwd):
             def _call(*a, **k):
                 self.invoked.add(name)
@@ -180,8 +192,8 @@ class HunyuanVideo15Pipeline:
 
             return _call
 
-        def build(name, module):
-            return wrap(name, _load_stub_module(name).build(device, module))
+        def build(name, module, **extra):
+            return wrap(name, _load_stub_module(name).build(device, module, **extra))
 
         m = model
         # --- composite-level stubs -------------------------------------------------
@@ -191,7 +203,10 @@ class HunyuanVideo15Pipeline:
         self.s_token_refiner = build("hunyuan_video15_token_refiner", m.context_embedder)
         self.s_byt5 = build("hunyuan_video15_by_t5_text_projection", m.context_embedder_2)
         self.s_image = build("hunyuan_video15_image_projection", m.image_embedder)
-        self.s_blocks = [build("hunyuan_video15_transformer_block", blk) for blk in m.transformer_blocks]
+        self.s_blocks = [
+            build("hunyuan_video15_transformer_block", blk, ccl_manager=self.ccl_manager, tp=self.tp)
+            for blk in m.transformer_blocks
+        ]
         self.s_norm_out = build("ada_layer_norm_continuous", m.norm_out)
 
         # --- mid-level stubs -------------------------------------------------------
@@ -419,16 +434,34 @@ class HunyuanVideo15Pipeline:
             return ttnn.concat([enc_i, enc_b, enc_m], dim=1)
         return ttnn.concat([enc_b, enc_m, enc_i], dim=1)
 
-    def _build_attn_bias(self, task, n_latent, Li, Lb, Lm):
+    def _build_attn_bias(self, task, n_latent, Li, Lb, Lm, mask_m=None, mask_b=None):
         """Per-key additive attention bias (host constant, built OUTSIDE the hot
-        forward).  Only the trailing image keys are masked, and only for t2v."""
+        forward): 0 for valid keys, -inf for masked ones. Two sources of masking,
+        combined:
+          (a) the trailing image keys, for t2v only (image conditioning is invalid);
+          (b) real per-token PADDING within the mllm/byT5 text streams, from the
+              tokenizer's own `encoder_attention_mask{,_2}` -- e.g. the mllm stream
+              is padded to a fixed 1000 tokens and byT5 to 256 regardless of the
+              actual prompt length, so a short prompt is mostly padding. Without
+              this, every padding position is attended to as if it were real text,
+              diluting the conditioning signal. `build_inputs()`'s synthetic
+              all-ones masks make this a no-op for the PCC/e2e gate tests."""
         import torch
 
-        if task == "i2v":
-            return None
         seq = n_latent + Lb + Lm + Li
         bias = torch.zeros(1, 1, 1, seq, dtype=torch.float32)
-        bias[0, 0, 0, n_latent + Lb + Lm :] = _MAX_NEG
+        # Order must match `_reorder_concat`.
+        if task == "i2v":
+            i_off, b_off, m_off = 0, Li, Li + Lb
+        else:
+            b_off, m_off, i_off = 0, Lb, Lb + Lm
+            bias[0, 0, 0, n_latent + i_off :] = _MAX_NEG  # image invalid for t2v
+        if mask_b is not None:
+            invalid = torch.as_tensor(mask_b).reshape(-1)[:Lb] == 0
+            bias[0, 0, 0, n_latent + b_off : n_latent + b_off + Lb][invalid] = _MAX_NEG
+        if mask_m is not None:
+            invalid = torch.as_tensor(mask_m).reshape(-1)[:Lm] == 0
+            bias[0, 0, 0, n_latent + m_off : n_latent + m_off + Lm][invalid] = _MAX_NEG
         return _f32(self.device, bias)
 
     # ---- encode (host: upload inputs + positional constants OUTSIDE the hot path)
@@ -446,6 +479,8 @@ class HunyuanVideo15Pipeline:
         Lm = int(inputs["encoder_hidden_states"].shape[1])
         Lb = int(inputs["encoder_hidden_states_2"].shape[1])
         Li = int(inputs["image_embeds"].shape[1])
+        mask_m = inputs.get("encoder_attention_mask")
+        mask_b = inputs.get("encoder_attention_mask_2")
 
         cos, sin = self.s_rope(hidden)  # rope stub (positional constant)
         return dict(
@@ -458,7 +493,7 @@ class HunyuanVideo15Pipeline:
             image=_f32(d, inputs["image_embeds"]),
             cos=cos,
             sin=sin,
-            attn_bias=self._build_attn_bias(task, n_latent, Li, Lb, Lm),
+            attn_bias=self._build_attn_bias(task, n_latent, Li, Lb, Lm, mask_m=mask_m, mask_b=mask_b),
             task=task,
             out_shape=(B, C, F, H, W),
         )
@@ -500,7 +535,19 @@ class HunyuanVideo15Pipeline:
     def _unpatchify(self, dev_out, out_shape):
         """(B, N, out_ch) -> (B, out_ch, F, H, W).  Pure layout (unit patch)."""
         B, _, F, H, W = out_shape
-        out = ttnn.to_torch(dev_out).reshape(B, F, H, W, self.out_channels)
+        if self.is_mesh:
+            # dev_out is REPLICATED across the mesh (every device agrees after the
+            # last block's all-reduce). Bare ttnn.to_torch on a mesh tensor isn't a
+            # stable readback path -- use the same ConcatMeshToTensor + de-dup
+            # pattern the per-component mesh PCC tests use.
+            ttnn.synchronize_device(self.device)
+            t = ttnn.to_torch(dev_out, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            n = self.device.get_num_devices()
+            if t.shape[0] == B * n:
+                t = t[:B]
+            out = t.reshape(B, F, H, W, self.out_channels)
+        else:
+            out = ttnn.to_torch(dev_out).reshape(B, F, H, W, self.out_channels)
         return out.permute(0, 4, 1, 2, 3).contiguous()
 
     def run(self, inputs, granularity="composite"):

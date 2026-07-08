@@ -10,6 +10,9 @@ Results on one Blackhole (see real_weights/README.md):
 """
 import os
 
+import pytest
+
+import ttnn
 from models.demos.hf_eager.hunyuanvideo_1_5.real_weights.weights import build_real_transformer
 from models.demos.hf_eager.hunyuanvideo_1_5.tt import pipeline as P
 
@@ -39,3 +42,34 @@ def test_real_weight_pcc(device):
     val = P.pcc(golden, out)
     print(f"\n===== REAL-WEIGHT e2e PCC (N={N}, t2v) = {val:.6f} =====\n", flush=True)
     assert val >= 0.95, f"real-weight PCC {val:.6f} < 0.95"
+
+
+@pytest.mark.timeout(1800)  # 4x54-layer build + upload across a fresh mesh is slower than pytest.ini's 300s default
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+)
+@pytest.mark.parametrize("mesh_device", [4], indirect=True)
+def test_real_weight_pcc_mesh(mesh_device):
+    """QB2 flat-TP=4 variant of :func:`test_real_weight_pcc` -- same real
+    checkpoint, same golden, but the DiT runs sharded across all 4 mesh
+    devices (see real_weights/README.md "RESUME ON QB2"). PCC should stay
+    comparable to the single-chip baseline (bf16, N=54 -> 0.967557); sharding
+    changes WHERE the math runs, not the math itself."""
+    if os.environ.get("HY_BF16") == "1":
+        coerce_bf16()
+    N = int(os.environ.get("HY_N", "2"))
+    print(
+        f"\n[real-weight PCC mesh] building real DiT at num_layers={N}, tp={mesh_device.get_num_devices()} ...",
+        flush=True,
+    )
+    model = build_real_transformer(num_layers=N)
+    pipe = P.build_pipeline(mesh_device, model)
+    inputs = P.build_inputs(model.config, task="t2v")
+    golden = P.hf_reference(model, inputs)
+    out = pipe.run(inputs, granularity="composite")
+    val = P.pcc(golden, out)
+    print(
+        f"\n===== REAL-WEIGHT e2e PCC mesh (N={N}, tp={mesh_device.get_num_devices()}, t2v) = {val:.6f} =====\n",
+        flush=True,
+    )
+    assert val >= 0.95, f"real-weight mesh PCC {val:.6f} < 0.95"
