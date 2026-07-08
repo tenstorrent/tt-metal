@@ -203,7 +203,17 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
 #endif
+#ifdef INPUT_FITS_L1
+    // Fast path: the reader gathers the whole per-core batch once and the compute keeps it tilized in
+    // cb_in (c_29) across both the welford-stats and normalization passes.
     constexpr uint32_t welford_batch_tiles = block_h * per_core_N;
+#else
+    // Fallback (large ROW_MAJOR shapes that would not fit L1): the batch is re-gathered and re-tilized
+    // one out-block at a time in each pass, and the 2-tile per-group welford state (mean + M2) is
+    // spilled to / reloaded from this L1 scratch CB across the per-out-block re-tilize.
+    constexpr uint32_t cb_welford_state_id = tt::CBIndex::c_17;
+    CircularBuffer cb_welford_state(cb_welford_state_id);
+#endif
 #else
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
@@ -243,7 +253,143 @@ void kernel_main() {
         cb_beta.wait_front(per_core_N);
     }
 
+    // Accumulate one out-block's tiles into the per-group welford running state (mean/M2 in DST). Shared by
+    // the fits-in-L1 path (called once per out-block inside one tile_regs window, stats_tile_idx running
+    // across the whole resident batch) and the fallback (called per re-tilized out-block, stats_tile_idx
+    // local to the chunk). block_xy_coord is the running global row position and advances across calls.
+    auto accumulate_out_block = [&](uint32_t out_block_h_actual, uint32_t& stats_tile_idx, uint32_t& block_xy_coord) {
+#ifndef TILIZE_IN
+        (void)stats_tile_idx;  // only the TILIZE_IN read path indexes a pre-tilized cb_in
+#endif
+        for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+            uint32_t min_group = 0;
+            uint32_t channels_left = num_channels_per_group;
+            uint32_t curr_xy_coord = block_xy_coord;
+            for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+#ifdef TILIZE_IN
+                // ROW_MAJOR: input is tilized into cb_in; read it by tile index.
+                transpose_init(cb_in_id);
+                transpose_tile(cb_in_id, stats_tile_idx, input_dst);
+                ++stats_tile_idx;
+#else
+                cb_in0.wait_front(1);
+                if constexpr (welford_fp32_alias) {
+                    cb_in0_welford.wait_front(1);
+                }
+                transpose_init(cb_in0_welford_id);
+                transpose_tile(cb_in0_welford_id, 0, input_dst);
+#endif
+                // On the unpack-to-DEST fp32 path, transpose_tile's llk_math_transpose_dest clobbers
+                // welford's LREG2/LREG3 (math-thread replay slots [16,32)), so re-arm the SFPU state.
+                if constexpr (welford_unpack_fp32_active) {
+                    welford_init<WelfordInitMode::PreserveStats>();
+                }
+                uint32_t group_offset = 0;
+                for (uint32_t g = min_group; g < num_groups; ++g) {
+                    uint32_t cols_available = tile_width - group_offset;
+                    uint32_t cols_consumed = std::min(cols_available, channels_left);
+                    welford_restore_state(mean_dst, g);
+                    welford_update_rows<reciprocal_size>(
+                        input_dst, curr_xy_coord, group_offset, cols_consumed, *p_reciprocal);
+                    welford_save_state(mean_dst, g);
+                    channels_left -= cols_consumed;
+                    group_offset += cols_consumed;
+                    curr_xy_coord += cols_consumed;
+                    if (channels_left > 0) {
+                        break;  // group spans into the next tile
+                    }
+                    ++min_group;
+                    channels_left = num_channels_per_group;
+                    curr_xy_coord = block_xy_coord;
+                    if (group_offset == tile_width) {
+                        break;  // tile fully consumed
+                    }
+                }
+#ifndef TILIZE_IN
+                cb_in0.pop_front(1);
+                if constexpr (welford_fp32_alias) {
+                    cb_in0_welford.pop_front(1);
+                }
+#endif
+            }
+            block_xy_coord += num_channels_per_group;
+        }
+    };
+
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+    // Fallback spills the 2-tile per-group welford state (mean + M2, all groups packed) to L1 across each
+    // out-block's re-tilize, since the tilize needs the same DST/tile_regs window the state lives in.
+    auto spill_welford_state = [&]() {
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_welford_state.reserve_back(2);
+        pack_tile_block(mean_dst, cb_welford_state_id, 2);
+        cb_welford_state.push_back(2);
+        tile_regs_release();
+    };
+    auto reload_welford_state = [&]() {
+        tile_regs_acquire();
+        cb_welford_state.wait_front(2);
+        copy_tile_init(cb_welford_state_id);
+        copy_tile(cb_welford_state_id, 0, mean_dst);
+        copy_tile(cb_welford_state_id, 1, mean_dst + 1);
+        cb_welford_state.pop_front(2);
+        welford_init<WelfordInitMode::PreserveStats>();
+    };
+#endif
+
     for (uint32_t b = 0; b < num_batches; ++b) {
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+        // ===== Fallback stats pass (does not fit L1): re-tilize one out-block at a time and accumulate
+        // welford stats across them. The state (mean + M2) is spilled to / reloaded from L1 around each
+        // tilize because the tilize needs the same DST/tile_regs window the state lives in. =====
+        cb_ex_partial.reserve_back(2);
+
+        // Zero-init the per-group welford state and spill it to L1.
+        tile_regs_acquire();
+        welford_init();
+        for (uint32_t g = 0; g < num_groups; ++g) {
+            welford_save_state(mean_dst, g);
+        }
+        spill_welford_state();
+
+        uint32_t block_xy_coord = 0;
+        for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+            uint32_t out_block_h_actual = out_block_h_normal;
+            if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                out_block_h_actual = out_block_h_last;
+            }
+            const uint32_t out_block_tiles = out_block_h_actual * per_core_N;
+
+            compute_kernel_lib::tilize<
+                per_core_N,
+                cb_in_rm_id,
+                cb_in_id,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(out_block_h_actual);
+            cb_in.wait_front(out_block_tiles);
+
+            reload_welford_state();
+            uint32_t stats_tile_idx = 0;
+            accumulate_out_block(out_block_h_actual, stats_tile_idx, block_xy_coord);
+            spill_welford_state();
+            cb_in.pop_front(out_block_tiles);
+        }
+
+        // Reload the accumulated state and convert M2 -> variance for the inter-core reduction.
+        reload_welford_state();
+        for (uint32_t g = 0; g < num_groups; ++g) {
+            welford_restore_state(mean_dst, g);
+            welford_finalize_to_face<reciprocal_size>(mean_dst, g, block_xy_coord - 1, *p_reciprocal);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile_block(mean_dst, cb_ex_partial_id, 2);
+        tile_regs_release();
+        cb_ex_partial.push_back(2);
+        // ================= End FALLBACK stats pass =================
+#else
 #ifdef TILIZE_IN
         compute_kernel_lib::tilize<
             per_core_N,
@@ -259,10 +405,7 @@ void kernel_main() {
         welford_init();
 
         uint32_t block_xy_coord = 0;
-
-#ifdef TILIZE_IN
-        uint32_t stats_tile_idx = 0;
-#endif
+        uint32_t stats_tile_idx = 0;  // advanced only on the TILIZE_IN (pre-tilized cb_in) read path
 
         for (uint32_t g = 0; g < num_groups; ++g) {
             welford_save_state(mean_dst, g);
@@ -273,102 +416,7 @@ void kernel_main() {
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
             }
-
-            for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                // This indicates the smallest group that is yet to be processed for this block
-                // As we iterate over nt, some of the groups will be completed, and we will update
-                // this variable
-                uint32_t min_group = 0;
-
-                // This indicates the number of channels left to be processed for the min_group
-                // As we iterate over nt, some of the channels will be completed, and we will
-                // update this variable
-                // It is mainly used when we move from one tile to the next, if there are channels
-                // left to be processed for the min_group, we will process them in the next tile
-                uint32_t channels_left = num_channels_per_group;
-
-                // This tracks the global index of the first element in a given group in a tile.
-                // It is used by the Welford's algorithm to scale the running mean and m2.
-                // This moves reverse of channels_left, except that it is the global index.
-                uint32_t curr_xy_coord = block_xy_coord;
-
-                for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-#ifdef TILIZE_IN
-                    // ROW_MAJOR: batch is pre-tilized into cb_in (no cb_in0 wait/pop).
-                    transpose_init(cb_in_id);
-                    transpose_tile(cb_in_id, stats_tile_idx, input_dst);
-                    ++stats_tile_idx;
-#else
-                    cb_in0.wait_front(1);
-                    if constexpr (welford_fp32_alias) {
-                        // The reader pushes cb_in0 and cb_in0_welford in separate push_back
-                        // calls (cb_in0 first, alias second); cb_in0.wait_front above only
-                        // synchronizes on the first. Wait on the alias to synchronize on the
-                        // second before transpose_tile reads via the alias below.
-                        cb_in0_welford.wait_front(1);
-                    }
-                    transpose_init(cb_in0_welford_id);
-                    transpose_tile(cb_in0_welford_id, 0, input_dst);
-#endif
-
-                    // Re-establish the welford SFPU replay buffer state. When transpose_tile
-                    // takes the unpack-to-DEST fp32 path, transpose_tile calls
-                    // llk_math_transpose_dest, whose math-side init records slots [16, 32) of
-                    // the math-thread replay buffer, clobbering welford's LREG2 / LREG3 portions.
-                    // Without welford_init<WelfordInitMode::PreserveStats>(), welford_update_rows would replay stale
-                    // transpose-dest ops.
-                    // When the unpack-to-DEST fp32 path is inactive, transpose_tile routes
-                    // through SrcA without touching the math-thread replay buffer, so re-init is
-                    // not needed.
-                    if constexpr (welford_unpack_fp32_active) {
-                        welford_init<WelfordInitMode::PreserveStats>();
-                    }
-
-                    uint32_t group_offset = 0;
-                    for (uint32_t g = min_group; g < num_groups; ++g) {
-                        // Start Welford Partial Tile Updates
-                        uint32_t cols_available = tile_width - group_offset;
-                        uint32_t cols_consumed = std::min(cols_available, channels_left);
-
-                        welford_restore_state(mean_dst, g);
-                        welford_update_rows<reciprocal_size>(
-                            input_dst, curr_xy_coord, group_offset, cols_consumed, *p_reciprocal);
-                        welford_save_state(mean_dst, g);
-                        // End Welford Partial Tile Updates
-
-                        channels_left -= cols_consumed;
-                        group_offset += cols_consumed;
-                        curr_xy_coord += cols_consumed;
-
-                        // There are still channels left to be processed for the current group
-                        // This can only be done in the next tile. So we don't do any more groups
-                        // for this tile.
-                        if (channels_left > 0) {
-                            break;
-                        }
-
-                        // Since we know that channels_left is 0, it also means that we have
-                        // processed all the channels for the current group.
-                        // We update the min_group so we never revisit this group again.
-                        ++min_group;
-                        channels_left = num_channels_per_group;
-                        curr_xy_coord = block_xy_coord;
-
-                        // All available columns have been used for this tile, so we don't do any
-                        // more groups for this tile.
-                        if (group_offset == tile_width) {
-                            break;
-                        }
-                    }
-#ifndef TILIZE_IN
-                    cb_in0.pop_front(1);
-                    if constexpr (welford_fp32_alias) {
-                        cb_in0_welford.pop_front(1);
-                    }
-#endif
-                }
-                block_xy_coord += num_channels_per_group;
-            }
+            accumulate_out_block(out_block_h_actual, stats_tile_idx, block_xy_coord);
         }
 
         // Start Statistics Aggregation
@@ -384,6 +432,7 @@ void kernel_main() {
         tile_regs_release();
         cb_ex_partial.push_back(2);
         // End Statistics Aggregation
+#endif
 
         // Start Normalization Factor Calculation
         // Wait for final welford values in cb_ex_global_id
@@ -410,7 +459,7 @@ void kernel_main() {
         cb_ex2pe.wait_front(num_groups);
 
         // Start Final Normalization
-#ifdef TILIZE_IN
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
         uint32_t norm_tile_idx = 0;
 #endif
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -418,6 +467,20 @@ void kernel_main() {
             if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                 out_block_h_actual = out_block_h_last;
             }
+
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+            // Fallback: re-gather + re-tilize this out-block for the normalization read (indexed locally).
+            const uint32_t out_block_tiles = out_block_h_actual * per_core_N;
+            compute_kernel_lib::tilize<
+                per_core_N,
+                cb_in_rm_id,
+                cb_in_id,
+                compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(out_block_h_actual);
+            cb_in.wait_front(out_block_tiles);
+            uint32_t norm_tile_idx = 0;
+#endif
 
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
                 // This indicates the smallest group that is yet to be processed for this block
@@ -626,10 +689,13 @@ void kernel_main() {
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
                 out_block_h_actual);
 #endif
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+            cb_in.pop_front(out_block_tiles);
+#endif
         }
         // End Final Normalization
 
-#ifdef TILIZE_IN
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
         cb_in.pop_front(welford_batch_tiles);
 #endif
 

@@ -31,6 +31,78 @@ uint64_t groupnorm_group_l1_bytes(const GroupNormGroupCbBytes& cbs, bool untiliz
     return bytes;
 }
 
+GroupNormWelfordBlocking groupnorm_welford_choose_blocking(const GroupNormWelfordBlockingParams& p) {
+    // ROW_MAJOR input spills a 2-tile welford state to L1 in the fallback (no c_20 reread here — welford
+    // folds the c_30 output into shared bytes below manually, so groupnorm_group_l1_bytes is called with
+    // untilize_out=false).
+    const uint32_t welford_state_bytes = p.tilize_in ? p.single_tile_size * 2 : 0;
+
+    // Per-core L1 footprint (bytes) with `intake_tiles` resident on c_0/c_29 and per-out-block height `out_bh`.
+    const auto footprint = [&](uint32_t out_bh, uint32_t intake_tiles, uint32_t state_bytes) {
+        const uint64_t outblk_bytes = static_cast<uint64_t>(out_bh) * p.per_core_Nt * p.in_single_tile_size;
+        const uint64_t shared = p.base_shared_cb_bytes + state_bytes + (p.untilize_out ? outblk_bytes : 0);
+        return groupnorm_group_l1_bytes(
+            {.in0 = intake_tiles * p.in_single_tile_size,
+             .out = out_bh * p.per_core_Nt * p.out_single_tile_size,
+             .in = intake_tiles * p.in_single_tile_size,
+             .in_tilized = 0,
+             .x = p.x_cb_bytes,
+             .xmm = p.xmm_cb_bytes,
+             .xmm2 = p.xmm2_cb_bytes,
+             .xmm3 = p.xmm3_cb_bytes,
+             .rm_untilize = 0},
+            /*untilize_out=*/false,
+            shared);
+    };
+    const auto fits = [&](uint64_t bytes) { return bytes * 100 <= p.available_l1 * kGroupnormTilizedL1UsagePercent; };
+    // Both per-core groups live on different cores, so each must fit independently.
+    const auto both_groups_fit = [&](uint32_t nob, uint32_t intake_g1, uint32_t intake_g2, uint32_t state_bytes) {
+        bool ok = fits(footprint(p.block_ht_g1 / nob, intake_g1, state_bytes));
+        if (p.has_group_2) {
+            ok = ok && fits(footprint(p.block_ht_g2 / nob, intake_g2, state_bytes));
+        }
+        return ok;
+    };
+
+    const uint32_t batch_g1 = p.block_ht_g1 * p.per_core_Nt;
+    const uint32_t batch_g2 = p.block_ht_g2 * p.per_core_Nt;
+    const bool whole_batch_fits = both_groups_fit(p.num_out_blocks, batch_g1, batch_g2, 0);
+
+    GroupNormWelfordBlocking r;
+    r.input_fits_l1 = p.tilize_in && !p.reader_repack_output && whole_batch_fits;
+    // A repack config always keeps the whole batch (no fallback wired); a tiled input keeps it resident
+    // only to let the reader run ahead.
+    r.keep_whole_batch = r.input_fits_l1 || p.reader_repack_output || (!p.tilize_in && whole_batch_fits);
+    r.num_out_blocks = p.num_out_blocks;
+    if (r.keep_whole_batch) {
+        return r;
+    }
+
+    // Fallback: a welford out-block spans the full per-core channel width (per_core_Nt), so the requested
+    // num_out_blocks may be too coarse; grow it (snapped to a divisor of every group's block_ht so all
+    // out-blocks are uniform) until a single out-block fits every group.
+    const uint32_t max_nob = p.has_group_2 ? std::min(p.block_ht_g1, p.block_ht_g2) : p.block_ht_g1;
+    const auto divides_all = [&](uint32_t d) {
+        return p.block_ht_g1 % d == 0 && (!p.has_group_2 || p.block_ht_g2 % d == 0);
+    };
+    const auto ceil_to_divisor = [&](uint32_t n) {
+        uint32_t d = std::min(n, max_nob);
+        while (d < max_nob && !divides_all(d)) {
+            d++;
+        }
+        return d;
+    };
+    r.num_out_blocks = ceil_to_divisor(p.num_out_blocks);
+    while (r.num_out_blocks < max_nob && !both_groups_fit(
+                                             r.num_out_blocks,
+                                             (p.block_ht_g1 / r.num_out_blocks) * p.per_core_Nt,
+                                             (p.block_ht_g2 / r.num_out_blocks) * p.per_core_Nt,
+                                             welford_state_bytes)) {
+        r.num_out_blocks = ceil_to_divisor(r.num_out_blocks + 1);
+    }
+    return r;
+}
+
 int get_max_subblock(uint32_t n, uint32_t max_subblock_w) {
     if (n <= max_subblock_w) {
         return n;

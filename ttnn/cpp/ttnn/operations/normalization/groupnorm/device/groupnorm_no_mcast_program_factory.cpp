@@ -446,27 +446,77 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         x_CB_size_group_2 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
         xmm_CB_size_group_2 = single_tile_size * 3;
+        // Welford never uses xmm2 (c_23) and only reuses xmm3 (c_22) as a spare output CB when neither gamma
+        // nor beta is applied (welford_groupnorm.cpp cb_reread_write_out_id); keep them minimal otherwise.
+        const uint32_t welford_xmm3_g1 =
+            (gamma.has_value() || beta.has_value()) ? single_tile_size : out_CB_size_group_1;
+        const uint32_t welford_xmm3_g2 =
+            (gamma.has_value() || beta.has_value()) ? single_tile_size : out_CB_size_group_2;
+        xmm2_CB_size_group_1 = single_tile_size;
+        xmm2_CB_size_group_2 = equal_batches_per_core ? 0 : single_tile_size;
+        xmm3_CB_size_group_1 = welford_xmm3_g1;
+        xmm3_CB_size_group_2 = equal_batches_per_core ? 0 : welford_xmm3_g2;
     }
 
-    // Default CB sizes above assume one out-block at a time; that is not enough for welford+ROW_MAJOR
-    // because the full batch must be tilized once and kept for both passes (c_0/c_29), while output
-    // CBs (c_16/c_30) can stay per out-block.
+    // The default in0/in CB sizes above hold one out-block. The welford+ROW_MAJOR fast path instead keeps
+    // the whole per-core batch tilized in c_0/c_29 across both welford passes; output CBs (c_16/c_30) stay
+    // per out-block. For large ROW_MAJOR (TILIZE_IN) shapes that would exceed L1,
+    // groupnorm_welford_choose_blocking picks a finer num_out_blocks (dividing every group's block_ht) and
+    // the kernel falls back to a per-out-block re-tilize path that spills the 2-tile welford state to L1
+    // (cb_welford_state, c_17). Repack configs have no fallback wired, so they keep the whole-batch path.
     uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
     uint32_t rm_untilize_CB_size_group_2 = in_CB_size_group_2;
+    bool welford_input_fits_l1 = false;
+    uint32_t welford_state_CB_size = 0;
     if (use_welford && (tilize_in || untilize_out)) {
-        const uint32_t welford_batch_tiles_g1 = block_ht_group_1 * per_core_Nt;
-        const uint32_t welford_batch_tiles_g2 = block_ht_group_2 * per_core_Nt;
-        const uint32_t welford_outblk_tiles_g1 = (block_ht_group_1 / num_out_blocks) * per_core_Nt;
-        const uint32_t welford_outblk_tiles_g2 = (block_ht_group_2 / num_out_blocks) * per_core_Nt;
-        in0_CB_size_group_1 = welford_batch_tiles_g1 * in_single_tile_size;
-        in_CB_size_group_1 = welford_batch_tiles_g1 * in_single_tile_size;
-        out_CB_size_group_1 = welford_outblk_tiles_g1 * out_single_tile_size;
-        rm_untilize_CB_size_group_1 = welford_outblk_tiles_g1 * in_single_tile_size;
+        // Height-independent CBs. The welford inter-core reduction CBs (c_9/c_15, c_27) scale with
+        // num_groups_per_core and can dwarf the small-CB allowance, so count them explicitly.
+        uint64_t base_shared_cb_bytes = static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
+        base_shared_cb_bytes += gamma.has_value() ? in5_CB_size : 0;
+        base_shared_cb_bytes += beta.has_value() ? in6_CB_size : 0;
+        base_shared_cb_bytes += input_mask.has_value() ? in_mask_CB_size : 0;
+        base_shared_cb_bytes += reciprocal_CB_size;
+        base_shared_cb_bytes += ex_partial_CB_size + ex_global_CB_size + ex2pe_CB_size + in2_CB_size + in3_CB_size;
+
+        const uint64_t available_l1 =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const auto wf = groupnorm_welford_choose_blocking(
+            {.num_out_blocks = num_out_blocks,
+             .block_ht_g1 = block_ht_group_1,
+             .block_ht_g2 = block_ht_group_2,
+             .has_group_2 = !equal_batches_per_core,
+             .per_core_Nt = per_core_Nt,
+             .in_single_tile_size = in_single_tile_size,
+             .out_single_tile_size = out_single_tile_size,
+             .single_tile_size = single_tile_size,
+             .x_cb_bytes = x_CB_size_group_1,
+             .xmm_cb_bytes = xmm_CB_size_group_1,
+             .xmm2_cb_bytes = xmm2_CB_size_group_1,
+             .xmm3_cb_bytes = xmm3_CB_size_group_1,
+             .base_shared_cb_bytes = base_shared_cb_bytes,
+             .untilize_out = untilize_out,
+             .available_l1 = available_l1,
+             .tilize_in = tilize_in,
+             .reader_repack_output = reader_repack_output});
+        num_out_blocks = wf.num_out_blocks;
+        welford_input_fits_l1 = wf.input_fits_l1;
+
+        const uint32_t outblk_g1 = (block_ht_group_1 / num_out_blocks) * per_core_Nt;
+        const uint32_t intake_g1 = wf.keep_whole_batch ? block_ht_group_1 * per_core_Nt : outblk_g1;
+        in0_CB_size_group_1 = intake_g1 * in_single_tile_size;
+        in_CB_size_group_1 = intake_g1 * in_single_tile_size;
+        out_CB_size_group_1 = outblk_g1 * out_single_tile_size;
+        rm_untilize_CB_size_group_1 = outblk_g1 * in_single_tile_size;
         if (!equal_batches_per_core) {
-            in0_CB_size_group_2 = welford_batch_tiles_g2 * in_single_tile_size;
-            in_CB_size_group_2 = welford_batch_tiles_g2 * in_single_tile_size;
-            out_CB_size_group_2 = welford_outblk_tiles_g2 * out_single_tile_size;
-            rm_untilize_CB_size_group_2 = welford_outblk_tiles_g2 * in_single_tile_size;
+            const uint32_t outblk_g2 = (block_ht_group_2 / num_out_blocks) * per_core_Nt;
+            const uint32_t intake_g2 = wf.keep_whole_batch ? block_ht_group_2 * per_core_Nt : outblk_g2;
+            in0_CB_size_group_2 = intake_g2 * in_single_tile_size;
+            in_CB_size_group_2 = intake_g2 * in_single_tile_size;
+            out_CB_size_group_2 = outblk_g2 * out_single_tile_size;
+            rm_untilize_CB_size_group_2 = outblk_g2 * in_single_tile_size;
+        }
+        if (tilize_in && !wf.keep_whole_batch) {
+            welford_state_CB_size = single_tile_size * 2;  // spilled 2-tile per-group welford state
         }
     }
 
@@ -609,7 +659,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     if (tilize_in) {
         reader_mcast_sender_defines["TILIZE_IN"] = "1";
     }
-    if (input_fits_l1) {
+    if (input_fits_l1 || welford_input_fits_l1) {
         // Fits-in-L1 variant: reader gathers from DRAM only on the first pass; compute tilizes once and
         // keeps the whole group in L1. Without this define the reader re-gathers every pass (re-tilize
         // fallback), used when the tilized-group CB would not fit in L1.
@@ -869,7 +919,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     if (tilize_in) {
         eltwise_binary_defines["TILIZE_IN"] = "1";
     }
-    if (input_fits_l1) {
+    if (input_fits_l1 || welford_input_fits_l1) {
         eltwise_binary_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
@@ -985,6 +1035,13 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
     if (welford_fp32_alias) {
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_19)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // Welford ROW_MAJOR fallback: reload the FP32 per-group welford state (mean + M2) via copy_tile on the
+    // unpack-to-DEST FP32 path so it round-trips losslessly across out-blocks. The compute kernel re-arms
+    // the welford SFPU replay buffer after each reload because this path clobbers it.
+    if (welford_state_CB_size > 0) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_17)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
@@ -1133,6 +1190,33 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                     .buffer_index = static_cast<uint8_t>(in_tilized_cb_index),
                     .data_format = in_data_format,
                     .page_size = in_single_tile_size,
+                }}},
+            });
+        }
+    }
+
+    // Welford ROW_MAJOR fallback: 2-tile scratch (c_17) to spill/reload the per-group welford state
+    // (mean + M2) across the per-out-block re-tilize. Same format as cb_ex_partial (c_8). Mutually
+    // exclusive with the legacy c_17 tilized-group CB above (welford vs legacy).
+    if (welford_state_CB_size > 0) {
+        constexpr uint32_t welford_state_cb_index = tt::CBIndex::c_17;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = welford_state_CB_size,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(welford_state_cb_index),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size,
+            }}},
+        });
+        if (!equal_batches_per_core) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = welford_state_CB_size,
+                .core_ranges = all_cores_group_2,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(welford_state_cb_index),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size,
                 }}},
             });
         }

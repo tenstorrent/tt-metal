@@ -60,4 +60,39 @@ struct GroupNormGroupCbBytes {
 // beta/mask CBs passed in `shared_cb_bytes`.
 uint64_t groupnorm_group_l1_bytes(const GroupNormGroupCbBytes& cbs, bool untilize_out, uint64_t shared_cb_bytes);
 
+// Inputs for the welford ROW_MAJOR/untilize height-blocking decision (shared by the mcast and no_mcast
+// factories). Byte fields (x/xmm/xmm2/xmm3, base_shared_cb_bytes) are per-core CB sizes; block_ht_g* are
+// per-core group heights in tiles. block_ht_g2 is used only when has_group_2 (no-mcast uneven batches).
+struct GroupNormWelfordBlockingParams {
+    uint32_t num_out_blocks = 1;  // requested (user/heuristic) height chunking
+    uint32_t block_ht_g1 = 0;
+    uint32_t block_ht_g2 = 0;
+    bool has_group_2 = false;
+    uint32_t per_core_Nt = 0;
+    uint32_t in_single_tile_size = 0;
+    uint32_t out_single_tile_size = 0;
+    uint32_t single_tile_size = 0;  // intermediate-format tile (used for the spilled welford-state CB)
+    uint32_t x_cb_bytes = 0;
+    uint32_t xmm_cb_bytes = 0;
+    uint32_t xmm2_cb_bytes = 0;
+    uint32_t xmm3_cb_bytes = 0;
+    uint64_t base_shared_cb_bytes = 0;  // scalar/reduction/gamma/beta/mask CBs that don't scale with height
+    bool untilize_out = false;
+    uint64_t available_l1 = 0;
+    bool tilize_in = false;
+    bool reader_repack_output = false;
+};
+
+struct GroupNormWelfordBlocking {
+    bool keep_whole_batch = true;  // true: whole batch resident in c_0/c_29 (fast); false: per-out-block fallback
+    bool input_fits_l1 = false;    // welford fast path chosen for ROW_MAJOR input (drives the INPUT_FITS_L1 define)
+    uint32_t num_out_blocks = 1;   // possibly grown (finer, uniform height blocking) so a fallback out-block fits
+};
+
+// Decide welford height-blocking for ROW_MAJOR input / ROW_MAJOR output. Keeps the whole per-core batch
+// resident in c_0/c_29 (fast path) when it fits L1 (or is forced, e.g. repack). Otherwise selects the
+// smallest num_out_blocks that divides every group's block_ht and makes one out-block fit L1 (the welford
+// re-tilize fallback, which for ROW_MAJOR input also spills the 2-tile welford state to L1).
+GroupNormWelfordBlocking groupnorm_welford_choose_blocking(const GroupNormWelfordBlockingParams& p);
+
 }  // namespace ttnn::prim
