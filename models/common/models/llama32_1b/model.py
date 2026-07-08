@@ -1131,10 +1131,21 @@ class EagerLlama32_1BExecutor:
 class TracedLlama32_1BExecutor:
     """Thin wrapper: passes Llama32_1B model to TracedLLMExecutor."""
 
-    def __init__(self, model: Llama32_1BTransformer1D, mesh_device: ttnn.MeshDevice, model_args=None):
+    def __init__(
+        self,
+        model: Llama32_1BTransformer1D,
+        mesh_device: ttnn.MeshDevice,
+        model_args=None,
+        ondevice_decode_loop: bool = False,
+    ):
         if model_args is not None:
             model.model_args = model_args
-        self._engine = TracedLLMExecutor(model, mesh_device, iter_named_modules=_iter_llama_executor_named_modules)
+        self._engine = TracedLLMExecutor(
+            model,
+            mesh_device,
+            iter_named_modules=_iter_llama_executor_named_modules,
+            ondevice_decode_loop=ondevice_decode_loop,
+        )
 
     @property
     def model(self):
