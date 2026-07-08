@@ -306,11 +306,34 @@ def main():
         print("[kv_cache] model built; weights on device", flush=True)
 
         if args.disable_sliding_window:
+            # Also allocate persistent K/V buffers for the layers that were
+            # originally sliding — the ring_joint SDPA op requires them.
             n_disabled = 0
+            prefill_sp = mesh_config.prefill.sp
             for decoder_layer in model.layers:
                 attn = decoder_layer.self_attn
+                was_sliding = attn.use_sliding_window
                 attn.use_sliding_window = False
                 object.__setattr__(attn.config, "sliding_window", None)
+                if was_sliding and prefill_sp > 1 and attn.persistent_k is None:
+                    seq_total = attn.config.max_seq_len * prefill_sp
+                    num_kv_heads_local = mesh_config.shard_size(attn.config.num_kv_heads)
+                    attn.persistent_k = ttnn.as_tensor(
+                        torch.zeros(1, num_kv_heads_local, seq_total, attn.config.head_dim),
+                        device=mesh,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat8_b,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    attn.persistent_v = ttnn.as_tensor(
+                        torch.zeros(1, num_kv_heads_local, seq_total, attn.config.head_dim),
+                        device=mesh,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat8_b,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
                 n_disabled += 1
             print(f"[kv_cache] DIAGNOSTIC: disabled sliding window on {n_disabled} layer(s)", flush=True)
 
