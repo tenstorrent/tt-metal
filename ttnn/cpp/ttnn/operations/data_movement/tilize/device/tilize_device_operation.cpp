@@ -27,6 +27,15 @@ bool can_use_sharded_optimized_factories(
         return false;
     }
 
+    // The optimized factory aliases CBs directly to the input and output shard buffers (zero-copy).
+    // CBs can only reside in L1, so any DRAM-backed input or output is always incompatible.
+    if (input_tensor.memory_config().buffer_type() != BufferType::L1) {
+        return false;
+    }
+    if (operation_attributes.output_mem_config.buffer_type() != BufferType::L1) {
+        return false;
+    }
+
     auto memory_layout = input_tensor.memory_config().memory_layout();
     if (memory_layout != TensorMemoryLayout::HEIGHT_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED &&
         memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
@@ -44,12 +53,9 @@ bool can_use_sharded_optimized_factories(
         if (operation_attributes.output_mem_config.shard_spec().value().shape[0] % tt::constants::TILE_HEIGHT != 0) {
             return false;
         }
-        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-            return false;
-        }
     }
 
-    // HEIGHT_SHARDED supports both same-layout sharded output and INTERLEAVED (L1/DRAM) output.
+    // HEIGHT_SHARDED supports both same-layout sharded output and INTERLEAVED L1 output.
     // The INTERLEAVED output path uses a contiguous tile-start-id assignment, which is only
     // correct for ROW_MAJOR shard orientation (shards are ordered row-wise matching the output).
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -62,22 +68,14 @@ bool can_use_sharded_optimized_factories(
             if (shard.orientation != ShardOrientation::ROW_MAJOR) {
                 return false;
             }
-            if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
-                // DRAM interleaved output always requires NoC writes regardless of the factory used,
-                // so there is no performance benefit from the optimized path. Fall back to the default factory.
-                return false;
-            }
         } else if (out_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
             return false;  // Only same-layout or L1 INTERLEAVED output supported for HEIGHT_SHARDED.
         }
     }
 
     if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED || memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
-        // WIDTH_SHARDED and BLOCK_SHARDED only support same-layout sharded L1 output.
+        // WIDTH_SHARDED and BLOCK_SHARDED only support same-layout sharded output.
         if (operation_attributes.output_mem_config.memory_layout() != memory_layout) {
-            return false;
-        }
-        if (operation_attributes.output_mem_config.buffer_type() == BufferType::DRAM) {
             return false;
         }
     }
