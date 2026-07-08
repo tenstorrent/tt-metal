@@ -126,8 +126,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     // --- Per-core runtime args ---
     // Reader per-core: named (start_id, num_tiles) + id_per_dim runtime varargs.
     // Writer per-core: named (num_pages, start_id).
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     uint32_t num_tiles_written = 0;
@@ -139,9 +139,11 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            reader_node_args.push_back({.node = core, .args = {{"start_id", 0}, {"num_tiles", 0}}});
+            reader_node_args["start_id"][core] = 0;
+            reader_node_args["num_tiles"][core] = 0;
             reader_run_advanced.runtime_varargs.emplace(core, std::vector<uint32_t>(num_dims, 0));
-            writer_node_args.push_back({.node = core, .args = {{"num_pages", 0}, {"start_id", 0}}});
+            writer_node_args["num_pages"][core] = 0;
+            writer_node_args["start_id"][core] = 0;
             continue;
         }
 
@@ -156,11 +158,12 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        reader_node_args.push_back({.node = core, .args = {{"start_id", start_id}, {"num_tiles", num_tiles_per_core}}});
+        reader_node_args["start_id"][core] = start_id;
+        reader_node_args["num_tiles"][core] = num_tiles_per_core;
         reader_run_advanced.runtime_varargs.emplace(core, std::move(id_per_dim));
 
-        writer_node_args.push_back(
-            {.node = core, .args = {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_written}}});
+        writer_node_args["num_pages"][core] = num_tiles_per_core;
+        writer_node_args["start_id"][core] = num_tiles_written;
 
         num_tiles_written += num_tiles_per_core;
     }

@@ -170,20 +170,18 @@ static vector<uint32_t> run_mxfp8_typecast(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_buffer->address()},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_dram_stride}}}},
+                {{"src_addr", {{node, src_buffer->address()}}},
+                 {"src_bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}},
+                 {"dram_page_stride", {{node, src_dram_stride}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dst_buffer->address()},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_dram_stride}}}},
+                {{"dst_addr", {{node, dst_buffer->address()}}},
+                 {"dst_bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}},
+                 {"dram_page_stride", {{node, dst_dram_stride}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

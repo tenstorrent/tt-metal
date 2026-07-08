@@ -287,30 +287,18 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"Mt", Mt},
-                    {"Kt", Kt},
-                    {"Nt", Nt},
-                    {"MtKt", MtKt},
-                    {"KtNt", KtNt},
-                    {"batch", B},
-                    {"bcast_B", uint32_t(bcast_batch)},
-                    {"output_tile_start_id", num_tiles_written},
-                    {"num_output_tiles", num_output_tiles_per_core},
-                    {"MtNt", MtNt},
-                },
-        });
-        writer_run_args.runtime_arg_values.push_back(ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_pages", num_output_tiles_per_core},
-                    {"start_id", num_tiles_written},
-                },
-        });
+        reader_run_args.runtime_arg_values["Mt"][core] = Mt;
+        reader_run_args.runtime_arg_values["Kt"][core] = Kt;
+        reader_run_args.runtime_arg_values["Nt"][core] = Nt;
+        reader_run_args.runtime_arg_values["MtKt"][core] = MtKt;
+        reader_run_args.runtime_arg_values["KtNt"][core] = KtNt;
+        reader_run_args.runtime_arg_values["batch"][core] = B;
+        reader_run_args.runtime_arg_values["bcast_B"][core] = uint32_t(bcast_batch);
+        reader_run_args.runtime_arg_values["output_tile_start_id"][core] = num_tiles_written;
+        reader_run_args.runtime_arg_values["num_output_tiles"][core] = num_output_tiles_per_core;
+        reader_run_args.runtime_arg_values["MtNt"][core] = MtNt;
+        writer_run_args.runtime_arg_values["num_pages"][core] = num_output_tiles_per_core;
+        writer_run_args.runtime_arg_values["start_id"][core] = num_tiles_written;
         num_tiles_written += num_output_tiles_per_core;
     }
 

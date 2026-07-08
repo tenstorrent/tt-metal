@@ -107,11 +107,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     auto make_kernel_run_params = [&]() {
         return experimental::ProgramRunArgs::KernelRunArgs{
             .runtime_arg_values =
-                {{node,
-                  {{"signal_address", signal_address},
-                   {"dram_dst_address", dram_address},
-                   {"dram_dst_bank_id", dram_channel},
-                   {"l1_result_addr", l1_result_addr}}}},
+                {{"signal_address", {{node, signal_address}}},
+                 {"dram_dst_address", {{node, dram_address}}},
+                 {"dram_dst_bank_id", {{node, dram_channel}}},
+                 {"l1_result_addr", {{node, l1_result_addr}}}},
         };
     };
 
@@ -342,7 +341,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = COMPUTE_KERNEL,
-        .runtime_arg_values = {{node, {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}}},
+        .runtime_arg_values =
+            {{"l1_result_addr", {{node, l1_result_addr}}}, {"signal_address", {{node, signal_address}}}},
     }};
     experimental::SetProgramRunArgs(program, params);
 

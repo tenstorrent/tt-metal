@@ -341,24 +341,20 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         int gi = group_index_of(core);
         TT_FATAL(gi >= 0, "tilize block: core not covered by any work-unit group");
 
-        reader_runs[gi].runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
-                {"pad_value", 0u},
-                {"width_size", TILE_WIDTH * a.element_size() * single_block_size_row_arg},
-                {"start_row_id", start_row_id},
-                {"start_column_id", start_column_id},
-                {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg},
-                {"sub_block_width_size", TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg},
-                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}}});
+        reader_runs[gi].runtime_arg_values["pad_value"][core] = 0u;
+        reader_runs[gi].runtime_arg_values["width_size"][core] =
+            TILE_WIDTH * a.element_size() * single_block_size_row_arg;
+        reader_runs[gi].runtime_arg_values["start_row_id"][core] = start_row_id;
+        reader_runs[gi].runtime_arg_values["start_column_id"][core] = start_column_id;
+        reader_runs[gi].runtime_arg_values["single_block_size_row_arg"][core] = single_block_size_row_arg;
+        reader_runs[gi].runtime_arg_values["single_block_size_col_arg"][core] = single_block_size_col_arg;
+        reader_runs[gi].runtime_arg_values["sub_block_width_size"][core] =
+            TILE_WIDTH * a.element_size() * single_sub_block_size_row_arg;
+        reader_runs[gi].runtime_arg_values["single_sub_block_size_row_arg"][core] = single_sub_block_size_row_arg;
 
-        writer_runs[gi].runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
-                {"start_id", tile_start_id},
-                {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg}}});
+        writer_runs[gi].runtime_arg_values["start_id"][core] = tile_start_id;
+        writer_runs[gi].runtime_arg_values["single_block_size_row_arg"][core] = single_block_size_row_arg;
+        writer_runs[gi].runtime_arg_values["single_block_size_col_arg"][core] = single_block_size_col_arg;
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
         start_column_id = end_column_id % row_size_bytes;

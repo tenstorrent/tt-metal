@@ -506,15 +506,18 @@ void run_single_core_reduce_program(
     }
 
     experimental::ProgramRunArgs params;
+    experimental::Table<std::string, experimental::Table<experimental::NodeCoord, uint32_t>> reader_rta;
+    for (const auto& [name, value] : reader_named_rtas) {
+        reader_rta[name][node] = value;
+    }
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values =
-                {{node, experimental::ProgramRunArgs::KernelRunArgs::RuntimeArgValues(reader_named_rtas)}},
+            .runtime_arg_values = std::move(reader_rta),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", writer_num_tiles}}}},
+            .runtime_arg_values = {{"num_tiles", {{node, writer_num_tiles}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

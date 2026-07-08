@@ -104,7 +104,7 @@ void set_args(Program& program, uint32_t should_trip) {
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = PRODUCER,
-            .runtime_arg_values = {{.node = node, .args = {{"should_trip", should_trip}, {"zero_bytes", kZeroBytes}}}},
+            .runtime_arg_values = {{"should_trip", {{node, should_trip}}}, {"zero_bytes", {{node, kZeroBytes}}}},
         },
     };
     experimental::SetProgramRunArgs(program, params);

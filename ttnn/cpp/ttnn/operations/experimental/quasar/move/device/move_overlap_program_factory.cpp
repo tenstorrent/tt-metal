@@ -305,8 +305,9 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             vals.insert({"aligned_page_size", aligned_page_size});
         }
 
-        reader_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(vals)});
+        for (const auto& [name, value] : vals) {
+            reader_run_args.runtime_arg_values[name][core] = value;
+        }
 
         m2::KernelRunArgs::RuntimeArgValues writer_vals = {
             {"start_id", pages_handled_per_core},
@@ -315,8 +316,9 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
         if (!tilized) {
             writer_vals.insert({"aligned_page_size", aligned_page_size});
         }
-        writer_run_args.runtime_arg_values.push_back(
-            m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(writer_vals)});
+        for (const auto& [name, value] : writer_vals) {
+            writer_run_args.runtime_arg_values[name][core] = value;
+        }
 
         pages_handled_per_core += num_pages_per_core;
     }

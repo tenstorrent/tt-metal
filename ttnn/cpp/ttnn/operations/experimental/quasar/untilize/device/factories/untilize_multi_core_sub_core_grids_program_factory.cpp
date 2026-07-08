@@ -162,20 +162,17 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
     uint32_t ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
 
     for (const auto& core : cores) {
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core, .args = {{"num_pages", ntiles_per_core}, {"start_id", tile_start_id}}});
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args = {
-                {"num_sticks", nsticks_per_core},
-                {"num_tiles_per_core", ntiles_per_core},
-                {"tile_width_size", tile_width_size},
-                {"start_stick_id", 0u},
-                {"offset_within_stick", offset_within_stick}}});
+        reader_node_args["num_pages"][core] = ntiles_per_core;
+        reader_node_args["start_id"][core] = tile_start_id;
+        writer_node_args["num_sticks"][core] = nsticks_per_core;
+        writer_node_args["num_tiles_per_core"][core] = ntiles_per_core;
+        writer_node_args["tile_width_size"][core] = tile_width_size;
+        writer_node_args["start_stick_id"][core] = 0u;
+        writer_node_args["offset_within_stick"][core] = offset_within_stick;
         tile_start_id += ntiles_per_core;
         offset_within_stick += ntiles_per_core * tile_width_size;
     }

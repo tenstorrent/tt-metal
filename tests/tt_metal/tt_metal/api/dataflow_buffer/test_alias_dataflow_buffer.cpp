@@ -240,11 +240,10 @@ void run_alias_dfb_program(
     using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
         return RuntimeArgValues{
-            {node,
-             {{"chunk_offset_a", 0u},
-              {"chunk_offset_b", 0u},
-              {"entries_per_core_a", epc_a},
-              {"entries_per_core_b", epc_b}}}};
+            {"chunk_offset_a", {{node, 0u}}},
+            {"chunk_offset_b", {{node, 0u}}},
+            {"entries_per_core_a", {{node, epc_a}}},
+            {"entries_per_core_b", {{node, epc_b}}}};
     };
 
     ProgramRunArgs run_params;
@@ -617,11 +616,10 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
         return RuntimeArgValues{
-            {node,
-             {{"chunk_offset_a", 0u},
-              {"chunk_offset_b", 0u},
-              {"entries_per_core_a", kNumEntries},
-              {"entries_per_core_b", kNumEntries}}}};
+            {"chunk_offset_a", {{node, 0u}}},
+            {"chunk_offset_b", {{node, 0u}}},
+            {"entries_per_core_a", {{node, kNumEntries}}},
+            {"entries_per_core_b", {{node, kNumEntries}}}};
     };
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {
@@ -675,11 +673,10 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
     using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
         return RuntimeArgValues{
-            {node,
-             {{"chunk_offset_a", 0u},
-              {"chunk_offset_b", 0u},
-              {"entries_per_core_a", kNumEntries},
-              {"entries_per_core_b", kNumEntries}}}};
+            {"chunk_offset_a", {{node, 0u}}},
+            {"chunk_offset_b", {{node, 0u}}},
+            {"entries_per_core_a", {{node, kNumEntries}}},
+            {"entries_per_core_b", {{node, kNumEntries}}}};
     };
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {

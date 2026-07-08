@@ -187,8 +187,6 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
 
     KernelRunArgs reader_run{.kernel = CN_READER};
     KernelRunArgs writer_run{.kernel = CN_WRITER};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
 
     for (uint32_t i = 0, num_pages_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -204,29 +202,17 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
         uint32_t n = curr_c % N;
         uint32_t start_tile = num_pages_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"N", N},
-                    {"C", C},
-                    {"HtWt", HtWt},
-                    {"batch_step", batch_step},
-                    {"channel_step", channel_step},
-                    {"num_pages", num_pages_per_core},
-                    {"start_id", start_tile},
-                    {"hw", hw},
-                    {"n", n},
-                },
-        });
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_pages", num_pages_per_core},
-                    {"start_id", num_pages_read},
-                },
-        });
+        reader_run.runtime_arg_values["N"][core] = N;
+        reader_run.runtime_arg_values["C"][core] = C;
+        reader_run.runtime_arg_values["HtWt"][core] = HtWt;
+        reader_run.runtime_arg_values["batch_step"][core] = batch_step;
+        reader_run.runtime_arg_values["channel_step"][core] = channel_step;
+        reader_run.runtime_arg_values["num_pages"][core] = num_pages_per_core;
+        reader_run.runtime_arg_values["start_id"][core] = start_tile;
+        reader_run.runtime_arg_values["hw"][core] = hw;
+        reader_run.runtime_arg_values["n"][core] = n;
+        writer_run.runtime_arg_values["num_pages"][core] = num_pages_per_core;
+        writer_run.runtime_arg_values["start_id"][core] = num_pages_read;
 
         num_pages_read += num_pages_per_core;
     }

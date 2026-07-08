@@ -400,16 +400,15 @@ void run_single_core_unary_broadcast_quasar(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src_addr", src_dram_addr},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", 1u},
-                   {"reader_only", 0u}}}},
+                {{"src_addr", {{node, src_dram_addr}}},
+                 {"src_dram_bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}},
+                 {"ublock_size_tiles", {{node, 1u}}},
+                 {"reader_only", {{node, 0u}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tiles}}}},
+            .runtime_arg_values = {{"num_tiles", {{node, num_tiles}}}},
         },
     };
     params.tensor_args = {{OUT_TENSOR, experimental::ProgramRunArgs::TensorArgument{out_tensor}}};

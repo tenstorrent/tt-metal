@@ -209,41 +209,37 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
     const NodeCoord node{0, 0};
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
-    reader_run.runtime_arg_values.push_back(
-        {node,
-         {{"num_unpadded_W", num_unpadded_W},
-          {"num_total_W", num_total_W},
-          {"num_unpadded_Z", num_unpadded_Z},
-          {"num_total_Z", num_total_Z},
-          {"num_unpadded_Y", num_unpadded_Y},
-          {"num_total_Y", num_total_Y},
-          {"unpadded_X_nbytes", unpadded_row_size_nbytes},
-          {"padded_X_nbytes", padded_row_size_nbytes},
-          {"padded_X_diff_nbytes", padded_row_diff_size_nbytes},
-          {"pad_value_packed", packed_pad_value},
-          {"start_src_stick_id", uint32_t{0}},
-          {"start_src_stick_wi", uint32_t{0}},
-          {"start_src_stick_offset", uint32_t{0}},
-          {"num_local_Y", num_local_Y},
-          {"num_local_unpadded_Y", num_local_unpadded_Y},
-          {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
-          {"num_local_W", num_local_W}}});
+    reader_run.runtime_arg_values["num_unpadded_W"][node] = num_unpadded_W;
+    reader_run.runtime_arg_values["num_total_W"][node] = num_total_W;
+    reader_run.runtime_arg_values["num_unpadded_Z"][node] = num_unpadded_Z;
+    reader_run.runtime_arg_values["num_total_Z"][node] = num_total_Z;
+    reader_run.runtime_arg_values["num_unpadded_Y"][node] = num_unpadded_Y;
+    reader_run.runtime_arg_values["num_total_Y"][node] = num_total_Y;
+    reader_run.runtime_arg_values["unpadded_X_nbytes"][node] = unpadded_row_size_nbytes;
+    reader_run.runtime_arg_values["padded_X_nbytes"][node] = padded_row_size_nbytes;
+    reader_run.runtime_arg_values["padded_X_diff_nbytes"][node] = padded_row_diff_size_nbytes;
+    reader_run.runtime_arg_values["pad_value_packed"][node] = packed_pad_value;
+    reader_run.runtime_arg_values["start_src_stick_id"][node] = uint32_t{0};
+    reader_run.runtime_arg_values["start_src_stick_wi"][node] = uint32_t{0};
+    reader_run.runtime_arg_values["start_src_stick_offset"][node] = uint32_t{0};
+    reader_run.runtime_arg_values["num_local_Y"][node] = num_local_Y;
+    reader_run.runtime_arg_values["num_local_unpadded_Y"][node] = num_local_unpadded_Y;
+    reader_run.runtime_arg_values["full_unpadded_X_nbytes"][node] = unpadded_row_size_nbytes;
+    reader_run.runtime_arg_values["num_local_W"][node] = num_local_W;
 
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    writer_run.runtime_arg_values.push_back(
-        {node,
-         {{"num_total_W", num_total_W},
-          {"num_total_Z", num_total_Z},
-          {"num_total_Y", num_total_Y},
-          {"num_total_X", num_total_X},
-          {"padded_X_nbytes", padded_row_size_nbytes},
-          {"start_dst_stick_id", uint32_t{0}},
-          {"start_dst_stick_wi", uint32_t{0}},
-          {"num_local_Y", num_local_Y},
-          {"num_local_unpadded_Y", num_local_unpadded_Y},
-          {"full_padded_X_nbytes", padded_row_size_nbytes},
-          {"dst_stick_offset", uint32_t{0}},
-          {"num_local_W", num_local_W}}});
+    writer_run.runtime_arg_values["num_total_W"][node] = num_total_W;
+    writer_run.runtime_arg_values["num_total_Z"][node] = num_total_Z;
+    writer_run.runtime_arg_values["num_total_Y"][node] = num_total_Y;
+    writer_run.runtime_arg_values["num_total_X"][node] = num_total_X;
+    writer_run.runtime_arg_values["padded_X_nbytes"][node] = padded_row_size_nbytes;
+    writer_run.runtime_arg_values["start_dst_stick_id"][node] = uint32_t{0};
+    writer_run.runtime_arg_values["start_dst_stick_wi"][node] = uint32_t{0};
+    writer_run.runtime_arg_values["num_local_Y"][node] = num_local_Y;
+    writer_run.runtime_arg_values["num_local_unpadded_Y"][node] = num_local_unpadded_Y;
+    writer_run.runtime_arg_values["full_padded_X_nbytes"][node] = padded_row_size_nbytes;
+    writer_run.runtime_arg_values["dst_stick_offset"][node] = uint32_t{0};
+    writer_run.runtime_arg_values["num_local_W"][node] = num_local_W;
 
     WorkUnitSpec wu{
         .name = "pad_rm_reader_writer_single_core",

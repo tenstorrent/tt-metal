@@ -80,7 +80,7 @@ protected:
             return experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = kernel_name,
                 .runtime_arg_values =
-                    {{core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+                    {{"l1_counter_addr", {{core, l1_unreserved_base}}}, {"increment_times", {{core, iterations}}}},
             };
         };
 

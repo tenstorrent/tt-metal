@@ -133,20 +133,20 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER,
             .runtime_arg_values =
-                {{node,
-                  {{"dram_addr", dram_src_addr},
-                   {"l1_addr", buf_a_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+                {{"dram_addr", {{node, dram_src_addr}}},
+                 {"l1_addr", {{node, buf_a_addr}}},
+                 {"num_elements", {{node, num_elements}}},
+                 {"dram_bank_id", {{node, 0u}}}},
+        },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_TRANSFORM},
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER,
             .runtime_arg_values =
-                {{node,
-                  {{"dram_addr", dram_dst_addr},
-                   {"l1_addr", buf_b_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+                {{"dram_addr", {{node, dram_dst_addr}}},
+                 {"l1_addr", {{node, buf_b_addr}}},
+                 {"num_elements", {{node, num_elements}}},
+                 {"dram_bank_id", {{node, 0u}}}},
+        },
     };
     experimental::SetProgramRunArgs(program, params);
 
@@ -341,29 +341,29 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_0,
             .runtime_arg_values =
-                {{node_0,
-                  {{"dram_addr", dram_mid_addr},
-                   {"l1_addr", buf_b_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u},
-                   {"remote_noc_x", static_cast<uint32_t>(core_1_virtual.x)},
-                   {"remote_noc_y", static_cast<uint32_t>(core_1_virtual.y)}}}}},
+                {{"dram_addr", {{node_0, dram_mid_addr}}},
+                 {"l1_addr", {{node_0, buf_b_addr}}},
+                 {"num_elements", {{node_0, num_elements}}},
+                 {"dram_bank_id", {{node_0, 0u}}},
+                 {"remote_noc_x", {{node_0, static_cast<uint32_t>(core_1_virtual.x)}}},
+                 {"remote_noc_y", {{node_0, static_cast<uint32_t>(core_1_virtual.y)}}}},
+        },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_READER_1,
             .runtime_arg_values =
-                {{node_1,
-                  {{"dram_addr", dram_mid_addr},
-                   {"l1_addr", buf_a_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+                {{"dram_addr", {{node_1, dram_mid_addr}}},
+                 {"l1_addr", {{node_1, buf_a_addr}}},
+                 {"num_elements", {{node_1, num_elements}}},
+                 {"dram_bank_id", {{node_1, 0u}}}},
+        },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DM_WRITER_1,
             .runtime_arg_values =
-                {{node_1,
-                  {{"dram_addr", dram_dst_addr},
-                   {"l1_addr", buf_b_addr},
-                   {"num_elements", num_elements},
-                   {"dram_bank_id", 0u}}}}},
+                {{"dram_addr", {{node_1, dram_dst_addr}}},
+                 {"l1_addr", {{node_1, buf_b_addr}}},
+                 {"num_elements", {{node_1, num_elements}}},
+                 {"dram_bank_id", {{node_1, 0u}}}},
+        },
     };
     experimental::SetProgramRunArgs(program, params);
 

@@ -153,20 +153,18 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs reader_run{.kernel = reader_spec.unique_id};
-    reader_run.runtime_arg_values.push_back(
-        {.node = test_config.core_coord,
-         .args = {
-             {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-             {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction}}});
+    reader_run.runtime_arg_values["num_of_transactions"][test_config.core_coord] =
+        (uint32_t)test_config.num_of_transactions;
+    reader_run.runtime_arg_values["pages_per_transaction"][test_config.core_coord] =
+        (uint32_t)test_config.pages_per_transaction;
     run_params.kernel_run_args.push_back(reader_run);
 
     ProgramRunArgs::KernelRunArgs writer_run{.kernel = writer_spec.unique_id};
-    writer_run.runtime_arg_values.push_back(
-        {.node = test_config.core_coord,
-         .args = {
-             {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
-             {"pages_per_transaction", (uint32_t)test_config.pages_per_transaction},
-             {"dram_addr", (uint32_t)output_dram_address}}});
+    writer_run.runtime_arg_values["num_of_transactions"][test_config.core_coord] =
+        (uint32_t)test_config.num_of_transactions;
+    writer_run.runtime_arg_values["pages_per_transaction"][test_config.core_coord] =
+        (uint32_t)test_config.pages_per_transaction;
+    writer_run.runtime_arg_values["dram_addr"][test_config.core_coord] = (uint32_t)output_dram_address;
     run_params.kernel_run_args.push_back(writer_run);
     SetProgramRunArgs(program, run_params);
 

@@ -416,40 +416,37 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreProgramFactor
                 }
 
                 const NodeCoord node = core;
-                reader_run.runtime_arg_values.push_back(
-                    {node,
-                     {{"num_unpadded_W", static_cast<uint32_t>(a.padded_shape()[0])},
-                      {"num_total_W", static_cast<uint32_t>(output_shape[0])},
-                      {"num_unpadded_Z", static_cast<uint32_t>(a.padded_shape()[1])},
-                      {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
-                      {"num_unpadded_Y", static_cast<uint32_t>(a.padded_shape()[2])},
-                      {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
-                      {"unpadded_X_nbytes", curr_stick_size_nbytes},
-                      {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
-                      {"padded_X_diff_nbytes", static_cast<uint32_t>(curr_stick_diff_nbytes)},
-                      {"pad_value_packed", packed_pad_value},
-                      {"start_src_stick_id", start_src_stick_id},
-                      {"start_src_stick_wi", start_src_stick_wi},
-                      {"start_src_stick_offset", start_src_stick_wi * a.element_size()},
-                      {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
-                      {"num_local_unpadded_Y", num_local_unpadded_nsticks},
-                      {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
-                      {"num_local_W", nbatch_per_core_h}}});
+                reader_run.runtime_arg_values["num_unpadded_W"][node] = static_cast<uint32_t>(a.padded_shape()[0]);
+                reader_run.runtime_arg_values["num_total_W"][node] = static_cast<uint32_t>(output_shape[0]);
+                reader_run.runtime_arg_values["num_unpadded_Z"][node] = static_cast<uint32_t>(a.padded_shape()[1]);
+                reader_run.runtime_arg_values["num_total_Z"][node] = static_cast<uint32_t>(output_shape[1]);
+                reader_run.runtime_arg_values["num_unpadded_Y"][node] = static_cast<uint32_t>(a.padded_shape()[2]);
+                reader_run.runtime_arg_values["num_total_Y"][node] = static_cast<uint32_t>(output_shape[2]);
+                reader_run.runtime_arg_values["unpadded_X_nbytes"][node] = curr_stick_size_nbytes;
+                reader_run.runtime_arg_values["padded_X_nbytes"][node] = static_cast<uint32_t>(dst_nbytes_per_core_w);
+                reader_run.runtime_arg_values["padded_X_diff_nbytes"][node] =
+                    static_cast<uint32_t>(curr_stick_diff_nbytes);
+                reader_run.runtime_arg_values["pad_value_packed"][node] = packed_pad_value;
+                reader_run.runtime_arg_values["start_src_stick_id"][node] = start_src_stick_id;
+                reader_run.runtime_arg_values["start_src_stick_wi"][node] = start_src_stick_wi;
+                reader_run.runtime_arg_values["start_src_stick_offset"][node] = start_src_stick_wi * a.element_size();
+                reader_run.runtime_arg_values["num_local_Y"][node] = static_cast<uint32_t>(local_nsticks);
+                reader_run.runtime_arg_values["num_local_unpadded_Y"][node] = num_local_unpadded_nsticks;
+                reader_run.runtime_arg_values["full_unpadded_X_nbytes"][node] = unpadded_row_size_nbytes;
+                reader_run.runtime_arg_values["num_local_W"][node] = nbatch_per_core_h;
 
-                writer_run.runtime_arg_values.push_back(
-                    {node,
-                     {{"num_total_W", static_cast<uint32_t>(output_shape[0])},
-                      {"num_total_Z", static_cast<uint32_t>(output_shape[1])},
-                      {"num_total_Y", static_cast<uint32_t>(output_shape[2])},
-                      {"num_total_X", static_cast<uint32_t>(output_shape[3])},
-                      {"padded_X_nbytes", static_cast<uint32_t>(dst_nbytes_per_core_w)},
-                      {"start_dst_stick_id", start_dst_stick_id},
-                      {"start_dst_stick_wi", start_dst_stick_wi},
-                      {"num_local_Y", static_cast<uint32_t>(local_nsticks)},
-                      {"num_local_unpadded_Y", num_local_unpadded_nsticks},
-                      {"full_padded_X_nbytes", padded_row_size_nbytes},
-                      {"dst_stick_offset", start_dst_stick_wi * output.element_size()},
-                      {"num_local_W", nbatch_per_core_h}}});
+                writer_run.runtime_arg_values["num_total_W"][node] = static_cast<uint32_t>(output_shape[0]);
+                writer_run.runtime_arg_values["num_total_Z"][node] = static_cast<uint32_t>(output_shape[1]);
+                writer_run.runtime_arg_values["num_total_Y"][node] = static_cast<uint32_t>(output_shape[2]);
+                writer_run.runtime_arg_values["num_total_X"][node] = static_cast<uint32_t>(output_shape[3]);
+                writer_run.runtime_arg_values["padded_X_nbytes"][node] = static_cast<uint32_t>(dst_nbytes_per_core_w);
+                writer_run.runtime_arg_values["start_dst_stick_id"][node] = start_dst_stick_id;
+                writer_run.runtime_arg_values["start_dst_stick_wi"][node] = start_dst_stick_wi;
+                writer_run.runtime_arg_values["num_local_Y"][node] = static_cast<uint32_t>(local_nsticks);
+                writer_run.runtime_arg_values["num_local_unpadded_Y"][node] = num_local_unpadded_nsticks;
+                writer_run.runtime_arg_values["full_padded_X_nbytes"][node] = padded_row_size_nbytes;
+                writer_run.runtime_arg_values["dst_stick_offset"][node] = start_dst_stick_wi * output.element_size();
+                writer_run.runtime_arg_values["num_local_W"][node] = nbatch_per_core_h;
 
                 start_src_stick_wi += ntiles_per_core_w * TILE_WIDTH;
                 start_dst_stick_wi += ntiles_per_core_w * TILE_WIDTH;

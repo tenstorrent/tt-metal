@@ -140,8 +140,6 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
 
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -161,19 +159,15 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         }
 
         const NodeCoord node = core;
-        reader_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core_read", num_sticks_per_core_read},
-              {"num_read_per_barrier", num_read_per_barrier},
-              {"start_id", curr_sticks_read},
-              {"curr_c", curr_c},
-              {"curr_h", curr_h},
-              {"curr_n", curr_n}}});
-        writer_run.runtime_arg_values.push_back(
-            {node,
-             {{"num_sticks_per_core_read", num_sticks_per_core_read},
-              {"num_read_per_barrier", num_read_per_barrier},
-              {"start_id", curr_sticks_write}}});
+        reader_run.runtime_arg_values["num_sticks_per_core_read"][node] = num_sticks_per_core_read;
+        reader_run.runtime_arg_values["num_read_per_barrier"][node] = num_read_per_barrier;
+        reader_run.runtime_arg_values["start_id"][node] = curr_sticks_read;
+        reader_run.runtime_arg_values["curr_c"][node] = curr_c;
+        reader_run.runtime_arg_values["curr_h"][node] = curr_h;
+        reader_run.runtime_arg_values["curr_n"][node] = curr_n;
+        writer_run.runtime_arg_values["num_sticks_per_core_read"][node] = num_sticks_per_core_read;
+        writer_run.runtime_arg_values["num_read_per_barrier"][node] = num_read_per_barrier;
+        writer_run.runtime_arg_values["start_id"][node] = curr_sticks_write;
 
         curr_sticks_write += num_sticks_per_core;
 

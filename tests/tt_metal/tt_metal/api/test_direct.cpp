@@ -293,20 +293,18 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{test_config.node,
-                  {{"src_addr", input_dram_byte_address},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", per_tile_stride}}}},
+                {{"src_addr", {{test_config.node, input_dram_byte_address}}},
+                 {"src_bank_id", {{test_config.node, 0u}}},
+                 {"num_tiles", {{test_config.node, num_tiles_per_thread}}},
+                 {"dram_page_stride", {{test_config.node, per_tile_stride}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values =
-                {{test_config.node,
-                  {{"dst_addr", output_dram_byte_address},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", per_tile_stride}}}},
+                {{"dst_addr", {{test_config.node, output_dram_byte_address}}},
+                 {"dst_bank_id", {{test_config.node, 0u}}},
+                 {"num_tiles", {{test_config.node, num_tiles_per_thread}}},
+                 {"dram_page_stride", {{test_config.node, per_tile_stride}}}},
         },
     };
     experimental::SetProgramRunArgs(program, params);
@@ -524,20 +522,18 @@ bool reader_datacopy_writer(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{test_config.node,
-                  {{"src_addr", ctx.input_dram_byte_address},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", ctx.per_tile_stride}}}},
+                {{"src_addr", {{test_config.node, ctx.input_dram_byte_address}}},
+                 {"src_bank_id", {{test_config.node, 0u}}},
+                 {"num_tiles", {{test_config.node, num_tiles_per_thread}}},
+                 {"dram_page_stride", {{test_config.node, ctx.per_tile_stride}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values =
-                {{test_config.node,
-                  {{"dst_addr", ctx.output_dram_byte_address},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles_per_thread},
-                   {"dram_page_stride", ctx.per_tile_stride}}}},
+                {{"dst_addr", {{test_config.node, ctx.output_dram_byte_address}}},
+                 {"dst_bank_id", {{test_config.node, 0u}}},
+                 {"num_tiles", {{test_config.node, num_tiles_per_thread}}},
+                 {"dram_page_stride", {{test_config.node, ctx.per_tile_stride}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

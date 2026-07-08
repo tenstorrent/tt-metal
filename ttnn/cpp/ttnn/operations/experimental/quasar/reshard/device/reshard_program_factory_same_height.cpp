@@ -167,18 +167,14 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
         const uint32_t num_segments = static_cast<uint32_t>(args_for_all_segments.size());
         const NodeCoord node{local_cores[core_idx].x, local_cores[core_idx].y};
 
-        k0_run_args.runtime_arg_values.push_back(
-            {node,
-             {{"total_num_sticks", total_num_sticks_kernel_0},
-              {"local_stride_bytes", local_stride_bytes},
-              {"remote_stride_bytes", remote_stride_bytes},
-              {"num_segments", num_segments}}});
-        k1_run_args.runtime_arg_values.push_back(
-            {node,
-             {{"total_num_sticks", total_num_sticks_kernel_1},
-              {"local_stride_bytes", local_stride_bytes},
-              {"remote_stride_bytes", remote_stride_bytes},
-              {"num_segments", num_segments}}});
+        k0_run_args.runtime_arg_values["total_num_sticks"][node] = total_num_sticks_kernel_0;
+        k0_run_args.runtime_arg_values["local_stride_bytes"][node] = local_stride_bytes;
+        k0_run_args.runtime_arg_values["remote_stride_bytes"][node] = remote_stride_bytes;
+        k0_run_args.runtime_arg_values["num_segments"][node] = num_segments;
+        k1_run_args.runtime_arg_values["total_num_sticks"][node] = total_num_sticks_kernel_1;
+        k1_run_args.runtime_arg_values["local_stride_bytes"][node] = local_stride_bytes;
+        k1_run_args.runtime_arg_values["remote_stride_bytes"][node] = remote_stride_bytes;
+        k1_run_args.runtime_arg_values["num_segments"][node] = num_segments;
 
         AdvancedKernelRunArgs::Varargs varargs_0(num_varargs, 0u);
         AdvancedKernelRunArgs::Varargs varargs_1(num_varargs, 0u);

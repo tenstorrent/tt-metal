@@ -4460,12 +4460,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 v.empty() ? 0u : v.back());
 
             if (in1_idx < num_blocks_x) {
-                in0_sender_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});
+                for (const auto& [name, value] : leading) {
+                    in0_sender_run_args.runtime_arg_values[name][core] = value;
+                }
                 in0_sender_run_args.advanced_options.runtime_varargs.emplace(core, v);
             } else if (has_in0_no_work) {
-                in0_no_work_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});
+                for (const auto& [name, value] : leading) {
+                    in0_no_work_run_args.runtime_arg_values[name][core] = value;
+                }
                 in0_no_work_run_args.advanced_options.runtime_varargs.emplace(core, v);
             }
         } else if (in1_idx == 0) {
@@ -4479,8 +4481,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 {"last_block_h", in0_idx == in0_end_idx ? last_out_block_h : out_block_h},
                 {"sparsity_addr", 0u},
             };
-            in0_sender_run_args.runtime_arg_values.push_back(
-                m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+            for (const auto& [name, value] : args) {
+                in0_sender_run_args.runtime_arg_values[name][core] = value;
+            }
         } else {
             // in0 interleaved receiver.
             m2::KernelRunArgs::RuntimeArgValues args = {
@@ -4488,11 +4491,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 {"in0_mcast_sender_noc_y", (uint32_t)in0_mcast_sender.y},
             };
             if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
-                in0_receiver_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                for (const auto& [name, value] : args) {
+                    in0_receiver_run_args.runtime_arg_values[name][core] = value;
+                }
             } else {
-                in0_receiver_other_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                for (const auto& [name, value] : args) {
+                    in0_receiver_other_run_args.runtime_arg_values[name][core] = value;
+                }
             }
         }
 
@@ -4536,8 +4541,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     args.insert(
                         {"last_num_blocks_w_dim", in1_idx == in1_end_idx ? last_out_num_blocks_w : out_num_blocks_x});
                 }
-                in1_sender_writer_run_args.runtime_arg_values.push_back(
-                    m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                for (const auto& [name, value] : args) {
+                    in1_sender_writer_run_args.runtime_arg_values[name][core] = value;
+                }
             } else {
                 // in1 receiver.
                 m2::KernelRunArgs::RuntimeArgValues args = {
@@ -4602,11 +4608,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     }
                 }
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    in1_receiver_writer_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    for (const auto& [name, value] : args) {
+                        in1_receiver_writer_run_args.runtime_arg_values[name][core] = value;
+                    }
                 } else {
-                    in1_receiver_writer_other_run_args.runtime_arg_values.push_back(
-                        m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = std::move(args)});
+                    for (const auto& [name, value] : args) {
+                        in1_receiver_writer_other_run_args.runtime_arg_values[name][core] = value;
+                    }
                 }
             }
         }

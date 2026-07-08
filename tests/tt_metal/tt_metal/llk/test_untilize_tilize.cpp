@@ -392,23 +392,27 @@ void run_single_core_tilize_program(
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src_addr", dram_buffer_src0_addr},
-                   {"src_dram_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"ublock_size_tiles", test_config.num_tiles_c},
-                   {"reader_only", 0u}}}},
+                {{"src_addr", {{node, dram_buffer_src0_addr}}},
+                 {"src_dram_bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}},
+                 {"ublock_size_tiles", {{node, test_config.num_tiles_c}}},
+                 {"reader_only", {{node, 0u}}}},
         });
     } else {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{node, {{"src_addr", dram_buffer_src0_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+                {{"src_addr", {{node, dram_buffer_src0_addr}}},
+                 {"bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}}},
         });
     }
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
         .kernel = WRITER,
-        .runtime_arg_values = {{node, {{"dst_addr", dram_buffer_dst_addr}, {"bank_id", 0u}, {"num_tiles", num_tiles}}}},
+        .runtime_arg_values =
+            {{"dst_addr", {{node, dram_buffer_dst_addr}}},
+             {"bank_id", {{node, 0u}}},
+             {"num_tiles", {{node, num_tiles}}}},
     });
     params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE});
     experimental::SetProgramRunArgs(program_, params);
@@ -729,11 +733,12 @@ void run_single_core_unpack_tilizeA_B_reduce_program(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{node, {{"num_tiles", num_tiles_in}, {"scaler", *reinterpret_cast<std::uint32_t*>(&scaler_f)}}}},
+                {{"num_tiles", {{node, num_tiles_in}}},
+                 {"scaler", {{node, *reinterpret_cast<std::uint32_t*>(&scaler_f)}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{node, {{"num_tiles", num_tiles_out}}}},
+            .runtime_arg_values = {{"num_tiles", {{node, num_tiles_out}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
@@ -1090,20 +1095,18 @@ static void run_quasar_tilize_untilize_test(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{node,
-                  {{"src_addr", dram_buffer_src_addr},
-                   {"src_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", src_tile_stride_bytes}}}},
+                {{"src_addr", {{node, dram_buffer_src_addr}}},
+                 {"src_bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}},
+                 {"dram_page_stride", {{node, src_tile_stride_bytes}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
             .runtime_arg_values =
-                {{node,
-                  {{"dst_addr", dram_buffer_dst_addr},
-                   {"dst_bank_id", 0u},
-                   {"num_tiles", num_tiles},
-                   {"dram_page_stride", dst_tile_stride_bytes}}}},
+                {{"dst_addr", {{node, dram_buffer_dst_addr}}},
+                 {"dst_bank_id", {{node, 0u}}},
+                 {"num_tiles", {{node, num_tiles}}},
+                 {"dram_page_stride", {{node, dst_tile_stride_bytes}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

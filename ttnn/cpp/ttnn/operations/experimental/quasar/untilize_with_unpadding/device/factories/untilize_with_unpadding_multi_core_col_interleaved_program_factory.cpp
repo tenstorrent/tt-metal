@@ -200,10 +200,8 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
     // ---- Per-core runtime args ----
     // Replicates the legacy per-core work-distribution loop verbatim; the src/dst buffer-address
     // RTAs are dropped (carried by the TensorAccessor bindings).
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
 
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t number_blocks_per_core;
@@ -223,19 +221,15 @@ UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_program_artif
         // This factory is not reachable via select_program_factory (dormant path), so the values are
         // preserved as-observed by the legacy kernel; width_size's legacy value was undefined and is
         // set here to the intended per-block width (TILE_WIDTH * el_size). See FLAG in port notes.
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
-                {"core_number", i},
-                {"size_per_row_per_block", number_blocks_per_core},
-                {"blocks_per_core", TILE_WIDTH * el_size},
-                {"width_size", TILE_WIDTH * el_size}}});
+        writer_node_args["core_number"][node] = i;
+        writer_node_args["size_per_row_per_block"][node] = number_blocks_per_core;
+        writer_node_args["blocks_per_core"][node] = TILE_WIDTH * el_size;
+        writer_node_args["width_size"][node] = TILE_WIDTH * el_size;
 
         // Reader named RTAs (legacy: src_addr, i, num_tiles_per_row, number_blocks_per_core).
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
-                {"core_number", i}, {"tiles_per_row", num_tiles_per_row}, {"num_blocks", number_blocks_per_core}}});
+        reader_node_args["core_number"][node] = i;
+        reader_node_args["tiles_per_row"][node] = num_tiles_per_row;
+        reader_node_args["num_blocks"][node] = number_blocks_per_core;
     }
 
     // ---- ProgramSpec ----

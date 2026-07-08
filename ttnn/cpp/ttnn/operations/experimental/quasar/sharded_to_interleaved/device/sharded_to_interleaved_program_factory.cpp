@@ -242,8 +242,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     // Reader run-time args: identical on every used core.
     for (const auto& core_range : used_cores.ranges()) {
         for (const auto& core : core_range) {
-            reader_run.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", num_units_per_shard}}});
+            reader_run.runtime_arg_values["num_units"][core] = num_units_per_shard;
         }
     }
 
@@ -283,17 +282,14 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                 }
             }
             // Writer run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
-            writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args = {
-                    {"block_height_tiles", num_units_per_shard_height},
-                    {"block_width_tiles", num_units_per_shard_width},
-                    {"unpadded_block_height_tiles", shard_height},
-                    {"unpadded_block_width_tiles", shard_width},
-                    {"output_width_tiles", num_units_offset},
-                    {"block_num_tiles", num_units_per_shard},
-                    {"start_id_offset", curr_idx_h + curr_idx_w},
-                    {"start_id_base", starting_idx_h}}});
+            writer_run.runtime_arg_values["block_height_tiles"][core] = num_units_per_shard_height;
+            writer_run.runtime_arg_values["block_width_tiles"][core] = num_units_per_shard_width;
+            writer_run.runtime_arg_values["unpadded_block_height_tiles"][core] = shard_height;
+            writer_run.runtime_arg_values["unpadded_block_width_tiles"][core] = shard_width;
+            writer_run.runtime_arg_values["output_width_tiles"][core] = num_units_offset;
+            writer_run.runtime_arg_values["block_num_tiles"][core] = num_units_per_shard;
+            writer_run.runtime_arg_values["start_id_offset"][core] = curr_idx_h + curr_idx_w;
+            writer_run.runtime_arg_values["start_id_base"][core] = starting_idx_h;
 
             curr_idx_w += num_units_per_shard_width;
             if (curr_idx_w >= num_units_per_row) {
@@ -336,14 +332,11 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
             // Writer run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
             // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
             // is dropped here to match the kernel's actual reads).
-            writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = core,
-                .args = {
-                    {"block_height", shard_height},
-                    {"block_width_bytes", shard_width},
-                    {"padded_block_width_bytes", padded_shard_width},
-                    {"input_width_offset_bytes", curr_idx_w},
-                    {"start_id", curr_idx_h}}});
+            writer_run.runtime_arg_values["block_height"][core] = shard_height;
+            writer_run.runtime_arg_values["block_width_bytes"][core] = shard_width;
+            writer_run.runtime_arg_values["padded_block_width_bytes"][core] = padded_shard_width;
+            writer_run.runtime_arg_values["input_width_offset_bytes"][core] = curr_idx_w;
+            writer_run.runtime_arg_values["start_id"][core] = curr_idx_h;
 
             curr_idx_w += output_unit_size;
             if (curr_idx_w >= num_units_per_row) {
@@ -353,8 +346,7 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
         }
 
         if (convert_df) {
-            compute_run.runtime_arg_values.push_back(
-                KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_units", num_units_per_shard}}});
+            compute_run.runtime_arg_values["num_units"][core] = num_units_per_shard;
         }
     }
 

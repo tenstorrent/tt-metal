@@ -306,10 +306,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     // Per-node runtime args. Replicates the legacy per-core work-distribution loop verbatim; the
     // src/dst buffer-address RTAs are dropped (carried by the TensorAccessor bindings).
     // ------------------------------------------------------------------------
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(ncores);
-    writer_node_args.reserve(ncores);
+    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
 
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;
@@ -353,23 +351,17 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        reader_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
-                {"start_id", tile_start_id},
-                {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg}}});
+        reader_node_args["start_id"][node] = tile_start_id;
+        reader_node_args["single_block_size_row_arg"][node] = single_block_size_row_arg;
+        reader_node_args["single_block_size_col_arg"][node] = single_block_size_col_arg;
 
-        writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = node,
-            .args = {
-                {"width_size", TILE_WIDTH * el_size * single_block_size_row_arg},
-                {"start_row_id", start_row_id},
-                {"start_column_id", start_column_id},
-                {"single_block_size_row_arg", single_block_size_row_arg},
-                {"single_block_size_col_arg", single_block_size_col_arg},
-                {"sub_block_width_size", TILE_WIDTH * el_size * single_sub_block_size_row_arg},
-                {"single_sub_block_size_row_arg", single_sub_block_size_row_arg}}});
+        writer_node_args["width_size"][node] = TILE_WIDTH * el_size * single_block_size_row_arg;
+        writer_node_args["start_row_id"][node] = start_row_id;
+        writer_node_args["start_column_id"][node] = start_column_id;
+        writer_node_args["single_block_size_row_arg"][node] = single_block_size_row_arg;
+        writer_node_args["single_block_size_col_arg"][node] = single_block_size_col_arg;
+        writer_node_args["sub_block_width_size"][node] = TILE_WIDTH * el_size * single_sub_block_size_row_arg;
+        writer_node_args["single_sub_block_size_row_arg"][node] = single_sub_block_size_row_arg;
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;

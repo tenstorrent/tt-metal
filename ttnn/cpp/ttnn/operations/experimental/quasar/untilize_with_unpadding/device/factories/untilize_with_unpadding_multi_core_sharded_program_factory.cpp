@@ -261,36 +261,27 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     const std::vector<CoreCoord> all_core_coords = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    Group<KernelRunArgs::NodeRuntimeArgs> reader_node_args;
-    Group<KernelRunArgs::NodeRuntimeArgs> writer_node_args;
-    reader_node_args.reserve(all_core_coords.size());
-    writer_node_args.reserve(all_core_coords.size());
+    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
+    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
 
     for (const auto& core : all_core_coords) {
         const NodeCoord node = core;
-        reader_node_args.push_back(
-            KernelRunArgs::NodeRuntimeArgs{.node = node, .args = {{"num_tiles_per_core", num_input_tiles}}});
+        reader_node_args["num_tiles_per_core"][node] = num_input_tiles;
     }
 
     if (out_sharded) {
         for (const auto& core : all_core_coords) {
             const NodeCoord node = core;
             if (unpad_tensor_w_16) {
-                writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = node,
-                    .args = {
-                        {"num_unpadded_output_rows", num_output_rows_unpadded},
-                        {"num_padded_tiles_per_core", num_input_tiles}}});
+                writer_node_args["num_unpadded_output_rows"][node] = num_output_rows_unpadded;
+                writer_node_args["num_padded_tiles_per_core"][node] = num_input_tiles;
             } else {
-                writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                    .node = node,
-                    .args = {
-                        {"num_unpadded_output_rows", num_output_rows_unpadded},
-                        {"num_padded_tiles_per_batch", ntiles_per_batch},
-                        {"num_unpadded_rows_per_batch", out_shard_spec.shape[0] / batch},
-                        {"padded_block_row_size_bytes", shard_spec.shape[1] * output.element_size()},
-                        {"unpadded_block_row_size_bytes", block_row_size},
-                        {"batch", batch}}});
+                writer_node_args["num_unpadded_output_rows"][node] = num_output_rows_unpadded;
+                writer_node_args["num_padded_tiles_per_batch"][node] = ntiles_per_batch;
+                writer_node_args["num_unpadded_rows_per_batch"][node] = out_shard_spec.shape[0] / batch;
+                writer_node_args["padded_block_row_size_bytes"][node] = shard_spec.shape[1] * output.element_size();
+                writer_node_args["unpadded_block_row_size_bytes"][node] = block_row_size;
+                writer_node_args["batch"][node] = batch;
             }
         }
     } else {
@@ -355,18 +346,15 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
             // Legacy positional RTAs (dst_addr dropped -> carried by the OUTPUT TensorAccessor):
             //   {dst_addr, num_rows_block, block_row_size, 1, 1, 1, row_size_unpadded,
             //    num_rows_unpadded, block_start_row_id_offset, block_start_row_offset}
-            writer_node_args.push_back(KernelRunArgs::NodeRuntimeArgs{
-                .node = node,
-                .args = {
-                    {"num_rows_block", num_rows_block},
-                    {"block_row_size", block_row_size},
-                    {"batch", 1u},
-                    {"num_blocks_h", 1u},
-                    {"num_blocks_w", 1u},
-                    {"last_block_row_size_unpadded", row_size_unpadded},
-                    {"num_output_rows_unpadded", num_rows_unpadded},
-                    {"block_start_row_id", block_start_row_id_offset},
-                    {"block_start_row_offset", block_start_row_offset}}});
+            writer_node_args["num_rows_block"][node] = num_rows_block;
+            writer_node_args["block_row_size"][node] = block_row_size;
+            writer_node_args["batch"][node] = 1u;
+            writer_node_args["num_blocks_h"][node] = 1u;
+            writer_node_args["num_blocks_w"][node] = 1u;
+            writer_node_args["last_block_row_size_unpadded"][node] = row_size_unpadded;
+            writer_node_args["num_output_rows_unpadded"][node] = num_rows_unpadded;
+            writer_node_args["block_start_row_id"][node] = block_start_row_id_offset;
+            writer_node_args["block_start_row_offset"][node] = block_start_row_offset;
         }
     }
 

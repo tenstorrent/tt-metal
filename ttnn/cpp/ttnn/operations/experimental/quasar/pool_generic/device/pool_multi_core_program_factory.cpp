@@ -1261,11 +1261,17 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             compute_vals["start_row"] = start_row;
             compute_vals["start_col"] = start_col;
         }
-        reader0_run.runtime_arg_values.push_back({node, reader_vals});
-        if (reader1.has_value()) {
-            reader1_run.runtime_arg_values.push_back({node, reader_vals});
+        for (const auto& [name, value] : reader_vals) {
+            reader0_run.runtime_arg_values[name][node] = value;
         }
-        compute_run.runtime_arg_values.push_back({node, compute_vals});
+        if (reader1.has_value()) {
+            for (const auto& [name, value] : reader_vals) {
+                reader1_run.runtime_arg_values[name][node] = value;
+            }
+        }
+        for (const auto& [name, value] : compute_vals) {
+            compute_run.runtime_arg_values[name][node] = value;
+        }
     }
 
     ProgramRunArgs run_args;

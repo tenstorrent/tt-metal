@@ -189,8 +189,6 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
-    reader_run.runtime_arg_values.reserve(num_cores_total);
-    writer_run.runtime_arg_values.reserve(num_cores_total);
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -208,23 +206,21 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         uint32_t ct = num_tiles_read / Wt % Ct;
 
         const NodeCoord node = core;
-        reader_run.runtime_arg_values.push_back(
-            {node,
-             {{"WT", Wt},
-              {"H", H},
-              {"CT", Ct},
-              {"HW_bytes", HW_bytes},
-              {"CHW_bytes", CHW_bytes},
-              {"start_id", num_tiles_read},
-              {"num_tiles", num_tiles_per_core},
-              {"batch_addr", num_tiles_read / CtHWt * CHW_bytes},
-              {"h", h},
-              {"htWT", h / TILE_HEIGHT * Wt},
-              {"ct", ct},
-              {"ctoffs", ct * TILE_HEIGHT * HW_bytes},
-              {"wt", num_tiles_read % Wt}}});
-        writer_run.runtime_arg_values.push_back(
-            {node, {{"num_pages", num_tiles_per_core}, {"start_id", num_tiles_read}}});
+        reader_run.runtime_arg_values["WT"][node] = Wt;
+        reader_run.runtime_arg_values["H"][node] = H;
+        reader_run.runtime_arg_values["CT"][node] = Ct;
+        reader_run.runtime_arg_values["HW_bytes"][node] = HW_bytes;
+        reader_run.runtime_arg_values["CHW_bytes"][node] = CHW_bytes;
+        reader_run.runtime_arg_values["start_id"][node] = num_tiles_read;
+        reader_run.runtime_arg_values["num_tiles"][node] = num_tiles_per_core;
+        reader_run.runtime_arg_values["batch_addr"][node] = num_tiles_read / CtHWt * CHW_bytes;
+        reader_run.runtime_arg_values["h"][node] = h;
+        reader_run.runtime_arg_values["htWT"][node] = h / TILE_HEIGHT * Wt;
+        reader_run.runtime_arg_values["ct"][node] = ct;
+        reader_run.runtime_arg_values["ctoffs"][node] = ct * TILE_HEIGHT * HW_bytes;
+        reader_run.runtime_arg_values["wt"][node] = num_tiles_read % Wt;
+        writer_run.runtime_arg_values["num_pages"][node] = num_tiles_per_core;
+        writer_run.runtime_arg_values["start_id"][node] = num_tiles_read;
 
         num_tiles_read += num_tiles_per_core;
     }

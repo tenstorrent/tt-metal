@@ -272,24 +272,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
         uint32_t end_idx = start_idx + num_tiles_per_core;
         uint32_t padded_end_idx = padded_start_idx + padded_tiles_per_core;
 
-        reader_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"num_tiles", num_tiles_per_core},
-                    {"start_id", start_idx},
-                },
-        });
-        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
-            .node = core,
-            .args =
-                {
-                    {"start_tile_idx", start_idx},
-                    {"end_tile_idx", end_idx},
-                    {"start_padding_tile_idx", padded_start_idx},
-                    {"end_padding_tile_idx", padded_end_idx},
-                },
-        });
+        reader_run.runtime_arg_values["num_tiles"][core] = num_tiles_per_core;
+        reader_run.runtime_arg_values["start_id"][core] = start_idx;
+        writer_run.runtime_arg_values["start_tile_idx"][core] = start_idx;
+        writer_run.runtime_arg_values["end_tile_idx"][core] = end_idx;
+        writer_run.runtime_arg_values["start_padding_tile_idx"][core] = padded_start_idx;
+        writer_run.runtime_arg_values["end_padding_tile_idx"][core] = padded_end_idx;
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;

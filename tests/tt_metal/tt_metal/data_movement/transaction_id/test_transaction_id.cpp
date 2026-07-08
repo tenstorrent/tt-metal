@@ -145,11 +145,10 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Transa
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
-    sender_run_params.runtime_arg_values.push_back(
-        {.node = test_config.master_core_coord,
-         .args = {
-             {"num_transactions", (uint32_t)test_config.num_of_trids},
-             {"bytes_per_transaction", (uint32_t)bytes_per_transaction}}});
+    sender_run_params.runtime_arg_values["num_transactions"][test_config.master_core_coord] =
+        (uint32_t)test_config.num_of_trids;
+    sender_run_params.runtime_arg_values["bytes_per_transaction"][test_config.master_core_coord] =
+        (uint32_t)bytes_per_transaction;
     run_params.kernel_run_args.push_back(sender_run_params);
     SetProgramRunArgs(program, run_params);
 

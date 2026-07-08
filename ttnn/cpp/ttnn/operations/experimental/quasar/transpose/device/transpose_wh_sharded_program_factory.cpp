@@ -169,19 +169,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     KernelRunArgs compute_run{.kernel = COMPUTE_KERNEL};
 
     const std::vector<NodeCoord> cores = corerange_to_cores(all_cores, std::nullopt, row_major);
-    reader_run.runtime_arg_values.reserve(cores.size());
-    writer_run.runtime_arg_values.reserve(cores.size());
-    compute_run.runtime_arg_values.reserve(cores.size());
     for (const NodeCoord& node : cores) {
-        reader_run.runtime_arg_values.push_back({node, {{"num_tiles", num_blocks}}});
-        writer_run.runtime_arg_values.push_back({node, {{"num_units", num_blocks}}});
-        compute_run.runtime_arg_values.push_back(
-            {node,
-             {{"NHtWt", num_blocks},
-              {"HtWt", HtWt_tile_size},
-              {"N", num_hw_blocks_per_shard},
-              {"Ht", Ht_per_shard},
-              {"Wt", Wts}}});
+        reader_run.runtime_arg_values["num_tiles"][node] = num_blocks;
+        writer_run.runtime_arg_values["num_units"][node] = num_blocks;
+        compute_run.runtime_arg_values["NHtWt"][node] = num_blocks;
+        compute_run.runtime_arg_values["HtWt"][node] = HtWt_tile_size;
+        compute_run.runtime_arg_values["N"][node] = num_hw_blocks_per_shard;
+        compute_run.runtime_arg_values["Ht"][node] = Ht_per_shard;
+        compute_run.runtime_arg_values["Wt"][node] = Wts;
     }
 
     WorkUnitSpec wu{
