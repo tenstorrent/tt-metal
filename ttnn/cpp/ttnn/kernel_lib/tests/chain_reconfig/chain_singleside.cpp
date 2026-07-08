@@ -26,7 +26,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
     compute_kernel_lib::eltwise_chain(
-        total_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(total_tiles),
         compute_kernel_lib::CopyTile<cb_a>{},
         compute_kernel_lib::CopyTile<cb_b>{},
         compute_kernel_lib::PackTile<cb_out>{});
