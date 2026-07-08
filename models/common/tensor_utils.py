@@ -16,6 +16,28 @@ import ttnn
 TILE_SIZE = ttnn.TILE_SIZE  # 32
 
 
+def align_shape_to_tile(shape, tile_size: int = TILE_SIZE):
+    """Round up the last two dimensions of *shape* to multiples of *tile_size*.
+
+    This is the recommended replacement for the deprecated ``ttnn.pad_to_tile_shape``.
+
+    Args:
+        shape: An iterable of dimension sizes (list, tuple, or ttnn.Shape).
+        tile_size: Tile dimension to align to (default 32).
+
+    Returns:
+        List[int]: A new shape with the last two dims tile-aligned.
+    """
+    import math
+
+    result = list(shape)
+    if len(result) >= 1:
+        result[-1] = math.ceil(result[-1] / tile_size) * tile_size
+    if len(result) >= 2:
+        result[-2] = math.ceil(result[-2] / tile_size) * tile_size
+    return result
+
+
 def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
     """
     Create rotation transformation matrix for RoPE.
