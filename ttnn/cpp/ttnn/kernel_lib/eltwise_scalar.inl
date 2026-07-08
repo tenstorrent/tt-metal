@@ -59,17 +59,22 @@ ELTWISE_DECLARE_BINOP_SCALAR(MulUnary, mul_unary_tile)
 ELTWISE_DECLARE_BINOP_SCALAR(DivUnary, div_unary_tile)
 ELTWISE_DECLARE_BINOP_SCALAR(RsubUnary, rsub_unary_tile)
 
-// Dropout — runtime probability + scale_factor (both packed u32 bits).
-// Init is separate (`dropout_kernel_init(seed)`) and must be called once
-// outside the chain with the runtime seed; the chain element runs the
-// per-tile dropout pass.
+// Dropout — runtime probability + scale_factor + seed (all packed u32 bits).
+// `dropout_kernel_init(seed)` is dropout's per-op SFPU init (it seeds the PRNG); it's
+// the dropout analogue of every other op's `*_tile_init`, except it takes the runtime
+// seed. So `init()` here is a normal instance method (non-static, like `exec`) that reads
+// the struct's `seed` — the chain dispatches init on the instance, so this just works.
+// The chain emits it once (boot-hoist), the once-per-kernel seeding the original kernel
+// did out-of-band.
 template <Dst Slot>
 struct Dropout : UnaryOp<Dropout<Slot>, Slot> {
     uint32_t probability;
     uint32_t scale_factor;
-    constexpr Dropout(uint32_t p, uint32_t s) noexcept : probability(p), scale_factor(s) {}
-    constexpr Dropout() noexcept : probability(0), scale_factor(0) {}
-    static ALWI void init() { /* no-op: dropout_kernel_init(seed) must run outside the chain */ }
+    uint32_t seed;
+    constexpr Dropout(uint32_t p, uint32_t s, uint32_t seed_) noexcept :
+        probability(p), scale_factor(s), seed(seed_) {}
+    constexpr Dropout() noexcept : probability(0), scale_factor(0), seed(0) {}
+    ALWI void init() const { dropout_kernel_init(seed); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         dropout_tile(to_u32(Slot) + slot_offset, probability, scale_factor);
     }
