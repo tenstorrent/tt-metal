@@ -453,22 +453,27 @@ Tensor fold(
 
         Tensor processed_tensor = input_tensor;
 
-        // Apply H,W padding using halo if needed
-        if (has_hw_padding) {
-            processed_tensor = operations::experimental::quasar::apply_halo_padding(
-                processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
-        }
-
-        // Apply channel padding separately if needed
+        // Apply CHANNEL padding FIRST, on the original NCHW input (dim1 = C). Doing it here keeps the
+        // channel a small, tile-aligned dim (e.g. 3->4). The old order padded C *after* the halo, which
+        // had already reinterpreted (C,H) as its spatial grid and left W as the row-major stick (last)
+        // dim -- so the pad landed on W (224 -> 225), which (a) is semantically the wrong axis and (b)
+        // gives a 450-byte row-major shard that Quasar rejects (page size must be 16B-aligned). Padding
+        // the channel dim up front avoids both.
         if (has_c_padding) {
             const auto current_shape = processed_tensor.logical_shape();
             const tt::tt_metal::Array4D padded_shape = {
                 static_cast<uint32_t>(current_shape[0]),
-                static_cast<uint32_t>(current_shape[1]),
+                static_cast<uint32_t>(current_shape[1] + pad_c_front + pad_c_back),
                 static_cast<uint32_t>(current_shape[2]),
-                static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
+                static_cast<uint32_t>(current_shape[3])};
             processed_tensor = ::ttnn::operations::experimental::quasar::pad(
-                processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
+                processed_tensor, padded_shape, tt::tt_metal::Array4D({0, pad_c_front, 0, 0}), 0);
+        }
+
+        // Apply H,W padding using halo if needed (now on the channel-padded tensor).
+        if (has_hw_padding) {
+            processed_tensor = operations::experimental::quasar::apply_halo_padding(
+                processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
         }
 
         // If processed tensor is tiled, convert to row-major.
