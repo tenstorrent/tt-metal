@@ -6,7 +6,7 @@
 - name: GPT-OSS 120B decoder unit test
   cmd: |
     export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
-    pytest "models/demos/gpt_oss/tests/unit/test_modules.py::test_decoder[wormhole_b0-paged-layer_0-decode_low_latency-4x8]" --timeout 1500
+    pytest "models/demos/gpt_oss/tests/unit/test_modules.py::test_decoder[wormhole_b0-paged-layer_0-decode_high_throughput-4x8]" --timeout 1500
   skus:
     wh_galaxy_merge_gate:
       timeout: 5
