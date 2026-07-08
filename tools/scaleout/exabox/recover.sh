@@ -397,7 +397,7 @@ set -o pipefail
 h=$(hostname)
 script -qefc "tt-smi -glx_reset" /dev/null |
     tr -d '\000' |
-    sed -u 's/\r$//; s/.*\r//; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
+    sed -u 's/\r$//; s/.*\r//; s/\^@//g; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
     awk '{
         key = $0
         gsub(/\033\[[0-9;]*[a-zA-Z]/, "", key)    # ignore color codes when comparing
@@ -409,6 +409,12 @@ script -qefc "tt-smi -glx_reset" /dev/null |
     while IFS= read -r line; do
         printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
     done
+ec=${PIPESTATUS[0]}
+if [[ $ec -eq 0 ]]; then
+    printf '[%s][%(%H:%M:%S)T] Reset completed successfully\n' "$h" -1
+else
+    printf '[%s][%(%H:%M:%S)T] Reset failed | Exit code: %s\n' "$h" -1 "$ec"
+fi
 RESET_CMD
     mpirun --host "$HOSTS" \
         --mca btl_tcp_if_include "$MPI_IF" \
