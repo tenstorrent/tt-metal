@@ -259,6 +259,15 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
+    log_debug(
+        tt::LogOp,
+        "fabric_config: {}, axis_topology: {}, axis_num_devices: {}, axis_num_links: {}, packet_size: {} B",
+        fabric_config,
+        axis_topology,
+        axis_num_devices,
+        axis_num_links,
+        packet_size);
+
     // Resolve negative gather dim
     uint32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;

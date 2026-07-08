@@ -52,9 +52,11 @@ void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size)
     if (packet_size != ideal_packet_size) {
         log_warning(
             tt::LogOp,
-            "Set Fabric packet size to {} B for best throughput, currently set to {} B.",
-            ideal_packet_size,
-            packet_size);
+            "Fabric packet size {} B is suboptimal for transporting {} B pages. Configure {} B packet size to maximize "
+            "throughput.",
+            packet_size,
+            page_size,
+            ideal_packet_size);
     }
 }
 

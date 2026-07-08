@@ -50,7 +50,7 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
     if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_info(
+        log_warning(
             tt::LogOp,
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
@@ -298,9 +298,9 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         const uint32_t max_l1_space = ttnn::operations::data_movement::get_max_l1_space(input_tensor);
         const uint32_t multiplier = std::clamp(max_l1_space / (cb_depth * cb_page_size), 1u, ideal_multiplier);
         if (multiplier < ideal_multiplier) {
-            log_info(
+            log_warning(
                 tt::LogOp,
-                "CircularBuffer depth is reduced due to L1 pressure (only {} B available), performance may regress.",
+                "CircularBuffer depth reduced due to L1 pressure (only {} B available), performance may regress.",
                 max_l1_space);
         }
         cb_page_size *= multiplier;
