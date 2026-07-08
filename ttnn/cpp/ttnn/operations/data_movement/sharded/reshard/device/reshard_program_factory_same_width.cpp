@@ -104,9 +104,12 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     push_reshard_same_width_cb_pair(
         desc, cb_index, data_format, total_size, local_unit_size_padded, all_cores, /*bound_buffer=*/local_buffer);
 
-    if (unaligned) {
-        // Scratch CB used by kernels when local/remote alignments differ. Its page size is the
-        // remote-aligned stride, matching its total_size (= remote rows * remote padded stride).
+    if (unaligned && local_is_output) {
+        // Scratch CB used only by the reader path (local_is_output): it bulk-reads remote rows at
+        // their aligned stride into scratch, then re-strides them into the local buffer. The writer
+        // path re-strides row-by-row directly (local source read via its L1 address), so it needs no
+        // scratch. Page size is the remote-aligned stride, matching total_size (= remote rows *
+        // remote padded stride).
         push_reshard_same_width_cb_pair(
             desc,
             cb_scratch_index,

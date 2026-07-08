@@ -162,13 +162,20 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
         return {false, "output must be sharded"};
     }
 
-    // ReshardSameWidthFactory (height↔height) has explicit unaligned handling,
-    // but all other legacy and ND factories require L1-aligned shard widths for correct NOC transfers.
+    // The height->height same-width factory handles unaligned shard widths in both directions: the
+    // reader path (L1 output) re-strides via a scratch buffer, and the writer path (non-L1 output)
+    // re-strides row-by-row. That factory is selected only when at least one buffer is in L1 (the
+    // legacy-reshard condition); a height->height reshard with both buffers off L1 falls through to
+    // the ND factories, which -- like all other legacy/ND paths -- require L1-aligned shard widths
+    // for correct NOC transfers. So skip the alignment check only for the same-width factory.
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         bool is_height_to_height = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
                                    out_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        bool one_buffer_in_l1 = input_tensor.memory_config().buffer_type() == BufferType::L1 ||
+                                out_mem_config.buffer_type() == BufferType::L1;
+        bool has_unaligned_handling = is_height_to_height && one_buffer_in_l1;
 
-        if (!is_height_to_height) {
+        if (!has_unaligned_handling) {
             const uint32_t alignment = hal::get_l1_alignment();
 
             uint32_t input_page_size = input_tensor.buffer()->page_size();
