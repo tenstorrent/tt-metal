@@ -393,7 +393,7 @@ if [[ "$SKIP_RESET" == false ]]; then
     mpirun --host "$HOSTS" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        bash -c 'set -o pipefail; h=$(hostname); script -qefc "tt-smi -glx_reset" /dev/null | tr "\r" "\n" | sed -u "s/\x1b\[[0-9;]*[a-zA-Z]//g; /^[[:space:]]*$/d" | while IFS= read -r line; do printf "[%s][%(%H:%M:%S)T] %s\n" "$h" -1 "$line"; done'
+        bash -c 'set -o pipefail; h=$(hostname); script -qefc "tt-smi -glx_reset" /dev/null | sed -u "s/\r$//; s/.*\r//; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d" | while IFS= read -r line; do printf "[%s][%(%H:%M:%S)T] %s\n" "$h" -1 "$line"; done'
 
     echo ""
     echo "Sleeping ${SLEEP_DURATION}s..."
