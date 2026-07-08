@@ -121,6 +121,10 @@ def test_pipeline_diffusion_gemma(
     hf_model = HFForBlockDiffusion.from_pretrained(MODEL_ID, dtype=torch.float32).eval()
     benchmark_profiler.end("setup")
 
+    # Enable MoE routing-histogram diagnostic to print per-expert token assignment counts
+    for layer in pipeline.tt_model.model.encoder.language_model.layers:
+        layer.experts_and_router.log_routing_histogram = True
+
     # 2. Correctness: one decoder forward at a seeded canvas vs HF.
     messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}]
     proc_inputs = hf_processor.apply_chat_template(

@@ -156,9 +156,13 @@ class DiffusionGemmaMoE(Module):
         counts = (routing_host != 0).sum(dim=0).tolist()
         total = sum(counts)
         expected = real_rows * self.top_k_experts
+        selected = sum(1 for c in counts if c > 0)
         summary = ", ".join(f"e{e}:{c}" for e, c in enumerate(counts) if c > 0)
         logger.info(
             f"[MoE routing] tokens={real_rows} top_k={self.top_k_experts} "
             f"total_assignments={total} (expected {expected})"
         )
-        logger.info(f"[MoE routing] per-expert counts (nonzero only): {summary}")
+        logger.info(
+            f"[MoE routing] per-expert counts (nonzero only): {summary} .... "
+            f"selected_experts = {selected} / {self.num_experts}"
+        )
