@@ -390,10 +390,30 @@ echo ""
 # Note: tt-smi -glx_reset is deprecated as of tt-smi 3.1.1; use tt-smi -r if available
 if [[ "$SKIP_RESET" == false ]]; then
     echo "Running tt-smi -glx_reset..."
+    # Host-tag every reset line for attribution. tt-smi writes key progress to the tty (not stdout) so
+    # run under `script`; the tr/sed/awk pipeline collapses its animated \r/spinner output, keeps colors.
+    read -r -d '' RESET_CMD <<'RESET_CMD' || true
+set -o pipefail
+h=$(hostname)
+script -qefc "tt-smi -glx_reset" /dev/null |
+    tr -d '\000' |
+    sed -u 's/\r$//; s/.*\r//; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d' |
+    awk '{
+        key = $0
+        gsub(/\033\[[0-9;]*[a-zA-Z]/, "", key)    # ignore color codes when comparing
+        sub(/[0-9]+[[:space:]]*$/, "", key)       # ignore trailing counter
+        if (seen && key == prev) { buf = $0 }     # same template -> keep only the latest
+        else { if (seen) print buf; buf = $0; prev = key; seen = 1 }
+    }
+    END { if (seen) print buf }' |
+    while IFS= read -r line; do
+        printf '[%s][%(%H:%M:%S)T] %s\n' "$h" -1 "$line"
+    done
+RESET_CMD
     mpirun --host "$HOSTS" \
         --mca btl_tcp_if_include "$MPI_IF" \
         "${MPI_EXTRA_ARGS[@]}" \
-        bash -c 'set -o pipefail; h=$(hostname); script -qefc "tt-smi -glx_reset" /dev/null | tr -d "\000" | sed -u "s/\r$//; s/.*\r//; /^\(\x1b\[[0-9;]*[a-zA-Z]\|[[:space:]]\)*$/d" | awk "{ cb=\$0; gsub(/\033\[[0-9;]*[a-zA-Z]/,\"\",cb); sub(/[0-9]+[[:space:]]*\$/,\"\",cb); if (have && cb==bb) { buf=\$0 } else { if (have) print buf; buf=\$0; bb=cb; have=1 } } END { if (have) print buf }" | while IFS= read -r line; do printf "[%s][%(%H:%M:%S)T] %s\n" "$h" -1 "$line"; done'
+        bash -c "$RESET_CMD"
 
     echo ""
     echo "Sleeping ${SLEEP_DURATION}s..."
