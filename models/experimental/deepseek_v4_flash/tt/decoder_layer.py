@@ -129,6 +129,8 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
         input_ids: Optional[torch.Tensor] = None,
+        paged_sliding_pool: ttnn.Tensor | None = None,
+        page_table: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Single-token decode: ``hidden_streams`` ``[B, 1, hc_mult, D]`` -> same.
 
@@ -141,7 +143,18 @@ class DeepSeekV4DecoderLayer(DeepSeekV4Module):
             normed = self.input_layernorm(collapsed)
         with _region("ATTENTION"):
             attn_out = self.self_attn.decode(
-                normed, cos, sin, neg_sin, cos_win, sin_win, mask, scache, sliding_pos, compress_pos
+                normed,
+                cos,
+                sin,
+                neg_sin,
+                cos_win,
+                sin_win,
+                mask,
+                scache,
+                sliding_pos,
+                compress_pos,
+                paged_sliding_pool=paged_sliding_pool,
+                page_table=page_table,
             )
         with _region("ATTN_MIX"):
             hidden_streams = self._mix(post, comb, attn_out, hidden_streams)
