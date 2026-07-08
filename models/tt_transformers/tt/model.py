@@ -280,6 +280,13 @@ class Transformer(LightweightModule):
             x = ttnn.to_memory_config(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
         logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if use_decode_layout:
+            # Revert to the default (full-grid) manager: only the norm+lm_head needed the
+            # prefetcher worker layout to dodge the global CB on (0,0). The callers' remaining
+            # ops (e.g. ttnn.untilize, full grid) must run on the default manager, and their
+            # small CBs coexist with the still-resident global CB. The global CB is NOT freed,
+            # so the decode trace stays intact; decode re-loads the manager via switch_mode (#47820).
+            self.prefetcher.revert_to_default_sub_device_manager()
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
