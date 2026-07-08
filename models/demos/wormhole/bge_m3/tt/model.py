@@ -426,4 +426,10 @@ def _attention_mask_dtype(
     max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
     if max_seq_len == 512 and max_batch in (1, 32):
         return dtype
+    # N300 B12/S8192: prepare the mask once in the SDPA score dtype (bf8) so the
+    # per-layer mask typecast in attention.py becomes a no-op. The mask is
+    # identical across all 24 layers — casting it 24x (bf16->bf8, ~13ms each =
+    # 7% of runtime) is pure waste.
+    if max_seq_len == 8192:
+        return dtype
     return BgeM3Model._MASK_DTYPE

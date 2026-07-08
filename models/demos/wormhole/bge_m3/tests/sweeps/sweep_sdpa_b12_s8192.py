@@ -45,12 +45,12 @@ HEAD_DIM = 64
 SCALE = HEAD_DIM**-0.5
 
 # Candidate chunk sizes (must divide S=8192; S/128=64 q-chunks etc.)
-Q_CHUNKS = [128, 256, 512]
-K_CHUNKS = [128, 256, 512, 1024]
+Q_CHUNKS = [256, 512, 1024]
+K_CHUNKS = [64, 128, 256]
 # Grids to try on the 8x8=64-core N300.
-GRIDS = [(8, 8), (8, 4), (7, 8)]
+GRIDS = [(8, 4), (8, 2), (8, 6), (8, 8)]
 # max_cores_per_head_batch candidates.
-MAX_CORES = [16, 8, 32]
+MAX_CORES = [8, 4]
 
 
 def _combos():
@@ -75,21 +75,21 @@ def test_sdpa_sweep(mesh_device):
     torch.manual_seed(0)
     q = ttnn.from_torch(
         torch.randn(B, N_HEADS, S, HEAD_DIM, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     k = ttnn.from_torch(
         torch.randn(B, N_HEADS, S, HEAD_DIM, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     v = ttnn.from_torch(
         torch.randn(B, N_HEADS, S, HEAD_DIM, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -97,7 +97,7 @@ def test_sdpa_sweep(mesh_device):
     # Additive mask [B,1,S,S] bf16 (all-zero = no-op, same cost as real mask).
     mask = ttnn.from_torch(
         torch.zeros(B, 1, S, S, dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -122,8 +122,14 @@ def test_sdpa_sweep(mesh_device):
             max_cores_per_head_batch=mc,
         )
         out = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, attn_mask=mask, scale=SCALE,
-            program_config=pc, compute_kernel_config=ck,
+            q,
+            k,
+            v,
+            is_causal=False,
+            attn_mask=mask,
+            scale=SCALE,
+            program_config=pc,
+            compute_kernel_config=ck,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(out)
