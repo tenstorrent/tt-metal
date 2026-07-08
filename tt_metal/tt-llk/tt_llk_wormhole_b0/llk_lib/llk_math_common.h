@@ -10,6 +10,7 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "sanitizer/api.h"
 
 using namespace ckernel::math;
@@ -132,9 +133,10 @@ inline void _llk_math_pack_sync_init_()
  * Programs the ALU source A format register. When the reconfiguration crosses an Int8/Int32 boundary
  * (to_from_int8), it also re-evaluates and programs the INT8 math enable bit.
  *
- * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled; INT8 math is enabled only when this is set.
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
  * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
  * @param srca_data_format: New data format of source A (DataFormat enum underlying value).
+ * @note Genuine Int8/Int32 math requires FP32 Dest (asserted when to_from_int8 is set); UInt8 datacopy is exempt and runs with INT8 math off in 16-bit Dest.
  */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
@@ -145,6 +147,9 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
     {
         // Gate INT8 math on FP32 dest: enabling it in 16-bit dest corrupts (u)int8 copies through MOVA2D.
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !requires_fp32_dest_for_int8_math(srca_data_format),
+            "Reconfiguring math to/from Int8/Int32 formats requires FP32 Dest mode enabled (only UInt8 datacopy is valid in 16-bit Dest)");
         std::uint32_t int8_math_enabled = is_fp32_dest_acc_en && is_int8_or_int32_format(srca_data_format);
         std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
@@ -166,9 +171,10 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
  * Programs the ALU source B format register. When the reconfiguration crosses an Int8/Int32 boundary
  * (to_from_int8), it also re-evaluates and programs the INT8 math enable bit.
  *
- * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled; INT8 math is enabled only when this is set.
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
  * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
  * @param srcb_data_format: New data format of source B (DataFormat enum underlying value).
+ * @note Genuine Int8/Int32 math requires FP32 Dest (asserted when to_from_int8 is set); UInt8 datacopy is exempt and runs with INT8 math off in 16-bit Dest.
  */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
@@ -179,6 +185,9 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
     {
         // Gate INT8 math on FP32 dest: enabling it in 16-bit dest corrupts (u)int8 copies through MOVA2D.
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || !requires_fp32_dest_for_int8_math(srcb_data_format),
+            "Reconfiguring math to/from Int8/Int32 formats requires FP32 Dest mode enabled (only UInt8 datacopy is valid in 16-bit Dest)");
         std::uint32_t int8_math_enabled = is_fp32_dest_acc_en && is_int8_or_int32_format(srcb_data_format);
         std::uint32_t config_data = (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) | (int8_math_enabled << ALU_ACC_CTRL_INT8_math_enabled_SHAMT);
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG1_SrcB_MASK | ALU_ACC_CTRL_INT8_math_enabled_MASK;
@@ -200,10 +209,11 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
  * Programs the ALU source A and source B format registers. When the reconfiguration crosses an Int8/Int32
  * boundary (to_from_int8), it also re-evaluates and programs the INT8 math enable bit from both source formats.
  *
- * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled; INT8 math is enabled only when this is set.
+ * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
  * @tparam to_from_int8: Set when the reconfiguration switches to or from an Int8/Int32 format.
  * @param srca_data_format: New data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: New data format of source B (DataFormat enum underlying value).
+ * @note Genuine Int8/Int32 math requires FP32 Dest (asserted when to_from_int8 is set); UInt8 datacopy is exempt and runs with INT8 math off in 16-bit Dest.
  */
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
@@ -214,6 +224,9 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
     {
         // Gate INT8 math on FP32 dest: enabling it in 16-bit dest corrupts (u)int8 copies through MOVA2D.
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
+        LLK_ASSERT(
+            is_fp32_dest_acc_en || (!requires_fp32_dest_for_int8_math(srca_data_format) && !requires_fp32_dest_for_int8_math(srcb_data_format)),
+            "Reconfiguring math to/from Int8/Int32 formats requires FP32 Dest mode enabled (only UInt8 datacopy is valid in 16-bit Dest)");
         std::uint32_t int8_math_enabled =
             is_fp32_dest_acc_en && (is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format));
         std::uint32_t config_data = (srca_data_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT) | (srcb_data_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |

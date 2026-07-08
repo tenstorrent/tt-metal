@@ -264,6 +264,14 @@ constexpr static bool is_int8_or_int32_format(const std::uint32_t format)
     return (masked_data_format(format) == to_underlying(DataFormat::Int8)) || (format == to_underlying(DataFormat::Int32));
 }
 
+// True if the format requires FP32 (32-bit) Dest to run INT8 math: Int8/Int32, but NOT UInt8.
+// UInt8 masks to the Int8 ALU format yet is a datacopy-only case that is valid in 16-bit Dest (INT8 math stays
+// off), so it is excluded here; genuine signed-Int8/Int32 math still requires FP32 Dest.
+constexpr static bool requires_fp32_dest_for_int8_math(const std::uint32_t format)
+{
+    return is_int8_or_int32_format(format) && (format != to_underlying(DataFormat::UInt8));
+}
+
 #define LOWER_HALFWORD(x) ((x) & 0xFFFF)
 #define UPPER_HALFWORD(x) ((x) >> 16)
 
