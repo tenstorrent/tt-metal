@@ -19,6 +19,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    CLAMP_NEGATIVE,
     FAST_MODE,
     ITERATIONS,
     LOOP_FACTOR,
@@ -170,6 +171,7 @@ def test_perf_eltwise_unary_sfpu(
             ITERATIONS(iterations),
             FAST_MODE(fast_mode),
             STABLE_SORT(stable_sort),
+            CLAMP_NEGATIVE(True),
         ],
         runtimes=[
             TILE_COUNT(tile_count_A),

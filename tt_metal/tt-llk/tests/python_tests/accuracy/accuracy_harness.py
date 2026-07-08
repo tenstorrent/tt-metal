@@ -331,16 +331,7 @@ def clear_shards() -> None:
 
 
 class RunMode(Enum):
-    """Which pipeline a single run_case variant exercises.
-
-    ACCURACY  — functional kernel (eltwise_unary_sfpu_test.cpp); writes the
-                accuracy CSV shard. This is the original, unchanged behavior.
-    PERF      — perf kernel (eltwise_unary_sfpu_perf.cpp) across every perf
-                scenario; captures timings into perf_report only (no CSV).
-    BOTH      — perf kernel restricted to L1_TO_L1; captures timings AND reads
-                the L1 result back to write the accuracy CSV, so the perf
-                kernel's output is checked against the golden in one run.
-    """
+    """Which pipeline a single run_case variant exercises."""
 
     ACCURACY = "accuracy"
     PERF = "perf"
@@ -377,12 +368,12 @@ def run_case(
 ) -> Optional[Path]:
     """Run one (op, format, config) variant in the requested *run_mode*.
 
-    RunMode.ACCURACY (default) reproduces the original accuracy sweep exactly:
+    RunMode.ACCURACY (default) reproduces the accuracy sweep exactly:
     the functional kernel runs, the result is compared to the torch golden, and
-    a shard CSV is written. RunMode.PERF runs the perf kernel for timings only
-    (into *perf_report*, no CSV). RunMode.BOTH runs the perf kernel once in
-    L1_TO_L1 and captures both the timings and the accuracy shard, so the perf
-    kernel's numeric output can be diffed against the accuracy-only run.
+    a shard CSV is written.
+    RunMode.PERF runs the perf kernel for timings only.
+    RunMode.BOTH runs the perf kernel once in L1_TO_L1 and captures both the timings
+    and the accuracy shard.
 
     The pipeline for the accuracy-producing modes (ACCURACY, BOTH):
       1. build the input sweep for this op (deterministic RAMP by default;
@@ -390,9 +381,6 @@ def run_case(
       2. compute the torch "golden" output,
       3. compile + run the op on the device to get the "hw" output,
       4. compute per-element errors and write a shard via rows_dataframe/write_shard.
-
-    *perf_report* (the pytest fixture) is required for PERF and BOTH; ACCURACY
-    ignores it. *loop_factor*/*iterations* apply only to the perf kernel.
 
     Returns the shard path for ACCURACY/BOTH, or None for PERF (timings only).
     """
@@ -428,14 +416,12 @@ def run_case(
         tile_count_res=tile_cnt_A,
     )
 
-    # A 32-bit input unpacks straight to dest when dest_acc is ON (matches the
-    # functional kernel); shared by both the functional and perf kernel paths.
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     if run_mode == RunMode.ACCURACY:
-        # ── Functional-kernel path (unchanged legacy behavior) ──────────────
+        # ── Functional-kernel path ─────────────────────────────────────────────
         num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
             DestSync.Half,
             dest_acc,
@@ -465,7 +451,7 @@ def run_case(
         )
         res_from_L1 = configuration.run().result
     else:
-        # ── Perf-kernel path (PERF: timings only; BOTH: timings + readback) ──
+        # ── Perf-kernel path ───────────────────────────────────────────────────
         _, _, faces_to_generate = calculate_tile_and_face_counts(
             input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
         )
@@ -508,14 +494,14 @@ def run_case(
             return None
 
         # BOTH: PerfConfig.run() does not write stimuli or read the result, so
-        # bracket it — write the real input to L1 first, read it back after.
+        # write the real input to L1 first and read it back after.
         configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
         configuration.run(perf_report)
         res_from_L1 = configuration.variant_stimuli.collect_results(
             TestConfig.TENSIX_LOCATION
         )
 
-    # ── Golden + accuracy CSV (ACCURACY and BOTH) ───────────────────────────
+    # ── Golden + accuracy CSV ──────────────────────────────────────────────────
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
         op,

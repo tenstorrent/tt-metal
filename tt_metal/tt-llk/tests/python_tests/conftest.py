@@ -289,6 +289,15 @@ def pytest_addoption(parser):
         "(case-insensitive, exact). Repeatable: --op=exp --op=log.",
     )
 
+    parser.addoption(
+        "--mode",
+        action="store",
+        default=None,
+        choices=["accuracy", "perf", "both"],
+        help="SFPU sweep selector (accuracy | perf | both): keeps only that sweep "
+        "test and deselects the other two. Exact-match shorthand for -k.",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
