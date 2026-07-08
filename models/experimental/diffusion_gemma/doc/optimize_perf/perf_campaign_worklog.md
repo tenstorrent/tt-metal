@@ -44,5 +44,35 @@ Permute cumsum-artifact is **gone** (1.8%) with the capacity-dispatch MoE — th
 Roofline: per denoise step re-reads all resident weights (13.1 GiB/chip, 88.6% MoE experts) over the full
 256 canvas — weight traffic, not incremental KV, sets the floor. `100 tok/s` needs the block-time split first.
 
+## Block-time split (2026-07-08) — commit dominates, not denoise
+
+| phase | per 256-token block | note |
+|---|---:|---|
+| denoise | ~11.2 s | ≤48 steps × 233 ms traced |
+| **commit** | **~31–35 s** | **256 sequential single-token decode-appends** (one full 30L forward each) |
+| ⇒ block | ~43 s → ~6 tok/s | commit is ~75% of block time |
+
+**So the #1 lever is the commit, not the denoise step.** After denoise the 256 canvas tokens are
+known; populating their KV is algebraically a *causal prefill of 256 tokens at start_pos*, not 256
+autoregressive decodes.
+
+## Batched commit — 24.8× prize, but currently numerically broken
+
+`verify_commit_batching.py --num-layers 30` (cloned KV caches, seq vs batched, per-layer PCC):
+
+- **speedup = 24.82×** (commit 35.1 s → **1.41 s**). This alone would take the block ~43 s → ~13 s ⇒ ~6 → ~20 tok/s.
+- **PCC FAIL: 232/240 K/V checks fail.** Signature: **layer 0 K/V = 0.99999 (exact), then error compounds every layer** (L1 K 0.89, L5 0.41, L11 0.04, L24 V = −0.10). Classic accumulation.
+- Diagnosis: layer-0 *written K/V* is correct, so embedding + K/V projection are right; the divergence is in the **attention output** (hidden state passed layer→layer). Suspects in `commit_batched.py`: the `build_device_commit_causal_mask` prefix+canvas causal pattern, canvas-Q RoPE offset, or the read-back-then-SDPA numerics — not the KV write.
+
+### Two paths forward (next iteration)
+1. **Reuse the proven `chunked_prefill.py` (PCC 0.9997)** for commit — it already does correct causal +
+   sliding-window prefill at a non-zero `start_pos` (`chunk_start_idx` + `paged_fill_cache`). Commit ≡ prefill
+   the 256 canvas tokens at `start_pos`; correct-by-construction, sidesteps the `commit_batched.py` mask bug. **Preferred.**
+2. Debug `commit_batched.py`'s attention layer-by-layer (compare batched vs sequential attention output at layer 0,
+   isolate mask/RoPE/SDPA). Higher risk.
+
+Do NOT enable batched commit until PCC ≥ 0.997 (KV correctness gates block-to-block coherence).
+
 ## Log
 - 2026-07-08: baseline captured (traced 233 ms/step); op audit from whole_gen_opprofile; levers prioritized.
+- 2026-07-08: block-time split → commit (~31 s, 256 sequential decodes) dominates. Batched commit verified 24.8× faster but KV PCC fails (232/240, layer-0-exact then compounds). Next: route commit through chunked_prefill (preferred) or debug commit_batched attention.
