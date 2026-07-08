@@ -12,7 +12,11 @@ The original Step-E "net loss" was measured in **host wall-clock**, which is dom
 | glm5-contiguous | 327 | 192 | 519 | **694** | 475 | **336** | 328 / 192(nl2) |
 | dsv32-contiguous | 327 | 332 | 659 | — | 490 | **376** | 332 |
 | glm5-block_cyclic (KC∤cl_t) | 327 | 192 | 519 | — | 563 | 407 | 328 / 192 |
-| glm5-block_cyclic (KC=cl_t=20) | 195 | 198 | 393 | — | — | **349** | 198 |
+| glm5-block_cyclic (KC=20\|cl_t) | 195 | 198 | 393 | — | — | **349** | 198 |
+| dsv32-block_cyclic (KC=8∤cl_t) | 330 | 332 | 662 | — | 735 | 540 | 332 |
+| **dsv32-block_cyclic (KC=10\|cl_t)** — production-shaped | 183 | 334 | 517 | — | — | **383** | 334 |
+
+The last row is the closest to the deployed DSA config (16 heads, block-cyclic, num_links=2, k_chunk_size aligned to chunk_local): **fused 383µs vs the 334µs AG-hidden ideal (+49µs), 133µs below the two-op floor** — the all-gather is essentially fully overlapped behind scoring.
 
 Original fused (glm5-contig) was **694µs > the 519µs two-op floor** — a genuine device regression, matching the host finding. After the fixes it is **336µs (nl2) — below the floor and within +144 of the AG-hidden ideal**; for the compute-heavy **dsv32 it is 376µs vs the 332µs ideal (+44µs — the AG is essentially fully hidden)**.
 
