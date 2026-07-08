@@ -225,7 +225,7 @@ def prefill_sdpa_program_config(head_dim, seq_len):
     )
 
 
-def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0):
+def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, scale=1.0, base_offset=0):
     """Chunked causal prefill SDPA over a paged KV cache.
 
     Splits the Q sequence into chunks of ``PREFILL_CHUNK_SIZE`` (<=32768) and runs
@@ -240,8 +240,13 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
         page_table: int32 [batch, num_pages] (row ``user_id`` is this user's blocks).
         user_id: which page_table row maps this user's logical->physical blocks.
         head_dim: layer head_dim (512 for global layers; sizes the SDPA grid).
-    Returns:
-        [1, num_local_heads, seq_len, head_dim] attention output (TILE layout).
+        base_offset: absolute position (in the full sequence) of ``tt_q``'s first
+            row. Non-zero for generator-level multi-chunk prefill: chunk N's Q sits
+            at ``N*chunk_size`` and must attend the full prior prefix already in the
+            paged cache. Added to each internal Q-chunk offset so the op's causal
+            mask covers ``[0, base_offset + local_end)``. Must be a multiple of the
+            program's ``q_chunk_size`` (128); generator chunk sizes are >=128 powers
+            of two so this holds.
     """
     seq_len = tt_q.shape[-2]
     nh = tt_q.shape[1]
@@ -294,7 +299,7 @@ def chunked_prefill_sdpa(tt_q, k_cache, v_cache, page_table, user_id, head_dim, 
             k_cache,
             v_cache,
             user_pt,
-            chunk_start_idx=start,
+            chunk_start_idx=base_offset + start,
             scale=scale,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,

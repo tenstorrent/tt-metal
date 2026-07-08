@@ -406,13 +406,16 @@ def test_demo_text(
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
-    # Bounded sliding KV cache: required for long context (>~64k). Without it,
-    # the 50 sliding layers each allocate the *full* context KV (~25 GB at 128k)
-    # and OOM; bounded mode caps them at the 1024-token sliding window so only
-    # the 10 full-attention layers grow with context. Auto-enable for long
-    # contexts; override with GEMMA4_BOUNDED_SLIDING=0/1.
+    # Sliding-cache mode. Default: FULL (unbounded) sliding KV, which stays
+    # coherent at long context — the bounded circular ring corrupts the recent
+    # window on padded >32k prefills (see docs/bounded_sliding_kv_cache_debug.md).
+    # Full KV allocates every sliding layer at full length, so it only fits up to
+    # ~64k on this board; above that we auto-fall back to bounded sliding to avoid
+    # OOM (the 50 sliding layers cap at the 1024-token window; only the 10
+    # full-attention layers grow), accepting bounded's known >~34k degradation
+    # there. Override either way with GEMMA4_BOUNDED_SLIDING=0/1.
     _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
-    bounded_sliding = (max_seq_len > 16384) if _bs_env is None else _bs_env.lower() in ("1", "true", "yes")
+    bounded_sliding = (max_seq_len > 65536) if _bs_env is None else _bs_env.lower() in ("1", "true", "yes")
     bounded_sliding = bounded_sliding and paged_attention
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
