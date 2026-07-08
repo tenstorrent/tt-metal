@@ -874,56 +874,63 @@ _HAS_SF_CREDS = bool(
     and os.environ.get("SNOWFLAKE_USER")
     and (os.environ.get("SNOWFLAKE_PRIVATE_KEY") or os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH"))
 )
+# A pre-provisioned scratch SELF_SERVE schema the service account owns. In the
+# managed SELF_SERVE model NO role can CREATE SCHEMA, so this test can't spin up
+# its own — it must be handed one. To run this test:
+#   1) provision a scratch schema via Data Central (e.g. ttnn_ops_pytest_integ),
+#   2) grant the service account its SELF_SERVE_OWNER_<SCHEMA> role,
+#   3) export TTNN_OPS_TEST_SCHEMA=<schema> and SNOWFLAKE_ROLE=SELF_SERVE_OWNER_<SCHEMA>.
+_TEST_SCHEMA = os.environ.get("TTNN_OPS_TEST_SCHEMA")
 
 
 @pytest.mark.skipif(
-    not _HAS_SF_CREDS,
-    reason="Snowflake creds not set (SNOWFLAKE_ACCOUNT/USER/PRIVATE_KEY[_PATH])",
+    not (_HAS_SF_CREDS and _TEST_SCHEMA),
+    reason="Set Snowflake creds + TTNN_OPS_TEST_SCHEMA (a provisioned SELF_SERVE schema the "
+    "service account owns, with SNOWFLAKE_ROLE set to its owner role) to run",
 )
 class TestSnowflakeLoadReconstructIntegration:
-    """Real Snowflake load -> reconstruct round-trip against a throwaway schema.
+    """Real Snowflake load -> reconstruct round-trip against a provisioned scratch schema.
 
-    This class replaces the old mocked-``psycopg2`` tests (the loader is now
-    Snowflake-only, so those mocks no longer apply). It is GATED on Snowflake
-    credentials and skipped otherwise, so the default local/CI run stays offline.
-
-    Test input is generated at runtime by reconstructing the smallest real V6
-    trace (read-only) into a temp file — no data fixture is committed to the repo
-    and the input never drifts from the schema. Each test builds an empty
-    throwaway schema from the v6 DDL, loads that JSON, reconstructs it, and drops
-    the schema in teardown. ``SELF_SERVE.TTNN_OPS_V6`` is only read, never written.
+    Replaces the old mocked-``psycopg2`` tests (the loader is now Snowflake-only).
+    GATED on Snowflake creds + TTNN_OPS_TEST_SCHEMA, so the default local/CI run
+    stays offline. Test input is generated at runtime by reconstructing the
+    smallest real V6 trace (read-only) into a temp file — no committed data
+    fixture, and the input never drifts from the schema. Each test (re)creates the
+    v6 tables in the scratch schema, loads that JSON, reconstructs it, and drops
+    the tables on teardown. ``SELF_SERVE.TTNN_OPS_V6`` is only read, never written.
     """
 
     # Provenance/aggregation keys added by load+reconstruct that are not part of
     # the config body we assert equality on.
     _PROVENANCE_KEYS = {"executions", "trace_run_ids", "pytest_args", "pytest_args_seen"}
 
-    # Fixed throwaway schema (unqualified name; the loader qualifies + uppercases
-    # it to SELF_SERVE.TTNN_OPS_PYTEST_INTEG). It is DROP+CREATEd per test so
-    # counts are deterministic and no state leaks between runs.
-    TEST_SCHEMA = "ttnn_ops_pytest_integ"
-
     @pytest.fixture
     def sf_schema(self):
-        """Create an empty throwaway schema from the v6 DDL; drop it on teardown.
+        """(Re)create the v6 tables in the provisioned scratch schema; drop them on teardown.
 
-        Yields ``(schema_name, connection)``. The DDL itself begins with
-        ``DROP SCHEMA IF EXISTS ...; CREATE SCHEMA ...`` so it is idempotent.
+        The schema is provisioned out-of-band (Data Central) — no role can
+        CREATE SCHEMA in the managed model — so this only creates/drops TABLES,
+        which the owner role can do. Requires SNOWFLAKE_ROLE to be a role that can
+        write TTNN_OPS_TEST_SCHEMA. Yields ``(schema_name, connection)``.
         """
         import tests.sweep_framework.load_ttnn_ops_data_v2 as _ldr
 
+        schema = _TEST_SCHEMA
+        qualified = f"SELF_SERVE.{schema.upper()}"
         ddl_path = Path(_ldr.__file__).parent.parent.parent / "model_tracer" / "create_ttnn_ops_schema_v6_snowflake.sql"
-        ddl = ddl_path.read_text().replace("TTNN_OPS_V6", "TTNN_OPS_PYTEST_INTEG")
+        ddl = ddl_path.read_text().replace("TTNN_OPS_V6", schema.upper())
 
         conn = _ldr._connect(autocommit=True)
-        qualified = f"SELF_SERVE.{self.TEST_SCHEMA.upper()}"
         try:
             for _ in conn.execute_string(ddl):
                 pass
-            yield self.TEST_SCHEMA, conn
+            yield schema, conn
         finally:
             try:
-                conn.cursor().execute(f"DROP SCHEMA IF EXISTS {qualified}")
+                cur = conn.cursor()
+                cur.execute(f"SHOW TABLES IN SCHEMA {qualified}")
+                for row in cur.fetchall():
+                    cur.execute(f'DROP TABLE IF EXISTS {qualified}."{row[1]}"')
             finally:
                 conn.close()
 

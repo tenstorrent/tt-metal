@@ -5,12 +5,15 @@
 -- TTNN Ops Database Schema v6 — SNOWFLAKE edition
 --
 -- Snowflake port of model_tracer/destructively_create_ttnn_ops_schema_v6.sql.
--- Creates SELF_SERVE.TTNN_OPS_V6, the schema read/written by
--- tests/sweep_framework/load_ttnn_ops_data_v2.py (Snowflake-only).
+-- Creates the TABLES in SELF_SERVE.TTNN_OPS_V6 (read/written by
+-- tests/sweep_framework/load_ttnn_ops_data_v2.py, Snowflake-only).
 --
--- ⚠️  DESTRUCTIVE: this DROPs the target schema and all its data, then recreates
---     it empty. To build a NON-destructive copy (e.g. to test without touching
---     the live TTNN_OPS_V6), find/replace TTNN_OPS_V6 -> TTNN_OPS_V7 below.
+-- The SELF_SERVE.<project> SCHEMA and its SELF_SERVE_OWNER_<project> /
+-- SELF_SERVE_READER_<project> roles are provisioned via Data Central; the schema
+-- is NOT created here (the owner role cannot CREATE SCHEMA on the database).
+-- Run with the owner role active:  USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;
+-- ⚠️  CREATE OR REPLACE below drops/recreates the TABLES (data-destructive), not
+--     the schema. To target another schema, find/replace TTNN_OPS_V6.
 --
 -- Postgres -> Snowflake differences (vs the .sql this is ported from):
 --   * SERIAL / BIGSERIAL PRIMARY KEY -> plain NUMBER id columns. Ids are
@@ -30,13 +33,12 @@
 --     inform tooling/optimizer.
 --   * DEFAULT NOW() -> DEFAULT CURRENT_TIMESTAMP().
 
-DROP SCHEMA IF EXISTS SELF_SERVE.TTNN_OPS_V6;
-CREATE SCHEMA SELF_SERVE.TTNN_OPS_V6;
+USE SCHEMA SELF_SERVE.TTNN_OPS_V6;
 
 -- ---------------------------------------------------------------------------
 -- 1. ttnn_operation
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_OPERATION (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_OPERATION (
     TTNN_OPERATION_ID   NUMBER(38,0) NOT NULL,
     OPERATION_NAME      VARCHAR      NOT NULL,
     -- Postgres GENERATED column; populated by the loader (_base_operation_name).
@@ -49,7 +51,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_OPERATION (
 -- ---------------------------------------------------------------------------
 -- 2. ttnn_model
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_MODEL (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_MODEL (
     TTNN_MODEL_ID       NUMBER(38,0) NOT NULL,
     SOURCE_FILE         VARCHAR      NOT NULL,
     HF_MODEL_IDENTIFIER VARCHAR,
@@ -65,7 +67,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_MODEL (
 -- ---------------------------------------------------------------------------
 -- 3. ttnn_hardware
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_HARDWARE (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_HARDWARE (
     TTNN_HARDWARE_ID NUMBER(38,0) NOT NULL,
     BOARD_TYPE       VARCHAR      NOT NULL,
     DEVICE_SERIES    VARCHAR      NOT NULL,
@@ -78,7 +80,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_HARDWARE (
 -- ---------------------------------------------------------------------------
 -- 4. ttnn_mesh_config  (mesh_shape stored as ARRAY)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_MESH_CONFIG (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_MESH_CONFIG (
     TTNN_MESH_CONFIG_ID NUMBER(38,0) NOT NULL,
     MESH_SHAPE          ARRAY        NOT NULL,
     DEVICE_COUNT        NUMBER(38,0) NOT NULL,
@@ -96,7 +98,7 @@ INSERT INTO SELF_SERVE.TTNN_OPS_V6.TTNN_MESH_CONFIG
 -- ---------------------------------------------------------------------------
 -- 5. ttnn_configuration  (full_config_json is the source of truth, stored as text)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_CONFIGURATION (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_CONFIGURATION (
     TTNN_CONFIGURATION_ID NUMBER(38,0) NOT NULL,
     OPERATION_ID          NUMBER(38,0) NOT NULL,
     HARDWARE_ID           NUMBER(38,0),
@@ -118,7 +120,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_CONFIGURATION (
 -- ---------------------------------------------------------------------------
 -- 6. ttnn_configuration_model  (derived aggregate: counts per config+model)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_CONFIGURATION_MODEL (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_CONFIGURATION_MODEL (
     CONFIGURATION_ID NUMBER(38,0) NOT NULL,
     MODEL_ID         NUMBER(38,0) NOT NULL,
     EXECUTION_COUNT  NUMBER(38,0) NOT NULL DEFAULT 1,
@@ -132,7 +134,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TTNN_CONFIGURATION_MODEL (
 -- ---------------------------------------------------------------------------
 -- 7. trace_run  (one row per imported trace artifact)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN (
     TRACE_RUN_ID NUMBER(38,0) NOT NULL,
     TRACE_UID    VARCHAR      NOT NULL,
     HARDWARE_ID  NUMBER(38,0),
@@ -152,7 +154,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN (
 -- ---------------------------------------------------------------------------
 -- 8. trace_run_configuration_model  (canonical per-trace per-config per-model counts)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_CONFIGURATION_MODEL (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_CONFIGURATION_MODEL (
     TRACE_RUN_ID     NUMBER(38,0) NOT NULL,
     CONFIGURATION_ID NUMBER(38,0) NOT NULL,
     MODEL_ID         NUMBER(38,0) NOT NULL,
@@ -168,7 +170,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_CONFIGURATION_MODEL (
 -- ---------------------------------------------------------------------------
 -- 9. trace_run_config  (derived aggregate: counts per trace+config)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_CONFIG (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_CONFIG (
     TRACE_RUN_ID     NUMBER(38,0) NOT NULL,
     CONFIGURATION_ID NUMBER(38,0) NOT NULL,
     EXECUTION_COUNT  NUMBER(38,0) NOT NULL DEFAULT 1,
@@ -180,7 +182,7 @@ CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_CONFIG (
 -- ---------------------------------------------------------------------------
 -- 10. trace_run_model  (derived: models per trace)
 -- ---------------------------------------------------------------------------
-CREATE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_MODEL (
+CREATE OR REPLACE TABLE SELF_SERVE.TTNN_OPS_V6.TRACE_RUN_MODEL (
     TRACE_RUN_ID NUMBER(38,0) NOT NULL,
     MODEL_ID     NUMBER(38,0) NOT NULL,
     PRIMARY KEY (TRACE_RUN_ID, MODEL_ID),

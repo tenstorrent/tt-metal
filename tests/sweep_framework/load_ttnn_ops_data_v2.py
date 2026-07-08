@@ -173,7 +173,8 @@ def _connect(autocommit=None):
     params = dict(
         account=os.environ["SNOWFLAKE_ACCOUNT"],
         user=os.environ["SNOWFLAKE_USER"],
-        role=os.environ.get("SNOWFLAKE_ROLE", "SELF_SERVE"),
+        # Read-only role by default; set SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6 to write.
+        role=os.environ.get("SNOWFLAKE_ROLE", "SELF_SERVE_READER_TTNN_OPS_V6"),
         warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "PUBLIC"),
         database=SNOWFLAKE_DATABASE,
     )
