@@ -90,13 +90,17 @@ def test_matmul_sweep(mesh_device):
         n_tiles = N // 32
         act = ttnn.from_torch(
             torch.randn(1, 1, M, K, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         w = ttnn.from_torch(
             torch.randn(1, 1, K, N, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT,
-            device=mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         act_fmt = (ttnn.UnaryOpType.GELU, True) if gelu else None
         for mb in M_BLOCKS:
@@ -108,17 +112,24 @@ def test_matmul_sweep(mesh_device):
                         continue
                     sbh, sbw = _pick_subblock(mb, nb)
                     cfg = ttnn.MinimalMatmulConfig(
-                        M_block_size=mb, K_block_size=kb, N_block_size=nb,
-                        subblock_h=sbh, subblock_w=sbw,
+                        M_block_size=mb,
+                        K_block_size=kb,
+                        N_block_size=nb,
+                        subblock_h=sbh,
+                        subblock_w=sbw,
                         compute_with_storage_grid_size=GRID,
                     )
 
                     def run(a=act, weight=w, c=cfg, fa=act_fmt):
                         out = ttnn.experimental.minimal_matmul(
-                            input_tensor=a, weight_tensor=weight, bias_tensor=None,
-                            fused_activation=fa, config=c,
+                            input_tensor=a,
+                            weight_tensor=weight,
+                            bias_tensor=None,
+                            fused_activation=fa,
+                            config=c,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                            dtype=ttnn.bfloat8_b, compute_kernel_config=ck,
+                            dtype=ttnn.bfloat8_b,
+                            compute_kernel_config=ck,
                         )
                         ttnn.deallocate(out)
 
