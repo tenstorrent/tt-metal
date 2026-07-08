@@ -218,7 +218,7 @@ class Cosmos3OmniTransformer(Module):
             # drain device profiler ring mid-trunk to prevent overflow on long captures;
             # each drain adds a host sync — no-op in production (env unset → 0)
             if _profile_flush_every and (i + 1) % _profile_flush_every == 0:
-                ttnn.ReadDeviceProfilerResults(self.mesh_device)
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         und_out = self.norm(und_seq)
         gen_out = self.norm_moe_gen(gen_seq)
