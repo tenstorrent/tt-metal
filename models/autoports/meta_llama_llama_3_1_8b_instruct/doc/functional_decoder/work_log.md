@@ -70,9 +70,40 @@ Note: `.agents/scripts/check_context_contract.py --model-dir models/autoports/me
 
 Rereview after remediation returned `clean-pass` with no required work. The reviewer classified the context-checker conflict and decode-shaped source graph as controlled anomalies.
 
+## AutoFix Follow-Up: Context Checker
+
+An AutoFix-style independent diagnostic pass inspected the remaining failed gate:
+
+```bash
+python .agents/scripts/check_context_contract.py --model-dir models/autoports/meta_llama_llama_3_1_8b_instruct
+```
+
+Result:
+
+```text
+models/autoports/meta_llama_llama_3_1_8b_instruct/doc/context_contract.json supports context 8, below HF-advertised 131072, without device-DRAM capacity evidence.
+```
+
+Verdict: no honest model-dir-only JSON change can both preserve:
+
+- `hf_advertised_context = 131072`
+- `current_supported_context = 8`, the largest validated prefill seq
+- non-DRAM, validation-scope reduction notes
+- checker success
+
+The checker condition is:
+
+```python
+if supported < target and not has_dram_limit_evidence(contract):
+    return 2
+```
+
+The only mechanical JSON edits that pass are to overstate supported context as 131072 or falsely claim a DRAM capacity limit. Both would violate the stage evidence, so this artifact intentionally keeps the honest context contract.
+
 ## Checkpoint Commit
 
 - Repo: `/localdev/mvasiljevic/tt-metal`
 - Branch: `mvasiljevic/llama-forge-seed-rerun`
 - Implementation checkpoint commit: `77600fb40a5`
+- Context-checker diagnostic commit: pending
 - Push: not pushed
