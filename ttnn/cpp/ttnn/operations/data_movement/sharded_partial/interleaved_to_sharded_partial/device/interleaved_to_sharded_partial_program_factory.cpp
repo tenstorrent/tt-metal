@@ -82,7 +82,10 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     auto* dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    // Quasar shares Blackhole's NoC alignment (DRAM read align 64, L1 16), which differs from Wormhole
+    // (DRAM align 32), so both take the same alignment-adjust path below.
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
+    bool is_quasar = (input.device()->arch() == tt::ARCH::QUASAR);
 
     if (input.layout() == Layout::TILE) {
         input_unit_size = tt::tile_size(input_cb_data_format);
@@ -167,7 +170,7 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
-    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
+    if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || (is_blackhole || is_quasar) || keep_l1_aligned) {
         // scratchpad going to be used to align DRAM (64B) to L1 (16B)
         // This is done to mitigate the alignment issues.
         // See issue #34414.
@@ -352,13 +355,13 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
                 (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0)
                              : true);
             // for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
-            aligned = aligned and !(is_blackhole);
+            aligned = aligned and !(is_blackhole || is_quasar);
             uint32_t aligned_width_offset = 0;
             uint32_t aligned_shard_width = 0;
             uint32_t aligned_offset = 0;
             if (!aligned) {
                 // TODO: is this right, leaving non BH case the same for now, should investigate
-                if (!is_blackhole) {
+                if (!(is_blackhole || is_quasar)) {
                     aligned_width_offset = tt::round_down(curr_idx_w, dram_alignment);
                 } else {
                     if (src_is_dram) {
