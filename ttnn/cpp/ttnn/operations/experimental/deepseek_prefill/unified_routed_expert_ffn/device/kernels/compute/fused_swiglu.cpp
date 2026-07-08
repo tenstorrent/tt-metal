@@ -59,6 +59,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
@@ -247,7 +248,8 @@ template <
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t out_subblock_num_tiles,
-    uint32_t out_block_num_tiles>
+    uint32_t out_block_num_tiles,
+    bool tilize_x = false>
 FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t x_cb_id,
     uint32_t gate_cb_id,
@@ -255,7 +257,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
     uint32_t partials_gu_cb_id,
     uint32_t partials_up_cb_id,
     uint32_t gate_intermed_cb_id,
-    uint32_t up_intermed_cb_id) {
+    uint32_t up_intermed_cb_id,
+    uint32_t x_rm_cb_id = 0) {
     PACK((pack_reconfig_data_format(partials_gu_cb_id)));
 #ifdef PACKER_L1_ACC
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -267,6 +270,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
     CircularBuffer partials_gu_cb(partials_gu_cb_id);
     CircularBuffer partials_up_cb(partials_up_cb_id);
     CircularBuffer gate_intermed_cb(gate_intermed_cb_id);
+    CircularBuffer x_rm_cb(x_rm_cb_id);
 
     // Reserve both partials CBs once for the full per-core block. pack_tile
     // with output_tile_index writes to absolute slots; WrPtr doesn't advance
@@ -277,6 +281,39 @@ FORCE_INLINE void matmul_phase_fused_gu(
     partials_up_cb.reserve_back(out_block_num_tiles);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
+        if constexpr (tilize_x) {
+            // Row-major x: tilize this K-block's cb_x_rm strips (bf16) -> x_cb
+            // (cb_in0_x, bf8_b) before the matmul consumes it. Packer recipe
+            // mirrors conv's conv_bmm_tilize.cpp: reconfig packer to the tilize
+            // output + L1_ACC off for the overwrite, tilize each 32-row strip,
+            // then restore the matmul unpack (x->SrcB, gate->SrcA) and the
+            // partials packer + L1_ACC state for this block.
+            constexpr uint32_t n_strips = in0_block_num_tiles / in0_block_w;
+            x_rm_cb.wait_front(in0_block_num_tiles);
+            x_cb.reserve_back(in0_block_num_tiles);
+            PACK((pack_reconfig_data_format(partials_gu_cb_id, x_cb_id)));
+#ifdef PACKER_L1_ACC
+            PACK((llk_pack_reconfig_l1_acc(0)));
+#endif
+            // Point SrcA at the bf16 row-major input. The prior matmul left SrcA
+            // configured for the gate/up weights (bf4/bf8); without this the
+            // tilize unpacks bf16 with the wrong register datatype and stalls.
+            // (Mirrors compute_kernel_lib::tilize's UnpackReconfigure step.)
+            reconfig_data_format_srca(x_rm_cb_id);
+            tilize_init(x_rm_cb_id, in0_block_w, x_cb_id);
+            for (uint32_t s = 0; s < n_strips; ++s) {
+                tilize_block(x_rm_cb_id, in0_block_w, x_cb_id, s * in0_block_w, s * in0_block_w);
+            }
+            tilize_uninit(x_rm_cb_id, x_cb_id);
+            x_cb.push_back(in0_block_num_tiles);
+            x_rm_cb.pop_front(in0_block_num_tiles);
+            reconfig_data_format(gate_cb_id, x_cb_id);
+            matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+            PACK((pack_reconfig_data_format(x_cb_id, partials_gu_cb_id)));
+#ifdef PACKER_L1_ACC
+            PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
+#endif
+        }
         x_cb.wait_front(in0_block_num_tiles);
         gate_cb.wait_front(in1_block_num_tiles);
         up_cb.wait_front(in1_block_num_tiles);
@@ -681,8 +718,16 @@ void kernel_main() {
             gu_out_subblock_h,
             gu_out_subblock_w,
             gu_out_subblock_num_tiles,
-            gu_out_block_num_tiles>(
-            cb_in0_x, cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
+            gu_out_block_num_tiles,
+            /*tilize_x=*/(x_is_row_major != 0)>(
+            cb_in0_x,
+            cb_in1_gate,
+            cb_in1_up,
+            cb_partials_gu,
+            cb_partials_up,
+            cb_gate_intermed,
+            cb_up_intermed,
+            cb_x_rm);
 
 #ifdef SWIGLU_OAI
         // Phase 3 (SwiGLU-OAI): fused clamp + alpha-sigmoid + (up+1) directly on
