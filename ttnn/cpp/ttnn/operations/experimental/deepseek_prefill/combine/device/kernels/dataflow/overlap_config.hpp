@@ -34,3 +34,11 @@
 //
 // Set to 0 to restore the original one-at-a-time blocking send path.
 #define OVERLAPING_TOKEN_WRITE 1
+
+// Depth of the lockstep trid + packet-header pools (stage 3 / 3b). Each in-flight token uses trid
+// (slot + 1) — trid 0 is avoided — and header pool[slot], cycling slot over [0, OVERLAP_POOL_DEPTH).
+// At stage 3 the wait is still adjacent (one in flight); at stage 4 this becomes the max number of
+// outstanding sends (the wait lags by this many). Must be <= 15 (Blackhole has 16 NOC trids 0..15,
+// trid 0 reserved) and, at stage 4, strictly less than the cb_route_info depth. The factory grows the
+// c_5 packet-header CB to (2 + OVERLAP_POOL_DEPTH) headers when OVERLAPING_TOKEN_WRITE is on.
+#define OVERLAP_POOL_DEPTH 8

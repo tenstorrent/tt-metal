@@ -20,6 +20,9 @@
 #include <tt-metalium/workload_descriptor.hpp>
 #include <ttnn/global_semaphore.hpp>
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+// Overlapping-token-write experiment toggles (OVERLAPING_TOKEN_WRITE, OVERLAP_POOL_DEPTH). Pure
+// #defines shared with the device kernels so one edit sizes both the CB (here) and the kernel pools.
+#include "kernels/dataflow/overlap_config.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
@@ -454,9 +457,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         });
     }
 
-    // c_5: packet header CB for fabric sends (writer-only)
+    // c_5: packet header CB for fabric sends (writer-only). Base layout is 2 headers (unicast +
+    // handshake). With OVERLAPING_TOKEN_WRITE the writer also keeps a lockstep pool of
+    // OVERLAP_POOL_DEPTH headers (one per in-flight send) right after those two, so grow the CB.
     if (num_links > 0) {
+#if OVERLAPING_TOKEN_WRITE
+        constexpr uint32_t num_packet_headers = 2 + OVERLAP_POOL_DEPTH;
+#else
         constexpr uint32_t num_packet_headers = 2;
+#endif
         auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
 

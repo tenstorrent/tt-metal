@@ -355,6 +355,16 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr);
 
+#if OVERLAPING_TOKEN_WRITE && defined(DEST_CHIP_ID)
+    // Lockstep trid + header pools (stage 3 / gap#1). The header pool lives right after the 2 base
+    // headers (unicast + handshake) in c_5. Each token uses header pool[overlap_slot] and trid
+    // (overlap_slot + 1), cycling overlap_slot over [0, OVERLAP_POOL_DEPTH). The wait is still
+    // adjacent here (one in flight), so cycling is functionally a no-op — it sets up stage 4, where
+    // the wait lags by the pool depth and these become the outstanding in-flight sends.
+    const uint32_t overlap_hdr_pool_base = packet_header_buffer_address + 2u * sizeof(PACKET_HEADER_TYPE);
+    uint32_t overlap_slot = 0;
+#endif
+
     {
         // DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
@@ -412,27 +422,30 @@ void kernel_main() {
 #else
                 auto& payload_sender = fabric_connections[fabric_route];
 #endif
-                ccl_routing_utils::fabric_set_line_unicast_route(
-                    pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
 #if OVERLAPING_TOKEN_WRITE
-                // Stage 2: tag the send with a NOC transaction id and wait on THAT specific trid
-                // instead of a global flush. Still issued + waited adjacently (single trid, one send
-                // in flight), so behaviorally equivalent to stage 1 — this just proves the trid path
-                // works before stage 3 (cycle a trid pool) and stage 4 (lag the wait). The barrier is
-                // a completion (ack) wait, marginally stronger than the flush it replaces; harmless at
-                // one-in-flight and hidden once the wait is lagged. See overlap_config.hpp.
-                constexpr uint32_t OVERLAP_TRID = 1;  // stage 3 will cycle a pool instead of reusing one
+                // Stage 3 / gap#1: pick this token's header + trid from the lockstep pools, build the
+                // route into that pooled header, issue tagged with its trid, then wait on that trid.
+                // The wait is still adjacent (one in flight) so this is behaviorally equivalent to
+                // stage 2 — it just establishes the per-slot header/trid pairing that stage 4 relies
+                // on (stage 4 moves this wait ahead by OVERLAP_POOL_DEPTH iterations).
+                auto* overlap_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                    overlap_hdr_pool_base + overlap_slot * sizeof(PACKET_HEADER_TYPE));
+                const uint32_t overlap_trid = overlap_slot + 1;  // 1..OVERLAP_POOL_DEPTH (trid 0 reserved)
+                ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(overlap_hdr), pkt_route_info);
                 fabric_send_noc_unicast_with_trid<fabric_max_packet_size>(
                     output_addr_gen,
                     payload_sender,
-                    unicast_packet_header,
+                    overlap_hdr,
                     output_data_addr,
                     output_page_idx,
                     (int)aligned_output_page_size,
                     l1_alignment,
-                    OVERLAP_TRID);
-                wait_on_flush_for_trid(OVERLAP_TRID);  // adjacent WAIT on this packet's trid
+                    overlap_trid);
+                wait_on_flush_for_trid(overlap_trid);  // adjacent WAIT on this packet's trid (stage 4 lags it)
+                overlap_slot = (overlap_slot + 1 == OVERLAP_POOL_DEPTH) ? 0u : overlap_slot + 1u;
 #else
+                ccl_routing_utils::fabric_set_line_unicast_route(
+                    pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
                 fabric_send_noc_unicast<fabric_max_packet_size>(
                     output_addr_gen,
                     payload_sender,
