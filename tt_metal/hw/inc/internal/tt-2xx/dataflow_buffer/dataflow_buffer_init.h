@@ -471,12 +471,11 @@ FORCE_INLINE void setup_dfb_implicit_sync(uint32_t tt_l1_ptr* dfb_config_base, u
         subpassB_hw);
 }
 
-FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32_t num_dfbs) {
+FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32_t /*num_dfbs*/) {
     const uint32_t start_time = rdcycle();
 
     volatile tt_l1_ptr uint8_t* config_base = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dfb_config_base);
     volatile dfb_global_header_t* ghdr = reinterpret_cast<volatile dfb_global_header_t*>(config_base);
-    num_dfbs = ghdr->num_dfbs;
     const uint32_t dm1_remapper_blob_offset = ghdr->dm1_remapper_blob_offset;
     volatile tt_l1_ptr uint8_t* dm1_blob_ptr = config_base + dm1_remapper_blob_offset;
 
@@ -495,62 +494,52 @@ FORCE_INLINE void setup_dfb_remapper(uint32_t tt_l1_ptr* dfb_config_base, uint32
     bool first_slot_written = false;
     uint32_t max_pair_idx = 0;
 
-    for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
-        const uint32_t t_pass_start = rdcycle();
-        uint32_t pass_l1_read = 0;
-        uint32_t pass_pairs_reg = 0;
+    const uint32_t t_loop_start = rdcycle();
+    const volatile dfb_dm1_remapper_core_header_t* core_hdr =
+        reinterpret_cast<const volatile dfb_dm1_remapper_core_header_t*>(dm1_blob_ptr);
+    const uint16_t num_slots = core_hdr->num_slots;
+    const volatile dfb_dm0_remapper_slot_t* slots =
+        reinterpret_cast<const volatile dfb_dm0_remapper_slot_t*>(
+            dm1_blob_ptr + sizeof(dfb_dm1_remapper_core_header_t));
+    const uint32_t t_after_hdr = rdcycle();
+    blob_l1_read_sw = t_after_hdr - t_loop_start;
 
-        const volatile dfb_dm1_remapper_entry_header_t* entry_hdr =
-            reinterpret_cast<const volatile dfb_dm1_remapper_entry_header_t*>(dm1_blob_ptr);
-        const int num_rmp = entry_hdr->num_remapper_slots;
-        WAYPOINT("RS2");
+    WAYPOINT("RS2");
 
-        const uint32_t entry_bytes = sizeof(dfb_dm1_remapper_entry_header_t)
-                                     + static_cast<uint32_t>(num_rmp) * sizeof(dfb_dm0_remapper_slot_t);
-        const volatile dfb_dm0_remapper_slot_t* slots =
-            reinterpret_cast<const volatile dfb_dm0_remapper_slot_t*>(
-                dm1_blob_ptr + sizeof(dfb_dm1_remapper_entry_header_t));
-        const uint32_t t_after_hdr = rdcycle();
-        pass_l1_read += t_after_hdr - t_pass_start;
+    for (uint16_t s = 0; s < num_slots; s++) {
+        const uint32_t t_slot_read_start = rdcycle();
+        const uint32_t pair_idx = slots[s].pair_index;
+        const uint32_t clientR_val = slots[s].clientR_val;
+        const uint32_t clientL_val = slots[s].clientL_val;
+        const uint32_t t_after_slot_read = rdcycle();
+        blob_l1_read_sw += t_after_slot_read - t_slot_read_start;
 
-        for (int s = 0; s < num_rmp; s++) {
-            const uint32_t t_slot_read_start = rdcycle();
-            const uint32_t pair_idx = slots[s].pair_index;
-            const uint32_t clientR_val = slots[s].clientR_val;
-            const uint32_t clientL_val = slots[s].clientL_val;
-            const uint32_t t_after_slot_read = rdcycle();
-            pass_l1_read += t_after_slot_read - t_slot_read_start;
-
-            const uint32_t t_clientR_start = rdcycle();
-            WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(pair_idx), clientR_val);
-            const uint32_t t_after_clientR = rdcycle();
-            if (!first_slot_written) {
-                first_pair_clientR_hw = t_after_clientR - t_clientR_start;
-            }
-
-            const uint32_t t_clientL_start = rdcycle();
-            WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
-            const uint32_t t_after_clientL = rdcycle();
-            if (!first_slot_written) {
-                first_pair_clientL_hw = t_after_clientL - t_clientL_start;
-                first_slot_written = true;
-            }
-
-            const uint32_t pair_reg_hw = (t_after_clientR - t_clientR_start) + (t_after_clientL - t_clientL_start);
-            pass_pairs_reg += pair_reg_hw;
-            last_pair_hw = pair_reg_hw;
-            pairs_slots_written++;
-            if (pair_idx > max_pair_idx) {
-                max_pair_idx = pair_idx;
-            }
+        const uint32_t t_clientR_start = rdcycle();
+        WRITE_REG32(REMAP_CLIENT_R_CONFIG_REG_ADDR32(pair_idx), clientR_val);
+        const uint32_t t_after_clientR = rdcycle();
+        if (!first_slot_written) {
+            first_pair_clientR_hw = t_after_clientR - t_clientR_start;
         }
 
-        dm1_blob_ptr += entry_bytes;
-        const uint32_t t_pass_end = rdcycle();
-        blob_l1_read_sw += pass_l1_read;
-        pairs_reg_hw += pass_pairs_reg;
-        blob_loop_ovhd += (t_pass_end - t_pass_start) - pass_l1_read - pass_pairs_reg;
+        const uint32_t t_clientL_start = rdcycle();
+        WRITE_REG32(REMAP_CLIENT_L_CONFIG_REG_ADDR32(pair_idx), clientL_val);
+        const uint32_t t_after_clientL = rdcycle();
+        if (!first_slot_written) {
+            first_pair_clientL_hw = t_after_clientL - t_clientL_start;
+            first_slot_written = true;
+        }
+
+        const uint32_t pair_reg_hw = (t_after_clientR - t_clientR_start) + (t_after_clientL - t_clientL_start);
+        pairs_reg_hw += pair_reg_hw;
+        last_pair_hw = pair_reg_hw;
+        pairs_slots_written++;
+        if (pair_idx > max_pair_idx) {
+            max_pair_idx = pair_idx;
+        }
     }
+
+    const uint32_t t_loop_end = rdcycle();
+    blob_loop_ovhd = (t_loop_end - t_loop_start) - blob_l1_read_sw - pairs_reg_hw;
 
     // uint32_t enable_remapper_hw = 0;
     // if (enable_remapper) {

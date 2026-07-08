@@ -68,10 +68,8 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
       dfb_global_header_t (96B) — fixed-size; DM1/DM0 blob offsets stored inside.
 
     [dfb_config_base + dm1_remapper_blob_offset]:
-      DM1 remapper blob — contiguous across all DFBs, read by DM1:
-        [DFB0: dfb_dm1_remapper_entry_header_t(4B) + dfb_dm0_remapper_slot_t × n]
-        [DFB1: ...]
-        ...
+      DM1 remapper blob — core-wide flat layout, read by DM1:
+        [dfb_dm1_remapper_core_header_t(4B) + dfb_dm0_remapper_slot_t × num_slots]
 
     [dfb_config_base + dm0_isr_blob_offset]:
       DM0 ISR blob — core-wide, read by DM0:
@@ -101,7 +99,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     DM2-7 + TRISC each walk their own sequential init blob — no pointer-table indirection.
 
     Memory (worst case 4Sx4A, 5 riscs, 4 rmp slots, 8 DFBs):
-      96 + (4+4*16)*8 + (4+20)*8 + per_hart_blobs(~3.2KB) + signal_region(256B) ≈ 3.8KB
+      96 + (4+4*16) + (8+20)*8 + per_hart_blobs(~3.2KB) + signal_region(256B) ≈ 3.7KB
 */
 
 // Fixed header at the start of the DFB config region.
@@ -300,11 +298,11 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
-// Per-DFB header for the DM1 remapper blob.
-// DM1 reads linearly through this region, processing only remapper slot data.
-struct dfb_dm1_remapper_entry_header_t {  // 4 bytes
-    uint8_t num_remapper_slots;
-    uint8_t _pad[3];
+// Core-wide header for the DM1 remapper blob.
+// Followed by dfb_dm0_remapper_slot_t[num_slots] aggregated in ascending DFB id order.
+struct dfb_dm1_remapper_core_header_t {  // 4 bytes
+    uint16_t num_slots;
+    uint8_t _pad[2];
 } __attribute__((packed));
 
 // Core-wide header at dm0_isr_blob_offset (before txn threshold + descriptor pools).
@@ -379,7 +377,7 @@ inline uint32_t dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, u
 }
 
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
-static_assert(sizeof(dfb_dm1_remapper_entry_header_t) == 4, "dfb_dm1_remapper_entry_header_t must be 4 bytes");
+static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
 static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");

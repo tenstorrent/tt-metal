@@ -106,9 +106,10 @@ struct DataflowBufferImpl {
     }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
-    uint32_t dm1_remapper_blob_serialized_size() const;  // DM1 blob: entry header + remapper slots
+    uint16_t dm1_remapper_slot_count() const;  // slots this DFB contributes to the core-wide DM1 blob
+    void append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& out) const;
+
     std::vector<uint8_t> serialize_for_core(const CoreCoord& core) const;  // WH/BH only (4-word CB format)
-    std::vector<uint8_t> serialize_dm1_remapper_blob_for_core(const CoreCoord& core) const;
 
     // Returns per-core DFBRiscConfig with base_addr/limit resolved for core's alloc_addr.
     // Used by serialize_dfb_config_for_core to build per-hart init blobs.
@@ -145,6 +146,12 @@ uint32_t compute_dfb_config_serialized_size(
 
 // DM0 ISR blob region: core header + txn_id-indexed hw pool + txn desc pool.
 uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// DM1 remapper blob: core header + contiguous remapper slots across all DFBs on core.
+uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+std::vector<uint8_t> serialize_dm1_remapper_core_blob(
+    const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
 
 // Packs Quasar DFB config: [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts]. Returns bytes written.
 size_t serialize_dfb_config_for_core(

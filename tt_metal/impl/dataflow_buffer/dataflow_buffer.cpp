@@ -180,6 +180,49 @@ uint32_t dm0_isr_blob_region_size(const std::vector<std::shared_ptr<DataflowBuff
     return static_cast<uint32_t>(sizeof(dfb_dm0_isr_blob_core_header_t)) + txn_hw_bytes + pool_bytes;
 }
 
+uint32_t dm1_remapper_blob_core_size(const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        return 0;
+    }
+    uint32_t num_slots = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        num_slots += dfb->dm1_remapper_slot_count();
+    }
+    return static_cast<uint32_t>(sizeof(dfb_dm1_remapper_core_header_t)) +
+           num_slots * static_cast<uint32_t>(sizeof(dfb_dm0_remapper_slot_t));
+}
+
+std::vector<uint8_t> serialize_dm1_remapper_core_blob(
+    const CoreCoord& core, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core) {
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) {
+        return {};
+    }
+
+    uint16_t num_slots = 0;
+    for (const auto& dfb : dfbs_on_core) {
+        const uint32_t slot_count = dfb->dm1_remapper_slot_count();
+        TT_FATAL(
+            num_slots + slot_count <= UINT16_MAX,
+            "DM1 remapper slot count overflow on core ({},{})",
+            core.x,
+            core.y);
+        num_slots = static_cast<uint16_t>(num_slots + slot_count);
+    }
+
+    std::vector<uint8_t> data;
+    data.reserve(dm1_remapper_blob_core_size(dfbs_on_core));
+
+    dfb_dm1_remapper_core_header_t hdr = {};
+    hdr.num_slots = num_slots;
+    const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
+    data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
+
+    for (const auto& dfb : dfbs_on_core) {
+        dfb->append_dm1_remapper_slots_for_core(core, data);
+    }
+    return data;
+}
+
 // Returns the serialized byte size of one hart's init blob (init entries only, no wait entries).
 // Accounts for per-entry variable TC arrays and 4B end-padding.
 static uint32_t hart_blob_byte_size(
@@ -209,9 +252,7 @@ uint32_t compute_dfb_config_serialized_size(
     TT_FATAL(hal.has_tile_counter_registers(), "compute_dfb_config_serialized_size requires Quasar");
 
     uint32_t payload = dfb_config_header_size();
-    for (const auto& dfb : dfbs_on_core) {
-        payload += dfb->dm1_remapper_blob_serialized_size();
-    }
+    payload += dm1_remapper_blob_core_size(dfbs_on_core);
     payload += dm0_isr_blob_region_size(dfbs_on_core);
     for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; h++) {
         payload += hart_blob_byte_size(h, dfbs_on_core);
@@ -403,8 +444,7 @@ size_t serialize_dfb_config_for_core(
     ghdr.dm0_isr_ready = 0;
 
     const uint32_t header_size = dfb_config_header_size();  // 96B
-    uint32_t total_dm1_blob_size = 0;
-    for (const auto& dfb : dfbs_on_core) { total_dm1_blob_size += dfb->dm1_remapper_blob_serialized_size(); }
+    const uint32_t total_dm1_blob_size = dm1_remapper_blob_core_size(dfbs_on_core);
     const uint32_t total_dm0_isr_blob_size = dm0_isr_blob_region_size(dfbs_on_core);
 
     ghdr.dm1_remapper_blob_offset = header_size;
@@ -431,10 +471,10 @@ size_t serialize_dfb_config_for_core(
     offset = header_size;
 
     // ---------------------------------------------------------------------------
-    // 4. Emit DM1 remapper blobs (unchanged).
+    // 4. Emit DM1 remapper blob (core-wide flat layout).
     // ---------------------------------------------------------------------------
-    for (const auto& dfb : dfbs_on_core) {
-        auto blob = dfb->serialize_dm1_remapper_blob_for_core(core);
+    {
+        auto blob = serialize_dm1_remapper_core_blob(core, dfbs_on_core);
         TT_FATAL(offset + blob.size() <= out.size(), "DFB config overflow (DM1 blob)");
         std::memcpy(out.data() + offset, blob.data(), blob.size());
         offset += static_cast<uint32_t>(blob.size());
@@ -688,16 +728,14 @@ void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std:
             h, ghdr->participation_mask[h], ghdr->hart_blob_offset[h]);
     }
 
-    // DM1 remapper blobs (unchanged format).
+    // DM1 remapper blob (core-wide flat layout).
     uint32_t dm1_off = ghdr->dm1_remapper_blob_offset;
-    for (uint8_t dfb_id = 0; dfb_id < num_dfbs; ++dfb_id) {
-        if (dm1_off + sizeof(dfb_dm1_remapper_entry_header_t) > config_bytes.size()) break;
-        const auto* dm1_hdr =
-            reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(config_bytes.data() + dm1_off);
-        log_info(tt::LogMetal, "  DFB{} DM1 @{}: num_remapper_slots={}",
-                 dfb_id, dm1_off, dm1_hdr->num_remapper_slots);
-        dm1_off += sizeof(dfb_dm1_remapper_entry_header_t);
-        for (uint8_t s = 0; s < dm1_hdr->num_remapper_slots; ++s) {
+    if (dm1_off + sizeof(dfb_dm1_remapper_core_header_t) <= config_bytes.size()) {
+        const auto* dm1_core_hdr =
+            reinterpret_cast<const dfb_dm1_remapper_core_header_t*>(config_bytes.data() + dm1_off);
+        log_info(tt::LogMetal, "  DM1 @{}: num_remapper_slots={}", dm1_off, dm1_core_hdr->num_slots);
+        dm1_off += sizeof(dfb_dm1_remapper_core_header_t);
+        for (uint16_t s = 0; s < dm1_core_hdr->num_slots; ++s) {
             if (dm1_off + sizeof(dfb_dm0_remapper_slot_t) > config_bytes.size()) break;
             const auto* slot =
                 reinterpret_cast<const dfb_dm0_remapper_slot_t*>(config_bytes.data() + dm1_off);
@@ -783,9 +821,9 @@ void log_dfb_config_readback(
     }
 
     if (ghdr->dm1_remapper_blob_offset < readback_bytes.size()) {
-        const auto* dm1_hdr = reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(
+        const auto* dm1_core_hdr = reinterpret_cast<const dfb_dm1_remapper_core_header_t*>(
             readback_bytes.data() + ghdr->dm1_remapper_blob_offset);
-        log_info(tt::LogMetal, "  dm1_blob[0].num_remapper_slots={}", dm1_hdr->num_remapper_slots);
+        log_info(tt::LogMetal, "  dm1_core_hdr.num_slots={}", dm1_core_hdr->num_slots);
     }
     if (ghdr->has_dm0_isr && ghdr->dm0_isr_blob_offset < readback_bytes.size()) {
         const auto* core_hdr = reinterpret_cast<const dfb_dm0_isr_blob_core_header_t*>(
@@ -1156,12 +1194,72 @@ struct TileCounterGroup {
 // WH/BH: one 4-word CB-format config per DFB.  Quasar: per-DFB layout folded into per-hart blobs.
 static uint32_t dfb_wh_bh_serialized_size() { return 4u * sizeof(uint32_t); }
 
-uint32_t DataflowBufferImpl::dm1_remapper_blob_serialized_size() const {
+uint16_t DataflowBufferImpl::dm1_remapper_slot_count() const {
     if (!MetalContext::instance().hal().has_tile_counter_registers()) return 0;
-    uint8_t num_rmp = use_remapper ? static_cast<uint8_t>(config.num_producers) : 0;
-    return static_cast<uint32_t>(
-        sizeof(dfb_dm1_remapper_entry_header_t) +
-        num_rmp * sizeof(dfb_dm0_remapper_slot_t));
+    return use_remapper ? static_cast<uint16_t>(config.num_producers) : 0;
+}
+
+void DataflowBufferImpl::append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& data) const {
+    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
+    if (!MetalContext::instance().hal().has_tile_counter_registers()) return;
+
+    const uint16_t num_rmp = dm1_remapper_slot_count();
+    if (num_rmp == 0) {
+        return;
+    }
+
+    auto it = this->core_lookup_.find(core);
+    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
+    const auto& [group_idx, alloc_addr] = it->second;
+    (void)alloc_addr;
+    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
+
+    // Recompute per-core addresses (needed for packed_tile_counter validation; slots don't use addrs directly).
+    uint8_t num_producer_tcs = 0;
+    for (const auto& rc : hw_risc_configs) {
+        if (rc.is_producer) num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
+    }
+    (void)num_producer_tcs;
+    std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
+
+    // Remapper slots: one per producer RISC that uses the remapper, in risc_mask bit order.
+    for (int bit = 0; bit < 16; bit++) {
+        if (!(this->risc_mask & (1 << bit))) continue;
+        const DFBRiscConfig* rc = nullptr;
+        for (const auto& c : per_core_rc) {
+            if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
+        }
+        if (!rc->is_producer) continue;
+
+        uint8_t num_clientRs =
+            static_cast<uint8_t>(__builtin_popcount(rc->config.remapper_consumer_ids_mask));
+        uint8_t producer_client_type = rc->config.producer_client_type;
+        uint8_t tc_id = ::dfb::get_counter_id(rc->config.packed_tile_counter[0]);
+        uint8_t valid_mask = static_cast<uint8_t>((1u << num_clientRs) - 1);
+
+        uint32_t clientR_val = 0;
+        uint8_t mask_remaining = rc->config.remapper_consumer_ids_mask;
+        for (uint8_t r = 0; r < num_clientRs && r < ::dfb::MAX_CLIENT_RS; r++) {
+            uint8_t id_R = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
+            mask_remaining &= mask_remaining - 1;
+            uint8_t tc_R = static_cast<uint8_t>((rc->config.consumer_tcs >> (r * 5)) & 0x1F);
+            clientR_val |= (static_cast<uint32_t>(id_R & 0x7u) << (r * 8)) |
+                           (static_cast<uint32_t>(tc_R & 0x1Fu) << (r * 8 + 3));
+        }
+        uint32_t clientL_val =
+            (static_cast<uint32_t>(producer_client_type & 0x7u)) |
+            (static_cast<uint32_t>(tc_id    & 0x1Fu) << 3) |
+            (static_cast<uint32_t>(valid_mask & 0xFu) << 8) |
+            (1u << 12) |  // clientl_is_producer = 1
+            (1u << 13);   // clientr_group = 1, distribute = 0
+
+        dfb_dm0_remapper_slot_t slot = {};
+        slot.pair_index  = rc->config.remapper_pair_index;
+        slot.clientR_val = clientR_val;
+        slot.clientL_val = clientL_val;
+        const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
+        data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
+    }
 }
 
 // WH/BH only: emit the 4-word CB-format config for the legacy firmware path.
@@ -1295,76 +1393,6 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
     }
 
     return per_core_rc;
-}
-
-
-std::vector<uint8_t> DataflowBufferImpl::serialize_dm1_remapper_blob_for_core(const CoreCoord& core) const {
-    TT_FATAL(this->configs_finalized, "DFB {} configs not finalized before serialization", this->id);
-    if (!MetalContext::instance().hal().has_tile_counter_registers()) return {};
-
-    auto it = this->core_lookup_.find(core);
-    TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
-    const auto& [group_idx, alloc_addr] = it->second;
-    const auto& hw_risc_configs = this->groups[group_idx].hw_risc_configs;
-
-    // Recompute per-core addresses (needed for packed_tile_counter validation; slots don't use addrs directly).
-    uint8_t num_producer_tcs = 0;
-    for (const auto& rc : hw_risc_configs) {
-        if (rc.is_producer) num_producer_tcs = std::max(num_producer_tcs, rc.config.num_tcs_to_rr);
-    }
-    std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
-
-    uint8_t num_rmp = this->use_remapper ? static_cast<uint8_t>(this->config.num_producers) : 0;
-    std::vector<uint8_t> data;
-    data.reserve(dm1_remapper_blob_serialized_size());
-
-    // DM1 remapper entry header.
-    dfb_dm1_remapper_entry_header_t hdr = {};
-    hdr.num_remapper_slots = num_rmp;
-    const auto* hdr_bytes = reinterpret_cast<const uint8_t*>(&hdr);
-    data.insert(data.end(), hdr_bytes, hdr_bytes + sizeof(hdr));
-
-    // Remapper slots: one per producer RISC that uses the remapper, in risc_mask bit order.
-    if (this->use_remapper) {
-        for (int bit = 0; bit < 16; bit++) {
-            if (!(this->risc_mask & (1 << bit))) continue;
-            const DFBRiscConfig* rc = nullptr;
-            for (const auto& c : per_core_rc) {
-                if (c.risc_id == static_cast<uint8_t>(bit)) { rc = &c; break; }
-            }
-            if (!rc->is_producer) continue;
-
-            uint8_t num_clientRs =
-                static_cast<uint8_t>(__builtin_popcount(rc->config.remapper_consumer_ids_mask));
-            uint8_t producer_client_type = rc->config.producer_client_type;
-            uint8_t tc_id = ::dfb::get_counter_id(rc->config.packed_tile_counter[0]);
-            uint8_t valid_mask = static_cast<uint8_t>((1u << num_clientRs) - 1);
-
-            uint32_t clientR_val = 0;
-            uint8_t mask_remaining = rc->config.remapper_consumer_ids_mask;
-            for (uint8_t r = 0; r < num_clientRs && r < ::dfb::MAX_CLIENT_RS; r++) {
-                uint8_t id_R = static_cast<uint8_t>(__builtin_ctz(mask_remaining));
-                mask_remaining &= mask_remaining - 1;
-                uint8_t tc_R = static_cast<uint8_t>((rc->config.consumer_tcs >> (r * 5)) & 0x1F);
-                clientR_val |= (static_cast<uint32_t>(id_R & 0x7u) << (r * 8)) |
-                               (static_cast<uint32_t>(tc_R & 0x1Fu) << (r * 8 + 3));
-            }
-            uint32_t clientL_val =
-                (static_cast<uint32_t>(producer_client_type & 0x7u)) |
-                (static_cast<uint32_t>(tc_id    & 0x1Fu) << 3) |
-                (static_cast<uint32_t>(valid_mask & 0xFu) << 8) |
-                (1u << 12) |  // clientl_is_producer = 1
-                (1u << 13);   // clientr_group = 1, distribute = 0
-
-            dfb_dm0_remapper_slot_t slot = {};
-            slot.pair_index  = rc->config.remapper_pair_index;
-            slot.clientR_val = clientR_val;
-            slot.clientL_val = clientL_val;
-            const auto* slot_bytes = reinterpret_cast<const uint8_t*>(&slot);
-            data.insert(data.end(), slot_bytes, slot_bytes + sizeof(slot));
-        }
-    }
-    return data;
 }
 
 uint32_t finalize_dfbs(
