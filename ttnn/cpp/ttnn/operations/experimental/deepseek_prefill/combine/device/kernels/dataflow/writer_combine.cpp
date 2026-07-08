@@ -423,14 +423,22 @@ void kernel_main() {
                 auto& payload_sender = fabric_connections[fabric_route];
 #endif
 #if OVERLAPING_TOKEN_WRITE
-                // Stage 3 / gap#1: pick this token's header + trid from the lockstep pools, build the
-                // route into that pooled header, issue tagged with its trid, then wait on that trid.
-                // The wait is still adjacent (one in flight) so this is behaviorally equivalent to
-                // stage 2 — it just establishes the per-slot header/trid pairing that stage 4 relies
-                // on (stage 4 moves this wait ahead by OVERLAP_POOL_DEPTH iterations).
+                // Stage 4: LAGGED wait. Before reusing this slot's header + trid, wait for that slot's
+                // PREVIOUS use (OVERLAP_POOL_DEPTH tokens ago) to complete. For the first DEPTH tokens
+                // the trid is unused so the barrier returns immediately; thereafter it lags by DEPTH,
+                // keeping up to DEPTH sends in flight. Only wait_for_empty_write_slot (inside the issue)
+                // and this lagged barrier can stall.
+                //
+                // PERF-PROTOTYPE CONTENT CAVEAT: the CB slot is still popped per-iteration below, so the
+                // reader can overwrite the payload while this non-blocking send is still reading it ->
+                // torn payload bytes (wrong token CONTENT). route/distance/page are captured into
+                // registers + the pooled header BEFORE the send, so routing, volume, and termination are
+                // all correct — only content is wrong. Correct content needs a lagged pop + CB peek-ahead
+                // (deferred; this stage is for the perf signal).
                 auto* overlap_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
                     overlap_hdr_pool_base + overlap_slot * sizeof(PACKET_HEADER_TYPE));
                 const uint32_t overlap_trid = overlap_slot + 1;  // 1..OVERLAP_POOL_DEPTH (trid 0 reserved)
+                wait_on_flush_for_trid(overlap_trid);            // LAGGED: free this slot's DEPTH-ago use before reuse
                 ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(overlap_hdr), pkt_route_info);
                 fabric_send_noc_unicast_with_trid<fabric_max_packet_size>(
                     output_addr_gen,
@@ -441,7 +449,6 @@ void kernel_main() {
                     (int)aligned_output_page_size,
                     l1_alignment,
                     overlap_trid);
-                wait_on_flush_for_trid(overlap_trid);  // adjacent WAIT on this packet's trid (stage 4 lags it)
                 overlap_slot = (overlap_slot + 1 == OVERLAP_POOL_DEPTH) ? 0u : overlap_slot + 1u;
 #else
                 ccl_routing_utils::fabric_set_line_unicast_route(
@@ -467,6 +474,13 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
+#if OVERLAPING_TOKEN_WRITE
+    // Drain the up-to-OVERLAP_POOL_DEPTH still-in-flight overlapped sends before the exit handshake /
+    // connection teardown. (noc_async_write_barrier below also drains, but be explicit per-trid.)
+    for (uint32_t t = 1; t <= OVERLAP_POOL_DEPTH; t++) {
+        wait_on_flush_for_trid(t);
+    }
+#endif
     // Defensive: drain pending local NOC writes before fabric atomic-inc traffic,
     // so the exit-sem signal cannot reach peers ahead of the last data writes.
     noc_async_write_barrier();

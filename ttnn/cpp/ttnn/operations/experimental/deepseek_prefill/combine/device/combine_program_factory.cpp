@@ -441,7 +441,14 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     //                    [l1_alignment..page_size) = output data
     //   One reserve/push per row replaces the previous c_3 + c_4 pair.
     {
+#if OVERLAPING_TOKEN_WRITE
+        // Deeper route_info CB to decouple the reader from the writer's overlapped (pipelined) sends
+        // and cut reader-write vs sender-read L1 contention. Not a correctness requirement (see
+        // overlap_config.hpp) — reduce if L1 overflows.
+        constexpr uint32_t rw_buffering = OVERLAP_ROUTE_INFO_CB_SLOTS;
+#else
         constexpr uint32_t rw_buffering = 2;
+#endif
 
         uint32_t route_info_page_size = l1_alignment;
         uint32_t output_payload_page_size = detail::get_aligned_page_size(output_tensor);

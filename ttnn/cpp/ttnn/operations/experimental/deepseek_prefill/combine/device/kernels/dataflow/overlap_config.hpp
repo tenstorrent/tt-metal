@@ -42,3 +42,14 @@
 // trid 0 reserved) and, at stage 4, strictly less than the cb_route_info depth. The factory grows the
 // c_5 packet-header CB to (2 + OVERLAP_POOL_DEPTH) headers when OVERLAPING_TOKEN_WRITE is on.
 #define OVERLAP_POOL_DEPTH 8
+
+// Depth (in slots) of the cb_route_info (c_3) CB between the sender reader and sender writer when
+// OVERLAPING_TOKEN_WRITE is on. NOTE: stage 4 uses per-iteration pop, so the overlap depth actually
+// lives in the trid+header pool (c_5) + the EDM buffer, NOT here — c_3 does not need to be >= the pool
+// depth for the pipeline. A deeper c_3 only decouples reader jitter and reduces reader-write vs
+// sender-read L1 contention on hot slots (a measurement-quality knob). Default is 2x the pool depth
+// (the "ideal" headroom). Each slot is ~14.4 KB (l1_align + aligned_output_page_size), and the sender
+// core's L1 is dominated by c_18 receive_buf (k_s * 16 * ~14.3 KB, k_s <= 4). If program creation
+// fails with an L1 out-of-memory error, reduce this (down to 2 is fine for correctness) or reduce
+// SLOTS_PER_UNTILIZER in the factory.
+#define OVERLAP_ROUTE_INFO_CB_SLOTS (2 * OVERLAP_POOL_DEPTH)
