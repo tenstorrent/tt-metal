@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -54,6 +55,42 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
+
+// Filename (in the per-kernel out_dir) of the generated header carrying the named
+// compile-time-arg map. See write_named_ct_arg_map_header.
+constexpr std::string_view NAMED_CT_ARG_MAP_HEADER = "kernel_named_ct_arg_map_generated.h";
+
+bool kernel_has_named_ct_args(const JitBuildSettings& settings) {
+    bool has = false;
+    settings.process_named_compile_time_args(
+        [&has](const std::unordered_map<string, uint32_t>& named_args) { has = !named_args.empty(); });
+    return has;
+}
+
+// The named CT-arg map (name -> value pairs consumed by compile_time_args.h's
+// get_named_compile_time_arg_val) can be very large: blaze fused ops emit hundreds to
+// thousands of long-named args. Passing it as a -DKERNEL_COMPILE_TIME_ARG_MAP define on the
+// compile command line can push the command past the OS single-argument limit
+// (MAX_ARG_STRLEN, 128 KB) and break the build. Instead we write it to a header that
+// compile_one force-includes (-include, which has no size limit). Entries are collected into
+// a std::map so the file is byte-deterministic (its content feeds the per-object dephash
+// cache). Only called when the kernel actually has named CT args.
+void write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings& settings) {
+    map<string, uint32_t> sorted_args;
+    settings.process_named_compile_time_args([&sorted_args](const std::unordered_map<string, uint32_t>& named_args) {
+        sorted_args.insert(named_args.begin(), named_args.end());
+    });
+
+    string map_literal;
+    for (const auto& [name, value] : sorted_args) {
+        map_literal += fmt::format("{{\"{}\",{}}}, ", name, value);
+    }
+
+    jit_build::utils::FileRenamer header(out_dir + string(NAMED_CT_ARG_MAP_HEADER));
+    std::ofstream f(header.path());
+    f << "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " << map_literal
+      << "\n";
+}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -513,24 +550,14 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
             defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
         });
 
-        // This creates a command-line define for named compile time args
-        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
-        // This generates:
-        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
-        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
-        settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
-                if (named_args.empty()) {
-                    return;
-                }
-                std::ostringstream ss;
-                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
-                for (const auto& [name, value] : named_args) {
-                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
-                }
-                ss << "\"";
-                defines += ss.str() + " ";
-            });
+        // Named compile time args define KERNEL_COMPILE_TIME_ARG_MAP (consumed by
+        // compile_time_args.h). The map can be very large, so it is delivered via a
+        // force-included header written in compile() rather than a -D on the command line,
+        // which would risk exceeding the OS single-argument limit. See
+        // write_named_ct_arg_map_header.
+        if (kernel_has_named_ct_args(*settings)) {
+            defines += fmt::format("-include {}{} ", out_dir, NAMED_CT_ARG_MAP_HEADER);
+        }
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {
@@ -582,6 +609,13 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         "Number of source files ({}) exceeds kMaxBuildBitset ({})",
         this->srcs_.size(),
         kMaxBuildBitset);
+
+    // Emit the named CT-arg map header once (single-threaded) before launching the parallel
+    // per-source compiles that -include it. Written unconditionally when present so it is
+    // up to date for the dephash check in need_compile() below.
+    if (settings && kernel_has_named_ct_args(*settings)) {
+        write_named_ct_arg_map_header(out_dir, *settings);
+    }
 
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
