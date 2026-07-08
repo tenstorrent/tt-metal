@@ -267,9 +267,9 @@ FORCE_INLINE void prepare_partial_reduce_scalers(float scaler_f) {
         "valid_reduce_dim_elements_in_tile = full_dim instead.");
 
     // Tile 0: full fill (every position holds the scaler).
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, full_dim);
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim>(scaler_f, full_dim);
     // Tile 1: partial fill (only the first `partial_positions` of the reduce axis hold the scaler).
-    prepare_reduce_scaler<cb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, partial_positions);
+    prepare_reduce_scaler<cb_id, pool_type, reduce_dim>(scaler_f, partial_positions);
 }
 
 // =============================================================================
