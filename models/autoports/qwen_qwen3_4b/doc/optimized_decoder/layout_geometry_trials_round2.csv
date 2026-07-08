@@ -1,8 +1,0 @@
-candidate,status,pcc,passes_0_99,traced_decode_ms,error
-baseline_split_dram_auto,ok,0.999324241979847,True,0.941774807870388,
-split_post_norm_l1,ok,0.999324241979847,True,0.8917949162423611,
-packed_gate_up_dram_auto,ok,0.999324241979847,True,0.8952450007200241,
-packed_gate_up_post_norm_l1,ok,0.999324241979847,True,0.9504840709269047,
-qkv_input_l1_split_dram_mlp,ok,0.999324241979847,True,0.9217248298227787,
-qkv_input_l1_split_post_norm_l1,ok,0.999324241979847,True,0.9344853460788727,
-qkv_input_l1_packed_post_norm_l1,ok,0.999324241979847,True,0.9236251935362816,

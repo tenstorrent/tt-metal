@@ -1,4 +1,0 @@
-candidate,status,pcc,passes_0_99,trace_pcc,traced_decode_ms,error
-final_bfp8_attention_control,ok,0.999104342904898,True,1.0,0.7515158504247665,
-final_bfp4_attention_hifi2,ok,0.9990924749345804,True,1.0,0.7871557027101517,
-final_bfp4_attention_lofi_projection_probe,ok,0.9990712074052157,True,1.0,0.7159649394452572,

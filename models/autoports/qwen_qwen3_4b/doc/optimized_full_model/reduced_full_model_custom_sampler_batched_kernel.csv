@@ -1,2 +1,0 @@
-ttft_ms,decode_t/s/u,prepare_decode_ms,steady_decode_t/s/u,e2e_t/s/u,decode_tokens,steady_decode_tokens,trace_replays,token_host_refreshes,position_host_refreshes,page_table_host_refreshes,syncs,readbacks
-488.22503816336393,5.04024971082267,1384.0076718479395,1246.7773813411595,4.2620179601291115,7,6,6,0,2,0,2,0
