@@ -249,8 +249,10 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * (`mul_tiles_init`) to have been called first. The DST register buffer must be in acquired state via
  * *acquire_dst* call. This call is blocking and is only available on the compute engine.
  *
- * NOTE: The loop implementation is transitional. The blocking will be pushed down into llk-lib
- * (MOPs / REPLAY buffers) by tt-metal#47482 without changing this signature.
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as already done on Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47482.
  *
  * Return value: None
  *
@@ -279,8 +281,10 @@ ALWI void mul_block(
  * to have been called first. The DST register buffer must be in acquired state via *acquire_dst* call. This call
  * is blocking and is only available on the compute engine.
  *
- * NOTE: The loop implementation is transitional. The blocking will be pushed down into llk-lib
- * (MOPs / REPLAY buffers) by tt-metal#47482 without changing this signature.
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as already done on Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47482.
  *
  * Return value: None
  *
@@ -309,8 +313,10 @@ ALWI void add_block(
  * (`sub_tiles_init`) to have been called first. The DST register buffer must be in acquired state via
  * *acquire_dst* call. This call is blocking and is only available on the compute engine.
  *
- * NOTE: The loop implementation is transitional. The blocking will be pushed down into llk-lib
- * (MOPs / REPLAY buffers) by tt-metal#47482 without changing this signature.
+ * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
+ * hardware MOP / REPLAY buffer (as already done on Quasar) so the whole block issues as a single
+ * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
+ * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47482.
  *
  * Return value: None
  *

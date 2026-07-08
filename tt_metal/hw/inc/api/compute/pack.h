@@ -119,6 +119,10 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
  * synchronized in the kernels. To ensure this synchronization, tile packing is implemented as a separate
  * API call.
  *
+ * NOTE: In the future the block pack must be folded further into a hardware MOP / REPLAY buffer (as
+ * already done on Quasar) inside llk-lib, without changing this signature. Tracked under the Compute
+ * API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47480.
+ *
  * Return value: None
  *
  * | Param Type | Name      | Description                                       | Type     | Valid Range                                          | Required |
