@@ -520,7 +520,7 @@ def test_eltwise_binary_bfp4_b(
     math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     input_dimensions=[[512, 32]],
     output_dimensions=[[128, 32]],
-    tile_dimensions=[[32, 32], [16, 32]],
+    tile_dimensions=[[32, 32], [16, 32], [1, 16]],
 )
 def test_eltwise_binary_dest_reuse(
     reuse_dest_type,

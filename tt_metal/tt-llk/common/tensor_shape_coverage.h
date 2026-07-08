@@ -33,6 +33,7 @@ namespace ckernel::coverage
 // Named shapes referenced by the TRISC coverage tables. Keep this list limited
 // to shapes that appear in tensor_shape_coverage_{math,unpack}.h; add a new
 // entry only when a harvested shape needs a named constant.
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x1  = {1, MAX_FACE_C_DIM, 1, 1};  ///<  1x16
 constexpr TensorShape TENSOR_SHAPE_FR1_NF1x2  = {1, MAX_FACE_C_DIM, 1, 2};  ///<  1x32
 constexpr TensorShape TENSOR_SHAPE_FR2_NF1x2  = {2, MAX_FACE_C_DIM, 1, 2};  ///<  2x32
 constexpr TensorShape TENSOR_SHAPE_FR4_NF1x2  = {4, MAX_FACE_C_DIM, 1, 2};  ///<  4x32
@@ -85,13 +86,16 @@ __attribute__((noinline, cold)) inline void assert_tensor_shape_coverage_unobser
 // Concatenate fn_name into the format literal instead of using CTSTR(fn_name);
 // CTSTR's COMDAT string object conflicts with DEVICE_PRINT's own string-section
 // metadata at inline template call sites. fn_name must be a string literal.
+// Print dims as integers (not tensor_shape_dim_name string pointers): DEVICE_PRINT
+// cannot reliably resolve those COMDAT string addresses on device, and the
+// coverage parser harvests digit fields from these lines.
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts)                                                       \
     DEVICE_PRINT(                                                                                          \
         "[" fn_name "] tensor_shape: face_r_dim={} face_c_dim={} num_faces_r_dim={} num_faces_c_dim={}\n", \
-        ::ckernel::coverage::tensor_shape_dim_name((ts).face_r_dim),                                       \
-        ::ckernel::coverage::tensor_shape_dim_name((ts).face_c_dim),                                       \
-        ::ckernel::coverage::tensor_shape_dim_name((ts).num_faces_r_dim),                                  \
-        ::ckernel::coverage::tensor_shape_dim_name((ts).num_faces_c_dim))
+        static_cast<std::uint32_t>((ts).face_r_dim),                                                       \
+        static_cast<std::uint32_t>((ts).face_c_dim),                                                       \
+        static_cast<std::uint32_t>((ts).num_faces_r_dim),                                                  \
+        static_cast<std::uint32_t>((ts).num_faces_c_dim))
 #else
 #define LLK_VALIDATE_TENSOR_SHAPE_EMIT_(fn_name, ts) ((void)0)
 #endif
