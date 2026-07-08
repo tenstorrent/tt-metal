@@ -276,34 +276,70 @@ def prefill_forward(
         )
         tt_sdpa_out_padded.deallocate(True)
     elif sp_factor > 1:
-        # Ring attention: fuses cross-device K/V all-gather inside the kernel so
-        # every token attends to the full causal context across all SP rows.
+        # TEMPORARY: replace ring_joint_scaled_dot_product_attention with an explicit
+        # all-gather of K/V across the SP axis + local scaled_dot_product_attention,
+        # so that we can pass `attention_sink=weights.sinks`.  The ring op does not
+        # currently accept an attention_sink parameter, which causes short-context
+        # tokens (row 0 [0..window)) to diverge from HF.  This path Q remains
+        # SP-sharded; each device attends its local Q rows against the full K/V and
+        # applies an explicit per-device causal mask.
         seq_total = seq_len * sp_factor
-        tt_sdpa_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-            tt_q,
+        sp_axis = mesh_config.sp_axis
+
+        tt_k_gathered = ttnn.all_gather(
             tt_k,
-            tt_v,
-            persistent_output_buffer_k=persistent_k,
-            persistent_output_buffer_v=persistent_v,
-            joint_strategy="rear",
-            logical_n=seq_total,
-            program_config=sdpa_program_config,
-            compute_kernel_config=sdpa_compute_config,
             dim=2,
-            multi_device_global_semaphore=ccl_manager.ring_attn_semaphores,
+            cluster_axis=sp_axis,
             num_links=ccl_manager.num_links,
-            cluster_axis=mesh_config.sp_axis,
-            mesh_device=mesh_device,
             topology=ccl_manager.topology,
-            subdevice_id=ccl_manager.ccl_sub_device_id,
-            ccl_core_grid_offset=ccl_manager.ring_attn_ccl_grid_offset,
-            use_column_major_ccl=True,
-            is_causal=True,
-            scale=config.scaling,
         )
-        tt_q.deallocate(True)
+        tt_v_gathered = ttnn.all_gather(
+            tt_v,
+            dim=2,
+            cluster_axis=sp_axis,
+            num_links=ccl_manager.num_links,
+            topology=ccl_manager.topology,
+        )
         tt_k.deallocate(True)
         tt_v.deallocate(True)
+
+        # Per-device causal mask [sp, 1, seq_len, seq_total]: row r covers absolute
+        # Q positions [r*seq_len, (r+1)*seq_len) against K positions [0, seq_total).
+        rows_idx = torch.arange(seq_len, dtype=torch.float32).view(1, seq_len, 1)
+        cols_idx = torch.arange(seq_total, dtype=torch.float32).view(1, 1, seq_total)
+        row_offset = torch.arange(sp_factor, dtype=torch.float32).view(sp_factor, 1, 1) * seq_len
+        q_abs = rows_idx + row_offset  # [sp, seq_len, 1]
+        attend = cols_idx <= q_abs  # [sp, seq_len, seq_total]
+        base_mask = torch.where(attend, torch.tensor(0.0), torch.tensor(float("-inf"))).to(torch.bfloat16)
+        mask_cpu = base_mask.unsqueeze(1)  # [sp, 1, seq_len, seq_total]
+
+        # Shard mask on SP axis (dim 0), replicate across TP.  ShardTensor2dMesh dims
+        # tuple is (row_dim, col_dim); rows = sp axis, cols = tp axis.
+        mask_dims = [None, None]
+        mask_dims[sp_axis] = 0
+        tt_attn_mask = ttnn.as_tensor(
+            mask_cpu,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=tuple(mask_dims)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k_gathered,
+            tt_v_gathered,
+            attn_mask=tt_attn_mask,
+            is_causal=False,
+            program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_total),
+            compute_kernel_config=sdpa_compute_config,
+            attention_sink=weights.sinks,
+        )
+        tt_q.deallocate(True)
+        tt_k_gathered.deallocate(True)
+        tt_v_gathered.deallocate(True)
+        tt_attn_mask.deallocate(True)
     else:
         # SP=1: plain SDPA, no cross-device communication needed
         tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
