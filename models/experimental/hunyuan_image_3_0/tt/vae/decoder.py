@@ -121,21 +121,20 @@ def _group_mean_flat_bthwc(
     out_channels: int,
     group_size: int,
 ) -> ttnn.Tensor:
-    """Group-mean on a single spatial tile; last dim = out_channels * group_size."""
-    n = b * t * h * w * out_channels
-    x = ttnn.reshape(x_bthwc, (n, group_size))
+    """Group-mean on a single spatial tile; last dim = out_channels * group_size.
 
-    acc = ttnn.slice(x, (0, 0), (n, 1))
-    for g in range(1, group_size):
-        part = ttnn.slice(x, (0, g), (n, g + 1))
-        new_acc = ttnn.add(acc, part, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(acc, force=False)
-        ttnn.deallocate(part, force=False)
-        acc = new_acc
+    Matches the reference ``view(..., out_channels, group_size).mean(dim=-1)`` /
+    ``view(b, out_channels, group_size, t, h, w).mean(dim=2)`` math via a fused
+    ``ttnn.mean`` over the group axis (avoids ``group_size`` slice+add round-trips).
+    """
+    # [B,T,H,W,out*g] -> [B,T,H,W,out,g]; mean over trailing group dim.
+    x = ttnn.reshape(x_bthwc, (b, t, h, w, out_channels, group_size))
+    mean = ttnn.mean(x, dim=5, keepdim=False, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(x, force=False)
-
-    acc = ttnn.multiply(acc, 1.0 / group_size, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.reshape(acc, (b, t, h, w, out_channels))
+    # ``ttnn.mean`` returns TILE; conv/shortcut path stays ROW_MAJOR.
+    mean_rm = ttnn.to_layout(mean, ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(mean, force=False)
+    return mean_rm
 
 
 def group_mean_groups_bthwc(
@@ -146,8 +145,9 @@ def group_mean_groups_bthwc(
 ) -> ttnn.Tensor:
     """Mean over channel groups on BTHWC (last dim = out_channels * group_size).
 
-    Uses slice+add instead of ttnn.mean on a 6D tensor to avoid huge tilize allocations
-    at full encoder resolution. Large spatial tensors are processed in H strips.
+    Uses fused ``ttnn.mean`` over the group axis (same math as the DCAE reference
+    ``.mean(dim=2)``). Large spatial tensors are still processed in H strips to avoid
+    the huge tilize allocations that a single full-res ``mean`` can trigger.
     """
     if group_size == 1:
         return x_bthwc
