@@ -159,7 +159,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None):
 
 
 # ── Mesh tensor helpers ─────────────────────────────────────────────────────
-def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat8_b):
+def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat16):
     """Convert a torch weight [out, in] to a sharded mesh tensor.
 
     Transposes to [in, out] (ttnn.linear convention) and shards along ``dim``
