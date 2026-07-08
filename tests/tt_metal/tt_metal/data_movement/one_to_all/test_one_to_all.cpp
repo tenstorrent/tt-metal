@@ -5,7 +5,6 @@
 // Note: The sender kernels in One To All write the same transaction_size_bytes amount of data to the same location
 // num_of_transactions times
 
-#include <functional>
 #include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>

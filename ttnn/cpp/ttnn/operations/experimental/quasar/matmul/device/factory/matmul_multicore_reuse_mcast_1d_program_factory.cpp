@@ -5,7 +5,6 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
-#include <functional>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"

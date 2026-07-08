@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 #include <vector>
 
 #include "ttnn/operations/data_movement/common/common.hpp"

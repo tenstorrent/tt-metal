@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <functional>
 #include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "../dm_common.hpp"

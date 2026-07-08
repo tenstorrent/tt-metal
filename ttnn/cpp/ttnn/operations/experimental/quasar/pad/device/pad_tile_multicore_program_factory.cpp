@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <filesystem>
-#include <functional>
 #include <vector>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
