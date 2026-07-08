@@ -900,10 +900,14 @@ static void emit_metal2_namespaces(
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
             // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
-            // which is not a valid flat C++ identifier; emitting
-            // `constexpr CtaVal<uint32_t> cp.dst{...}` fails to compile. Such args
-            // are materialized as `ct_args::<ns>` structs (which the kernels
-            // reference), so skip them in the flat `args::` form.
+            // which is not a valid flat C++ identifier, so emitting
+            // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
+            // skip them to keep the flat `args::` form namespaced-safe. This change
+            // does NOT emit the matching `ct_args::<ns>` structs — that is a separate
+            // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
+            // a kernel that references `ct_args::<ns>` requires that step to be
+            // present, so skipping here only prevents invalid flat C++, it does not
+            // itself make namespaced args available.
             if (name.find('.') != std::string::npos) {
                 continue;
             }
@@ -1808,6 +1812,20 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
+                // Per-kernel include roots (Kernel::process_include_paths) change
+                // which headers resolve, and therefore the compiled artifact, so
+                // fold them into the key. Without this, two kernels that share
+                // src_path/compile_args/named_compile_args/defines but differ in
+                // include configuration would alias in the JIT cache (in-memory
+                // g_jit_cache and deferred_compiles) and a disk-cached .so built
+                // under a different include config could be reused. Kernels with no
+                // extra include roots keep their previous key (backward-compatible).
+                if (kernel_extra_inc != extra_inc) {
+                    char inc_hex[FNV_HEX_BUF_SIZE];
+                    std::snprintf(inc_hex, sizeof(inc_hex), "%016lx", fnv1a_hash(kernel_extra_inc));
+                    key += ":inc";
+                    key += inc_hex;
+                }
                 // ASAN builds are -g; keep their cache distinct from the lean build.
                 if (emule_asan_enabled()) {
                     key += ":asan_g";
