@@ -56,6 +56,7 @@ fi
 KEEP_GOING=0
 DRY_RUN=0
 GREP_FILTER=""
+GREP_EXCLUDE=""
 GROUP="all"
 FAILURES=()
 CURRENT_GROUP="all"
@@ -88,7 +89,7 @@ TT_RUN_FLAGS=(--force-rediscovery)
 SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_mapping.yaml"
 SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_single_pod_mapping.yaml"
 # revAB subtorus / system-120 (bh-glx-120-*). tt-cluster-descriptors renamed this set to
-# SC36_32x4_revAB_subtorus_aisleC (tt-cluster-descriptors#9, issue #48868), matching tt-metal's subtorus naming.
+# SC36_32x4_revAB_subtorus_aisleC, matching tt-metal's subtorus naming.
 SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_subtorus_aisleC"
 SC20_REVAB_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="${SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE}/SC20_32x4_revAB_subtorus_aisleC_mapping.yaml"
 # SC4 revAB single-pod (4-rank) mock: column-1 single-pod subset of the revAB subtorus Aisle C set.
@@ -133,7 +134,7 @@ GTEST_GALAXY_CORNER_PINS="ControlPlaneFixture.TestGalaxyCornerPins"
 GTEST_PIPELINE_BUILDER_CHECK="ControlPlaneFixture.TestPipelineBuilderCheck"
 GTEST_SUBTORUS_2X4_PIPELINE="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 GTEST_SUBTORUS_8X4_PIPELINE="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
-# TODO(tt-metal#49196): the 4x4 split-host layout check (TestGalaxy4x4SplitHostLayoutCheck) is currently
+# TODO(https://github.com/tenstorrent/tt-metal/issues/49196): the 4x4 split-host layout check (TestGalaxy4x4SplitHostLayoutCheck) is currently
 # broken for the 4x4 pipeline MGDs (subtorus_4x4_pipeline_8stage / _32stage / sc20_4x4_pipeline_40stage):
 # 8stage crashes (topology_mapper.cpp:198 "Fabric node id not found in mapping"), and 32stage/40stage fail
 # the 2x4 tray-pair invariant (utils.cpp:788 "tray pair must be {1,2} or {3,4}"). The layout pinning for
@@ -163,6 +164,9 @@ run_test() {
   local cmd_str
   cmd_str=$(printf '%q ' "$@")
   if [[ -n "$GREP_FILTER" && "$cmd_str" != *"$GREP_FILTER"* ]]; then
+    return 0
+  fi
+  if [[ -n "$GREP_EXCLUDE" && "$cmd_str" == *"$GREP_EXCLUDE"* ]]; then
     return 0
   fi
   echo "+ [${CURRENT_GROUP}] ${cmd_str% }" >&2
@@ -217,6 +221,11 @@ while [[ $# -gt 0 ]]; do
         echo "--grep requires a value" >&2; exit 1
       fi
       GREP_FILTER="$2"; shift 2 ;;
+    --grep-exclude)
+      if [[ $# -lt 2 ]]; then
+        echo "--grep-exclude requires a value" >&2; exit 1
+      fi
+      GREP_EXCLUDE="$2"; shift 2 ;;
     *) echo "Unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -460,7 +469,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # Subtorus single-galaxy grouping MGDs (16–32 ASICs)
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_ring_ring_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x4_ring_ring_1x1_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK}:${GTEST_PIPELINE_BUILDER_CHECK}"
-# TODO(tt-metal#49196): DISABLED pending fix. subtorus_4x4_ring_ring_2x2 lays the 4x4 mesh out one row
+# TODO(https://github.com/tenstorrent/tt-metal/issues/49196): DISABLED pending fix. subtorus_4x4_ring_ring_2x2 lays the 4x4 mesh out one row
 # per tray, so each 2x2 host rank group straddles two trays. This trips expect_galaxy_rank_group_2x2_check's
 # "same tray" (utils.cpp:693) and asic-location quadrant {1,2,5,6}/{3,4,7,8} (utils.cpp:705) invariants,
 # failing TestGalaxyLayoutCheck and TestGalaxy4x4SplitHostLayoutCheck. Re-enable the line below once fixed.
@@ -478,14 +487,14 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/fabric_cpu_only_blitz_quad_galaxy_4x8_4x4_4x2_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins"
 # Quad-galaxy heterogeneous 4x8+4x2 10-stage ring (128 ASICs): 2x 4x8 RING+RING + 8x 4x2 RING+LINE on subtorus mock.
 # Homogeneous 4x2 hops use NESW (no assign_z_direction); heterogeneous 4x8<->4x2 hops use assign_z_direction.
-# TODO(tt-metal#49277): TestGalaxyCornerPins is omitted here: this ring mixes 4x8 and 4x2 meshes, and the
+# TODO(https://github.com/tenstorrent/tt-metal/issues/49277): TestGalaxyCornerPins is omitted here: this ring mixes 4x8 and 4x2 meshes, and the
 # corner-fold invariant (mesh endpoints must map to asic_location 1 / trays 1-4) does not hold for the 4x2
 # mesh endpoints (utils.cpp:1044).
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_4x8_2x4_10stage_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck"
 # Dual 4x16 quad-galaxy intermesh (128 ASICs): M0 1x8 hosts + M1 2x16 hosts, 4 intermesh links
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_4x16_blitz_test.textproto" --mock-cluster-rank-binding "${SC4_REVC_SUBTORUS_AISLEC_SINGLE_POD_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ControlPlaneFixture.TestBlitzDecodePipelineBuilder:ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins"
 # Quad BH galaxy subtorus (128 ASICs, 32x4 RING+RING on quad subtorus mock)
-# TODO(tt-metal#49275): TestPipelineBuilderCheck is omitted here: the 32x4 RING pipeline is a 4-stage ring
+# TODO(https://github.com/tenstorrent/tt-metal/issues/49275): TestPipelineBuilderCheck is omitted here: the 32x4 RING pipeline is a 4-stage ring
 # over the 4 host slices (8x4 each), so it needs the torus wrap (row 31 <-> row 0, i.e. submesh 3 <-> submesh 0) to close.
 # On this single-pod mock that wrap has no direct ethernet link (discover_connections sees a line
 # 0-1-2-3, not a ring; get_chip_neighbors returns 0 neighbors for the 3<->0 pair even though routing
@@ -531,7 +540,7 @@ for mock in "${SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}" "${SC20_REVAB_SU
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_4x4_pipeline_40stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_4X4_PIPELINE}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_8x4_pipeline_20stage_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_SUBTORUS_8X4_PIPELINE}"
   # Full SC20 torus: five 32x4 groups wired as a ring (20 hosts).
-  # TODO(tt-metal#49275): TestPipelineBuilderCheck omitted: the 5-group 32x4 ring fails resolve_graph_layout
+  # TODO(https://github.com/tenstorrent/tt-metal/issues/49275): TestPipelineBuilderCheck omitted: the 5-group 32x4 ring fails resolve_graph_layout
   # ("no valid submesh assignment found") on the subtorus mocks — a distinct pipeline-builder bug worth
   # investigating. Layout + corner-pin checks still run and pass.
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_OPERATION_TIMEOUT_SECONDS=600 tt-run --mesh-graph-descriptor "${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=ControlPlaneFixture.TestGalaxyLayoutCheck:ControlPlaneFixture.TestGalaxyCornerPins
@@ -656,14 +665,14 @@ done
 # dual_bh_galaxy_1x2 (8x8 device, 64 ASIC, 8x8_Mesh PGD) — needs 16x8 pod mock, not single-galaxy single-pod mocks
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/dual_bh_galaxy_1x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/quad_bh_galaxy_1x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
-# TODO(tt-metal#49313): DISABLED on CI. quad_bh_galaxy_2x2 on the 16x8 pod mock (8x16 / 128-node mesh)
+# DISABLED on CI. quad_bh_galaxy_2x2 on the 16x8 pod mock (8x16 / 128-node mesh)
 # passes locally (<4 min) but wedges in tt-run setup (control-plane init / rank-binding for the 128-node
 # mesh) for >20 min on the cpu_medium runner — it never reaches a gtest and blocks the whole shard
 # (0 progress at 30/50/35-min timeouts). Removing only the pipeline-builder check did not help since the
 # slowness is pre-gtest. Re-enable once large-mesh control-plane init / SAT solve is fast enough for CI.
 # run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/quad_bh_galaxy_2x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${POD_16X8_BH_GALAXY_CLUSTER_DESC_MAPPING}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 
-# Llama 8b pod MGDs (tt-blaze issue #46935): 40-host, 2-mesh (M0 8 hosts + M1 32 hosts) decode pods.
+# Llama 8b pod MGDs: 40-host, 2-mesh (M0 8 hosts + M1 32 hosts) decode pods.
 # These only map onto a SINGLE pod (4-host mocks); on a full 16-host system mock the 40-host pod has no
 # valid mapping (the 16-host variants are commented out in the bh-sp4-glx and bh-blitz-decode groups).
 # Validated on rev A/B (sp4 single-pod), revAB subtorus/120c single-pod, revC subtorus aisle C (SC4),

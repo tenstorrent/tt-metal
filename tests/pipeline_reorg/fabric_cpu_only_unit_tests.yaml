@@ -33,29 +33,46 @@
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
 
-# bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 39 per-host-sliced pod combos
-# across 4 single-pod mocks (incl. slow 40-host llama pods), which exceeded a 40-min shard on CI. Split by
-# mock revision via --grep: revAB (21 combos: SC4 revAB subtorus/aisleD + SP3 16x8) and revC (18 combos:
-# SC4 revC subtorus aisleC/aisleD). The two greps partition the group exactly (21 + 18 = 39, disjoint).
+# bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 38 per-host-sliced pod combos
+# across 4 single-pod mocks. The four 40-host llama_8b pods dominate wall-clock (they alone need ~40 min),
+# so they are pulled into their own shard; the remaining fast layout/pipeline-builder combos are split by
+# mock revision. Partition (disjoint, exhaustive): revAB-fast (16) + revC-fast (14) + llama (8) = 38.
+#   revAB-fast: SC4 revAB subtorus/aisleD + SP3 16x8, minus llama  (--grep revAB --grep-exclude llama_8b)
+#   revC-fast:  SC4 revC subtorus aisleC/aisleD, minus llama       (--grep revC  --grep-exclude llama_8b)
+#   llama:      all 40-host llama_8b pods on revAB + revC mocks     (--grep llama_8b)
 - id: fabric-cpu-bh-pod-pipeline-revab
   name: fabric cpu unit tests (bh-pod-pipeline-revAB)
-  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revAB --grep-exclude llama_8b
   skus:
     cpu_medium:
-      # 21 combos incl. the SC36-subtorus single-pod mock, the 16x8 SP3 mock, and 40-host llama pods.
+      # 16 fast layout/pipeline-builder combos (SC36-subtorus single-pod mock + 16x8 SP3 mock); ~3 min.
       # (The one pathological 8x16 pipeline-builder combo is dropped on CI —
       # see https://github.com/tenstorrent/tt-metal/issues/49313.)
-      timeout: 35
+      timeout: 15
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
 
 - id: fabric-cpu-bh-pod-pipeline-revc
   name: fabric cpu unit tests (bh-pod-pipeline-revC)
-  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revC
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep revC --grep-exclude llama_8b
   skus:
     cpu_medium:
-      timeout: 30
+      # 14 fast layout/pipeline-builder combos (SC4 revC subtorus aisleC/aisleD); ~3 min.
+      timeout: 15
+  team: scaleout
+  arch: wormhole_b0
+  owner_id: U03FJB5TM5Y # Ridvan Song
+
+- id: fabric-cpu-bh-pod-pipeline-llama
+  name: fabric cpu unit tests (bh-pod-pipeline-llama)
+  cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-pod-pipeline --grep llama_8b
+  skus:
+    cpu_medium:
+      # 8 slow 40-host llama_8b pods (revAB subtorus/aisleD + revC subtorus aisleC/aisleD). These dominate
+      # the pod-pipeline wall-clock; a combined revAB shard timed out at 35 min, and the 8-combo llama-only
+      # run completes in ~40 min, so this shard gets a dedicated 55-min budget for host-variance headroom.
+      timeout: 55
   team: scaleout
   arch: wormhole_b0
   owner_id: U03FJB5TM5Y # Ridvan Song
