@@ -70,7 +70,7 @@
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d" -vvv --tb=short --timeout=900
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and pcc and iter1 and no_determinism and fabric2d and pretrained" -vvv --tb=short --timeout=900
   test_type: prefill_block
   test_group: module
   skus:
@@ -188,7 +188,10 @@
 - name: "(Galaxy) DeepSeek Prefill - Kimi Prefill Block"
   cmd: |
     export MESH_DEVICE=TG
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism" -vvv --tb=short --timeout=1800
+    export KIMI_K2_6_HF_MODEL=/mnt/MLPerf/huggingface/hub/Kimi-K2.6-dequantized
+    export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/moonshotai/Kimi-K2.6-Cache/CI
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_5k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and pcc-prompt_25k and iter1 and no_determinism and pretrained" -vvv --tb=short --timeout=1800
   test_type: kimi_prefill_block
   test_group: module
   skus:
@@ -201,7 +204,7 @@
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced" -vvv --tb=short --timeout=900
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and perf-prompt_25k and with_determinism and iter2 and not iter25 and not iter2000 and moe-gate_device and balanced and not non_balanced and pretrained" -vvv --tb=short --timeout=900
   test_type: prefill_block_determinism
   test_group: module
   skus:
