@@ -123,7 +123,6 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config) {
-    // The four knobs are common to both generations; select the alternative matching the target arch.
     if (arch == tt::ARCH::QUASAR) {
         return tt::tt_metal::experimental::ComputeGen2Config{
             .math_fidelity = config.math_fidelity,
