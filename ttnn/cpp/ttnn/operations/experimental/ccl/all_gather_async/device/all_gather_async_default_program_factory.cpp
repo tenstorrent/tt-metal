@@ -95,7 +95,9 @@ DefaultMeshWorkloadFactory::cached_program_t DefaultMeshWorkloadFactory::create_
                 num_buffers_per_channel,
                 core_grid_offset,
                 reverse_order,
-                sub_core_grid);
+                sub_core_grid,
+                operation_attributes.war_semaphore,
+                operation_attributes.war_wait_value);
 
     return {
         std::move(program),
@@ -230,7 +232,9 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
     const bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<GlobalSemaphore>& war_semaphore,
+    std::optional<uint32_t> war_wait_value) {
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto& input_tensor_shape = input_tensor.padded_shape();
@@ -743,6 +747,17 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     start_pages_read_in_row,  // start_pages_read_in_row
                     start_row_offset,         // start_row_offset
                     chunks_per_sync_val};     // chunks_per_sync
+
+                // WAR-hazard (demo #48222/#48469): writer args idx 14/15. Non-zero only on the anchor
+                // core (logical (1,0) = the local-writing dir==1 worker under choose_worker_cores
+                // row-major layout); the writer kernel waits there before overwriting the reused
+                // buffer. 0 on every other core disables the wait, so a coord that is not a writer
+                // core is a harmless no-op (never a deadlock). Must be pushed here (idx 14/15), before
+                // the conditional mux/shard/fabric args, to match the kernel's fixed-prefix read.
+                const bool is_war_anchor = war_semaphore.has_value() && core.x == 1 && core.y == 0;
+                writer_rt_args.push_back(
+                    is_war_anchor ? static_cast<uint32_t>(war_semaphore.value().address()) : 0);
+                writer_rt_args.push_back(is_war_anchor ? war_wait_value.value_or(0) : 0);
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(

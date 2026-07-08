@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.modules.tt_ccl import get_num_links as get_common_num_links
 
@@ -72,6 +74,24 @@ class TT_CCL:
                 self.rs_semaphore_handles[i].append(
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
+
+        # WAR-hazard demo (#48222/#48469, draft PR #49353): the sampling gather reuses a fixed
+        # (trace-pinned) output buffer every decode step. Under contention the next step's gather can
+        # overwrite it before the current step's ttnn.sampling finishes reading -> batch-32 gibberish.
+        # When enabled, ttnn.sampling signals `war_semaphore` at `war_sem_drain_core` once per user core
+        # (war_sem_wait_value total), and the gather's writer waits on it before overwriting. Init value
+        # == wait value bootstraps step 1 (no prior signal to wait for). Gated behind an env var so the
+        # semaphore is only allocated when the demo runs. `war_sem_drain_core` (1,0) must match the PF's
+        # hardcoded anchor core in all_gather_async_default_program_factory.cpp.
+        self.war_semaphore = None
+        self.war_sem_drain_core = None
+        self.war_sem_wait_value = None
+        if os.environ.get("TT_SAMPLING_WAR_DEMO") == "1" and os.environ.get("TT_SAMPLING_WAR_ENABLE") == "1":
+            self.war_sem_wait_value = int(os.environ.get("TT_SAMPLING_WAR_WAIT_VALUE", "32"))
+            self.war_sem_drain_core = ttnn.CoreCoord(1, 0)
+            self.war_semaphore = ttnn.create_global_semaphore(
+                self.mesh_device, self.sub_device_crs, self.war_sem_wait_value
+            )
 
     def get_num_links(self, cluster_axis=None):
         """

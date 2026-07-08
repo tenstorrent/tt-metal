@@ -73,7 +73,11 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
     std::optional<uint32_t> num_buffers_per_channel,
     CoreCoord core_grid_offset,
     bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    // WAR-hazard (demo #48222/#48469): gate reuse of the gathered buffer on the downstream sampling
+    // op finishing its read. Non-null only for the sampling gather; the writer waits on the anchor core.
+    const std::optional<GlobalSemaphore>& war_semaphore = std::nullopt,
+    std::optional<uint32_t> war_wait_value = std::nullopt);
 
 // Runtime argument override function
 void all_gather_async_minimal_default_helper_override_runtime_arguments(

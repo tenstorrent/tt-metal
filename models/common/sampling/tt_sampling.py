@@ -452,13 +452,46 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
 
-    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+    def _perform_all_gather(
+        self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None, enable_war=False
+    ):
         """
         Flexible all-gather that works across different CCL implementations.
 
         - If `tt_ccl` exposes `line_all_gather`, prefer it (enables persistent buffer usage on some stacks).
         - Otherwise fall back to `ttnn.all_gather`.
+
+        WAR-hazard demo (#48222/#48469): when TT_SAMPLING_WAR_DEMO=1, route the tt-transformers gather
+        through all_gather_async so it can (a) reproduce the broken batch-32 timing by dropping the
+        cross-device barrier, and (b) optionally gate buffer reuse on a WAR semaphore signaled by the
+        downstream ttnn.sampling op. Only the first (values) gather is gated (`enable_war`): once its
+        WAR-wait clears, the prior step's sampling read is provably complete, so the subsequent indices
+        overwrite in the same step is also safe from one signal. See the draft PR (#49353).
         """
+        import os
+
+        if os.environ.get("TT_SAMPLING_WAR_DEMO") == "1" and not callable(self._line_all_gather):
+            war_semaphore = getattr(self.tt_ccl, "war_semaphore", None) if enable_war else None
+            war_wait_value = getattr(self.tt_ccl, "war_sem_wait_value", None) if enable_war else None
+            use_barrier = os.environ.get("TT_SAMPLING_WAR_NOBARRIER") != "1"
+            barrier_semaphore = (
+                self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis) if use_barrier else None
+            )
+            return ttnn.experimental.all_gather_async(
+                tensor,
+                persistent_output_buffer=None,
+                dim=dim,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=memory_config,
+                cluster_axis=cluster_axis,
+                topology=ttnn.Topology.Linear,
+                barrier_semaphore=barrier_semaphore,
+                num_buffers_per_channel=2,
+                war_semaphore=war_semaphore,
+                war_wait_value=war_wait_value,
+            )
+
         if callable(self._line_all_gather):
             # Some implementations accept `buffer_key` (for persistent buffers), others may not.
             line_all_gather_kwargs = {
@@ -700,6 +733,7 @@ class TTSampling(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 num_links=self.num_gather_links,
                 buffer_key="SAMPLING_VALUES",
+                enable_war=True,
             )
 
             ttnn.deallocate(topk_values)
