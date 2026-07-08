@@ -6,7 +6,7 @@ training_config:
   gradient_accumulation_steps: 4
   num_epochs: 1
   max_steps: 5000
-  use_clip_grad_norm: false  # TP-incompatible; both trainers reject use_clip_grad_norm=true under TP
+  use_clip_grad_norm: false  # TP-incompatible
   clip_grad_norm_max_norm: 1.0
   data_path: "data/tokenized_shakespeare_tinyllama.yaml"
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/llama8b.yaml"
