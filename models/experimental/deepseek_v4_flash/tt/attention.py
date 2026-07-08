@@ -262,11 +262,23 @@ def _height_sharded_l1_config(width: int) -> ttnn.MemoryConfig:
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _update_cache_at(cache: ttnn.Tensor, row: ttnn.Tensor, pos_tensor: ttnn.Tensor) -> None:
-    """In-place write ``row`` ``[1, 1, 1, F]`` into ``cache`` at ``pos_tensor`` ``[1]`` (INT32)."""
+def _update_cache_at(
+    cache: ttnn.Tensor,
+    row: ttnn.Tensor,
+    pos_tensor: ttnn.Tensor,
+    page_table: ttnn.Tensor | None = None,
+) -> None:
+    """In-place write ``row`` ``[1, 1, 1, F]`` into ``cache`` at ``pos_tensor`` ``[1]`` (INT32).
+
+    When ``page_table`` is ``[1, num_blocks]``, uses vLLM-style logical->physical block
+    mapping (GPT-OSS / tt-transformers paged KV path).
+    """
     width = row.shape[-1]
     row_sharded = ttnn.to_memory_config(row, _height_sharded_l1_config(width))
-    ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
+    if page_table is not None:
+        ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor, page_table=page_table)
+    else:
+        ttnn.experimental.paged_update_cache(cache, row_sharded, update_idxs_tensor=pos_tensor)
     ttnn.deallocate(row_sharded)
 
 
@@ -692,6 +704,31 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )  # [1, 1, H, Dh]
 
+    def _sdpa_paged_sliding(
+        self,
+        q: ttnn.Tensor,
+        paged_pool: ttnn.Tensor,
+        page_table: ttnn.Tensor,
+        cur_pos: ttnn.Tensor,
+        sliding_window: int,
+    ) -> ttnn.Tensor:
+        """Sliding-window MQA decode against a paged K=V pool (K==V)."""
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q,
+            paged_pool,
+            paged_pool,
+            page_table,
+            is_causal=False,
+            cur_pos_tensor=cur_pos,
+            sliding_window_size=sliding_window,
+            attention_sink=self.sdpa_sinks_tt,
+            scale=self.scaling,
+            program_config=self._sdpa_pcfg,
+            compute_kernel_config=_HIFI4_SDPA,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
     def _grouped_output(self, attn: ttnn.Tensor) -> ttnn.Tensor:
         """``DeepseekV4GroupedLinear`` (o_a) + ``o_b_proj``.
 
@@ -774,13 +811,28 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         scache: "_StaticLayerCache",
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
+        paged_sliding_pool: ttnn.Tensor | None = None,
+        page_table: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         """Single-token decode attention against the paged in-place ``scache``.
 
         Same as :meth:`decode_static`; the eager model path builds ``mask`` and the
         position tensors on host while the traced path generates them on device.
         """
-        return self.decode_static(hidden, cos, sin, neg_sin, cos_win, sin_win, mask, scache, sliding_pos, compress_pos)
+        return self.decode_static(
+            hidden,
+            cos,
+            sin,
+            neg_sin,
+            cos_win,
+            sin_win,
+            mask,
+            scache,
+            sliding_pos,
+            compress_pos,
+            paged_sliding_pool=paged_sliding_pool,
+            page_table=page_table,
+        )
 
     def decode_static(
         self,
@@ -794,9 +846,28 @@ class DeepSeekV4Attention(DeepSeekV4Module):
         scache: "_StaticLayerCache",
         sliding_pos: ttnn.Tensor,
         compress_pos: ttnn.Tensor,
+        paged_sliding_pool: ttnn.Tensor | None = None,
+        page_table: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """Trace-safe single-token decode against fixed-size in-place caches."""
+        """Trace-safe single-token decode against fixed-size in-place caches.
+
+        When ``paged_sliding_pool`` and ``page_table`` are set and this is a
+        sliding-attention layer, K=V is stored in the shared paged pool (block
+        size 64) and attention uses ``paged_scaled_dot_product_attention_decode``.
+        CSA/HCA layers keep the ring buffer + compressor path with per-user caches.
+        """
         q, kv_new = self._qkv(hidden, cos, sin)  # q [1,1,H,Dh], kv_new [1,1,1,Dh]
+
+        use_paged_sliding = (
+            paged_sliding_pool is not None and page_table is not None and self.layer_type == "sliding_attention"
+        )
+
+        if use_paged_sliding:
+            _update_cache_at(paged_sliding_pool, kv_new, compress_pos, page_table=page_table)
+            attn = self._sdpa_paged_sliding(q, paged_sliding_pool, page_table, compress_pos, self.config.sliding_window)
+            attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
+            return self._grouped_output(attn)
+
         _update_cache_at(scache.sliding, kv_new, sliding_pos)
         kv = scache.sliding  # [1, 1, window, Dh] (updated in place)
 
