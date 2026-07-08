@@ -158,61 +158,61 @@ extern "C" uint32_t _start1() {
             uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
-                                                                launch_msg->kernel_config.local_cb_offset);
-        uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
-        setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
+                                                                    launch_msg->kernel_config.local_cb_offset);
+            uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
+            setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #endif
 
-        // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
-        rta_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset +
-                                  MEM_L1_UNCACHED_BASE);
-        crta_l1_base =
-            (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].crta_offset +
-                                  MEM_L1_UNCACHED_BASE);
-        sem_l1_base[ProgrammableCoreType::TENSIX] =
-            (uint32_t tt_l1_ptr*)(kernel_config_base +
-                                  launch_msg->kernel_config.sem_offset[ProgrammableCoreType::TENSIX]);
+            // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged
+            rta_l1_base =
+                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset +
+                                      MEM_L1_UNCACHED_BASE);
+            crta_l1_base =
+                (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].crta_offset +
+                                      MEM_L1_UNCACHED_BASE);
+            sem_l1_base[ProgrammableCoreType::TENSIX] =
+                (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                      launch_msg->kernel_config.sem_offset[ProgrammableCoreType::TENSIX]);
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
-        // Initialize RTA count from L1 memory
-        // Set to 0 if: 1. offset is sentinel (no args set)
-        //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
-        if (launch_msg->kernel_config.rta_offset[hartid].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
-            ((rta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
-            rta_count = 0;
-        } else {
-            rta_count = rta_l1_base[0];
-            rta_l1_base += 1;  // Skip count word
-        }
+            // Initialize RTA count from L1 memory
+            // Set to 0 if: 1. offset is sentinel (no args set)
+            //              2. memory contains known garbage pattern 0xBEEF#### (uninitialized slot)
+            if (launch_msg->kernel_config.rta_offset[hartid].rta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+                ((rta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
+                rta_count = 0;
+            } else {
+                rta_count = rta_l1_base[0];
+                rta_l1_base += 1;  // Skip count word
+            }
 
-        // Initialize CRTA count from L1 memory
-        // Set to 0 if: 1. offset is sentinel (no common args set)
-        //              2. memory contains known garbage pattern 0xBEEF#### (unicast mode, kernel has no CRTAs)
-        if (launch_msg->kernel_config.rta_offset[hartid].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
-            ((crta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
-            crta_count = 0;
-        } else {
-            crta_count = crta_l1_base[0];
-            crta_l1_base += 1;  // Skip count word
-        }
+            // Initialize CRTA count from L1 memory
+            // Set to 0 if: 1. offset is sentinel (no common args set)
+            //              2. memory contains known garbage pattern 0xBEEF#### (unicast mode, kernel has no CRTAs)
+            if (launch_msg->kernel_config.rta_offset[hartid].crta_offset == RTA_CRTA_NO_ARGS_SENTINEL ||
+                ((crta_l1_base[0] & 0xFFFF0000) == WATCHER_RTA_UNSET_PATTERN)) {
+                crta_count = 0;
+            } else {
+                crta_count = crta_l1_base[0];
+                crta_l1_base += 1;  // Skip count word
+            }
 #endif
 
-        my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
-        my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+            my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
+            my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
-        WAYPOINT("R");
-        uintptr_t kernel_lma =
-            (kernel_config_base +
-             launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
-        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
-        record_stack_usage(stack_free);
-        WAYPOINT("D");
-        DEVICE_PRINT_KERNEL_FINISHED();
+            WAYPOINT("R");
+            uintptr_t kernel_lma =
+                (kernel_config_base +
+                 launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
+            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+            record_stack_usage(stack_free);
+            WAYPOINT("D");
+            DEVICE_PRINT_KERNEL_FINISHED();
 
-        // Signal completion
-        DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
-        tensix_sync();
+            // Signal completion
+            DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
+            tensix_sync();
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
