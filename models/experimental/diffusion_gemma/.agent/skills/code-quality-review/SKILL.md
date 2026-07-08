@@ -1,5 +1,5 @@
 ---
-name: code_quality_review
+name: code-quality-review
 description: Review code for readability, maintainability, and unnecessary complexity. Use when planning refactors, or when the user asks for code quality cleanup opportunities.
 disable-model-invocation: true
 ---

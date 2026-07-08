@@ -182,14 +182,7 @@ Record the working server invocation in the work log, including `--max-model-len
 
 Before classifying any serving-output problem as a model-quality limitation, use `qualitative-check` to produce matching prompt-correct evidence from HF, or at minimum from the full-model stage on comparable prompts. If serving output is materially worse than the prompt-correct control, that is a serving regression and in scope for this stage - stale trace inputs, sampler state, and cache/position handling are the usual causes, not the checkpoint. If the shared readiness runner cannot send the correct prompt format, fix it or add a targeted prompt-correct request before judging output quality.
 
-After qualitative collection, run:
-
-```bash
-python models/common/readiness_check/check_degenerate_output.py \
-  --hf-model <hf-model-id> --missing-artifacts critical --scope vllm
-```
-
-Mechanical degeneracy - doubled tokens, single-token collapse - is never a model property. The runner-side stage gate runs the same check.
+After qualitative collection, gate the serving output the DiffusionGemma way rather than with an autoregressive degeneracy script: `check_degenerate_output.py` is not present in this checkout, and doubled/EOS-heavy output is acceptable at the RUN milestone for the diffusion path (see the DiffusionGemma adaptation above and #48291). Gate on the decision-agreement floor — injected-noise replay through `demo/replay_hf_tt.py` (with the `reference/generate.py` replay hooks) measuring per-position committed-argmax agreement, Gumbel-max argmax agreement, entropy PCC + max abs error, and entropy-budget accept IoU vs the torch reference (see dg-05 and the `diffusion-gemma` keystone). Run this check yourself and record its verdict; there is no auto-chaining runner in this pipeline. For an autoregressive model mechanical degeneracy - doubled tokens, single-token collapse - is never a model property; for the diffusion path the serving analogue is canvas non-convergence or accept-schedule stalls, not repeated tokens.
 
 If the tokenizer has no chat template, say so explicitly, treat the checkpoint as a base model, and judge the qualitative outputs against continuation-style expectations; do not let chat-style prompts produce poor text that masks serving bugs.
 

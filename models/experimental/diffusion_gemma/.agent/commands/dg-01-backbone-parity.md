@@ -2,7 +2,7 @@
 description: DiffusionGemma stage 01 — validate the reused Gemma-4 backbone against the DiffusionGemma checkpoint (weight mapping + causal PCC on QB2).
 ---
 
-Load `diffusion-gemma` first. This is the FOUNDATION stage (#47461 / #47468). The backbone is the in-repo Gemma-4 26B-A4B MoE at models/demos/gemma4/ — do NOT re-author it and do NOT edit it. This stage points the existing DiffusionGemma4Model (models/experimental/diffusion_gemma/tt/model.py, weight_mapping.py) at the DiffusionGemma checkpoint and validates the causal (encoder/prefill) pass, before any diffusion delta is exercised. Work only under models/experimental/diffusion_gemma/.
+Load `diffusion-gemma` first. This is the FOUNDATION stage (#47461 / #47468). The backbone is the in-repo Gemma-4 26B-A4B MoE at models/demos/gemma4/ — do NOT re-author it and do NOT edit it. This stage points the existing DiffusionGemma4Model (models/experimental/diffusion_gemma/tt/model.py, root-level weight_mapping.py) at the DiffusionGemma checkpoint and validates the causal (encoder/prefill) pass, before any diffusion delta is exercised. Work only under models/experimental/diffusion_gemma/.
 
 Goal completion requirements:
 - weight_mapping.remap_state_dict loads the real DiffusionGemma checkpoint into the gemma4-keyed backbone state + the self-conditioning state, with every missing/renamed key and config diff (v-norm, K=V for full-attn layers, canvas_length, dual RoPE, softcap) reconciled and recorded. `git diff main -- models/demos/gemma4/` is EMPTY.

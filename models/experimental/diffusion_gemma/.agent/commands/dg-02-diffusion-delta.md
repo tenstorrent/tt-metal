@@ -1,8 +1,8 @@
 ---
-description: DiffusionGemma stage 02 — validate the diffusion delta: bidirectional attention, three-phase KV, self-conditioning, on-device canvas sampling.
+description: "DiffusionGemma stage 02 — validate the diffusion delta: bidirectional attention, three-phase KV, self-conditioning, on-device canvas sampling."
 ---
 
-Load `diffusion-gemma` first. This stage covers the net-new device pieces layered over the untouched gemma4 backbone: bidirectional/masked canvas attention (#47462), the three-phase KV state machine (#47474), the self-conditioning gated MLP loader+runtime (#47461/#47463), and on-device canvas sampling (#47472). These pieces exist (tt/diffusion_attention.py, kv_phase.py, tt/self_conditioning.py, tt/sampling.py). This stage is validation + coverage + hardening, not authoring. Do NOT begin the denoise-loop control flow, RUN e2e, or vLLM work here. Work only under models/experimental/diffusion_gemma/.
+Load `diffusion-gemma` first. This stage covers the net-new device pieces layered over the untouched gemma4 backbone: bidirectional/masked canvas attention (#47462), the three-phase KV state machine (#47474), the self-conditioning gated MLP loader+runtime (#47461/#47463), and on-device canvas sampling (#47472). These pieces exist (tt/diffusion_attention.py, root-level kv_phase.py, tt/self_conditioning.py, tt/sampling.py). This stage is validation + coverage + hardening, not authoring. Do NOT begin the denoise-loop control flow, RUN e2e, or vLLM work here. Work only under models/experimental/diffusion_gemma/.
 
 Goal completion requirements:
 - Bidirectional masked SDPA is PCC-validated on QB2 vs the torch reference for BOTH ≤32768 and the long-prompt >32768 non-causal path, for full and sliding layer kinds. The explicitly-defined 2D mask geometry (canvas↔canvas bidirectional, canvas→prompt visibility, symmetric 2W+1 on local layers, absolute/RoPE offsets by prompt_len, chunking of the [256, prompt_len+256] mask) is tested — not just an isolated 256 canvas.

@@ -179,8 +179,10 @@ Under `models/experimental/diffusion_gemma/`:
 - **RUN-first vs correctness:** the current priority is a reproducible prompt→text device run at
   small scale; degenerate/EOS-heavy output is acceptable for the RUN milestone. Fidelity (#48291,
   R0.5/R0.6 replay) is a separate, deferred track — do not let it block a run.
-- Stage evidence should go under `models/experimental/diffusion_gemma/doc/<stage>/` (README.md +
-  work_log.md + artifacts); the context contract, once created, is
-  `models/experimental/diffusion_gemma/doc/context_contract.json`. This `doc/` tree does not exist
-  yet — create it on first stage work (the layout mirrors `models/autoports/*/doc/`).
+- Stage evidence goes under `models/experimental/diffusion_gemma/doc/<stage>/` (README.md +
+  work_log.md + artifacts); the context contract is
+  `models/experimental/diffusion_gemma/doc/context_contract.json`. This `doc/` tree already exists
+  (`context_contract.json` plus the `optimize_perf/` and `vllm_integration/` stage dirs; the layout
+  mirrors `models/autoports/*/doc/`) — add a new `doc/<stage>/` per stage, and do NOT recreate or
+  overwrite the existing stage dirs.
 - Grep `DG_TEXT_DEMO_SUCCESS` / `DG_TEXT_DEMO_FAILURE` for run outcome — not the fallback log noise.

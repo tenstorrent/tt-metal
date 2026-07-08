@@ -16,12 +16,14 @@ models/experimental/diffusion_gemma/.agent/
   skills/                     # Claude Code skills (SKILL.md each) — the engineering knowledge
     diffusion-gemma/          #   keystone: shared model context + hard rules (load first)
   commands/                   # 10 stage slash-commands (/dg-01-… … /dg-10-…)
-  scripts/                    # deterministic gate scripts + the context-contract checker
+  scripts/                    # deterministic gate scripts + the context-contract checker + AUTODEBUG_PROMPT.md (AutoDebug inspection brief)
 ```
 
 There are no Codex artifacts here: no `agents/openai.yaml`, no `multigoal` runner, no
 `$skill`/`/goal` syntax, no 4000-char objective cap. Skills are referenced by name (Claude Code
-auto-invokes them from their `description`, or you type `/name`); stages are ordinary slash commands.
+auto-invokes them from their `description`, or you type `/name` — except `beautify` and
+`code-quality-review`, which set `disable-model-invocation: true` and are `/name`-only); stages are
+ordinary slash commands.
 
 ## Wiring it into Claude Code
 
@@ -40,7 +42,9 @@ done
 ```
 
 (Copy instead of symlink if you prefer, or point `~/.claude/skills` at them for personal use.)
-After that, `/help` lists the `dg-*` commands and the skills auto-trigger on their descriptions.
+After that, `/help` lists the `dg-*` commands and the skills auto-trigger on their descriptions
+(except `beautify` and `code-quality-review`, which are `disable-model-invocation: true` and so are
+user-invoked only via `/name`, never auto-triggered).
 
 ## This is not a greenfield bring-up
 
@@ -55,8 +59,10 @@ the existing code**, ordered by the issue-map roadmap — not "author a decoder 
 
 1. **Never edit the shared Gemma-4 backbone.** The backbone is `models/demos/gemma4/`, reused
    as-is. Every DiffusionGemma fix stays inside `models/experimental/diffusion_gemma/`. The gate
-   `scripts/check_no_shared_gemma4_edits.sh` enforces this (set `DG_BASE_REF` to the ref the work
-   branched from — `main` on a main-based dev branch).
+   `scripts/check_no_shared_gemma4_edits.sh` enforces this — it blocks edits under
+   `models/demos/gemma4/`, `models/common/`, and `models/tt_transformers/` (all shared backbone),
+   not just gemma4 (set `DG_BASE_REF` to the ref the work branched from — `main` on a main-based dev
+   branch).
 2. **Correctness is judged on diffusion decisions, not teacher-forcing top-k.** No AIME24 top-1/5.
    Validate entropy values, Gumbel-max argmax agreement, and accept/renoise agreement vs the torch
    reference, with the torch run's Gumbel noise injected for token-exact comparison. See the
@@ -79,16 +85,17 @@ Each stage is a slash command; run them in order (or jump to the one you need).
 | `/dg-09-vllm-integration` | Block-granular serving through the tenstorrent/vllm TT plugin | #47466 #47488 |
 | `/dg-10-release-ci` | Release handoff + tiered models-CI wiring | tti-release #47489 |
 
-Every stage command tells Claude to use the `diffusion-gemma` skill first; hardware-facing stages
-also use the `tt-device-usage` skill. Each command names the generic skill whose knowledge that
-stage reuses, and that skill's "DiffusionGemma adaptation" section states the overrides.
+Every stage command tells Claude to use the `diffusion-gemma` skill first; on hardware-facing stages
+the `tt-device-usage` skill auto-triggers from its description (no command names it). Each stage
+reuses a mapped generic skill (see the "How the generic skills map" table); Claude auto-triggers it
+from its description, and a few commands also name it explicitly.
 
 ## How the generic skills map
 
 - **Reused as-is** (model-agnostic TTNN/infra): `autodebug`, `autotriage`, `models-ci`, `tt-lang`,
   `tt-device-usage`, and the bulk of `optimize` / `tt-enable-tracing` TTNN knowledge.
 - **Lightly noted** (reused process, with a short `## DiffusionGemma note` re-pointing scope/examples
-  to the diffusion path): `autofix`, `code_quality_review`, `beautify`, `qualitative-check`.
+  to the diffusion path): `autofix`, `code-quality-review`, `beautify`, `qualitative-check`.
 - **Adapted** (a `## DiffusionGemma adaptation` section overrides the autoregressive assumptions):
   `functional-decoder`, `full-model`, `datatype-sweep`, `multichip`, `optimize`,
   `tt-enable-tracing`, `vllm-integration`, `tti-release`, `stage-review`.
@@ -103,7 +110,8 @@ acceptable only for a hard physical device limit (QB2 DRAM), with a byte calcula
 capacity probe as evidence — and the budget must include the per-step canvas K/V scratch and the
 non-causal long-context mask buffers, not just weights + KV. The artifact is
 `models/experimental/diffusion_gemma/doc/context_contract.json` (validate it with
-`scripts/check_context_contract.py`); stages create/verify it. Stage evidence goes under
+`python3 models/experimental/diffusion_gemma/.agent/scripts/check_context_contract.py --model-dir models/experimental/diffusion_gemma`);
+stages create/verify it. Stage evidence goes under
 `models/experimental/diffusion_gemma/doc/<stage>/` (README.md + work_log.md + artifacts).
 
 ## Verification gates

@@ -2,7 +2,9 @@
 description: DiffusionGemma stage 08 — optimize the denoise-step / per-block performance.
 ---
 
-Load `diffusion-gemma` first. This is the PERF stage (#47465). The optimization unit is the DENOISE STEP over the 256-token canvas (≤48 steps/block) + the commit, NOT per-token autoregressive decode. Preserve the selected precision config and the diffusion decisions. Do NOT begin vLLM work. Do NOT edit models/demos/gemma4/ — optimize DiffusionGemma-local code and drive the backbone through its existing knobs. Work only under models/experimental/diffusion_gemma/.
+Load `diffusion-gemma` first, then read the `DiffusionGemma denoise-step optimization playbook` in the `optimize` skill (just before `Evidence To Leave`) — it grounds where the real headroom is: the denoise step is OP-COUNT bound (~4176 ms/step, 98.8% per-layer backbone, 85–170× the bandwidth roofline), the ranked DG-local levers are `DG-OPT-D01..D06` (de-chunk the 256-canvas RMSNorms, fuse RoPE, close the SDPA L1 static-CB clash), and the shared-gemma4 MoE / #48291 ceiling is what you must NOT re-grind. Evidence lives under `doc/optimize_perf/` (`work_log.md`, `perf_summary.json`, `prof_denoise_step.py`, `bench_sampling_step.py`); the build is `ENABLE_TRACY=OFF`, so use traced Metal capture/replay + synchronized per-op device-time tables (see `Profiling without Tracy`), not `tt-perf-report` op-CSV.
+
+This is the PERF stage (#47465). The optimization unit is the DENOISE STEP over the 256-token canvas (≤48 steps/block) + the commit, NOT per-token autoregressive decode. Preserve the selected precision config and the diffusion decisions. Do NOT begin vLLM work. Do NOT edit models/demos/gemma4/ — optimize DiffusionGemma-local code and drive the backbone through its existing knobs. Work only under models/experimental/diffusion_gemma/.
 
 Goal completion requirements:
 - Performance is reported per-denoise-step, per-block, and full-generation (prefill TTFT + Σ steps + commit), with a traced measured path — eager/untraced denoise-step numbers are not acceptable for ranking. Report tokens-per-block / blocks-per-second, never 1000/mean_tpot_ms.

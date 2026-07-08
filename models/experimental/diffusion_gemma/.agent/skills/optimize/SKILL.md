@@ -14,6 +14,7 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 - Roofline changes fundamentally: there is **no incremental single-token KV read**; each of the ≤48 steps re-reads weights and recomputes over the full 256 canvas against the frozen prefix. Reconcile measured device time against per-step-weight-traffic × steps.
 - Keep the fixed ≤48-step **trace-safe shape** (on-device cutoff mask, tensor-valued scatter indices, warmed program cache); early-halt cannot shorten a static trace. Token-feedback tests become **canvas-feedback tests** (the accepted canvas from step N is the input consumed at step N+1, with no host readback of the cutoff).
 - **NEVER edit `models/demos/gemma4/`** (`git diff main -- models/demos/gemma4/` must stay empty); optimize DiffusionGemma-local code and drive the backbone through its existing knobs. MoE sparse-matmul advice **does** apply (128-expert top-8 backbone). Evidence goes under `models/experimental/diffusion_gemma/doc/<stage>/`.
+- **Read the `DiffusionGemma denoise-step optimization playbook` (below, just before `Evidence To Leave`) before tuning any knob.** It grounds where the real headroom is: the denoise-step roofline (op-count bound, not bandwidth-bound), the ranked DG-local levers (`DG-OPT-D01..D06`), the shared-backbone ceiling you must NOT re-grind, and profiling-without-Tracy. Every number there traces to `doc/optimize_perf/work_log.md` / `perf_summary.json`.
 
 This skill assumes you have runnable TTNN code with passing correctness tests. If not, first use the appropriate bringup or debugging skill. This guide is written for autoregressive LLMs with prefill and decode phases. If the target model differs, map each requirement to the nearest equivalent path and record that mapping; do not drop correctness or performance evidence.
 
@@ -129,6 +130,22 @@ When optimizing a complete model or serving path, also write `doc/<stage>/perf_s
 }
 ```
 
+The template above is the per-token `single_user_decode` shape. **DiffusionGemma does NOT use it.** The optimization unit is the denoise step over the 256-token canvas, so the summary uses `profile: "block_diffusion_denoise_step"` with per-step / per-block fields. Map every per-token field (ms/token, t/s/u, per-token roofline) onto per-step / per-block; report tokens-per-block and blocks-per-second, never `1000/mean_tpot_ms`. The diffusion shape (mirroring the shipped `doc/optimize_perf/perf_summary.json`) is:
+
+```json
+{
+  "workload": {"profile": "block_diffusion_denoise_step", "prompt_len": 32, "canvas_length": 256, "max_denoise_steps": 48, "batch": 1, "mesh": [1, 4], "tensor_parallel": 4},
+  "ms_per_denoise_step": 4175.7,
+  "steps_per_block": 48,
+  "ms_per_block": 231906.0,
+  "roofline_ms_per_step_estimate": 49.1,
+  "decode_ms_per_token_device": null,
+  "named_limitations": ["hardware-profiler-limited: ENABLE_TRACY=OFF, tt-perf-report op-CSV unavailable; per-step/per-block/full-generation numbers come from traced Metal capture/replay plus synchronized per-op device-time tables"]
+}
+```
+
+The shipped `doc/optimize_perf/perf_summary.json` is the canonical example for this stage and nests richer provenance (e.g. `denoise_step_full_30L.ms_per_step_traced_post_argmax_fix`, `per_block.ms_per_block_total_traced` / `blocks_per_second_traced`, `roofline_ms_per_step_estimate.*`). Set `decode_ms_per_token_device` to `null` with the profiler reason — the device-time op table cannot be collected on this build (see `Profiling without Tracy` in the playbook).
+
 ## Full-Model Decode Closure
 
 For optimized full-model work, first compute a target budget from the best decoder-layer evidence:
@@ -170,6 +187,111 @@ The same measured path must be used for before/after comparisons. A teacher-forc
 If a decoder optimization was disabled in the full model because the stacked model hit L1, semaphore, trace, or CCL limits, do not accept the fallback as final until you have tried to reduce or pool that resource. Examples include persistent CCL buffers, output buffers, ring buffers, semaphores, trace input tensors, and page-table buffers. If it still cannot fit, record the exact allocation or runtime failure and the measured cost of the fallback.
 
 Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try fused collective/matmul or sharded-output patterns first and find a way to make the performant solution work. `autofix` can help you if you are running into bugs here.
+
+## DiffusionGemma denoise-step optimization playbook
+
+Load `diffusion-gemma` first, then read this before touching a knob. It is DiffusionGemma-specific and grounds exactly where the denoise-step headroom is (and is not), so you neither re-grind exhausted levers nor reach for the shared gemma4 backbone. Every number below traces to `doc/optimize_perf/work_log.md` and `doc/optimize_perf/perf_summary.json`; reproduce it in your own run before acting on it. The generic OPT-00x advice above still applies to the shapes it fits (MoE sparse_matmul, DRAM-sharded matmul geometry, precision), but the *first* move on this path is dictated by the roofline below, not by dtype.
+
+### The denoise-step roofline: op-count bound, NOT bandwidth-bound
+
+The single most important reframing: **the denoise step is OP-COUNT bound — not DRAM-bandwidth bound and not dispatch-gap bound.** Adding precision/dtype knobs or chasing bandwidth is the WRONG first move here; collapsing op count is.
+
+- Traced full step (30 layers, 256 canvas, TP=4) = **4175.7 ms/step**, of which **98.8%** is the per-layer backbone: `per_layer = 137.55 ms × 30 = 4126 ms`; only `49.24 ms` is fixed terminal/overhead. The ROW_MAJOR-argmax fix already cut the step ~37% (6642 → 4176 ms).
+- The weight-traffic roofline is **24.6–49.1 ms/step** (12.58 GB/chip/step at 512–256 GB/s-chip; on 256 tokens × top-8, coupon-collector saturates near all 128 experts, so the routed sparse_matmul reads ~the whole expert bank/step). Measured is **85–170× the bandwidth roofline.**
+- Two independent confirmations that this is op-COST, not dispatch or bandwidth: (a) 98.8% of the step is per-layer backbone versus a ~0.8 ms/layer bandwidth roofline per layer (~170×); (b) traced ≈ eager within ~3% — tracing removes almost nothing because the per-layer OPS themselves are the cost.
+- The full-30L number is a LINEAR PROJECTION from reduced-layer L=1/2/4 traced fits (`per_layer=137.55`, `fixed=49.24`; check: L2 fit 324.34 vs measured 324.12), not a direct 30L device measurement — a full-30L profiling run is blocked by earlyoom and graph_capture is broken. It assumes constant per-layer cost across layer kinds (sliding vs global attention, MoE vs non-MoE); reasonable given the excellent fit, but re-derive if you change layer structure.
+
+The op count comes from three **DiffusionGemma-local** constructs in `tt/denoise_forward.py` + `tt/diffusion_attention.py`, NOT from the shared backbone math: (1) 32-row-chunked RMSNorms (~1600+ slice/norm/concat ops/step), (2) manual per-32-token/per-head RoPE (`_apply_rope_chunked`), and (3) the staged `_manual_gqa_attention` fallback that replaces the real flash SDPA because the ttnn SDPA kernel misses L1 static-CB by <1 tile. Collapsing those three is where the realistic **~3–5× DG-local headroom** lives. Beyond ~3–5× you hit the shared-gemma4 MoE sparse_matmul weight-traffic floor (see the ceiling below).
+
+### DG-OPT denoise-step advice
+
+These mirror the OPT-00x format for the DiffusionGemma denoise path. Landed levers first (do NOT redo them), then the remaining DG-local levers ranked by leverage. Each remaining lever states what to measure, why it helps (op-count reduction), and the correctness guard (preserve the diffusion decisions and trace-safety).
+
+**Already landed — do not re-grind:**
+
+- ROW_MAJOR multi-core argmax (`tt/sampling.py:43`, wired into `gumbel_max` + `denoise_step`): 1239.7 → 14.4 ms/op (86×), bit-identical to TILE argmax; 2 calls/step, cut the full step ~37%. Root cause: last-dim argmax is single-core on TILE input, multi-core on ROW_MAJOR.
+- Preallocated accept/renoise constants (`make_denoise_constants` / `DenoiseConstants`, `denoise_loop.py:58-135`): removed per-step `ttnn.full`/`zeros_like` host writes that raised TT_FATAL during trace capture (makes the terminal chain trace-safe) and 23% faster on the accept chain (0.416 → 0.321 ms).
+- Trace-safe fixed-step loop (`run_fixed_denoise_steps` / `denoise_step_next_canvas`, `denoise_loop.py:215-271`): fixed ≤48-step count, accepted canvas from step N feeds N+1 entirely on device, no host readback of the argmax/entropy/cutoff; traced replay == eager (committed argmax 100.00% identical, `TRACE_SAFE_OK`).
+
+**Remaining DG-local levers, ranked by leverage:**
+
+#### DG-OPT-D01: De-chunk the 256-canvas RMSNorms (HIGHEST leverage)
+
+Run each canvas RMSNorm over the full 256 rows in one op instead of 8× (slice + width-sharded-norm + concat). This is the single largest op-count contributor and is entirely DiffusionGemma-local.
+
+- What to measure: op count and per-layer traced ms before/after. Today ~6 norms/layer × 30 layers + router norms + final norm = ~1600+ slice/norm/concat ops/step (~90 slice/norm/concat ops/layer); a full-256 norm is ~1 op each. Target: ~90 ops/layer → ~6.
+- Why it helps: it directly attacks the 137.55 ms/layer that is 98.8% of the step. `denoise_forward.py:187` hard-codes `chunk_size=32`; `self_conditioning.py:127-174` `_width_sharded_rms_norm` only takes the fast sharded path when `shape[-2]==32` (line 130), else falls back to generic `ttnn.rms_norm`. De-chunking needs a `block_h=8` (256/32) sharded `LayerNormShardedMultiCoreProgramConfig`, or a validated generic 256-row norm. The 32-row chunking was a decode-footprint workaround; at 256 tokens the full norm should fit.
+- Correctness guard: the full-256 norm output must be numerically equal (same eps, same weight, fp32 accumulation preserved) to the chunked path — verify per-layer PCC and that the committed clean-argmax canvas is unchanged. Keep it trace-safe: static shapes, no host writes introduced during capture.
+
+#### DG-OPT-D02: Fuse RoPE over the full 256 canvas
+
+Replace `_apply_rope_chunked` (manual per-32-token, per-head RoPE) with a single fused/prefill RoPE over the full 256-token canvas × all heads.
+
+- What to measure: RoPE op count and per-layer ms before/after. `diffusion_attention.py:96`, `chunk_size=TILE_SIZE(32)`, `head_chunk_size=1` → for Q it iterates 8 seq-chunks × num_heads, each doing 2 rope-cache slices + slice(x1)/slice(x2)/mul(-1)/concat/mul(cos)/mul(sin)/add (~9 tiny DRAM ops); repeated per q AND per k every layer → dozens-to-hundreds of tiny DRAM ops/layer.
+- Why it helps: RoPE is a standard fused ttnn op; one fused call over 256 tokens × all heads collapses the per-head/per-chunk iteration to O(1) ops per q/k. DG-local (`diffusion_attention.py`).
+- Correctness guard: preserve the exact rotary convention — rotate-half ordering, cos/sin cache indexing, and the position offset against the frozen prefix. A fast RoPE with the wrong halves or offset is a correctness bug. Verify attention-output PCC and that the canvas decisions are unchanged; keep trace-safe.
+
+#### DG-OPT-D03: Close the denoise SDPA L1 static-CB clash (eliminate `_manual_gqa_attention`)
+
+Tune `_denoise_sdpa_program_config` so the real flash SDPA allocates and the staged GQA fallback is retired. This is the hardest of the three but attacks the attention-side op count.
+
+- What to measure: whether shrinking the SDPAProgramConfig static-CB footprint (smaller grid/chunk, or `exp_approx_mode=True`) lets flash SDPA allocate, then per-layer ms with flash SDPA vs the staged fallback. `diffusion_attention.py:63` `_denoise_sdpa_program_config` (grid 8×1, `q_chunk=k_chunk=32`, `exp_approx_mode=False`) is the DG-local knob; `:189` catches `Statically allocated circular buffers ... clash with L1 buffers`; `:239` `_manual_gqa_attention` runs per-kv-head slice + clone/concat (GQA expand) + permute + matmul(scores) + softmax + matmul(out) + concat — many single-core-ish ops replacing one flash op. The kernel misses L1 by <1 tile; the "~832 bytes" figure in the task framing is NOT in the committed docs/artifacts, so re-derive the actual shortfall from the allocator error in your own run rather than citing it as measured.
+- Why it helps: one flash-attention kernel versus O(kv_heads × ~8) staged ops per layer. Because the clash is sub-tile, a smaller grid/chunk or `exp_approx` is a genuine in-repo knob that may close the <1-tile gap with NO shared-gemma4 edit.
+- Correctness guard: SDPA must reproduce the manual-GQA attention output (PCC), preserve the bidirectional attention + three-phase-[P+C] KV masking contract, and stay trace-safe.
+
+#### DG-OPT-D04: Dedup the 2nd full-vocab argmax in the RUN-first path
+
+- What to measure/where: `denoise_loop.py:162-165` — `gumbel_max(logits, ...)` returns `argmax_last_dim(logits/T)` and `TS.argmax_last_dim(logits)` is computed separately; for `T>0` with `gumbel_noise=None` these are identical (argmax is scale-invariant). Removing the redundant call saves ~14 ms/step (one of the two 14.4 ms ROW_MAJOR argmaxes).
+- Why it helps: small (~0.3% of the 4176 ms step, inside the fixed overhead) but cheap and safe in the RUN-first argmax path.
+- Correctness guard: valid ONLY when `gumbel_noise=None` (pure argmax). Do not remove the second argmax on the general Gumbel-noise decision path — it was deferred precisely to avoid touching that path late in the stage.
+
+#### DG-OPT-D05: Wire `share_z` into the production `denoise_step`
+
+- What to measure/where: compute `z = logits/T` once and reuse it across gumbel / clean-argmax / entropy. Measured in bench (`bench_sampling_step.py` `variant_share_z`, 43.06 → 42.30 ms) but NOT wired into production — `denoise_loop.py:162-166` still does TWO independent `temperature_scale` passes (`gumbel_max` + `token_entropy`). Honest status: measured, not landed in the shipping path.
+- Why it helps: drops one redundant full-vocab `temperature_scale` (~0.8 ms/step, inside the fixed overhead). The code + measurement already exist; it just isn't wired.
+- Correctness guard: the shared `z` must be bit-equivalent to the separate passes; verify the entropy-budget accept decisions and the committed canvas are unchanged.
+
+#### DG-OPT-D06: Tune self-conditioning soft-embedding `vocab_chunk_size`
+
+- What to measure/where: `self_conditioning.py:284` `vocab_chunk_size=8192` → 32 chunks; `_soft_embedding_chunked` runs 32 × (slice + subtract + exp + sum + slice-embed + matmul[256,8192]@[8192,2816] + adds) per self-cond step. Larger chunks reduce op launches.
+- Why it helps: bounded — this only runs on self-conditioning steps and sits inside the ~49 ms fixed overhead (~1.2% of the step).
+- Correctness guard: fp32 softmax accumulation is load-bearing — preserve it. The chunk size only bounds the softmax static-CB footprint, so raise it only as far as L1 capacity allows.
+
+#### DG-OPT-D07: LM-head vocab-sharding is NOT a clean DG-local lever
+
+Vocab-sharding the full-vocab 262144 LM-head matmul (`_apply_lm_head`) is the standard terminal win — it is a hidden-size × vocab-size projection and is usually DRAM-bound. **But `_apply_lm_head` is a shared `Gemma4Model` method (`denoise_forward.py:384`), so vocab-sharding it is a backbone knob, not a clean DG-local Python lever.** Do NOT edit it in place. Treat it as a scoped, separately-owned shared-backbone change or the copy-into-DG approach (see the ceiling below); never an in-place gemma4 edit.
+
+### When the in-repo levers are exhausted: the ceiling
+
+These are genuinely NOT fixable DiffusionGemma-locally (hard rule #1 forbids in-place shared-gemma4 edits) or are hard device limits. Do not waste cycles re-investigating them as DG-local Python knobs. MEMORY `diffusiongemma-shared-moe-ceilings` already records that both denoise perf and argmax fidelity bottom out in the shared MoE and that the in-repo Python levers there are exhausted.
+
+1. **#48291 decision fidelity (correctness, but caps USABILITY).** The bf16 / MoE / TP=4 backbone argmax-agrees with HF only ~50%, and diffusion commits the clean argmax with no temperature/top-p cushion, so output is degenerate. Fixing it needs core gemma4 MoE-precision work (fp32-faithful router top-k is blocked by `ttnn.topk` TT_FATAL on FLOAT32; fp32 experts exceed QB2 DRAM) or a product decision. This is correctness, not perf, but it caps whether the fast path is ever usable (plan.md #48291, lines 39-41/148).
+2. **MoE sparse_matmul weight-traffic floor.** Even a perfect DG-local op-count collapse bottoms out at the 24.6–49.1 ms/step bandwidth roofline set by the routed expert sparse_matmul reading ~the whole 128-expert bank (12.58 GB/chip/step). That matmul lives in the shared gemma4 experts module — so beyond ~3–5× DG-local recovery you need a scoped shared-gemma4 MoE change.
+3. **The commit path (31.5 s/block).** 256 SEQUENTIAL single-token decode-appends (1042 ms/layer) running on the ungated shared-gemma4 decode footprint (RoPE-per-user, SDPA 1×1 grid k=32, single-core-ish). A proper fix (single causal 256-token commit forward, or reverting the decode-footprint edits) touches shared gemma4 → needs a gate/rebaseline or the copy-into-DG approach (plan.md R0.4 / R-new / line 149).
+4. **LM-head full-vocab 262144 matmul.** `_apply_lm_head` is a shared `Gemma4Model` method (`denoise_forward.py:384`); vocab-sharding it is a backbone knob, not a clean DG-local Python lever (see DG-OPT-D07).
+5. **Full-vocab on-device MATERIALIZED Gumbel.** A `[1,256,262144]` fp32 noise tensor does not fit DRAM comfortably (hard device constraint). Mitigated by the chunked-Gumbel path (`sampling.py:165` `gumbel_max_with_chunked_noise`) and by RUN-first argmax (`gumbel_noise=None`, which skips the noise buffer entirely), so it is NOT on the critical path.
+
+Any of the above requires a SCOPED, separately-owned shared-backbone change — never an in-place `models/demos/gemma4/` edit (hard rule #1) — or a product decision. Prior-campaign context (from MEMORY `dg-perf-campaign` / plan.md, NOT measured in this stage's work_log): true-sparse MoE moved 1.08 → 4.78 t/s and batched-commit has been the default since 2026-07-04. Cite those as prior-campaign context, not as this stage's evidence.
+
+### Profiling without Tracy
+
+The build has `ENABLE_TRACY=OFF` (`build_Release/CMakeCache.txt: ENABLE_TRACY:BOOL=OFF`, confirmed). So `TT_METAL_DEVICE_PROFILER=1`, `python -m tracy`, and `tt-perf-report` op-level CSV all raise `TT_FATAL: ... requires a Tracy-enabled build`. Enabling requires a full ttnn rebuild that would replace the shared venv's `_ttnn` bindings on a shared QB2 — an environment limit, not in-repo fixable. **Do NOT attempt that rebuild to satisfy the generic `tt-perf-report` paragraph.** For this stage the op-CSV requirement is *substituted*, not skipped, and the substitute is a legitimate measured path:
+
+- Metal TRACE capture/replay itself WORKS — so the per-step, per-block, and full-generation numbers ARE from a traced measured path (not eager). Only the Tracy op-attribution CSV is unavailable.
+- Substitute the op-CSV with: **synchronized per-op device-time tables** (`time.perf_counter` + `ttnn.synchronize_device` around each op; work_log 2a/2b/2e), the **reduced-layer per-layer sweep** (work_log 3a/3c), and the **traced e2e terminal microbench** (work_log 2d). Together these give the same "which ops dominate + before/after" signal a `tt-perf-report` table would.
+- The prof/bench scripts still `import from tracy import signpost` and document a `python -m tracy -r -p` invocation, but that op-table path cannot run with `ENABLE_TRACY=OFF`; the recorded numbers come from the `time.perf_counter` + `ttnn.synchronize_device` path.
+- Mark the evidence `hardware-profiler-limited` and note that trace capture/replay works. Set `decode_ms_per_token_device` (or the per-step device-time field) to `null` with this reason in `perf_summary.json`.
+- `artifacts/*.log` are NOT in the committed tree (only the `.py` harnesses + `work_log.md` + `perf_summary.json` + `README.md`), so the raw run logs backing the tables cannot be re-read from this checkout; the numbers are as recorded in `work_log.md` / `perf_summary.json`.
+
+### Denoise-step evidence artifacts
+
+Read before acting; reproduce before trusting. All under `models/experimental/diffusion_gemma/doc/optimize_perf/`:
+
+- `work_log.md` — before/after tables, topology audit, roofline reconciliation, and the landed-lever provenance cited above.
+- `perf_summary.json` — the diffusion-shaped perf summary (`profile: block_diffusion_denoise_step`); the canonical field shape for this stage.
+- `prof_denoise_step.py` — the reduced-layer L=1/2/4 traced per-layer / fixed-overhead fit.
+- `bench_sampling_step.py` — the terminal-path microbench (argmax / gumbel / `share_z` variants).
+- `README.md`, plus `diag_sampling_ops.py` / `diag_argmax_alt.py` / `verify_trace_safe_loop.py` for op-diagnosis and trace-safety checks.
 
 ## Evidence To Leave
 

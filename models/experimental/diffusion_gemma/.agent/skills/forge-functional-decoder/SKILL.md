@@ -1,6 +1,7 @@
 ---
 name: forge-functional-decoder
 description: Bring up a functionally correct TTNN decoder layer for the model-specific autoport directory by TRANSLATING a tt-forge / tt-torch codegen-emitted TTNN model into the functional-decoder output shape. Use this instead of `functional-decoder` when a forge emit already exists and you must adapt it (not author from scratch). Scope for this pass is PREFILL only; decode is a documented stub until an emitted decode version is provided.
+disable-model-invocation: true
 ---
 
 # Forge → Functional Decoder Bringup

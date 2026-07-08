@@ -5,6 +5,7 @@
   "tt_vllm_architecture": "TTDiffusionGemmaForBlockDiffusion",
   "tt_vllm_adapter": "models.experimental.diffusion_gemma.tt.generator_vllm:DiffusionGemmaForCausalLM",
   "max_model_len": 262144,
+  "hf_advertised_context": 262144,
   "max_model_len_provenance": "HF config text_config.max_position_embeddings = 262144 (256K). Equals canvas_length(256) * max_blocks(1024). This is the capacity limit for prompt + generated, NOT a requirement that prompts be 262144 tokens (HF DiffusionGemmaGenerationMixin.generate computes max_length = input_len + max_new_tokens).",
   "max_model_len_physical_limit_evidence": {
     "device": "QB2 / bh-qbge-06 / P150x4 (2 Blackhole PCIe cards, 4 Tensix, TP=4, (1,4) mesh)",

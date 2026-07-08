@@ -2,7 +2,7 @@
 
 ## Problem
 
-{{FOCUS_PATH_SECTION}}Problem: {{PROBLEM}}
+The concrete problem to investigate — and an optional focus path — are appended below.
 
 ## Operating Constraints
 

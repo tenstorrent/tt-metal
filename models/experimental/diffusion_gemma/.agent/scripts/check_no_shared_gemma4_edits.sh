@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Reusable DiffusionGemma gate: the shared Gemma-4 backbone must stay byte-for-byte
 # unchanged. Every DiffusionGemma stage fix belongs inside
-# models/experimental/diffusion_gemma/ (see $diffusion-gemma, plan.md F1/F2, risk R-new).
+# models/experimental/diffusion_gemma/ (see the diffusion-gemma skill, plan.md F1/F2, risk R-new).
 #
 # Exit codes: 0 pass, 2 critical failure, 3 checker error.
 #

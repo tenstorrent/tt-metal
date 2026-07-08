@@ -130,6 +130,8 @@ Include both batch-1 and larger-batch correctness coverage. Batch 1 is the prima
 
 For instruction/chat models, prefer a teacher-forcing reference generated from a normal chat-template prompt over raw book text. In tt-metal autoports, use the DeepSeek AIME24 prompt set rendered by the HF tokenizer chat template as the main readiness reference, for example:
 
+For DiffusionGemma, this AIME24 teacher-forcing readiness command and the free-running degeneracy checks below are SUPERSEDED by injected-noise replay + diffusion-decision metrics (Gumbel-max argmax agreement, entropy PCC, accept/renoise IoU) — see the DiffusionGemma adaptation section above and dg-05.
+
 ```bash
 python -m models.common.readiness_check.generate \
   --hf-model <hf-model-id> \
@@ -144,14 +146,9 @@ Raw Tale-of-Two-Cities/book references can still be useful as extra stress cover
 
 Generate the main reference fresh by default. Reuse a reference only when metadata under the current autoport directory proves the same HF model id and revision, tokenizer, prompt source, chat-template flag, generation length, top-k, and generation command. If any of that is missing or mismatched, regenerate the reference rather than carrying forward a possibly contaminated artifact.
 
-Free-running comparison must be strong enough to catch feedback bugs; teacher forcing cannot see them by construction (it overrides the token-feedback path every step). Use several prompts and the longest feasible generation - at least 64-128 tokens when runtime allows - not a single short continuation. Then run:
+Free-running comparison must be strong enough to catch feedback bugs; teacher forcing cannot see them by construction (it overrides the token-feedback path every step). Use several prompts and the longest feasible generation - at least 64-128 tokens when runtime allows - not a single short continuation.
 
-```bash
-python models/common/readiness_check/check_degenerate_output.py \
-  --hf-model <hf-model-id> --missing-artifacts critical --scope autoregressive
-```
-
-and include its verdict in the stage evidence. Mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug, never a model property. The runner-side stage gate runs the same check.
+For DiffusionGemma the autoregressive free-running degeneracy check does not apply: `check_degenerate_output.py` is not present in this checkout, and doubled/EOS-heavy output is acceptable at the RUN milestone for the diffusion path. Gate instead on the decision-agreement floor — injected-noise replay through `demo/replay_hf_tt.py` (with the `reference/generate.py` replay hooks `make_replay_canvas_init_fn` / `make_replay_noise_fn`) measuring per-position committed-argmax agreement, Gumbel-max argmax agreement, entropy PCC + max abs error, and entropy-budget accept IoU vs the torch reference (see dg-05 and the `diffusion-gemma` keystone). Run this check yourself and record its verdict in the stage evidence; there is no auto-chaining runner in this pipeline. For an autoregressive model, mechanical degeneracy - doubled tokens, single-token collapse - is a decode-loop bug and never a model property; for the diffusion path the analogue is canvas non-convergence or accept-schedule stalls, not repeated tokens.
 
 Shift qualitative checks left: as soon as the full model can generate text, use `qualitative-check` to run the shared qualitative prompt suite through both the HF reference and TT generator. Later stages may add serving-specific checks, but they should not be the first place these prompts are tried.
 
