@@ -148,11 +148,14 @@ extern "C" uint32_t _start1() {
                 }
             }
         }
-        DeviceZoneScopedMainN("TRISC-FW");
-        uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
-        launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
+        // Scope the FW zone so finish_profiler flushes this TRISC's DEVICE_BUFFER_END_INDEX before
+        // RUN_SYNC_MSG_DONE is signaled.
+        {
+            DeviceZoneScopedMainN("TRISC-FW");
+            uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
+            launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
+            uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
@@ -210,6 +213,7 @@ extern "C" uint32_t _start1() {
         // Signal completion
         DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
         tensix_sync();
+        }
         *trisc_run = RUN_SYNC_MSG_DONE;
         DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
     }

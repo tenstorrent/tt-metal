@@ -17,6 +17,12 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "internal/risc_attribs.h"
+#include "internal/hw_thread.h"
+
+#if defined(ARCH_QUASAR)
+// Quasar NEO_REGS_0 wall-clock register addresses
+#include "tensix_neo_reg.h"
+#endif
 
 #include "hostdev/dev_msgs.h"
 
@@ -94,22 +100,19 @@ volatile tt_l1_ptr profiler_msg_buffer_t* profiler_data_buffer =
 #if (PROFILE_KERNEL & PROFILER_OPT_DO_TRACE_ONLY)
 constexpr uint32_t myRiscID = 0;
 #else
-// TODO: Update for Quasar - PROCESSOR_INDEX is not defined for Quasar DM/TRISC
-// because kernels may run as a single binary across multiple hardware threads.
-// Need to use internal_::get_hw_thread_idx() but that requires non-constexpr handling
-constexpr uint32_t myRiscID = PROCESSOR_INDEX;
+#define myRiscID (internal_::get_hw_thread_idx())
 #endif
 
 #if defined(DEVICE_DEBUG_DUMP)
 // Each risc has their own DRAM profiler address index
 constexpr bool NON_DROPPING = true;
-constexpr uint32_t DRAM_PROFILER_ADDRESS = DRAM_PROFILER_ADDRESS_BR_ER_0 + myRiscID;
+#define DRAM_PROFILER_ADDRESS (DRAM_PROFILER_ADDRESS_BR_ER_0 + myRiscID)
 #else
 constexpr bool NON_DROPPING = false;
 constexpr uint32_t DRAM_PROFILER_ADDRESS = DRAM_PROFILER_ADDRESS_DEFAULT;
 #endif
 
-constexpr uint32_t HOST_BUFFER_END_INDEX = HOST_BUFFER_END_INDEX_BR_ER + myRiscID;
+#define HOST_BUFFER_END_INDEX (HOST_BUFFER_END_INDEX_BR_ER + myRiscID)
 
 constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
     return n == 0 ? basis : Hash32_CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
@@ -134,7 +137,13 @@ __attribute__((noinline)) void init_profiler(
     }
 
 #if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
-    defined(COMPILE_FOR_BRISC)
+    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_DM)
+#if defined(COMPILE_FOR_DM)
+    // On Quasar only DM0 runs the per-core bookkeeping below
+    if (myRiscID != 0) {
+        return;
+    }
+#endif
     uint32_t runCounter = profiler_control_buffer[RUN_COUNTER];
     profiler_control_buffer[PROFILER_DONE] = 0;
     if constexpr (NON_DROPPING) {
@@ -148,7 +157,8 @@ __attribute__((noinline)) void init_profiler(
 #if !defined(COMPILE_FOR_IDLE_ERISC)
             // Update every risc's trace ID
             profiler_data_buffer[riscID].data[ID_LH] =
-                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+                ((traceCount & PROFILER_ID_TRACE_MASK) << PROFILER_ID_TRACE_SHIFT) |
+                (profiler_data_buffer[riscID].data[ID_LH] & PROFILER_ID_RISC_FLAT_FIELD_MASK);
 #endif
         }
         profiler_control_buffer[NOC_X] = my_x[0];
@@ -184,11 +194,35 @@ inline __attribute__((always_inline)) bool bufferHasRoom(uint32_t additional_slo
     return bufferHasRoom;
 }
 
+#if defined(ARCH_QUASAR)
+inline __attribute__((always_inline)) uint64_t quasar_read_wall_clock_64() {
+#if defined(COMPILE_FOR_TRISC)
+    constexpr uint32_t wall_clock_0_addr = LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_OFFSET;
+    constexpr uint32_t wall_clock_1_at_addr =
+        LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_OFFSET;
+#else
+    constexpr uint32_t wall_clock_0_addr = NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR;
+    constexpr uint32_t wall_clock_1_at_addr = NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_ADDR;
+#endif
+    uint32_t time_low = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(wall_clock_0_addr);
+    uint32_t time_high = *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(wall_clock_1_at_addr);
+    return (static_cast<uint64_t>(time_high) << 32) | time_low;
+}
+#endif
+
 inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t index, uint32_t timer_id) {
+#if defined(ARCH_QUASAR)
+    uint64_t wall_clock = quasar_read_wall_clock_64();
+    uint32_t time_low = static_cast<uint32_t>(wall_clock);
+    uint32_t time_high = static_cast<uint32_t>(wall_clock >> 32);
+    profiler_data_buffer[myRiscID].data[index] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (time_high & 0xFFF);
+    profiler_data_buffer[myRiscID].data[index + 1] = time_low;
+#else
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     profiler_data_buffer[myRiscID].data[index] =
         0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
+#endif
 }
 
 // Like mark_time_at_index_inlined but writes a pre-captured timestamp (time_h/time_l) instead of sampling now.
@@ -436,7 +470,25 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
         return;
     }
     risc_finished_profiling();
-#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
+#if defined(COMPILE_FOR_DM)
+    // Quasar DM0 additionally writes the per-risc ID words the host, then advances RUN_COUNTER and
+    // marks PROFILER_DONE.
+    // TODO: Quasar profiler is L1-only, no DRAM/NoC push. Can merge with logic below once DRAM path is supported.
+    if (myRiscID != 0) {
+        return;
+    }
+    if (profiler_control_buffer[PROFILER_DONE] == 1) {
+        return;
+    }
+    uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+    for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+        profiler_data_buffer[riscID].data[ID_LH] =
+            (profiler_data_buffer[riscID].data[ID_LH] & PROFILER_ID_TRACE_FIELD_MASK) |
+            (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) | (riscID & PROFILER_ID_RISC_MASK));
+    }
+    profiler_control_buffer[RUN_COUNTER]++;
+    profiler_control_buffer[PROFILER_DONE] = 1;
+#elif defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
     if (profiler_control_buffer[PROFILER_DONE] == 1) {
         return;
@@ -459,11 +511,13 @@ __attribute__((noinline)) void finish_profiler(bool do_accumulate = DO_ACCUMULAT
         }
 
 #if defined(COMPILE_FOR_IDLE_ERISC)
-        profiler_data_buffer[riscID].data[ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
+        profiler_data_buffer[riscID].data[ID_LH] =
+            ((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) | (riscID & PROFILER_ID_RISC_MASK);
 #else
         // Need to preserve the upper bits of ID_LH which contain the trace ID
         profiler_data_buffer[riscID].data[ID_LH] =
-            (profiler_data_buffer[riscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | riscID);
+            (profiler_data_buffer[riscID].data[ID_LH] & PROFILER_ID_TRACE_FIELD_MASK) |
+            (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) | (riscID & PROFILER_ID_RISC_MASK));
 #endif
         int hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER + riscID;
         int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
@@ -554,7 +608,8 @@ __attribute__((noinline)) void quick_push() {
     uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
     profiler_data_buffer[myRiscID].data[ID_LH] =
-        (profiler_data_buffer[myRiscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | myRiscID);
+        (profiler_data_buffer[myRiscID].data[ID_LH] & PROFILER_ID_TRACE_FIELD_MASK) |
+        (((core_flat_id & PROFILER_ID_FLAT_MASK) << PROFILER_ID_FLAT_SHIFT) | (myRiscID & PROFILER_ID_RISC_MASK));
 
     mark_time_at_index_inlined(wIndex, get_const_id(hash, ZONE_END));
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
@@ -784,17 +839,26 @@ struct profileScopeMainAccumulate {
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeAccumulate {
     uint64_t start_time = 0;
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+
+    static inline __attribute__((always_inline)) uint64_t read_wall_clock_64() {
+#if defined(ARCH_QUASAR)
+        return quasar_read_wall_clock_64();
+#else
+        volatile tt_reg_ptr uint32_t* p_reg =
+            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        return ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+#endif
+    }
 
     inline __attribute__((always_inline)) profileScopeAccumulate() {
         if constexpr (kernel_profiler::DO_SUM) {
-            start_time = ((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX];
+            start_time = read_wall_clock_64();
         }
     }
     inline __attribute__((always_inline)) ~profileScopeAccumulate() {
         if constexpr (kernel_profiler::DO_SUM) {
             sumIDs[index] = timer_id;
-            sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
+            sums[index] += read_wall_clock_64() - start_time;
         }
     }
 };
@@ -850,7 +914,8 @@ inline __attribute__((always_inline)) void increment_trace_count() {
 #if !defined(COMPILE_FOR_IDLE_ERISC)
             // Update every risc's trace ID
             profiler_data_buffer[riscID].data[ID_LH] =
-                (traceCount & 0xFFFF) << 11 | ((profiler_data_buffer[riscID].data[ID_LH] & 0x7FF));
+                ((traceCount & PROFILER_ID_TRACE_MASK) << PROFILER_ID_TRACE_SHIFT) |
+                (profiler_data_buffer[riscID].data[ID_LH] & PROFILER_ID_RISC_FLAT_FIELD_MASK);
 #endif
         }
     }

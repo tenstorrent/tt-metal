@@ -99,7 +99,7 @@ uint32_t _start() {
 #endif
     wait_for_go_message();
     {
-        DeviceZoneScopedMainChildN("BRISC-KERNEL");
+        DeviceZoneScopedMainChildN("DM-KERNEL");
 
         // Setup after the go signal so the previous kernel has completed.
         num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];

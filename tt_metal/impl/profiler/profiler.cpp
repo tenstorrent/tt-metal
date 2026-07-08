@@ -1498,9 +1498,10 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
-    // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out in trace-only/accumulate modes, where data stays in
-    // L1 and the index may never advance.
-    if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate()) {
+    // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out where it doesn't apply: trace-only /
+    // accumulate modes (data stays in L1 and the index may never advance), and the L1-only path.
+    if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate() &&
+        data_source != ProfilerDataBufferSource::L1) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
             return;
@@ -1532,7 +1533,7 @@ void DeviceProfiler::readRiscProfilerResults(
     int riscCount = 1;
 
     if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
-        riscCount = 5;
+        riscCount = MetalContext::instance(context_id).hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX);
     }
 
     std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
@@ -1550,7 +1551,14 @@ void DeviceProfiler::readRiscProfilerResults(
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
             riscType = tracy::RiscType::TENSIX_RISC_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            if (device_arch == tt::ARCH::QUASAR) {
+                // Map riscEndIndex to the corresponding QUASAR_* RiscType (contiguous from QUASAR_DM0), matching
+                // the device get_hw_thread_idx() ordering.
+                riscType =
+                    static_cast<tracy::RiscType>(static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) + riscEndIndex);
+            } else {
+                riscType = static_cast<tracy::RiscType>(riscEndIndex);
+            }
         } else {
             riscType = tracy::RiscType::ERISC;
         }
@@ -1638,11 +1646,12 @@ void DeviceProfiler::readRiscProfilerResults(
                 } else if (newRunStart) {
                     newRunStart = false;
 
-                    // TODO(MO): Cleanup magic numbers
-                    riscNumRead = data_buffer.at(index) & 0x7;
-                    coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
+                    riscNumRead = data_buffer.at(index) & kernel_profiler::PROFILER_ID_RISC_MASK;
+                    coreFlatIDRead = (data_buffer.at(index) >> kernel_profiler::PROFILER_ID_FLAT_SHIFT) &
+                                     kernel_profiler::PROFILER_ID_FLAT_MASK;
                     if (!skipReadingDeviceTraceCounter()) {
-                        deviceTraceCounterRead = (data_buffer.at(index) >> 11) & 0xFFFF;
+                        deviceTraceCounterRead = (data_buffer.at(index) >> kernel_profiler::PROFILER_ID_TRACE_SHIFT) &
+                                                 kernel_profiler::PROFILER_ID_TRACE_MASK;
                     }
                     runHostCounterRead = data_buffer.at(index + 1);
                     if (runHostCounterRead != 0) {

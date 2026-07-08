@@ -16,6 +16,16 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "api/kernel_thread_globals.h"
 
+#if defined(PROFILE_KERNEL)
+namespace kernel_profiler {
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+uint32_t traceCount __attribute__((used));
+}  // namespace kernel_profiler
+#endif
+
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
 
@@ -450,9 +460,13 @@ extern "C" uint32_t _start1() {
         // Invalidate the i$ now the kernels have loaded and before running
         invalidate_kernel_binary_l2_cache(kernel_lma, launch_msg, index);
         invalidate_l1_icache();
-        auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
+        {
+            // Profiler FW zone for subordinate DMs (DM1-DM7).
+            DeviceZoneScopedMainN("DM-FW");
+            auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
 
-        record_stack_usage(stack_free);
+            record_stack_usage(stack_free);
+        }
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 
