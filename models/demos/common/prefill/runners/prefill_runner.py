@@ -129,7 +129,7 @@ METADATA_SIZE_BYTES = 12
 
 # LayerAck D2H FIFO. Records are METADATA_SIZE_BYTES (12 B) each; 4 KB is a PCIe-aligned
 # one-page buffer with generous headroom for in-flight records.
-LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_LAYER_ACK_FIFO_BYTES", 4 * 1024))
+LAYER_ACK_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_LAYER_ACK_FIFO_BYTES", 4 * 1024))
 
 # End-of-stream sentinel: the producer/scheduler closes the request stream with one final push whose
 # PrefillMetadata words are all -1 (0xFFFFFFFF on the wire). -1 is out of range for slot_id and both KV
@@ -327,16 +327,16 @@ def _d2d_recv(inbound) -> tuple:
     import torch
 
     t0 = time.perf_counter()
-    act, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+    act, metadata_device = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
         inbound, metadata_size_bytes=METADATA_SIZE_BYTES
     )
-    m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
+    m = ttnn.to_torch(ttnn.get_device_tensors(metadata_device)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2])}
     logger.info(
         f"[pp] RECV-d2d [{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']} "
         f"[xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
-    return act, meta, md
+    return act, meta, metadata_device
 
 
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
@@ -484,19 +484,21 @@ def run_request_loop(
     while not _shutdown:
         _lease_reclaim(d2d_in, d2d_out)
         if cfg.is_first_rank:
-            inp, meta, md = _socket_next(h2d_service)  # slot/start/end from the producer
+            inp, meta, metadata_device = _socket_next(h2d_service)  # slot/start/end from the producer
         else:
-            inp, meta, md = _d2d_recv(d2d_in)
+            inp, meta, metadata_device = _d2d_recv(d2d_in)
         if _is_shutdown_sentinel(meta):
             # End of stream: drop the throwaway payload + its metadata tensor, hand the sentinel to the
             # next rank so it too unblocks and exits, then fall through to the graceful drain below.
             logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
             ttnn.deallocate(inp)
-            ttnn.deallocate(md)
+            ttnn.deallocate(metadata_device)
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=md)
+        t = _compute_and_send(
+            runtime, kv_cache, rank, c, inp, meta, d2d_out, d2h_service=d2h_service, record_dev=metadata_device
+        )
         if first is None:
             first = t
         c += 1
@@ -536,11 +538,11 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
             kv_actual = c * cfg.chunk_size
             inp = _first_rank_chunk_tokens(runtime, token_ids, kv_actual)
             meta = {"slot_id": slot_id, "actual_start": kv_actual, "actual_end": kv_actual + cfg.chunk_size}
-            md = None
+            metadata_device = None
         else:
-            inp, meta, md = _d2d_recv(d2d_in)
+            inp, meta, metadata_device = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out, record_dev=md)
+        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out, record_dev=metadata_device)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
