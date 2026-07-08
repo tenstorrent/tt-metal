@@ -144,6 +144,29 @@ enum class SetupOwner {
     Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
 };
 
+// -----------------------------------------------------------------------------
+// Skip-compute — a performance-debugging BUILD knob, NOT part of the eltwise_chain API.
+//
+// With CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1, every eltwise_chain in the translation unit emits only the
+// CB lifecycle (wait/pop/reserve/push) + the tile_regs window, skipping all init, reconfig, and
+// compute. CB counts are unchanged, so the reader/writer handshake holds — no hang, just fast
+// garbage output.
+//
+// USE IT to profile a kernel skip-off vs skip-on: the delta is the compute+init cost, and the
+// skip-on time is the CB/data-movement floor. That split tells you whether an eltwise kernel is
+// compute-bound or dataflow-bound before you spend effort optimizing the wrong half.
+//
+// DON'T ship it: output is garbage, so it is only ever a local profiling build — never production,
+// and never a correctness run.
+//
+// Opt in per kernel, before the include (call sites never change):
+//   #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 1
+//   #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+// See tests/axes/skip_compute_exp.cpp for the pattern.
+#ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE
+#define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
+#endif
+
 // =============================================================================
 // 1c. Taxonomy: Lifecycle as a two-axis struct
 // =============================================================================

@@ -35,6 +35,10 @@ BLOCK_CHUNKED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp_chunked.cpp"
 BLOCK_BULK = "ttnn/cpp/ttnn/kernel_lib/tests/axes/block_exp.cpp"  # Bulk + Block, block_size param
 HOIST_SINGLE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist_single_call.cpp"  # streaming per-tile
 HOIST_PERTILE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/hoist_per_tile.cpp"
+# Skip-compute twin of HOIST_SINGLE: same streaming exp(x) chain built with
+# CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1 (the chain reads the macro internally — no API change).
+# Profiling both isolates the exp compute + init cost.
+SKIP_COMPUTE = "ttnn/cpp/ttnn/kernel_lib/tests/axes/skip_compute_exp.cpp"
 FUSED = "ttnn/cpp/ttnn/kernel_lib/tests/axes/fused_chain.cpp"  # FPU add + Exp + DestReuse mul
 
 # Chunked-vs-Bulk comparison on a REALISTIC fused chain (out = exp(A+B)*C: FPU add + Exp + DestReuse
@@ -102,6 +106,15 @@ def test_func_block(device, n, block_size):
 @pytest.mark.parametrize("mode", ["single", "pertile"])
 def test_func_hoist(device, n, mode):
     _run_hoist(device, n, HOIST_SINGLE if mode == "single" else HOIST_PERTILE)
+
+
+@pytest.mark.parametrize("n", HOIST_N)
+@pytest.mark.parametrize("mode", ["run", "skip"])
+def test_func_compute_mode(device, n, mode):
+    """Streaming exp(x) over n tiles, ComputeMode::Run vs ComputeMode::Skip (same chain, only the
+    second template arg differs). Skip output is garbage by design, so there is no correctness
+    check — this node only exists to be profiled by test_perf_compute_mode_compare."""
+    _run_hoist(device, n, HOIST_SINGLE if mode == "run" else SKIP_COMPUTE)
 
 
 def _run_lifecycle(device, mode, n):
@@ -195,6 +208,32 @@ def test_perf_hoisting_device(n):
     )
     _check_baseline(ns_single, HOIST_BASELINE_NS[(n, "single")], f"hoist-single n={n}")
     _check_baseline(ns_pertile, HOIST_BASELINE_NS[(n, "pertile")], f"hoist-pertile n={n}")
+
+
+@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.parametrize("n", HOIST_N)
+def test_perf_compute_mode_compare(n):
+    """ComputeMode::Run vs ComputeMode::Skip on the SAME streaming exp(x) chain, real device-kernel ns.
+
+    Run does unpack + exp_tile + pack; Skip emits only the CB lifecycle (wait/pop/reserve/push)
+    + the tile_regs window and skips all init + compute. The CB traffic is identical across the two,
+    so:
+        Run - Skip  = the compute + init cost the knob strips out (ns and % of Run)
+        Skip        = the pure CB/sync/loop-overhead floor
+    This is the intended perf-analysis use of the knob. No baseline guard — it is a directional
+    A/B, logged for inspection; we only sanity-assert Skip is not slower than Run."""
+    ns_run = _device_kernel_ns(f"test_func_compute_mode[mode=run-n={n}]", f"eltwise_computemode_run_n{n}")
+    ns_skip = _device_kernel_ns(f"test_func_compute_mode[mode=skip-n={n}]", f"eltwise_computemode_skip_n{n}")
+    compute_ns = ns_run - ns_skip
+    logger.info(
+        f"[compute-mode n={n}] DEVICE KERNEL ns | Run {ns_run:.0f} | Skip {ns_skip:.0f} | "
+        f"compute+init = Run-Skip = {compute_ns:.0f} ns ({100*compute_ns/ns_run:.1f}% of Run) | "
+        f"Skip floor = {100*ns_skip/ns_run:.1f}% of Run"
+    )
+    assert ns_skip <= ns_run * 1.02, (
+        f"Skip ({ns_skip:.0f} ns) is not faster than Run ({ns_run:.0f} ns) — the knob should "
+        f"remove work, not add it."
+    )
 
 
 @pytest.mark.models_device_performance_bare_metal
