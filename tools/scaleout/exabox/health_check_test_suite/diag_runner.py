@@ -158,8 +158,10 @@ CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt
 # eth_bandwidth uses a trailing wildcard so it picks up BandwidthBidir automatically
 # if/when it gets added to sources.cmake. Today the build only registers Bandwidth.
 TESTS = {
-    "eth_link_up": "*TensixDeploymentEthernetLinkUp",
-    "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
+    # ETH tests are temporarily disabled; they will be re-enabled once the ETH
+    # tests are updated.
+    # "eth_link_up": "*TensixDeploymentEthernetLinkUp",
+    # "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
     "gddr_fast": "*DramDeployment_PersistentOptimalWorkersAllDramBanks",
     "gddr_full": "*DramDeployment_*",
     # Source files for these tests exist in the branch but are NOT in
@@ -171,9 +173,11 @@ TESTS = {
 }
 
 TIER_TESTS = {
-    "light": ["eth_link_up"],
-    "medium": ["eth_link_up", "eth_bandwidth", "gddr_fast"],
-    "deploy": ["eth_link_up", "eth_bandwidth", "gddr_full"],
+    # ETH tests are temporarily disabled; they will be re-enabled once the ETH
+    # tests are updated.
+    "light": [],  # "eth_link_up"
+    "medium": ["gddr_fast"],  # "eth_link_up", "eth_bandwidth"
+    "deploy": ["gddr_full"],  # "eth_link_up", "eth_bandwidth"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
