@@ -364,6 +364,13 @@ jobs:
 
   ttnn-run-sweeps:
     needs: [prepare-sweep-vectors, load-test-matrix]
+    # Explicit guard (every other job in the chain has one). Without it, the
+    # implicit success() combined with the needs on prepare-sweep-vectors — a
+    # matrix job whose ancestor generate-master-json-from-db is skipped on nightly
+    # — triggers GitHub skip-propagation and this job is skipped before matrix
+    # expansion (empty-matrix placeholder). The display-matrix control job, which
+    # carries this guard, consumes the same matrix and runs fine.
+    if: ${{ always() && needs.prepare-sweep-vectors.result == 'success' && needs.load-test-matrix.result == 'success' }}
     name: ${{ matrix.test-group.name }}
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
