@@ -4,6 +4,71 @@ Tenstorrent implementation of [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3),
 a multilingual embedding model supporting dense, sparse (lexical), and ColBERT
 (multi-vector) retrieval.
 
+## Long-context serving: batch 12, sequence length 8192 (N300)
+
+This is the optimized long-context prefill configuration for a **single
+Wormhole N300 chip (64 cores, 8×8 grid)**: global batch **12**, input
+sequence length (ISL) **8192**, weights and activations in **bfloat8_b**.
+
+### Requirements to launch this configuration
+
+- **Hardware:** one Wormhole N300 (single chip; the demo/perf tests expect
+  exactly one device — do **not** set `TT_VISIBLE_DEVICES` to more than one id).
+- **Model weights:** `BAAI/bge-m3` (downloaded automatically from HuggingFace
+  on first run, or point to a local checkout via `hf_model_name`).
+- **Data type:** `ttnn.bfloat8_b` (holds the 0.94 hidden-state PCC gate at
+  B12/S8192 — measured 0.961).
+- **Device launch parameters** (must match across demo + perf tests):
+  - `trace_region_size = 50_000_000` (holds the captured 24-layer encoder program)
+  - `num_command_queues = 1`
+- **Fixed shapes:** `max_batch_size = 12`, `max_seq_len = 8192`. Prompts are
+  padded/truncated to 8192; the batch dimension is exactly 12.
+
+### Run the demo
+
+Builds the model, runs a single warmup forward (JIT compile), captures the
+trace, then does a single trace replay (one forward pass) over 12 prompts:
+
+```bash
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_long_seq.py
+```
+
+Output is the encoder hidden state `[12, 1, 8192, 1024]` plus one pooled
+(CLS + L2-normalized) embedding per prompt.
+
+### Measure prefill performance (`perf.py`)
+
+Trace-capture latency/throughput for B12/S8192. Each iteration copies fresh
+random inputs to device and times only the trace replay (device compute);
+reports avg / best ms, embeddings/s, and tokens/s:
+
+```bash
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "b12_s8192" -s
+```
+
+### Kernel-level profiling (`tracy_perf.py`)
+
+Runs a single forward pass (no trace capture — Tracy needs the individual
+device ops) inside Tracy signposts. Requires `TT_METAL_DEVICE_PROFILER=1`:
+
+```bash
+TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r \
+  --no-runtime-analysis -v -m pytest \
+  models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py \
+  -k "b12_s8192" -sv
+```
+
+Reports are saved to
+`generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv`. Then
+summarize the CSV with `tt-perf-report` (install it once with
+`uv pip install tt-perf-report` inside `python_env`; see the
+**`tracy_perf.py` — Kernel-level profiling** section below for details):
+
+```bash
+tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv \
+  --start-signpost start --end-signpost stop 2>&1 | tee bge_m3_b12_s8192_tracy_report.log
+```
+
 ## Low-level model creation
 
 Use `create_tt_model()` when you want the raw TT encoder model.
