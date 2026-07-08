@@ -361,6 +361,13 @@ void run_single_core_broadcast(
         .hw_config = writer_hw_config,
     };
 
+    experimental::ComputeHardwareConfig compute_hw_config;
+    if (mesh_device->arch() == tt::ARCH::QUASAR) {
+        compute_hw_config = experimental::ComputeGen2Config{.math_fidelity = test_config.math_fidelity};
+    } else {
+        compute_hw_config = experimental::ComputeGen1Config{.math_fidelity = test_config.math_fidelity};
+    }
+
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
@@ -387,12 +394,7 @@ void run_single_core_broadcast(
                  .endpoint_type = experimental::DFBEndpointType::PRODUCER,
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                experimental::ComputeGen2Config{
-                    .math_fidelity = test_config.math_fidelity,
-                },
-            },
+        .hw_config = compute_hw_config,
     };
 
     experimental::WorkUnitSpec wu{
