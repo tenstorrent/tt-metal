@@ -1,0 +1,95 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native ttnn, tensor-parallel port of `wan_residual_block`
+(meituan-longcat/LongCat-Video's `vae.encoder.down_blocks.0`, a real
+`diffusers.models.autoencoders.autoencoder_kl_wan.WanResidualBlock` --
+norm/silu/conv1 -> norm/silu/conv2 with a residual add, optionally
+through a 1x1x1 `WanCausalConv3d`/`Linear` shortcut when `in_dim !=
+out_dim`).
+
+Adapts the already-validated `WanResidualBlock` in
+`models/tt_dit/models/vae/vae_wan2_1.py` -- the SAME class
+`autoencoder_k_l_wan`'s `WanEncoder3D`/`WanMidBlock`/`WanUpBlock` use
+internally for every residual stage in the real (graduated) VAE pipeline
+-- same rationale/precedent as `wan_causal_conv3d`/`wan_resample`. Its TP
+scheme (already implemented, not re-derived) is height/width-SHARDED
+ACTIVATIONS with a halo (`neighbor_pad`) CCL exchange for the inner
+convs' receptive fields, matching `autoencoder_k_l_wan.py`'s
+`_hw_parallel_config` convention; the two norms and the (here: absent,
+`in_dim == out_dim`) shortcut stay replicated per the general TP
+principle for elementwise/lookup ops.
+"""
+
+from __future__ import annotations
+
+import torch
+
+import ttnn
+from models.demos.hf_eager.longcat_video._stubs.autoencoder_k_l_wan import (
+    _hw_parallel_config,
+    _replicated_ttnn_to_torch,
+)
+from models.tt_dit.models.vae.vae_wan2_1 import WanResidualBlock
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
+from models.tt_dit.utils.tensor import typed_tensor_2dshard
+
+
+class TtWanResidualBlock:
+    def __init__(self, mesh_device: ttnn.MeshDevice, torch_module) -> None:
+        self.mesh_device = mesh_device
+        self.parallel_config = _hw_parallel_config(mesh_device)
+        self.ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+        self.dtype = ttnn.bfloat16
+
+        self.module = WanResidualBlock(
+            in_dim=torch_module.in_dim,
+            out_dim=torch_module.out_dim,
+            mesh_device=mesh_device,
+            parallel_config=self.parallel_config,
+            ccl_manager=self.ccl_manager,
+            dtype=self.dtype,
+        )
+        self.module.load_torch_state_dict(torch_module.state_dict())
+
+    def __call__(self, x: ttnn.Tensor) -> torch.Tensor:
+        h_axis = self.parallel_config.height_parallel.mesh_axis
+        w_axis = self.parallel_config.width_parallel.mesh_axis
+        h_factor = self.parallel_config.height_parallel.factor
+        w_factor = self.parallel_config.width_parallel.factor
+
+        x_torch = _replicated_ttnn_to_torch(x, self.mesh_device).to(torch.float32)
+        x_BTHWC = x_torch.permute(0, 2, 3, 4, 1)  # BCTHW -> BTHWC
+        x_BTHWC = conv_pad_in_channels(x_BTHWC)
+        x_BTHWC, logical_h = conv_pad_height(x_BTHWC, h_factor * 8)
+        x_BTHWC, logical_w = conv_pad_width(x_BTHWC, w_factor * 8)
+        # WanResidualBlock (unlike WanCausalConv3d/WanResample) asserts a
+        # TILE_LAYOUT input -- its norm/silu run in tile before the halo'd
+        # convs, which retile internally.
+        x_BTHWC = typed_tensor_2dshard(
+            x_BTHWC,
+            self.mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            dtype=self.dtype,
+        )
+
+        out_BTHWC = self.module(x_BTHWC, logical_h, logical_w=logical_w)
+
+        concat_dims = [None, None]
+        concat_dims[h_axis] = 2
+        concat_dims[w_axis] = 3
+        out_torch = ttnn.to_torch(
+            out_BTHWC,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=concat_dims
+            ),
+        )
+        out_torch = out_torch[:, :, :logical_h, :logical_w, :]
+        return out_torch.permute(0, 4, 1, 2, 3)  # BTHWC -> BCTHW
+
+
+def build(mesh_device: ttnn.MeshDevice, torch_module) -> TtWanResidualBlock:
+    return TtWanResidualBlock(mesh_device, torch_module)
