@@ -1408,3 +1408,252 @@ def test_traced_corr(mesh_device, model, tp, topology, op_override, tp_axis, ful
             logger.warning(f"RMSTRACE {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"RMSTRACE [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
     assert not flagged, f"traced-vs-eager correctness flagged: {flagged}"
+
+
+# ===========================================================================
+# test_sweep — exhaustive local parameter sweep (skipped in CI)
+#
+# Independent, self-contained thorough test of the fused op across TP=1 / TP=4
+# line / TP=4 ring: hidden width (-> resident vs streaming vs block-major POST
+# selection), seqlen, batch, RMS vs LayerNorm, affine mode (none / broadcast
+# weight[+bias] / per-token / per-batch adaLN), fused RoPE (broadcast-heads &
+# per-head, broadcast & per-batch cos), per-head norm, and bf16/fp32 dtypes.
+#
+# It draws its own seeded host tensors, builds device inputs, and computes an
+# fp32 torch reference IN THE SAME PASS (so build and reference share the exact
+# values) — this avoids touching the shared Cfg/_build/_torch_ref machinery that
+# test_corr_det relies on. The op RUN reuses the trusted _run_fused/_make_pob/
+# _gather plumbing. Known-good shapes are included, so a reference bug surfaces as
+# a failure on a config the op is known to handle. Per-point failures are collected
+# (one bad shape doesn't abort the sweep) and asserted at the end.
+# ===========================================================================
+
+_SWEEP_PARAMS = [
+    ((4, 8), _DP_GAL, 1, ttnn.Topology.Linear, 1, False),  # TP=1 single-device (1,1) submesh
+    ((4, 8), _DP_GAL, 4, ttnn.Topology.Linear, 1, False),  # TP=4 line (1,4) submesh
+    ((4, 8), _DP_GAL_RING, 4, ttnn.Topology.Ring, 0, False),  # TP=4 ring on the 4-axis
+]
+_SWEEP_IDS = ["tp1", "tp4_line", "tp4_ring"]
+
+
+def _sweep_points(tp: int) -> list[dict]:
+    """Curated families covering each axis; widths chosen to span the resident /
+    streaming / block-major POST bands AND block_size-divisible vs not."""
+    if tp == 1:
+        # per-device tile-cols = dim/32: 16,32,64,96,160 (div) + 15,38 (non-div)
+        widths = [512, 1024, 2048, 3072, 5120, 480, 1216]
+        rope_widths = [1024, 2048]  # heads = dim/128 = 8, 16
+        mid = 2048
+    else:  # tp == 4: per-device tile-cols = (dim/4)/32
+        # Up to 6144 (FLUX's full dim, 48 tile-cols/device) — the widest real shape on the AG
+        # path. dim=8192 (64 cols) RMS+affine marginally overflows L1 on the AG path (the AG
+        # stats/packet CBs + weight+bias CBs clash by ~3 KB) and is beyond any real model width.
+        widths = [2048, 4096, 6144, 1920, 2432]  # 16,32,48 (div) + 15,19 (non-div)
+        rope_widths = [2048, 4096]  # heads/dev = (dim/4)/128 = 4, 8
+        mid = 4096
+
+    def pt(**kw):
+        base = dict(
+            norm="rms", dim=mid, rows=128, batch=1, head_dim=None, rope=False,
+            bcast_rope=False, per_head_norm=False, affine="none", in_dtype="bf16",
+            out_dtype="bf16", rope_perbatch=False,
+        )
+        base.update(kw)
+        return base
+
+    pts = []
+    # F1 width x norm x affine (nh=1, no rope) — the POST-path-selection stressor.
+    for dim in widths:
+        for norm in ("rms", "layernorm"):
+            for affine in ("none", "wb"):
+                pts.append(pt(fam="width", norm=norm, dim=dim, affine=affine))
+    # F2 seqlen x norm
+    for rows in (32, 128, 512, 2048):
+        for norm in ("rms", "layernorm"):
+            pts.append(pt(fam="seqlen", norm=norm, rows=rows))
+    # F3 fused RoPE (RMS): broadcast-heads & per-head, no/with broadcast weight
+    for dim in rope_widths:
+        for bcast in (True, False):
+            pts.append(pt(fam="rope", norm="rms", dim=dim, head_dim=128, rope=True, bcast_rope=bcast, affine="none"))
+    pts.append(pt(fam="rope", norm="rms", dim=rope_widths[0], head_dim=128, rope=True, bcast_rope=True, affine="w"))
+    # F4 per-head norm (RMS, no AG regardless of TP)
+    for dim in rope_widths:
+        pts.append(pt(fam="perhead", norm="rms", dim=dim, head_dim=128, per_head_norm=True))
+    # F5 dtypes
+    for aff in ("none", "wb"):
+        pts.append(pt(fam="dtype", norm="rms", affine=aff, in_dtype="fp32", out_dtype="fp32"))
+        pts.append(pt(fam="dtype", norm="rms", affine=aff, in_dtype="fp32", out_dtype="bf16"))
+        pts.append(pt(fam="dtype", norm="layernorm", affine=aff, in_dtype="bf16", out_dtype="fp32"))  # LN needs bf16 in
+    # F6 per-token affine (LN, batch=1)
+    pts.append(pt(fam="pertoken", norm="layernorm", dim=mid, affine="pertoken"))
+    pts.append(pt(fam="pertoken", norm="layernorm", dim=rope_widths[-1], affine="pertoken"))
+    # F7 batch>1
+    for batch in (2, 3):
+        # LayerNorm nh=1: plain fold, broadcast affine, per-batch adaLN
+        for dim in (widths[1], widths[3] if tp == 1 else widths[2]):
+            for affine in ("none", "wb", "perbatch"):
+                pts.append(pt(fam="batchLN", norm="layernorm", dim=dim, batch=batch, affine=affine))
+        # RMS batched RoPE (head-split): broadcast cos and per-batch cos
+        for pb in (False, True):
+            pts.append(
+                pt(fam="batchRope", norm="rms", dim=rope_widths[0], rows=64, batch=batch, head_dim=128,
+                   rope=True, bcast_rope=True, affine="none", rope_perbatch=pb)
+            )
+    return pts
+
+
+def _sweep_build(submesh, tp_axis, tp, p):
+    """Build device inputs + fp32 reference for one sweep point.
+    Returns (inp_dict, cfg, ref_flat[batch*rows, dim])."""
+    norm, dim, rows, batch = p["norm"], p["dim"], p["rows"], p["batch"]
+    head_dim, rope, bcast_rope = p["head_dim"], p["rope"], p["bcast_rope"]
+    per_head_norm, affine = p["per_head_norm"], p["affine"]
+    in_dtype, out_dtype, rope_perbatch = p["in_dtype"], p["out_dtype"], p["rope_perbatch"]
+    feat_local = dim // tp
+    heads_total = (dim // head_dim) if head_dim else 1
+    heads_per_dev = (feat_local // head_dim) if head_dim else 1
+    eps = NORM_EPS
+    n = batch * rows
+
+    torch.manual_seed(0)
+    xdt = torch.float32 if in_dtype == "fp32" else torch.bfloat16
+    x_host = torch.randn(1, batch, rows, dim, dtype=xdt)
+    _act = float32_tensor if in_dtype == "fp32" else bf16_tensor
+    inp = {"x": _act(x_host, device=submesh, mesh_axis=tp_axis, shard_dim=-1)}
+
+    xf = x_host.float().reshape(n, dim)
+    if per_head_norm:
+        xh = xf.reshape(n, heads_total, head_dim)
+        y = (xh * (xh.pow(2).mean(-1, keepdim=True) + eps).rsqrt()).reshape(n, dim)
+    elif norm == "layernorm":
+        y = (xf - xf.mean(-1, keepdim=True)) * (xf.var(-1, unbiased=False, keepdim=True) + eps).rsqrt()
+    else:
+        y = xf * (xf.pow(2).mean(-1, keepdim=True) + eps).rsqrt()
+
+    # ---- affine ----
+    if affine in ("w", "wb"):
+        w_host = torch.randn(dim, dtype=torch.bfloat16).float()
+        inp["weight"] = bf16_tensor(
+            w_host.to(torch.bfloat16).reshape(1, dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1
+        )
+        y = y * w_host
+        if affine == "wb":
+            b_host = torch.randn(dim, dtype=torch.bfloat16).float()
+            inp["bias"] = bf16_tensor(
+                b_host.to(torch.bfloat16).reshape(1, dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1
+            )
+            y = y + b_host
+    elif affine == "perbatch":  # [batch,1,dim] adaLN (broadcast over seq, distinct per batch)
+        scale = torch.randn(batch, 1, dim, dtype=torch.bfloat16).float()
+        shift = torch.randn(batch, 1, dim, dtype=torch.bfloat16).float()
+        inp["weight"] = float32_tensor(1.0 + scale, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        inp["bias"] = float32_tensor(shift, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        idx = torch.arange(n) // rows  # row -> batch (batch-major fold)
+        y = y * (1.0 + scale)[:, 0, :][idx] + shift[:, 0, :][idx]
+    elif affine == "pertoken":  # [1,1,rows,dim] per-token (batch==1 only)
+        scale = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+        shift = torch.randn(1, 1, rows, dim, dtype=torch.bfloat16).float()
+        inp["weight"] = float32_tensor(1.0 + scale, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        inp["bias"] = float32_tensor(shift, device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+        y = y * (1.0 + scale).reshape(n, dim) + shift.reshape(n, dim)
+
+    # ---- fused RoPE (RMS) ----
+    if rope:
+        b_rope = batch if rope_perbatch else 1
+        if bcast_rope:  # cos/sin shared across heads: [b_rope,1,rows,hd] fp32 replicated
+            cos_raw = torch.randn(b_rope, rows, 1, head_dim // 2)
+            sin_raw = torch.randn(b_rope, rows, 1, head_dim // 2)
+            cos_f, sin_f = stack_cos_sin(cos_raw, sin_raw)  # (b_rope, rows, 1, hd)
+            cos_dev = cos_f.permute(0, 2, 1, 3)  # (b_rope, 1, rows, hd)
+            sin_dev = sin_f.permute(0, 2, 1, 3)
+            inp["cos"] = from_torch(cos_dev, device=submesh, dtype=ttnn.float32)
+            inp["sin"] = from_torch(sin_dev, device=submesh, dtype=ttnn.float32)
+            cos_full, sin_full = cos_dev, sin_dev  # (b_rope, 1, rows, hd)
+        else:  # per-head: [b_rope,heads_total,rows,hd] bf16, head axis TP-sharded
+            head_axes = [None, tp_axis, None, None]
+            cos_raw = torch.randn(b_rope, heads_total, rows, head_dim // 2)
+            sin_raw = torch.randn(b_rope, heads_total, rows, head_dim // 2)
+            cos_full, sin_full = stack_cos_sin(cos_raw, sin_raw)  # (b_rope, heads_total, rows, hd)
+            inp["cos"] = from_torch(cos_full, device=submesh, dtype=ttnn.bfloat16, mesh_axes=head_axes)
+            inp["sin"] = from_torch(sin_full, device=submesh, dtype=ttnn.bfloat16, mesh_axes=head_axes)
+        inp["trans"] = bf16_tensor(get_rot_transformation_mat(), device=submesh)
+
+        nhd = cos_full.shape[1]  # 1 (broadcast-heads) or heads_total (per-head)
+        if rope_perbatch:  # (batch, nhd, rows, hd) -> (batch*rows, nhd, hd) batch-major
+            cos_row = cos_full.permute(0, 2, 1, 3).reshape(n, nhd, head_dim).to(torch.bfloat16).float()
+            sin_row = sin_full.permute(0, 2, 1, 3).reshape(n, nhd, head_dim).to(torch.bfloat16).float()
+        else:  # broadcast cos across the input batch: tile the single batch's rows
+            cos_row = cos_full[0].permute(1, 0, 2).to(torch.bfloat16).float().repeat(batch, 1, 1)
+            sin_row = sin_full[0].permute(1, 0, 2).to(torch.bfloat16).float().repeat(batch, 1, 1)
+        yh = y.reshape(n, heads_total, head_dim)
+        x0, x1 = yh[..., 0::2], yh[..., 1::2]
+        rot = torch.stack([-x1, x0], dim=-1).flatten(-2)
+        y = (yh * cos_row + rot * sin_row).reshape(n, dim)
+
+    # ---- Welford recip LUT (LayerNorm) ----
+    if norm == "layernorm":
+        recip = torch.tensor([1.0 / (i + 1) for i in range(feat_local)], dtype=torch.float32).reshape(1, 1, 1, feat_local)
+        inp["recip"] = from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32)
+
+    cfg = Cfg(
+        cid="sweep", model="SWEEP", tp=tp, rows=rows, dim=dim, head_dim=head_dim, rope=rope,
+        full_heads=heads_total, broadcast_rope=bcast_rope, per_head_norm=per_head_norm,
+        in_dtype=in_dtype, out_dtype=out_dtype, weight_mode="auto", bias_mode="auto", norm=norm,
+    )
+    return inp, cfg, y
+
+
+def _sweep_id(p: dict) -> str:
+    s = f"{p['fam']}/{p['norm']}/d{p['dim']}/r{p['rows']}/b{p['batch']}/{p['affine']}"
+    if p["rope"]:
+        s += f"/rope-{'bcast' if p['bcast_rope'] else 'perhead'}{'-pb' if p['rope_perbatch'] else ''}"
+    if p["per_head_norm"]:
+        s += "/phn"
+    if p["in_dtype"] != "bf16" or p["out_dtype"] != "bf16":
+        s += f"/{p['in_dtype']}->{p['out_dtype']}"
+    return s
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_SWEEP_PARAMS, _SWEEP_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_sweep(mesh_device, tp, topology, tp_axis, full_mesh):
+    """Exhaustive local correctness sweep. Skipped in CI (expensive: hundreds of shapes)."""
+    if _os.getenv("CI") or _os.getenv("GITHUB_ACTIONS"):
+        pytest.skip("test_sweep is a local-only exhaustive sweep (too expensive for CI)")
+
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    links = GALAXY_LINKS
+    points = _sweep_points(tp)
+    only = _os.getenv("SWEEP_ONLY", "")  # substring filter on the sweep id, for debugging
+    if only:
+        points = [p for p in points if only in _sweep_id(p)]
+    logger.info(f"SWEEP [tp{tp}_{topology.name}] running {len(points)} points")
+    flagged = []
+    for p in points:
+        pid = _sweep_id(p)
+        try:
+            ccl = CCLManager(mesh_device=submesh, num_links=links, topology=topology)
+            inp, cfg, ref = _sweep_build(submesh, tp_axis, tp, p)
+            sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
+            pobs = [_make_pob(inp, submesh, cfg, links, tp_axis) for _ in range(_PINGPONG)]
+            ttnn.synchronize_device(submesh)
+            batched = p["batch"] > 1 and cfg.heads == 1  # nh>1 head-split uses the head-concat gather
+            outs = []
+            for k in range(2):  # ping-pong; also a bit-exact determinism check
+                o = _run_fused(inp, submesh, sems[k % _PINGPONG], cfg, topology, tp_axis, pobs[k % _PINGPONG], links)
+                outs.append(_gather(o, tp_axis, batched=batched))
+            det = torch.equal(outs[0], outs[1])
+            out0 = outs[0].reshape(p["batch"] * p["rows"], p["dim"])
+            pcc = _pcc(out0, ref)
+            ok = det and pcc >= 0.999
+            logger.info(f"SWEEP {pid:<52} pcc={pcc * 100:8.4f}% det={det} {'ok' if ok else 'FAIL'}")
+            if not ok:
+                flagged.append(f"{pid}(pcc={pcc * 100:.3f}%,det={det})")
+        except Exception as e:  # noqa: BLE001 — characterize the shape, keep sweeping
+            flagged.append(f"{pid}(EXC:{type(e).__name__}:{str(e)[:140]})")
+            logger.warning(f"SWEEP {pid} EXCEPTION: {type(e).__name__}: {str(e)[:220]}")
+    logger.info(f"SWEEP [tp{tp}_{topology.name}] {len(points) - len(flagged)}/{len(points)} passed")
+    assert not flagged, f"sweep failures ({len(flagged)}/{len(points)}):\n" + "\n".join(flagged)
