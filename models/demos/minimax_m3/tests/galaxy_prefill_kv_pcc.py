@@ -83,7 +83,7 @@ def plan(n_tokens, chunk_size, chunked):
     return n_chunks, chunk, n_chunks * chunk
 
 
-def check_kv_pcc(runtime, golden_dir, n_tokens, num_layers, hf_config):
+def check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config):
     """Per-layer K / V / index_k PCC: device cache (gather_layer) vs the golden trace. The device
     stores K / index_k Meta-RoPE swizzled over the rotary slice; the golden is HF half-split, so
     permute the golden's rotary slice (identity tail) before comparing. V is raw (no swizzle)."""
@@ -103,7 +103,7 @@ def check_kv_pcc(runtime, golden_dir, n_tokens, num_layers, hf_config):
     logger.info(f"[kv-pcc] per-layer K / V / index_k vs golden ({golden_dir}):")
     mins = {"k": 1.0, "v": 1.0, "index_k": 1.0}
     for L in range(num_layers):
-        dev_k, dev_v, dev_ik = runtime.gather_layer(slot_id=0, layer_idx=L, n_tokens=n_tokens)
+        dev_k, dev_v, dev_ik = runtime.gather_layer(kv_cache, slot_id=0, layer_idx=L, n_tokens=n_tokens)
         with safe_open(str(kv_dir / f"layer_{L}.safetensors"), framework="pt") as h:
             keys = set(h.keys())
             g_k = h.get_tensor(f"key_cache_layer_{L}").float()[:, :, :n_tokens, :][..., src]  # HF -> Meta
@@ -129,6 +129,7 @@ def check_kv_pcc(runtime, golden_dir, n_tokens, num_layers, hf_config):
 
 
 def main():
+    from models.demos.minimax_m3.tt.attention import allocate_kv_caches
     from models.demos.minimax_m3.tt.model_config import ModelArgs
     from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
     from models.demos.minimax_m3.tt.weight_cache import weight_cache_is_complete
@@ -232,13 +233,20 @@ def main():
             mesh_shape=(rows, cols),
             chunk_size=chunk,
             num_users=1,
+            expert_weight_dtype=expert_dtype,
             weight_cache_path=cache_path,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict
 
+        # The runtime is stateless w.r.t. the cache (engine-owned model): allocate it here and pass it
+        # into every runtime call (compile / prefill_chunk / gather_layer), mirroring the prefill engine.
+        kv_cache = allocate_kv_caches(
+            mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
+        )
+
         print(f"[prefill-pcc] compiling ({num_layers}L, SP=8 × TP=4 + EP=32) ...", flush=True)
-        runtime.compile()
+        runtime.compile(kv_cache)
 
         # --- throughput: each iteration re-fills slot 0; the cache is valid after the last ---
         padded = token_ids + [0] * (total - n_tokens)
@@ -247,7 +255,7 @@ def main():
             for c in range(n_chunks):
                 a = c * chunk
                 inp = runtime.make_chunk_input(padded[a : a + chunk])
-                runtime.prefill(inp, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+                runtime.prefill_chunk(inp, kv_cache, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
             ttnn.synchronize_device(mesh)
 
         times = []
@@ -270,7 +278,7 @@ def main():
         )
 
         # --- accuracy: per-layer KV PCC vs golden ---
-        check_kv_pcc(runtime, golden_dir, n_tokens, num_layers, hf_config)
+        check_kv_pcc(runtime, kv_cache, golden_dir, n_tokens, num_layers, hf_config)
         print("[prefill-pcc] DONE", flush=True)
     finally:
         ttnn.close_mesh_device(mesh)
