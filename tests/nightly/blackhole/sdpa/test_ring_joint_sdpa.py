@@ -275,6 +275,46 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    # LTX-2.3 distilled video self-attention (spatial, non-causal). video_dim=4096, 32 heads ->
+    # 8 local heads on TP=4, head_dim=128. seq_len is per-device (SP-padded total / sp_size); the two
+    # distilled stages use N=9728 (s1) and N=38912 (s2). Chunk sizes match attention_ltx's
+    # ring_sdpa_chunk_by_n for (blackhole, sp=8, tp=4).
+    if mesh_config.is_galaxy:
+        configs.append(
+            ModelConfig(
+                name="ltx_s1",
+                nhq=8,
+                nhk=8,
+                nhv=8,
+                d_q=128,
+                d_k=128,
+                d_v=128,
+                is_causal=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat16,
+                q_chunk_sizes=[96],
+                k_chunk_sizes=[256],
+                seq_len=1216,
+            )
+        )
+        configs.append(
+            ModelConfig(
+                name="ltx_s2",
+                nhq=8,
+                nhk=8,
+                nhv=8,
+                d_q=128,
+                d_k=128,
+                d_v=128,
+                is_causal=False,
+                q_dtype=ttnn.bfloat16,
+                kv_dtype=ttnn.bfloat16,
+                q_chunk_sizes=[192],
+                k_chunk_sizes=[512],
+                seq_len=4864,
+            )
+        )
+
     return {config.name: config for config in configs}
 
 

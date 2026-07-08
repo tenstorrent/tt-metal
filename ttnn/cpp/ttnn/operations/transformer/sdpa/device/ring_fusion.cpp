@@ -69,5 +69,17 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     out_rt_args.push_back(static_cast<uint32_t>(this->backward_writes_expected));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+
+    // Even-ring split-forwarding: the diametric shard S arrives split across both links. Direction 1
+    // (all-gather semaphore index 0) carries its second half as one extra signal, so the SDPA reader
+    // must wait backward_writes_expected + 1 on that semaphore at S's step. S is direction 1's
+    // terminal received shard: ring_index + backward_writes_expected + 1 (== ring_index - num_targets
+    // _forward, mod ring_size). Values are ignored downstream when split_forwarding_enabled is false.
+    const uint32_t split_shard_id =
+        this->ring_size ? ((this->ring_index + this->backward_writes_expected + 1) % this->ring_size) : 0;
+    const uint32_t split_second_half_wait = this->backward_writes_expected + 1;
+    out_rt_args.push_back(static_cast<uint32_t>(this->split_forwarding_enabled ? 1 : 0));
+    out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
+    out_rt_args.push_back(static_cast<uint32_t>(split_second_half_wait));
 }
 }  // namespace ttnn::prim
