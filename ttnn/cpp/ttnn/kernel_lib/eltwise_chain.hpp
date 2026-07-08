@@ -144,6 +144,38 @@ enum class SetupOwner {
     Caller,  // the caller emitted it once, outside the loop — the chain emits none of it here
 };
 
+// -----------------------------------------------------------------------------
+// Skip-compute — a *performance-analysis* BUILD knob (NOT part of the eltwise_chain API).
+//
+// Define CKL_ELTWISE_CHAIN_SKIP_COMPUTE=1 for a kernel translation unit and EVERY eltwise_chain in
+// it emits ONLY the CB lifecycle (wait/pop on inputs, reserve/push on outputs) plus the tile_regs
+// dst-sync window, skipping ALL one-time init, ALL per-tile init + dtype reconfig, and ALL compute
+// (every element's `exec` — unpack, FPU/SFPU math, pack_tile). The output CB is reserved and pushed
+// but never written, so its contents are garbage.
+//
+// Purpose: isolate the cost of the data-movement / CB-synchronization skeleton from the cost of the
+// actual LLK compute. Because the CB wait/pop/reserve/push counts are byte-for-byte identical to a
+// normal run, the reader/writer dataflow kernels are unmodified and still handshake — the kernel
+// does NOT hang; it just produces garbage output fast. Profile the same kernel twice (skip off vs
+// on); the wall-clock delta is the compute+init cost, and the skip time is the pure CB/sync/loop
+// overhead floor. The tile_regs window is retained: with an empty DEST it is near-free, and keeping
+// it makes the loop skeleton identical so the delta attributes cleanly to the compute instructions.
+//
+// This is intentionally a compile-time macro, NOT a template arg on eltwise_chain: the chain reads
+// the macro directly (see `skip_compute` in eltwise_chain_impl), so call sites never change. A
+// kernel opts in at its start, before including this header:
+//
+//   #define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 1   // profile this kernel's CB/sync floor
+//   #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+//   ...
+//   eltwise_chain(shape, elts...);             // call site unchanged
+//
+// NOT for production — skip output is meaningless. Guard any skip build so it never ships.
+// See ttnn/cpp/ttnn/kernel_lib/tests/axes/skip_compute_exp.cpp for the pattern.
+#ifndef CKL_ELTWISE_CHAIN_SKIP_COMPUTE
+#define CKL_ELTWISE_CHAIN_SKIP_COMPUTE 0
+#endif
+
 // =============================================================================
 // 1c. Taxonomy: Lifecycle as a two-axis struct
 // =============================================================================
@@ -209,6 +241,8 @@ inline constexpr InputLifecycle InputLifecycle::DeferredPop = {
     WaitPolicy::None, PopPolicy::AtEnd};  // caller waited, chain bulk-pops M
 inline constexpr InputLifecycle InputLifecycle::NoWaitPop = {
     WaitPolicy::None, PopPolicy::PerTile};  // caller waited, chain pops per-tile
+inline constexpr InputLifecycle InputLifecycle::OuterStream = {
+    WaitPolicy::PerOuter, PopPolicy::PerOuter};  // wait 1 at each row entry, pop 1 at each row exit
 
 /// Validates a caller-constructed `InputLifecycle` against the legal set; every input
 /// element static_asserts on it. The half-edge cells above are legal (audit-confirmed as
@@ -263,6 +297,8 @@ inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy
 inline constexpr OutputLifecycle OutputLifecycle::HeldReserve = {ReservePolicy::PerTile, PushPolicy::None};
 // Caller bulk-reserved externally, chain bulk-pushes at end.
 inline constexpr OutputLifecycle OutputLifecycle::DeferredReserve = {ReservePolicy::None, PushPolicy::AtEnd};
+// One output tile per OUTER (ht/row) iteration: reserve 1 at row entry, push 1 at row exit.
+inline constexpr OutputLifecycle OutputLifecycle::OuterStream = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
