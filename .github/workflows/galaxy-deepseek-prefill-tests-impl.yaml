@@ -28,6 +28,10 @@ on:
         required: false
         type: string
         default: ""
+      resource-prefix:
+        required: true
+        type: string
+        description: "Unique prefix for allocation/environment names when multiple impl jobs share a run (e.g. module, sdpa-perf)"
 
 permissions:
   id-token: write
@@ -171,22 +175,22 @@ jobs:
         uses: ./.github/actions/ttop-create-allocation
         timeout-minutes: 120
         with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
           namespace: ttop-ci
           spec: ${{ steps.extract-spec.outputs.allocation_spec }}
 
       - name: Get allocation configs
         uses: ./.github/actions/ttop-get-allocation-data
         with:
-          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
 
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
         timeout-minutes: 30
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
           allocationNamespace: ttop-ci
           workerRepository: ${{ steps.parse-image.outputs.repository }}
           workerTag: ${{ steps.parse-image.outputs.tag }}
@@ -352,14 +356,14 @@ jobs:
         if: always()
         uses: ./.github/actions/ttop-delete-environment
         with:
-          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - name: Delete allocation
         if: always()
         uses: ./.github/actions/ttop-delete-allocation
         with:
-          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
+          allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ inputs.resource-prefix }}-${{ strategy.job-index }}
           namespace: ttop-ci
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main

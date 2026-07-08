@@ -128,6 +128,7 @@ jobs:
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
       # Perf checks need the profiler build, so keep them out of the "all" plain-build run.
       exclude-test-group: sdpa_perf
+      resource-prefix: module
 
   Galaxy-DeepSeek-Prefill-SDPA-Perf-tests:
     needs: [validate-test-type, check-harbor, build-artifact-profiler]
@@ -146,3 +147,4 @@ jobs:
       sp-config: spsg
       # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
       test-type: sdpa_perf
+      resource-prefix: sdpa-perf
