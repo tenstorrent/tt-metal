@@ -17,6 +17,7 @@ import pytest
 import torch
 import torch.nn as nn
 from loguru import logger
+from tracy import signpost
 
 import ttnn
 from models.tt_dit.models.vae.vae_ltx import (
@@ -754,6 +755,81 @@ def test_ltx_video_decoder(
     """
     _skip_ltx_decoder_if_single_chip_too_large(mesh_device, height, width)
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
+
+
+_NUM_FRAMES = 145
+_HEIGHT = 1088
+_WIDTH = 1920
+
+
+def _build_tt_decoder(mesh):
+    """Production decoder with random weights; torch module built for its
+    state_dict only (no host forward)."""
+    vae_mods = _require_diffusers_ltx_vae()
+    if not vae_mods["ltx2"]:
+        pytest.skip("LTX-2 decoder profiling requires diffusers autoencoder_kl_ltx2")
+
+    torch.manual_seed(42)
+    torch_decoder = _TorchLTXVideoDecoder(
+        decoder_blocks=_LTX_PROD_DECODER_BLOCKS,
+        in_channels=128,
+        out_channels=3,
+        patch_size=4,
+        base_channels=128,
+        causal=False,
+        spatial_padding_mode="zeros",
+        vae_mods=vae_mods,
+    )
+    torch_decoder.eval()
+    state = torch_decoder.state_dict()
+    # Identity per-channel stats so denorm is a no-op (random weights give garbage stats).
+    state["per_channel_statistics.mean-of-means"] = torch.zeros(128)
+    state["per_channel_statistics.std-of-means"] = torch.ones(128)
+    torch_decoder.load_state_dict(state)
+
+    # num_links=2 mirrors the BH production device config; NP_LINKS probes the W-transport bound.
+    ccl_manager = CCLManager(mesh, topology=ttnn.Topology.Linear, num_links=int(os.environ.get("NP_LINKS", "2")))
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh.shape)[0], mesh_axis=0),
+        width_parallel=ParallelFactor(factor=tuple(mesh.shape)[1], mesh_axis=1),
+    )
+    tt_decoder = LTXVideoDecoder(
+        decoder_blocks=_LTX_PROD_DECODER_BLOCKS,
+        in_channels=128,
+        out_channels=3,
+        patch_size=4,
+        base_channels=128,
+        causal=False,
+        num_frames=_NUM_FRAMES,
+        height=_HEIGHT,
+        width=_WIDTH,
+        mesh_device=mesh,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+    )
+    tt_decoder.load_torch_state_dict(_diffusers_decoder_state_to_tt(torch_decoder.state_dict()))
+    return tt_decoder
+
+
+def _latent():
+    latent_frames = (_NUM_FRAMES - 1) // 8 + 1
+    return torch.randn(1, 128, latent_frames, _HEIGHT // 32, _WIDTH // 32, dtype=torch.float32)
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_prof_vae_ltx_devicetime(mesh_device, device_params):
+    mesh = mesh_device.create_submesh(ttnn.MeshShape(4, 8))
+    tt_decoder = _build_tt_decoder(mesh)
+    latent = _latent()
+
+    # One forward only: the decoder emits ~10x a transformer block's ops, so warm-ups
+    # would overflow the profiler DRAM buffer. Device kernel durations are warm-independent.
+    signpost("start")
+    _ = tt_decoder(latent)
+    ttnn.synchronize_device(mesh)
+    signpost("stop")
+    ttnn.ReadDeviceProfiler(mesh)
 
 
 @pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_2K_SHAPE_PARAMS)
