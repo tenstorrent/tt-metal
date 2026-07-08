@@ -66,6 +66,15 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
     // tile-by-tile and have no equivalent concept. Deferred: not on the Quasar critical path.
     UNPACK((llk_unpack_tilize_init(icb, block /*full_ct_dim*/)));  // block_ct_dim defaults to 1
     MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, DST_ACCUM_MODE>(icb)));
+    // (Re)program the packer to target `ocb`. On Quasar the pack buffer descriptor / MOP is baked at op
+    // init and pack_reconfig_data_format does NOT retarget it (see reconfig_data_format.h's ARCH_QUASAR
+    // note: "When the pack output operand changes, call pack_init(new_cb_id) before pack_tile"). WH/BH
+    // already configure PACK here via state_configure<...,Operand::PACK>(icb, ocb). Without this, tilize
+    // packs into whatever CB was last pack-configured (e.g. unary_op_init_common's output CB) instead of
+    // `ocb` — silently writing the tilized tiles to the wrong L1 region (seen as all-zero output when the
+    // real consumer reads `ocb`). Mirror pack_init(ocb) = state_configure<PACK> + llk_pack_init.
+    state_configure<Operand::PACK>(ocb, call_line);
+    PACK((llk_pack_init(ocb)));
 #endif
 }
 
