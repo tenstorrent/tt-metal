@@ -504,9 +504,12 @@ static void run_a1_blocked_pipeline(
     // because the A1 back-half does not do the DM block-consumer's reordering write.
     const uint32_t wpe = entry_size / sizeof(uint32_t);
     const uint32_t bs = block_size;
-    const char* cap_name = (cap_in == m2::DFBAccessPattern::BLOCKED) ? "BLOCKED"
-                           : (cap_in == m2::DFBAccessPattern::ALL)   ? "ALL"
-                                                                     : "STRIDED";
+    const char* cap_name = "STRIDED";
+    if (cap_in == m2::DFBAccessPattern::BLOCKED) {
+        cap_name = "BLOCKED";
+    } else if (cap_in == m2::DFBAccessPattern::ALL) {
+        cap_name = "ALL";
+    }
     std::vector<uint32_t> expected(input.size(), 0u);
     if (cap_in == m2::DFBAccessPattern::ALL) {
         // BLOCKED→ALL: the ALL consumer writes in consume order, so this matches the DM→DM golden:
@@ -1489,12 +1492,13 @@ static void run_single_dfb_program_2_0(
     // Producer kernel
     m2::KernelSpec producer;
     if (p.producer_type == M2PorCType::DM) {
-        producer = make_dm_kernel(
-            PRODUCER,
-            blocked_to_strided ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer_2_0.cpp"
-            : producer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp"
-                               : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp",
-            p.num_producers);
+        const char* producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp";
+        if (blocked_to_strided) {
+            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_strided_producer_2_0.cpp";
+        } else if (producer_blocked) {
+            producer_src = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp";
+        }
+        producer = make_dm_kernel(PRODUCER, producer_src, p.num_producers);
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
         producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {
