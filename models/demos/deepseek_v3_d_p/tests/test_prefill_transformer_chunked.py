@@ -106,10 +106,12 @@ GATED_LAYER_DEPTH = 10
 # chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by
 # re-reading the "chunk timing stats" table from a fresh green CI run.
 KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks5-ten_iters]
-    # Baseline from https://github.com/tenstorrent/tt-metal/actions/runs/28753487696 (run attempt 2):
-    # the per-chunk median column of the "chunk timing stats" table (9 post-warmup iters, iter 0 omitted).
-    (61, 5, 10): [1.330, 1.326, 1.326, 1.340, 1.369],
+    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks_eleven-ten_iters] (55k / code_debug).
+    # TODO: populate the 11 per-chunk medians from the first green code_debug 55k CI run's
+    # "chunk timing stats" table; until then this config runs record-only (no perf gate). The old 5-chunk
+    # longbook baseline was [1.330, 1.326, 1.326, 1.340, 1.369] (run 28753487696) -- chunks 0-4 should be
+    # ~unchanged (chunk c attends to KV[0:c*CHUNK] regardless of n_chunks); chunks 5-10 are new.
+    # (61, 11, 10): [...],
 }
 # Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
 # perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
