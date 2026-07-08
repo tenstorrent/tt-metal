@@ -19,6 +19,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -55,6 +56,39 @@ using namespace std;
 namespace tt::tt_metal {
 
 namespace {
+
+// Filename (in the per-kernel out_dir) of the generated header carrying the named
+// compile-time-arg map. See write_named_ct_arg_map_header.
+constexpr std::string_view NAMED_CT_ARG_MAP_HEADER = "kernel_named_ct_arg_map_generated.h";
+
+bool kernel_has_named_ct_args(const JitBuildSettings& settings) {
+    bool has = false;
+    settings.process_named_compile_time_args(
+        [&has](const std::unordered_map<string, uint32_t>& named_args) { has = !named_args.empty(); });
+    return has;
+}
+
+// Delivers KERNEL_COMPILE_TIME_ARG_MAP (consumed by compile_time_args.h) via a header that
+// compile_one force-includes, rather than a -D define. Blaze fused ops emit hundreds-to-
+// thousands of named args; as a -D on the command line that map can exceed the OS single-
+// argument limit (MAX_ARG_STRLEN, 128 KB) and break the build. Entries go through a std::map
+// so the file is byte-deterministic for the per-object dephash cache.
+void write_named_ct_arg_map_header(const string& out_dir, const JitBuildSettings& settings) {
+    map<string, uint32_t> sorted_args;
+    settings.process_named_compile_time_args([&sorted_args](const std::unordered_map<string, uint32_t>& named_args) {
+        sorted_args.insert(named_args.begin(), named_args.end());
+    });
+
+    string map_literal;
+    for (const auto& [name, value] : sorted_args) {
+        map_literal += fmt::format("{{\"{}\",{}}}, ", name, value);
+    }
+
+    jit_build::utils::FileRenamer header(out_dir + string(NAMED_CT_ARG_MAP_HEADER));
+    std::ofstream f(header.path());
+    f << "// AUTO-GENERATED -- do not edit.\n#pragma once\n\n#define KERNEL_COMPILE_TIME_ARG_MAP " << map_literal
+      << "\n";
+}
 
 void report_result(const string& target_name, string_view op, const string& cmd, const string& log_file, bool result) {
     if (!result) {
@@ -541,24 +575,11 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
             defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
         });
 
-        // This creates a command-line define for named compile time args
-        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
-        // This generates:
-        // -DKERNEL_COMPILE_TIME_ARG_MAP="{{\"buffer_size\",1024}, {\"num_tiles\",64}} "
-        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
-        settings->process_named_compile_time_args(
-            [&defines](const std::unordered_map<std::string, uint32_t>& named_args) {
-                if (named_args.empty()) {
-                    return;
-                }
-                std::ostringstream ss;
-                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
-                for (const auto& [name, value] : named_args) {
-                    ss << "{\\\"" << name << "\\\"," << value << "}, ";
-                }
-                ss << "\"";
-                defines += ss.str() + " ";
-            });
+        // KERNEL_COMPILE_TIME_ARG_MAP is delivered via a header (written in compile())
+        // force-included here, not a -D define; see write_named_ct_arg_map_header.
+        if (kernel_has_named_ct_args(*settings)) {
+            defines += fmt::format("-include {}{} ", out_dir, NAMED_CT_ARG_MAP_HEADER);
+        }
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {
@@ -610,6 +631,12 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         "Number of source files ({}) exceeds kMaxBuildBitset ({})",
         this->srcs_.size(),
         kMaxBuildBitset);
+
+    // Write the map header once (single-threaded) before the parallel per-source compiles
+    // that -include it, and before the need_compile() dephash check below reads it.
+    if (settings && kernel_has_named_ct_args(*settings)) {
+        write_named_ct_arg_map_header(out_dir, *settings);
+    }
 
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
