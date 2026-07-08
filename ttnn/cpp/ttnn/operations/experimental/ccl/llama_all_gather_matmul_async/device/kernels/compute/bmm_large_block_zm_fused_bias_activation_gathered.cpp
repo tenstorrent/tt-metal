@@ -419,11 +419,10 @@ void kernel_main() {
                 out_subblock_w,
                 in0_block_w,
                 num_blocks,
-                /*batch=*/1),
+                /*batch=*/1,
+                /*in1_per_core_w=*/in1_per_core_w),  // out_row_width defaults to in1_per_core_w (SubblockMajor)
             PostComputeFnT{},
             pre_fn,
-            /*in1_per_core_w=*/in1_per_core_w,
-            /*out_row_width=*/0,  // unused on SubblockMajor; defaults to in1_per_core_w
             post_fn,
             NoKBlockInnerDimFn{},
             NoIn0Source{},

@@ -182,8 +182,6 @@ ALWI void matmul_block(
     const MatmulBlockShape& shape,
     PostComputeFn post_compute,
     PreKBlockFn pre_k_block,
-    uint32_t in1_per_core_w,
-    uint32_t out_row_width,
     PostKBlockFn post_k_block,
     KBlockInnerDimFn k_block_inner_dim,
     In0SourceFn in0_source_fn,
@@ -361,15 +359,17 @@ ALWI void matmul_block(
     const uint32_t out_num_tiles = shape.out_subblock_h * shape.out_subblock_w;
     const uint32_t in0_subblock_num_tiles = shape.out_subblock_h * shape.in0_block_k;
     const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks;
-    // in1_per_core_w: actual N-width the producer pushes per K-block. Derived from subblocks
-    // by default; callers that pad the in1 width must pass the real value to avoid wait/pop
-    // mismatches.
+    // in1_per_core_w: actual N-width the producer pushes per K-block (shape.in1_per_core_w).
+    // Derived from subblocks by default; callers that pad the in1 width set shape.in1_per_core_w
+    // to the real value to avoid wait/pop mismatches.
+    uint32_t in1_per_core_w = shape.in1_per_core_w;
     if (in1_per_core_w == 0) {
         in1_per_core_w = shape.out_subblock_w * shape.in1_num_subblocks;
     }
-    // out_row_width: N-tiles per row of the OUTPUT CB (TileRowMajor row stride). Defaults to
-    // in1_per_core_w (read and pack widths usually coincide); callers that pad the output
-    // width above the in1 read width pass the larger value here.
+    // out_row_width: N-tiles per row of the OUTPUT CB (TileRowMajor row stride, shape.out_row_width).
+    // Defaults to in1_per_core_w (read and pack widths usually coincide); callers that pad the output
+    // width above the in1 read width set shape.out_row_width to the larger value.
+    uint32_t out_row_width = shape.out_row_width;
     if (out_row_width == 0) {
         out_row_width = in1_per_core_w;
     }

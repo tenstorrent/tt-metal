@@ -152,8 +152,9 @@ enum class DataFormatReconfig : uint8_t { InputAndOutput, Input, Output, None };
 
 /**
  * Block-shape spec for matmul_block — subblock counts, subblock size, K-blocking, batch
- * — so callers pass one struct instead of positional integers. Optional strides
- * (in1_per_core_w / out_row_width) stay on the function signature as advanced overrides.
+ * — so callers pass one struct instead of positional integers. The advanced stride
+ * overrides (last_in1_subblock_w_valid / in1_per_core_w / out_row_width) live here too,
+ * so everything the helper needs about the block shape is in one place.
  * Build with MatmulBlockShape::of(...).
  *
  * Matmul blocking in one paragraph: A is M×K, B is K×N, C is M×N. K-blocking splits K
@@ -186,6 +187,15 @@ struct MatmulBlockShape {
     // the writer drops the padded output columns.
     uint32_t last_in1_subblock_w_valid = 0;
 
+    // Actual N-tiles the producer pushes per K-block. 0 = derive from
+    // out_subblock_w * in1_num_subblocks. Pass the real value when the factory pads the
+    // in1 width above the pushed shard width, else the wait/pop counts mismatch and deadlock.
+    uint32_t in1_per_core_w = 0;
+
+    // N-tiles per row in the OUTPUT CB (TileRowMajor row stride). 0 = reuse in1_per_core_w.
+    // Pass the larger pack width when the output is padded above the in1 read width.
+    uint32_t out_row_width = 0;
+
     static constexpr MatmulBlockShape of(
         uint32_t in0_num_subblocks,
         uint32_t in1_num_subblocks,
@@ -193,8 +203,20 @@ struct MatmulBlockShape {
         uint32_t out_subblock_w,
         uint32_t in0_block_k,
         uint32_t num_k_blocks,
-        uint32_t batch = 1) {
-        return {in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, in0_block_k, num_k_blocks, batch};
+        uint32_t batch = 1,
+        uint32_t in1_per_core_w = 0,
+        uint32_t out_row_width = 0) {
+        return {
+            in0_num_subblocks,
+            in1_num_subblocks,
+            out_subblock_h,
+            out_subblock_w,
+            in0_block_k,
+            num_k_blocks,
+            batch,
+            /*last_in1_subblock_w_valid=*/0,
+            in1_per_core_w,
+            out_row_width};
     }
 };
 
@@ -337,15 +359,10 @@ struct NoIn1BaseOffset {
  *                      output format). Any other buffer is safe ONLY if its data format
  *                      matches out_buf — a mismatch silently mis-configures the packer
  *                      width. (Exempt under reconfig=None, which issues no pack reconfig.)
- *   shape              MatmulBlockShape — build with MatmulBlockShape::of(...).
+ *   shape              MatmulBlockShape — build with MatmulBlockShape::of(...). Carries the
+ *                      advanced stride overrides (in1_per_core_w / out_row_width); see the
+ *                      MatmulBlockShape field docs.
  *   post_compute, ...  functor instances for the template hooks above.
- *   in1_per_core_w     actual N-tiles the producer pushes per K-block. 0 = derive from
- *                      out_subblock_w * in1_num_subblocks. Pass the real value when the
- *                      factory pads the in1 width above the pushed shard width, else the
- *                      wait/pop counts mismatch and deadlock.
- *   out_row_width      N-tiles per row in the OUTPUT CB (TileRowMajor row stride). 0 =
- *                      reuse in1_per_core_w. Pass the larger pack width when the output is
- *                      padded above the in1 read width.
  *
  * @example  // Single K-block, all defaults. Boot with compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0,
  *           // cb_in1, cb_out) then matmul_block_init(cb_in0, cb_in1, transpose=0, ct_dim=1,
@@ -388,8 +405,6 @@ ALWI void matmul_block(
     const MatmulBlockShape& shape,
     PostComputeFn post_compute = {},
     PreKBlockFn pre_k_block = {},
-    uint32_t in1_per_core_w = 0,
-    uint32_t out_row_width = 0,
     PostKBlockFn post_k_block = {},
     KBlockInnerDimFn k_block_inner_dim = {},
     In0SourceFn in0_source_fn = {},

@@ -284,7 +284,9 @@ void kernel_main() {
                     out_subblock_w,
                     in0_block_w,
                     num_blocks_inner_dim,
-                    /*batch=*/1);
+                    /*batch=*/1,
+                    /*in1_per_core_w=*/in1_block_w,
+                    /*out_row_width=*/out_block_w);
 #ifdef MATMUL_DRAM_SHARDED
                 // DRAM-sharded matmul pads per_core_N_compute beyond per_core_N_in1_sender
                 // so out_subblock_w can be larger than the reader actually pushes for the
@@ -344,15 +346,7 @@ void kernel_main() {
                         NoIn0Source,                       // In0SourceFn
                         NoIn1BaseOffset,                   // In1BaseOffsetFn
                         ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>>(
-                        in0_buf,
-                        in1_buf,
-                        phase1_out_buf,
-                        mm_partials_buf,
-                        shape,
-                        NoPostCompute{},
-                        xpose,
-                        /*in1_per_core_w=*/in1_block_w,
-                        /*out_row_width=*/out_block_w);
+                        in0_buf, in1_buf, phase1_out_buf, mm_partials_buf, shape, NoPostCompute{}, xpose);
                 } else {
                     matmul_block<
                         in1_transpose_tile,
@@ -370,15 +364,7 @@ void kernel_main() {
                         NoIn0Source,
                         NoIn1BaseOffset,
                         ActivationOp<matmul_activation, activation_param0, activation_param1, activation_param2>>(
-                        in0_buf,
-                        in1_buf,
-                        phase1_out_buf,
-                        mm_partials_buf,
-                        shape,
-                        NoPostCompute{},
-                        NoPreKBlock{},
-                        /*in1_per_core_w=*/in1_block_w,
-                        /*out_row_width=*/out_block_w);
+                        in0_buf, in1_buf, phase1_out_buf, mm_partials_buf, shape, NoPostCompute{}, NoPreKBlock{});
                 }
 
                 // ── Phase 2: Bias addition ──────────────────────────────

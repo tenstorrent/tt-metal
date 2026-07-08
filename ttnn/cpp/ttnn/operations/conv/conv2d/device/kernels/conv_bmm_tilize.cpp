@@ -647,8 +647,6 @@ void kernel_main() {
                 shape,
                 MatmulPostFn{},
                 pre_k_block,
-                /*in1_per_core_w=*/0,
-                /*out_row_width=*/0,
                 compute_kernel_lib::NoPostKBlock{},
                 compute_kernel_lib::NoKBlockInnerDimFn{},
                 compute_kernel_lib::NoIn0Source{},

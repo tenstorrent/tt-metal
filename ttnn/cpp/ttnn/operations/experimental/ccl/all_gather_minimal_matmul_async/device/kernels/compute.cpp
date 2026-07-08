@@ -390,7 +390,9 @@ void kernel_main() {
                 current_subblock_w,
                 K_block_tiles,
                 K_num_blocks,
-                /*batch=*/1);
+                /*batch=*/1,
+                /*in1_per_core_w=*/N_block_tiles,
+                /*out_row_width=*/N_block_tiles);
 
             // in0_policy selection: WaitAndRetainOnLastBlock when reusing in0 across
             // the next n iter (helper skips popping in0 on the last K-block);
@@ -424,8 +426,6 @@ void kernel_main() {
                     shape,
                     NoPostCompute{},
                     NoPreKBlock{},
-                    /*in1_per_core_w=*/N_block_tiles,
-                    /*out_row_width=*/N_block_tiles,
                     NoPostKBlock{},
                     NoKBlockInnerDimFn{},
                     NoIn0Source{},
@@ -455,8 +455,6 @@ void kernel_main() {
                     shape,
                     NoPostCompute{},
                     NoPreKBlock{},
-                    /*in1_per_core_w=*/N_block_tiles,
-                    /*out_row_width=*/N_block_tiles,
                     NoPostKBlock{},
                     NoKBlockInnerDimFn{},
                     NoIn0Source{},
