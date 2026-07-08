@@ -27,8 +27,8 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in"),
                        dfb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("dfb_gamma");
-    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("dfb_beta");
+    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);

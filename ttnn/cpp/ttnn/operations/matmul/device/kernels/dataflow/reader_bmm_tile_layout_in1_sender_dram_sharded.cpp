@@ -53,9 +53,9 @@ void kernel_main() {
     constexpr DataFormat bias_data_format = get_dataformat(dfb_id_in3);
 #endif
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
-    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("dfb_out");
-    constexpr uint32_t dfb_id_out_reshard = get_named_compile_time_arg_val("dfb_out_reshard");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t dfb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
     // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
     // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).

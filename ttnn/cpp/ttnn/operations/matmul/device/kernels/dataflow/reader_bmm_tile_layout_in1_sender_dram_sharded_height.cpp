@@ -54,8 +54,8 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
-    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("dfb_out");  // Local output CB (compute writes here)
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("cb_out");  // Local output CB (compute writes here)
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(dfb_id_in1);
     constexpr uint32_t out_single_tile_size_bytes = get_tile_size(dfb_id_out);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;

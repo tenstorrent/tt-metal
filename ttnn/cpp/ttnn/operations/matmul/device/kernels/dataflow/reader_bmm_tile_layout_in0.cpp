@@ -38,7 +38,7 @@ void kernel_main() {
 
     constexpr auto in0_args = TensorAccessorArgs<11>();
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);

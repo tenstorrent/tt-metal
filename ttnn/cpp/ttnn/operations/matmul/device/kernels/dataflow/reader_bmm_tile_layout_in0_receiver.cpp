@@ -31,7 +31,7 @@ void kernel_main() {
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(7);
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);

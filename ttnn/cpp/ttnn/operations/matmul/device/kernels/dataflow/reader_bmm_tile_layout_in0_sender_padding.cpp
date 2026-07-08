@@ -108,7 +108,7 @@ void kernel_main() {
         );
     }
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM, and the
     // interleaved in0 CB pages are sized to match (see the program factory). The NOC reads the
@@ -148,7 +148,7 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 
     // sparsity accessor
-    constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("dfb_sparsity");
+    constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 

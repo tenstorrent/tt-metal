@@ -122,7 +122,7 @@ void kernel_main() {
     // Welford-fp32 alias for dfb_in0 (non-TILIZE_IN path). Shares L1 memory with dfb_in0 but has
     // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
     // dfb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
-    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("dfb_in0_welford");
+    constexpr uint32_t dfb_in0_welford_id = get_named_compile_time_arg_val("cb_in0_welford");
     // Boolean indicating whether the welford kernel uses the alias CB.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
     // True when the welford intake CB is configured with UnpackToDestFp32, i.e. the FP32

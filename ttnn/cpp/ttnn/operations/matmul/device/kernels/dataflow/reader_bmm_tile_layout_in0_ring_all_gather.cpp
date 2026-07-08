@@ -46,8 +46,8 @@ void kernel_main() {
     Noc noc_obj(noc_id);
     Semaphore<> signal_sem(get_compile_time_arg_val(4));
 
-    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("dfb_in0");
-    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("dfb_in2");
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in2");
 
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);

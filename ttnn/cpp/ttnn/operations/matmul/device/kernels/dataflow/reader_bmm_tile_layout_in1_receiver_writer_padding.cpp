@@ -85,10 +85,10 @@ void kernel_main() {
     }
     // WRITER
 
-    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("dfb_in1");
+    constexpr uint32_t dfb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     // WRITER
-    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("dfb_out");
+    constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     // WRITER
     // single-tile

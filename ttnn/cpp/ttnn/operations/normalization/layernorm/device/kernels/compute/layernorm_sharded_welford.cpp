@@ -216,7 +216,7 @@ void kernel_main() {
     // have independent read/write pointers so the fused path pushes both side by side; the non-fused
     // path reads c_0 (sharded) without read/write pointer manipulation, and so does the alias.
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
-    constexpr auto dfb_x_welford_named = get_named_compile_time_arg_val("dfb_x_welford");
+    constexpr auto dfb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
     constexpr auto dfb_x_welford_id = welford_fp32_alias ? dfb_x_welford_named : dfb_in_id;
     DataflowBuffer dfb_x_welford(dfb_x_welford_id);
 

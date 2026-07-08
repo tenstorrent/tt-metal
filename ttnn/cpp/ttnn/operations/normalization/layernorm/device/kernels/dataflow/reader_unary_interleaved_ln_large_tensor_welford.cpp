@@ -22,13 +22,13 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in"),
                        dfb_id_in1 = get_named_compile_time_arg_val("cb_inb");
-    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("dfb_gamma");
-    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("dfb_beta");
+    constexpr uint32_t dfb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t dfb_id_beta = get_named_compile_time_arg_val("cb_beta");
     // Welford-fp32 alias of cb_in (non-fused) -- shares L1 memory with dfb_in0 but has its own
     // semaphore. The compute kernel waits on dfb_x_welford for the welford section because that
     // buffer index is configured with unpack_to_dest_mode=UnpackToDestFp32. When the alias is
     // inactive, dfb_x_welford == cb_in (non-fused) or cb_x (fused); the gate below avoids double-counting.
-    constexpr uint32_t dfb_id_x_welford = get_named_compile_time_arg_val("dfb_x_welford");
+    constexpr uint32_t dfb_id_x_welford = get_named_compile_time_arg_val("cb_x_welford");
     constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
 
     Noc noc;
