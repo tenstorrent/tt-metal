@@ -4,6 +4,12 @@
 """
 Standalone SDPA chunk/grid sweep for BGE-M3 B12/S8192 on N300 (single Wormhole chip).
 
+!!! WARNING: standalone SDPA timings are NOT representative of in-model SDPA !!!
+The isolated op runs differently than inside the encoder trace. Example: this
+sweep says grid 8x4 (165us) beats 8x8 (249us), but IN-MODEL the 8x8 grid is
+~2x FASTER (121us/op) and 8x4 is a 63% regression. Use this sweep only for
+COARSE chunk-size intuition; validate every SDPA change in-model via perf.py.
+
 SDPA is 66.7% of the B12/S8192 prefill device time. This sweep isolates the
 encoder (non-causal) SDPA op for the exact model shape and finds the fastest
 (q_chunk, k_chunk, grid, max_cores_per_head_batch) via the device profiler,
