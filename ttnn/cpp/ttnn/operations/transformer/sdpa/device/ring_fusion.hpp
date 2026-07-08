@@ -24,6 +24,11 @@ struct RingSDPAFusedOpSignaler {
     uint32_t forward_writes_expected = 0;
     uint32_t backward_writes_expected = 0;
 
+    // Set by the program factory when the all-gather relays the diametric slice split across both
+    // links (even ring, size > 2). Must match the all-gather kernels' gate exactly. Drives the SDPA
+    // reader's dual-half wait on the split shard.
+    bool split_forwarding_enabled = false;
+
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 
