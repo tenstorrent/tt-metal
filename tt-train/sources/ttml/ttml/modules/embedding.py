@@ -174,4 +174,4 @@ class VocabParallelEmbedding(AbstractModuleBase):
         # Each token is nonzero on exactly one device; sum reconstructs the full
         # embedding, replicated across TP. Input ids carry no grad, so backward
         # simply passes the (already replicated) output grad through unchanged.
-        return ttml.ops.distributed.all_reduce(emb, True, self.cluster_axis)
+        return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)

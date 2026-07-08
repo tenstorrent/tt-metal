@@ -81,18 +81,11 @@ def _num_available_devices() -> int:
 # ---------------------------------------------------------------------------
 
 
-def _close_device_quietly() -> None:
+def _close_device_mesh_quietly() -> None:
+    """Reverse ``open_device_mesh`` (close device, disable fabric, clear the global mesh),
+    swallowing errors so it is safe on the pre-open and teardown paths."""
     try:
-        ttml.autograd.AutoContext.get_instance().close_device()
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _clear_global_mesh() -> None:
-    try:
-        import ttml._mesh as _mesh_mod  # type: ignore[import-not-found]
-
-        _mesh_mod._mesh = None
+        ttml.close_device_mesh()
     except Exception:  # noqa: BLE001
         pass
 
@@ -164,8 +157,7 @@ def _open_mesh_or_skip(shape: tuple[int, ...]):
     """
     _skip_if_unsupported(shape)
     previous_mgd = _ensure_mgd_path(shape)
-    _close_device_quietly()
-    _clear_global_mesh()
+    _close_device_mesh_quietly()
     try:
         ttml.open_device_mesh(shape)
     except Exception as e:  # noqa: BLE001
@@ -179,8 +171,7 @@ def ccl_mesh():
     """Open the default 2x2 mesh used by the main test classes."""
     previous_mgd = _open_mesh_or_skip(MESH_SHAPE_2X2)
     yield ttml.mesh()
-    _close_device_quietly()
-    _clear_global_mesh()
+    _close_device_mesh_quietly()
     _restore_mgd_path(previous_mgd)
 
 
