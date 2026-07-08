@@ -108,7 +108,7 @@ class FunctionalDecoder(LightweightModule):
             "post_attention_layernorm": _to_tt_weight(
                 _lookup(state_dict, layer_idx, "post_attention_layernorm.weight"), mesh_device
             ),
-            # The Llama forge emit fuses layers 0..30 in [Q, V, K] order.
+            # Normalize canonical HF q/k/v weights to the functional runtime Q/V/K packing.
             "qkv": _to_tt_weight(torch.cat([q_proj.T, v_proj.T, k_proj.T], dim=1), mesh_device),
             "o_proj": _to_tt_weight(_lookup(state_dict, layer_idx, "self_attn.o_proj.weight").T, mesh_device),
             "gate_proj": _to_tt_weight(_lookup(state_dict, layer_idx, "mlp.gate_proj.weight").T, mesh_device),

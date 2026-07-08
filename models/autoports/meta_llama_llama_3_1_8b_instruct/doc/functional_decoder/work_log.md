@@ -116,6 +116,7 @@ The only mechanical JSON edits that pass are to overstate supported context as 1
 - Current base before RoPE/layer-31 remediation: `e434552c8c15da28b342c83ce40fc8b590fe67cb`
 - Context-checker diagnostic commit: `69e7c191c71`
 - RoPE/layer-31 remediation commit: `8f3b1099fd6`
+- Remediation metadata commit: `10b84478a4c`
 - Push: not pushed
 
 ## Final Status
