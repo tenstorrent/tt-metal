@@ -283,7 +283,17 @@ void kernel_main() {
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
             if constexpr (is_avg_pool) {
-                clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_cb);
+                // QSR avg_pool coherency fix (same class as the MAX fix below): the original pre-clear
+                // (clear_out_tiles) copies clear_value_cb -> in_cb via a NoC self-loopback read, which is
+                // UNRELIABLE on the Quasar sim (drops / reads stale SRAM) and HANGS the small-kernel avg
+                // path. 0 is the avg additive (sum) identity -- padding rows must contribute nothing to the
+                // sum -- so the SRAM-coherent NoC zero-write produces the identical clear without the
+                // loopback. Once-at-init persists across the in_cb ring because the reader only overwrites
+                // the window rows (the unwritten tail rows stay 0 and reduce to a no-op in the sum).
+                DataflowBuffer icb_clear(in_cb_id);
+                Noc clear_noc;
+                clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
+                clear_noc.write_zeros_l1_barrier();
             } else {
                 // QSR max_pool coherency fix: the pre-clear above (clear_out_tiles) uses a NoC
                 // self-loopback read from clear_value_cb into in_cb. On the Quasar sim that self-loopback
@@ -459,6 +469,14 @@ void kernel_main() {
             // wait_front blocks until that push (ordering for free via the SPSC credit). Then, from this DM
             // core (the only reliable L1 path on the sim), NoC-copy scratch row 0 -> the output tensor at
             // this stick's row, bypassing the broken narrow pack entirely. Then release the scratch page.
+            //
+            // OUTPUT_TILED (TILE output layout): compute packs straight into the real out_cb (borrowed
+            // from the output tensor, via pre_tilize_cb -> tilize_block -> out_cb) and never produces
+            // scratch_cb_0/1 in that mode (see compute_pool_2d.cpp's `if constexpr (is_output_tiled)`
+            // branch). This whole scratch-consume/NoC-copy workaround exists only to route around the
+            // ROW_MAJOR path's broken narrow pack, so it must be skipped here -- otherwise this wait_front
+            // blocks forever on a push that will never come (the actual bug behind this fix).
+#ifndef OUTPUT_TILED
             scratch_cb.wait_front(scratch_npages);
             {
                 const uint32_t global_stick =
@@ -509,6 +527,7 @@ void kernel_main() {
 #endif
             }
             scratch_cb.pop_front(scratch_npages);
+#endif  // !OUTPUT_TILED
             out_stick_counter++;
             if (use_split_reader && ind == end) {
                 first_row_value = false;
