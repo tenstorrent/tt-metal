@@ -82,14 +82,21 @@ void read_in0_block_sync(
     uint32_t d0_start,
     uint32_t d0_end,
     uint32_t d1_start,
-    uint32_t d1_end) {
+    uint32_t d1_end,
+    // When false, issue the async reads but skip the completion barrier, so a caller reading the
+    // block in M-row bands can keep band s's reads in flight while it waits for band s+1's data and
+    // barrier once after the last band.
+    bool issue_barrier = true,
+    // Byte offset from the CB base at which this (sub-)block's writes begin. A caller streaming the
+    // block in M-row bands passes each band's offset so bands land at their slots instead of the base.
+    uint32_t write_ptr_offset = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
     Noc noc;
     CircularBuffer cb(cb_id);
     const uint32_t cb_base_write_ptr = cb.get_write_ptr();
-    uint32_t write_ptr = cb_base_write_ptr;
+    uint32_t write_ptr = cb_base_write_ptr + write_ptr_offset;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
             break;
@@ -116,7 +123,9 @@ void read_in0_block_sync(
         // finish up incrementing write_ptr if (d1_end - d1_start) < K_block_tiles
         write_ptr += (K_block_tiles - (d1_end - d1_start)) * tile_size_bytes;
     }
-    noc_async_read_barrier();
+    if (issue_barrier) {
+        noc_async_read_barrier();
+    }
     noc.write_zeros_l1_barrier();
 }
 
