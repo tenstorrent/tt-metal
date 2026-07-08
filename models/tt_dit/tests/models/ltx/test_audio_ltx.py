@@ -32,8 +32,8 @@ from loguru import logger
 import ttnn
 from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from models.tt_dit.models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
-from models.tt_dit.models.audio_vae.mel_decoder_ltx import MelDecoder
-from models.tt_dit.models.audio_vae.vocoder_ltx import Vocoder
+from models.tt_dit.models.audio_vae.mel_decoder_ltx import AudioUpsample, MelDecoder, ResnetBlock
+from models.tt_dit.models.audio_vae.vocoder_ltx import AMPBlock1, Vocoder
 from models.tt_dit.parallel.config import AudioTCParallelConfig, DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
