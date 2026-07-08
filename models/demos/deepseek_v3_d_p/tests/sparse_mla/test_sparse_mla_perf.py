@@ -105,10 +105,16 @@ LONG_CACHE_TOKENS = int(os.environ.get("DS_PERF_LONG_CACHE", 512000))
 ATTN_MODES = ("sparse", "dense")
 ATTN_MODE = os.environ.get("DS_PERF_ATTN_MODE", "sparse")  # the impl selects its mode from this
 
+# Variant axis: which sparse model to profile. Default deepseek_v32 (128 heads / 64 index heads);
+# glm_5_1 is the GLM-5.1 workload (64 heads / 32 index heads, hidden 6144, interleaved rope). The
+# config itself (dims + rope convention) flows from the `variant` fixture -> config_only; only the
+# Galaxy head COUNTS below are model-specific (they drive the per-box head/chunk division).
+PERF_VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
+
 
 def _subdir(mode: str) -> str:
-    """Per-mode tracy profiler subdir (holds the raw device reports + the per-scenario summary CSVs)."""
-    return f"deepseek_v32_{mode}_mla_perf"
+    """Per-(variant,mode) tracy profiler subdir (holds the raw device reports + per-scenario CSVs)."""
+    return f"{PERF_VARIANT}_{mode}_mla_perf"
 
 
 def _csv_name(mode: str) -> str:
@@ -150,8 +156,15 @@ pytestmark = pytest.mark.perf
 
 GALAXY_SP = 8
 GALAXY_TP = 4
-GALAXY_NUM_HEADS = 128
-GALAXY_INDEX_HEADS = 64
+# Galaxy head counts are the model's full-workload heads (per-box division scales from these). GLM-5.1
+# has half the MLA + index heads of v3.2; the rest of the config (dims, rope) comes from config_only.
+_GALAXY_HEADS_BY_VARIANT = {
+    "deepseek_v32": (128, 64),  # (num_attention_heads, index_n_heads)
+    "glm_5_1": (64, 32),
+}
+if PERF_VARIANT not in _GALAXY_HEADS_BY_VARIANT:
+    raise ValueError(f"DS_PERF_VARIANT={PERF_VARIANT!r} not in {list(_GALAXY_HEADS_BY_VARIANT)}")
+GALAXY_NUM_HEADS, GALAXY_INDEX_HEADS = _GALAXY_HEADS_BY_VARIANT[PERF_VARIANT]
 INDEX_HEAD_DIM = 128
 
 
@@ -241,7 +254,7 @@ def _require_perf(request):
     ids=["line"],
     indirect=True,
 )
-@pytest.mark.parametrize("variant", ["deepseek_v32"], indirect=True, ids=["deepseek_v32"])
+@pytest.mark.parametrize("variant", [PERF_VARIANT], indirect=True, ids=[PERF_VARIANT])
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test — skip on CI")
 @pytest.mark.timeout(0)
 def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only):
@@ -428,7 +441,7 @@ def test_mla_chunked_perf(scenario, attn_mode):
     span = f"full cold prefill 0→{cache}-tok cache" if is_cold else f"one chunk @ {cache}-tok cache"
     table = "\n".join(
         [
-            f"DeepSeek V3.2 MLA chunked perf [{attn_mode}/{scenario}] — {PERF_WORKLOAD.system_name} proxy "
+            f"{PERF_VARIANT} MLA chunked perf [{attn_mode}/{scenario}] — {PERF_WORKLOAD.system_name} proxy "
             f"{PERF_WORKLOAD.chunk_tokens}-tok chunk, {span}, SP={PERF_WORKLOAD.sp}×TP={PERF_WORKLOAD.tp}",
             f"Galaxy target: {CHUNK_TOKENS}-tok chunk @ {galaxy_cache}-tok cache, SP=8×TP=4; "
             f"local chunk={CHUNK_TOKENS // GALAXY_SP}, local MLA heads={GALAXY_NUM_HEADS // GALAXY_TP}",
