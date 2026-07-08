@@ -21,10 +21,10 @@ from PIL import Image
 import ttnn
 
 from ...models.transformers.transformer_flux2 import Flux2Transformer
-from ...models.vae.vae_flux2 import Flux2VaeDecoder
+from ...models.vae.vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, Flux2VaeParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
-from ...utils import cache
+from ...utils import cache, tensor
 from ...utils.padding import PaddingConfig
 from ...utils.tensor import fast_device_to_host, float_to_uint8
 from ...utils.tracing import StateTensor, traced_function
@@ -166,10 +166,25 @@ class Flux2Pipeline:
             use_conv3d=self._vae_use_conv3d,
         )
 
+        logger.info("creating TT-NN VAE encoder...")
+        self._vae_encoder = Flux2VaeEncoder(
+            in_channels=3,
+            block_out_channels=[128, 256, 512, 512],
+            layers_per_block=2,
+            z_channels=32,
+            device=self._mesh_device,
+            parallel_config=self._vae_parallel,
+            ccl_manager=self._vae_ccl_manager,
+            use_conv3d=self._vae_use_conv3d,
+        )
+
         if self.dynamic_load:
-            self.transformer.register_coresident_exclusions(self._prompt_encoder._encoder, self._vae_decoder)
+            self.transformer.register_coresident_exclusions(
+                self._prompt_encoder._encoder, self._vae_decoder, self._vae_encoder
+            )
             self._prompt_encoder._encoder.register_coresident_exclusions(self.transformer)
             self._vae_decoder.register_coresident_exclusions(self.transformer)
+            self._vae_encoder.register_coresident_exclusions(self.transformer)
 
         # Load in reverse order of use so the first-used model (encoder) stays loaded before __call__.
         self._prepare_vae()
@@ -246,6 +261,18 @@ class Flux2Pipeline:
             get_torch_state_dict=self._torch_vae.state_dict,
             model_name=os.path.basename(self.checkpoint_name),
             subfolder="vae",
+            parallel_config=self._vae_parallel,
+            mesh_shape=tuple(self._mesh_device.shape),
+        )
+        ttnn.synchronize_device(self._mesh_device)
+
+    def _prepare_vae_encoder(self) -> None:
+        # distinct subfolder from the decoder so the two VAE halves don't collide in the weight cache
+        cache.load_model(
+            tt_model=self._vae_encoder,
+            get_torch_state_dict=self._torch_vae.state_dict,
+            model_name=os.path.basename(self.checkpoint_name),
+            subfolder="vae_encoder",
             parallel_config=self._vae_parallel,
             mesh_shape=tuple(self._mesh_device.shape),
         )
@@ -351,8 +378,9 @@ class Flux2Pipeline:
         image_latents_for_rope: list[torch.Tensor] | None = None
         if image is not None:
             logger.info("encoding condition image...")
-            condition_image = self._preprocess_condition_image(image)
-            patchified = self._encode_vae_image(condition_image)
+            with profiler("vae_encode", profiler_iteration) if profiler else nullcontext():
+                condition_image = self._preprocess_condition_image(image)
+                patchified = self._encode_vae_image(condition_image, traced=traced)
             image_latents_torch = _pack_latents(patchified).repeat(transformer_batch_size, 1, 1)
             image_latents_for_rope = [patchified[0]]
 
@@ -551,16 +579,36 @@ class Flux2Pipeline:
         image_height = (image_height // multiple_of) * multiple_of
         return self._image_processor.preprocess(image, height=image_height, width=image_width, resize_mode="crop")
 
-    def _encode_vae_image(self, image: torch.Tensor) -> torch.Tensor:
-        with torch.no_grad():
-            encoded = self._torch_vae.encode(image).latent_dist.mode()
+    def _encode_vae_image(self, image: torch.Tensor, *, traced: bool = False) -> torch.Tensor:
+        # Runs the VAE encoder, .mode(), space-to-depth patchify and batch-norm normalize entirely
+        # on device. Returns the normalized patchified latent as host [B, C*p^2, H/16, W/16]
+        # (channel-first), matching the previous torch fallback's contract so the packing/rope/cat
+        # logic in __call__ is unchanged.
+        self._prepare_vae_encoder()
 
-        encoded = _patchify_latents(encoded)
-        mean = self._torch_vae.bn.running_mean.view(1, -1, 1, 1).to(device=encoded.device, dtype=encoded.dtype)
-        std = torch.sqrt(self._torch_vae.bn.running_var.view(1, -1, 1, 1) + self._torch_vae.config.batch_norm_eps).to(
-            device=encoded.device, dtype=encoded.dtype
+        _, _, img_height, img_width = image.shape
+        h_axis = self._vae_parallel.h_parallel.mesh_axis if self._vae_parallel.h_parallel is not None else None
+        mesh_axes = [None, h_axis, None, None] if h_axis is not None else None
+
+        image_nhwc = image.permute(0, 2, 3, 1).contiguous().to(torch.bfloat16)
+        tt_image = tensor.from_torch(
+            image_nhwc,
+            device=self._mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_axes=mesh_axes,
         )
-        return (encoded - mean) / std
+
+        enc_height = img_height // self._vae_scale_factor
+        enc_width = img_width // self._vae_scale_factor
+        patchified = self._vae_encoder.encode_and_patchify(tt_image, height=enc_height, width=enc_width, traced=traced)
+
+        patchified_host = tensor.to_torch(
+            patchified,
+            mesh_axes=mesh_axes,
+            composer_device=self._mesh_device,
+        )
+        # [B, H/16, W/16, C*p^2] -> [B, C*p^2, H/16, W/16]
+        return patchified_host.permute(0, 3, 1, 2).contiguous().to(torch.float32)
 
     def _update_spatial_rope(
         self,

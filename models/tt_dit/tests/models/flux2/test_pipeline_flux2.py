@@ -11,6 +11,7 @@ from PIL import Image
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from ....pipelines.flux2.pipeline_flux2 import Flux2Pipeline
 from ....utils.test import line_params, line_params_8k, ring_params, ring_params_8k
@@ -197,13 +198,38 @@ def test_pipeline_img2img(
     init_image = _load_init_image(width=width, height=height, mesh_device=mesh_device)
     prompt = "winter night"
 
-    images = pipeline(
-        prompts=[prompt],
-        image=init_image,
-        num_inference_steps=num_inference_steps,
-        seed=0,
-        traced=False,
-    )
+    benchmark_profiler = BenchmarkProfiler()
+    ttnn.synchronize_device(mesh_device)
+    with benchmark_profiler("run", iteration=0):
+        images = pipeline(
+            prompts=[prompt],
+            image=init_image,
+            num_inference_steps=num_inference_steps,
+            seed=0,
+            traced=False,
+            profiler=benchmark_profiler,
+            profiler_iteration=0,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+    def _dur(step: str) -> float:
+        try:
+            return benchmark_profiler.get_duration(step, 0)
+        except Exception:
+            return float("nan")
+
+    total = _dur("run")
+    print("\n" + "=" * 72)
+    print(f"FLUX2 IMG2IMG PERF (4x8 WH galaxy, {width}x{height}, {num_inference_steps} steps)")
+    print("-" * 72)
+    print(f"  {'prompt+encoder':24} | {_dur('encoder') * 1e3:10.3f} ms")
+    print(f"  {'VAE image encode':24} | {_dur('vae_encode') * 1e3:10.3f} ms")
+    print(f"  {'denoising (total)':24} | {_dur('denoising') * 1e3:10.3f} ms")
+    print(f"  {'VAE decode':24} | {_dur('vae') * 1e3:10.3f} ms")
+    print("-" * 72)
+    print(f"  {'total image-to-image':24} | {total * 1e3:10.3f} ms")
+    print("=" * 72)
+    logger.info(f"img2img total: {total:.3f}s (vae_encode {_dur('vae_encode'):.3f}s)")
 
     arch = "bh" if is_blackhole() else "wh"
     mesh_tag = "x".join(str(s) for s in mesh_device.shape)
