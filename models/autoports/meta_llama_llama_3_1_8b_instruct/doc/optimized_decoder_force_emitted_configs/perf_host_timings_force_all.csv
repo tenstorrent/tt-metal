@@ -1,0 +1,2 @@
+model,decoder,profile,layer,mode,seq_len,decode_pos,batch,traced,host_ms
+meta-llama/Llama-3.1-8B-Instruct,OptimizedDecoderOriginalConfigs,llama31_8b_instruct_optimized_decoder_original_configs_v1,0,decode,1,16,1,True,1.120779

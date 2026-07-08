@@ -1,0 +1,2 @@
+model,decoder,profile,force_scope,layer,mode,seq_len,decode_pos,batch,traced,host_ms
+meta-llama/Llama-3.1-8B-Instruct,OptimizedDecoderForceEmittedConfigs,llama31_8b_instruct_optimized_decoder_force_emitted_configs_v1,unchanged,0,decode,1,16,1,True,1.050887
