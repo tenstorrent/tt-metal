@@ -25,13 +25,25 @@ bool is_dram_interleaved(const ttnn::Tensor& t) {
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& op, const tensor_args_t& t) {
     TT_FATAL(t.x.storage_type() == tt::tt_metal::StorageType::DEVICE, "x must be on device");
-    // x is restricted to BFLOAT8_B — the only dtype the existing callers
-    // (TtRoutedExpert typecasts the dispatched buffer to BF8_B before this
-    // op) and tests exercise. The kernel CB-size config can also accept
-    // BFLOAT16, but that path is untested; reintroduce when a real caller
-    // + PCC test for BF16 lands.
-    TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
-    TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
+    // x layout/dtype depends on x_is_row_major:
+    //   false (default): x is TILE BFLOAT8_B — the reader reads tile pages directly.
+    //   true: x is ROW_MAJOR BFLOAT16 (the dispatch output) — the reader streams
+    //     sticks and the compute kernel tilizes them to bf8_b before the matmul,
+    //     fusing the standalone to_layout. Off preserves the pre-fusion path for
+    //     standalone / Wormhole callers.
+    if (op.x_is_row_major) {
+        TT_FATAL(
+            t.x.dtype() == tt::tt_metal::DataType::BFLOAT16,
+            "x must be BFLOAT16 when x_is_row_major, got {}",
+            t.x.dtype());
+        TT_FATAL(
+            t.x.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "x must be ROW_MAJOR when x_is_row_major, got {}",
+            t.x.layout());
+    } else {
+        TT_FATAL(t.x.dtype() == tt::tt_metal::DataType::BFLOAT8_B, "x must be BFLOAT8_B, got {}", t.x.dtype());
+        TT_FATAL(t.x.layout() == tt::tt_metal::Layout::TILE, "x must be TILE layout");
+    }
     TT_FATAL(is_dram_interleaved(t.x), "x must be DRAM-interleaved");
     TT_FATAL(t.x.logical_shape().rank() >= 2, "x must have rank >= 2, got rank {}", t.x.logical_shape().rank());
     // For rank > 2, all leading dims must be 1 — we treat x as effectively
@@ -241,6 +253,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t chunk_M_tiles,
     uint32_t m_tiles,
     bool read_x_at_offset,
+    bool x_is_row_major,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
@@ -253,6 +266,7 @@ ttnn::Tensor unified_routed_expert_ffn(
             .m_tiles = m_tiles,
             .local_expert_id = local_expert_id,
             .read_x_at_offset = read_x_at_offset,
+            .x_is_row_major = x_is_row_major,
             .activation = activation,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
