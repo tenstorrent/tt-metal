@@ -122,6 +122,7 @@ class Qwen36DecoderLayer:
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
         valid_len=None,
+        batch_slot=None,
     ):
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
@@ -154,7 +155,9 @@ class Qwen36DecoderLayer:
                             chunk_start_idx_tensor=chunk_start_idx_tensor,
                         )
                     else:
-                        attn_output = self.attention.forward_prefill(attn_input, cos, sin)
+                        attn_output = self.attention.forward_prefill(
+                            attn_input, cos, sin, batch_slot=(batch_slot if batch_slot is not None else 0)
+                        )
                 else:
                     attn_output = self.attention.forward_decode(
                         attn_input, position_tensor, cos, sin, page_table=page_table
@@ -163,9 +166,17 @@ class Qwen36DecoderLayer:
                 # GDN carries its recurrent/conv state internally (capture_state on
                 # prefill, read on decode); it has no paged KV, so page_table is N/A.
                 if mode == "prefill":
-                    attn_output = self.attention.forward_prefill(
-                        attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
-                    )
+                    # batch_slot set → batched-decode seeding: stash this sequence's state
+                    # for the given lane (finalize_seed assembles [B,...] later). Otherwise
+                    # the single-sequence capture_state path (unchanged).
+                    if batch_slot is not None:
+                        attn_output = self.attention.forward_prefill(
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len, seed_slot=batch_slot
+                        )
+                    else:
+                        attn_output = self.attention.forward_prefill(
+                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                        )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)
         elif self.is_full_attention:

@@ -148,6 +148,14 @@ class TPGatedDeltaNet:
         self._stable_state = False
         self.conv_carry = None  # [1, K-1, qkv_dim_tp] cross-chunk prefill conv carry
         self._zero_conv0 = None  # persistent zero source for conv_states[0] (trace-safe)
+        # Batched-decode seeding (Step 1): when B>1, each of the B sequences is
+        # prefilled independently and its captured recurrent/conv state is stashed
+        # per batch slot here (kept ON DEVICE — the state's per-device head shards
+        # differ across the mesh, so a host round-trip would collapse the mesh dim),
+        # then concatenated into the [B,...] decode buffers by finalize_seed().
+        # Seeding happens once per sequence, not in the decode hot loop.
+        self._seed_rec = {}  # slot -> device rec state  [1, Nv, Dk, Dv]
+        self._seed_conv = {}  # slot -> list of K-1 device conv windows, each [1, 1, qkv_dim_tp]
 
     def reset_state(self):
         def z(shape):
@@ -215,7 +223,64 @@ class TPGatedDeltaNet:
         ttnn.copy(zcc, self.conv_carry)
         ttnn.deallocate(zcc)
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
+    def finalize_seed(self, batch_size):
+        """Assemble the per-slot stashed prefill state (see forward_prefill seed_slot)
+        into the [B,...] decode buffers. Call once after all `batch_size` sequences
+        have been prefilled with their seed_slot. Clears the stash.
+
+        Everything stays on device: ttnn.concat runs per-device, so each device's own
+        GDN head shard is preserved (the recurrent/conv state is NOT replicated — it is
+        computed independently per device). Concatenation is along the batch (slot) axis.
+        """
+        assert len(self._seed_rec) == batch_size, f"seeded {len(self._seed_rec)} slots, expected {batch_size}"
+        if self.conv_states is None:
+            self.reset_state()
+        # Recurrent state: [B, Nv, Dk, Dv] over the batch axis (dim=0). Match the demo
+        # semantics (self.rec_state = final_state) by reassigning; copy in place only when
+        # the buffer address must stay fixed (trace path, Step 2).
+        slots = [self._seed_rec[b] for b in range(batch_size)]
+        rec = slots[0] if batch_size == 1 else ttnn.concat(slots, dim=0)
+        if self._stable_state:
+            ttnn.copy(rec, self.rec_state)  # data → fixed buffer; rec itself no longer needed
+            ttnn.deallocate(rec)
+        else:
+            self.rec_state = rec  # rec becomes the buffer
+        for s in slots:
+            if s is not rec and s is not self.rec_state:
+                ttnn.deallocate(s)
+        # Conv window: conv_states[0] = zero; conv_states[j+1] = the j-th window over all slots.
+        D = self.qkv_dim_tp
+        zc = ttnn.from_torch(
+            torch.zeros(1, batch_size, D, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        ttnn.copy(zc, self.conv_states[0])
+        ttnn.deallocate(zc)
+        for j in range(self.K - 1):
+            wins = [self._seed_conv[b][j] for b in range(batch_size)]  # each [1, 1, D]
+            if batch_size == 1:
+                win = wins[0]
+            else:
+                # Concat along the batch axis (dim=1). That is a TILE sub-dim, so detour
+                # through ROW_MAJOR where a size-1 stack is unambiguous, then back to TILE.
+                rm = [ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT) for w in wins]
+                win_rm = ttnn.concat(rm, dim=1)  # [1, B, D] row-major
+                win = ttnn.to_layout(win_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(win_rm)
+                for r in rm:
+                    ttnn.deallocate(r)
+            ttnn.copy(win, self.conv_states[j + 1])
+            if win is not wins[0]:
+                ttnn.deallocate(win)
+            for w in wins:
+                ttnn.deallocate(w)
+        self._seed_rec.clear()
+        self._seed_conv.clear()
+
+    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, seed_slot=None):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
         x: [1,1,T,dim] replicated. Reuses the shared gated_delta_attn_seq kernel
@@ -301,10 +366,28 @@ class TPGatedDeltaNet:
             valid_len=valid_len,
         )
         B, D = 1, self.qkv_dim_tp
+        # ---- Batched-decode seeding (Step 1): stash this sequence's state per slot. ----
+        # When seed_slot is set we are prefilling ONE of B sequences whose decode buffers
+        # are [B,...]; a single-pass prefill produces batch-1 state, so we stash it (keyed
+        # by slot, kept on device) and DON'T touch the shared [B,...] buffers here.
+        # finalize_seed() concats all B slots into rec_state/conv_states once every
+        # sequence is prefilled. Falls through to the shared output tail below.
+        if seed_slot is not None:
+            # Keep the state ON DEVICE (per-device head shards differ across the mesh;
+            # a host round-trip would collapse the mesh dim). finalize_seed concats these
+            # per-slot device tensors along the batch axis — ttnn.concat is per-device, so
+            # each device's own head shard is preserved. Slices are fresh tensors, so the
+            # shared tail's deallocate(conv_new_state) is still correct.
+            self._seed_rec[seed_slot] = final_state  # [1, Nv, Dk, Dv]; NOT freed here
+            windows = []
+            for j in range(self.K - 1):
+                windows.append(ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D)))
+            self._seed_conv[seed_slot] = windows  # K-1 tensors, each [1, 1, D]
+            # conv_new_state is freed by the shared tail below; final_state is retained.
         # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
         # In place (ttnn.copy) when _stable_state so the addresses the prefill/decode traces
         # baked in stay valid across execute_trace replays and across sequences.
-        if carry:
+        elif carry:
             ttnn.copy(final_state, self.rec_state)
             ttnn.deallocate(final_state)
             ttnn.copy(conv_new_state, self.conv_carry)  # [1, K-1, D] last-K-1 conv inputs
@@ -313,7 +396,7 @@ class TPGatedDeltaNet:
         # ---- Finalize the decode conv window (last chunk / short prompt). ----
         # conv_states[1..K-1] = the last K-1 real conv inputs; [0] is the (shifted-out) zero.
         # Harmless to refresh every chunk — the last chunk's values are the ones decode reads.
-        if capture_state:
+        if seed_slot is None and capture_state:
             if self.conv_states is None:
                 self.reset_state()
             if self._zero_conv0 is not None:
