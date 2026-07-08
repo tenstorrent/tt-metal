@@ -800,6 +800,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
             if (chan_id >= 4 && chan_id <= 9) {
                 return "TRACE";
             }
+            break;
 
         case 2:
         case 3:
@@ -809,6 +810,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
             if (chan_id >= 2 && chan_id <= 9) {
                 return "TRACE";
             }
+            break;
 
         case 4:
             if ((chan_id >= 0 && chan_id <= 1) || (chan_id >= 10 && chan_id <= 11)) {
@@ -820,6 +822,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
             if (chan_id >= 4 && chan_id <= 6) {
                 return "ExaMAX";
             }
+            break;
 
         case 5:
             if ((chan_id >= 2 && chan_id <= 3) || (chan_id >= 10 && chan_id <= 11)) {
@@ -831,6 +834,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
             if (chan_id >= 7 && chan_id <= 9) {
                 return "ExaMAX";
             }
+            break;
 
         case 6:
         case 7:
@@ -843,6 +847,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
             if (chan_id >= 7 && chan_id <= 9) {
                 return "ExaMAX";
             }
+            break;
 
         case 8:
             if (chan_id >= 10 && chan_id <= 11) {
@@ -854,6 +859,7 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
             if (chan_id >= 4 && chan_id <= 9) {
                 return "ExaMAX";
             }
+            break;
 
         default: return "unknown";
     }

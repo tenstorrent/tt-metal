@@ -12,7 +12,7 @@ This test suite is meant for testing the functionality of the Ethernet subsystem
   and the contents are compared after all transactions have finished. The host
   downloads the data from the receiver side and compares it.
 
-* **TensixDeploymentEthernet01Bandwidth**
+* **TensixDeploymentEthernet02BandwidthBidir**
   Similar as above but full-duplex, the host initializes both L1s and then
   downloads and compares both L1s after the transactions have finished.
 
