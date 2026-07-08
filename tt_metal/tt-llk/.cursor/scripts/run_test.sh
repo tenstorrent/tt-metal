@@ -256,14 +256,22 @@ _do_count() {
 
 _do_compile() {
   _validate
-  _vlog "compile: $(_test_label) (arch=${ARCH}, -n ${JOBS}${K_FILTER:+, -k '${K_FILTER}'})"
 
   # The two-phase flow requires compile and simulate to filter to the same set:
   # simulate's --compile-consumer reads per-variant artifacts that producer
   # wrote, so an unfiltered producer + filtered consumer would either rebuild
   # variants the consumer skips or miss variants the consumer needs.
   local -a kflag=()
-  [[ -n "$K_FILTER" ]] && kflag=(-k "$K_FILTER")
+  local -a pytest_targets=("${TEST_FILES[@]}")
+  local target_label="$(_test_label)"
+  if [[ -n "$TEST_ID" ]]; then
+    pytest_targets=("$TEST_ID")
+    target_label="$TEST_ID"
+  elif [[ -n "$K_FILTER" ]]; then
+    kflag=(-k "$K_FILTER")
+  fi
+
+  _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'})"
 
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
@@ -271,14 +279,14 @@ _do_compile() {
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${TEST_FILES[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${TEST_FILES[@]}"
+      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${kflag[@]}" "${pytest_targets[@]}"
     )
   fi
 }
