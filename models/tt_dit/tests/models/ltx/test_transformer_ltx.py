@@ -17,6 +17,7 @@ import pytest
 import torch
 from loguru import logger
 from safetensors.torch import load_file
+from tracy import signpost
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
@@ -856,7 +857,15 @@ def test_ltx_transformer_block(
             video_padding_mask=v_pad_sp,
         )
 
+    # Signpost-bracket one warm forward for tt-perf-report --start/end-signpost.
+    for _ in range(2):
+        tt_out = tt_block(**forward_kwargs)
+    ttnn.synchronize_device(mesh_device)
+    signpost("start")
     tt_out = tt_block(**forward_kwargs)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+
     if has_audio:
         tt_v, tt_a = tt_out
     else:
