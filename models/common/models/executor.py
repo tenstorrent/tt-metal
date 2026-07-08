@@ -19,7 +19,6 @@ Design principle: Thick engine, thin model executor.
 from __future__ import annotations
 
 import contextlib
-import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -929,17 +928,34 @@ class TracedLLMExecutor:
         decode_output_spec: Captured output spec from compile_decode().
     """
 
-    def __init__(self, model, mesh_device: ttnn.MeshDevice, iter_named_modules=None) -> None:
+    def __init__(
+        self,
+        model,
+        mesh_device: ttnn.MeshDevice,
+        iter_named_modules=None,
+        ondevice_decode_loop: bool = False,
+    ) -> None:
         """Initialize traced executor engine.
 
         Args:
             model: Transformer model with prefill_forward(), decode_forward(), model_args, etc.
             mesh_device: TT mesh device for execution.
+            iter_named_modules: Optional callable yielding the model's named modules for config
+                validation (model-specific; defaults to the generic walk in the eager engine).
+            ondevice_decode_loop: Opt-in, default OFF. When True, the captured decode trace advances
+                position/rope on device (in-place ``ttnn.plus_one``) and feeds the sampled token back
+                into the persistent token buffer (``ttnn.sampling(output_tensor=...)``), so steady-state
+                steps replay with NO per-step host input staging — mirroring TTTv1's on-device sampling
+                trace (generator ``refresh_trace_inputs=False`` + ``_increment_decode_positions_device``).
+                Valid ONLY for free-running greedy/top-k generation, NOT teacher forcing (which injects
+                host tokens every step), so accuracy/teacher-forcing runs must leave this OFF. Also inert
+                on the force-argmax path (``_decode_loop_active`` gates it to the top-k op path).
         """
         self.model = model
         self.mesh_device = mesh_device
         self._eager = EagerLLMExecutor(model, mesh_device, iter_named_modules=iter_named_modules)
         self._cleaned_up = False
+        self.ondevice_decode_loop = ondevice_decode_loop
 
         # todo)) we cannot save many traces in memory! Gotta limit the number of traces! --> lru_cache?
         #        but the warmup_model_prefill() traces must be kept around forever!
@@ -953,14 +969,6 @@ class TracedLLMExecutor:
         self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
         self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
 
-        # On-device decode loop (opt-in, default OFF). When enabled, the captured decode trace
-        # advances position/rope on device (in-place ``ttnn.plus_one``) and feeds the sampled token
-        # back into the persistent token buffer (``ttnn.sampling(output_tensor=...)``), so steady-state
-        # steps replay with NO per-step host input staging. Mirrors TTTv1's on-device sampling trace
-        # (tt_transformers generator ``refresh_trace_inputs=False`` + model ``_increment_decode_positions_device``).
-        # Only valid for free-running greedy/top-k generation — NOT teacher forcing (which injects
-        # host tokens every step), so accuracy/teacher-forcing runs must leave this OFF.
-        self._ondevice_decode_loop = os.environ.get("TTT_ONDEVICE_DECODE_LOOP", "0") == "1"
         # Per sampling-mode flag: the next decode step must re-seed the persistent buffers from host
         # (correct first token + start position). Set after every prefill and at init; cleared once
         # the device has been seeded, after which steady-state steps carry state on device.
@@ -1034,7 +1042,7 @@ class TracedLLMExecutor:
         realloc. The force-argmax path (``ttnn.argmax`` → uint32 ``[1,1,32]``, rank-3) does NOT
         match the rank-4 token buffer, so the loop stays off there and falls back to host resupply.
         """
-        if not self._ondevice_decode_loop or sampling_params is None or self.model.sampling is None:
+        if not self.ondevice_decode_loop or sampling_params is None or self.model.sampling is None:
             return False
         # kpt is None only for the force-argmax path; non-None => top-k op path.
         return self._eager._get_decode_sampling_kpt(sampling_params) is not None
@@ -1920,6 +1928,7 @@ def run_perf_benchmark(
     prompt_lens: torch.Tensor | None = None,
     start_pos: list[int] | None = None,
     sampling_params=None,
+    pipeline_readback: bool = True,
 ) -> PerfBenchmarkResult:
     """Run timed prefill + decode loop for performance measurement.
 
@@ -1936,6 +1945,10 @@ def run_perf_benchmark(
         prompt_lens: Actual prompt length per user, shape [batch_size].
         start_pos: Starting position for prefix caching.
         sampling_params: Explicit sampling params (None = host argmax).
+        pipeline_readback: Overlap each step's token readback with the next step's
+            trace (host one step behind the device). Only engages when the executor's
+            on-device decode loop is active on the top-k path; ignored otherwise. Set
+            False to A/B against the blocking readback.
 
     Returns:
         PerfBenchmarkResult with raw timings + derived metrics.
@@ -2004,20 +2017,20 @@ def run_perf_benchmark(
     # N+1's replay does NOT depend on step N's token reaching the host. We therefore
     # issue each step's token readback non-blocking, launch the next step's trace,
     # and resolve step N's token one iteration later — the host stays exactly one
-    # step behind the device, mirroring TTTv1's on-device sampling loop. This
-    # overlaps the readback + host bookkeeping with device compute, removing the
-    # per-step host round-trip that otherwise serializes with the tiny b1 device step
-    # (the residual after Stage-1/1b). The token stream is unchanged: the device
-    # produces the same tokens; we only read them back deferred, then drain the last
-    # one so generated_token_ids is byte-identical to the blocking loop. Escape
-    # hatch for A/B: TTT_DECODE_PIPELINE_READBACK=0 keeps the blocking readback.
+    # step behind the device. This mirrors the deferred-readback idiom in
+    # models/demos/llama3_70b_galaxy/demo/demo_decode.py (``.cpu(blocking=False)`` +
+    # ``record_event`` ... ``event_synchronize``) and the vLLM async-read path; note
+    # the single-box text demo instead reads back blocking. Overlapping the readback +
+    # host bookkeeping with device compute removes the per-step host round-trip that
+    # otherwise serializes with the very short batch-1 device step. The token stream is
+    # unchanged: the device produces the same tokens; we only read them back deferred,
+    # then drain the last one so generated_token_ids is byte-identical to the blocking
+    # loop. Pass pipeline_readback=False to A/B back to the blocking readback.
     # Every other path (host resupply, force-argmax, host sampling) is unaffected —
-    # only _decode_loop_active (opt-in TTT_ONDEVICE_DECODE_LOOP=1 + top-k) qualifies.
+    # only _decode_loop_active (executor.ondevice_decode_loop + top-k) qualifies.
     _engine = getattr(executor, "_engine", executor)
     _pipeline_readback = (
-        isinstance(_engine, TracedLLMExecutor)
-        and _engine._decode_loop_active(sampling_params)
-        and os.environ.get("TTT_DECODE_PIPELINE_READBACK", "1") == "1"
+        isinstance(_engine, TracedLLMExecutor) and _engine._decode_loop_active(sampling_params) and pipeline_readback
     )
 
     if _pipeline_readback:
