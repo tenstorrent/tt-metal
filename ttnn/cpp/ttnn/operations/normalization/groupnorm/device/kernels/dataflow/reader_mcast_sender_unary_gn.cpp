@@ -77,15 +77,15 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
     constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
-    // Per-core slots in dfb_ex_external are hardcoded to a cb_ex_external_slot_pitch_bytes
-    // pitch (see the `l1_write_addr_external += cb_ex_external_slot_pitch_bytes`
+    // Per-core slots in dfb_ex_external are hardcoded to a dfb_ex_external_slot_pitch_bytes
+    // pitch (see the `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes`
     // increments below). Each NOC read writes datum_size_bytes into its slot, so
-    // datum_size_bytes > cb_ex_external_slot_pitch_bytes would overflow into the next
+    // datum_size_bytes > dfb_ex_external_slot_pitch_bytes would overflow into the next
     // core's slot and silently corrupt the reduction. Zero-fill does not fix this; the
     // slot pitch itself would need to grow.
     static_assert(datum_size_bytes <= dfb_ex_external_slot_pitch_bytes,
                   "cb_ex_external slot pitch is hardcoded; "
-                  "datum_size_bytes must be <= cb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
+                  "datum_size_bytes must be <= dfb_ex_external_slot_pitch_bytes or per-slot writes will overflow");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
     constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
 
@@ -259,13 +259,13 @@ void kernel_main() {
     // Two independent sources of stale SRAM contents in dfb_ex_external that the
     // downstream `reduce_tile` SUM consumer would otherwise sum into the
     // global reduction:
-    //   (A) intra-slot gap: each per-core slot is cb_ex_external_slot_pitch_bytes
+    //   (A) intra-slot gap: each per-core slot is dfb_ex_external_slot_pitch_bytes
     //       wide (see the hardcoded
-    //       `l1_write_addr_external += cb_ex_external_slot_pitch_bytes` increments
+    //       `l1_write_addr_external += dfb_ex_external_slot_pitch_bytes` increments
     //       below) but the NOC read writes only the first datum_size_bytes; bytes
-    //       [datum_size_bytes, cb_ex_external_slot_pitch_bytes) of every used slot
+    //       [datum_size_bytes, dfb_ex_external_slot_pitch_bytes) of every used slot
     //       are never written. Present iff
-    //       datum_size_bytes < cb_ex_external_slot_pitch_bytes (compile-time check).
+    //       datum_size_bytes < dfb_ex_external_slot_pitch_bytes (compile-time check).
     //   (B) trailing tile gap: when the total meaningful data
     //       (cb_ex_external_data_bytes) does not exactly fill the integer
     //       number of reserved tiles (cb_ex_external_tiles_required), the
@@ -273,7 +273,7 @@ void kernel_main() {
     //
     // Fix: zero-fill dfb_ex_external once at kernel startup. The per-iteration
     // writes below only touch the per-core slot data positions (first
-    // datum_size_bytes of every cb_ex_external_slot_pitch_bytes-wide slot);
+    // datum_size_bytes of every dfb_ex_external_slot_pitch_bytes-wide slot);
     // the gap bytes are never written by this kernel, and the consumer
     // (compute kernel's reduce_tile) is read-only on this CB. So the gap
     // bytes stay zero across every iteration.
@@ -286,8 +286,8 @@ void kernel_main() {
     // therefore documented to have exact zeros at every non-result datum.
     // This mcast reader instead reserves cb_ex_external_tiles_required tiles
     // per cur_read_iteration and writes per-core scalars across all of them
-    // at a cb_ex_external_slot_pitch_bytes slot pitch -- when
-    // num_mcast_cores * cb_ex_external_slot_pitch_bytes does not divide
+    // at a dfb_ex_external_slot_pitch_bytes slot pitch -- when
+    // num_mcast_cores * dfb_ex_external_slot_pitch_bytes does not divide
     // single_tile_size_bytes, slot writes straddle tile boundaries and the
     // 2nd-and-later tiles never get a full-tile overwrite to clear their gap
     // bytes.
@@ -354,10 +354,10 @@ void kernel_main() {
 
                             // read self Ex partial - this slot is treated the same as every
                             // other core's slot (datum_size_bytes wide, advancing by
-                            // cb_ex_external_slot_pitch_bytes).
+                            // dfb_ex_external_slot_pitch_bytes).
                             // Gap bytes inside dfb_ex_external are kept zero by the
                             // kernel-startup zero_whole_cb call above (or are statically absent
-                            // when datum_size_bytes == cb_ex_external_slot_pitch_bytes and the
+                            // when datum_size_bytes == dfb_ex_external_slot_pitch_bytes and the
                             // slots tile exactly).
                             uint32_t l1_read_addr_ex_par =
                                 cur_read_iteration== 0 ? dfb_ex_partial.get_read_ptr() : dfb_ex2_partial.get_read_ptr();

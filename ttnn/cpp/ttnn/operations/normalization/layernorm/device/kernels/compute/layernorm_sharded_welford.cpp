@@ -447,8 +447,8 @@ void kernel_main() {
                 // between first stage (row) and second stage (column) (if row major).
                 // The factor of 2 is because each block has 2 tiles (mean, var).
                 constexpr uint32_t num_second_stage_tiles = 2 * (num_blocks_second_stage - 1);
-                dfb_ex_external.wait_front(num_second_stage_tiles);
-                dfb_ex_external.pop_front(num_second_stage_tiles);
+                dfb_ex_external.wait_front(static_cast<uint16_t>(num_second_stage_tiles));
+                dfb_ex_external.pop_front(static_cast<uint16_t>(num_second_stage_tiles));
             }
         }
         dfb_ex.push_back(2 * num_tiles_per_allgather_worker);
