@@ -4,6 +4,7 @@
 
 #include "untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -234,6 +235,17 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             writer_desc.runtime_args.emplace_back(core, writer_rt_args);
         }
     } else {
+        // Batched height-sharded -> interleaved: each core holds `batch` whole [H_padded, W]
+        // matrices. Untilize strips every matrix's interior tile-pad rows, so the writer must land
+        // each matrix at its own logical row offset in the interleaved output and advance by the
+        // logical matrix height per matrix — it cannot treat the shard as one contiguous block the
+        // way the single-matrix (batch==1) path does. Anything else (WIDTH/BLOCK sharded, or a
+        // single matrix row-split across cores) keeps the original per-core block arithmetic.
+        const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+        const bool batched_interleaved = height_sharded && global_batch > 1;
+        const uint32_t matrix_h_padded = a.padded_shape()[-2];
+        const uint32_t matrix_h_logical = output.logical_shape()[-2];
+
         writer_desc.runtime_args.reserve(all_core_coords.size());
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             CoreCoord core = all_core_coords[i];
@@ -243,6 +255,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             uint32_t block_start_row_id_offset;
             uint32_t row_size_unpadded = block_row_size;
             uint32_t num_rows_unpadded = num_rows_block;
+            // Per-matrix block height and matrix count seen by the writer. Defaults reproduce the
+            // legacy single-block behaviour (one matrix per core, all of it real data).
+            uint32_t writer_num_rows_block = num_rows_block;
+            uint32_t writer_batch = 1;
+            uint32_t writer_num_real_batches = 1;
             if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 block_start_row_offset = i * block_row_size;
                 block_start_row_id_offset = 0;
@@ -255,17 +272,32 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
                 }
-            } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-                block_start_row_offset = 0;
-                block_start_row_id_offset = i * num_rows_block;
-                if (i > last_idx) {
-                    row_size_unpadded = 0;
-                    num_rows_unpadded = 0;
+            } else if (height_sharded) {
+                if (batched_interleaved) {
+                    // One writer "block" == one padded matrix; `batch` of them are drained per core.
+                    writer_num_rows_block = matrix_h_padded;
+                    writer_batch = batch;
+                    block_start_row_offset = 0;
+                    block_start_row_id_offset = i * batch * matrix_h_logical;  // this core's first matrix
+                    row_size_unpadded = last_block_row_size_unpadded;          // unpadded width in bytes
+                    num_rows_unpadded = matrix_h_logical;                      // data rows written per matrix
+                    // Tail cores may hold whole padding matrices past the real batch; those are
+                    // popped but not written.
+                    const uint32_t first_matrix = i * batch;
+                    writer_num_real_batches =
+                        first_matrix >= global_batch ? 0u : std::min(batch, global_batch - first_matrix);
                 } else {
-                    if (i == last_idx) {
-                        num_rows_unpadded = num_output_rows_unpadded;
+                    block_start_row_offset = 0;
+                    block_start_row_id_offset = i * num_rows_block;
+                    if (i > last_idx) {
+                        row_size_unpadded = 0;
+                        num_rows_unpadded = 0;
+                    } else {
+                        if (i == last_idx) {
+                            num_rows_unpadded = num_output_rows_unpadded;
+                        }
+                        row_size_unpadded = last_block_row_size_unpadded;
                     }
-                    row_size_unpadded = last_block_row_size_unpadded;
                 }
             } else {
                 if (row_major) {
@@ -296,15 +328,16 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             writer_desc.emplace_runtime_args(
                 core,
                 {dst_buffer,  // dst_addr
-                 num_rows_block,
+                 writer_num_rows_block,
                  block_row_size,
-                 std::uint32_t{1},
+                 writer_batch,
                  std::uint32_t{1},
                  std::uint32_t{1},
                  row_size_unpadded,
                  num_rows_unpadded,
                  block_start_row_id_offset,
-                 block_start_row_offset});
+                 block_start_row_offset,
+                 writer_num_real_batches});
         }
     }
 

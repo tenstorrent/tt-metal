@@ -108,11 +108,32 @@ void UntilizeWithUnpaddingDeviceOperation::validate_on_program_cache_miss(
                         operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
                         "Output memory config layout must be INTERLEAVED but got {}",
                         operation_attributes.output_mem_config.memory_layout());
+                    // Height-sharded -> interleaved supports two regimes:
+                    //   1. A single logical matrix split (by rows) across cores: no interior
+                    //      padding, each core copies its contiguous row range 1:1 and only the last
+                    //      core trims trailing pad rows.
+                    //   2. A batch of whole [H_padded, W] matrices, shard_h / H_padded of them per
+                    //      core: the writer strips each matrix's interior tile-pad rows and lands
+                    //      every matrix at its logical row offset in the interleaved output.
+                    // Regime 2 requires each shard to hold *whole* matrices — full matrix width and a
+                    // shard height that is a multiple of the padded matrix height. A multi-matrix
+                    // batch whose matrices straddle core boundaries is not supported.
+                    const auto& shard_shape = input_tensor_a.shard_spec().value().shape;
+                    const uint32_t padded_h = input_tensor_a.padded_shape()[-2];
+                    const uint32_t padded_w = input_tensor_a.padded_shape()[-1];
+                    const uint32_t global_batch =
+                        (padded_h * padded_w) == 0 ? 0 : input_tensor_a.physical_volume() / (padded_h * padded_w);
+                    const bool whole_matrices_per_shard =
+                        shard_shape[1] == padded_w && padded_h != 0 && shard_shape[0] % padded_h == 0;
                     TT_FATAL(
-                        input_tensor_a.physical_volume() /
-                                (input_tensor_a.padded_shape()[-2] * input_tensor_a.padded_shape()[-1]) ==
-                            1,
-                        "Can only write unbatched output interleaved");
+                        global_batch == 1 || whole_matrices_per_shard,
+                        "Height-sharded untilize to interleaved output supports a single matrix or shards that each "
+                        "hold whole [H_padded={}, W_padded={}] matrices; got shard shape [{}, {}] with batch {}",
+                        padded_h,
+                        padded_w,
+                        shard_shape[0],
+                        shard_shape[1],
+                        global_batch);
                 }
                 // What else?
             } else if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {

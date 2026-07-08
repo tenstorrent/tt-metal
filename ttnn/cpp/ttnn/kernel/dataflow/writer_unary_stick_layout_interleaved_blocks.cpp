@@ -47,6 +47,10 @@ void kernel_main() {
     uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(7);
     uint32_t block_start_row_id = get_arg_val<uint32_t>(8);
     uint32_t block_start_row_offset = get_arg_val<uint32_t>(9);
+    // Number of leading matrices (of the `batch` held by this core) that carry real, non-padding
+    // data. Any matrices past this count are still drained from the CB (so compute never blocks)
+    // but no rows are written out. Callers with no padding matrices pass num_real_batches == batch.
+    uint32_t num_real_batches = get_arg_val<uint32_t>(10);
 
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
     constexpr auto dst_args = TensorAccessorArgs<2>();
@@ -62,8 +66,13 @@ void kernel_main() {
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
     const auto s = TensorAccessor(dst_args, dst_addr);
-    uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
     for (uint32_t b = 0; b < batch; ++b) {
+        // A real matrix emits its full (unpadded) height; a trailing padding matrix emits nothing,
+        // yet its tiles are still popped below so the compute kernel never stalls on a full CB.
+        uint32_t rows_this_matrix = (b < num_real_batches) ? num_output_rows_unpadded : 0;
+        // block_start_row_id is the matrix's first row in the (unpadded) interleaved output. The
+        // write loop stops once it reaches this threshold, dropping the matrix's interior pad rows.
+        uint32_t num_rows_unpadded = block_start_row_id + rows_this_matrix;
         for (uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {
             uint32_t block_row_offset = block_start_row_offset;
             for (uint32_t block_w = 0; block_w < num_blocks_w; block_w++) {
@@ -83,7 +92,9 @@ void kernel_main() {
                     s);
                 block_row_offset += block_row_size;
             }  // for num_blocks_w
-            block_start_row_id += num_rows_block;
+            // Advance the output pointer by the rows actually written so the next matrix lands
+            // directly after this one — padding rows between matrices are skipped, not stored.
+            block_start_row_id += rows_this_matrix;
         }  // for num_blocks_h
     }  // for batch
 }
