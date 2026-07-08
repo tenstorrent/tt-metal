@@ -122,9 +122,10 @@ def _get_hf_reference_model(
     vv_config,
     *,
     attn_implementation: str = DEFAULT_HF_DECODE_ATTN_IMPLEMENTATION,
+    dtype: torch.dtype = torch.bfloat16,
 ) -> torch.nn.Module:
-    """Build and cache one HF Qwen2Model per ``(lm_state, attn_implementation)``."""
-    cache_key = (id(lm_state), attn_implementation)
+    """Build and cache one HF Qwen2Model per ``(lm_state, attn_implementation, dtype)``."""
+    cache_key = (id(lm_state), attn_implementation, dtype)
     if cache_key not in _HF_MODEL_CACHE:
         from transformers import Qwen2Config, Qwen2Model
 
@@ -143,7 +144,7 @@ def _get_hf_reference_model(
         )
         model = Qwen2Model(hf_cfg)
         model.load_state_dict(_remap_lm_state_to_hf(lm_state), strict=False)
-        model.to(torch.bfloat16)
+        model.to(dtype)
         model.eval()
         _HF_MODEL_CACHE[cache_key] = model
     return _HF_MODEL_CACHE[cache_key]
@@ -1843,6 +1844,31 @@ def compare_prefill_hidden_pcc(
         return passed_p, pcc_p, []
     per_pos = [comp_pcc(ref_f[:, p], tt_f[:, p], pcc=PCC_THRESHOLD)[1] for p in range(seq_len)]
     return passed_p, pcc_p, per_pos
+
+
+def per_position_pcc(ref_prefill: torch.Tensor, tt_prefill: torch.Tensor) -> torch.Tensor:
+    """Vectorized per-position PCC over the hidden dim; returns a 1-D ``[seq_len]`` tensor.
+
+    Equivalent to ``comp_pcc(ref[:, p], tt[:, p])`` for every position but computed with
+    tensor ops (no Python loop), so it stays fast for long ISL sweeps where the per-token
+    loop in ``compare_prefill_hidden_pcc`` is impractical. Non-finite values are zeroed to
+    match ``comp_pcc``.
+
+    The per-position median of this is a length-stable accuracy metric: the overall flattened
+    PCC is dominated by a few massive-activation positions/channels (|hidden| ~20x typical)
+    whose bf16 rounding tanks the flattened correlation even reference-vs-reference, so it is
+    not a reliable gate for long sequences.
+    """
+    ref_f = ref_prefill.to(torch.float32).reshape(-1, ref_prefill.shape[-1])
+    tt_f = tt_prefill.to(torch.float32).reshape(-1, tt_prefill.shape[-1])
+    if not bool((torch.isfinite(ref_f) & torch.isfinite(tt_f)).all()):
+        ref_f = torch.nan_to_num(ref_f, nan=0.0, posinf=0.0, neginf=0.0)
+        tt_f = torch.nan_to_num(tt_f, nan=0.0, posinf=0.0, neginf=0.0)
+    ref_c = ref_f - ref_f.mean(dim=-1, keepdim=True)
+    tt_c = tt_f - tt_f.mean(dim=-1, keepdim=True)
+    cov = (ref_c * tt_c).sum(dim=-1, dtype=torch.float64)
+    denom = torch.sqrt(ref_c.pow(2).sum(dim=-1, dtype=torch.float64) * tt_c.pow(2).sum(dim=-1, dtype=torch.float64))
+    return (cov / denom.clamp_min(1e-30)).to(torch.float32)
 
 
 def prefill_isl_sweep_effective_lengths(vv_config, isl_lengths=None) -> tuple[list[int], int]:
