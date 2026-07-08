@@ -28,6 +28,80 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
 
 ---
 
+## Snowflake Reference (common commands)
+
+Concrete values for this project: account `TLUIIGS-MN66866`, database `SELF_SERVE`,
+schema `TTNN_OPS_V6`, warehouse `PUBLIC`, owner role `SELF_SERVE_OWNER_TTNN_OPS_V6`,
+reader role `SELF_SERVE_READER_TTNN_OPS_V6`, service user `SVC_TTOPS_SWEEPS`.
+
+### 0. Provision the schema (one-time — Data Central, not SQL)
+
+You don't create the database — `SELF_SERVE` already exists. Create a *schema* at
+<https://datacentral.ds.aws.tenstorrent.com/database/self-serve>. It mints two roles:
+`SELF_SERVE_OWNER_<project>` (write, granted to you) and `SELF_SERVE_READER_<project>`
+(read-only). No role can `CREATE SCHEMA` directly, so this step is required first.
+
+### Connection env
+
+```bash
+export SNOWFLAKE_ACCOUNT=TLUIIGS-MN66866
+export SNOWFLAKE_USER=SVC_TTOPS_SWEEPS            # or your SSO user
+export SNOWFLAKE_PRIVATE_KEY_PATH=~/key.pem       # service user (keypair); omit for SSO
+export SNOWFLAKE_WAREHOUSE=PUBLIC
+export SNOWFLAKE_DATABASE=SELF_SERVE
+export SNOWFLAKE_ROLE=SELF_SERVE_READER_TTNN_OPS_V6   # reader = read-only; owner = write
+```
+
+### 1. Create / recreate the tables (owner role)
+
+Run the DDL under the owner role — e.g. paste into a Snowsight worksheet:
+
+```sql
+USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;
+-- then run the contents of model_tracer/create_ttnn_ops_schema_v6_snowflake.sql
+```
+
+### 2. Load traces into the DB (owner role — writes)
+
+```bash
+SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6 \
+  python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
+  model_tracer/traced_operations/ttnn_operations_master.json
+```
+
+### 3. Reconstruct the master JSON / sweep vectors (reader role — read-only)
+
+```bash
+# default role is the reader, so no SNOWFLAKE_ROLE needed
+python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+  model_tracer/trace_selection_registry.yaml \
+  model_tracer/traced_operations/ttnn_operations_master.json
+```
+
+### 4. Grant access to others
+
+Run under the owner role (in Snowsight, or headless if your user/service account holds
+the owner role):
+
+```sql
+USE ROLE SELF_SERVE_OWNER_TTNN_OPS_V6;
+
+-- read-only, to a teammate (SSO) or a service user
+GRANT ROLE SELF_SERVE_READER_TTNN_OPS_V6 TO USER "teammate@tenstorrent.com";
+GRANT ROLE SELF_SERVE_READER_TTNN_OPS_V6 TO USER SVC_OTHER;
+
+-- read + write (full control — trusted pipelines only)
+GRANT ROLE SELF_SERVE_OWNER_TTNN_OPS_V6 TO USER SVC_WRITER;
+
+-- or grant privileges directly to an existing team role
+GRANT USAGE  ON SCHEMA SELF_SERVE.TTNN_OPS_V6                 TO ROLE <other_role>;
+GRANT SELECT ON ALL TABLES    IN SCHEMA SELF_SERVE.TTNN_OPS_V6 TO ROLE <other_role>;
+GRANT SELECT ON FUTURE TABLES IN SCHEMA SELF_SERVE.TTNN_OPS_V6 TO ROLE <other_role>;
+GRANT INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA SELF_SERVE.TTNN_OPS_V6 TO ROLE <other_role>;  -- write
+```
+
+---
+
 ## End-to-End Workflow
 
 ### Step 1: Trace a model
