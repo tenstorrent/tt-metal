@@ -1,9 +1,9 @@
 # Model Tracer Guide
 
-The model tracer extracts operation configuration data while running models and stores them in a PostgreSQL database. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
+The model tracer extracts operation configuration data while running models and stores them in Snowflake. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
 
-**Schema:** All data lives in `ttnn_ops_v6` on Metal Ops PostgreSQL (configurable via `--schema`).
-**Connection:** Set `TTNN_OPS_DATABASE_URL`
+**Schema:** All data lives in `SELF_SERVE.TTNN_OPS_V6` in Snowflake (configurable via `--schema`). The schema and its owner/reader roles are provisioned via [Data Central](https://datacentral.ds.aws.tenstorrent.com/database/self-serve).
+**Connection:** Configured via env — `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and `SNOWFLAKE_ROLE` (defaults to the read-only `SELF_SERVE_READER_TTNN_OPS_V6`; set `SELF_SERVE_OWNER_TTNN_OPS_V6` to write). Auth is an RSA keypair (`SNOWFLAKE_PRIVATE_KEY` or `SNOWFLAKE_PRIVATE_KEY_PATH`) for service users, or SSO for humans. Warehouse via `SNOWFLAKE_WAREHOUSE` (default `PUBLIC`).
 
 ---
 
@@ -85,13 +85,8 @@ On load the tool:
 `trace_run.pytest_args`. This lets you answer "have I traced model X with these args on
 hardware Y?" purely via SQL without re-running anything.
 
-If you're upgrading an existing `ttnn_ops_v6` deployment, apply the additive migration:
-
-```bash
-psql "$TTNN_OPS_DATABASE_URL" -f model_tracer/migrate_v6_add_pytest_args.sql
-```
-
-Pre-migration `trace_run` rows simply have `pytest_args = NULL`.
+The Snowflake `SELF_SERVE.TTNN_OPS_V6` schema already includes `trace_run.pytest_args`
+(see `model_tracer/create_ttnn_ops_schema_v6_snowflake.sql`), so no migration is needed.
 - **Auto-appends a `draft` entry** to `model_tracer/trace_selection_registry.yaml`
 
 Example output:
