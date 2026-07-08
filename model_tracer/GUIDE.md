@@ -4,6 +4,8 @@ The model tracer extracts operation configuration data while running models and 
 
 **Schema:** All data lives in `SELF_SERVE.TTNN_OPS_V6` in Snowflake (configurable via `--schema`). The schema and its owner/reader roles are provisioned via [Data Central](https://datacentral.ds.aws.tenstorrent.com/database/self-serve).
 **Connection:** Configured via env — `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and `SNOWFLAKE_ROLE` (defaults to the read-only `SELF_SERVE_READER_TTNN_OPS_V6`; set `SELF_SERVE_OWNER_TTNN_OPS_V6` to write). Auth is an RSA keypair (`SNOWFLAKE_PRIVATE_KEY` or `SNOWFLAKE_PRIVATE_KEY_PATH`) for service users, or SSO for humans. Warehouse via `SNOWFLAKE_WAREHOUSE` (default `PUBLIC`).
+**Prerequisites:** `pip install snowflake-connector-python cryptography` (already in the sweeps CI image), and access to the schema's roles — provision them via Data Central (see the Snowflake Reference below).
+**Writes need the owner role:** the default role is read-only, so run write commands (`load`, `set-model-name`) with `SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6`. Reads (`reconstruct-*`, `list-*`) work with the default reader role.
 
 ---
 
@@ -13,7 +15,8 @@ The model tracer extracts operation configuration data while running models and 
 # 1. Trace a model
 python model_tracer/generic_ops_tracer.py models/demos/deepseek_v3/demo/demo.py
 
-# 2. Load into DB (creates trace_run, auto-appends draft to manifest)
+# 2. Load into DB (writes → owner role; creates trace_run, auto-appends draft to manifest)
+SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6 \
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
     model_tracer/traced_operations/ttnn_operations_master.json
 
@@ -153,6 +156,9 @@ Output: `model_tracer/traced_operations/ttnn_operations_master.json`
 ### Step 2: Load into DB
 
 ```bash
+# Loading writes, so use the owner role (export once; all loads below inherit it):
+export SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6
+
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load
 
 # Load a specific JSON file
@@ -200,6 +206,9 @@ With `--dry-run`, the transaction is rolled back and the summary shows what the 
 Each model gets a short, lowercase `model_name` derived from its source path or HF identifier when it is first inserted. If the loader reports a `model_name` uniqueness error, disambiguate with:
 
 ```bash
+# set-model-name writes, so use the owner role:
+export SNOWFLAKE_ROLE=SELF_SERVE_OWNER_TTNN_OPS_V6
+
 # Override a specific model's name
 python tests/sweep_framework/load_ttnn_ops_data_v2.py set-model-name \
     --source-file "path/to/demo.py" --model-name custom_name
