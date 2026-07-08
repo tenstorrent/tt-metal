@@ -75,6 +75,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             read_x_at_offset (bool, optional): when True, x is a shared buffer
                 and the reader offsets x reads by expert_region_offsets[global_id]
                 (fusing ttnn::extract). Requires expert_region_offsets. Default False.
+            activation (ttnn.RoutedExpertActivation, optional):
+                Silu (default, DeepSeek) or SwiGluOai (clamped, MiniMax-M3 / gpt-oss).
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -92,7 +94,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("output") = nb::none(),
         nb::arg("expert_region_offsets") = nb::none(),
         nb::arg("input_m_tiles") = nb::none(),
-        nb::arg("read_x_at_offset") = false);
+        nb::arg("read_x_at_offset") = false,
+        nb::arg("activation") = RoutedExpertActivation::Silu);
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
