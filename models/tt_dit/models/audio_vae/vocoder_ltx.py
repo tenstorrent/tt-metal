@@ -252,6 +252,9 @@ class Vocoder(Module):
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # forward_traced cache: input-shape -> Tracer, LRU-ordered (max_traces caps it; None = unbounded).
+        # Manual (not @traced_function) so the pipeline can release_trace on shutdown/re-warm and so the
+        # free-list-preserving eager warm below (prep_run=False capture) can run — neither is expressible
+        # via the decorator.
         self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
         self._warmed_shapes: set = set()
         self._max_traces = max_traces

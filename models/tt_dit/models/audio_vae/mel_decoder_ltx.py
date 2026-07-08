@@ -279,6 +279,7 @@ class MelDecoder(Module):
         mel_bins: int | None = None,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
+        max_traces: int | None = None,
     ) -> None:
         super().__init__()
 
@@ -308,10 +309,12 @@ class MelDecoder(Module):
         # input shape and replay it (the conv ops are host-dispatch-bound, so this removes
         # the dominant per-op dispatch cost). _target_shape is set per-input by
         # _host_to_device and read by _device_to_host, so it is not baked into the graph.
+        # A manual shape-keyed cache (not @traced_function) is used so the pipeline can
+        # explicitly release_trace on shutdown/re-warm, which the decorator does not expose.
         self.use_trace = False
         self._target_shape: tuple[int, int, int, int] | None = None
         self._traces: "OrderedDict[tuple, Tracer]" = OrderedDict()
-        self._max_traces = None
+        self._max_traces = max_traces
 
         self.patchifier = AudioPatchifier()
 

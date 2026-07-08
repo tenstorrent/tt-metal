@@ -41,6 +41,26 @@ _VOCODER_CONFIG_KEYS = (
     "use_bias_at_final",
 )
 
+# Cap resident per-shape traces per decoder so a long-lived server decoding many clip
+# lengths bounds trace-region memory instead of growing without limit.
+_AUDIO_TRACE_CACHE_MAX = 8
+
+_TRUE_TOKENS = frozenset({"1", "true", "yes", "on"})
+_FALSE_TOKENS = frozenset({"0", "false", "no", "off"})
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    """Boolean env var with one truthiness convention across all trace gates."""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    token = val.strip().lower()
+    if token in _TRUE_TOKENS:
+        return True
+    if token in _FALSE_TOKENS:
+        return False
+    raise ValueError(f"{name}={val!r} is not a boolean (expected one of {_TRUE_TOKENS | _FALSE_TOKENS})")
+
 
 class LTXAudioDecoderAdapter:
     """Owns the LTX audio decode stack: parses the checkpoint's ``audio_vae`` / ``vocoder`` config,
@@ -134,6 +154,7 @@ class LTXAudioDecoderAdapter:
             mel_bins=mel_bins,
             mesh_device=self._mesh_device,
             dtype=ttnn.bfloat16,
+            max_traces=_AUDIO_TRACE_CACHE_MAX,
         )
 
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
@@ -166,9 +187,9 @@ class LTXAudioDecoderAdapter:
             mesh_device=self._mesh_device,
             dtype=ttnn.float32,
         )
-        self._vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
+        self._vocoder_with_bwe.use_trace = self._traced and _env_flag("LTX_VOC_TRACE", default=True)
         self._vocoder_with_bwe.use_trace_bwe = self._traced
-        self._mel_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
+        self._mel_decoder.use_trace = self._traced and _env_flag("LTX_VAE_TRACE", default=False)
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
@@ -197,6 +218,7 @@ class LTXAudioDecoderAdapter:
             dtype=ttnn.float32,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            max_traces=_AUDIO_TRACE_CACHE_MAX,
         )
 
     def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:
