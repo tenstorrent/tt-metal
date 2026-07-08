@@ -5,8 +5,8 @@
 | Pair | Demonstrates |
 |------|--------------|
 | `test_eltwise_binary.py` / `perf_eltwise_binary.py` | `broadcast_type` → C++ template; derive+assert `tile_count`; intentional geometry divergence |
-| `test_reduce.py` / `perf_reduce.py` | `math_fidelity`, `is_reduce_to_one` wired; perf drops `tile_dimensions` sweep |
-| `test_unpack_tilize.py` / `perf_unpack_tilize.py` | `num_faces` → `NUM_FACES`; `input_dimensions` wired + asserted |
+| `test_reduce.py` / `perf_reduce.py` | `math_fidelity` + `pool_type` wired; `is_reduce_to_one` pinned + documented (kernel has no reduce-to-one branch to bind); perf drops `tile_dimensions` sweep |
+| `test_unpack_tilize.py` / `perf_unpack_tilize.py` | single geometry axis `input_dimensions` (redundant `dimensions` axis removed); `num_faces` → `NUM_FACES`; derived + asserted |
 | `test_unpack_A.py` / `perf_unpack_A.py` | `cpp_source` axis; transpose runtimes; format skip matrix |
 | `test_pack_dest_bank.py` / `perf_pack_dest_bank.py` | `input_dimensions` derived from block geometry |
 | `perf_sfpu_unary.py` (with functional SFPU unary) | `math_op` threading; `approx_mode`/`fast_mode`/`dest_acc`; `iterations`/`loop_factor` ignored by comparison |
@@ -25,16 +25,24 @@
 
 ## Template vs runtime parameters
 
-**Templates** (compile-time, in `PerfConfig.templates`):
+**Templates** (compile-time `constexpr`, in `PerfConfig.templates`):
 
 - `MATH_OP(mathop=...)`, `MATH_FIDELITY(...)`, `BROADCAST_TYPE(...)`
 - `REDUCE_POOL_TYPE(...)`, `APPROX_MODE(...)`, `FAST_MODE(...)`
+- `DEST_SYNC(...)`, `STABLE_SORT(...)`, `TILE_DST_CT_OFFSET(...)`, `ACC_TO_DEST(...)`
 
-**Runtimes** (per-variant, in `PerfConfig.runtimes`):
+**Runtimes** (per-variant struct fields, in `PerfConfig.runtimes`):
 
-- `TILE_COUNT(n)`, `REDUCE_TO_ONE(bool)`, `NUM_FACES(n)`
-- `UNPACK_TRANS_FACES(...)`, `UNPACK_TRANS_WITHIN_FACE(...)`
+- `TILE_COUNT(n)` (varies per variant / derived)
+- `UNPACK_TRANS_FACES(...)`, `UNPACK_TRANS_WITHIN_FACE(...)` (multi-option sweeps)
 - `LOOP_FACTOR(...)`, `ITERATIONS(...)` (perf measurement only)
+
+**Single-option axes belong in `templates`, not `runtimes`.** A `RuntimeParameter`
+(e.g. `NUM_FACES`, `TEST_FACE_DIMS`) can be placed in `templates=[...]` — it is
+then emitted as a bare `constexpr` via `convert_to_cpp()` in both normal and
+`SPEED_OF_LIGHT` builds, so the kernel reads it directly with no `params.*` access
+and no `#ifndef SPEED_OF_LIGHT` guard. Runtimes become an empty struct under SOL,
+so keeping a multi-option runtime requires a `#ifndef SPEED_OF_LIGHT` alias.
 
 Use `runtime(...)` wrapper from `param_config` when a runtime axis should not
 split compile keys.

@@ -62,20 +62,35 @@ sweeps or variant counts unless the user explicitly asks.
 | `tile_dimensions` | only when geometry is swept |
 | `dest_acc` | `dest_acc_and_dims` combos when axes can be split |
 
-### Three ways to handle a shared axis on perf
+### Handling a shared axis on perf
 
-Pick one — **never leave a silent no-op**:
+Pick one — **never leave a silent no-op**. Prefer **wiring** over dropping:
+replace hard-coded values in the perf kernel with the value the axis provides.
 
-1. **Wire** — pass through `templates=[...]` / `runtimes=[...]` and into C++
-   compile-time symbols (`MATH_OP(...)`, `BROADCAST_TYPE(...)`, `MATH_FIDELITY(...)`,
-   `REDUCE_TO_ONE(...)`, `NUM_FACES(...)`, etc.).
+1. **Wire (preferred)** — pass through `templates=[...]` / `runtimes=[...]` and
+   consume it in the C++ kernel, replacing any hard-coded constant. Examples:
+   `MATH_OP(...)`, `BROADCAST_TYPE(...)`, `MATH_FIDELITY(...)`, `DEST_SYNC(...)`,
+   `STABLE_SORT(...)`, `NUM_FACES(...)`. A single-option value still equal to the
+   old hard-code keeps behavior identical while making the axis truthful.
 2. **Derive + assert** — compute from other axes and `assert` consistency:
    ```python
    derived_tile_count = (input_dimensions[0] // tile_rows) * (input_dimensions[1] // tile_cols)
    assert derived_tile_count == tile_count
    ```
-3. **Drop** — remove the axis from perf if it isn't used and functional sweeps it
-   (comparison will show `[T] FUNCTIONAL-ONLY`; that's OK).
+3. **Drop (last resort)** — only when the perf kernel genuinely cannot honor the
+   axis and wiring would require dead code (e.g. an unexercised algorithmic
+   branch such as reduce-to-one in `reduce_perf.cpp`). Keep the single-value axis
+   with a comment documenting the covered path instead of binding an unused
+   runtime; comparison then shows `[~]`/`[T]`, which is honest.
+
+### Single-option axes → compile-time templates
+
+If an axis has **exactly one option**, pass it as a **template** parameter (put
+the param object in `templates=[...]`, not `runtimes=[...]`) and read it as a
+compile-time `constexpr` in the kernel. This is cleaner and `SPEED_OF_LIGHT`-safe
+by construction (see the C++ wiring section). A `RuntimeParameter` placed in
+`templates=[...]` is emitted via its `convert_to_cpp()` as a bare `constexpr` in
+both build modes (e.g. `NUM_FACES(4)`, `TEST_FACE_DIMS(face_r_dim=16)`).
 
 ### Perf-only measurement axes (OK to differ)
 
@@ -184,20 +199,41 @@ Key differences from functional:
 
 ## C++ perf kernel wiring (`sources/<name>_perf.cpp`)
 
-Template parameters come from Python `templates=[...]` as compile-time `#define`s
-(e.g. `MATH_FIDELITY`, `BROADCAST_TYPE`, `REDUCE_DIM`, `POOL_TYPE`).
+Template parameters come from Python `templates=[...]` as compile-time `constexpr`
+symbols (e.g. `MATH_FIDELITY`, `BROADCAST_TYPE`, `DEST_SYNC`, `STABLE_SORT`).
 
-Runtime parameters come from `runtimes=[...]` (e.g. `TILE_COUNT`, `REDUCE_TO_ONE`,
+Runtime parameters come from `runtimes=[...]` (e.g. `TILE_COUNT`,
 `UNPACK_TRANS_FACES`) and arrive via `RUNTIME_PARAMETERS params`.
 
 Rules:
 
-- **Do not hardcode** values that Python exposes as axes — read from template or
-  `params.*`.
-- Non–speed-of-light builds: read from `params` (e.g. `params.num_faces`,
-  `params.TILE_CNT`).
-- `SPEED_OF_LIGHT` builds: use compile-time constants from `params.h` where needed.
+- **Do not hardcode** values that Python exposes as axes — read from the template
+  `constexpr` or from `params.*`.
 - Match functional kernel behavior for the swept subset.
+
+### SPEED_OF_LIGHT contract (important)
+
+`SPEED_OF_LIGHT` builds (`-DSPEED_OF_LIGHT`) move **all runtime params into
+templates** and emit an **empty** `struct RuntimeParams {}`. Every runtime param
+becomes a bare compile-time `constexpr`, and `params.<field>` no longer exists.
+
+- **Never** access `params.<runtime_field>` unguarded — it is a compile error
+  under SOL. Guard it and alias to a bare identifier, then use the bare name in
+  the body (works in both modes):
+  ```cpp
+  #ifndef SPEED_OF_LIGHT
+      const std::uint32_t TILE_CNT = params.TILE_CNT;  // constexpr TILE_CNT under SOL
+  #endif
+  for (std::uint32_t i = 0; i < TILE_CNT; ++i) { ... }
+  ```
+- `params.formats` is only valid under
+  `#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)`.
+- **Single-option axes placed in `templates=[...]` are `constexpr` in both
+  modes** — use the bare name directly, no `#ifndef` alias needed. This is the
+  simplest way to stay SOL-safe (prefer it for single-value axes like
+  `num_faces` / `TEST_FACE_R_DIM`).
+- Format-derived constants (`TILE_C_DIM`, `TILE_NUM_FACES`, `FACE_R_DIM`) are
+  `constexpr` in both modes and are always safe.
 
 ---
 
@@ -258,6 +294,8 @@ Perf count should stay stable unless you intentionally changed coverage.
 - Using `mathop=` in `MATH_OP(...)` call — parameter name is `mathop=` (API), axis is `math_op`
 - Naming helper scripts `test_*.py` → pytest collects them (`pytest.ini` collects `test_*.py`, `perf_*.py`)
 - Hardcoding HiFi4 / broadcast / num_faces in C++ while Python sweeps those axes
+- Accessing `params.<runtime>` unguarded in a perf kernel → compile error under `SPEED_OF_LIGHT` (empty `RuntimeParams`)
+- Declaring a single-option axis as a runtime instead of a template
 - Forgetting `@pytest.mark.perf` on perf tests
 
 ---
