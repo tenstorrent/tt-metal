@@ -728,9 +728,10 @@ std::vector<uint32_t> run_sfpu_pipeline(
     if (test_config.unpack_to_dest_fp32) {
         unpack_modes = {{IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
+    const bool fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
         compute_hw_config = experimental::ComputeGen2Config{
-            .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
             .unpack_to_dest_en = test_config.unpack_to_dest_fp32 || test_config.unpack_to_dest_en,
@@ -738,7 +739,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
         };
     } else {
         compute_hw_config = experimental::ComputeGen1Config{
-            .fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
             .unpack_to_dest_mode = unpack_modes,
