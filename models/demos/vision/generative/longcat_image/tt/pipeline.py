@@ -338,33 +338,30 @@ class LongCatImagePipelineTT:
         stub.wdtype = BF16
         self.invoked.add("long_cat_image_transformer2_d_model")
         try:
-            # PERF: for text-to-image, capture the FULL per-step DiT compute (both CFG
-            # forwards + the guidance combine) as ONE trace and execute_trace per step —
-            # removing the eager per-op host dispatch. Both forwards live inside the traced
-            # fn so no post-capture tensor is clobbered by a later execute_trace. Only the
-            # scheduler's new latents is allocated eagerly, and the Tracer copies it into
-            # the captured input buffer before the next execute. Falls back to eager on the
-            # image-edit path (img_lat) or any trace error.
-            if image_latents_packed is None:
-                # On a 2-CQ device, overlap per-step input staging (CQ1) with the traced
-                # compute (CQ0). Degrade to trace+1CQ, then eager, on any error.
-                if getattr(self, "num_cqs", 1) >= 2:
-                    try:
-                        return self._tt_denoise_traced_2cq(
-                            stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
-                            txt_ids, img_ids, timesteps, sigmas, guidance_scale,
-                            enable_cfg_renorm, cfg_renorm_min, do_cfg,
-                        )
-                    except Exception as _te:
-                        print(f"[denoise] traced+2cq path failed ({type(_te).__name__}: {str(_te)[:200]}); trying traced+1cq", flush=True)
+            # PERF: capture the FULL per-step DiT compute (both CFG forwards + guidance combine +
+            # cfg_renorm + Euler) as ONE trace and execute_trace per step, removing the eager
+            # per-op host dispatch. Works for BOTH text->image and image-edit: the edit path
+            # concatenates the FIXED image latents onto the noise latents inside the trace (a
+            # constant, like the encoder states) and slices the noise-latent output. On a 2-CQ
+            # device, overlap per-step input staging (CQ1) with the traced compute (CQ0). Degrade
+            # to trace+1CQ, then eager, on any error.
+            if getattr(self, "num_cqs", 1) >= 2:
                 try:
-                    return self._tt_denoise_traced(
+                    return self._tt_denoise_traced_2cq(
                         stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
                         txt_ids, img_ids, timesteps, sigmas, guidance_scale,
-                        enable_cfg_renorm, cfg_renorm_min, do_cfg,
+                        enable_cfg_renorm, cfg_renorm_min, do_cfg, image_latents_packed, image_seq_len,
                     )
                 except Exception as _te:
-                    print(f"[denoise] traced path failed ({type(_te).__name__}: {str(_te)[:200]}); using eager", flush=True)
+                    print(f"[denoise] traced+2cq path failed ({type(_te).__name__}: {str(_te)[:200]}); trying traced+1cq", flush=True)
+            try:
+                return self._tt_denoise_traced(
+                    stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
+                    txt_ids, img_ids, timesteps, sigmas, guidance_scale,
+                    enable_cfg_renorm, cfg_renorm_min, do_cfg, image_latents_packed, image_seq_len,
+                )
+            except Exception as _te:
+                print(f"[denoise] traced path failed ({type(_te).__name__}: {str(_te)[:200]}); using eager", flush=True)
             latents = ttnn.from_torch(
                 latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
             )
@@ -429,14 +426,16 @@ class LongCatImagePipelineTT:
     def _tt_denoise_traced(
         self, stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
         txt_ids, img_ids, timesteps, sigmas, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg,
+        image_latents_packed=None, image_seq_len=None,
     ):
-        """Traced text-to-image denoise loop. Captures the WHOLE per-step DiT compute (both
-        CFG forwards + guidance combine + cfg_renorm) as ONE trace via the tt_dit Tracer, then
+        """Traced denoise loop (text->image OR image-edit). Captures the WHOLE per-step DiT compute
+        (both CFG forwards + guidance combine + cfg_renorm) as ONE trace via the tt_dit Tracer, then
         execute_trace per step. The Tracer refreshes the captured input buffers (latents, temb)
-        from the args each call (enc_pos/enc_neg are fixed -> same object -> copy skipped). The
-        FlowMatch Euler step stays eager fp32 (trajectory-stable, matches the eager path); its
-        output latents is consumed by the next call's input-refresh before that call's
-        execute_trace, so it is never clobbered."""
+        from the args each call (enc_pos/enc_neg — and, for edit, the fixed image latents — are the
+        same object -> copy skipped). The FlowMatch Euler step stays inside the trace; its output
+        latents feed the next call's input-refresh before that call's execute_trace, so nothing is
+        clobbered. For image-edit, the fixed image latents are concatenated onto the noise latents
+        inside the trace (constant) and the noise-latent output is sliced to image_seq_len."""
         from models.tt_dit.utils.tracing import Tracer
 
         cos, sin = stub._rope_tables(txt_ids, img_ids)  # fixed positions
@@ -447,17 +446,26 @@ class LongCatImagePipelineTT:
         latents = ttnn.from_torch(
             latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
         )
+        # edit: the input image's latents are FIXED across steps -> a trace constant
+        img_lat = (
+            ttnn.from_torch(image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM)
+            if image_latents_packed is not None else None
+        )
         gs = float(guidance_scale)
 
         def _dit(lat, temb, enc):  # one DiT forward, mirrors denoise_trace_step
-            hid = stub._linear(lat, stub.tf.x_embedder)
+            model_in = ttnn.concat([lat, img_lat], dim=1) if img_lat is not None else lat
+            hid = stub._linear(model_in, stub.tf.x_embedder)
             for blk in stub.tf.transformer_blocks:
                 enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
             for blk in stub.tf.single_transformer_blocks:
                 enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
             scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
             out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
-            return stub._linear(out, stub.tf.proj_out)
+            out = stub._linear(out, stub.tf.proj_out)
+            if img_lat is not None:  # keep only the noise-latent tokens
+                out = ttnn.slice(out, [0, 0, 0], [1, image_seq_len, out.shape[2]], [1, 1, 1])
+            return out
 
         # The FlowMatch Euler step runs INSIDE the trace and the traced fn returns the NEW
         # latents. dt varies per step, so it is a (refreshable) tensor input. The output feeds
@@ -495,6 +503,7 @@ class LongCatImagePipelineTT:
     def _tt_denoise_traced_2cq(
         self, stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
         txt_ids, img_ids, timesteps, sigmas, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg,
+        image_latents_packed=None, image_seq_len=None,
     ):
         """Trace + TWO command queues. Captures the SAME whole per-step DiT compute as
         _tt_denoise_traced (both CFG forwards + guidance + cfg_renorm + Euler) as ONE trace on
@@ -516,17 +525,25 @@ class LongCatImagePipelineTT:
         enc_neg = (
             stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
         )
+        img_lat = (
+            ttnn.from_torch(image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=device, memory_config=DRAM)
+            if image_latents_packed is not None else None
+        )
         gs = float(guidance_scale)
 
         def _dit(lat, temb, enc):  # one DiT forward (identical to _tt_denoise_traced._dit)
-            hid = stub._linear(lat, stub.tf.x_embedder)
+            model_in = ttnn.concat([lat, img_lat], dim=1) if img_lat is not None else lat
+            hid = stub._linear(model_in, stub.tf.x_embedder)
             for blk in stub.tf.transformer_blocks:
                 enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
             for blk in stub.tf.single_transformer_blocks:
                 enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
             scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
             out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
-            return stub._linear(out, stub.tf.proj_out)
+            out = stub._linear(out, stub.tf.proj_out)
+            if img_lat is not None:
+                out = ttnn.slice(out, [0, 0, 0], [1, image_seq_len, out.shape[2]], [1, 1, 1])
+            return out
 
         def _step_cfg(lat, temb, dt_t, enc_p, enc_n):
             nt = ttnn.typecast(_dit(lat, temb, enc_p), F32)
@@ -894,16 +911,20 @@ class LongCatImagePipelineTT:
         ts = torch.tensor([float(inputs["timestep"])], dtype=torch.float32)
         temb = stub._time_embed(ts * 1000.0)  # per-step scalar -> device buffer
         latents = stub._to_ttnn(inputs["latents_packed"])  # mutable input buffer
+        # image-edit geometry: the fixed image latents concatenated onto the noise latents (a
+        # constant), with the noise-latent output sliced back to image_seq_len.
+        img_lat = stub._to_ttnn(inputs["image_latents_packed"]) if inputs.get("image_latents_packed") is not None else None
         self._trace_ctx = {
             "stub": stub, "enc": enc, "cos": cos, "sin": sin, "temb": temb, "latents": latents,
-            "stage": "denoise",
+            "img_lat": img_lat, "image_seq_len": int(inputs["latents_packed"].shape[1]), "stage": "denoise",
         }
         return self._trace_ctx
 
     def denoise_trace_step(self):
         c = self._trace_ctx
         stub = c["stub"]
-        hid = stub._linear(c["latents"], stub.tf.x_embedder)
+        hid_in = ttnn.concat([c["latents"], c["img_lat"]], dim=1) if c.get("img_lat") is not None else c["latents"]
+        hid = stub._linear(hid_in, stub.tf.x_embedder)
         enc = c["enc"]
         for blk in stub.tf.transformer_blocks:
             enc, hid = stub._double_block(blk, hid, enc, c["temb"], c["cos"], c["sin"])
@@ -911,7 +932,10 @@ class LongCatImagePipelineTT:
             enc, hid = stub._single_block(blk, hid, enc, c["temb"], c["cos"], c["sin"])
         scale, shift = stub._ada_mod_cont(c["temb"], stub.tf.norm_out.linear)
         out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
-        return (stub._linear(out, stub.tf.proj_out),)
+        out = stub._linear(out, stub.tf.proj_out)
+        if c.get("img_lat") is not None:
+            out = ttnn.slice(out, [0, 0, 0], [1, c["image_seq_len"], out.shape[2]], [1, 1, 1])
+        return (out,)
 
     def denoise_write_inputs(self, latents_packed, timestep):
         """Stage the next step's latents on CQ1 and refresh temb — the write half of the trace+2CQ
@@ -943,8 +967,12 @@ class LongCatImagePipelineTT:
     # (decode_prefill/decode_step/decode_write_inputs) so `measure_adapter` can capture ONE
     # host-op-free step as a trace, replay it, and report device-honest per-step latency.
     def decode_prefill(self, prompt_ids=None):
-        """Build the denoise stage's persistent on-device buffers once (OUTSIDE any trace)."""
-        inputs = self._stage_inputs("denoise", max_length=32, size=128)
+        """Build the denoise stage's persistent on-device buffers once (OUTSIDE any trace).
+        LONGCAT_PERF_EDIT=1 (or self._perf_edit) uses the image-edit geometry (image latents
+        concatenated onto the noise latents) so the perf test measures the edit denoise step."""
+        import os as _os
+        edit = bool(getattr(self, "_perf_edit", False)) or _os.environ.get("LONGCAT_PERF_EDIT", "0") != "0"
+        inputs = self._stage_inputs("denoise", max_length=32, size=128, edit=edit)
         self.denoise_trace_setup(inputs)
         self._perf_denoise_inputs = inputs
         return {"step": 0}
@@ -989,7 +1017,7 @@ class LongCatImagePipelineTT:
             c["z"] = ttnn.from_torch(host, dtype=F32, layout=TILE, device=self.device, memory_config=DRAM)
 
     # ── selftest inputs (small but real) ─────────────────────────────────────
-    def _stage_inputs(self, stage, max_length=32, size=128):
+    def _stage_inputs(self, stage, max_length=32, size=128, edit=False):
         pipe = self.pipe
         vsf = pipe.vae_scale_factor
         prompt = "a small red cube on a white table"
@@ -1007,10 +1035,19 @@ class LongCatImagePipelineTT:
             img_ids = prepare_pos_ids(
                 modality_id=1, type="image", start=(max_length, max_length), height=lh // 2, width=lh // 2
             )
-            return {
+            out = {
                 "latents_packed": latents, "prompt_embeds": prompt_embeds,
                 "txt_ids": text_ids, "img_ids": img_ids, "timestep": 1.0,
             }
+            if edit:
+                # image-edit geometry: fixed image latents concatenated onto the noise latents
+                # (img_ids covers both blocks), so the traced denoise step matches run_image_edit.
+                image_latents_ids = prepare_pos_ids(
+                    modality_id=2, type="image", start=(max_length, max_length), height=lh // 2, width=lh // 2
+                )
+                out["image_latents_packed"] = torch.randn(1, img_len, 64, dtype=torch.float32)
+                out["img_ids"] = torch.cat([img_ids, image_latents_ids], dim=0)
+            return out
         if stage == "vae_decode":
             return {"latents_nchw": torch.randn(1, 16, lh, lh, dtype=torch.float32)}
         raise ValueError(stage)
