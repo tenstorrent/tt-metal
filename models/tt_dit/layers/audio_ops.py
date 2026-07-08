@@ -178,14 +178,13 @@ def _t_neighbor_pad(
 def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
-    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1``. Default is a single
-    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``; else MAC fallback.
+    Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
+    ``ttnn.conv1d`` (groups=C) with the prepared weight cached in ``cache``.
     """
     B, T_pad, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
 
-    shape_key = (C, T_pad, stride)
     # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
     # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
     wkey = ("w", C, stride, K, tuple(taps))
@@ -225,7 +224,6 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     )
     if not prepared:
         cache[wkey] = weight
-    cache[shape_key] = "conv1d"
     # conv1d emits HEIGHT_SHARDED TILE; untilize straight to interleaved DRAM ROW_MAJOR — the
     # memory_config folds the reshard into the untilize (one op instead of to_memory_config + to_layout).
     out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
