@@ -94,7 +94,11 @@ void ttnn_device(nb::module_& mod) {
                 <ttnn._ttnn.device.Device object at 0x7fbac5bfc1b0>
         )doc");
 
-    mod.def("close_device", [](ttnn::MeshDevice& device) { ttnn::close_device(device); }, nb::arg("device"));
+    mod.def(
+        "close_device",
+        [](ttnn::MeshDevice& device) { ttnn::close_device(device); },
+        nb::arg("device"),
+        nb::call_guard<nb::gil_scoped_release>());
 
     mod.def(
         "deallocate_buffers",

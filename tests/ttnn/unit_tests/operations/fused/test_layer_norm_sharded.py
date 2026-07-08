@@ -13,6 +13,9 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     simple_size_params,
     generate_input_tensor,
     ttnn_layer_norm_sharded,
+    run_sharded_norm_logical_width_multicore,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
+    UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
@@ -484,4 +487,63 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
         rtol=rtol,
         atol=atol,
         frobenius_threshold=frobenius_threshold,
+    )
+
+
+# Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
+# tile-aligned-uneven and non-tile-aligned widths). Covers both the legacy path and Welford.
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize(
+    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
+)
+def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford, dtype):
+    run_sharded_norm_logical_width_multicore(
+        device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, dtype=dtype, use_welford=use_welford
+    )
+
+
+# Column masking of a non-tile-aligned width must work regardless of whether gamma/beta are supplied
+# in TILE or ROW_MAJOR layout: ROW_MAJOR gamma/beta selects the row-major writer kernel, and the
+# compute kernel needs its column mask on that path too.
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+)
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize(("w", "num_cores_w"), [(72, 1), (200, 3)], ids=["w72_c1", "w200_c3"])
+def test_layer_norm_sharded_uneven_multicore_logical_width_row_major(device, w, num_cores_w, use_welford, dtype):
+    run_sharded_norm_logical_width_multicore(
+        device,
+        is_rmsnorm=False,
+        w=w,
+        num_cores_w=num_cores_w,
+        dtype=dtype,
+        use_welford=use_welford,
+        weight_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+
+# A non-tile-aligned width split across a 2D core grid selects the two-stage cross-core Welford reduce
+# (first stage combines the shards within a row, second combines the per-row results). The combine must
+# weight each block by its true logical width, including the partially-valid final block, which sits at a
+# single global position rather than in every row. The geometries below place the partial block in
+# different rows and with a single partial tile on the final core (the case most sensitive to the
+# per-row weighting). fp32 isolates the combine arithmetic from lossy-format noise.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
+@pytest.mark.parametrize(
+    ("w", "num_cores_w", "num_cores_h"),
+    [(200, 2, 2), (488, 2, 3), (328, 2, 3), (552, 2, 3), (488, 2, 4)],
+    ids=["w200_2x2", "w488_2x3", "w328_2x3", "w552_2x3", "w488_2x4"],
+)
+def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, num_cores_w, num_cores_h, dtype):
+    run_sharded_norm_logical_width_multicore(
+        device,
+        is_rmsnorm=False,
+        w=w,
+        num_cores_w=num_cores_w,
+        num_cores_h=num_cores_h,
+        dtype=dtype,
+        use_welford=True,
     )
