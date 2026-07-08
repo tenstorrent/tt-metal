@@ -369,7 +369,9 @@ class TPAttention:
         self.v_caches = [z() for _ in range(self.NKV)]
 
     def forward_prefill(self, x, cos_tt, sin_tt):
-        """Causal prefill. x [1,1,S,dim] replicated; output reduce-scattered on dim=3."""
+        """Causal prefill. x [1,1,S,dim]: K-sharded (dim/tp per device) when the fused in-proj
+        AG-matmul path is active (``_fuse_agmm`` and S>TILE — the norm skips its post-AG); replicated
+        otherwise. Output reduce-scattered on dim=3."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         S = x.shape[-2]
 
@@ -547,13 +549,20 @@ class TPAttention:
                 k_full = ttnn.concat(self.k_caches, dim=1)
                 v_full = ttnn.concat(self.v_caches, dim=1)
 
+            # Non-paged oracle path (test/generate_tp only): the full-cache SDPA-decode's static CBs
+            # grow with max_seq_len and, unbounded (k_chunk_size=0), overrun into the persistent CCL
+            # semaphore buffers at the top of L1. Bound the K-chunk to cap the CB footprint (the paged
+            # production path reads bounded blocks, so it keeps the auto config).
+            nonpaged_sdpa_cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8), exp_approx_mode=False, q_chunk_size=0, k_chunk_size=128
+            )
             attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
                 q,
                 k_full,
                 v_full,
                 cur_pos_tensor=cur_pos_tt,
                 scale=self.scale,
-                program_config=sdpa_dec_cfg,
+                program_config=nonpaged_sdpa_cfg,
                 # Emit to L1: consumed by the L1 sigmoid-gate multiply next (output-only, doesn't
                 # change the SDPA reduction), before the wo matmul + all-reduce re-materialize to DRAM.
                 memory_config=_L1,
@@ -610,6 +619,7 @@ class TPAttention:
     ):
         """Paged-KV prefill for one chunk: fill cache + chunked SDPA over prior chunks.
 
+        x is K-sharded when the fused in-proj path is active (same contract as ``forward_prefill``).
         chunk_start_idx_tensor: optional device offset for FLEXIBLE chunked SDPA (one program
         per trace/bucket). chunk_start_idx (int) still sizes the page table host-side.
         """

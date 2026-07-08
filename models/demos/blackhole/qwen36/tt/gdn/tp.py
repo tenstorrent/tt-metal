@@ -309,7 +309,9 @@ class TPGatedDeltaNet:
         return qkv, z, a, b
 
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
-        """Causal chunk-prefill from scratch. x [1,1,T,dim] replicated; output reduce-scattered.
+        """Causal chunk-prefill from scratch. x [1,1,T,dim]: K-sharded (dim/tp per device) when the
+        fused in-proj AG-matmul path is active (``_fuse_agmm`` and T>TILE — the norm skips its
+        post-AG); replicated otherwise. Output reduce-scattered.
 
         valid_len: real token count (rest is padding). capture_state: save rec/conv state for decode.
         """
