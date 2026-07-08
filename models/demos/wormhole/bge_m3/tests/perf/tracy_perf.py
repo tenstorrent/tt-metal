@@ -142,3 +142,67 @@ def test_bge_m3_tracy_perf(mesh_device, batch_size):
 
     logger.info("Tracy profiling complete.")
     ttnn.deallocate(out)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Long-context Tracy profiling: batch 12, seq_len 8192 (N300 single chip)
+# ──────────────────────────────────────────────────────────────────────────────
+
+SEQ_LEN_8192 = 8192
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 50_000_000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_bge_m3_tracy_perf_b12_s8192(mesh_device):
+    """Single forward pass inside Tracy signposts for B12/S8192 kernel profiling.
+
+    Same pattern as ``test_bge_m3_tracy_perf`` (no trace capture — Tracy needs
+    the individual device ops). Produces the ops_perf_results CSV consumed by
+    ``tt-perf-report`` (focus: stacked report + suggestions, device kernel time).
+
+    Run (from tt-metal root):
+        TT_VISIBLE_DEVICES=0 TT_METAL_DEVICE_PROFILER=1 python -m tracy -p -r \
+          --no-runtime-analysis -v -m pytest \
+          models/demos/wormhole/bge_m3/tests/perf/tracy_perf.py \
+          -k "b12_s8192" -sv
+    """
+    if os.environ.get("TT_METAL_DEVICE_PROFILER", "0") != "1":
+        pytest.fail(
+            "TT_METAL_DEVICE_PROFILER=1 is required for device kernel profiling. "
+            "Re-run with: TT_METAL_DEVICE_PROFILER=1 TT_VISIBLE_DEVICES=0 python -m tracy ..."
+        )
+    batch_size = 12
+    # bf8 holds the 0.94 PCC gate at B12/S8192 (measured 0.961 — the batch-12
+    # averaging gives far more headroom than batch-1, where bf8 ~0.90).
+    dtype = ttnn.bfloat8_b
+    device_name = determine_device_name(mesh_device)[0]
+
+    logger.info(f"Building model: B{batch_size} S{SEQ_LEN_8192} {device_name}")
+    model_args, model, _ = create_tt_model(
+        mesh_device=mesh_device,
+        max_batch_size=batch_size,
+        max_seq_len=SEQ_LEN_8192,
+        dtype=dtype,
+    )
+
+    mask_dtype = ttnn.bfloat16
+    host_inputs = prepare_inputs(model_args.tokenizer, batch_size, SEQ_LEN_8192, model_args.pad_token_id)
+    device_inputs = to_device(host_inputs, mesh_device, mask_dtype)
+
+    logger.info("Compiling (warmup forward)...")
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(mesh_device)
+    ttnn.deallocate(out)
+    logger.info("Warmup done.")
+
+    logger.info(f"Running profiled forward: B{batch_size} S{SEQ_LEN_8192}")
+    signpost("start")
+    out = model.forward(**device_inputs)
+    ttnn.synchronize_device(mesh_device)
+    signpost("stop")
+
+    logger.info("Tracy profiling complete.")
+    ttnn.deallocate(out)
