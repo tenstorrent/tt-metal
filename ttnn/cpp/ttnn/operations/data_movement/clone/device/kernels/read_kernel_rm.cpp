@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -16,15 +16,15 @@ void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
     constexpr auto input_args = TensorAccessorArgs<2>();
 
-    CircularBuffer src_cb(src_cb_id);
+    DataflowBuffer src_dfb(src_cb_id);
     Noc noc;
     const auto s = TensorAccessor(input_args, input_buffer_address);
 
     uint32_t end_id = start_id + num_sticks;
     for (uint32_t i = start_id; i < end_id; ++i) {
-        src_cb.reserve_back(1);
-        noc.async_read(s, src_cb, stick_size, {.page_id = i}, {.offset_bytes = 0});
+        src_dfb.reserve_back(1);
+        noc.async_read(s, src_dfb, stick_size, {.page_id = i}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        src_cb.push_back(1);
+        src_dfb.push_back(1);
     }
 }

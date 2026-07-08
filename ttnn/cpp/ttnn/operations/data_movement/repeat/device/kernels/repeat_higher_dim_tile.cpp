@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -42,10 +42,10 @@ void kernel_main() {
     const auto d = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    CircularBuffer cb(cb_id_in0);
-    cb.reserve_back(1);
-    const uint32_t cb_slot = cb.get_write_ptr();
-    cb.push_back(1);
+    DataflowBuffer dfb(cb_id_in0);
+    dfb.reserve_back(1);
+    const uint32_t cb_slot = dfb.get_write_ptr();
+    dfb.push_back(1);
     const CoreLocalMem<uint32_t> cb_mem(cb_slot);
 
     for (uint32_t h = higher_dim_start; h < higher_dim_end; h++) {

@@ -44,7 +44,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -72,14 +72,14 @@ void kernel_main() {
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_in(cb_id_in);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer dfb_in(cb_id_in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position
     for (uint32_t local_row = 0; local_row < num_rows_for_this_core; ++local_row) {
-        cb_in.wait_front(1);
-        uint32_t l1_read_addr = cb_in.get_read_ptr();
+        dfb_in.wait_front(1);
+        uint32_t l1_read_addr = dfb_in.get_read_ptr();
 
         // Calculate global output row index for this local row
         uint32_t global_output_row = start_row_for_this_core + local_row;
@@ -90,7 +90,7 @@ void kernel_main() {
             noc, l1_read_addr, s0, global_output_row, /*offset=*/0, /*size=*/output_bytes_per_row);
         noc.async_writes_flushed();
 
-        cb_in.pop_front(1);
+        dfb_in.pop_front(1);
     }
     noc.async_write_barrier();
 }

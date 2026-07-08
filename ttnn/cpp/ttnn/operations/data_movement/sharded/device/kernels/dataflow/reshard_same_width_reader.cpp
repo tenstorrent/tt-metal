@@ -6,7 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint_pages.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
@@ -32,13 +32,13 @@ void kernel_main() {
 
     Noc noc;
     AllocatorBank<bank_type> bank;
-    CircularBuffer shard_cb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_cb_id);
 
-    uint32_t l1_write_addr = shard_cb.get_write_ptr() + write_offset;
+    uint32_t l1_write_addr = shard_dfb.get_write_ptr() + write_offset;
     if constexpr (unaligned) {
-        CircularBuffer cb_scratch(cb_scratch_index);
-        uint32_t l1_scratch_write_addr = cb_scratch.get_write_ptr();
-        uint32_t l1_scratch_read_addr = cb_scratch.get_read_ptr();
+        DataflowBuffer dfb_scratch(cb_scratch_index);
+        uint32_t l1_scratch_write_addr = dfb_scratch.get_write_ptr();
+        uint32_t l1_scratch_read_addr = dfb_scratch.get_read_ptr();
         for (uint32_t i = 0; i < num_reads; ++i) {
             uint32_t bank_id = args[args_idx++];
             uint32_t src_offset = args[args_idx++];

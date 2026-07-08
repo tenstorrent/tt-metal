@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 void kernel_main() {
     uint32_t batch_size_in_pages = get_arg_val<uint32_t>(0);
@@ -21,8 +21,8 @@ void kernel_main() {
         return;
     }
 
-    CircularBuffer cb_in0(cb_in0_id);
+    DataflowBuffer dfb_in0(cb_in0_id);
 
-    cb_in0.wait_front(batch_size_in_pages);
-    cb_in0.pop_front(batch_size_in_pages);
+    dfb_in0.wait_front(batch_size_in_pages);
+    dfb_in0.pop_front(batch_size_in_pages);
 }
