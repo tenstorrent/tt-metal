@@ -89,7 +89,9 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel,
     bool reverse_order,
-    const std::optional<CoreRangeSet>& sub_core_grid) {
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const std::optional<GlobalSemaphore>& war_semaphore,
+    std::optional<uint32_t> war_wait_value) {
     auto* mesh_device_ptr = input_tensor.device();
     TT_FATAL(mesh_device_ptr != nullptr, "Mesh device is required for all_gather_async operation");
     uint32_t resolved_num_links =
@@ -125,7 +127,9 @@ ttnn::Tensor all_gather_async(
         num_buffers_per_channel,
         reverse_order,
         sub_core_grid,
-        /*mesh_device*/ nullptr);
+        /*mesh_device*/ nullptr,
+        war_semaphore,
+        war_wait_value);
 }
 
 // Overload with multi-device input

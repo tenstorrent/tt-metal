@@ -45,7 +45,11 @@ ttnn::Tensor all_gather_async(
     std::optional<uint32_t> num_workers_per_link = std::nullopt,
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     bool reverse_order = false,
-    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
+    // WAR-hazard (demo #48222/#48469): forwarded to the device op so the generic default PF can gate
+    // buffer reuse on the downstream sampling read. Non-null only for the sampling gather.
+    const std::optional<GlobalSemaphore>& war_semaphore = std::nullopt,
+    std::optional<uint32_t> war_wait_value = std::nullopt);
 
 // Overload with multi-device input
 std::vector<ttnn::Tensor> all_gather_async(
