@@ -115,6 +115,8 @@ static_assert(
 static_assert(hashable_v<DataMovementGen1Config>, "DataMovementGen1Config must be hashable via ttsl reflection");
 static_assert(hashable_v<DataMovementGen2Config>, "DataMovementGen2Config must be hashable via ttsl reflection");
 static_assert(hashable_v<ComputeHardwareConfig>, "ComputeHardwareConfig must be hashable via ttsl reflection");
+static_assert(hashable_v<ComputeGen1Config>, "ComputeGen1Config must be hashable via ttsl reflection");
+static_assert(hashable_v<ComputeGen2Config>, "ComputeGen2Config must be hashable via ttsl reflection");
 
 // Per-spec advanced options
 static_assert(hashable_v<KernelAdvancedOptions>, "KernelAdvancedOptions must be hashable via ttsl reflection");
@@ -176,9 +178,7 @@ TEST_F(ProgramSpecTestQuasar, DuplicateKernelNameFails) {
 
     // Add a kernel with duplicate name
     auto duplicate_kernel = MakeMinimalGen2DMKernel("dm_kernel");
-    DataMovementHardwareConfig dm_config;
-    dm_config = DataMovementGen2Config{};
-    duplicate_kernel.hw_config = dm_config;
+    duplicate_kernel.hw_config = DataMovementGen2Config{};
     spec.kernels.push_back(duplicate_kernel);
 
     EXPECT_THAT(
@@ -2748,8 +2748,6 @@ static_assert(
     "DataflowBufferSpec must remain an aggregate to support designated initializers");
 static_assert(
     std::is_aggregate_v<SemaphoreSpec>, "SemaphoreSpec must remain an aggregate to support designated initializers");
-// ComputeHardwareConfig / DataMovementHardwareConfig are now std::variant aliases (not aggregates);
-// their sub-configs remain aggregates and are what designated initializers target.
 static_assert(std::is_aggregate_v<DataMovementGen1Config>, "DataMovementGen1Config must remain an aggregate");
 static_assert(std::is_aggregate_v<DataMovementGen2Config>, "DataMovementGen2Config must remain an aggregate");
 static_assert(std::is_aggregate_v<ComputeGen1Config>, "ComputeGen1Config must remain an aggregate");
