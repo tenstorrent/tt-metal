@@ -19,37 +19,42 @@ namespace tt::tt_metal::experimental {
 //
 // Describes the hardware resources controlled by a data movement ("DM") kernel.
 //
-// The DM hardware differs between Gen1 architectures (Wormhole, Blackhole) and
-// Gen2 architectures (Quasar and derivatives). A DM kernel targets exactly one
-// generation, it MUST match the target architecture the program is dispatched onto.
-// This invariant is checked at program build and will result in a hard error if not upheld.
+// The DM hardware differs between Tenstorrent accelerators:
+//  - Gen1 architectures (Wormhole, Blackhole) and
+//  - Gen2 architectures (Quasar and derivatives).
 //
-// Gen1 DM config (i.e., which RISC and NOC a kernel uses) is performance-critical,
-// but the common case is handled for you: build the DataMovementGen1Config with
-// CreateReaderGen1DataMovementConfig() / CreateWriterGen1DataMovementConfig(),
-// which fill in the conventional processor/NOC/NOC-mode. Power users who want to override
-// that convention construct a DataMovementGen1Config directly.
-//
-// Gen2 has a unified NOC and its DM kernel core selection is fully automated.
-// The DataMovementGen2Config controls only whether the ISR-based DFB implicit
-// sync is enabled.
+// The DataMovementHardwareConfig is therefore generation-specific.
+// You must provide the variant that matches your kernel's target architecture.
 //
 // ============================================================================
 
+// The Gen1 data movement hardware config specifies which RISC-V core and which
+// NOC a kernel uses. This selection is performance-critical.
+//
+// The common case is handled for you by role-specific factory functions:
+//  - For a DM kernel that reads from DRAM: CreateReaderGen1DataMovementConfig()
+//  - For a DM kernel that writes to DRAM:  CreateWriterGen1DataMovementConfig()
+//
+// Power users can override these conventions by constructing a
+// DataMovementGen1Config directly.
+//
 struct DataMovementGen1Config {
-    // Defaults for processor and noc are intentionally omitted as they're perf sensitive to their use case.
-    // Please use factory functions `create_reader/write_gen1_datamovement_config` if you would like to create a
-    // default DataMovementGen1Config.
+    // The RISC-V core that runs this DM kernel (RISCV_0 or RISCV_1)
+    // Each DM kernel on a node must be assigned to a unique RISC-V core
     tt::tt_metal::DataMovementProcessor processor;
+
+    // The physical NOC that this DM kernel uses (NOC_0 or NOC_1)
     tt::tt_metal::NOC noc;
+
+    // NOC ownership model. Leave as DM_DEDICATED_NOC unless you specifically
+    // need both DM cores to share a single NOC (e.g. to keep the other NOC
+    // free for fabric/CCL traffic). Dynamic mode adds cross-core coordination
+    // overhead and must be set identically on both DM kernels on a node.
     tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
 };
 
-// Build the conventional Gen1 placement for a reader / writer DM kernel, mirroring the legacy
-// Reader/WriterDataMovementConfig convention (see kernel_types.cpp):
-//   reader -> NCRISC (RISCV_1) on NOC_0;  writer -> BRISC (RISCV_0) on NOC_1
-// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only by
-// constructing a DataMovementGen1Config directly.
+// Factory helper:
+// Default config for a reader DM kernel (i.e. that reads from DRAM)
 inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -57,6 +62,8 @@ inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
 
+// Factory helper:
+// Default config for a writer DM kernel (i.e. that writes to DRAM)
 inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
     return DataMovementGen1Config{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -64,11 +71,15 @@ inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
         .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC};
 }
 
+// Gen2 architectures have a unified NOC and fully automated DM kernel core selection.
+// The DataMovementGen2Config controls whether the DFB implicit sync feature for DM
+// kernels is enabled or disabled.
+//
 struct DataMovementGen2Config {
     // Opt-out of DFB implicit sync (on a per-DFB basis)
     //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
     //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
-    //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
+    //  - Opting out is mainly for debug purposes, or for backwards-compatible code style.
     // Any bound DFB not listed here will use implicit sync by default.
     Group<DFBSpecName> disable_dfb_implicit_sync_for;
 
