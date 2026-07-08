@@ -22,13 +22,13 @@ void kernel_main() {
     tt_l1_ptr uint32_t* chunk_start_id = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 3));
     tt_l1_ptr uint32_t* chunk_num_sticks = (tt_l1_ptr uint32_t*)(chunk_start_id + 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
 
     Noc noc;
     // Create DataflowBuffers for Device 2.0 API
-    DataflowBuffer dfb_in(cb_in0);
-    DataflowBuffer dfb_out(cb_out0);
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
     dfb_out.reserve_back(num_sticks_unpadded);
     uint32_t l1_read_addr = dfb_in.get_write_ptr();

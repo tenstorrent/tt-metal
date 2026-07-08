@@ -22,7 +22,7 @@ void kernel_main() {
     const uint32_t pad_value = get_arg_val<uint32_t>(9);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_out1 = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
@@ -30,7 +30,7 @@ void kernel_main() {
     const auto s1 = TensorAccessor(dst_args, dst_addr);
     Noc noc;
     DataflowBuffer dfb_out0(cb_id_out0);
-    DataflowBuffer dfb_out1(cb_id_out1);
+    DataflowBuffer dfb_out1(dfb_id_out1);
 
     dfb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
 

@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Slice-specific writer using named compile-time args for CB index.
-// Based on eltwise/unary writer but uses get_named_compile_time_arg_val("dfb_out")
-// so the CB index can be remapped by the fusion infrastructure.
+// Slice-specific writer using named compile-time args for DFB index.
+// Based on eltwise/unary writer but uses get_named_compile_time_arg_val("dfb_id_out")
+// so the DFB index can be remapped by the fusion infrastructure.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -16,11 +16,11 @@ void kernel_main() {
     const uint32_t num_pages = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("dfb_out");
+    constexpr uint32_t dfb_id_out = get_named_compile_time_arg_val("dfb_id_out");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
     // Create objects for Device 2.0 API
-    DataflowBuffer dfb_out(cb_id_out);
+    DataflowBuffer dfb_out(dfb_id_out);
 
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = dfb_out.get_entry_size();

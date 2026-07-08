@@ -13,7 +13,7 @@ inline uint64_t round_down_32(uint64_t a) { return (a >> 5) << 5; }
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t dfb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -43,7 +43,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     auto pop_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {

@@ -31,12 +31,12 @@ void kernel_main() {
     // One shared TensorAccessorArgs — all output chunks have the same buffer type and page size.
     constexpr auto out_tensor_args = TensorAccessorArgs<5>();
 
-    constexpr uint32_t cb_id_out0 = 0;
+    constexpr uint32_t dfb_id_out0 = 0;
     constexpr uint32_t onetile = 1;
 
     const auto s = TensorAccessor(out_tensor_args, out_tensor_addr);
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
     const uint32_t single_tile_size_bytes = dfb_out.get_entry_size();
 
     uint32_t z_stride_cum = 0;

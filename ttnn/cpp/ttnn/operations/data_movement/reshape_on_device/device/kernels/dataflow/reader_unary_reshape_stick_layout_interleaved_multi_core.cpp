@@ -18,12 +18,12 @@ void kernel_main() {
     constexpr uint32_t old_stick_size = get_compile_time_arg_val(0);
     constexpr auto src_args = TensorAccessorArgs<1>();
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
 
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    DataflowBuffer dfb_input(cb_in0);
+    DataflowBuffer dfb_input(dfb_in0);
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;

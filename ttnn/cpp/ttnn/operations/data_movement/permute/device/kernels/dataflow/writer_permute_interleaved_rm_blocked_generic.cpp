@@ -33,9 +33,9 @@ void kernel_main() {
     constexpr uint32_t W = get_named_compile_time_arg_val("W");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t cb_id_in = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_id_in = tt::CBIndex::c_2;
     Noc noc;
-    DataflowBuffer dfb_in(cb_id_in);
+    DataflowBuffer dfb_in(dfb_id_in);
 
     // Precompute bytes-per-block along X
     constexpr uint32_t x_block_size_bytes = x_block_size * element_size;

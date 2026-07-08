@@ -10,8 +10,8 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t routing_weights_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t local_weights_idxs_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t routing_weights_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t local_weights_idxs_dfb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_cluster_experts = get_compile_time_arg_val(2);
     constexpr uint32_t num_non_zero_per_device = get_compile_time_arg_val(3);
     constexpr uint32_t weight_datum_size_bytes = get_compile_time_arg_val(4);
@@ -28,8 +28,8 @@ void kernel_main() {
     const auto routing_weights_addrgen = TensorAccessor(routing_weights_args, routing_weights_base_address);
 
     Noc noc;
-    DataflowBuffer routing_weights_dfb(routing_weights_cb_id);
-    DataflowBuffer local_weights_idxs_dfb(local_weights_idxs_cb_id);
+    DataflowBuffer routing_weights_dfb(routing_weights_dfb_id);
+    DataflowBuffer local_weights_idxs_dfb(local_weights_idxs_dfb_id);
 
     routing_weights_dfb.reserve_back(1);
     const uint32_t routing_weights_l1_addr = routing_weights_dfb.get_write_ptr();

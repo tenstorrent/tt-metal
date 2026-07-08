@@ -16,18 +16,18 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(4);
 
     constexpr auto src_args = TensorAccessorArgs<0>();
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    DataflowBuffer dfb(cb_id_in0);
+    DataflowBuffer dfb(dfb_id_in0);
 
 #ifdef REDUCE_SCALER
-    constexpr uint32_t cb_in_2 = 2;
+    constexpr uint32_t dfb_in_2 = 2;
     constexpr uint32_t scaler = get_compile_time_arg_val(src_args.next_compile_time_args_offset());
-    DataflowBuffer dfb_scaler(cb_in_2);
+    DataflowBuffer dfb_scaler(dfb_in_2);
     dfb_scaler.reserve_back(1);
     if (scaler != 0) {
         uint16_t u = uint16_t(scaler >> 16);

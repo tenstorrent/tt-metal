@@ -21,10 +21,10 @@ void kernel_main() {
     tt_l1_ptr uint32_t* chunk_start_id = (tt_l1_ptr uint32_t*)(get_arg_addr(1 + num_cores_read * 3));
     tt_l1_ptr uint32_t* chunk_num_sticks = (tt_l1_ptr uint32_t*)(chunk_start_id + 1);
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    DataflowBuffer dfb_in0_exp(cb_in0);
-    DataflowBuffer dfb_out0_exp(cb_out0);
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
+    DataflowBuffer dfb_in0_exp(dfb_in0);
+    DataflowBuffer dfb_out0_exp(dfb_out0);
 
     Noc noc;
 

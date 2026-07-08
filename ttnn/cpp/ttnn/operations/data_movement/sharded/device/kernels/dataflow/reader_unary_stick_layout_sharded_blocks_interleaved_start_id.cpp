@@ -21,13 +21,13 @@ void kernel_main() {
     const uint32_t aligned_offset           = get_arg_val<uint32_t>(8);
     const uint32_t start_id                 = get_arg_val<uint32_t>(9);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t num_trids = get_compile_time_arg_val(2);
     constexpr auto src_args = TensorAccessorArgs<3>();
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in1(cb_id_in1);
 
     const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes);

@@ -25,7 +25,7 @@ void kernel_main() {
 
     constexpr uint32_t CH = C * H;
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
@@ -33,7 +33,7 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_in0);
+    DataflowBuffer dfb(dfb_in0);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

@@ -11,11 +11,11 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t local_experts_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t metadata_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t data_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t output_mapping_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t output_reduced_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t local_experts_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t metadata_dfb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t data_dfb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t output_mapping_dfb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t output_reduced_dfb_id = get_compile_time_arg_val(4);
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(5);
     constexpr uint32_t num_local_experts = get_compile_time_arg_val(6);
     constexpr uint32_t output_mapping_page_size_bytes = get_compile_time_arg_val(7);  // num_local_experts * datum size
@@ -39,11 +39,11 @@ void kernel_main() {
     const auto output_reduced_addrgen = TensorAccessor(output_reduced_args, output_reduced_base_addr);
 
     Noc noc;
-    DataflowBuffer local_experts_dfb(local_experts_cb_id);
-    DataflowBuffer metadata_dfb(metadata_cb_id);
-    DataflowBuffer data_dfb(data_cb_id);
-    DataflowBuffer output_mapping_dfb(output_mapping_cb_id);
-    DataflowBuffer output_reduced_dfb(output_reduced_cb_id);
+    DataflowBuffer local_experts_dfb(local_experts_dfb_id);
+    DataflowBuffer metadata_dfb(metadata_dfb_id);
+    DataflowBuffer data_dfb(data_dfb_id);
+    DataflowBuffer output_mapping_dfb(output_mapping_dfb_id);
+    DataflowBuffer output_reduced_dfb(output_reduced_dfb_id);
 
     // scratch space for mapping
     output_mapping_dfb.reserve_back(1);

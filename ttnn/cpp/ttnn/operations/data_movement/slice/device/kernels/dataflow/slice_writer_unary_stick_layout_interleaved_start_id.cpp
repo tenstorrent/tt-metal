@@ -26,14 +26,14 @@ void kernel_main() {
     const uint32_t num_chunks_per_stick = get_arg_val<uint32_t>(9);
     const uint32_t last_chunk_size = get_arg_val<uint32_t>(10);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
     const auto s0 = TensorAccessor(dst_args, dst_addr, page_size_override);
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

@@ -25,8 +25,8 @@ void kernel_main() {
     Noc noc;
 
     for (uint32_t tensor_id = 0; tensor_id < num_tensors; tensor_id++) {
-        const uint32_t input_shard_cb_id = get_arg_val<uint32_t>(arg_index++);
-        DataflowBuffer input_shard_dfb(input_shard_cb_id);
+        const uint32_t input_shard_dfb_id = get_arg_val<uint32_t>(arg_index++);
+        DataflowBuffer input_shard_dfb(input_shard_dfb_id);
         input_shard_dfb.wait_front(num_pages_per_tensor);
         uint32_t page_id = 0;
         for (uint32_t page_id_input = 0; page_id_input < num_pages_per_tensor; page_id_input++) {

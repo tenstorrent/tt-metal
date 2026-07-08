@@ -20,12 +20,12 @@ void kernel_main() {
     i += 1;
     uint32_t remainder_chunk_size_bytes = get_arg_val<uint32_t>(i);
     i += 1;
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t src_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_dfb_id = get_compile_time_arg_val(1);
 
     Noc noc;
-    DataflowBuffer src_dfb(src_cb_id);
-    DataflowBuffer dst_dfb(dst_cb_id);
+    DataflowBuffer src_dfb(src_dfb_id);
+    DataflowBuffer dst_dfb(dst_dfb_id);
 
     uint32_t src_cb_base_addr = src_dfb.get_read_ptr();
     uint32_t dst_cb_base_addr = dst_dfb.get_write_ptr();

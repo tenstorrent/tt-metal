@@ -30,14 +30,14 @@ void kernel_main() {
     constexpr auto in0_tensor_args = TensorAccessorArgs<5>();
 
     constexpr uint32_t out_num_tensors = 1;
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr uint32_t onetile = 1;
 
     const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
     const uint32_t single_tile_size_bytes = dfb_in0.get_entry_size();
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;

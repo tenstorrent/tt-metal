@@ -15,7 +15,7 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_across_height = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_columns_of_blocks = get_compile_time_arg_val(4);
@@ -27,7 +27,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     uint32_t row_stick_ids[tile_height];
     uint32_t stick_offset = 0;

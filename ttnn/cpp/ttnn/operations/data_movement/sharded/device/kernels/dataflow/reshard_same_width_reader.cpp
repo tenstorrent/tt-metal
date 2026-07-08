@@ -12,13 +12,13 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb_id = get_compile_time_arg_val(0);
     constexpr bool read_from_dram = get_compile_time_arg_val(1);
     constexpr bool unaligned = get_compile_time_arg_val(2);
     constexpr uint32_t unit_size = get_compile_time_arg_val(3);
     constexpr uint32_t local_unit_size_padded = get_compile_time_arg_val(4);
     constexpr uint32_t remote_unit_size_padded = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_scratch_index = get_compile_time_arg_val(6);
+    constexpr uint32_t dfb_scratch_index = get_compile_time_arg_val(6);
     constexpr AllocatorBankType bank_type = read_from_dram ? AllocatorBankType::DRAM : AllocatorBankType::L1;
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -32,11 +32,11 @@ void kernel_main() {
 
     Noc noc;
     AllocatorBank<bank_type> bank;
-    DataflowBuffer shard_dfb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_dfb_id);
 
     uint32_t l1_write_addr = shard_dfb.get_write_ptr() + write_offset;
     if constexpr (unaligned) {
-        DataflowBuffer dfb_scratch(cb_scratch_index);
+        DataflowBuffer dfb_scratch(dfb_scratch_index);
         uint32_t l1_scratch_write_addr = dfb_scratch.get_write_ptr();
         uint32_t l1_scratch_read_addr = dfb_scratch.get_read_ptr();
         for (uint32_t i = 0; i < num_reads; ++i) {

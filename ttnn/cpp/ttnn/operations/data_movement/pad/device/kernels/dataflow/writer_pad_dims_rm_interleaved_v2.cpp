@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
     uint32_t start_page_id = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
     constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
@@ -24,7 +24,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr, accessor_page_size);
     Noc noc;
-    DataflowBuffer dfb_out0_exp(cb_out0);
+    DataflowBuffer dfb_out0_exp(dfb_out0);
 
     uint32_t i_page = start_page_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {

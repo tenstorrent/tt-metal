@@ -79,15 +79,15 @@ void kernel_main() {
     constexpr uint32_t index_tensor_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t input_tensor_transposed_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t index_tensor_transposed_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t value_tensor_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t index_tensor_output_cb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t value_tensor_dfb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t index_tensor_output_dfb_id = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr bool descending = get_compile_time_arg_val(7);
     constexpr bool stable =
         get_compile_time_arg_val(8);  // TODO: In the future change LLK to have the option or add additional step with
                                       // checking values and indexes after the sorting
                                       // Issue: https://github.com/tenstorrent/tt-metal/issues/20625
-    constexpr uint32_t synchronization_cb_id = get_compile_time_arg_val(9);
+    constexpr uint32_t synchronization_dfb_id = get_compile_time_arg_val(9);
     constexpr bool is_row_major = get_compile_time_arg_val(10) == 1;
     constexpr uint32_t rm_input_cb_id = get_compile_time_arg_val(11);
     constexpr uint32_t rm_value_output_cb_id = get_compile_time_arg_val(12);
@@ -105,9 +105,9 @@ void kernel_main() {
     DataflowBuffer index_tensor_dfb(index_tensor_cb_id);
     DataflowBuffer input_tensor_transposed_dfb(input_tensor_transposed_cb_id);
     DataflowBuffer index_tensor_transposed_dfb(index_tensor_transposed_cb_id);
-    DataflowBuffer value_tensor_dfb(value_tensor_cb_id);
-    DataflowBuffer index_tensor_output_dfb(index_tensor_output_cb_id);
-    DataflowBuffer synchronization_dfb(synchronization_cb_id);
+    DataflowBuffer value_tensor_dfb(value_tensor_dfb_id);
+    DataflowBuffer index_tensor_output_dfb(index_tensor_output_dfb_id);
+    DataflowBuffer synchronization_dfb(synchronization_dfb_id);
     DataflowBuffer rm_input_dfb(rm_input_cb_id);
     DataflowBuffer rm_value_output_dfb(rm_value_output_cb_id);
     DataflowBuffer rm_index_output_dfb(rm_index_output_cb_id);

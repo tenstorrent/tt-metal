@@ -13,7 +13,7 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(1);
     uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t Ht = get_compile_time_arg_val(1);
     constexpr uint32_t H = get_compile_time_arg_val(2);
     constexpr uint32_t Wt = get_compile_time_arg_val(3);
@@ -30,7 +30,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_out0);
+    DataflowBuffer dfb(dfb_out0);
 
     uint32_t i_stick = start_id;
 

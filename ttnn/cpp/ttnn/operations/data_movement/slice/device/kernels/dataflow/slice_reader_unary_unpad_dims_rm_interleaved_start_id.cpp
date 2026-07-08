@@ -37,11 +37,11 @@ void kernel_main() {
     // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
     const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     uint32_t src_stick_id = start_id;
     uint32_t sticks_read = 0;

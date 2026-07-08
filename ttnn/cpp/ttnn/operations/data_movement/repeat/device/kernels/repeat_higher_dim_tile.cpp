@@ -25,7 +25,7 @@ void kernel_main() {
     const uint32_t nop = get_arg_val<uint32_t>(7);
 
     constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(1);
     constexpr uint32_t LOWER_DIMS = get_compile_time_arg_val(2);
     constexpr uint32_t REP_DIM = get_compile_time_arg_val(3);
     constexpr auto src_args = TensorAccessorArgs<4, 0>();
@@ -42,7 +42,7 @@ void kernel_main() {
     const auto d = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_id_in0);
+    DataflowBuffer dfb(dfb_id_in0);
     dfb.reserve_back(1);
     const uint32_t cb_slot = dfb.get_write_ptr();
     dfb.push_back(1);

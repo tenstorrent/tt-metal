@@ -14,14 +14,14 @@ void kernel_main() {
     uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(3);
     uint32_t start_id = get_arg_val<uint32_t>(4);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t new_stick_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb_output(cb_out0);
+    DataflowBuffer dfb_output(dfb_out0);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

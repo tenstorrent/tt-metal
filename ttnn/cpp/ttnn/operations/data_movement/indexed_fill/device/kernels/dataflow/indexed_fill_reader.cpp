@@ -19,8 +19,8 @@ void kernel_main() {
     uint32_t batch_size_in_pages = get_arg_val<uint32_t>(4);
     uint32_t my_batch_id = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t batch_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t batch_dfb_id = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
 
     // Mode encoding (compile-time arg 3):
@@ -49,8 +49,8 @@ void kernel_main() {
     const auto batchAddr = TensorAccessor(batch_ids_args, batch_ids_addr, batch_id_size << 2);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
-    DataflowBuffer batch_dfb(batch_cb_id);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer batch_dfb(batch_dfb_id);
 
     volatile tt_l1_ptr int* addr_ptr = nullptr;
 

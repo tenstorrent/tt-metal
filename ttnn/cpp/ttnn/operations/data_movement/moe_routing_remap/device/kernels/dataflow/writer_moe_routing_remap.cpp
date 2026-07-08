@@ -13,9 +13,9 @@
 using namespace tt::data_movement::common;
 
 void kernel_main() {
-    constexpr uint32_t routing_weights_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t local_weights_idxs_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t local_weights_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t routing_weights_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t local_weights_idxs_dfb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t local_weights_dfb_id = get_compile_time_arg_val(2);
     constexpr uint32_t num_cluster_experts = get_compile_time_arg_val(3);
     constexpr uint32_t num_non_zero_per_device = get_compile_time_arg_val(4);
     constexpr uint32_t weight_datum_size_bytes = get_compile_time_arg_val(5);
@@ -29,9 +29,9 @@ void kernel_main() {
     const auto local_weights_addrgen = TensorAccessor(local_weights_args, local_weights_base_address);
 
     Noc noc;
-    DataflowBuffer local_weights_dfb(local_weights_cb_id);
-    DataflowBuffer routing_weights_dfb(routing_weights_cb_id);
-    DataflowBuffer local_weights_idxs_dfb(local_weights_idxs_cb_id);
+    DataflowBuffer local_weights_dfb(local_weights_dfb_id);
+    DataflowBuffer routing_weights_dfb(routing_weights_dfb_id);
+    DataflowBuffer local_weights_idxs_dfb(local_weights_idxs_dfb_id);
 
     local_weights_dfb.reserve_back(1);
     const uint32_t local_weights_l1_addr = local_weights_dfb.get_read_ptr();

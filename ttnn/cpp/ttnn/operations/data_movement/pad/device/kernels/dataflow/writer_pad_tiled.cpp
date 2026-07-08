@@ -19,9 +19,9 @@
 // [0:2, 0:2, 0:1, 0:1] we wait for the reader to send us the correct tile, and then write it, otherwise we
 // write padding.
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t pad_val_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t pad_val_dfb_id = get_compile_time_arg_val(2);
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
     constexpr uint32_t num_dims = get_compile_time_arg_val(4);
     constexpr uint32_t pad_value = get_compile_time_arg_val(5);
@@ -41,8 +41,8 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, output_addr);
     Noc noc;
-    DataflowBuffer dfb_input(input_cb_id);
-    DataflowBuffer dfb_pad_val(pad_val_cb_id);
+    DataflowBuffer dfb_input(input_dfb_id);
+    DataflowBuffer dfb_pad_val(pad_val_dfb_id);
 
     // Reserve and push the pad value into the circular buffer, generalized for any contiguous dtype
     dfb_pad_val.reserve_back(1);

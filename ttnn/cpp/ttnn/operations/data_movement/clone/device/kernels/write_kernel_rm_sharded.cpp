@@ -13,9 +13,9 @@ void kernel_main() {
     uint32_t stick_size = get_arg_val<uint32_t>(1);
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dst_dfb_id = get_compile_time_arg_val(0);
     Noc noc;
-    DataflowBuffer dst_dfb(dst_cb_id);
+    DataflowBuffer dst_dfb(dst_dfb_id);
 
     uint32_t local_l1_write_addr = output_buffer_address;
 

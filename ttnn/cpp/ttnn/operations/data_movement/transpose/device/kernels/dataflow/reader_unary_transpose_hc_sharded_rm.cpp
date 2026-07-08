@@ -22,13 +22,13 @@ void kernel_main() {
     tt_l1_ptr uint32_t* noc_coord_x = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read));
     tt_l1_ptr uint32_t* noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(5 + num_cores_read * 2));
 
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(2);
 
     Noc noc;
-    DataflowBuffer dfb_in(cb_in0);
-    DataflowBuffer dfb_out(cb_out0);
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
     if (read_single_h_block_per_core) {
         uint32_t write_stick_stride = stick_size_bytes * num_cores_read;
@@ -90,8 +90,8 @@ void kernel_main() {
 
 #else
 
-    constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t N = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr uint32_t C = get_compile_time_arg_val(4);
@@ -117,8 +117,8 @@ void kernel_main() {
     const uint32_t stick_size_bytes = W_size_bytes;
 
     Noc noc;
-    DataflowBuffer dfb_in(cb_in0);
-    DataflowBuffer dfb_out(cb_out0);
+    DataflowBuffer dfb_in(dfb_in0);
+    DataflowBuffer dfb_out(dfb_out0);
 
     dfb_out.reserve_back(num_sticks_per_core);
     uint32_t l1_write_addr = dfb_out.get_write_ptr();

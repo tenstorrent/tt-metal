@@ -40,7 +40,7 @@ void kernel_main() {
     // when the sort kernel runs in 32-bit DEST mode.
     constexpr bool is_32_bit_data = get_compile_time_arg_val(7) == 1;
     constexpr bool is_row_major = get_compile_time_arg_val(8) == 1;
-    constexpr uint32_t rm_value_output_cb_index = get_compile_time_arg_val(9);
+    constexpr uint32_t rm_value_output_dfb_index = get_compile_time_arg_val(9);
     constexpr uint32_t W_value_bytes = get_compile_time_arg_val(10);
 
     constexpr auto value_tensor_args = TensorAccessorArgs<11>();
@@ -54,7 +54,7 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer value_tensor_dfb(value_tensor_cb_index);
-    DataflowBuffer rm_value_output_dfb(rm_value_output_cb_index);
+    DataflowBuffer rm_value_output_dfb(rm_value_output_dfb_index);
     constexpr uint32_t value_tensor_tile_size = get_tile_size(value_tensor_cb_index);
 
     if constexpr (!is_row_major) {

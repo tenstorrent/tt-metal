@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t shard_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb = get_compile_time_arg_val(0);
     constexpr uint32_t num_x_cores = get_compile_time_arg_val(1);
     constexpr uint32_t num_y_cores = get_compile_time_arg_val(2);
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
@@ -26,7 +26,7 @@ void kernel_main() {
     const uint32_t output_page_offset = get_arg_val<uint32_t>(arg_index++);
 
     Noc noc;
-    DataflowBuffer dfb(shard_cb);
+    DataflowBuffer dfb(shard_dfb);
     uint32_t l1_write_addr = dfb.get_write_ptr() + output_page_offset * page_size;
 
     uint32_t mask_byte = 0x0ff;     // 8 bits

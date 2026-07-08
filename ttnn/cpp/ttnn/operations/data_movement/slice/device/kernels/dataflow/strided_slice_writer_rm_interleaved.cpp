@@ -17,11 +17,11 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
-    constexpr uint32_t cb_id_out0 = 24;
+    constexpr uint32_t dfb_id_out0 = 24;
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
     const uint32_t start_id = 0;
     uint32_t i_stick = start_id;
     uint32_t sticks_read = 0;

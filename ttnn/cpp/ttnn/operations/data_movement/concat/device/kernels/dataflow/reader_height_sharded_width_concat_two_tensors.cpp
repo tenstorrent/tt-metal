@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
 
     constexpr uint32_t input_stick_size_0 = get_compile_time_arg_val(1);
     constexpr uint32_t input_stick_size_1 = get_compile_time_arg_val(2);
@@ -26,8 +26,8 @@ void kernel_main() {
     const uint32_t input_start_1 = get_compile_time_arg_val(10);
 
     const uint32_t groups = get_compile_time_arg_val(11);
-    constexpr uint32_t input_cb_0_id = get_compile_time_arg_val(12);
-    constexpr uint32_t input_cb_1_id = get_compile_time_arg_val(13);
+    constexpr uint32_t input_dfb_0_id = get_compile_time_arg_val(12);
+    constexpr uint32_t input_dfb_1_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t group_stick_size_0 = input_stick_size_0 / groups;
     constexpr uint32_t group_stick_size_1 = input_stick_size_1 / groups;
@@ -35,9 +35,9 @@ void kernel_main() {
     constexpr uint32_t group_stride_1 = input_stride_1 / groups;
 
     Noc noc;
-    DataflowBuffer output_dfb(output_cb_id);
-    DataflowBuffer input_dfb_0(input_cb_0_id);
-    DataflowBuffer input_dfb_1(input_cb_1_id);
+    DataflowBuffer output_dfb(output_dfb_id);
+    DataflowBuffer input_dfb_0(input_dfb_0_id);
+    DataflowBuffer input_dfb_1(input_dfb_1_id);
 
     const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
 

@@ -19,8 +19,8 @@ void kernel_main() {
     const uint32_t num_rows_to_process = get_arg_val<uint32_t>(2);
 
     // compile-time args
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in1 = get_compile_time_arg_val(1);
     constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(2);
     constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(3);
     constexpr uint32_t elements_per_output_page = get_compile_time_arg_val(4);
@@ -31,8 +31,8 @@ void kernel_main() {
     constexpr uint32_t bytes_per_output_subblock = get_compile_time_arg_val(9);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
-    DataflowBuffer dfb_in1(cb_id_in1);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in1(dfb_id_in1);
 
     constexpr auto src_args = TensorAccessorArgs<10>();
     const auto accessor_src = TensorAccessor(src_args, src_addr);

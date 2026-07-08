@@ -63,8 +63,8 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto pad_tensor_args = TensorAccessorArgs<dst_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    DataflowBuffer dfb(cb_id);
+    constexpr uint32_t dfb_id = tt::CBIndex::c_0;
+    DataflowBuffer dfb(dfb_id);
     Noc noc;
 
     // calculate the offset for alignment of padding in rows/sticks

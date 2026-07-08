@@ -18,14 +18,14 @@ void kernel_main() {
     constexpr uint32_t H_size_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t l1_read_offset_bytes = get_compile_time_arg_val(6);
 
-    constexpr auto cb_out = tt::CBIndex::c_27;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto dfb_out = tt::CBIndex::c_27;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
 
     const uint32_t stick_size_bytes = H_size_bytes;
 
     Noc noc;
-    DataflowBuffer dfb_src(cb_out);
-    DataflowBuffer dfb_dst(cb_out0);
+    DataflowBuffer dfb_src(dfb_out);
+    DataflowBuffer dfb_dst(dfb_out0);
 
     uint32_t dst_addr = dfb_dst.get_write_ptr();
 

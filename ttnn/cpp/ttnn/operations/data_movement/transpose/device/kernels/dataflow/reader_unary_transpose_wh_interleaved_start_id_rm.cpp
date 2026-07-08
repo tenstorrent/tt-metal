@@ -24,14 +24,14 @@ void kernel_main() {
     constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(7);
     constexpr auto src_args = TensorAccessorArgs<9>();
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto dfb_in0 = tt::CBIndex::c_0;
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_in0);
+    DataflowBuffer dfb(dfb_in0);
 
     uint32_t i_stick = start_id;
 

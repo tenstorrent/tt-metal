@@ -16,7 +16,7 @@ void kernel_main() {
     uint32_t NC = get_arg_val<uint32_t>(4);
     uint32_t batch_offset = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
     constexpr auto src1_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -25,7 +25,7 @@ void kernel_main() {
     const auto s1 = TensorAccessor(src1_args, src1_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in1(cb_id_in1);
     const uint32_t tile_bytes_1 = get_tile_size(cb_id_in1);
 

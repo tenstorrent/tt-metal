@@ -21,11 +21,11 @@ void kernel_main() {
 
     constexpr auto src_args = TensorAccessorArgs<0>();
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
-    DataflowBuffer dfb(cb_id_in0);
+    DataflowBuffer dfb(dfb_id_in0);
     const uint32_t tile_bytes = dfb.get_entry_size();
     const auto s = TensorAccessor(src_args, src_addr);
 

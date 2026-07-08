@@ -94,8 +94,8 @@ void kernel_main() {
     constexpr uint32_t elem_size = get_compile_time_arg_val(4);
     constexpr uint32_t fill_bits_ct = get_compile_time_arg_val(5);
     constexpr uint32_t cb_data_in_id = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_right_mask_id = get_compile_time_arg_val(7);
-    constexpr uint32_t cb_bot_mask_id = get_compile_time_arg_val(8);
+    constexpr uint32_t dfb_right_mask_id = get_compile_time_arg_val(7);
+    constexpr uint32_t dfb_bot_mask_id = get_compile_time_arg_val(8);
     constexpr uint32_t cb_data_out_id = get_compile_time_arg_val(9);
 
     // Per-phase tile counts. Phases with num == 0 are skipped. When the
@@ -110,8 +110,8 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_data_in(cb_data_in_id);
-    DataflowBuffer dfb_right_mask(cb_right_mask_id);
-    DataflowBuffer dfb_bot_mask(cb_bot_mask_id);
+    DataflowBuffer dfb_right_mask(dfb_right_mask_id);
+    DataflowBuffer dfb_bot_mask(dfb_bot_mask_id);
     DataflowBuffer dfb_data_out(cb_data_out_id);
 
     // Standard init for unary-style SFPU compute with one primary input CB.

@@ -11,7 +11,7 @@
 
 void kernel_main() {
     // Constexpr
-    constexpr uint32_t cb_id_out0 = 16;
+    constexpr uint32_t dfb_id_out0 = 16;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -26,7 +26,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     uint32_t curr_stick_offset = 0;
     uint32_t row_stick_ids[tile_height];

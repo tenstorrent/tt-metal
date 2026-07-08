@@ -11,13 +11,13 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t output_stride = get_compile_time_arg_val(2);
     constexpr uint32_t num_input_tensors = get_compile_time_arg_val(3);
 
     Noc noc;
-    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer output_dfb(output_dfb_id);
     const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
 
     uint32_t arg_idx = 0;

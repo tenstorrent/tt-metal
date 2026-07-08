@@ -77,7 +77,7 @@ void kernel_main() {
     uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
 
@@ -90,7 +90,7 @@ void kernel_main() {
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_out(cb_id_out);
+    DataflowBuffer dfb_out(dfb_id_out);
 
     // Multi-core work distribution: this core processes rows [start_row_for_this_core, start_row_for_this_core +
     // num_rows_for_this_core) We need to map these logical output row indices back to the corresponding (n,d,h)

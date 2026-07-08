@@ -11,8 +11,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-
-	constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t shard_dfb_id = get_compile_time_arg_val(0);
     constexpr bool write_to_dram = get_compile_time_arg_val(1);
     constexpr bool unaligned = get_compile_time_arg_val(2);
     constexpr uint32_t unit_size = get_compile_time_arg_val(3);
@@ -30,7 +29,7 @@ void kernel_main() {
     tt_l1_ptr uint32_t* args = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     uint32_t args_idx = 0;
 
-    DataflowBuffer shard_dfb(shard_cb_id);
+    DataflowBuffer shard_dfb(shard_dfb_id);
     Noc noc;
     AllocatorBank<bank_type> bank;
 

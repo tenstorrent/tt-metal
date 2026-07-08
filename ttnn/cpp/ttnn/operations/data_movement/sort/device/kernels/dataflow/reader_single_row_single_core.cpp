@@ -36,8 +36,8 @@ void kernel_main() {
     constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(5);
     constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(6);
     constexpr bool is_row_major = get_compile_time_arg_val(7) == 1;
-    constexpr uint32_t rm_input_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t rm_index_output_cb_index = get_compile_time_arg_val(9);
+    constexpr uint32_t rm_input_dfb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t rm_index_output_dfb_index = get_compile_time_arg_val(9);
     constexpr uint32_t W_value_bytes = get_compile_time_arg_val(10);
     constexpr uint32_t W_index_bytes = get_compile_time_arg_val(11);
 
@@ -56,8 +56,8 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer input_tensor_dfb(input_tensor_cb_index);
     DataflowBuffer index_output_dfb(index_tensor_output_cb_index);
-    DataflowBuffer rm_input_dfb(rm_input_cb_index);
-    DataflowBuffer rm_index_output_dfb(rm_index_output_cb_index);
+    DataflowBuffer rm_input_dfb(rm_input_dfb_index);
+    DataflowBuffer rm_index_output_dfb(rm_index_output_dfb_index);
     constexpr uint32_t input_tensor_tile_size = get_tile_size(input_tensor_cb_index);
     constexpr uint32_t index_tensor_tile_size = get_tile_size(index_tensor_output_cb_index);
 

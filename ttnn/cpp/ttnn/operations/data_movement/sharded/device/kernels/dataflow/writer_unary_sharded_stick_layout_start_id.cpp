@@ -18,13 +18,13 @@ void kernel_main() {
     const uint32_t output_width_in_pages = get_arg_val<uint32_t>(5);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     uint32_t stick_id = start_id;
     dfb_out.wait_front(block_height);

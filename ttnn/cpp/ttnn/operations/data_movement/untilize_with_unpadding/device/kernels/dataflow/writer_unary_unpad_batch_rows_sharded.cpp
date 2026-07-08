@@ -18,13 +18,13 @@ void kernel_main() {
     uint32_t unpadded_block_row_size_bytes = get_arg_val<uint32_t>(4);
     uint32_t batch = get_arg_val<uint32_t>(5);
 
-    constexpr uint32_t cb_id_untilize_out = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_untilize_out = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out = get_compile_time_arg_val(1);
     constexpr uint32_t aligned_page_size = get_compile_time_arg_val(2);
 
     Noc noc;
-    DataflowBuffer dfb_untilize_out(cb_id_untilize_out);
-    DataflowBuffer dfb_out(cb_id_out);
+    DataflowBuffer dfb_untilize_out(dfb_id_untilize_out);
+    DataflowBuffer dfb_out(dfb_id_out);
 
     dfb_out.reserve_back(num_unpadded_output_rows);
     uint32_t l1_write_addr = dfb_out.get_write_ptr();

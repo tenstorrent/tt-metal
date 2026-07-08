@@ -14,7 +14,7 @@ void kernel_main() {
     uint32_t num_read_per_barrier = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t W_size_bytes = get_compile_time_arg_val(1);
 
     const uint32_t stick_size_bytes = W_size_bytes;
@@ -23,7 +23,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_out0);
+    DataflowBuffer dfb(dfb_out0);
 
     uint32_t i_stick = start_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read; ++iter) {

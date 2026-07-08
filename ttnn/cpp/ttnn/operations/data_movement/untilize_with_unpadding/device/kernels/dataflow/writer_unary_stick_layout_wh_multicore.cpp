@@ -12,7 +12,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr std::uint32_t cb_id_out0 = 16;
+    constexpr std::uint32_t dfb_id_out0 = 16;
 
     constexpr std::uint32_t total_num_rows = get_compile_time_arg_val(0);
     constexpr std::uint32_t third_dim = get_compile_time_arg_val(1);
@@ -24,7 +24,7 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;
-    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     auto write_block = [&](std::uint32_t num_rows,
                            std::uint32_t start_row_id,

@@ -26,8 +26,8 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t cb_id = tt::CBIndex::c_0;
-    DataflowBuffer dfb(cb_id);
+    constexpr uint32_t dfb_id = tt::CBIndex::c_0;
+    DataflowBuffer dfb(dfb_id);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
     Noc noc;

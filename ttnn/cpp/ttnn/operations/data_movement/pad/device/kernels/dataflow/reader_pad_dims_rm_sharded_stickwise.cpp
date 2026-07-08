@@ -18,13 +18,13 @@ void kernel_main() {
     constexpr uint32_t padded_shard_height        = get_compile_time_arg_val(3);
     constexpr uint32_t W_front_pad_bytes = get_compile_time_arg_val(4);
 
-    constexpr uint32_t input_shard_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t output_shard_cb = get_compile_time_arg_val(6);
+    constexpr uint32_t input_shard_dfb = get_compile_time_arg_val(5);
+    constexpr uint32_t output_shard_dfb = get_compile_time_arg_val(6);
     constexpr uint32_t unpadded_stick_step = get_compile_time_arg_val(7);
     constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
 
-    DataflowBuffer dfb_input_shard(input_shard_cb);
-    DataflowBuffer dfb_output_shard(output_shard_cb);
+    DataflowBuffer dfb_input_shard(input_shard_dfb);
+    DataflowBuffer dfb_output_shard(output_shard_dfb);
 
     uint32_t input_shard_base_addr = dfb_input_shard.get_write_ptr();
     uint32_t output_shard_base_addr = dfb_output_shard.get_write_ptr();

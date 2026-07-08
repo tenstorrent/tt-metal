@@ -13,10 +13,10 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t src_dfb_id = get_compile_time_arg_val(0);
     constexpr auto input_args = TensorAccessorArgs<2>();
 
-    DataflowBuffer src_dfb(src_cb_id);
+    DataflowBuffer src_dfb(src_dfb_id);
     Noc noc;
     const auto s = TensorAccessor(input_args, input_buffer_address);
 

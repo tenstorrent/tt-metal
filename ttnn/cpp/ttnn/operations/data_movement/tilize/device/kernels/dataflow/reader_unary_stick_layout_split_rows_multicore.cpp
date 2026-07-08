@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -32,7 +32,7 @@ void kernel_main() {
     const auto s = TensorAccessor(src_tensor_args, src_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     auto read_tiles = [&](const uint32_t& num_tiles, uint32_t page_id) {
         dfb_in0.reserve_back(num_tiles);

@@ -17,8 +17,8 @@ void kernel_main() {
     constexpr uint32_t input0_transpose_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t input1_transpose_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t concat_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_transpose_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t output_transpose_dfb_id = get_compile_time_arg_val(5);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(6);
 
     constexpr uint32_t input0_num_tiles_height = get_compile_time_arg_val(7);
     constexpr uint32_t input0_num_tiles_width = get_compile_time_arg_val(8);
@@ -34,8 +34,8 @@ void kernel_main() {
     constexpr uint32_t width_len_bytes = tile_size * (input0_num_tiles_width + input1_num_tiles_width);
 
     Noc noc;
-    DataflowBuffer output_dfb(output_cb_id);
-    DataflowBuffer output_transpose_dfb(output_transpose_cb_id);
+    DataflowBuffer output_dfb(output_dfb_id);
+    DataflowBuffer output_transpose_dfb(output_transpose_dfb_id);
 
     const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
     uint32_t l1_write_addr = base_l1_write_addr;

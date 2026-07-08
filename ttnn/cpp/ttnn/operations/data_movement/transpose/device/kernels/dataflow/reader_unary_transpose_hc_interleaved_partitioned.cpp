@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     // The basic idea here is to iterate over output tiles (that will be over CT,WT) and H
     // this will generate a linearly incremented output address in the inner loop
@@ -47,7 +47,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src0_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_id_in0);
+    DataflowBuffer dfb(dfb_id_in0);
     DataflowBuffer dfb_scratch(1);
 
     uint32_t intermed_l1_scratch = MISALIGNED ? dfb_scratch.get_write_ptr() : 0;

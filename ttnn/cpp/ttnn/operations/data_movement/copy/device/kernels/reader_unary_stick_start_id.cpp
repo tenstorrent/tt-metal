@@ -15,9 +15,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(3);
     uint32_t num_shards = get_arg_val<uint32_t>(4);
 
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     typedef ShardedInfo<
         get_compile_time_arg_val(2),

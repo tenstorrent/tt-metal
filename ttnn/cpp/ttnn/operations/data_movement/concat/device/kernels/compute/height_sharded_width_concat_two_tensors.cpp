@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t input1_transpose_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t concat_cb_id = get_compile_time_arg_val(4);
     constexpr uint32_t output_transpose_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(6);
+    constexpr uint32_t output_dfb_id = get_compile_time_arg_val(6);
 
     constexpr uint32_t input0_num_tiles_height = get_compile_time_arg_val(7);
     constexpr uint32_t input0_num_tiles_width = get_compile_time_arg_val(8);
@@ -54,7 +54,7 @@ void kernel_main() {
     DataflowBuffer input1_transpose_dfb(input1_transpose_cb_id);
     DataflowBuffer concat_dfb(concat_cb_id);
     DataflowBuffer output_transpose_dfb(output_transpose_cb_id);
-    DataflowBuffer output_dfb(output_cb_id);
+    DataflowBuffer output_dfb(output_dfb_id);
 
     compute_kernel_hw_startup(input0_cb_id, input0_transpose_cb_id);
     transpose_init(input0_cb_id);

@@ -37,13 +37,13 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src_args, src_addr);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_out0 = 24;
+    constexpr uint32_t dfb_id_in0 = 0;
+    constexpr uint32_t dfb_id_out0 = 24;
 
     Noc noc;
     // Create DataflowBuffers for Device 2.0 API
-    DataflowBuffer dfb_in0(cb_id_in0);
-    DataflowBuffer dfb_out0(cb_id_out0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_out0(dfb_id_out0);
 
     uint32_t src_buffer_l1_addr = dfb_in0.get_write_ptr();
     volatile tt_l1_ptr uint8_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_buffer_l1_addr);

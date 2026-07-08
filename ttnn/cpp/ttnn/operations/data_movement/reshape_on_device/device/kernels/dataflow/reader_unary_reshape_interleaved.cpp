@@ -30,18 +30,18 @@ void kernel_main() {
 
     constexpr uint32_t SUBTILE_LINE_BYTES = (16 << 1);
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
 
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
-    constexpr uint32_t cb_id_intermed = 1;
-    DataflowBuffer dfb_intermed(cb_id_intermed);
+    constexpr uint32_t dfb_id_intermed = 1;
+    DataflowBuffer dfb_intermed(dfb_id_intermed);
     uint32_t intermed_l1_scratch = MISALIGNED ? dfb_intermed.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise

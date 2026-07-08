@@ -19,7 +19,7 @@ void kernel_main() {
 
     // Compile-time constants
     constexpr uint32_t element_size = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t C = get_compile_time_arg_val(2);
     constexpr uint32_t H = get_compile_time_arg_val(3);
     constexpr uint32_t W = get_compile_time_arg_val(4);
@@ -49,7 +49,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_id_out0);
+    DataflowBuffer dfb(dfb_id_out0);
     DataflowBuffer dfb_padding(tt::CBIndex::c_1);
 
     // Calculate actual data height in the last tile

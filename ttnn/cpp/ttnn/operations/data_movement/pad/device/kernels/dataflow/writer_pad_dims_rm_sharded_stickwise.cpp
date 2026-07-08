@@ -46,9 +46,9 @@ void kernel_main() {
     constexpr uint32_t padding_value_as_u32         = get_compile_time_arg_val(2);
     constexpr uint32_t padding_value_num_bytes      = get_compile_time_arg_val(3);
 
-    constexpr auto output_shard_cb = get_compile_time_arg_val(4);
+    constexpr auto output_shard_dfb = get_compile_time_arg_val(4);
     constexpr auto padding_value_cb = get_compile_time_arg_val(5);
-    DataflowBuffer dfb_output_shard(output_shard_cb);
+    DataflowBuffer dfb_output_shard(output_shard_dfb);
     DataflowBuffer dfb_padding_value(padding_value_cb);
 
     Noc noc;

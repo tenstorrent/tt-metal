@@ -32,9 +32,9 @@ void kernel_main() {
 
     // DPRINT("fill_rm_8bank: NC={} H={} W={} fillH={} fillW={}\n", NC, H, W, fillH, fillW);
     constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t dfb_id_in1 = 1;
     DataflowBuffer dfb_in0(cb_id_in0);
-    DataflowBuffer dfb_in1(cb_id_in1);
+    DataflowBuffer dfb_in1(dfb_id_in1);
     // How many bytes along a row in the original tensor
     uint32_t num_bytes_per_tile = get_tile_size(cb_id_in0);
     uint32_t num_bytes_per_tile_row = 64;

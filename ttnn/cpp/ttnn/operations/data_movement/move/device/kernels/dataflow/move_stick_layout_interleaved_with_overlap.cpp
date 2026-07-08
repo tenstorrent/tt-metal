@@ -38,13 +38,13 @@ void kernel_main() {
     bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
     uint32_t aligned_page_size = get_arg_val<uint32_t>(25);
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr auto src_args = TensorAccessorArgs<2>();
     constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 
     Noc noc;
-    DataflowBuffer dfb(cb_id);
+    DataflowBuffer dfb(dfb_id);
 
     const auto src_addrgen = TensorAccessor(src_args, src_addr);
     const auto dst_addrgen = TensorAccessor(dst_args, dst_addr);

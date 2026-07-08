@@ -62,7 +62,7 @@ void kernel_main() {
     uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
 
     // Compile-time arguments
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
     constexpr auto dst_args = TensorAccessorArgs<2>();
 
@@ -80,7 +80,7 @@ void kernel_main() {
 
     Noc noc;
     // Create DataflowBuffer for Device 2.0 API
-    DataflowBuffer dfb_in(cb_id_in);
+    DataflowBuffer dfb_in(dfb_id_in);
 
     // Multi-core work distribution: this core writes rows starting from start_row_for_this_core
     // Write each row from circular buffer to output tensor at the correct logical position

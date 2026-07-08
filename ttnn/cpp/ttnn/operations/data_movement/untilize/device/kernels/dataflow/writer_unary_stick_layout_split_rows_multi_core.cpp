@@ -20,7 +20,7 @@ void kernel_main() {
     const uint32_t num_cols_already_processed_in_first_output_block = get_arg_val<uint32_t>(5);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
@@ -32,7 +32,7 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index) {
         dfb_out.wait_front(num_tiles_per_input_block);

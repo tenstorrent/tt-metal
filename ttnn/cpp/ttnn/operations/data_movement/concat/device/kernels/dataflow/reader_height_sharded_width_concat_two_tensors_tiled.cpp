@@ -11,11 +11,11 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t input0_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input1_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t input0_transpose_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t input1_transpose_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t concat_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t input0_dfb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input1_dfb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t input0_transpose_dfb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t input1_transpose_dfb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t concat_dfb_id = get_compile_time_arg_val(4);
     constexpr uint32_t output_transpose_cb_id = get_compile_time_arg_val(5);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(6);
 
@@ -40,11 +40,11 @@ void kernel_main() {
     constexpr uint32_t group_stride = input0_stride + input1_stride;
 
     Noc noc;
-    DataflowBuffer input0_dfb(input0_cb_id);
-    DataflowBuffer input1_dfb(input1_cb_id);
-    DataflowBuffer input0_transpose_dfb(input0_transpose_cb_id);
-    DataflowBuffer input1_transpose_dfb(input1_transpose_cb_id);
-    DataflowBuffer concat_dfb(concat_cb_id);
+    DataflowBuffer input0_dfb(input0_dfb_id);
+    DataflowBuffer input1_dfb(input1_dfb_id);
+    DataflowBuffer input0_transpose_dfb(input0_transpose_dfb_id);
+    DataflowBuffer input1_transpose_dfb(input1_transpose_dfb_id);
+    DataflowBuffer concat_dfb(concat_dfb_id);
 
     const uint32_t base_l1_read_addr_0 = input0_transpose_dfb.get_read_ptr();
     const uint32_t base_l1_read_addr_1 = input1_transpose_dfb.get_read_ptr();

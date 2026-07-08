@@ -9,8 +9,8 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_tensor = get_compile_time_arg_val(1);
+    constexpr uint32_t dfb_id_in0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_tensor = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
     const uint32_t tile_width = get_compile_time_arg_val(3);
     const uint32_t tile_height = get_compile_time_arg_val(4);
@@ -33,8 +33,8 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src_args, src_addr);
 
     // Create objects for Device 2.0 API
-    DataflowBuffer dfb_in0(cb_id_in0);
-    DataflowBuffer dfb_tensor(cb_id_tensor);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_tensor(dfb_id_tensor);
     Noc noc;
 
     // Get tile size from CB interface

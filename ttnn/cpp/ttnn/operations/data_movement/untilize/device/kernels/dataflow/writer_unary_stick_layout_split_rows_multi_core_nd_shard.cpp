@@ -18,7 +18,7 @@ void kernel_main() {
     const uint32_t start_shard_id = get_arg_val<uint32_t>(2);
 
     // compile-time args
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t tile_height = get_compile_time_arg_val(2);
     constexpr uint32_t num_tiles_per_input_block = get_compile_time_arg_val(3);
     constexpr uint32_t num_output_blocks_across_width = get_compile_time_arg_val(4);
@@ -38,7 +38,7 @@ void kernel_main() {
     const auto accessor_src = TensorAccessor(src0_args, src0_addr);
 
     Noc noc;
-    DataflowBuffer dfb_out(cb_id_out0);
+    DataflowBuffer dfb_out(dfb_id_out0);
 
     auto write_tiles_in_current_block = [&](uint32_t block_height_index,
                                             uint32_t width_wise_output_block_start_index,

@@ -82,12 +82,12 @@ void kernel_main() {
         packed_pad_value = kernel_compile_time_args[13];
     }
 
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t dfb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
-    constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
-    DataflowBuffer dfb_in0_exp(cb_in0);
+    constexpr uint32_t dfb_pad_align = tt::CBIndex::c_2;
+    DataflowBuffer dfb_in0_exp(dfb_in0);
     DataflowBuffer dfb_pad_exp(cb_pad);
-    DataflowBuffer dfb_pad_align_exp(cb_pad_align);
+    DataflowBuffer dfb_pad_align_exp(dfb_pad_align);
 
     const auto s = TensorAccessor(src_args, src_addr, accessor_page_size);
     Noc noc;

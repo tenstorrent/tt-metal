@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     // Constexpr
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t dfb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -44,7 +44,7 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
 
     Noc noc;
-    DataflowBuffer dfb_in0(cb_id_in0);
+    DataflowBuffer dfb_in0(dfb_id_in0);
 
     uint32_t stick_id = 0;
 

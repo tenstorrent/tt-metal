@@ -73,9 +73,9 @@ void kernel_main() {
     }
 
     constexpr auto cb_pad = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
+    constexpr auto dfb_out0 = tt::CBIndex::c_16;
     DataflowBuffer dfb_pad_exp(cb_pad);
-    DataflowBuffer dfb_out0_exp(cb_out0);
+    DataflowBuffer dfb_out0_exp(dfb_out0);
 
     Noc noc;
 

@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t base_idx_cta = args_dst.next_compile_time_args_offset();
     constexpr uint32_t base_idx_crta = args_dst.next_common_runtime_args_offset();
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(base_idx_cta);
+    constexpr uint32_t dfb_id = get_compile_time_arg_val(base_idx_cta);
     constexpr uint32_t page_size = get_compile_time_arg_val(base_idx_cta + 1);
 
     const uint32_t bank_base_address_dst = get_common_arg_val<uint32_t>(base_idx_crta);
@@ -26,7 +26,7 @@ void kernel_main() {
     auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst);
 
     Noc noc;
-    DataflowBuffer dfb(cb_id);
+    DataflowBuffer dfb(dfb_id);
 
     constexpr uint32_t one_tile = 1;
     auto pages = accessor_dst.pages(start_page, end_page);

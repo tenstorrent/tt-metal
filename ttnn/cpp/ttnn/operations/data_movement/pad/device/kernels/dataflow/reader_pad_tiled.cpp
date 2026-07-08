@@ -11,7 +11,7 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t input_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t num_dims = get_compile_time_arg_val(2);
 
@@ -28,7 +28,7 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, input_addr);
     Noc noc;
-    DataflowBuffer dfb_input(input_cb_id);
+    DataflowBuffer dfb_input(input_dfb_id);
 
     bool within_input_region;
     uint32_t input_page_offset = start_offset;

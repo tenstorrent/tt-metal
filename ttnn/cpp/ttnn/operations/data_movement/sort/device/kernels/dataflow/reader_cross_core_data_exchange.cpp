@@ -35,8 +35,8 @@ void kernel_main() {
     constexpr uint32_t sem_exchange_id = get_compile_time_arg_val(14);
     constexpr uint32_t sem_barrier_id = get_compile_time_arg_val(15);
     constexpr bool is_row_major = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t rm_input_cb_index = get_compile_time_arg_val(17);
-    constexpr uint32_t rm_index_output_cb_index = get_compile_time_arg_val(18);
+    constexpr uint32_t rm_input_dfb_index = get_compile_time_arg_val(17);
+    constexpr uint32_t rm_index_output_dfb_index = get_compile_time_arg_val(18);
     constexpr uint32_t W_value_slice_bytes = get_compile_time_arg_val(19);
     constexpr uint32_t W_index_slice_bytes = get_compile_time_arg_val(20);
 
@@ -57,13 +57,13 @@ void kernel_main() {
     constexpr uint32_t input_tensor_tile_size_bytes = get_tile_size(input_tensor_cb_index);
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_buffer_addr);
     DataflowBuffer input_tensor_dfb(input_tensor_cb_index);
-    DataflowBuffer rm_input_dfb(rm_input_cb_index);
+    DataflowBuffer rm_input_dfb(rm_input_dfb_index);
 
     // Index tensor config
     const uint32_t index_tensor_output_tile_size_bytes = get_tile_size(index_tensor_output_cb_index);
     const auto index_tensor_output_accessor = TensorAccessor(index_tensor_output_args, index_tensor_buffer_addr);
     DataflowBuffer index_output_dfb(index_tensor_output_cb_index);
-    DataflowBuffer rm_index_output_dfb(rm_index_output_cb_index);
+    DataflowBuffer rm_index_output_dfb(rm_index_output_dfb_index);
 
     // Physical core lookup table config
     constexpr uint32_t physical_core_lookup_table_tile_size_bytes = get_tile_size(physical_core_lookup_table_cb_index);

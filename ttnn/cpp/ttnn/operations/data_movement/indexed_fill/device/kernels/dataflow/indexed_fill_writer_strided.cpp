@@ -29,12 +29,12 @@ void kernel_main() {
         return;
     }
 
-    constexpr uint32_t cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t dfb_id = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto dst = TensorAccessor(dst_args, output_addr);
 
     Noc noc;
-    DataflowBuffer dfb(cb_id);
+    DataflowBuffer dfb(dfb_id);
 
     for (uint32_t s = 0; s < num_slices; ++s) {
         const uint32_t my_slice = slice_start + s;

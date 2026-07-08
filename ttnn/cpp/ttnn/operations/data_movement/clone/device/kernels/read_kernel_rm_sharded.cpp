@@ -13,9 +13,9 @@ void kernel_main() {
     uint32_t stick_size = get_arg_val<uint32_t>(1);
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
 
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t src_dfb_id = get_compile_time_arg_val(0);
     Noc noc;
-    DataflowBuffer src_dfb(src_cb_id);
+    DataflowBuffer src_dfb(src_dfb_id);
     uint32_t local_l1_read_addr = input_buffer_address;
 
     for (uint32_t i = 0; i < num_sticks; ++i) {
