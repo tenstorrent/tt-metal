@@ -87,7 +87,7 @@ TT_RUN_FLAGS=(--force-rediscovery)
 # SC20 = 20-host), _SUBTORUS marks torus wrap-around links, _SINGLE_POD marks a 4-host pod subset,
 # _MAPPING marks a mock-cluster-rank-binding mapping (no suffix = a single-host cluster_desc yaml).
 SC16_REVAB_AISLED_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_mapping.yaml"
-SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC16_32x4_revAB_aisleD_single_pod_mapping.yaml"
+SC4_REVAB_AISLED_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC16_32x4_revAB_aisleD/SC4_32x4_revAB_aisleD_mapping.yaml"
 # revAB subtorus / system-120 (bh-glx-120-*). tt-cluster-descriptors renamed this set to
 # SC36_32x4_revAB_subtorus_aisleC, matching tt-metal's subtorus naming.
 SUBTORUS_REVAB_AISLEC_CLUSTER_DESC_BASE="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_subtorus_aisleC"
