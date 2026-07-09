@@ -311,6 +311,29 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         ek = ttnn.permute(ek, (0, 2, 1, 3))
         ev = ttnn.permute(ev, (0, 2, 1, 3))
 
+        # `scale` is NOT passed: the op binds it as a `.noconvert()` C++ float, so
+        # a Python double (every Python float) is rejected with a TypeError -- which
+        # is why every other caller in the repo (tt_dit SD3.5/Mochi/etc.) omits it.
+        # The kernel's internal default is `1/sqrt(head_dim)` (joint_sdpa_device_
+        # operation.cpp), identical to this model's `scale` (== dim_head**-0.5). The
+        # assert makes a future checkpoint carrying a non-standard `attn.scale` fail
+        # loudly here instead of silently getting the default.
+        assert abs(scale - dim_head**-0.5) < 1e-9, (
+            f"joint SDPA can only use its built-in 1/sqrt(head_dim) scale "
+            f"({dim_head**-0.5}), but this module's scale is {scale}"
+        )
+        # The joint SDPA kernel only accepts bf16/bf8 q/k/v (asserted in
+        # joint_sdpa_device_operation.cpp); the old explicit matmul path took
+        # fp32. Cast the six streams to bf16 for the kernel and cast the two
+        # outputs back to the original dtype. In the real 54-layer run
+        # everything is already bf16 (coerce_bf16), so this is a no-op there;
+        # in the fp32 PCC self-test it limits precision loss to bf16 input
+        # rounding (the kernel still accumulates in fp32 via compute_config's
+        # fp32_dest_acc_en).
+        attn_dtype = q.dtype
+        if attn_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+            q, k, v = (ttnn.typecast(t, ttnn.bfloat16) for t in (q, k, v))
+            eq, ek, ev = (ttnn.typecast(t, ttnn.bfloat16) for t in (eq, ek, ev))
         hid_out, enc_out = ttnn.transformer.joint_scaled_dot_product_attention(
             q,
             k,
@@ -319,10 +342,12 @@ def build(device, torch_module, ccl_manager=None, tp=1):
             ek,
             ev,
             joint_strategy="rear",
-            scale=scale,
             program_config=sdpa_program_config,
             compute_kernel_config=compute_config,
         )
+        if attn_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
+            hid_out = ttnn.typecast(hid_out, attn_dtype)
+            enc_out = ttnn.typecast(enc_out, attn_dtype)
         hid_out = ttnn.permute(hid_out, (0, 2, 1, 3))  # (B, Limg, H, D)
         enc_out = ttnn.permute(enc_out, (0, 2, 1, 3))  # (B, Ltxt, H, D)
         hid_out = ttnn.reshape(hid_out, (B, Limg, inner))

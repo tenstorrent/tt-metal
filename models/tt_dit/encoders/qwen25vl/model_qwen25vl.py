@@ -106,7 +106,13 @@ class Qwen25VlTextEncoder(Module):
         *,
         attention_mask: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        hidden_layers_to_skip: int = 0,
     ) -> list[ttnn.Tensor]:
+        # `hidden_layers_to_skip` mirrors HF's `num_hidden_layers_to_skip`: when > 0,
+        # return the raw output of decoder layer (num_layers - 1 - k) -- i.e. HF's
+        # `hidden_states[-(k+1)]` -- WITHOUT the final RMSNorm (HF only norms the last
+        # layer to make `last_hidden_state`, not the intermediates). Default 0 keeps the
+        # original behavior (all layers + final norm). HunyuanVideo-1.5 consumes k=2.
         batch_size, seq_len = input_ids.shape
 
         if attention_mask is not None:
@@ -141,20 +147,25 @@ class Qwen25VlTextEncoder(Module):
             # clone to move out of persistent buffer
             input_embeds = ttnn.clone(input_embeds)
 
+        target_idx = None if hidden_layers_to_skip == 0 else (len(self.layers) - 1 - hidden_layers_to_skip)
+        assert target_idx is None or 0 <= target_idx < len(
+            self.layers
+        ), f"hidden_layers_to_skip={hidden_layers_to_skip} out of range for {len(self.layers)} layers"
+
         hidden_states = input_embeds
-        # hidden_states_list = []
 
-        for decoder_layer in self.layers:
-            # hidden_states_list.append(hidden_states)
-
+        for i, decoder_layer in enumerate(self.layers):
             hidden_states = decoder_layer.forward(
                 hidden_states,
                 attention_bias=attention_bias,
                 pos_embeds=pos_embeds,
             )
+            if target_idx is not None and i == target_idx:
+                # Return this raw layer output (no final norm), matching HF hidden_states[-(k+1)].
+                break
 
-        hidden_states = self.norm.forward(hidden_states)
-        # hidden_states_list.append(hidden_states)
+        if target_idx is None:
+            hidden_states = self.norm.forward(hidden_states)
 
         if padded_seq_len != seq_len:
             # hidden_states_list = [x[:, :seq_len, :] for x in hidden_states_list]
