@@ -231,9 +231,9 @@ ADAPTER_PATHS = {
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",
-    # GLM-5.2: DSA + cross-layer indexer reuse. Test-only STUB today (GLM52Adapter in sparse_mla.py);
-    # the SERVING adapter is the combined-branch TODO — mirror glm_5_1.py with full-layer-aware caches.
-    "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:GLM52Adapter",
+    # GLM-5.2: DSA + cross-layer indexer reuse. Full prefill serving runtime (adapters/glm_5_2.py),
+    # mirrors glm_5_1.py two-cache serving; the reuse itself is config-driven (indexer_types).
+    "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}
