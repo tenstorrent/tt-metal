@@ -190,26 +190,68 @@ class BriaFiboPipeline:
     ) -> list[Image.Image] | torch.Tensor:
         height = height if height is not None else self._height
         width = width if width is not None else self._width
-        submesh = self._submesh
-        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
 
         assert height % (_VAE_SCALE_FACTOR) == 0 and width % (_VAE_SCALE_FACTOR) == 0
 
+        # 1-3. Encode, then build per-branch conditioning + schedule + latents.
+        encoded = self._encode(prompt, negative_prompt)
+        cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length = self._prepare(
+            encoded,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+            latents=latents,
+        )
+
+        # 4. Denoise loop (CFG per step).
+        latent = self._denoise(cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length, guidance_scale)
+
+        # 5. Return the pre-VAE latent (PCC gate) or decode to an image.
+        if output_type == "latent":
+            logger.info("returning pre-VAE latent...")
+            return self._gather_latent(latent)
+        logger.info("decoding image...")
+        return self._decode_latents(
+            latent, height=height, width=width, output_type=output_type, force_device_decode=force_device_decode
+        )
+
+    def _encode(self, prompt: str, negative_prompt: str) -> tuple:
+        """Encode positive and negative prompts SEPARATELY (per-branch, true token lengths)."""
+        logger.info("encoding prompts...")
+        cond_embeds, cond_hidden_states = self._text_encoder.encode_prompt(prompt)
+        uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt)
+        return cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states
+
+    def _prepare(
+        self,
+        encoded: tuple,
+        *,
+        height: int,
+        width: int,
+        num_inference_steps: int,
+        seed: int,
+        latents: torch.Tensor | None,
+    ) -> tuple:
+        """Build per-branch conditioning (RoPE + host->device uploads), schedule, and initial latents.
+
+        Per-``__call__`` work (recurs on every call): rebuilds the 37->46 layer list, recomputes RoPE
+        (``_pos_embed.forward`` in ``_prepare_branch``), uploads ``prompt`` + 2x46 layer tensors + RoPE +
+        latents to device, recomputes the schedule. Only weights/submesh/``_pos_embed`` are built once
+        (``__init__``), so this is real per-image cost -- a warmup run amortizes op compile, not this.
+        """
+        cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states = encoded
+        sp_axis = self._parallel_config.sequence_parallel.mesh_axis
         latent_h = height // _VAE_SCALE_FACTOR
         latent_w = width // _VAE_SCALE_FACTOR
         spatial_sequence_length = latent_h * latent_w
 
-        # 1. Encode positive and negative prompts SEPARATELY (per-branch, true token lengths).
-        logger.info("encoding prompts...")
-        cond_embeds, cond_hidden_states = self._text_encoder.encode_prompt(prompt)
-        uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt)
         cond_layers = build_text_encoder_layers(cond_hidden_states, self._num_blocks)
         uncond_layers = build_text_encoder_layers(uncond_hidden_states, self._num_blocks)
-
         cond_branch = self._prepare_branch(cond_embeds, cond_layers, latent_h, latent_w, sp_axis)
         uncond_branch = self._prepare_branch(uncond_embeds, uncond_layers, latent_h, latent_w, sp_axis)
 
-        # 2. Timesteps + solver schedule (dynamic shift on the image sequence length).
+        # Timesteps + solver schedule (dynamic shift on the image sequence length).
         logger.info("preparing timesteps...")
         self._scheduler.set_timesteps(
             sigmas=np.linspace(1.0, 1 / num_inference_steps, num_inference_steps),
@@ -218,14 +260,24 @@ class BriaFiboPipeline:
         self._solver.set_schedule(self._scheduler.sigmas.tolist())
         timesteps = self._scheduler.timesteps
 
-        # 3. Latents (no 2x2 pack): (1, 48, h, w) -> (1, h*w, 48), sequence-sharded on sp.
-        #    ``latents`` (if given) injects a fixed initial noise in the same packed layout, so a
-        #    reference comparison can feed BOTH pipelines identical noise (host/device RNG differ).
+        # Latents (no 2x2 pack): (1, 48, h, w) -> (1, h*w, 48), sequence-sharded on sp.
         logger.info("preparing latents...")
         latent = self._random_latents(height=height, width=width, seed=seed, latents=latents)
 
-        # 4. Denoise loop: two per-branch forwards per step, combined via CFG.
+        return cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length
+
+    def _denoise(
+        self,
+        cond_branch: dict,
+        uncond_branch: dict,
+        timesteps,
+        latent: ttnn.Tensor,
+        spatial_sequence_length: int,
+        guidance_scale: float,
+    ) -> ttnn.Tensor:
+        """Denoise loop: two per-branch forwards per step, combined via CFG. Syncs per step."""
         logger.info("denoising...")
+        submesh = self._submesh
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             timestep = tt_tensor.from_torch(
                 torch.full((1, 1), float(t), dtype=torch.bfloat16), device=submesh, dtype=ttnn.bfloat16
@@ -246,15 +298,7 @@ class BriaFiboPipeline:
             latent = new_latent
 
             ttnn.synchronize_device(submesh)
-
-        # 5. Return the pre-VAE latent (PCC gate) or decode to an image.
-        if output_type == "latent":
-            logger.info("returning pre-VAE latent...")
-            return self._gather_latent(latent)
-        logger.info("decoding image...")
-        return self._decode_latents(
-            latent, height=height, width=width, output_type=output_type, force_device_decode=force_device_decode
-        )
+        return latent
 
     def _prepare_branch(
         self,
