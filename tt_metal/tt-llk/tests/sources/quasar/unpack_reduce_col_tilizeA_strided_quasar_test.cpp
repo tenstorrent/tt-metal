@@ -102,7 +102,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_math_reduce_(i);
+        _llk_math_reduce_<POOL_TYPE, REDUCE_DIM>(i);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
