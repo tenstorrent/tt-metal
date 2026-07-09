@@ -104,6 +104,9 @@ constexpr uint32_t myRiscID = 0;
 #endif
 
 #if defined(DEVICE_DEBUG_DUMP)
+#if defined(ARCH_QUASAR)
+#error "DEVICE_DEBUG_DUMP is not supported on Quasar yet"
+#endif
 // Each risc has their own DRAM profiler address index
 constexpr bool NON_DROPPING = true;
 #define DRAM_PROFILER_ADDRESS (DRAM_PROFILER_ADDRESS_BR_ER_0 + myRiscID)

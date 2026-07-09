@@ -1499,7 +1499,7 @@ void DeviceProfiler::readRiscProfilerResults(
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
     // Skip the HOST_BUFFER_END_INDEX (DRAM flush count) early-out where it doesn't apply: trace-only /
-    // accumulate modes (data stays in L1 and the index may never advance), and the L1-only path.
+    // accumulate modes (data stays in L1 and the index may never advance), and the Quasar L1-only path.
     if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate() &&
         data_source != ProfilerDataBufferSource::L1) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
