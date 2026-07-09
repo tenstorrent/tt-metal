@@ -604,10 +604,10 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
     // Wait till packer is done before changing config registers
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::PACK);
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
-    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO); // 16-bit write
-    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
-    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
-    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
+    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC0_REG1_Out_data_format_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO); // 16-bit write
+    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC0_REG8_Out_data_format_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
+    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG1_Out_data_format_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
+    TTI_REG2FLOP(2, 0, 0, 0, THCON_SEC1_REG8_Out_data_format_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::TMP_LO);
 
     LLK_ASSERT(
         is_pack_reads_per_xy_plane(1),
@@ -647,32 +647,32 @@ __attribute__((noinline)) inline void reconfig_packer_data_format(
 
         // Override exp section size for packers 1,2,3
         // Tile header + exp size + datum size
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
+        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP0_SEC_SIZE_BFP);
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP8);
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP8);
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP8);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP8);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP8);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP8);
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4_b))
         {
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP4);
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP4);
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP4);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP4);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP4);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP4);
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2_b))
         {
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP2);
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP2);
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP2);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP1_SEC_SIZE_BFP2);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP2_SEC_SIZE_BFP2);
+            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::EXP3_SEC_SIZE_BFP2);
         }
     }
     else if ((pack_dst_format == to_underlying(DataFormat::Lf8)) || (masked_data_format(pack_dst_format) == to_underlying(DataFormat::Int8)))
     {
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
-        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG1_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
+        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC1_REG8_Row_start_section_size_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr::ZERO);
     }
 
     // Set l1 address offset
@@ -1049,10 +1049,10 @@ __attribute__((noinline)) void are_packers_configured_correctly(
 
     // Only read config word 2 per packer (contains in_data_format and out_data_format)
     static constexpr std::uint32_t config_word2_addrs[NUM_PACKERS] = {
-        THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2,
-        THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 2,
-        THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 2,
-        THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 2,
+        THCON_SEC0_REG1_Out_data_format_ADDR32,
+        THCON_SEC0_REG8_Out_data_format_ADDR32,
+        THCON_SEC1_REG1_Out_data_format_ADDR32,
+        THCON_SEC1_REG8_Out_data_format_ADDR32,
     };
 
     const std::uint32_t expected_src = masked_data_format(pack_src_format);
