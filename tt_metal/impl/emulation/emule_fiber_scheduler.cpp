@@ -440,12 +440,17 @@ void FiberScheduler::run_until_idle() {
     }
 
     unsigned W;
-    {
+    {   // Publish the whole program in ONE critical section: reset counters + progress, size + fill
+        // the ready queues, AND bump generation_ atomically. generation_ must not be bumped in a
+        // separate locked block: a worker preempted past the previous program's wake could then
+        // observe the new W_ paired with a STALE generation_, pass `w < W_`, run inner_loop an
+        // extra time and double-count workers_done_ past W_ — stalling the done_cv_ wait below
+        // forever (watchdog trip / hang). See tt-emule docs/fiber-engine.md.
         std::lock_guard<std::mutex> g(p_->mu_);
-        p_->active_ = static_cast<unsigned>(p_->all_.size());
-        if (p_->active_ == 0) {
+        if (p_->all_.empty()) {
             return;   // nothing to run; the pool stays parked
         }
+        p_->active_ = static_cast<unsigned>(p_->all_.size());
         p_->idle_ = 0;
         p_->running_ = 0;
         p_->workers_done_ = 0;
@@ -453,9 +458,10 @@ void FiberScheduler::run_until_idle() {
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
         p_->latency_parked_.clear();
+        p_->progress_.store(0);
+        p_->resumptions_.store(0);
         // Activate W = min(K, fiber count) workers; pin each fiber round-robin across [0,W).
         // Surplus workers (>= W) stay parked on start_cv_, so a tiny program pays no herd.
-        // See tt-emule docs/fiber-engine.md.
         W = std::min<unsigned>(p_->K_, p_->active_);
         p_->W_ = W;
         p_->ready_.assign(W, {});
@@ -464,22 +470,19 @@ void FiberScheduler::run_until_idle() {
             f->home = static_cast<unsigned>(i % W);
             p_->ready_[f->home].push_back(f);
         }
+        ++p_->generation_;
     }
-    p_->progress_.store(0);
-    p_->resumptions_.store(0);
     if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
         std::fprintf(stderr, "[EMULE FIBER] program: %u fibers on W=%u of K=%u workers\n",
                      p_->active_, W, p_->K_);
     }
 
+    // Watchdog up before the pool is released (notify_all below): a parked worker cannot wake until
+    // that notify, so the run is covered. Created after the dispatch block so a throw there can't
+    // leave a joinable thread. See tt-emule docs/fiber-engine.md.
     p_->run_active_.store(true, std::memory_order_release);
     std::thread wd([this] { p_->watchdog(); });
 
-    // Launch: bump the generation under mu_ (after the watchdog is up), then wake the pool.
-    {
-        std::lock_guard<std::mutex> g(p_->mu_);
-        ++p_->generation_;
-    }
     p_->start_cv_.notify_all();
     {   // Block the dispatch thread until every active worker has finished this run.
         std::unique_lock<std::mutex> lk(p_->mu_);
