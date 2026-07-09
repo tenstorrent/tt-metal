@@ -38,6 +38,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "device.hpp"
 #include "dispatch/system_memory_manager.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -111,7 +113,7 @@ TEST_F(MultiCQDeallocRaceFixture, TestMultiCQDeallocRace) {
     // Step 3: CQ1 — record a pending event, then quiesce. This drains CQ1 and
     // leaves wait_for_pending_events() with a non-empty stale CQ1 slot.
     {
-        auto& cq1 = mesh_device_->mesh_command_queue(1);
+        auto& cq1 = mesh_device_->impl().mesh_command_queue_base(1);
         auto registration = mesh_buf->try_acquire_pending_event_registration();
         ASSERT_TRUE(registration.has_value());
         std::vector<uint32_t> dummy(num_pages * page_size / sizeof(uint32_t), 0xDEAD);
@@ -169,7 +171,7 @@ TEST_F(MultiCQDeallocRaceFixture, TestEventQueryQuiesced) {
     auto mesh_buf = MeshBuffer::create(global_config, per_device_config, mesh_device_.get());
 
     // Record an event on CQ0.
-    auto& cq0 = mesh_device_->mesh_command_queue(0);
+    auto& cq0 = mesh_device_->impl().mesh_command_queue_base(0);
     std::vector<uint32_t> src(num_pages * page_size / sizeof(uint32_t), 0xCAFE);
     EnqueueWriteMeshBuffer(cq0, mesh_buf, src, /*blocking=*/false);
     auto event = cq0.enqueue_record_event_to_host();
@@ -236,7 +238,7 @@ TEST_F(MultiCQDeallocRaceFixture, TestEventSynchronizeEpochShortCircuit) {
     };
 
     auto mesh_buf = MeshBuffer::create(global_config, per_device_config, mesh_device_.get());
-    auto& cq0 = mesh_device_->mesh_command_queue(0);
+    auto& cq0 = mesh_device_->impl().mesh_command_queue_base(0);
 
     // Step 1: record event E (epoch 0).
     std::vector<uint32_t> src(num_pages * page_size / sizeof(uint32_t), 0xF00D);
