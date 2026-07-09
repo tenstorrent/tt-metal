@@ -39,10 +39,11 @@ from models.tt_transformers.tt.model_config import determine_device_name
 _MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
-# needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated
-# TP serving config and is ample for the single 2048-token chunk trace — negligible vs the
-# per-device DRAM that chunk-outer prefill frees. Single-device params are left unchanged.
-_TP_TRACE_REGION_SIZE = 256 * 1024 * 1024
+# needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). The captured prefill+decode
+# trace scales with layer count / program count: 256 MiB fits the 9B/27B, but the 40-layer
+# 35B-A3B MoE needs ~535 MiB, so use 768 MiB — ample for all three, negligible vs the per-device
+# DRAM that chunk-outer prefill frees. Single-device params are left unchanged.
+_TP_TRACE_REGION_SIZE = 768 * 1024 * 1024
 DEVICE_PARAMS = [
     {
         "l1_small_size": 24576,

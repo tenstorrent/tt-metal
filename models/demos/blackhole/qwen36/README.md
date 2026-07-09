@@ -9,6 +9,17 @@ This directory implements Tenstorrent Blackhole inference for the hybrid
 | Qwen3.5-9B       | `Qwen/Qwen3.5-9B`      | single P150 — `P150` | single device          |
 | Qwen3.5-27B      | `Qwen/Qwen3.5-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
 | Qwen3.6-27B      | `Qwen/Qwen3.6-27B`     | P150x4 — `P150x4`    | 4-way tensor parallel  |
+| Qwen3.6-35B-A3B  | `Qwen/Qwen3.6-35B-A3B` | P150x4 — `P150x4`    | 4-way TP + sparse MoE  |
+
+The **35B-A3B** is the sparse Mixture-of-Experts member of the family (`qwen3_5_moe`:
+256 routed experts, top-8, plus a gated shared expert on every layer). It shares the
+exact hybrid attention / GDN / partial-RoPE / zero-centered-RMSNorm stack as the dense
+variants — the only difference is that each layer's dense SwiGLU MLP is replaced by the
+sparse MoE block in `tt/moe/`. Dispatch is config-driven (`args.is_moe_layer`): on the
+dense 9B/27B `num_experts == 0`, so the MoE path is inert and the dense MLP is unchanged.
+The MoE experts are gemma4-style (dense routing → `sparse_matmul` experts, TP-sharded on
+the intermediate dim, reduce-scattered after `down_proj` to the same fractured-hidden
+layout the dense MLP produces).
 
 - The **9B** runs on a **single Blackhole P150** device. It uses the validated
   single-device forward path (no collectives).
@@ -118,6 +129,7 @@ per-test thresholds.
 | `test_rms_norm.py`         | zero-centered RMSNorm (the "+1" fold)                |
 | `test_rope.py`             | partial-rotary RoPE (host freqs + on-device lookup)  |
 | `test_mlp.py`              | single-device SwiGLU MLP (layer 0)                   |
+| `test_moe.py`              | single-device sparse MoE MLP (MoE checkpoint only; decode + prefill) |
 | `test_attention.py`        | single-device gated full attention (layer 3)         |
 | `test_gdn.py`              | single-device Gated DeltaNet (layer 0)               |
 | `test_lm_head.py`          | LM head logits (bf8 vs bf16)                          |
@@ -153,6 +165,7 @@ checkpoint. They must run on the `(1,4)` mesh with `FABRIC_1D` (the
 | Test                  | Validates                                                            |
 | --------------------- | ------------------------------------------------------------------- |
 | `test_mlp_tp.py`      | TP SwiGLU MLP (column/row-parallel + reduce-scatter)                |
+| `test_moe_tp.py`      | TP sparse MoE MLP (router + experts + shared; MoE checkpoint only; decode + prefill) |
 | `test_attention_tp.py`| TP gated full attention: decode / prefill / paged-KV contract       |
 | `test_gdn_tp.py`      | TP Gated DeltaNet: decode + chunk-prefill                           |
 | `test_model_tp.py`    | full-model TP contract: paged+traced path matches the bespoke oracle |

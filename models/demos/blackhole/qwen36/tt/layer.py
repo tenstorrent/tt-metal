@@ -5,6 +5,7 @@
 Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
+
 import ttnn
 from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
@@ -78,7 +79,17 @@ class Qwen36DecoderLayer:
 
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-        self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+        if args.is_moe_layer(layer_num):
+            # Sparse MoE MLP (Qwen3.5-MoE). Qwen36MoE.forward(x) keeps the same
+            # single-in/single-out signature + fractured-hidden output as Qwen36MLP,
+            # so the forward below and the model/trace-capture loops are unchanged.
+            from models.demos.blackhole.qwen36.tt.moe import MoEConfig, Qwen36MoE
+
+            self.feed_forward = Qwen36MoE(
+                mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
+            )
+        else:
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
 
     def _make_norm(self, mesh_device, args, state_dict, layer_num, weight_key, tensor_cache_path, tt_ccl, ag_key):
         """Build the per-layer RMSNorm; wrap in DistributedNorm when TP>1.

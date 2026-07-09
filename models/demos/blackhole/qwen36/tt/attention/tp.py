@@ -49,8 +49,13 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wqkv"),
         dtype=ttnn.bfloat8_b,
     )
+    # GQA under TP: when there are fewer KV heads than devices (e.g. Qwen3.5-MoE:
+    # 2 KV heads on a 4-device mesh), replicate whole KV heads so each device holds
+    # one full head (n_local_kv_heads=1, width head_dim). No-op when n_kv_heads>=tp
+    # (e.g. the 27B's 4 heads / 4 devices), so that validated path is unchanged.
+    kv_kwargs = (args.n_kv_heads, args.num_devices, args.head_dim)
     tw["wk"] = tpc.shard_w(
-        state_dict["k_proj.weight"],
+        tpc.replicate_kv_weight(state_dict["k_proj.weight"], *kv_kwargs),
         mesh,
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -58,7 +63,7 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         dtype=ttnn.bfloat8_b,
     )
     tw["wv"] = tpc.shard_w(
-        state_dict["v_proj.weight"],
+        tpc.replicate_kv_weight(state_dict["v_proj.weight"], *kv_kwargs),
         mesh,
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
