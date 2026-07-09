@@ -365,11 +365,15 @@ def _height_sharded_l1_config(grid_end, shard_shape):
         # issue_test.py repro: 1024 padded [32,64] matrices, 16 per core over an 8x8 grid; logical
         # height 17 is not tile-aligned so every matrix carries 15 interior pad rows to be stripped.
         ([32, 32, 17, 64], (7, 7), (512, 64)),
-        # batch == 1 per core but many matrices total: each core holds exactly one [32,64] matrix.
+        # batch == 1 per core, 64 matrices total: each core holds exactly one padded [32, 64] matrix.
         # The old writer advanced the interleaved output pointer by the padded height (32) instead of
-        # the logical height (17), so every matrix past core 0 landed at the wrong row. 64 matrices.
+        # the logical height, so every matrix past core 0 landed at the wrong row. The h17 rows carry
+        # interior row padding (17 real of 32) to strip; the h32 rows are tile-aligned (no row
+        # padding) and pair with non-tile-aligned widths (49/50) to isolate per-row column unpadding.
         ([64, 1, 17, 49], (7, 7), (32, 64)),
+        ([64, 1, 32, 49], (7, 7), (32, 64)),
         ([64, 1, 17, 50], (7, 7), (32, 64)),
+        ([64, 1, 32, 50], (7, 7), (32, 64)),
         ([64, 1, 17, 64], (7, 7), (32, 64)),
         # matrix taller than one tile: H 40 -> padded 64 => 2 tile-rows per matrix, 2 matrices/core
         # over 8 cores. Exercises block_height_ntiles > 1 together with batch > 1.
@@ -383,9 +387,11 @@ def _height_sharded_l1_config(grid_end, shard_shape):
     ],
     ids=[
         "repro_1024x16",
-        "batch1_per_core_w49",
-        "batch1_per_core_w50",
-        "batch1_per_core_w64",
+        "batch1_per_core_h17_w49",
+        "batch1_per_core_h32_w49",
+        "batch1_per_core_h17_w50",
+        "batch1_per_core_h32_w50",
+        "batch1_per_core_h17_w64",
         "multi_tile_row_matrix",
         "width_unpad",
         "single_matrix_split",
