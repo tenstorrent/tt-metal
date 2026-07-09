@@ -309,6 +309,24 @@ class Qwen36Model:
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
 
+    def reseed_slot_tp(self, prompt_ids, slot):
+        """Continuous-batching join: replace batch lane `slot` with a new sequence mid-flight,
+        leaving the other lanes' running KV / GDN state untouched. Prefills the new prompt into
+        lane `slot` (attention KV via fill_cache(batch_slot), GDN state stashed) then writes the
+        GDN state into lane `slot` in place (reseed_slot). Returns (first_token_id, next_position)
+        for the new sequence; the caller resets that lane's decode position to next_position.
+        """
+        import math as _math
+
+        T = len(prompt_ids)
+        T_pad = max(128, _math.ceil(T / 128) * 128)
+        padded = list(prompt_ids) + [0] * (T_pad - T)
+        logits = self.prefill_seed_tp(torch.tensor([padded], dtype=torch.long), valid_len=T, batch_slot=slot)
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.reseed_slot(slot)
+        return int(torch.argmax(logits).item()), T
+
     def _decode_forward_batched(self, tokens_tt, cur_pos_tt, cos, sin, B):
         """Core batched decode forward (B lanes) on device. Consumes device tensors:
         tokens_tt (B tokens, either [1,B] or [B,1]), cur_pos_tt [B] int32, cos/sin

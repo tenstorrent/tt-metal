@@ -280,6 +280,72 @@ class TPGatedDeltaNet:
         self._seed_rec.clear()
         self._seed_conv.clear()
 
+    def reseed_slot(self, b):
+        """Replace ONLY batch lane b's recurrent + conv state with the sequence stashed
+        for slot b (a prior forward_prefill(seed_slot=b)), leaving the other B-1 lanes'
+        running state untouched. In-place (ttnn.copy into the fixed buffers) so a captured
+        decode trace's baked addresses survive — this is the continuous-batching join.
+
+        Slice-per-lane + concat (per-device, so each device keeps its own head shard),
+        replacing lane b with the seed. Clears the slot's stash.
+        """
+        assert b in self._seed_rec, f"call forward_prefill(seed_slot={b}) before reseed_slot({b})"
+        B = self.B
+
+        def _match(t, ref):
+            # After decode steps the running buffers may be a different dtype (fp32 recurrent
+            # default) than the freshly-prefilled seed pieces; concat requires uniform dtype.
+            return t if t.dtype == ref.dtype else ttnn.typecast(t, ref.dtype)
+
+        # Recurrent state [B, Nv, Dk, Dv]: replace lane b along dim 0.
+        seed_rec = _match(self._seed_rec[b], self.rec_state)
+        lanes = [
+            seed_rec if i == b else ttnn.slice(self.rec_state, (i, 0, 0, 0), (i + 1, self.Nv, self.Dk, self.Dv))
+            for i in range(B)
+        ]
+        new = lanes[0] if B == 1 else ttnn.concat(lanes, dim=0)
+        ttnn.copy(new, self.rec_state)
+        if new is not lanes[0]:
+            ttnn.deallocate(new)
+        for i, s in enumerate(lanes):
+            if i != b:  # slices we made; the seed (i==b) is freed with the stash below
+                ttnn.deallocate(s)
+        if seed_rec is not self._seed_rec[b]:
+            ttnn.deallocate(seed_rec)
+        # Conv window [1, B, D]: conv_states[0] lane b = 0; conv_states[j+1] lane b = window j.
+        D = self.qkv_dim_tp
+        zero_b = ttnn.from_torch(
+            torch.zeros(1, 1, D, dtype=torch.bfloat16),
+            dtype=self.conv_states[0].dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        for k in range(self.K):
+            seed_lane = zero_b if k == 0 else _match(self._seed_conv[b][k - 1], self.conv_states[k])  # [1,1,D]
+            wins = [seed_lane if i == b else ttnn.slice(self.conv_states[k], (0, i, 0), (1, i + 1, D)) for i in range(B)]
+            if B == 1:
+                new_c = wins[0]
+            else:
+                rm = [ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT) for w in wins]
+                new_rm = ttnn.concat(rm, dim=1)
+                new_c = ttnn.to_layout(new_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(new_rm)
+                for r in rm:
+                    ttnn.deallocate(r)
+            ttnn.copy(new_c, self.conv_states[k])
+            if new_c is not wins[0]:
+                ttnn.deallocate(new_c)
+            for i, w in enumerate(wins):
+                if i != b:  # slices; seed windows freed with the stash below
+                    ttnn.deallocate(w)
+            if k > 0 and seed_lane is not self._seed_conv[b][k - 1]:
+                ttnn.deallocate(seed_lane)  # a typecast temp (not the stashed window)
+        ttnn.deallocate(zero_b)
+        # Free the slot's stashed device tensors and clear it.
+        ttnn.deallocate(self._seed_rec[b])
+        for w in self._seed_conv[b]:
+            ttnn.deallocate(w)
+        del self._seed_rec[b]
+        del self._seed_conv[b]
+
     def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, seed_slot=None):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
@@ -308,7 +374,12 @@ class TPGatedDeltaNet:
         # state continue from the persistent buffers (zeroed at sequence start by
         # reset_state_inplace, so a from-scratch single pass reads zeros == None). The demo
         # path (_stable_state False) is unchanged: no carry, reassign state.
-        carry = self._stable_state
+        # seed_slot prefills a fresh single sequence into a batch lane; it is always
+        # from-scratch (initial_state=None), even while the batch runs in-place-state
+        # (_stable_state) mode — a running batch reseeds a slot via prefill(seed_slot=b)
+        # while _stable_state is True, and self.rec_state is then [B,...] (wrong shape for
+        # this batch-1 prefill). So force no-carry when seeding.
+        carry = self._stable_state and seed_slot is None
         if carry and self.conv_carry is None:
             self.reset_state()
 
