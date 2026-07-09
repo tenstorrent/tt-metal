@@ -73,16 +73,16 @@ struct RxLogHeader {
 };
 static_assert(sizeof(RxLogHeader) == 16 * sizeof(uint32_t), "RxLogHeader must mirror ReceiverLog's header");
 
-struct RxRecord {  // ReceiverLogRecord, 8 bytes
-    uint16_t ts_delta;
-    uint8_t iter_delta;
+struct RxRecord {  // ReceiverLogRecord, 16 bytes
+    uint32_t ts_delta;
+    uint32_t iter_delta;
     uint8_t ready;
     uint8_t ack_delta;
     uint8_t wr_sent_delta;
     uint8_t wr_flush_delta;
     uint8_t completion_delta;
 };
-static_assert(sizeof(RxRecord) == 8, "RxRecord must mirror ReceiverLogRecord");
+static_assert(sizeof(RxRecord) == 16, "RxRecord must mirror ReceiverLogRecord");
 
 // Mirror of SenderLog up to and including the DRAM flush state.
 struct TxLogHeader {
@@ -101,15 +101,15 @@ struct TxLogHeader {
 };
 static_assert(sizeof(TxLogHeader) == 28 * sizeof(uint32_t), "TxLogHeader must mirror SenderLog's header");
 
-struct TxRecord {  // SenderLogRecord, 14 bytes
-    uint16_t ts_delta;
-    uint8_t iter_delta;
+struct TxRecord {  // SenderLogRecord, 20 bytes
+    uint32_t ts_delta;
+    uint32_t iter_delta;
     uint8_t dn_credits;
     uint8_t ch_flags;  // low nibble = ch0 [conn:bit3 | reason:bits0-2]; high nibble = ch1 (same layout)
     uint8_t ch0_local_occ, ch0_sent_delta, ch0_acked_delta, ch0_cmpl_delta;
     uint8_t ch1_local_occ, ch1_sent_delta, ch1_acked_delta, ch1_cmpl_delta;
 };
-static_assert(sizeof(TxRecord) == 14, "TxRecord must mirror SenderLogRecord");
+static_assert(sizeof(TxRecord) == 20, "TxRecord must mirror SenderLogRecord");
 
 // Read `size` bytes from a router's DRAM log buffer. `bank_id` is the kernel's LOG_DRAM_BANK_ID; for DRAM it
 // indexes the DRAM channel directly (matches the interleaved-read path in tt_metal.cpp). We add the allocator's
@@ -161,6 +161,26 @@ std::string file_header(
         dram_records,
         dropped);
 }
+
+// [debug] Decode the per-channel sender block-reason code (mirror of SenderSendReason in
+// fabric_erisc_router.cpp) into a readable label for the dumped [txlog] lines.
+const char* sender_reason_str(uint32_t reason) {
+    switch (reason) {
+        case 0: return "IDLE";     // no send, no obvious block (nothing pending / turn skipped)
+        case 1: return "SENT";     // transmitted a packet this pass
+        case 2: return "STARVED";  // downstream credit + txq free, but no unsent packet from the producer
+        case 3: return "RXFULL";   // unsent packet + txq free, but no downstream receiver credit
+        case 4: return "TXQBUSY";  // unsent packet + downstream credit, but the eth txq is busy
+        default: return "UNKNOWN";
+    }
+}
+
+// [debug] conn (ch_flags bit3/bit7) = channel_connection_established: whether an upstream worker (the tensix
+// producer) currently holds an OPEN fabric connection to this VC0 sender channel this pass. "UP" = a worker is
+// connected; "DN" = none attached (e.g. before the first open / after teardown, or a window edge). Reading it
+// alongside reason=STARVED disambiguates "connected worker not producing fast enough" (conn=UP) from "no
+// producer attached this pass" (conn=DN).
+const char* sender_conn_str(uint32_t conn_bit) { return conn_bit ? "UP" : "DN"; }
 
 }  // namespace
 
@@ -337,7 +357,8 @@ void dump_combine_flow_logs(const tt::tt_metal::distributed::MeshDevice& mesh_de
                             const uint32_t fl = rec.ch_flags;
                             const uint32_t dncr = rec.dn_credits;
                             f << fmt::format(
-                                "[txlog] iter={} dt={} ch=0 occ={} sent={} ack={} cmpl={} dncr={} r={} cn={}\n",
+                                "[txlog] iter={} dt={} ch=0 occ={} sent={} ack={} cmpl={} dncr={} reason={} "
+                                "conn={}\n",
                                 iter_acc,
                                 rec.ts_delta,
                                 rec.ch0_local_occ,
@@ -345,18 +366,19 @@ void dump_combine_flow_logs(const tt::tt_metal::distributed::MeshDevice& mesh_de
                                 ack0,
                                 cmpl0,
                                 dncr,
-                                fl & 0x7,
-                                (fl >> 3) & 0x1);
+                                sender_reason_str(fl & 0x7),
+                                sender_conn_str((fl >> 3) & 0x1));
                             f << fmt::format(
-                                "[txlog] iter={} dt=0 ch=1 occ={} sent={} ack={} cmpl={} dncr={} r={} cn={}\n",
+                                "[txlog] iter={} dt=0 ch=1 occ={} sent={} ack={} cmpl={} dncr={} reason={} "
+                                "conn={}\n",
                                 iter_acc,
                                 rec.ch1_local_occ,
                                 sent1,
                                 ack1,
                                 cmpl1,
                                 dncr,
-                                (fl >> 4) & 0x7,
-                                (fl >> 7) & 0x1);
+                                sender_reason_str((fl >> 4) & 0x7),
+                                sender_conn_str((fl >> 7) & 0x1));
                         }
                         ++files_written;
                     }

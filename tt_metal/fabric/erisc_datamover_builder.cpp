@@ -404,7 +404,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // [debug] Carve a second L1 scratch region for the receiver flow-control trace (ReceiverLog in the
     // kernel): a ring-buffer-free append log of delta-encoded {ts, iter, ready, ack, wr_sent, wr_flush,
     // completion} records, one appended per change of the receiver channel's flow-control state during a
-    // combine window. Sized for a 16 B header + 500 * 8 B records = 4000 B (kept in sync with
+    // combine window. Sized for a 64 B header + 252 * 16 B records = 4096 B (kept in sync with
     // RECEIVER_LOG_CAPACITY in the kernel); the total debug carve (combine + receiver) must stay well under
     // the unused channel-buffer headroom (the allocator's TT_FATAL catches overflow).
     constexpr std::size_t RECEIVER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words (>= 4096 B ReceiverLog)
@@ -413,10 +413,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
 
     // [debug] Carve a third L1 scratch region for the sender flow-control trace (SenderLog in the kernel):
     // one combined delta-encoded record per main-loop pass capturing both VC0 sender channels' state during a
-    // combine window. Distinct from the receiver region so the two traces never alias. Sized for a 16 B header
-    // + 256 * 14 B records = 3600 B (kept in sync with SENDER_LOG_CAPACITY in the kernel); like the other debug
+    // combine window. Distinct from the receiver region so the two traces never alias. Sized for a 112 B header
+    // + 128 * 20 B records = 2672 B (kept in sync with SENDER_LOG_CAPACITY in the kernel); like the other debug
     // carves it must stay well under the unused channel-buffer headroom (the allocator's TT_FATAL catches it).
-    constexpr std::size_t SENDER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words (>= 3600 B SenderLog)
+    constexpr std::size_t SENDER_LOG_BUFFER_SIZE = 4096;  // 1024 uint32 words (>= 2672 B SenderLog)
     this->sender_log_buffer_address = buffer_address;
     buffer_address += SENDER_LOG_BUFFER_SIZE;
 

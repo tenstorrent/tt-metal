@@ -588,29 +588,30 @@ bool combine_first_pkt_seen = false;
 // log spans a meaningful stretch of activity rather than a handful of adjacent iterations. Dumped in order
 // via DEVICE_PRINT at the combine STOP marker (which stalls the eRisc, acceptable post-window).
 //
-// Overlaid on the RECEIVER_LOG_BUFFER_ADDR region carved by the builder (4096 B). Records are 28 B, so the
-// region holds far more than the RECEIVER_LOG_CAPACITY cap below.
-// Packed to 8 bytes. Every field is a delta since the previous recorded row -- the reset snapshot is the
-// implicit zero (see reset_receiver_log / record_receiver_flow_state) -- except `ready`, which is an absolute
-// level. Deltas between consecutive recorded rows are tiny: the monotonic counters advance by at most one per
-// main-loop pass, and the window opens at data-send start (quiescent), so the counter deltas are 0/1 and never
-// saturate their byte. ts_delta/iter_delta can saturate across a long idle gap between records (documented in
-// record_receiver_flow_state); ts/iter are relative/approximate anyway, so a clamped gap is acceptable.
-struct ReceiverLogRecord {
-    uint16_t ts_delta;         // cycles since previous record (get_timestamp_32b domain), saturating at 0xFFFF
-    uint8_t iter_delta;        // main-loop passes since previous record, saturating at 0xFF
+// Overlaid on the RECEIVER_LOG_BUFFER_ADDR region carved by the builder (4096 B). Records are 16 B.
+// Every field is a delta since the previous recorded row -- the reset snapshot is the implicit zero (see
+// reset_receiver_log / record_receiver_flow_state) -- except `ready`, which is an absolute level. Deltas
+// between consecutive recorded rows are tiny: the monotonic counters advance by at most one per main-loop
+// pass, so the single-byte counter deltas never saturate. ts_delta/iter_delta are full 32b so they capture
+// arbitrarily long idle gaps between records without saturating (the reason they were widened from 2 B/1 B).
+struct ReceiverLogRecord {     // 16 bytes (see static_assert)
+    uint32_t ts_delta;         // cycles since previous record (get_timestamp_32b domain), full 32b (no saturation)
+    uint32_t iter_delta;       // main-loop passes since previous record, full 32b (no saturation)
     uint8_t ready;             // to_receiver_pkts_sent doorbell level, absolute (bounded by receiver slot count)
     uint8_t ack_delta;         // ack_counter increments since previous record
     uint8_t wr_sent_delta;     // wr_sent_counter increments since previous record
     uint8_t wr_flush_delta;    // wr_flush_counter increments since previous record (always 0 in fused builds)
     uint8_t completion_delta;  // completion_counter increments since previous record
+    // 3 B tail padding (struct alignment 4): keeps records 16 B / 4-aligned so the uint32 deltas above are
+    // never accessed unaligned on the eRisc, and CAPACITY*16 stays a 16 B multiple for the DRAM flush.
 };
-static_assert(sizeof(ReceiverLogRecord) == 8, "ReceiverLogRecord must be 8 bytes");
+static_assert(sizeof(ReceiverLogRecord) == 16, "ReceiverLogRecord must be 16 bytes");
 
-// Cap the number of records so the dump is bounded and we never run past the carved region. 500 * 8 B of
-// records + a 44 B header (16 B tag/count + 28 B working state) = 4044 B; the builder carves
-// RECEIVER_LOG_BUFFER_SIZE = 4096 B to hold it (keep the two in sync).
-constexpr uint32_t RECEIVER_LOG_CAPACITY = 500;
+// Cap the number of records so the dump is bounded and we never run past the carved region. 252 * 16 B of
+// records + a 64 B header = 4096 B exactly; the builder carves RECEIVER_LOG_BUFFER_SIZE = 4096 B to hold it
+// (keep the two in sync). 252 is the most 16 B records that fit alongside the header without growing the carve
+// -- 256 would need 4160 B.
+constexpr uint32_t RECEIVER_LOG_CAPACITY = 252;
 constexpr uint32_t RECEIVER_LOG_MAGIC = 0xC0FFEE02;
 
 struct ReceiverLog {
@@ -698,7 +699,7 @@ FORCE_INLINE void reset_receiver_log(
 //
 // Alignment: records_l1_src is &records[0] (16 B-aligned: the region base and both record-array offsets are
 // 16 B multiples) and dram_base is 16 B-aligned. Every full-buffer flush moves CAPACITY*sizeof(record) --
-// a 16 B multiple for both logs (500*8, 256*14) -- so the DRAM offset stays 16 B-aligned and each write's
+// a 16 B multiple for both logs (252*16, 128*20) -- so the DRAM offset stays 16 B-aligned and each write's
 // start addresses satisfy the NOC 16 B write-alignment requirement (only the start addresses must be
 // aligned, not the length). Only the final partial flush can move a non-multiple, and nothing follows it.
 //
@@ -726,8 +727,8 @@ FORCE_INLINE bool flush_log_records_to_dram(
 // [debug] Append a record iff the flow-control state changed since the last recorded row. Gated by the caller
 // on combine_window_active. Cheap when nothing changed: 5 compares and an early return. Everything is stored
 // as a delta against the previous recorded row (reset seeds the baseline): the monotonic counter deltas are
-// 0/1 per pass so they never overflow a byte; ts_delta/iter_delta saturate to their field width (only
-// reachable across a long idle gap, where ts/iter are approximate anyway); `ready` is stored absolute.
+// 0/1 per pass so they never overflow a byte; ts_delta/iter_delta are full 32b so a long idle gap is captured
+// exactly (no saturation); `ready` is stored absolute.
 FORCE_INLINE void record_receiver_flow_state(
     uint32_t iter, uint32_t ready, uint32_t ack, uint32_t wr_sent, uint32_t wr_flush, uint32_t completion) {
     volatile ReceiverLog* log = receiver_log();
@@ -759,8 +760,9 @@ FORCE_INLINE void record_receiver_flow_state(
     }
     uint32_t now = get_timestamp_32b();
 
-    // Deltas against the previous recorded row. Counters are monotonic so these are non-negative; clamp to the
-    // field width (only ts/iter can actually reach the clamp, across a long quiet stretch between records).
+    // Deltas against the previous recorded row. Counters are monotonic so these are non-negative. ts/iter are
+    // full 32b (stored verbatim, no saturation); the single-byte counter deltas are 0/1 per pass so they never
+    // reach their clamp.
     uint32_t ts_d = now - log->last_ts;
     uint32_t iter_d = iter - log->last_iter;
     uint32_t ack_d = ack - log->last_ack;
@@ -769,8 +771,8 @@ FORCE_INLINE void record_receiver_flow_state(
     uint32_t completion_d = completion - log->last_completion;
 
     volatile ReceiverLogRecord* rec = &log->records[idx];
-    rec->ts_delta = ts_d > 0xFFFF ? 0xFFFF : static_cast<uint16_t>(ts_d);
-    rec->iter_delta = iter_d > 0xFF ? 0xFF : static_cast<uint8_t>(iter_d);
+    rec->ts_delta = ts_d;      // full 32b: capture long idle gaps without saturating
+    rec->iter_delta = iter_d;  // full 32b
     rec->ready = ready > 0xFF ? 0xFF : static_cast<uint8_t>(ready);
     rec->ack_delta = ack_d > 0xFF ? 0xFF : static_cast<uint8_t>(ack_d);
     rec->wr_sent_delta = wr_sent_d > 0xFF ? 0xFF : static_cast<uint8_t>(wr_sent_d);
@@ -810,9 +812,9 @@ enum SenderSendReason : uint8_t {
     SENDER_REASON_TXQBUSY = 4,  // unsent packet + downstream credit, but the eth txq is busy
 };
 
-struct SenderLogRecord {    // 14 bytes (see static_assert)
-    uint16_t ts_delta;      // cycles since previous record (get_timestamp_32b), saturating at 0xFFFF
-    uint8_t iter_delta;     // main-loop passes since previous record, saturating at 0xFF
+struct SenderLogRecord {    // 20 bytes (see static_assert)
+    uint32_t ts_delta;      // cycles since previous record (get_timestamp_32b), full 32b (no saturation)
+    uint32_t iter_delta;    // main-loop passes since previous record, full 32b (no saturation)
     uint8_t dn_credits;     // outbound.num_free_slots (VC-shared downstream headroom), absolute
     uint8_t ch_flags;       // low nibble = ch0 [conn:bit3 | reason:bits0-2]; high nibble = ch1 (same layout)
     uint8_t ch0_local_occ;  // num_buffers[0] - free_slots[0] (packets waiting to transmit), absolute
@@ -823,12 +825,13 @@ struct SenderLogRecord {    // 14 bytes (see static_assert)
     uint8_t ch1_sent_delta;
     uint8_t ch1_acked_delta;
     uint8_t ch1_cmpl_delta;
+    // 2 B tail padding (struct alignment 4): keeps records 20 B / 4-aligned so the uint32 deltas above are
+    // never accessed unaligned on the eRisc, and CAPACITY*20 stays a 16 B multiple for the DRAM flush.
 };
-static_assert(sizeof(SenderLogRecord) == 14, "SenderLogRecord must be 14 bytes");
+static_assert(sizeof(SenderLogRecord) == 20, "SenderLogRecord must be 20 bytes");
 
-// 256 * 14 B records + an 88 B header (16 B tag/count + 72 B working state) = 3672 B, under the builder's
-// SENDER_LOG_BUFFER_SIZE (4096). Keep in sync.
-constexpr uint32_t SENDER_LOG_CAPACITY = 256;
+// 128 * 20 B records + a 112 B header = 2672 B, under the builder's SENDER_LOG_BUFFER_SIZE (4096). Keep in sync.
+constexpr uint32_t SENDER_LOG_CAPACITY = 128;
 constexpr uint32_t SENDER_LOG_MAGIC = 0xC0FFEE03;
 
 struct SenderLog {
@@ -970,8 +973,8 @@ __attribute__((noinline)) void record_sender_flow_state(uint32_t iter) {
     uint32_t cmpl1_d = log->cmpl[1] - log->last_cmpl[1];
 
     volatile SenderLogRecord* rec = &log->records[idx];
-    rec->ts_delta = ts_d > 0xFFFF ? 0xFFFF : static_cast<uint16_t>(ts_d);
-    rec->iter_delta = iter_d > 0xFF ? 0xFF : static_cast<uint8_t>(iter_d);
+    rec->ts_delta = ts_d;      // full 32b: capture long idle gaps without saturating
+    rec->iter_delta = iter_d;  // full 32b
     rec->dn_credits = log->dn_credits > 0xFF ? 0xFF : static_cast<uint8_t>(log->dn_credits);
     rec->ch_flags = static_cast<uint8_t>(
         (log->reason[0] & 0x7) | (log->conn[0] ? 0x8 : 0) | ((log->reason[1] & 0x7) << 4) | (log->conn[1] ? 0x80 : 0));
