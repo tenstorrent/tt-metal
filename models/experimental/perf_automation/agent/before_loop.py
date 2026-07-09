@@ -360,7 +360,13 @@ def before_loop(
             )
     if pathmap is None:
         raise _last_exc if _last_exc else RuntimeError("discover produced no pathmap")
-    if pcc_abs is not None:
+    # --perf-test PERF_TEST help text promises this "overrides auto-generation" -- but nothing
+    # actually gated the auto-gen-from-pcc call on its absence, so a caller passing BOTH --pcc-test
+    # (for the correctness gate) AND --perf-test (to pin an existing, bounded/layer-capped perf
+    # test) still paid for an LLM perf-test-generation call on every run, and a rejected/failed
+    # draft (e.g. the generative-decode-loop heuristic false-positiving on non-LLM PCC source) took
+    # down the whole run with RuntimeError even though a perfectly good --perf-test was given.
+    if pcc_abs is not None and not config.get("perf_test"):
         from .perf_test_gen import generate_perf_test
 
         perf_node = generate_perf_test(model_root, "main", None, force=True, source_abs=pcc_abs, source_kind="pcc")
@@ -380,7 +386,13 @@ def before_loop(
     )
     # perf test path: discovery returns model-root-relative; pytest runs from tt-metal root
     perf_rel = config.get("perf_test") or os.path.relpath(model_root / pathmap["perf_test"]["path"], tt_root)
-    case = config.get("case") or pathmap["perf_test"]["case"]
+    # An explicit --perf-test override points at a DIFFERENT file than whatever discovery found
+    # (or auto-generated, e.g. `test_main_perf.py` from --pcc-test) -- pathmap["perf_test"]["case"]
+    # belongs to THAT file, not the override, and blindly reusing it here can attach a case id that
+    # doesn't exist in the override (e.g. discovery's "test_main_perf" against a bare, non-
+    # parametrized user test), which hard-fails preflight with "selects no cases". Only fall back to
+    # discovery's case when the perf_test path ALSO came from discovery.
+    case = config.get("case") or (None if config.get("perf_test") else pathmap["perf_test"]["case"])
     # SELF-HEAL the case: the discovery agent (or a stale config) can emit a case id that selects
     # NOTHING (e.g. 'device_params0-0' vs the real 'device_params0') -> preflight would hard-fail.
     # Validate against the test's ACTUAL collected ids and auto-correct to a collectable case (best
@@ -397,6 +409,15 @@ def before_loop(
                 print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
                 stages._event("note", msg)
                 case = corrected
+            elif not corrected:
+                # No parametrized case exists to correct to (the resolved perf test is a bare,
+                # non-parametrized function) -- clear the stale mismatched case instead of leaving
+                # it set to something that selects 0 tests; `if not case:` below then collects
+                # without -k, which is the right behavior for a non-parametrized test.
+                msg = f"discovery case '{case}' selects 0 tests and target has no parametrization -> clearing -k"
+                print(f"      ⚠ {msg}", file=sys.stderr, flush=True)
+                stages._event("note", msg)
+                case = None
     for w in pathmap.get("warnings", []):
         print(f"      ⚠ {w.get('code')}: {w.get('detail')}", file=sys.stderr, flush=True)
     stages.done(
