@@ -79,10 +79,11 @@ from models.tt_transformers.tt.common import encode_prompt_hf
 # conservative upper bounds: the swept TTTv2 prefill predates batched prefill, which only LOWERS
 # TTFT, so the current base clears them with margin while gross prefill regressions are still caught.
 #
-# KNOWN GAP (tracked, being closed — github.com/tenstorrent/tt-metal/issues/49282): at T3K
-# batch-1 on_device_topk, TTTv1 (~153 t/s/u) is ~16% above TTTv2 (~128). Per the rule the gate
-# is set at the TTTv1 value, so that ONE cell is expected RED until the gap closes — an honest,
-# visible signal, not a lowered gate. Every other cell is at parity-or-better.
+# T3K batch-1 GAP CLOSED (issue #49282 -> fix #49284, on main): the ~16%-under-TTTv1 TTTv2 decode
+# gap once seen at this cell (~128 vs ~153 t/s/u) was closed by the shared on-device decode loop.
+# The gate stays at the TTTv1 value (better-of rule); TTTv2 now measures ~152/150 t/s/u (perf/acc,
+# T3K on_device_topk), TTTv1 parity within the 5% PERF_TOLERANCE. Enabled on the perf path via
+# TracedLlama32_1BExecutor(ondevice_decode_loop=...). Every cell is now at parity-or-better.
 # =============================================================================
 
 # top1/top5 are teacher-forcing accuracy floors (sampling-independent). Perf metrics for batch-1
@@ -119,12 +120,12 @@ EXPECTED_METRICS_BATCH1 = {
         "performance": {
             "N150": {"tok_s_u": 12.2, "ttft_ms": 30},
             "N300": {"tok_s_u": 37.9, "ttft_ms": 32},
-            "T3K": {"tok_s_u": 153.5, "ttft_ms": 30},  # TTTv1 > TTTv2 — issue #49282, red-until-closed
+            "T3K": {"tok_s_u": 153.5, "ttft_ms": 30},  # gate = TTTv1 (better-of); TTTv2 at parity via #49284 (~152)
         },
         "accuracy": {
             "N150": {"tok_s_u": 12.1, "ttft_ms": 30},
             "N300": {"tok_s_u": 37.5, "ttft_ms": 32},
-            "T3K": {"tok_s_u": 153.2, "ttft_ms": 30},  # TTTv1 > TTTv2 — issue #49282, red-until-closed
+            "T3K": {"tok_s_u": 153.2, "ttft_ms": 30},  # gate = TTTv1 (better-of); TTTv2 at parity via #49284 (~150)
         },
     },
 }
