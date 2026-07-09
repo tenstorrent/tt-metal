@@ -105,7 +105,9 @@ runs:
               echo "Repeated auth failures despite token reissue; failing."
               exit 1
             fi
+            set +e
             IDTOKEN=$(mint_token)
+            set -e
             echo "::add-mask::${IDTOKEN}"
           else
             echo "Transient error polling allocation (rc=${rc}): ${output}"
