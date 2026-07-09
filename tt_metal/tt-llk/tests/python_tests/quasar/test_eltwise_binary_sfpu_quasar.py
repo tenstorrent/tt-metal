@@ -741,6 +741,7 @@ def _run_quant(binary_op, tile_indices):
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
