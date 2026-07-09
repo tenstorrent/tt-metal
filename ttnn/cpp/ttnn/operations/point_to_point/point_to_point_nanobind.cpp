@@ -31,7 +31,10 @@ ttnn::Tensor point_to_point_wrapper(
 void bind_point_to_point(nb::module_& mod) {
     const auto* doc =
         R"doc(
-            Point-to-point send and receive operation. Send a tensor from one device to another.
+            Point-to-point send and receive operation. Send a tensor shard from one device to
+            another over the fabric. If sender_coord == receiver_coord (same device), it performs a
+            local on-device copy of the shard into output_tensor (no fabric); if output_tensor
+            aliases input_tensor this is a no-op.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
