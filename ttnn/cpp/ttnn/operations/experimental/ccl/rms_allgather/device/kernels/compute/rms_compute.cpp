@@ -217,7 +217,7 @@ void kernel_main() {
         ckl::BroadcastDim::Row,
         ckl::InputLifecycle::Bulk,
         ckl::InputLifecycle::HeldBulk,
-        ckl::OutputLifecycle::BulkReservePerChunk,
+        ckl::OutputLifecycle::ReserveAllPushPerChunk,
         ckl::BinaryDataFormatReconfig::Input,
         ckl::PackTileReconfig::Output,
         ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));

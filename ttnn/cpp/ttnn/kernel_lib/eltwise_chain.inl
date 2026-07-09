@@ -532,10 +532,10 @@ struct OutputStream {
     // upfront-reserve policies reserve the whole window once and write distinct tiles into it
     // (walk); per-tile/per-chunk-reserve policies advance the CB front, so the index stays pinned.
     static constexpr bool walk =
-        is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::BulkReservePerTile, OutputLifecycle::BulkReservePerChunk>;
+        is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::ReserveAllPushPerTile, OutputLifecycle::ReserveAllPushPerChunk>;
 
     ALWI void reserve_per_tile(uint32_t /*i*/) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Streaming, OutputLifecycle::HeldReserve>) {
+        if constexpr (Policy == OutputLifecycle::Streaming) {
             DataflowBuffer(Cb).reserve_back(1);
         }
     }
@@ -545,33 +545,23 @@ struct OutputStream {
         }
     }
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::BulkReservePerTile, OutputLifecycle::BulkReservePerChunk>) {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Bulk, OutputLifecycle::ReserveAllPushPerTile, OutputLifecycle::ReserveAllPushPerChunk>) {
             DataflowBuffer(Cb).reserve_back((Ht * Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::DeferredReserve, OutputLifecycle::Bulk>) {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::ReserveNonePushEnd, OutputLifecycle::Bulk>) {
             DataflowBuffer(Cb).push_back((walk ? (Ht * Wt) : 1u) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_per_tile(uint32_t /*i*/) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Streaming, OutputLifecycle::BulkReservePerTile>) {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Streaming, OutputLifecycle::ReserveAllPushPerTile>) {
             DataflowBuffer(Cb).push_back(1);
         }
     }
     ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::Chunked, OutputLifecycle::BulkReservePerChunk>) {
+        if constexpr (is_one_of_v<Policy, OutputLifecycle::Chunked, OutputLifecycle::ReserveAllPushPerChunk>) {
             DataflowBuffer(Cb).push_back(inner_count);
-        }
-    }
-    ALWI void reserve_per_row() const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::OuterStream>) {
-            DataflowBuffer(Cb).reserve_back(1);
-        }
-    }
-    ALWI void push_per_row() const {
-        if constexpr (is_one_of_v<Policy, OutputLifecycle::OuterStream>) {
-            DataflowBuffer(Cb).push_back(1);
         }
     }
 };
@@ -663,7 +653,7 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     // without per-iter bookkeeping the chain doesn't own.
     static_assert(Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
                   "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
-                  "(OutputLifecycle::Bulk / OutputLifecycle::DeferredReserve / OutputLifecycle::HeldReserve / OutputLifecycle::CallerManaged)");
+                  "(OutputLifecycle::Bulk / OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::CallerManaged)");
 
     static constexpr uint32_t  dfb                 = Cb;
     static constexpr uint32_t          pack_dfb_id()        { return Cb; }
@@ -711,7 +701,7 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     // reserve_per_tile / reserve_per_block / reserve_upfront / push_at_end / push_per_tile /
-    // push_per_block / reserve_per_row / push_per_row inherited from OutputStream.
+    // push_per_block inherited from OutputStream.
 };
 
 // =============================================================================
@@ -1930,8 +1920,8 @@ template <class E>
 ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_writer_op_v<E>) e.push_at_end(Ht, Wt);
 }
-// Per-outer-row hooks (InputLifecycle::OuterStream readers / OutputLifecycle::OuterStream
-// writers): wait/reserve at row entry, pop/push at row exit. Inert for every other policy.
+// Per-outer-row hooks (InputLifecycle::OuterStream readers): wait at row entry, pop at row exit.
+// Inert for every other policy.
 template <class E>
 ALWI void elem_wait_per_row(const E& e) {
     if constexpr (is_cb_reader_op_v<E>) e.wait_per_row();
@@ -1939,14 +1929,6 @@ ALWI void elem_wait_per_row(const E& e) {
 template <class E>
 ALWI void elem_pop_per_row(const E& e) {
     if constexpr (is_cb_reader_op_v<E>) e.pop_per_row();
-}
-template <class E>
-ALWI void elem_reserve_per_row(const E& e) {
-    if constexpr (is_cb_writer_op_v<E>) e.reserve_per_row();
-}
-template <class E>
-ALWI void elem_push_per_row(const E& e) {
-    if constexpr (is_cb_writer_op_v<E>) e.push_per_row();
 }
 
 }  // namespace detail
@@ -1992,11 +1974,10 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
     // Block-mode elements consume `flat_base + j`; bcast-mode read `ht` / `wt = wt_base + j`.
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         const uint32_t row_base = ht * Wt;
-        // Outer-axis streamed operands (InputLifecycle/OutputLifecycle::OuterStream): wait the
-        // input / reserve the output ONE tile at row entry; the inner loop re-reads it at the
-        // front; pop / push it at row exit. Inert for every other policy.
+        // Outer-axis streamed input operands (InputLifecycle::OuterStream): wait ONE tile at row
+        // entry; the inner loop re-reads it at the front; pop it at row exit. Inert for every
+        // other policy.
         (detail::elem_wait_per_row(elts), ...);
-        (detail::elem_reserve_per_row(elts), ...);
         for (uint32_t wt_base = 0; wt_base < Wt; wt_base += block_size) {
             const uint32_t inner_count =
                 (wt_base + block_size <= Wt) ? block_size : (Wt - wt_base);
@@ -2011,7 +1992,6 @@ ALWI void chain_run_loop(EltwiseShape shape, Es... elts) {
             tile_regs_release();
         }
         (detail::elem_pop_per_row(elts), ...);
-        (detail::elem_push_per_row(elts), ...);
     }
 
     // End-of-chain upfront-policy lifecycle.

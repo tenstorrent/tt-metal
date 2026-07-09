@@ -252,7 +252,7 @@ void kernel_main() {
                 ckl::InputLifecycle::Streaming,
                 ckl::InputLifecycle::CallerManaged>{},
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
-            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::DeferredReserve>{});
+            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::ReserveNonePushEnd>{});
 
         ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
         cb_ex2pe_obj.wait_front(onetile);

@@ -221,7 +221,7 @@ void kernel_main() {
         //   - Original: 1 upfront cb_xmm.reserve_back(total) + N per-block push.
         //   - Chain:   N per-block cb_xmm.reserve_back(full_block_size) + N per-block push.
         //     Chain BlockIter pack requires Upfront* / NoReserve* policy (chain.inl:361);
-        //     OutputLifecycle::DeferredReserve / OutputLifecycle::Streaming are static_assert'd out.
+        //     OutputLifecycle::ReserveNonePushEnd / OutputLifecycle::Streaming are static_assert'd out.
         //     OutputLifecycle::Bulk per call emits both. The upfront reserve(total) is dropped — per-block reserves
         //     cover the same capacity progressively. All reserves are capacity-checks;
         //     since the producer/consumer balance is unchanged, behavior is identical.

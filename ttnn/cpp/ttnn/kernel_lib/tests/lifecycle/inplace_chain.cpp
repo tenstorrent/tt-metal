@@ -13,8 +13,8 @@
 //   The chain's per-iter order is  wait -> read -> POP  (compute phase)  then  RESERVE -> pack -> push
 //   (pack phase); see eltwise_chain.inl. The pop frees the slot BEFORE the reserve asks for one, so an
 //   output that reserves INCREMENTALLY (per-tile / per-chunk) reuses the just-freed slot and the CB
-//   stays at steady occupancy. An output that reserves UPFRONT (Bulk / BulkReservePerTile /
-//   BulkReservePerChunk) issues cb_reserve_back(N) BEFORE the loop, while all N input tiles still
+//   stays at steady occupancy. An output that reserves UPFRONT (Bulk / ReserveAllPushPerTile /
+//   ReserveAllPushPerChunk) issues cb_reserve_back(N) BEFORE the loop, while all N input tiles still
 //   occupy cb_x -> 0 free slots -> DEADLOCK. Symmetrically the input must free space as it goes
 //   (BulkDrain / Streaming pop-per-tile, or Chunked pop-per-chunk); an input that holds everything to
 //   the end (HeldBulk) never frees a slot for the writer either.
@@ -29,7 +29,7 @@
 //
 // NOT in-place-safe (would hang — deliberately NOT built as a passing case):
 //    BulkDrain(in) + Bulk(out)  — Bulk reserves N upfront while cb_x holds N -> cb_reserve_back(N) hangs.
-//    (Same for any *upfront-reserve* output: BulkReservePerTile / BulkReservePerChunk.)
+//    (Same for any *upfront-reserve* output: ReserveAllPushPerTile / ReserveAllPushPerChunk.)
 //
 // TOPOLOGY (why 3 stages, not just reader->cb_x->writer): a CB has ONE tiles_acked counter shared by
 // every consumer. If the DRAM writer drained cb_x directly it would see N tiles available the instant

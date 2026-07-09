@@ -241,7 +241,6 @@ enum class ReservePolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
-    PerOuter,  // reserve 1 at each OUTER (ht/row) iteration entry — one output tile per row
     Upfront,
 };
 
@@ -249,7 +248,6 @@ enum class PushPolicy : uint8_t {
     None,
     PerTile,
     PerChunk,
-    PerOuter,  // push 1 at each OUTER (ht/row) iteration exit — one output tile per row
     AtEnd,
 };
 
@@ -263,8 +261,11 @@ struct OutputLifecycle {
     constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
 
     // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Defined out-of-line below.
-    static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
-        HeldReserve, DeferredReserve, OuterStream;
+    // Naming: single-word names (Streaming/Chunked/Bulk/CallerManaged) are the symmetric cells where
+    // reserve and push move together; the asymmetric cells spell BOTH axes literally as
+    // Reserve<rate>Push<rate> (e.g. ReserveAllPushPerTile = reserve all upfront, push one per tile).
+    static const OutputLifecycle Streaming, Chunked, Bulk, ReserveAllPushPerTile, ReserveAllPushPerChunk, CallerManaged,
+        ReserveNonePushEnd;
 };
 
 // Default: reserve and push 1 output tile each step.
@@ -274,24 +275,19 @@ inline constexpr OutputLifecycle OutputLifecycle::Chunked = {ReservePolicy::PerC
 // Reserve all output tiles upfront, push them all at the end.
 inline constexpr OutputLifecycle OutputLifecycle::Bulk = {ReservePolicy::Upfront, PushPolicy::AtEnd};
 // Reserve all output tiles upfront, but push 1 per step so a downstream consumer can start reading before the chain finishes.
-inline constexpr OutputLifecycle OutputLifecycle::BulkReservePerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerTile = {ReservePolicy::Upfront, PushPolicy::PerTile};
 // Reserve all output tiles upfront, push block_size tiles at a time.
-inline constexpr OutputLifecycle OutputLifecycle::BulkReservePerChunk = {ReservePolicy::Upfront, PushPolicy::PerChunk};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveAllPushPerChunk = {
+    ReservePolicy::Upfront, PushPolicy::PerChunk};
 // Chain does not reserve or push (it only writes the tile). Use when you wrap the chain in your own reserve/push.
 inline constexpr OutputLifecycle OutputLifecycle::CallerManaged = {ReservePolicy::None, PushPolicy::None};
-// Reserve 1 output tile per step, but do not push — you push later yourself.
-inline constexpr OutputLifecycle OutputLifecycle::HeldReserve = {ReservePolicy::PerTile, PushPolicy::None};
 // Do not reserve (you reserved upfront yourself), push all at the end.
-inline constexpr OutputLifecycle OutputLifecycle::DeferredReserve = {ReservePolicy::None, PushPolicy::AtEnd};
-// Reserve and push 1 output tile per row (one per outer/ht step). Use for chains that produce one output tile per row
-// instead of one per tile.
-inline constexpr OutputLifecycle OutputLifecycle::OuterStream = {ReservePolicy::PerOuter, PushPolicy::PerOuter};
+inline constexpr OutputLifecycle OutputLifecycle::ReserveNonePushEnd = {ReservePolicy::None, PushPolicy::AtEnd};
 
 constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Streaming || lc == OutputLifecycle::Chunked || lc == OutputLifecycle::Bulk ||
-           lc == OutputLifecycle::BulkReservePerTile || lc == OutputLifecycle::BulkReservePerChunk ||
-           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::HeldReserve ||
-           lc == OutputLifecycle::DeferredReserve || lc == OutputLifecycle::OuterStream;
+           lc == OutputLifecycle::ReserveAllPushPerTile || lc == OutputLifecycle::ReserveAllPushPerChunk ||
+           lc == OutputLifecycle::CallerManaged || lc == OutputLifecycle::ReserveNonePushEnd;
 }
 
 /// Which tile of an input operand to read at each step of the (Ht x Wt) walk.
@@ -375,8 +371,8 @@ constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
 
 /// Lifecycle compatibility check for `TileBase != None` on output elements.
 constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
-    return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::DeferredReserve ||
-           lc == OutputLifecycle::HeldReserve || lc == OutputLifecycle::CallerManaged;
+    return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::ReserveNonePushEnd ||
+           lc == OutputLifecycle::CallerManaged;
 }
 
 // =============================================================================

@@ -9,7 +9,7 @@ AND write the SAME circular buffer. Run under --dev.
 In-place is how an op overwrites a resident buffer with no second CB. It is CB-self-deadlock-prone:
 the packer's cb_reserve_back cannot succeed while the reader's tiles still occupy the buffer. The chain's per-iter order is  wait -> read -> POP  then  RESERVE -> pack -> push, so the pop
 frees a slot BEFORE the reserve asks for one -- but only if the output reserves INCREMENTALLY
-(per-tile / per-chunk). An upfront-reserve output (Bulk / BulkReservePerTile / BulkReservePerChunk)
+(per-tile / per-chunk). An upfront-reserve output (Bulk / ReserveAllPushPerTile / ReserveAllPushPerChunk)
 reserves N before the loop while the CB is full -> deadlock. See inplace_chain.cpp for the full rule.
 
 inplace_chain.cpp fills cb_x from the reader, runs exp(x) IN PLACE on cb_x under a selectable

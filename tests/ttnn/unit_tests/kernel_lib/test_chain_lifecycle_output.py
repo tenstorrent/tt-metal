@@ -12,8 +12,8 @@ A miscount hangs the writer (BRISC) or overwrites an unpushed tile. out_lifecycl
 identity copy with a selectable OutputLifecycle and supplies the caller-side edge where needed.
 
 Limited to the 4 well-defined cells with documented real usage (Streaming, Bulk,
-BulkReservePerTile = SDPA reduce_c, CallerManaged = tt-train L1 accumulator). HeldReserve /
-DeferredReserve / Chunked are skipped — their n>1 reserve-without-push semantics are ambiguous
+ReserveAllPushPerTile, CallerManaged).
+ReserveNonePushEnd / Chunked are skipped — their n>1 reserve-without-push semantics are ambiguous
 (see TEST_DECISION_LOG.md).
 """
 
@@ -29,7 +29,7 @@ KERNEL = "ttnn/cpp/ttnn/kernel_lib/tests/lifecycle/out_lifecycle.cpp"
 OUT_LIFECYCLES = {
     0: "Streaming",
     1: "Bulk",
-    2: "BulkReservePerTile",
+    2: "ReserveAllPushPerTile",
     3: "CallerManaged",
 }
 
