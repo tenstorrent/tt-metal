@@ -201,7 +201,7 @@ EXPECTED_METRICS_BATCH32_CI: dict = {
 
 # Perf workload: natural-length prefill (these sample prompts are ~90-125 tokens -> 128 bucket,
 # matching TTTv1), 200 decode steps. Accuracy uses the 511-token teacher-forcing refpt.
-_PERF_NUM_DECODE_TOKENS = 200
+_PERF_NUM_DECODE_TOKENS = int(os.environ.get("PERF_NUM_DECODE_TOKENS", "200"))
 
 PERF_TOLERANCE = 0.05
 
@@ -857,7 +857,29 @@ def _run_perf_benchmark(
     if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
         model.model_args.disable_batched_prefill = True
 
-    traced_executor = TracedLlama32_3BExecutor(model, mesh_device)
+    # On-device sampling toggle for N150/N300/T3K evidence-gathering (see sampling handoff docs):
+    #   host            -> sampling_params=None (host-argmax, the default shipped path)
+    #   on_device       -> greedy temp=0,k=1,p=0  => trace-captured TOP-K op path with k=1
+    #   on_device_topk  -> temp=0,k=32,p=0.08      => trace-captured TOP-K op path with k=32
+    #                      (PERF.md-parity recipe). Both on-device modes route through the same
+    #                      per-device ttnn.topk -> all-gather of the [*,k] tuples -> ttnn.sampling
+    #                      op path (the model is built with allow_force_argmax=False, so the
+    #                      full-vocab argmax all-gather is never taken); they differ only in k.
+    sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+    _on_device_params = {
+        "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
+        "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
+    }
+    sampling_params = (
+        _on_device_params[sampling_mode]
+        if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
+        else None
+    )
+    logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+
+    # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
+    # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active).
+    traced_executor = TracedLlama32_3BExecutor(model, mesh_device, ondevice_decode_loop=sampling_params is not None)
     try:
         ma = model.model_args
         assert ma is not None
@@ -887,26 +909,6 @@ def _run_perf_benchmark(
         # Natural-length tokenization (matches TTTv1): the executor buckets each user's real
         # length to get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
-
-        # On-device sampling toggle for N150/N300/T3K evidence-gathering (see sampling handoff docs):
-        #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0  => trace-captured TOP-K op path with k=1
-        #   on_device_topk  -> temp=0,k=32,p=0.08      => trace-captured TOP-K op path with k=32
-        #                      (PERF.md-parity recipe). Both on-device modes route through the same
-        #                      per-device ttnn.topk -> all-gather of the [*,k] tuples -> ttnn.sampling
-        #                      op path (the model is built with allow_force_argmax=False, so the
-        #                      full-vocab argmax all-gather is never taken); they differ only in k.
-        sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
-        _on_device_params = {
-            "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
-            "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
-        }
-        sampling_params = (
-            _on_device_params[sampling_mode]
-            if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
-            else None
-        )
-        logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
         result = run_perf_benchmark(
             traced_executor,
