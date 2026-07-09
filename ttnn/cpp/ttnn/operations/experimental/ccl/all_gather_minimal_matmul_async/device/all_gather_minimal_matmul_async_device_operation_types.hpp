@@ -102,6 +102,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         "num_workers_per_link",
         "num_buffers_per_channel",
         "config",
+        "chunks",
         "fsdp_cluster_axis",
         "fsdp_ring_size",
         "using_persistent_weight_buffer");
@@ -117,6 +118,7 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->num_workers_per_link,
             this->num_buffers_per_channel,
             this->config,
+            this->chunks,
             this->fsdp_cluster_axis,
             this->fsdp_ring_size,
             this->using_persistent_weight_buffer);
