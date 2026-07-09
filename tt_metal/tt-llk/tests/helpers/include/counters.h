@@ -467,7 +467,11 @@ struct perf_counter_scoped
 
 #else // !PERF_COUNTERS_COMPILED
 
+#if defined(LLK_PROFILER)
+#define MEASURE_PERF_COUNTERS(zone_name) llk_profiler::sync_point(llk_profiler::TRISC_ID == 0, [] {});
+#else
 #define MEASURE_PERF_COUNTERS(zone_name)
+#endif
 
 // No-counter build stub — brisc calls this unconditionally; compiler folds it to nothing.
 namespace llk_perf

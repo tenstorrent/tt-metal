@@ -217,9 +217,6 @@ public:
 
     inline __attribute__((always_inline)) zone_scoped()
     {
-#ifndef PERF_COUNTERS_COMPILED
-        sync_point(TRISC_ID == 0, [] {});
-#endif
         ckernel::fence_compiler();
         if (!is_buffer_full())
         {
