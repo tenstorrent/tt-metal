@@ -75,7 +75,7 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        expected_device_perf_ns_per_iteration=41_294_210,
+        expected_device_perf_ns_per_iteration=32_766_805,  # Recalibrated 2026-07-07 (perf improvement, was 41_294_210).
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,

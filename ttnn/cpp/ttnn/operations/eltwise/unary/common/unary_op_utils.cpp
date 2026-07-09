@@ -288,22 +288,14 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     "remainder_tile_init({:#x}u, {:#x}u);",
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format(
-                    "remainder_tile({}, {:#x}u, {:#x}u);",
-                    idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(1.0f / param0))};
+                fmt::format("remainder_tile({});", idst)};
         case UnaryOpType::FMOD:
             return {
                 fmt::format(
                     "fmod_tile_init({:#x}u, {:#x}u);",
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(1.0f / param0)),
-                fmt::format(
-                    "fmod_tile({}, {:#x}u, {:#x}u);",
-                    idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(1.0f / param0))};
+                fmt::format("fmod_tile({});", idst)};
         case UnaryOpType::EXP:
             return {
                 fmt::format("exp_tile_init<{}u>();", (uint32_t)param0),
@@ -674,10 +666,14 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::RELU:
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
+            // For unsigned inputs, relu is the identity. Emit an empty op so the tile is just copied.
+            if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT16 || input_dtype == DataType::UINT8) {
+                return {};
+            }
             if (input_dtype == DataType::INT32) {
                 return {"relu_tile_init();", fmt::format("relu_tile_int32({});", idst)};
             }
-            return {"relu_tile_init();", fmt::format("        relu_tile({});", idst)};
+            return {"relu_tile_init();", fmt::format("relu_tile({});", idst)};
 
         case UnaryOpType::SIGNBIT:
             TT_FATAL(

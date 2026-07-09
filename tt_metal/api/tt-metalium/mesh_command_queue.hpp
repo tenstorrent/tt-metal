@@ -112,11 +112,23 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     [[deprecated("Use enqueue_write_shards with distributed::ShardDataTransfer instead.")]]
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
@@ -131,11 +143,23 @@ public:
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     [[deprecated("Use enqueue_read_shards with distributed::ShardDataTransfer instead.")]]
     void enqueue_read_shards(
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
     virtual MeshEvent enqueue_record_event(
         ttsl::Span<const SubDeviceId> sub_device_ids = {},
@@ -161,10 +185,22 @@ private:
 
 public:
     explicit ShardDataTransfer(const MeshCoordinate& shard_coord) : shard_coord_(shard_coord) {}
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
     explicit ShardDataTransfer(const MeshCommandQueue::ShardDataTransfer& shard_data_transfer) :
         shard_coord_(shard_data_transfer.shard_coord),
         host_data_(shard_data_transfer.host_data),
         region_(shard_data_transfer.region) {}
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
 
     MeshCoordinate shard_coord() const { return shard_coord_; }
     void* host_data() const { return host_data_; }
