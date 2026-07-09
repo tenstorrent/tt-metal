@@ -72,7 +72,7 @@ def test_ep_moe_fwd():
         extract_mesh_config,
     )
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-    from models.demos.minimax_m3.tt.experts_throughput.tt_minimax_moe import TtMiniMaxMoE
+    from models.demos.minimax_m3.tt.moe.tt_minimax_moe import TtMiniMaxMoE
 
     rows, cols = int(os.getenv("PERF_ROWS", "8")), int(os.getenv("PERF_COLS", "4"))
     seq = int(os.getenv("PERF_SEQ", "2048"))

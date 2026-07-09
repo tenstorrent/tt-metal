@@ -8,7 +8,7 @@ A plain clamped-"swigluoai" SwiGLU FFN: down(swiglu(gate(x), up(x))), at
 dense_intermediate_size (12288). Weights load from mlp.{gate,up,down}_proj. gate/up are
 column-parallel (shard the intermediate dim across TP); down is row-parallel followed by a
 TP all-reduce. The activation is the same clamped SwiGLU as the MoE experts (see
-experts_throughput/activation.apply_swiglu); anchor: transformers minimax_m3_vl MLP.
+moe/activation.apply_swiglu); anchor: transformers minimax_m3_vl MLP.
 """
 
 from types import SimpleNamespace
@@ -17,7 +17,7 @@ import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 
-from .experts_throughput.activation import apply_swiglu
+from .moe.activation import apply_swiglu
 
 
 class DenseMLP:

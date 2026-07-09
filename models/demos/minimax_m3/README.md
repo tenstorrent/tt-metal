@@ -62,7 +62,7 @@ Module-level PCC tests (vs torch reference / HF) live under [`tests/unit/`](test
 
 ```
 tt/attention/     dense SP (ring_joint) + sparse MSA (indexer + sparse_sdpa_msa), RoPE, KV-cache
-tt/experts_throughput/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
+tt/moe/   EP MoE (TtMiniMaxMoE + fused swigluoai routed expert), activation
 tt/               dense_mlp, layer, model, rms_norm, topk, mlp, weight_cache, tt_prefill_runtime
 reference/        torch reference model + sparse GQA prefill
 scripts/          golden KV-cache generation + verification

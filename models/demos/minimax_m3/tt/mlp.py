@@ -8,7 +8,6 @@ dispatch/combine reused verbatim + the fused unified_routed_expert_ffn kernel wi
 swigluoai activation) across the mesh. Needs multi-device + fabric. The single-device / non-EP
 expert backends were removed in the prefill cleanup; this mirrors deepseek_v3_d_p's EP-only MoE.
 """
-import os
 
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
@@ -16,33 +15,6 @@ from models.demos.minimax_m3.utils.substate import substate
 
 from .dense_mlp import DenseMLP
 from .topk import TopKRouter
-
-
-def _dbg_alldev(tag, t):
-    """DEBUG_LAYERS=1: all-device max|x| + which device/(row,col) holds it (cols=4). Reveals the non-
-    device-0 TP column where the token-0 garbage lives (post-all-gather probe)."""
-    if os.getenv("DEBUG_LAYERS") != "1":
-        return
-    try:
-        import torch
-        from loguru import logger
-
-        dts = ttnn.get_device_tensors(t)
-        gmax, gdev, fin = 0.0, -1, True
-        for i, d in enumerate(dts):
-            xa = ttnn.to_torch(d).float()
-            m = xa.abs().max().item()
-            fin = fin and bool(torch.isfinite(xa).all())
-            if m > gmax:
-                gmax, gdev = m, i
-        logger.info(
-            f"[MLP {tag}] GLOBALmax|x|={gmax:.3e} @dev{gdev}(row{gdev // 4},col{gdev % 4}) "
-            f"finite_all={fin} shape={tuple(ttnn.to_torch(dts[0]).shape)}"
-        )
-    except Exception as e:
-        from loguru import logger
-
-        logger.info(f"[MLP {tag}] failed: {e}")
 
 
 def _make_cache_subdir(tensor_cache_path, name):
@@ -143,7 +115,7 @@ class MLP:
 
         from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 
-        from .experts_throughput.tt_minimax_moe import TtMiniMaxMoE
+        from .moe.tt_minimax_moe import TtMiniMaxMoE
 
         mc = extract_mesh_config(mesh_device)
         dgs, ndg = mc.dispatch_group_size, mc.num_dispatch_groups
@@ -214,7 +186,6 @@ class MLP:
                 out = ttnn.all_gather(
                     out, dim=-1, cluster_axis=1, num_links=self.ep_num_links, topology=ttnn.Topology.Linear
                 )
-        _dbg_alldev("post_AG", out)  # all-device: did the swap fix it / which col still has garbage?
         if shared_out is not None:
             out = ttnn.add(out, shared_out)
             shared_out.deallocate(True)

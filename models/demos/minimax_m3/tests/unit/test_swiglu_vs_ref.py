@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.tt.experts_throughput.activation import apply_swiglu
+from models.demos.minimax_m3.tt.moe.activation import apply_swiglu
 
 from ..test_factory import parametrize_mesh_with_fabric
 

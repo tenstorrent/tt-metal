@@ -19,42 +19,9 @@ swigluoai activation; only the shared-expert step of DeepSeek's TtMoe.forward is
 Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward).
 """
 
-import os
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-
-def _moe_stage_dbg(tag, t):
-    """DEBUG_LAYERS=1: log max|x|/finite of a MoE pipeline stage (device-0 shard) to localize which stage
-    (input/dispatch/expert/combine/reduce) injects the token-0 garbage (~1e38). Correlate to the layer via
-    the adjacent [DBG L## mlp_out] anchor printed by layer.py. First stage with max|x|>1e30 = culprit."""
-    if os.getenv("DEBUG_LAYERS") != "1":
-        return
-    try:
-        import torch
-        from loguru import logger
-
-        # Scan ALL devices: the token-0 garbage is on a NON-device-0 TP column (col 2), invisible to a
-        # device-0-only read. Report the global max + WHICH device/(row,col) holds it. cols=4 (M3 galaxy).
-        dts = ttnn.get_device_tensors(t)
-        gmax, gdev, fin = 0.0, -1, True
-        for i, d in enumerate(dts):
-            xa = ttnn.to_torch(d).float()
-            m = xa.abs().max().item()
-            fin = fin and bool(torch.isfinite(xa).all())
-            if m > gmax:
-                gmax, gdev = m, i
-        logger.info(
-            f"[MOE {tag}] GLOBALmax|x|={gmax:.3e} @dev{gdev}(row{gdev // 4},col{gdev % 4}) "
-            f"finite_all={fin} shape={tuple(ttnn.to_torch(dts[0]).shape)}"
-        )
-    except Exception as e:
-        from loguru import logger
-
-        logger.info(f"[MOE {tag}] failed: {e}")
-
-
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -235,13 +202,10 @@ class TtMiniMaxMoE(LightweightModule):
                 x, dim=-1, cluster_axis=1, num_links=self.reduce_module.num_links, topology=ttnn.Topology.Linear
             )
 
-        _moe_stage_dbg("input(post-AG)", x)
-
         # Dispatch -> per-expert buffers (NO shared expert)
         dispatched_buffer, metadata = self.dispatch_module(
             x, scores, indices, tt_expert_offsets, self.tt_expert_dispatch_table
         )
-        _moe_stage_dbg("dispatch", dispatched_buffer)
         ttnn.deallocate(x)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
@@ -255,16 +219,13 @@ class TtMiniMaxMoE(LightweightModule):
 
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts, tt_expert_region_offsets)
         expert_outputs = ttnn.unsqueeze(ttnn.unsqueeze(expert_outputs, dim=0), dim=0)
-        _moe_stage_dbg("expert", expert_outputs)
 
         combined_output = self.combine_module(
             expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
         )
-        _moe_stage_dbg("combine", combined_output)
         # Fused weighted-sum over topk + reduce-scatter across TP
         routed_output = self.reduce_module(
             combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table
         )
-        _moe_stage_dbg("reduce", routed_output)
         routed_output = ttnn.squeeze(routed_output, dim=0)
         return routed_output
