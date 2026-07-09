@@ -53,7 +53,8 @@ void kernel_main() {
     CircularBuffer cb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
+    CircularBuffer cb_weight_scratch_obj(cb_weight_scratch);
+    read_line(cb_weight_obj, cb_weight_scratch_obj, addrg_weight, weight_num_tile);
 
     cb_weight_obj.wait_front(weight_num_tile);
     CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
@@ -62,10 +63,12 @@ void kernel_main() {
 #if defined(DIVISOR)
     const auto addrg_divisor = TensorAccessor(divisor_args, divisor_addr);
 
-    read_tile(cb_divisor, addrg_divisor, 0);
+    CircularBuffer cb_divisor_obj(cb_divisor);
+    read_tile(cb_divisor_obj, addrg_divisor, 0);
 #endif
 
-    read_tile(cb_output_grad, addrg_output_grad, 0);
+    CircularBuffer cb_output_grad_obj(cb_output_grad);
+    read_tile(cb_output_grad_obj, addrg_output_grad, 0);
 
     uint32_t end_id = start_id + num_tiles_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
@@ -75,7 +78,7 @@ void kernel_main() {
         uint32_t c = nc % C;
 
         uint32_t target_noc_id = n * num_inner_tile + inner;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(cb_target_obj, addrg_target, target_noc_id);
 
         cb_tmp_weight_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);

@@ -6,9 +6,9 @@ from typing import List, Tuple
 
 import torch
 from fuser.block_data import BlockData
+from fuser.fpu_node import FpuNode
 from fuser.fused_fpu import Fpu
 from fuser.fused_loop import FusedLoop, LoopTileByTile
-from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
@@ -36,7 +36,7 @@ class ReduceFpu(Fpu):
         tensor_dst: torch.Tensor,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         output_format = config.sentinel.golden_math_format
         dimensions = operation.max_output_dimensions
@@ -131,7 +131,7 @@ class ReduceFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         stage = operation.stage_id
@@ -139,29 +139,28 @@ class ReduceFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
+        tile_shape = compute_unit.src_a.tile_shape
+        tensor_shape_instantiation: str = (
+            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
         )
 
         return (
             f"// Operation {stage}: Reduce {reduce_dim_cpp} FPU\n"
-            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {enforce_fp32_accumulation}>();\n"
+            f"_llk_math_reduce_init_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}>(\n"
+            f"{tensor_shape_instantiation});\n"
         )
 
     def calculate(
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         pool_type_cpp = self.reduce_pool.cpp_enum_value
         reduce_dim_cpp = self.reduce_dim.cpp_enum_value
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
-        )
         _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
         is_int_fpu_en = (
             "true"
@@ -178,14 +177,13 @@ class ReduceFpu(Fpu):
             else "false"
         )
 
-        # Create a temporary TensorShape object with Src_A tile dimensions
         tile_shape = compute_unit.src_a.tile_shape
         tensor_shape_instantiation: str = (
             f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
         )
 
         return (
-            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}, {enforce_fp32_accumulation}>(\n"
+            f"_llk_math_reduce_<{pool_type_cpp}, {reduce_dim_cpp}, {dest_acc}, {math_fidelity}, {is_int_fpu_en}>(\n"
             f"{block.tile_id_block}, {tensor_shape_instantiation}\n"
             f");\n"
         )
@@ -194,10 +192,7 @@ class ReduceFpu(Fpu):
         self,
         operation: FusedOperation,
         config: GlobalConfig,
-        compute_unit: ComputeNode,
+        compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
-        enforce_fp32_accumulation = (
-            compute_unit.enforce_fp32_accumulation.cpp_enum_value
-        )
-        return f"_llk_math_reduce_uninit_<{enforce_fp32_accumulation}>({config.sentinel.math_format});\n"
+        return f"_llk_math_reduce_uninit_();\n"

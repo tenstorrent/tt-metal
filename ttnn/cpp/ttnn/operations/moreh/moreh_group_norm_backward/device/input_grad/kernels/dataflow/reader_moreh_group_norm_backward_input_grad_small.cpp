@@ -63,16 +63,19 @@ void kernel_main() {
         uint32_t u;
     } scalar;
     scalar.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scalar.u);
+    CircularBuffer cb_one(cb_id_one);
+    CircularBuffer cb_n_recip_n(cb_id_n_recip_n);
+    fill_cb_with_value(cb_one, scalar.u);
 
     const auto n = static_cast<float>((num_channels / num_groups) * origin_h * origin_w);
     scalar.f = n;
-    fill_cb_with_value(cb_id_n_recip_n, scalar.u);
+    fill_cb_with_value(cb_n_recip_n, scalar.u);
     scalar.f = 1.0f / n;
-    fill_cb_with_value(cb_id_n_recip_n, scalar.u);
+    fill_cb_with_value(cb_n_recip_n, scalar.u);
 
     if (do_mask_h || do_mask_w) {
-        generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w, get_tile_size(cb_id_mask_h_w));
+        CircularBuffer cb_mask_h_w(cb_id_mask_h_w);
+        generate_mask_h_w(cb_mask_h_w, mask_h, mask_w, get_tile_size(cb_id_mask_h_w));
     }
 
     // output_grad

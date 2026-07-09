@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 
 // Implementation macros for binary operations (must match declarations in binary.hpp)
 #define TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(NAME, OP_TYPE)                                 \
@@ -349,7 +350,7 @@ inline Tensor to_layout(const Tensor& input, Layout layout) {
         return input;
     }
 
-    return ttnn::to_layout(input, layout);
+    return ttnn::operations::experimental::quasar::to_layout(input, layout);
 }
 
 inline float to_layout(float input, [[maybe_unused]] Layout layout) { return input; }
@@ -857,7 +858,7 @@ Tensor binary_operation_addalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return ttnn::operations::experimental::quasar::binary::detail::invoke_binary_ng(
         lhs,
         rhs,
@@ -879,7 +880,7 @@ Tensor binary_operation_subalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
     return ttnn::operations::experimental::quasar::binary::detail::invoke_binary_ng(
         lhs,
         rhs,

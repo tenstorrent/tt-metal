@@ -22,9 +22,9 @@ Workflow:
 
 This replaces the invasive approach where decorators.py inserted into SQLite during execution.
 
-Note: Comparison mode (golden tensor validation) is Python-specific and still writes
-directly to SQLite during execution. The importer is aware of this and uses
-CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
+Note: Comparison mode (golden tensor validation) is Python-specific and is
+captured in a sidecar JSON file. The importer consumes that sidecar offline and
+populates the visualizer comparison tables.
 """
 
 import json
@@ -146,7 +146,11 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # Bump when the visualizer schema changes; stale DBs are deleted on import (no migration path).
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
-DATABASE_SCHEMA_VERSION = "3.2"
+# 3.3 - rank on local/global_tensor_comparison_records (#45448)
+DATABASE_SCHEMA_VERSION = "3.3"
+PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
+COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
+COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -212,7 +216,12 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
         return sorted(main_captures, key=_capture_sort_key)
     skip = {"config.json"}
     return sorted(
-        p for p in report_path.glob("*.json") if p.name not in skip and not p.name.endswith(".python_io.json")
+        p
+        for p in report_path.glob("*.json")
+        if p.name not in skip
+        and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
+        and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        and p.name != COMPARISON_RECORDS_FALLBACK_NAME
     )
 
 
@@ -622,9 +631,7 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Comparison mode tables (populated by Python runtime, not importer)
-    # These are created here for schema completeness but data comes from
-    # ttnn.database when comparison mode is enabled during execution
+    # Comparison mode tables (populated from Python runtime sidecar data).
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS local_tensor_comparison_records (
@@ -632,7 +639,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             golden_tensor_id int,
             matches int,
             desired_pcc float,
-            actual_pcc float
+            actual_pcc float,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -644,7 +653,9 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             golden_tensor_id int,
             matches int,
             desired_pcc float,
-            actual_pcc float
+            actual_pcc float,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -1678,6 +1689,83 @@ def import_graph(
     }
 
 
+def _is_sidecar_path(path: Path) -> bool:
+    name = path.name
+    return (
+        name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
+        or name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
+        or name == COMPARISON_RECORDS_FALLBACK_NAME
+    )
+
+
+def _comparison_record_to_row(record: dict, rank: int = 0) -> tuple:
+    return (
+        int(record["tensor_id"]),
+        int(record["golden_tensor_id"]),
+        int(bool(record["matches"])),
+        float(record["desired_pcc"]),
+        float(record["actual_pcc"]),
+        int(record.get("rank", rank)),
+    )
+
+
+def _tensor_record_to_row(tensor: dict, rank: int = 0) -> tuple:
+    return (
+        int(tensor["tensor_id"]),
+        tensor.get("shape"),
+        tensor.get("dtype"),
+        tensor.get("layout"),
+        tensor.get("memory_config"),
+        tensor.get("device_id"),
+        tensor.get("address"),
+        tensor.get("buffer_type"),
+        rank,
+    )
+
+
+def import_tensor_comparison_records(cursor: sqlite3.Cursor, comparison_data: dict, rank: int = 0) -> dict:
+    """Import comparison-mode sidecar records into the visualizer schema."""
+    if not comparison_data:
+        return {"local_tensor_comparison_records": 0, "global_tensor_comparison_records": 0, "tensors": 0}
+
+    tensors_batch = [_tensor_record_to_row(tensor, rank) for tensor in comparison_data.get("tensors", [])]
+    local_records_batch = [
+        _comparison_record_to_row(record, rank) for record in comparison_data.get("local_tensor_comparison_records", [])
+    ]
+    global_records_batch = [
+        _comparison_record_to_row(record, rank)
+        for record in comparison_data.get("global_tensor_comparison_records", [])
+    ]
+
+    if tensors_batch:
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+    if local_records_batch:
+        cursor.executemany(
+            """INSERT INTO local_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", local_records_batch
+        )
+    if global_records_batch:
+        cursor.executemany(
+            """INSERT INTO global_tensor_comparison_records VALUES (?, ?, ?, ?, ?, ?)""", global_records_batch
+        )
+
+    return {
+        "local_tensor_comparison_records": len(local_records_batch),
+        "global_tensor_comparison_records": len(global_records_batch),
+        "tensors": len(tensors_batch),
+    }
+
+
+def _load_comparison_records_sidecar(report_file: Path) -> dict | None:
+    for sidecar_path in (
+        report_file.with_suffix(COMPARISON_RECORDS_SIDECAR_SUFFIX),
+        report_file.parent / COMPARISON_RECORDS_FALLBACK_NAME,
+    ):
+        if sidecar_path.exists():
+            with open(sidecar_path, "r") as f:
+                return json.load(f)
+    return None
+
+
 def import_metadata(cursor: sqlite3.Cursor, metadata: dict) -> None:
     """Import report metadata using batch insert."""
     if not metadata:
@@ -1784,6 +1872,7 @@ def import_report(
             "devices": 0,
             "errors": 0,
             "stack_traces": 0,
+            "comparison_records": 0,
             "svgs": 0,
             "tensor_lifetime_records": 0,
             "tensor_consumer_rows": 0,
@@ -1859,7 +1948,7 @@ def import_report(
 
                 python_io = report.get("python_io")
                 if python_io is None:
-                    sidecar_path = rpath.with_suffix(".python_io.json")
+                    sidecar_path = rpath.with_suffix(PYTHON_IO_SIDECAR_SUFFIX)
                     if sidecar_path.exists():
                         with open(sidecar_path, "r") as pio:
                             python_io = json.load(pio)
@@ -1903,6 +1992,17 @@ def import_report(
                     svg_path = graphs_dir / f"{rpath.stem}.svg"
                     if generate_svg(report["graph"], svg_path):
                         total_stats["svgs"] += 1
+
+            comparison_data = report.get("comparison_records")
+            if comparison_data is None:
+                comparison_data = _load_comparison_records_sidecar(rpath)
+            if comparison_data:
+                comparison_stats = import_tensor_comparison_records(cursor, comparison_data, rank=rank)
+                total_stats["comparison_records"] += (
+                    comparison_stats["local_tensor_comparison_records"]
+                    + comparison_stats["global_tensor_comparison_records"]
+                )
+                total_stats["tensors"] += comparison_stats["tensors"]
 
             if "metadata" in report:
                 import_metadata(cursor, report["metadata"])
@@ -2066,6 +2166,8 @@ def import_report(
             summary.append(f"  - {total_stats['errors']} errors captured")
         if total_stats["stack_traces"] > 0:
             summary.append(f"  - {total_stats['stack_traces']} stack traces captured")
+        if total_stats["comparison_records"] > 0:
+            summary.append(f"  - {total_stats['comparison_records']} tensor comparison records")
         if total_stats.get("tensor_lifetime_records", 0) > 0:
             summary.append(
                 f"  - {total_stats['tensor_lifetime_records']} tensor lifetime rows (also in {output_dir}/*.tensor_lifetime.json)"

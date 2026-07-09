@@ -11,6 +11,7 @@
 #include <unordered_map>
 #include <vector>
 #include "llrt/hal.hpp"
+#include <hostdevcommon/common_values.hpp>
 
 namespace tt {
 class Cluster;
@@ -84,7 +85,7 @@ public:
 
     static constexpr uint32_t MAX_NUM_HW_CQS = 2;
 
-    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = 8;
+    static constexpr uint32_t DISPATCH_MESSAGE_ENTRIES = ::DISPATCH_MAX_MESSAGE_ENTRIES;
 
     // correctness asserted in .cpp
     static constexpr uint32_t DISPATCH_MESSAGES_MAX_OFFSET = 255;

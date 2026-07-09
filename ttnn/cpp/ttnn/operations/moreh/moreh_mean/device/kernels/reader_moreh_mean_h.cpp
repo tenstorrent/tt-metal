@@ -39,7 +39,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_mask_h = tt::CBIndex::c_3;
 #ifdef DO_MASK_H
-    generate_mask_h(cb_id_mask_h, mask_h);
+    CircularBuffer cb_mask_h(cb_id_mask_h);
+    generate_mask_h(cb_mask_h, mask_h);
 #endif
 
     const auto s = TensorAccessor(src_args, src_addr);

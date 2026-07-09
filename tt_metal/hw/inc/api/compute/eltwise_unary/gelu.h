@@ -67,6 +67,36 @@ ALWI void gelu_tile_pack(uint32_t idst) {
 }
 
 /**
+ * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
+ */
+ALWI void gelu_tanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
+
+ALWI void gelu_tanh_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
+
+// clang-format off
+/**
+ * Element-wise GELU using the tanh approximation, computed in FP32:
+ *   GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+ *
+ * Intended as a fused-activation drop-in for matmuls that need the
+ * tanh-GELU (e.g. F.gelu(approximate="tanh")).
+ *
+ * Return value: None
+ *
+ * | Argument         | Description                                                                | Type     | Valid Range                                           | Required |
+ * |------------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void gelu_tanh_tile(uint32_t idst) {
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
+}
+
+ALWI void gelu_tanh_tile_pack(uint32_t idst) {
+    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
+}
+
+/**
  * Please refer to documentation for any_init.
  */
 template <bool fast_and_approx = false>

@@ -35,8 +35,8 @@ def rms_norm(x, dim, gamma, beta, eps):
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
@@ -303,8 +303,8 @@ def test_layernorm_sharded_mix_precision_rm(
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
@@ -423,7 +423,7 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         device.arch(),
         math_fidelity=fidelity,
         math_approx_mode=True,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
 
@@ -559,4 +559,92 @@ def test_layernorm_1d_sharded_mix_precision_rm(
         rtol=3.158,
         atol=0.087,
         frobenius_threshold=0.016,
+    )
+
+
+# ---------------------------------------------------------------------------------------------
+# FP32 coverage for the complete (non-distributed) block-sharded LayerNorm op.
+# Spans {legacy, welford} x {fp32, bf16} input x {bf16, fp32} ROW_MAJOR gamma/beta. FP32 requires
+# fp32_dest_acc_en=True. Input is TILE (welford requires TILE; ROW_MAJOR input hangs).
+# ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("gamma_dtype", [ttnn.bfloat16, ttnn.float32], ids=["gb_bf16", "gb_fp32"])
+@pytest.mark.parametrize("use_welford", [True, False], ids=["welford", "legacy"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b], ids=["fp32", "bf16", "bf8"])
+def test_layernorm_block_sharded_all_config(device, dtype, use_welford, gamma_dtype):
+    torch.manual_seed(1234)
+    g = device.compute_with_storage_grid_size()
+    grid_size = [g.x, min(g.y, 8)]
+    batch = grid_size[1]
+    width = 128 * grid_size[1]
+    in0_shape = (batch, 1, 32 * grid_size[0], width)
+    M, K = in0_shape[2] * batch, in0_shape[3]
+
+    x = torch.rand(in0_shape, dtype=torch.float32) * 2 - 0.95
+    w = torch.rand(K, dtype=torch.float32) * 2 - 1
+    b = torch.rand(K, dtype=torch.float32) * 2 - 1.1
+    ref = torch.nn.functional.layer_norm(x, (K,), weight=w, bias=b, eps=1e-2)
+
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    shard_shape = [M // grid_size[0], math.ceil(K / grid_size[1] / 32) * 32]
+    x_shard = ttnn.interleaved_to_sharded(
+        xt, grid_size, shard_shape, ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.ShardOrientation.COL_MAJOR
+    )
+
+    wt = ttnn.from_torch(w.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    bt = ttnn.from_torch(b.reshape(1, 1, -1, 32), dtype=gamma_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        subblock_w=4,
+        block_h=batch,
+        block_w=4,
+        inplace=False,
+        use_welford=use_welford,
+    )
+    out_mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, x_shard.memory_config().shard_spec
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,  # required for FP32
+        packer_l1_acc=False,
+    )
+
+    recip = None
+    if use_welford:
+        sspec = x_shard.memory_config().shard_spec
+        recip = ttnn.create_layer_norm_reciprocals(device, sspec.grid, sspec.shape[1])
+
+    out = ttnn.layer_norm(
+        x_shard,
+        epsilon=1e-2,
+        weight=wt,
+        bias=bt,
+        memory_config=out_mem,
+        program_config=cfg,
+        compute_kernel_config=compute_kernel_config,
+        recip_tensor=recip,
+    )
+    ot = (
+        ttnn.to_torch(ttnn.from_device(ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)))
+        .float()
+        .reshape(ref.shape)
+    )
+
+    if dtype == ttnn.bfloat8_b:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.02, 0.045, 0.011
+    elif dtype == ttnn.bfloat16:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.019, 0.003
+    else:
+        pcc_threshold, rtol, atol, frobenius_threshold = 0.999, 0.006, 0.013, 0.003
+
+    assert_numeric_metrics(
+        ref,
+        ot,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
     )

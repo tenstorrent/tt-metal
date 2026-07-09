@@ -82,14 +82,14 @@ void create_test_stimuli(MatmulTileStimuli& stimuli, uint32_t M, uint32_t K, uin
 
     auto activations_tilized = tilize_swizzled(tensor.get_values(), M * 32, K * 32);
     auto activations_tile_layout =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
     auto activations_tile_transposed = tt::tt_metal::transpose_tiles(activations, M, K, 1);
     stimuli.a = activations_tile_transposed;
 
     auto identity = create_identity_matrix(K * 32, N * 32, std::min(K, N) * 32);
     auto identity_tilized = tilize_swizzled(identity, K * 32, N * 32);
-    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(identity_tilized));
+    auto weights_tile_layout = convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
     auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
     stimuli.w = weights;
 }
@@ -183,7 +183,7 @@ static void verify_matmul_tile_output(
     std::vector<bfloat16> golden = std::move(tensor_vals);
     std::vector<bfloat16> golden_tilized = tilize_swizzled(golden, ctx.M * 32, ctx.N * 32);
     std::vector<bfloat16> golden_tilized_single =
-        convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(golden_tilized));
+        convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(golden_tilized));
 
     std::vector<uint32_t> golden_packed(golden_tilized_single.size());
     uint16_t math_fid_mask = 0xFFFF;
@@ -285,8 +285,7 @@ static void matmul_tile_block(
                     experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     experimental::KernelSpec writer_spec{
@@ -303,7 +302,7 @@ static void matmul_tile_block(
                     experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // matmul_block.cpp uses named CTAs. Map cfg.compute_kernel_args (positional) to the
@@ -569,7 +568,7 @@ static void matmul_tile(
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
         program_,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});

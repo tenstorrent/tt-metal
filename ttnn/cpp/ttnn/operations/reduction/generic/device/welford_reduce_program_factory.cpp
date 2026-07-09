@@ -11,6 +11,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include "welford_reduce_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <cstdint>
 
 namespace ttnn::prim {
 
@@ -169,7 +170,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     ProgramDescriptor desc;
 
     // Input CB c_0. The unpack_to_dest_mode flag below makes c_0 UnpackToDestFp32 for FP32
-    // input so the welford SFPU intake (copy_tile / transpose_wh_tile) reads via the
+    // input so the welford SFPU intake (copy_tile / transpose_tile) reads via the
     // precision-preserving unpack-to-DEST path instead of the FPU SrcA path (which would
     // truncate FP32 to TF32). The user scalar is applied as an SFPU post-multiplication on
     // the reduced output, not by pre-scaling the input -- see post_mul_scaler below.
@@ -296,14 +297,15 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
         reduce_defines["WELFORD_POST_MUL"] = "1";
     }
 
-    // welford_fp32_input gates the transpose_wh re-init / welford PreserveStats recovery in the
-    // W-reduce compute kernel's wt-inner loop, needed because transpose_wh_tile's UnpackToDestFp32
+    // welford_fp32_input gates the transpose re-init / welford PreserveStats recovery in the
+    // W-reduce compute kernel's wt-inner loop, needed because transpose_tile's UnpackToDestFp32
     // path clobbers the welford SFPU replay buffer on FP32 input. H- and HW-reduce kernels read
     // the input via copy_tile (no transpose) and don't need this flag.
     std::vector<std::pair<std::string, uint32_t>> welford_named_args;
     if (reduce_w) {
         welford_named_args.push_back(
-            {"welford_fp32_input", static_cast<uint32_t>(input_cb_data_format == tt::DataFormat::Float32 ? 1 : 0)});
+            {"welford_fp32_input",
+             static_cast<uint32_t>(input_cb_data_format == tt::DataFormat::Float32 ? 1 : 0)});
     }
 
     // --- Reader kernel ---
@@ -421,9 +423,9 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // between nearby samples.
     //
     // Apply this to every Float32 CB the compute kernel reads back via copy_tile /
-    // transpose_wh_tile:
+    // transpose_tile:
     //   - Input CB: needed on all three reduction paths (H, W, HW) with FP32 input. The Welford
-    //     SFPU intake reads c_0 directly via copy_tile/transpose_wh_tile, so UnpackToDestFp32
+    //     SFPU intake reads c_0 directly via copy_tile/transpose_tile, so UnpackToDestFp32
     //     preserves the full FP32 into DEST (there is no input pre-scaling -- see post_mul_scaler).
     //   - W-reduce only: cb_var (c_19) -- the variance tile is read back after the initial
     //     transpose to undo it.
@@ -432,13 +434,16 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (input_cb_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_0)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_w && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_19)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     if (reduce_hw && fp32_dest_acc_en && !narrow_scratch_to_bf16) {
-        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(CBIndex::c_22)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     KernelDescriptor compute_desc_g1;

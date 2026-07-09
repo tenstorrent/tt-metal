@@ -43,7 +43,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr uint32_t l1_address = 1000 * 1024;
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(16, 0);
     tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
 
@@ -119,7 +120,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr uint32_t l1_address = 1000 * 1024;
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(4, 0);
     tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
 

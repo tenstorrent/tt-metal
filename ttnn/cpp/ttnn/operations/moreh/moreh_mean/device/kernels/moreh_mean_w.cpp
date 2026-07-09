@@ -66,7 +66,7 @@ void kernel_main() {
 
                 cb_accum_dst_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst);
+                pack_tile_with_dt(reduce_dst_idx, cb_accum_dst_obj);
                 tile_regs_release();
                 cb_accum_dst_obj.push_back(onetile);
             }
@@ -75,10 +75,10 @@ void kernel_main() {
                 tile_regs_acquire();
                 CircularBuffer(cb_input).wait_front(onetile);
 
-                copy_tile_init_with_dt(cb_input);
+                copy_tile_init_with_dt(CircularBuffer(cb_input));
                 copy_tile(cb_input, 0, reduce_dst_idx);
 
-                copy_tile_init_with_dt(cb_mask_w);
+                copy_tile_init_with_dt(cb_mask_w_obj);
                 copy_tile(cb_mask_w, 0, mask_dst_idx);
 
                 mask_tile_init();
@@ -87,7 +87,7 @@ void kernel_main() {
 
                 cb_masked_input_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_masked_input);
+                pack_tile_with_dt(reduce_dst_idx, cb_masked_input_obj);
                 tile_regs_release();
                 cb_masked_input_obj.push_back(onetile);
 
@@ -100,7 +100,7 @@ void kernel_main() {
             if (!is_w_single_tile) {
                 cb_accum_dst_obj.wait_front(onetile);
 
-                copy_tile_init_with_dt(cb_accum_dst);
+                copy_tile_init_with_dt(cb_accum_dst_obj);
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
@@ -113,7 +113,7 @@ void kernel_main() {
 
             cb_out_obj.reserve_back(onetile);
             tile_regs_wait();
-            pack_tile_with_dt(reduce_dst_idx, cb_out);
+            pack_tile_with_dt(reduce_dst_idx, cb_out_obj);
             tile_regs_release();
             cb_out_obj.push_back(onetile);
 

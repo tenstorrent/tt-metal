@@ -64,6 +64,23 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be DRAM interleaved, not sharded");
+
+    // Optional padding_config: per-device [local_real_tokens, pad_side], read on device to bound the
+    // dispatch token loop. Must be ROW_MAJOR uint32/int32 with last dim 2.
+    if (tensor_args.padding_config.has_value()) {
+        const auto& padding_config = tensor_args.padding_config.value();
+        TT_FATAL(
+            padding_config.layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "padding_config tensor must be ROW_MAJOR layout");
+        TT_FATAL(
+            padding_config.dtype() == DataType::UINT32 || padding_config.dtype() == DataType::INT32,
+            "padding_config tensor must be UINT32 or INT32, got {}",
+            padding_config.dtype());
+        TT_FATAL(
+            padding_config.logical_shape()[-1] == 2,
+            "padding_config last dim must be 2 ([local_real_tokens, pad_side]), got {}",
+            padding_config.logical_shape()[-1]);
+    }
 }
 
 void DispatchDeviceOperation::validate_on_program_cache_hit(
@@ -150,6 +167,7 @@ prefill_dispatch(
     uint32_t num_experts_per_tok,
     uint32_t metadata_len,
     uint32_t max_dispatch_buffer_token_size,
+    const std::optional<ttnn::Tensor>& padding_config,
     std::optional<uint32_t> axis,
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
@@ -174,12 +192,14 @@ prefill_dispatch(
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
             .use_fp8_dispatch = use_fp8_dispatch,
-            .num_untilizers_per_sender = num_untilizers_per_sender},
+            .num_untilizers_per_sender = num_untilizers_per_sender,
+            .has_padding_config = padding_config.has_value()},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,
             .indices_tensor = indices_tensor,
             .expert_offsets_tensor = expert_offsets_tensor,
-            .expert_dispatch_table_tensor = expert_dispatch_table_tensor});
+            .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
+            .padding_config = padding_config});
 }
 }  // namespace ttnn::prim

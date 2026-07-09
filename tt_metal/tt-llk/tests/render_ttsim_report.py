@@ -58,6 +58,7 @@ class FileStats:
     failed: int = 0
     skipped: int = 0
     errored: int = 0
+    crashed: int = 0
     cases: list[Case] = field(default_factory=list)
 
 
@@ -181,6 +182,92 @@ def parse(xml_path: Path) -> tuple[list[FileStats], list[Case], RunMeta]:
     return sorted(by_file.values(), key=lambda s: s.file), all_cases, meta
 
 
+def mangle_test_address(address: str) -> tuple[str, str]:
+    """Map a pytest node ID to the (classname, name) pytest writes to JUnit XML.
+
+    This mirrors `_pytest.junitxml.mangle_test_address`: the file portion has
+    its path separators turned into dots and the `.py` suffix stripped, the
+    parametrization (`[...]`) is re-attached to the leaf, the leaf becomes
+    `name`, and everything before it joins with dots into `classname`. Keeping
+    this in lockstep is what lets us match collected node IDs against the
+    `Case.classname`/`Case.name` produced by `parse()`.
+    """
+    path, open_bracket, params = address.partition("[")
+    names = path.split("::")
+    names[0] = names[0].replace("/", ".")
+    names[0] = re.sub(r"\.py$", "", names[0])
+    names[-1] += open_bracket + params
+    return ".".join(names[:-1]), names[-1]
+
+
+def load_collected(path: Path) -> list[str]:
+    """Read pytest `--collect-only -q` output into a list of node IDs.
+
+    Only lines that look like a test node ID (contain `.py::`) are kept, so any
+    stray log lines or the trailing "N tests collected" summary are ignored.
+    """
+    ids: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if ".py::" in line:
+            ids.append(line)
+    return ids
+
+
+def compute_crashed(
+    files: list[FileStats],
+    all_cases: list[Case],
+    collected_path: Path,
+) -> list[Case]:
+    """Diff the expected (collected) tests against the recorded ones.
+
+    Anything pytest said it would run but that never produced a `<testcase>` in
+    the JUnit XML is treated as crashed: the worker died (segfault, OOM-kill,
+    timeout-killed worker, ttsim hard-exit during collection/setup, …) before
+    the result could be written, so `--forked` never converted it into a normal
+    failure. Returns the synthetic crashed `Case`s and folds their counts into
+    the per-file stats so the per-file table stays consistent.
+    """
+    expected: dict[tuple[str, str], str] = {}
+    for nid in load_collected(collected_path):
+        expected[mangle_test_address(nid)] = nid
+
+    recorded = {(c.classname, c.name) for c in all_cases}
+    missing = sorted(
+        ((key, nid) for key, nid in expected.items() if key not in recorded),
+        key=lambda x: x[1],
+    )
+
+    file_map = {f.file: f for f in files}
+    crashed_cases: list[Case] = []
+    for (classname, name), _nid in missing:
+        case = Case(
+            classname=classname,
+            name=name,
+            duration=0.0,
+            outcome="crashed",
+            short=(
+                "No result recorded — the test was collected but never produced "
+                "a JUnit entry. The worker process likely crashed before "
+                "reporting (ttsim hard-exit, segfault, OOM-kill, or "
+                "timeout-killed worker)."
+            ),
+            stdout="",
+        )
+        crashed_cases.append(case)
+        stats = file_map.get(classname)
+        if stats is None:
+            stats = FileStats(classname)
+            file_map[classname] = stats
+            files.append(stats)
+        stats.total += 1
+        stats.crashed += 1
+        stats.cases.append(case)
+
+    files.sort(key=lambda s: s.file)
+    return crashed_cases
+
+
 def pct(n: int, d: int) -> float:
     return 100.0 * n / d if d else 0.0
 
@@ -200,8 +287,16 @@ def render(
     all_cases: list[Case],
     xml_path: Path,
     meta: RunMeta,
+    crashed_cases: Optional[list[Case]] = None,
+    have_collected: bool = False,
 ) -> str:
-    total = len(all_cases)
+    crashed_cases = crashed_cases or []
+    crashed = len(crashed_cases)
+    recorded = len(all_cases)
+    # When a collected baseline is supplied, `total` is the version-independent
+    # expected count (recorded + crashed); otherwise it falls back to whatever
+    # the XML recorded.
+    total = recorded + crashed
     passed = sum(1 for c in all_cases if c.outcome == "passed")
     failed = sum(1 for c in all_cases if c.outcome == "failed")
     skipped = sum(1 for c in all_cases if c.outcome == "skipped")
@@ -243,9 +338,12 @@ def render(
     else:
         wall_time_str_full = wall_time_str
 
-    ran = passed + failed + errored
+    # Crashed tests count as non-passing: they were supposed to run but the
+    # worker died before recording a result.
+    bad = failed + errored + crashed
+    ran = passed + bad
     pass_pct = pct(passed, ran)
-    fail_pct = pct(failed + errored, ran)
+    fail_pct = pct(bad, ran)
     skip_pct = pct(skipped, total)
 
     # Donut: build CSS conic-gradient
@@ -254,7 +352,7 @@ def render(
         parts = []
         for color, n in [
             ("var(--ok)", passed),
-            ("var(--bad)", failed + errored),
+            ("var(--bad)", bad),
         ]:
             if n == 0:
                 continue
@@ -267,17 +365,20 @@ def render(
 
     rows_files = []
     for s in files:
+        file_bad = s.failed + s.errored + s.crashed
+        crash_cell = f"<td class='num bad'>{s.crashed}</td>" if have_collected else ""
         rows_files.append(
             f"<tr>"
             f"<td>{html.escape(s.file)}</td>"
             f"<td class='num'>{s.total}</td>"
             f"<td class='num ok'>{s.passed}</td>"
             f"<td class='num bad'>{s.failed + s.errored}</td>"
+            f"{crash_cell}"
             f"<td class='num warn'>{s.skipped}</td>"
             f"<td class='barcell'>"
             f"  <div class='filebar'>"
             f"    <span class='seg ok'   style='width:{pct(s.passed, s.total):.1f}%'></span>"
-            f"    <span class='seg bad'  style='width:{pct(s.failed + s.errored, s.total):.1f}%'></span>"
+            f"    <span class='seg bad'  style='width:{pct(file_bad, s.total):.1f}%'></span>"
             f"    <span class='seg warn' style='width:{pct(s.skipped, s.total):.1f}%'></span>"
             f"  </div>"
             f"</td>"
@@ -367,6 +468,49 @@ def render(
             f"</details>"
         )
 
+    # Crashed tests: collected by pytest but absent from the JUnit XML. Grouped
+    # by file so a worker that took out a whole file is obvious at a glance.
+    crashed_by_file: Counter[str] = Counter()
+    for c in crashed_cases:
+        crashed_by_file[c.classname] += 1
+    rows_crash = []
+    for classname, n in crashed_by_file.most_common():
+        names = sorted(c.name for c in crashed_cases if c.classname == classname)
+        shown = names[:200]
+        more = len(names) - len(shown)
+        tests_html = (
+            "<ul class='siglist'>"
+            + "".join(f"<li><code>{html.escape(nm)}</code></li>" for nm in shown)
+            + (f"<li><i>… {more} more</i></li>" if more > 0 else "")
+            + "</ul>"
+        )
+        rows_crash.append(
+            f"<tr class='sigrow'>"
+            f"<td class='num'>{n}</td>"
+            f"<td class='sigcell'>"
+            f"  <details><summary><code>{html.escape(classname)}</code></summary>{tests_html}</details>"
+            f"</td>"
+            f"</tr>"
+        )
+    crashed_section = (
+        (
+            f"<h2 id='crashed'>Crashed tests "
+            f"<span class='hcount'>{crashed} collected but not recorded</span></h2>"
+            "<div class='card empty' style='text-align:left'>"
+            "These tests were enumerated by <code>pytest --collect-only</code> "
+            "but produced no JUnit entry, so the worker almost certainly crashed "
+            "before reporting (ttsim hard-exit, segfault, OOM-kill, or a "
+            "timeout-killed worker). They are the gap between the expected and "
+            "recorded test counts.</div>"
+            "<table class='datatable' style='margin-top:12px'>"
+            "<thead><tr><th class='num'>Count</th>"
+            "<th>File <span class='hint'>(click to list affected tests)</span></th></tr></thead>"
+            "<tbody>" + "".join(rows_crash) + "</tbody></table>"
+        )
+        if (have_collected and rows_crash)
+        else ""
+    )
+
     cat_section = (
         (
             "<table class='datatable'>"
@@ -400,6 +544,41 @@ def render(
         if rows_sig
         else ""
     )
+
+    # Conditional bits that only appear when a collected baseline was supplied.
+    if have_collected:
+        summary_cols = "240px repeat(5, 1fr)"
+        crash_pct = pct(crashed, total)
+        crashed_card = (
+            f'<div class="card kpi bad"><div class="label">Crashed</div>'
+            f'<div class="big bad">{crashed}</div>'
+            f'<div class="sub">{crash_pct:.1f}%</div></div>'
+        )
+        crash_th = "<th class='num'>Crash</th>"
+        crashed_nav = "<a href='#crashed'>Crashed</a>" if rows_crash else ""
+        # "Enumerated" = tests pytest --collect-only listed; "finished" = tests
+        # that produced a JUnit result (passed/failed/skipped); the difference
+        # is the crashed gap.
+        count_summary = f"{total} enumerated · {recorded} finished" + (
+            f" · <span style='color:#ffd5d5;font-weight:600'>{crashed} crashed</span>"
+            if crashed
+            else ""
+        )
+        total_label = "Total"
+        total_sub_extra = (
+            "<div class='sub'>"
+            + f"{recorded} finished"
+            + (f" · <span class='bad'>{crashed} crashed</span>" if crashed else "")
+            + "</div>"
+        )
+    else:
+        summary_cols = "240px repeat(4, 1fr)"
+        crashed_card = ""
+        crash_th = ""
+        crashed_nav = ""
+        count_summary = f"{total} tests"
+        total_label = "Total"
+        total_sub_extra = ""
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -591,10 +770,10 @@ def render(
   <div class="hero-inner">
     <div class="brand">
       <h1>ttsim regression</h1>
-      <div class="meta">{html.escape(xml_path.name)} · {total} tests · {wall_time_str_full or (cases_time_str + " test-time")}</div>
+      <div class="meta">{html.escape(xml_path.name)} · {count_summary} · {wall_time_str_full or (cases_time_str + " test-time")}</div>
     </div>
     <div class="passrate">
-      <div class="passrate-num">{pass_pct:.1f}%</div>
+      <div class="passrate-num">{pass_pct:.2f}%</div>
       <div class="passrate-label">{passed} of {ran} tests passed</div>
     </div>
   </div>
@@ -614,24 +793,26 @@ def render(
     {("<a href='#signatures'>Signatures</a>") if rows_sig else ""}
     <a href="#files">Files</a>
     <a href="#failures">Failures</a>
+    {crashed_nav}
   </div>
 </nav>
 <main>
   <section id="summary">
-    <div class="row summary">
+    <div class="row summary" style="grid-template-columns: {summary_cols};">
       <div class="card donut-wrap">
         <div class="donut">
           <div class="center">
             <div>
-              <div class="pct">{pass_pct:.0f}%</div>
+              <div class="pct">{pass_pct:.2f}%</div>
               <div class="ctxt">passing</div>
             </div>
           </div>
         </div>
       </div>
-      <div class="card kpi"><div class="label">Total</div><div class="big">{total}</div><div class="sub" title="Σ test-time = sum of per-test durations from JUnit. Wall-clock = end-to-end runtime estimated from the suite's timestamp and the XML mtime.">{("wall " + wall_time_str + " · ") if wall_time_str else ""}Σ test {cases_time_str}</div></div>
+      <div class="card kpi"><div class="label">{total_label}</div><div class="big">{total}</div><div class="sub" title="Σ test-time = sum of per-test durations from JUnit. Wall-clock = end-to-end runtime estimated from the suite's timestamp and the XML mtime.">{("wall " + wall_time_str + " · ") if wall_time_str else ""}Σ test {cases_time_str}</div>{total_sub_extra}</div>
       <div class="card kpi ok"><div class="label">Passed</div><div class="big ok">{passed}</div><div class="sub">{pass_pct:.1f}%</div></div>
       <div class="card kpi bad"><div class="label">Failed</div><div class="big bad">{failed + errored}</div><div class="sub">{fail_pct:.1f}%</div></div>
+      {crashed_card}
       <div class="card kpi warn"><div class="label">Skipped</div><div class="big warn">{skipped}</div><div class="sub">{skip_pct:.1f}%</div></div>
     </div>
   </section>
@@ -648,7 +829,7 @@ def render(
   <section id="files">
     <h2>Per-file breakdown</h2>
     <table class="datatable">
-      <thead><tr><th>File</th><th class='num'>Total</th><th class='num'>Pass</th><th class='num'>Fail</th><th class='num'>Skip</th><th class='sharecol'>Distribution</th></tr></thead>
+      <thead><tr><th>File</th><th class='num'>Total</th><th class='num'>Pass</th><th class='num'>Fail</th>{crash_th}<th class='num'>Skip</th><th class='sharecol'>Distribution</th></tr></thead>
       <tbody>{"".join(rows_files)}</tbody>
     </table>
   </section>
@@ -660,6 +841,8 @@ def render(
     </div>
     <div id="cases">{"".join(rows_fail) if rows_fail else "<div class='card empty'>No failures.</div>"}</div>
   </section>
+
+  {f"<section id='crashed-section'>{crashed_section}</section>" if crashed_section else ""}
 </main>
 <script>
 (() => {{
@@ -702,6 +885,16 @@ def main() -> int:
         "xml", type=Path, help="JUnit XML produced by run_ttsim_regression.sh"
     )
     p.add_argument("html", type=Path, help="Output HTML path")
+    p.add_argument(
+        "--collected",
+        type=Path,
+        default=None,
+        help=(
+            "Optional file of pytest node IDs (from `pytest --collect-only -q`) "
+            "listing every test that was expected to run. Tests in this file "
+            "that have no testcase in the XML are reported as crashed."
+        ),
+    )
     args = p.parse_args()
 
     if not args.xml.is_file():
@@ -709,11 +902,30 @@ def main() -> int:
         return 2
 
     files, cases, meta = parse(args.xml)
-    out = render(files, cases, args.xml, meta)
+
+    crashed_cases: list[Case] = []
+    have_collected = False
+    if args.collected is not None and args.collected.is_file():
+        have_collected = True
+        crashed_cases = compute_crashed(files, cases, args.collected)
+    elif args.collected is not None:
+        sys.stderr.write(
+            f"WARNING: collected file not found, skipping gap analysis: {args.collected}\n"
+        )
+
+    out = render(
+        files,
+        cases,
+        args.xml,
+        meta,
+        crashed_cases=crashed_cases,
+        have_collected=have_collected,
+    )
     args.html.write_text(out, encoding="utf-8")
+    crashed_note = f", {len(crashed_cases)} crashed" if have_collected else ""
     print(
         f"Wrote {args.html} ({os.path.getsize(args.html)} bytes, "
-        f"{len(cases)} cases across {len(files)} files)"
+        f"{len(cases)} cases across {len(files)} files{crashed_note})"
     )
     return 0
 

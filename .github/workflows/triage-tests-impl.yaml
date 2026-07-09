@@ -19,7 +19,7 @@ on:
         required: false
         type: string
         default: unit
-        description: "smoke: core triage (merge-gate); unit: hang-report test (L2 nightly). Selects yaml and verify_time_budget.py key."
+        description: "merge_gate: core triage (merge-gate); unit: hang-report test (L2 nightly). Selects yaml and verify_time_budget.py key."
       enable-watcher:
         description: "Enable watcher"
         default: false
@@ -39,7 +39,7 @@ jobs:
     outputs:
       matrix: ${{ steps.prepare.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ${{ inputs.test-category == 'smoke' && './tests/pipeline_reorg/triage_smoke_merge_gate_tests.yaml' || './tests/pipeline_reorg/triage_tests.yaml' }}
+      TESTS_YAML_PATH: ${{ inputs.test-category == 'merge_gate' && './tests/pipeline_reorg/triage_merge_gate_tests.yaml' || './tests/pipeline_reorg/triage_tests.yaml' }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -15,7 +15,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -49,7 +48,7 @@ void kernel_main() {
     // Fill the reduce scaler tile: zero, then 1.0 in row 0 of each face (reduce MAX layout).
     cb_scaler_obj.reserve_back(1);
     CoreLocalMem<volatile uint32_t> sc(cb_scaler_obj.get_write_ptr());
-    fill_zeros_async(noc, cb_scaler_obj, get_tile_size(cb_scaler));
+    noc.async_write_zeros(cb_scaler_obj, get_tile_size(cb_scaler), {.offset_bytes = 0});
     noc.write_zeros_l1_barrier();
 
     for (uint32_t f = 0; f < num_faces; ++f) {

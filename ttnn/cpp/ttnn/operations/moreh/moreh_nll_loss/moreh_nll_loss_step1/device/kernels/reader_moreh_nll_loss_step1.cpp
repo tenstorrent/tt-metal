@@ -54,7 +54,8 @@ void kernel_main() {
 
 #if defined(WEIGHT)
     // weight: (1, C)
-    read_line(cb_weight, cb_weight_scratch, addrg_weight, weight_num_tile);
+    CircularBuffer cb_weight_scratch_obj(cb_weight_scratch);
+    read_line(cb_weight_obj, cb_weight_scratch_obj, addrg_weight, weight_num_tile);
 
     cb_weight_obj.wait_front(weight_num_tile);
     CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
@@ -63,7 +64,7 @@ void kernel_main() {
     uint32_t end_id = start_id + num_units_per_core;
     for (uint32_t i = start_id; i < end_id; ++i) {
         uint32_t target_noc_id = i;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(cb_target_obj, addrg_target, target_noc_id);
 
         cb_output_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);

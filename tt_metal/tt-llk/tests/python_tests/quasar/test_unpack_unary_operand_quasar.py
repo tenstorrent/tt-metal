@@ -25,6 +25,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
@@ -124,8 +125,8 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        dimensions,
-                                        tile_dims,
+                                        runtime(dimensions),
+                                        runtime(tile_dims),
                                     )
                                 )
 

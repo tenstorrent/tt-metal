@@ -25,11 +25,6 @@ on:
         type: boolean
         default: true
         description: "Set to false to allow write access to MLPerf mount"
-      test-category:
-        required: false
-        type: string
-        default: smoke
-        description: "Time-budget workflow key passed to verify_time_budget.py."
 
 jobs:
   load-test-matrix:
@@ -37,7 +32,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_smoke_merge_gate_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/models_merge_gate_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -57,7 +52,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             "${{ env.TESTS_YAML_PATH }}" \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            merge_gate
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -65,7 +60,7 @@ jobs:
           TESTS_YAML: ${{ env.TESTS_YAML_PATH }}
         run: |
           set -euo pipefail
-          # TODO: Remove this empty-yaml short-circuit once models_smoke_merge_gate_tests.yaml
+          # TODO: Remove this empty-yaml short-circuit once models_merge_gate_tests.yaml
           # has at least one test row; prepare_test_matrix.py fails on an empty yaml.
           test_count=$(python3 - <<'PY'
           import os, yaml

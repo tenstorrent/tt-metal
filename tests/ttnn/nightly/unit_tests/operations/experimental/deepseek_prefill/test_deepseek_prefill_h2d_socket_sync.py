@@ -51,8 +51,7 @@ def test_h2d_socket_sync_single_device(mesh_device):
     service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
-        fifo_size_bytes=8 * per_row_bytes,
-        scratch_cb_size_bytes=per_row_bytes,
+        max_socket_page_size_bytes=per_row_bytes,
         worker_cores=worker_cores,
         metadata_size_bytes=_METADATA_SIZE_BYTES,
     )

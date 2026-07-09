@@ -396,6 +396,37 @@ def prepare_gpt_oss_generator_args(
             False,  # stop_at_eos
             False,  # run_in_ci
         ),
+        # Seqlen sweep: 1k-128k context lengths, one step per seqlen (on single-row meshes, >64k steps are skipped)
+        (
+            [
+                "models/tt_transformers/demo/sample_prompts/input_data_long_1k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_8k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",
+                "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
+            ],  # input_prompts: list of 8 files, one per sweep step
+            1,  # data_parallel
+            1,  # batch_size
+            8,  # repeat_batches (one per seqlen step)
+            128 * 1024,  # max_seq_len (single-row meshes cap at 64k via is_seqlen_sweep guard)
+            32,  # max_generated_tokens (minimal decode to verify prefill works)
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params
+            True,  # enable_decode_trace
+            False,  # enable_prefill_trace (avoid trace memory issues at 128k)
+            False,  # warmup_prefill
+            False,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            # run_in_ci=False: the GPT-OSS e2e pipeline runs this demo file without a -k filter, so a
+            # CI-enabled seqlen-sweep case would be collected by the regular e2e job and fail. GPT-OSS is
+            # descoped from the sweep pipeline pending #48533; keep this case out of CI until re-scoped
+            # (the sweep pipeline will select it explicitly via -k "seqlen-sweep").
+            False,  # run_in_ci
+        ),
     ],
     ids=[
         "prefill_128",
@@ -410,6 +441,7 @@ def prepare_gpt_oss_generator_args(
         "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
+        "seqlen-sweep",
     ],
 )
 @parametrize_mesh_with_fabric()
@@ -437,12 +469,17 @@ def test_gpt_oss_demo(
 ):
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     mesh_shape = tuple(mesh_device.shape)
+    test_id = request.node.callspec.id if hasattr(request.node, "callspec") else request.node.name
+    is_seqlen_sweep = "seqlen-sweep" in test_id
+    # On single-row meshes (T3K, LoudBox), cap max_seq_len at 64k for seqlen-sweep so steps >64k are skipped
+    actual_max_seq_len = min(max_seq_len, 64 * 1024) if (is_seqlen_sweep and mesh_shape[0] == 1) else max_seq_len
     if mesh_shape[0] == 1:
         if batch_size > 1:
             pytest.skip(
                 f"Batch size = 128 demo skipped for mesh shape f{mesh_shape}. Only single user demo is supported for single row meshes."
             )
-        elif max_seq_len > 64 * 1024:
+        elif max_seq_len > 64 * 1024 and not is_seqlen_sweep:
+            # Seqlen sweep uses actual_max_seq_len (capped at 64k) for execution; skip only non-sweep tests
             pytest.skip(f"Long context demo with >64k tokens skipped for mesh shape {mesh_shape} due to OOM.")
     if is_blackhole() and batch_size > 1:
         pytest.skip(
@@ -486,13 +523,17 @@ def test_gpt_oss_demo(
     num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
     users_per_row = global_batch_size // mesh_device.shape[0]
 
-    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
+    seqlen_sweep_files = None
+    if is_seqlen_sweep:  # seqlen-sweep: list of file paths, loaded per step during repeat_batch_prompts construction
+        seqlen_sweep_files = input_prompts
+        real_prompts = None  # not used; each step loads its own prompts
+    elif isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
         real_prompts = input_prompts * num_real_users
     elif isinstance(input_prompts, str):  # Inputs from file
         real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
     else:
         raise ValueError(
-            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
+            f"Invalid input prompts: {input_prompts}. Expected a list of prompts, a single-item list, or a string path to a json file."
         )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
@@ -511,7 +552,7 @@ def test_gpt_oss_demo(
         mesh_device=mesh_device,
         global_batch_size=global_batch_size,
         optimizations=optimizations,
-        max_seq_len=max_seq_len,
+        max_seq_len=actual_max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
         mesh_config=mesh_config,  # Pass our refactored mesh config
@@ -589,8 +630,28 @@ def test_gpt_oss_demo(
 
     # Create repeat batches (like tt-transformers)
     repeat_batch_prompts = []
-    for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+    if is_seqlen_sweep:
+        # Load each seqlen step from its own file; skip steps exceeding the mesh's seqlen cap.
+        # Extract target seqlen from filename (e.g. "input_data_long_16k.json" -> "16k" -> 16384).
+        from pathlib import Path
+
+        for sweep_file in seqlen_sweep_files:
+            label = Path(sweep_file).stem.split("_")[-1]  # e.g. "16k"
+            if not (label.endswith("k") and label[:-1].isdigit()):
+                continue
+            step_len = int(label[:-1]) * 1024
+            if step_len > actual_max_seq_len:
+                logger.info(
+                    f"Seqlen sweep step ({step_len // 1024}k) skipped: exceeds mesh cap of {actual_max_seq_len // 1024}k"
+                )
+                continue
+            step_prompts, _ = load_inputs(sweep_file, num_real_users, instruct=False)
+            repeat_batch_prompts.append(step_prompts)
+    else:
+        for i in range(repeat_batches):
+            repeat_batch_prompts.append(
+                [input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))]
+            )
 
     num_tokens_generated_decode = []
 
@@ -991,7 +1052,7 @@ def test_gpt_oss_demo(
         )
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name=model_args[0].base_model_name,
             ml_model_type="llm",
             device_name=tt_device_name,

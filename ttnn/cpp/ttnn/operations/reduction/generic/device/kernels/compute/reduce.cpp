@@ -3,11 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Thin wrapper around compute_kernel_lib::reduce<>. The input data format is deduced from the input
-// CB id inside the helper, so Int32 MAX is routed to the SFPU path automatically; otherwise
+// CB id inside the helper, so Int32 MAX and SUM are routed to the SFPU path automatically; otherwise
 // FPU/GMPOOL. MIN on Int32 is dispatched separately via reduce_{h,w}_neg.
 
 #include <cstdint>
 #include "api/compute/cb_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -44,5 +45,6 @@ void kernel_main() {
 
     // The reduce helper waits on the scaler CB but never pops it (the single scaler tile is
     // reused for the whole reduction). Pop it here so the CB is left balanced.
-    cb_pop_front(tt::CBIndex::c_2, 1);
+    CircularBuffer cb_scaler(tt::CBIndex::c_2);
+    cb_scaler.pop_front(1);
 }

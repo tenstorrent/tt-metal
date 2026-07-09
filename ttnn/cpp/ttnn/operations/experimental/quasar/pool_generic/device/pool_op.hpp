@@ -17,8 +17,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/workload_descriptor.hpp>
+#include "ttnn/api/ttnn/metal_v2_artifacts.hpp"
 #include <utility>
 
 namespace ttnn::operations::pool::quasar {
@@ -45,27 +44,22 @@ struct Pool2D {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = std::vector<Tensor>;
 
+    // Metal 2.0 single-program factory (MetalV2FactoryConcept). The op-owned
+    // sliding-window reader-indices table and (for some avg-pool variants) the
+    // scalar config tensor are carried in ProgramArtifacts::op_owned_tensors.
     struct MultiCore {
-        // Builds the entire workload in one call (cache miss):
-        //   1. Uploads the halo lookup table (and, for avg-pool variants that
-        //      need it, the per-stick scalar config tensor) and parks the
-        //      backing MeshBuffers in the descriptor's `buffers` vector so
-        //      they outlive the cached workload.
-        //   2. Loops `tensor_coords` and pushes a ProgramDescriptor per coord
-        //      into `programs`.
-        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
             const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensors,
-            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+            tensor_return_value_t& output_tensors);
     };
 
     using program_factory_t = std::variant<MultiCore>;
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 };

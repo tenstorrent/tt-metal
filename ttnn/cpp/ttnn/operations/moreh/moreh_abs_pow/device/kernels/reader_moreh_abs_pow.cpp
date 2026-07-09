@@ -28,15 +28,18 @@ void kernel_main() {
 
     Scalar one;
     one.f = 1.0f;
-    fill_cb_with_value(cb_id_one, one.u);
-    fill_cb_with_value(cb_id_decimal, decimal);
+    CircularBuffer cb_one(cb_id_one);
+    CircularBuffer cb_decimal(cb_id_decimal);
+    fill_cb_with_value(cb_one, one.u);
+    fill_cb_with_value(cb_decimal, decimal);
 
     constexpr uint32_t TILE_W = 32;
     const bool do_mask_w = (origin_w % TILE_W) != 0;
     const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
     if (do_mask_w) {
-        generate_mask_w(cb_id_mask_w, mask_w);
+        CircularBuffer cb_mask_w(cb_id_mask_w);
+        generate_mask_w(cb_mask_w, mask_w);
     }
 
     Noc noc;

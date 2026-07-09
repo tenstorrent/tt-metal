@@ -30,6 +30,10 @@ class DeviceConfig:
         self.enable_tp = device_config.get("enable_tp", False)
         self.enable_ddp = device_config.get("enable_ddp", False)
         self.enable_fsdp = device_config.get("enable_fsdp", False)
+        # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
+        # so large models (e.g. 32B) never materialize a full replicated copy on one chip.
+        # Set to false to opt into the eager (full-replicated, then shard) path.
+        self.lazy_parameter_init = device_config.get("lazy_parameter_init", True)
 
     def total_devices(self) -> int:
         """Get total number of devices in mesh.
@@ -118,7 +122,7 @@ class TransformerConfig:
             self.original_context_length = self.rope.get("original_context_length", None)
 
         # Qwen3-specific
-        self.head_dim = int(tc.get("head_dim", None))
+        self.head_dim = tc.get("head_dim", None)
 
 
 @dataclass

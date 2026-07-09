@@ -6,7 +6,7 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/welford.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
@@ -45,10 +45,10 @@ void kernel_main() {
 
     // Circular buffer that the reader kernel fills with input tiles.
     // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so the welford SFPU
-    // intake (transpose_wh_tile) reads with full FP32 precision. For BF16 input c_0 is Default.
+    // intake (transpose_tile) reads with full FP32 precision. For BF16 input c_0 is Default.
     constexpr auto cb_in = tt::CBIndex::c_0;
-    // True when input is FP32; gates the transpose_wh re-init / welford PreserveStats recovery
-    // in the Wt-inner loop (transpose_wh_tile's UnpackToDestFp32 path clobbers the welford SFPU
+    // True when input is FP32; gates the transpose re-init / welford PreserveStats recovery
+    // in the Wt-inner loop (transpose_tile's UnpackToDestFp32 path clobbers the welford SFPU
     // replay buffer). On BF16 input that path is inactive, so the recovery is gated out.
     constexpr bool welford_fp32_input = get_named_compile_time_arg_val("welford_fp32_input") != 0;
     // Circular buffer where the final variance output tile is written
@@ -102,7 +102,7 @@ void kernel_main() {
         // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
         // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so _init_short is
         // enough here. For BF16 input cb_in is Default mode and the same call works.
-        transpose_wh_init_short(cb_in);
+        transpose_init(cb_in);
         tile_regs_acquire();
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
@@ -112,19 +112,19 @@ void kernel_main() {
             cb_in_obj.wait_front(onetile);
             if constexpr (welford_fp32_input) {
                 // Re-records the transpose-dest setup at math-thread replay slots [16, 32).
-                transpose_wh_init_short(cb_in);
+                transpose_init(cb_in);
             }
-            transpose_wh_tile(cb_in, 0, input_dst);
+            transpose_tile(cb_in, 0, input_dst);
             cb_in_obj.pop_front(onetile);
 
-            // For fp32 input, transpose_wh_tile takes the UnpackToDest path whose math-side init
+            // For fp32 input, transpose_tile takes the UnpackToDest path whose math-side init
             // overwrites the upper half of the SFPU replay buffer (slots [16, 32)), clobbering
             // welford's recurrence. welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots without
             // clearing LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in transpose=1 by
-            // transpose_wh_tile; welford_update is pure SFPU and does not consume that state, and the next iteration's
-            // transpose_wh_init[_short] reprograms it.
+            // transpose_tile; welford_update is pure SFPU and does not consume that state, and the next iteration's
+            // transpose_init reprograms it.
             //
-            // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+            // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
             // through SrcA without touching the SFPU replay buffer, so the recovery is gated out.
             if constexpr (welford_fp32_input) {
                 welford_init<WelfordInitMode::PreserveStats>();
@@ -155,9 +155,9 @@ void kernel_main() {
 
         cb_var_obj.wait_front(onetile);
         reconfig_data_format_srca(cb_var);
-        transpose_wh_init_short(cb_var);
+        transpose_init(cb_var);
         tile_regs_acquire();
-        transpose_wh_tile(cb_var, 0, var_dst);
+        transpose_tile(cb_var, 0, var_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);

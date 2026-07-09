@@ -49,11 +49,12 @@ void kernel_main() {
     auto momentum_in = TensorAccessor(momentum_in_args, momentum_in_addr);
 #endif
 
-    fill_cb_with_value(cb_scalar_args, lr);
-    fill_cb_with_value(cb_scalar_args, momentum);
-    fill_cb_with_value(cb_scalar_args, dampening);
-    fill_cb_with_value(cb_scalar_args, weight_decay);
-    fill_cb_with_value(cb_scalar_args, one);
+    CircularBuffer cb_scalar_args_obj(cb_scalar_args);
+    fill_cb_with_value(cb_scalar_args_obj, lr);
+    fill_cb_with_value(cb_scalar_args_obj, momentum);
+    fill_cb_with_value(cb_scalar_args_obj, dampening);
+    fill_cb_with_value(cb_scalar_args_obj, weight_decay);
+    fill_cb_with_value(cb_scalar_args_obj, one);
 
     Noc noc;
     CircularBuffer cb_param_in_obj(cb_param_in);

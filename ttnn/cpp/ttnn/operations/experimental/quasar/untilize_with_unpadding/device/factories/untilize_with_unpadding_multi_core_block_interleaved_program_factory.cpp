@@ -105,34 +105,59 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
 
     // ------------------------------------------------------------------------
     // Dataflow buffers (formerly CB c_0 / c_16). The legacy factory emitted a CB pair per non-empty
-    // sub-region with a per-region size. A DataflowBuffer carries one size set at construction, so the
-    // IN/OUT DFBs are sized to the MAX present region size — a superset of each legacy per-region
-    // buffer (the FIFO depth need only be >= the block consumed at once).
+    // sub-region with a per-region size; a DataflowBuffer carries ONE size shared across all regions.
+    // pack_untilize_block reads/writes block_width_tiles CONTIGUOUS tiles from the FIFO read/write
+    // pointer (fifo_rd_ptr + tile_index*page_size, no wrap mid-block), so the shared capacity must be
+    // a MULTIPLE of every present region's block_width_tiles. Sizing to just the MAX block (what an
+    // earlier port did) lets a block straddle the FIFO wrap when capacity % block_width_tiles != 0
+    // (e.g. cap 6 with a width-4 block: block 2 reads tiles 4..7 past fifo_limit), running the indexed
+    // tile read out of bounds (caught by the cb_access_within_bounds sanitizer; previously a silent
+    // garbage read). Size to the LCM of the present regions' block_width_tiles (full / cliff_col use
+    // single_sub_block_size; cliff_row / cliff_col_row use single_block_size_cliff_row). A multiple of
+    // block_width_tiles is also a multiple of the block-based path's sub_block_width (which divides
+    // block_width_tiles), so this is correct for both untilize dispatch paths; LCM(a,b) >= max(a,b) so
+    // capacity is never under-sized.
     // ------------------------------------------------------------------------
-    uint32_t max_block_tiles = 0;
+    auto lcm_u32 = [](uint32_t a, uint32_t b) -> uint32_t {
+        if (a == 0) {
+            return b;
+        }
+        if (b == 0) {
+            return a;
+        }
+        uint32_t ga = a;
+        uint32_t gb = b;
+        while (gb != 0) {
+            uint32_t t = gb;
+            gb = ga % gb;
+            ga = t;
+        }
+        return a / ga * b;
+    };
+    uint32_t block_buf_tiles = 0;
     if (!core_range.empty()) {
-        max_block_tiles = std::max(max_block_tiles, single_sub_block_size);
-    }
-    if (has_cliff_col && has_cliff_row) {
-        max_block_tiles = std::max(max_block_tiles, single_block_size_cliff_row);
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_sub_block_size);
     }
     if (has_cliff_row) {
-        max_block_tiles = std::max(max_block_tiles, single_block_size_cliff_row);
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_block_size_cliff_row);
     }
     if (has_cliff_col) {
-        max_block_tiles = std::max(max_block_tiles, single_sub_block_size);
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_sub_block_size);
+    }
+    if (has_cliff_col && has_cliff_row) {
+        block_buf_tiles = lcm_u32(block_buf_tiles, single_block_size_cliff_row);
     }
 
     DataflowBufferSpec in_dfb{
         .unique_id = IN_DFB,
         .entry_size = input_single_tile_size,
-        .num_entries = max_block_tiles,
+        .num_entries = block_buf_tiles,
         .data_format_metadata = input_cb_data_format,
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT_DFB,
         .entry_size = output_single_tile_size,
-        .num_entries = max_block_tiles,
+        .num_entries = block_buf_tiles,
         .data_format_metadata = output_cb_data_format,
     };
 
@@ -286,33 +311,37 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     uint32_t single_block_size_col_arg;
     uint32_t single_sub_block_size_row_arg;
 
-    uint32_t total_row_cores = full_cores_per_row;
-    if (has_cliff_row) {
-        total_row_cores++;
-    }
     uint32_t cores_col_count = 1;
 
     for (uint32_t i = 0; i < ncores; ++i) {
         const NodeCoord node = cores[i];
 
-        if (has_cliff_col && has_cliff_row && i == ncores - 1) {
+        // Classify each core by ACTUAL region-set membership (the same sets the WorkUnitSpecs use to
+        // place the compute kernels), not by reconstructing split_blocks_for_tilize_wh's assignment
+        // from the linear index. The index heuristic breaks for wide / single-tile-high shapes where
+        // full_cores_per_col == 0 (every core lands in cliff_col, but the modulo still flags one as
+        // cliff_row), giving that core reader/writer RTAs that don't match its compute kernel -> the
+        // writer pops a different tile count than compute pushes and the compute/writer stall (CWFW).
+        // Membership is exact.
+        const CoreCoord core = cores[i];
+        if (has_cliff_col && has_cliff_row && cliff_col_row_core_range.contains(core)) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
 
-        } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
+        } else if (has_cliff_row && cliff_row_core_range.contains(core)) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_block_size_cliff_row;
 
-        } else if (i < total_row_cores * full_cores_per_col) {
+        } else if (has_cliff_col && cliff_col_core_range.contains(core)) {
             single_block_size_row_arg = single_block_size;
-            single_block_size_col_arg = single_block_size;
+            single_block_size_col_arg = single_block_size_cliff_col;
             single_sub_block_size_row_arg = single_sub_block_size;
 
         } else {
             single_block_size_row_arg = single_block_size;
-            single_block_size_col_arg = single_block_size_cliff_col;
+            single_block_size_col_arg = single_block_size;
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 

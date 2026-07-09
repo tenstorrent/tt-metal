@@ -118,6 +118,7 @@ skus:
   bh_p150b_civ2:
     runs_on:
       - tt-ubuntu-2204-P150b-stable
+    weights-cache-mode: lfc
 
   wh_n300_perf:
     runs_on:
@@ -132,6 +133,7 @@ skus:
       - arch-blackhole
       - P150
       - pipeline-functional
+    weights-cache-mode: cloud-mlperf
 
   bh_p150_perf:
     runs_on:
@@ -139,6 +141,7 @@ skus:
       - arch-blackhole
       - P150
       - pipeline-perf
+    weights-cache-mode: local-disk
 
   bh_loudbox:
     runs_on:
@@ -146,6 +149,7 @@ skus:
       - arch-blackhole
       - BH-LoudBox
       - pipeline-functional
+    weights-cache-mode: cloud-mlperf
 
   bh_p300:
     runs_on:
@@ -153,11 +157,14 @@ skus:
       - arch-blackhole
       - P300-viommu
       - pipeline-yyz2-lfc
+    weights-cache-mode: lfc
+
   bh_p300_viommu:
     runs_on:
       - pipeline-yyz2-lfc
       - P300-viommu
       - in-service
+    weights-cache-mode: lfc
 
   bh_loudbox_civ2_viommu:
     runs_on:
@@ -168,6 +175,14 @@ skus:
       - BH-Quietbox-2
       - pipeline-perf
       - in-service
+    weights-cache-mode: yyz4-mnt-models
+
+  bh_quietbox_2_iommu:
+    runs_on:
+      - BH-Quietbox-2-iommu
+      - pipeline-perf
+      - in-service
+    weights-cache-mode: yyz4-mnt-models
 
   bh_spsg:
     runs_on:
@@ -175,9 +190,6 @@ skus:
     allocation:
       type: Count
       count: 1
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
 
   bh_sp1:
     runs_on:
@@ -185,17 +197,14 @@ skus:
     allocation:
       type: Count
       count: 4
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
+      topologyKeys:
+        - exabox.tenstorrent.com/quad
 
   bh_sp1-blitz:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
       type: MGD
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
       topologyKeys:
         - exabox.tenstorrent.com/quad
       mgd_file: models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_single_pod_mesh_graph_descriptor.textproto
@@ -205,8 +214,6 @@ skus:
       - exabox-multihost-with-nfs
     allocation:
       type: MGD
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
       topologyKeys:
         - exabox.tenstorrent.com/quad
       mgd_file: tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto
@@ -217,9 +224,8 @@ skus:
     allocation:
       type: Count
       count: 16
-      match_labels:
-        exabox.tenstorrent.com/purpose: ci-metal
-        exabox.tenstorrent.com/superpod: A29
+      topologyKeys:
+        - exabox.tenstorrent.com/SC16
 
   cpu_medium:
     runs_on:
@@ -239,3 +245,9 @@ skus:
   sim_blackhole:
     runs_on:
       - ubuntu-latest
+  sim_wormhole_b0_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable
+  sim_blackhole_galaxy:
+    runs_on:
+      - tt-ubuntu-2204-large-stable

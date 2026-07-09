@@ -17,7 +17,7 @@ from pathlib import Path
 _PYTHON_STACK_FILE_PATTERN = re.compile(r'^\s*File "([^"]+)", line \d+, in ')
 _PATH_WITH_LINE_PATTERN = re.compile(r"^\s*([^:\n]+):(\d+)(?::\d+)?\s*$")
 
-# Shared by ``graph_report.create_database_schema`` and ``database.get_or_create_sqlite_db``.
+# Shared by ``graph_report.create_database_schema`` when importing stack traces.
 CREATE_SOURCE_FILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS source_files (
     id INTEGER PRIMARY KEY,

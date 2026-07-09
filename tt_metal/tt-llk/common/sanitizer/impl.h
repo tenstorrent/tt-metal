@@ -54,7 +54,7 @@ static inline void thread_init_impl(SanitizerState& sanitizer)
     }
 
     new (&sanitizer.operation[COMPILE_FOR_TRISC]) llk::san::OperationState();
-    new (&sanitizer.fsm[COMPILE_FOR_TRISC]) llk::san::FsmState(llk::san::FsmState::Initial);
+    new (&sanitizer.fsm[COMPILE_FOR_TRISC]) llk::san::FsmState();
 }
 
 static inline void thread_silent_push_impl(ThreadOutputContext& context)
@@ -351,12 +351,12 @@ constexpr size_t _operation_entry_size(
 
 // Goes in LLK_LIB in Init
 // Store operation type and push arguments to state stack
-template <Operation op, typename... Ts>
-static inline void operation_init_impl(ThreadOutputContext& context, OperationState& state, const Ts... args)
+template <typename... Ts>
+static inline void operation_init_impl(ThreadOutputContext& context, OperationState& state, const Operation op, Ts&&... args)
 {
-    state.operation     = op;
-    state.expect_uninit = operation_must_uninit<op>;
-    context.operation   = context.current;
+    state.status      = OperationStatus::Initialized;
+    state.operation   = op;
+    context.operation = context.current;
 
     constexpr std::uint8_t args_count = _args_count<Ts...>();
 
@@ -393,161 +393,300 @@ static inline void operation_init_impl(ThreadOutputContext& context, OperationSt
 }
 
 // Goes in LLK_LIB in Execute
-// Check operation type and arguments against stored ones
-template <Operation op, typename... Ts>
-static inline void operation_check_impl(const ThreadOutputContext& context, OperationState& state, const Ts... args)
+// Check the operation (and its arguments) against the stored one, then mark it executed
+template <typename... Ts>
+static inline void operation_execute_impl(const ThreadOutputContext& context, OperationState& state, const Operation op, Ts&&... args)
 {
-    if (thread_silent_get_impl(context))
+    // The check is skipped when silenced (e.g. the connected FSM transition already failed),
+    // but the operation state is always advanced to stay in sync with the FSM.
+    if (!thread_silent_get_impl(context) &&
+        operation_assert<Trigger::ERROR>(
+            CTSTR("INITIALIZED for Operation X, but EXECUTED Operation Y"), state, OperationStatus::Executed, op, context.operation, context.current))
     {
-        return;
+        constexpr std::uint8_t args_count = _args_count<Ts...>();
+
+        constexpr std::array<std::uint8_t, args_count> args_sizeof  = _args_sizeof<Ts...>();
+        constexpr std::array<std::uint8_t, args_count> args_alignof = _args_alignof<Ts...>();
+        constexpr std::array<size_t, args_count + 1> args_offsetof  = _args_offsetof(args_sizeof, args_alignof);
+
+        constexpr size_t entry_size = _operation_entry_size<args_count>(args_sizeof, args_alignof, args_offsetof);
+
+        static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault   | operation entry will overflow the buffer");
+
+        // | ARG_COUNT | SIZEOF(args[0]) ... | ALIGNOF(args[1]) ... | args[0] PADDING ... |
+
+        char* ptr = state.buffer;
+
+        LLK_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "llk::san | fault   | saved vs provided args_count mismatch");
+        ptr += sizeof(args_count);
+
+        if constexpr (args_count > 0)
+        {
+            LLK_ASSERT(
+                std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "llk::san | fault   | saved vs provided args_sizeof mismatch");
+            ptr += args_count * sizeof(args_sizeof[0]);
+
+            LLK_ASSERT(
+                std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0,
+                "llk::san | fault   | saved vs provided args_alignof mismatch");
+            ptr += args_count * sizeof(args_alignof[0]);
+
+            constexpr size_t max_align = alignof(max_align_t);
+            size_t padding             = (max_align - reinterpret_cast<uintptr_t>(ptr) % max_align) % max_align;
+            ptr += padding;
+
+            [[maybe_unused]] size_t i = 0;
+            (
+                [&]([[maybe_unused]] const auto& arg)
+                {
+                    operation_argument_assert<Trigger::ERROR>(ptr + args_offsetof[i], &arg, sizeof(arg), i, context.operation, context.current);
+                    ++i;
+                }(args),
+                ...);
+        }
     }
 
-    const bool passed = operation_assert<Trigger::ERROR>(state.operation, op, context.operation, context.current);
-
-    if (!passed)
-    {
-        return;
-    }
-
-    constexpr std::uint8_t args_count = _args_count<Ts...>();
-
-    constexpr std::array<std::uint8_t, args_count> args_sizeof  = _args_sizeof<Ts...>();
-    constexpr std::array<std::uint8_t, args_count> args_alignof = _args_alignof<Ts...>();
-    constexpr std::array<size_t, args_count + 1> args_offsetof  = _args_offsetof(args_sizeof, args_alignof);
-
-    constexpr size_t entry_size = _operation_entry_size<args_count>(args_sizeof, args_alignof, args_offsetof);
-
-    static_assert(entry_size <= OperationState::BUFFER_SIZE, "llk::san | fault   | operation entry will overflow the buffer");
-
-    // | ARG_COUNT | SIZEOF(args[0]) ... | ALIGNOF(args[1]) ... | args[0] PADDING ... |
-
-    char* ptr = state.buffer;
-
-    LLK_ASSERT(std::memcmp(&args_count, ptr, sizeof(args_count)) == 0, "llk::san | fault   | saved vs provided args_count mismatch");
-    ptr += sizeof(args_count);
-
-    if constexpr (args_count > 0)
-    {
-        LLK_ASSERT(
-            std::memcmp(args_sizeof.data(), ptr, args_count * sizeof(args_sizeof[0])) == 0, "llk::san | fault   | saved vs provided args_sizeof mismatch");
-        ptr += args_count * sizeof(args_sizeof[0]);
-
-        LLK_ASSERT(
-            std::memcmp(args_alignof.data(), ptr, args_count * sizeof(args_alignof[0])) == 0, "llk::san | fault   | saved vs provided args_alignof mismatch");
-        ptr += args_count * sizeof(args_alignof[0]);
-
-        constexpr size_t max_align = alignof(max_align_t);
-        size_t padding             = (max_align - reinterpret_cast<uintptr_t>(ptr) % max_align) % max_align;
-        ptr += padding;
-
-        [[maybe_unused]] size_t i = 0;
-        (
-            [&]([[maybe_unused]] const auto& arg)
-            {
-                operation_argument_assert<Trigger::ERROR>(ptr + args_offsetof[i], &arg, sizeof(arg), i, context.operation, context.current);
-                ++i;
-            }(args),
-            ...);
-    }
+    state.status = OperationStatus::Executed;
 }
 
 // Goes in LLK_LIB in Uninit
-// Check operation type and clear must uninit flag
-template <Operation op>
-static inline void operation_uninit_impl(const ThreadOutputContext& context, OperationState& state)
+// Check the operation against the stored one, then mark it uninitialized
+static inline void operation_uninit_impl(ThreadOutputContext& context, OperationState& state, const Operation op)
 {
     if (!thread_silent_get_impl(context))
     {
-        operation_assert<Trigger::ERROR>(state.operation, op, context.operation, context.current);
+        operation_assert<Trigger::ERROR>(
+            CTSTR("INITIALIZED for Operation X, but UNINITIALIZED Operation Y"), state, OperationStatus::Uninitialized, op, context.operation, context.current);
     }
 
-    state.expect_uninit = false;
+    state.status      = OperationStatus::Uninitialized;
+    state.operation   = Operation::None;
+    context.operation = context.current;
 }
 
-template <FsmState next>
-static inline void fsm_advance_impl(ThreadOutputContext& context, FsmState& current, [[maybe_unused]] const OperationState& operation)
+static inline bool fsm_check(ThreadOutputContext& context, const FsmState& current, const FsmStateType type, const Operation operation)
 {
-    if (!thread_silent_get_impl(context))
+    if (thread_silent_get_impl(context))
     {
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Initial || next == FsmState::Configured,
-            CTSTR("First transition must be INITIAL -> CONFIGURED"),
-            current,
-            next,
-            CTSTR("CONFIGURED"),
-            UnwindContext::UNKNOWN,
-            context.current);
-
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Configured || next == FsmState::Initialized,
-            CTSTR("Expected CONFIGURED -> INITIALIZED"),
-            current,
-            next,
-            CTSTR("INITIALIZED"),
-            context.fsm,
-            context.current);
-
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Initialized || !operation.expect_uninit || next == FsmState::Executed,
-            CTSTR("Operation UNINIT required, expected INITIALIZED -> EXECUTED"),
-            current,
-            next,
-            CTSTR("EXECUTED"),
-            context.fsm,
-            context.current);
-
-        // Reconfig after init (without an intervening execute) is tolerated for operations that don't require
-        // uninit, but it is still likely indicative of a bug, hence WARN rather than ERROR.
-        fsm_assert<Trigger::WARN>(
-            current != FsmState::Initialized || operation.expect_uninit || next == FsmState::Executed || next == FsmState::Reconfigured,
-            CTSTR("Operation UNINIT not required, expected INITIALIZED -> [EXECUTED, RECONFIGURED]"),
-            current,
-            next,
-            CTSTR("EXECUTED, RECONFIGURED"),
-            context.fsm,
-            context.current);
-
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Executed || !operation.expect_uninit || next == FsmState::Uninitialized || next == FsmState::Executed,
-            CTSTR("Operation UNINIT required, expected EXECUTED -> [UNINITIALIZED, EXECUTED]"),
-            current,
-            next,
-            CTSTR("UNINITIALIZED, EXECUTED"),
-            context.fsm,
-            context.current);
-
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Executed || operation.expect_uninit || next == FsmState::Executed || next == FsmState::Initialized ||
-                next == FsmState::Reconfigured,
-            CTSTR("Operation UNINIT not required, expected EXECUTED -> [EXECUTED, INITIALIZED, RECONFIGURED]"),
-            current,
-            next,
-            CTSTR("EXECUTED, INITIALIZED, RECONFIGURED"),
-            context.fsm,
-            context.current);
-
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Uninitialized || next == FsmState::Initialized || next == FsmState::Reconfigured,
-            CTSTR("Expected UNINITIALIZED -> [INITIALIZED, RECONFIGURED]"),
-            current,
-            next,
-            CTSTR("INITIALIZED, RECONFIGURED"),
-            context.fsm,
-            context.current);
-
-        fsm_assert<Trigger::ERROR>(
-            current != FsmState::Reconfigured || next == FsmState::Initialized || next == FsmState::Reconfigured,
-            CTSTR("Expected RECONFIGURED -> [INITIALIZED, RECONFIGURED]"),
-            current,
-            next,
-            CTSTR("INITIALIZED, RECONFIGURED"),
-            context.fsm,
-            context.current);
+        return true;
     }
 
-    // valid transition -> commit
-    current     = next;
-    context.fsm = context.current;
+    const FsmState next = {type, operation};
+
+    const bool expect_uninit = OperationUtil::expect_uninit(current.operation) == OperationUtil::ExpectUninit::Yes;
+
+    // Only ERROR-level transitions affect the result; WARNs are advisory.
+    bool success = true;
+
+    // Checks for transitions from INITIAL
+
+    // INITIAL -> CONFIGURED: Valid
+    // ELSE: Error (The first operation in the kernel must be a hardware configure)
+    success &= fsm_assert<Trigger::ERROR>(
+        current.type != FsmStateType::Initial || next.type == FsmStateType::Configured,
+        CTSTR("First transition must be INITIAL -> CONFIGURED"),
+        current,
+        next,
+        CTSTR("CONFIGURED"),
+        context.fsm,
+        context.current);
+
+    // Checks for transitions from CONFIGURED
+
+    // CONFIGURED -> INITIALIZED[Any]: Valid
+    // CONFIGURED -> RECONFIGURED: Warn (Functionally valid, Performance loss)
+    // ELSE: Error
+    success &= fsm_assert<Trigger::ERROR>(
+        current.type != FsmStateType::Configured || next.type == FsmStateType::Initialized || next.type == FsmStateType::Reconfigured,
+        CTSTR("Expected CONFIGURED -> INITIALIZED[Any]"),
+        current,
+        next,
+        CTSTR("INITIALIZED[Any]"),
+        context.fsm,
+        context.current);
+
+    fsm_assert<Trigger::WARN>(
+        current.type != FsmStateType::Configured || next.type != FsmStateType::Reconfigured,
+        CTSTR("RECONFIGURE after CONFIGURE is a performance loss, expected CONFIGURED -> INITIALIZED[Any]"),
+        current,
+        next,
+        CTSTR("INITIALIZED[Any]"),
+        context.fsm,
+        context.current);
+
+    // Checks for transitions from INITIALIZED
+    // INITIALIZED[Op] -> EXECUTED[Op]: Valid
+    // INITIALIZED[Op] -> INITIALIZED[Any]: WARN (Functionally valid, Performance loss)
+    // INITIALIZED[Op] -> UNINITIALIZED[Op]: WARN (Functionally valid, Performance loss)
+    //
+    // IF EXPECT_UNINIT == FALSE
+    //     INITIALIZED[Op] -> RECONFIGURED: Valid
+    //
+    // ELSE: Error
+    success &= fsm_assert<Trigger::ERROR>(
+        !(current.type == FsmStateType::Initialized && expect_uninit) || next.type == FsmStateType::Executed || next.type == FsmStateType::Initialized ||
+            next.type == FsmStateType::Uninitialized,
+        CTSTR("Operation with required UNINIT, expected INITIALIZED[Op] -> EXECUTED[Op]"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op]"),
+        context.fsm,
+        context.current);
+
+    fsm_assert<Trigger::WARN>(
+        current.type != FsmStateType::Initialized || next.type != FsmStateType::Initialized,
+        CTSTR("INITIALIZED[Any] after INITIALIZED[Op] is a performance loss, expected INITIALIZED[Op] -> EXECUTED[Op]"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op]"),
+        context.fsm,
+        context.current);
+
+    fsm_assert<Trigger::WARN>(
+        current.type != FsmStateType::Initialized || next.type != FsmStateType::Uninitialized,
+        CTSTR("UNINITIALIZED[Op] after INITIALIZED[Op] is a performance loss, expected INITIALIZED[Op] -> EXECUTED[Op]"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op]"),
+        context.fsm,
+        context.current);
+
+    success &= fsm_assert<Trigger::ERROR>(
+        !(current.type == FsmStateType::Initialized && !expect_uninit) || next.type == FsmStateType::Executed || next.type == FsmStateType::Initialized ||
+            next.type == FsmStateType::Uninitialized || next.type == FsmStateType::Reconfigured,
+        CTSTR("Operation with no required UNINIT, expected INITIALIZED[Op] -> EXECUTED[Op]"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op]"),
+        context.fsm,
+        context.current);
+
+    fsm_assert<Trigger::WARN>(
+        !(current.type == FsmStateType::Initialized && !expect_uninit) || next.type != FsmStateType::Reconfigured,
+        CTSTR("Operation with no required UNINIT, RECONFIGURE after INITIALIZED[Op] is DEPRECATED, expected INITIALIZED[Op] -> EXECUTED[Op]"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op]"),
+        context.fsm,
+        context.current);
+
+    // Checks for transitions from EXECUTED
+
+    // EXECUTED[Op] -> EXECUTED[Op]: Valid
+    //
+    // IF EXPECT_UNINIT == TRUE
+    //     EXECUTED[Op] -> UNINITIALIZED[Op]: Valid
+    //
+    // IF EXPECT_UNINIT == FALSE
+    //     EXECUTED[Op] -> INITIALIZED[Any]: Valid
+    //     EXECUTED[Op] -> RECONFIGURED: Valid
+    //
+    // ELSE: Error
+    success &= fsm_assert<Trigger::ERROR>(
+        !(current.type == FsmStateType::Executed && expect_uninit) || next.type == FsmStateType::Executed || next.type == FsmStateType::Uninitialized,
+        CTSTR("Operation UNINIT required, expected EXECUTED[Op] -> { EXECUTED[Op], UNINITIALIZED[Op] }"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op], UNINITIALIZED[Op]"),
+        context.fsm,
+        context.current);
+
+    success &= fsm_assert<Trigger::ERROR>(
+        !(current.type == FsmStateType::Executed && !expect_uninit) || next.type == FsmStateType::Executed || next.type == FsmStateType::Initialized ||
+            next.type == FsmStateType::Reconfigured,
+        CTSTR("Operation UNINIT not required, expected EXECUTED[Op] -> { EXECUTED[Op], INITIALIZED[Any], RECONFIGURED }"),
+        current,
+        next,
+        CTSTR("EXECUTED[Op], INITIALIZED[Any], RECONFIGURED"),
+        context.fsm,
+        context.current);
+
+    // Checks for transitions from UNINITIALIZED
+
+    // UNINITIALIZED[Op] -> INITIALIZED[Any]: Valid
+    // UNINITIALIZED[Op] -> RECONFIGURED: Valid
+    // ELSE: Error
+    success &= fsm_assert<Trigger::ERROR>(
+        current.type != FsmStateType::Uninitialized || next.type == FsmStateType::Initialized || next.type == FsmStateType::Reconfigured,
+        CTSTR("Expected UNINITIALIZED[Op] -> { INITIALIZED[Any], RECONFIGURED }"),
+        current,
+        next,
+        CTSTR("INITIALIZED[Any], RECONFIGURED"),
+        context.fsm,
+        context.current);
+
+    // Checks for transitions from RECONFIGURED
+
+    // RECONFIGURED -> INITIALIZED[Any]: Valid
+    // RECONFIGURED -> RECONFIGURED: Valid
+    // ELSE: Error
+    success &= fsm_assert<Trigger::ERROR>(
+        current.type != FsmStateType::Reconfigured || next.type == FsmStateType::Initialized || next.type == FsmStateType::Reconfigured,
+        CTSTR("Expected RECONFIGURED -> { INITIALIZED[Any], RECONFIGURED }"),
+        current,
+        next,
+        CTSTR("INITIALIZED[Any], RECONFIGURED"),
+        context.fsm,
+        context.current);
+
+    return success;
+}
+
+// Goes in LLK_LIB in HWConfigure (first configure of the kernel)
+static inline bool fsm_configure_impl(ThreadOutputContext& context, FsmState& current)
+{
+    const bool success = fsm_check(context, current, FsmStateType::Configured, Operation::None);
+
+    current.type = FsmStateType::Configured;
+    context.fsm  = context.current;
+
+    return success;
+}
+
+// Goes in LLK_LIB in HWReconfig
+static inline bool fsm_reconfigure_impl(ThreadOutputContext& context, FsmState& current)
+{
+    const bool success = fsm_check(context, current, FsmStateType::Reconfigured, Operation::None);
+
+    current.type = FsmStateType::Reconfigured;
+    context.fsm  = context.current;
+
+    return success;
+}
+
+// Goes in LLK_LIB in Init
+static inline bool fsm_init_impl(ThreadOutputContext& context, FsmState& current, const Operation op)
+{
+    const bool success = fsm_check(context, current, FsmStateType::Initialized, op);
+
+    current.type      = FsmStateType::Initialized;
+    current.operation = op;
+    context.fsm       = context.current;
+
+    return success;
+}
+
+// Goes in LLK_LIB in Execute
+static inline bool fsm_execute_impl(ThreadOutputContext& context, FsmState& current, const Operation op)
+{
+    const bool success = fsm_check(context, current, FsmStateType::Executed, op);
+
+    current.type = FsmStateType::Executed;
+    context.fsm  = context.current;
+
+    return success;
+}
+
+// Goes in LLK_LIB in Uninit
+static inline bool fsm_uninit_impl(ThreadOutputContext& context, FsmState& current, const Operation op)
+{
+    const bool success = fsm_check(context, current, FsmStateType::Uninitialized, op);
+
+    current.type      = FsmStateType::Uninitialized;
+    current.operation = Operation::None;
+    context.fsm       = context.current;
+
+    return success;
 }
 
 } // namespace llk::san

@@ -153,12 +153,10 @@ Tensor reduce(
             input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
     }
 
-    // GMPOOL applies exp2(floor(log2(|s|))) of the scalar (only the exponent), so for
-    // MAX/MIN with non-unity scalar we instead reduce with scaler=1.0 and apply the user
-    // scalar after reduction via post-multiplication. See issue #40498. The flag also
-    // covers reduce_min (math_op=MAX with negate=true) since high-level dispatch lowers
-    // min through reduce_min before reaching here.
-    const bool use_post_mul = (reduce_math == tt::tt_metal::ReduceOpMath::MAX) && (scaler != 1.0f);
+    // A non-unity scalar is applied after the reduction (see requires_post_mul() in common.hpp):
+    // GMPOOL keeps only the scaler's exponent for MAX/MIN, and the Int32 SFPU path ignores the
+    // scaler CB. Int32 post-mul rounds through fp32, so it is lossy for |result| > 2^24.
+    const bool use_post_mul = ttnn::prim::requires_post_mul(reduce_math, tilized_input.dtype(), scaler);
     const float reduce_scaler = use_post_mul ? 1.0f : scaler;
     const float post_mul = use_post_mul ? scaler : 1.0f;
 
@@ -193,20 +191,29 @@ Tensor reduce(
     // However, sqrt of a negative number is NaN, so negative scalers
     // must take the two-step W-then-H path where the scaler is applied once.
     //
-    // INT32 SFPU max/min has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
+    // INT32 SFPU reduce has no REDUCE_SCALAR primitive (ROW/COL only), so Int32 HW always uses
     // W-then-H. Float32 max HW can use single-core REDUCE_SCALAR (FPU) when num_tiles == 1;
-    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX and MIN (MIN via negate).
-    const bool use_two_step_hw_sfpu_reduce = (reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
-                                             (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
-                                             (reduce_math == tt::tt_metal::ReduceOpMath::MAX);
+    // multi-tile HW still uses W-then-H via is_multicore_hw. Applies to MAX/SUM and MIN (MIN via negate).
+    const bool use_two_step_hw_sfpu_reduce =
+        (reduce_dim == tt::tt_metal::ReduceOpDim::HW) && (tilized_input.dtype() == tt::tt_metal::DataType::INT32) &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
 
     if (is_multicore_hw || use_two_step_hw_sfpu_reduce ||
         (reduce_dim == tt::tt_metal::ReduceOpDim::HW && reduce_scaler < 0)) {
         // Multi-core HW reduction: first reduce W, then reduce H on the result.
-        // For the Sum chain's terminal fp32->bf16 stage, keep W in fp32 so only H packs to bf16.
+        // Keep the W intermediate in FP32 (only H packs to BF16) to preserve accumulation
+        // precision. Applies to SUM only:
+        // - FP32 input after an earlier NC-stage reduction with a BF16 final pack (chain path), or
+        // - BF16 input on a pure H+W reduction (e.g. dim=[-2,-1] on 8D tensors).
+        // MAX/MIN must not use this path: MIN is lowered to MAX + negate, and the fused-negate
+        // W step produces wrong results with an FP32 intermediate (issue #40854). They also gain
+        // no precision from FP32 since they select, not accumulate.
         const auto out_final_dtype = output_dtype.value_or(input_tensor.dtype());
-        const bool keep_w_fp32 = output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
-                                 tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32;
+        const bool keep_w_fp32 =
+            reduce_math == tt::tt_metal::ReduceOpMath::SUM &&
+            ((output_dtype.has_value() && out_final_dtype == tt::tt_metal::DataType::BFLOAT16 &&
+              tilized_input.dtype() == tt::tt_metal::DataType::FLOAT32) ||
+             (tilized_input.dtype() == tt::tt_metal::DataType::BFLOAT16 && config.fp32_dest_acc_en));
         const auto out_w_dtype = keep_w_fp32 ? tt::tt_metal::DataType::FLOAT32 : out_final_dtype;
 
         const Tensor output_tensor = ttnn::prim::reduce(

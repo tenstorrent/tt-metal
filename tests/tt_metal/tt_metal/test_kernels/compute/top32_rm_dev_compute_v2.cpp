@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/dataflow/circular_buffer.h"
 
 // DeepSeek Top32 headers — Blackhole only; no WH B0 port exists yet.
@@ -77,12 +77,12 @@ void kernel_main() {
 
     // step 1
     reconfig_data_format_srca(cb_in0);
-    transpose_wh_init_short(cb_in0);
-    transpose_wh_tile(cb_in0, 0, value_offset_tiles);
+    transpose_init(cb_in0);
+    transpose_tile(cb_in0, 0, value_offset_tiles);
 
     reconfig_data_format_srca(cb_in1);
-    transpose_wh_init_short(cb_in1);
-    transpose_wh_tile(cb_in1, 0, index_offset_tiles);
+    transpose_init(cb_in1);
+    transpose_tile(cb_in1, 0, index_offset_tiles);
 
     // step 2
     const uint32_t decreasing = 0;
@@ -101,12 +101,12 @@ void kernel_main() {
     for (uint32_t i = 1; i < num_chunks; i++) {
         // step 3
         reconfig_data_format_srca(cb_in0);
-        transpose_wh_init_short(cb_in0);
-        transpose_wh_tile(cb_in0, i, value_offset_tiles + 1);
+        transpose_init(cb_in0);
+        transpose_tile(cb_in0, i, value_offset_tiles + 1);
 
         reconfig_data_format_srca(cb_in1);
-        transpose_wh_init_short(cb_in1);
-        transpose_wh_tile(cb_in1, i, index_offset_tiles + 1);
+        transpose_init(cb_in1);
+        transpose_tile(cb_in1, i, index_offset_tiles + 1);
 
         // step 4
         MATH(SFPU_UNARY_CALL(

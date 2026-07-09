@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "hal.hpp"
 #include "llrt/rtoptions.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -37,10 +38,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr uint32_t num_elements = 10;
-    constexpr uint32_t buf_a_addr = 1000 * 1024;
-    constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    constexpr uint32_t dram_src_addr = 29000 * 1024;
-    constexpr uint32_t dram_dst_addr = 30000 * 1024;
+    const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
+    const uint32_t dram_src_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dram_dst_addr = dram_src_addr + (1000 * 1024);
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {
@@ -176,6 +178,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
 
     auto mesh_device = devices_[0];
 
+    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "This test requires at least 2 worker nodes.";
+    }
+
     const experimental::NodeCoord node_0{0, 0};
     const experimental::NodeCoord node_1{1, 0};
 
@@ -185,10 +191,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr uint32_t num_elements = 10;
-    constexpr uint32_t buf_a_addr = 1000 * 1024;
-    constexpr uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
-    const uint32_t dram_mid_addr = 31000 * 1024;
-    const uint32_t dram_dst_addr = 32000 * 1024;
+    const uint32_t buf_a_addr = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    const uint32_t buf_b_addr = buf_a_addr + num_elements * sizeof(uint32_t);
+    const uint32_t dram_mid_addr = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    const uint32_t dram_dst_addr = dram_mid_addr + (1000 * 1024);
 
     std::vector<uint32_t> initial_data(num_elements, 0);
     for (uint32_t i = 0; i < num_elements; i++) {

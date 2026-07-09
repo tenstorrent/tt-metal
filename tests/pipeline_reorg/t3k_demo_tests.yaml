@@ -36,15 +36,6 @@
   team: models
   model-name: sd35_large
 
-- name: t3k_flux1-dev_tests
-  cmd: run_t3000_flux1_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux1-dev
-
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
   skus:
@@ -82,12 +73,3 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: mochi
-
-- name: t3k_qwen3_vl_tests
-  cmd: run_t3000_qwen3_vl_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U08H31YMN4Q # Sanjay Sanjay
-  team: models
-  model-name: qwen3_vl

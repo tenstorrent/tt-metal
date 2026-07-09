@@ -104,6 +104,7 @@ def test_sfpu_binary_float(
         ]
     ),
     mathop=[
+        MathOperation.SfpuElwadd,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwLogicalRightShift,

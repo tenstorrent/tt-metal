@@ -31,6 +31,7 @@ def run_transpose_test(
     input_mem_config=None,
     output_mem_config=None,
     dtype=ttnn.bfloat16,
+    expected_shard_orientation=None,
 ):
     """Helper to run a single transpose test with the given configs."""
     torch.manual_seed(12345)
@@ -59,6 +60,11 @@ def run_transpose_test(
             assert (
                 actual.shard_spec is not None
             ), f"Sharded output requested but result has no shard_spec (silently fell back?)"
+            if expected_shard_orientation is not None:
+                assert actual.shard_spec.orientation == expected_shard_orientation, (
+                    f"Expected output shard orientation {expected_shard_orientation}, "
+                    f"got {actual.shard_spec.orientation}"
+                )
 
     ref = x.transpose(dim0, dim1)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
@@ -96,7 +102,7 @@ def _tile_align(shard_shape, layout):
     return (h, w)
 
 
-def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
+def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR):
     """Create a 2x2 block-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     grid_x = min(2, compute_grid.x)
@@ -106,30 +112,39 @@ def _block_shard_config(shape, device, layout=ttnn.TILE_LAYOUT):
     shard_spec = ttnn.ShardSpec(
         ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}),
         shard_shape,
-        ttnn.ShardOrientation.ROW_MAJOR,
+        orientation,
     )
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
-def _height_shard_config(shape, device, num_cores=4, buffer_type=ttnn.BufferType.L1, layout=ttnn.TILE_LAYOUT):
+def _height_shard_config(
+    shape,
+    device,
+    num_cores=4,
+    buffer_type=ttnn.BufferType.L1,
+    layout=ttnn.TILE_LAYOUT,
+    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
     """Create a height-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align(((total_h + num_cores - 1) // num_cores, w), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type, shard_spec)
 
 
-def _width_shard_config(shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT):
+def _width_shard_config(
+    shape, device, num_cores=4, layout=ttnn.TILE_LAYOUT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+):
     """Create a width-sharded MemoryConfig; shard rounded up to tile for TILE inputs."""
     compute_grid = device.compute_with_storage_grid_size()
     num_cores = min(num_cores, compute_grid.x * compute_grid.y)
     shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid, True)
     total_h, w = _padded_hw(shape, layout)
     shard_shape = _tile_align((total_h, (w + num_cores - 1) // num_cores), layout)
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, orientation)
     return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
 
 
@@ -345,7 +360,7 @@ def test_transpose_dram_sharded_fallback(device):
     assert_with_ulp(ref, got, ulp_threshold=1)
 
 
-# Non-native (BLOCK) sharded input → user-requested sharded output without shard_spec.
+# Non-native (BLOCK) sharded input → sharded output without shard_spec; COL_MAJOR cases cover orientation propagation.
 @pytest.mark.parametrize(
     "requested_out_layout",
     [
@@ -354,15 +369,54 @@ def test_transpose_dram_sharded_fallback(device):
         pytest.param(ttnn.TensorMemoryLayout.BLOCK_SHARDED, id="B_out"),
     ],
 )
-def test_transpose_non_native_sharded_input_to_sharded_nospec(requested_out_layout, device):
+@pytest.mark.parametrize(
+    "input_orientation",
+    [
+        pytest.param(ttnn.ShardOrientation.ROW_MAJOR, id="row_major_in"),
+        pytest.param(ttnn.ShardOrientation.COL_MAJOR, id="col_major_in"),
+    ],
+)
+def test_transpose_non_native_sharded_input_to_sharded_nospec(requested_out_layout, input_orientation, device):
     shape = (1, 1, 64, 64)
     run_transpose_test(
         shape,
         2,
         3,
         device,
-        input_mem_config=_block_shard_config(shape, device),
+        input_mem_config=_block_shard_config(shape, device, orientation=input_orientation),
         output_mem_config=ttnn.MemoryConfig(requested_out_layout, ttnn.BufferType.L1),
+        expected_shard_orientation=input_orientation,
+    )
+
+
+# Native cross-layout sharded-nospec output: preserves input shard orientation end-to-end.
+@pytest.mark.parametrize(
+    "input_factory, requested_out_layout",
+    [
+        pytest.param(
+            lambda d: _height_shard_config((1, 1, 128, 128), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            id="col_major_height_in_width_out_nospec",
+        ),
+        pytest.param(
+            lambda d: _width_shard_config((1, 1, 128, 128), d, orientation=ttnn.ShardOrientation.COL_MAJOR),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            id="col_major_width_in_height_out_nospec",
+        ),
+    ],
+)
+def test_transpose_native_col_major_sharded_input_to_sharded_nospec_cross_layout(
+    input_factory, requested_out_layout, device
+):
+    shape = (1, 1, 128, 128)
+    run_transpose_test(
+        shape,
+        2,
+        3,
+        device,
+        input_mem_config=input_factory(device),
+        output_mem_config=ttnn.MemoryConfig(requested_out_layout, ttnn.BufferType.L1),
+        expected_shard_orientation=ttnn.ShardOrientation.COL_MAJOR,
     )
 
 

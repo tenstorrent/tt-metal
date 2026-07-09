@@ -28,10 +28,12 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_scaler, scaler.u);
+    CircularBuffer cb_scaler(cb_id_scaler);
+    fill_cb_with_value(cb_scaler, scaler.u);
 
     if (do_mask_h || do_mask_w) {
-        generate_mask_h_w(cb_id_mask_h_w, mask_h, mask_w);
+        CircularBuffer cb_mask_h_w(cb_id_mask_h_w);
+        generate_mask_h_w(cb_mask_h_w, mask_h, mask_w);
     }
 
     const auto s0 = TensorAccessor(src_args, src_addr);

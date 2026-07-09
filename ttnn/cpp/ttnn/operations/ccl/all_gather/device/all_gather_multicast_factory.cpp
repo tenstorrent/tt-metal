@@ -27,7 +27,7 @@ AllGatherMulticastFactory::cached_mesh_workload_t AllGatherMulticastFactory::cre
     if (operation_attributes.sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
     }
-    ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait
     // for all remote devices to be ready before beginning operation.

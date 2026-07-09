@@ -29,7 +29,8 @@ namespace {
 // MeshWorkloadFactory::override_runtime_arguments, so the buffer-binding fast cache-hit path stays
 // correct while those values remain out of the program hash.
 constexpr auto kReaderKernelPath =
-    "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/reader_fill_cache_interleaved_start_id.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/"
+    "reader_update_padded_kv_cache.cpp";
 constexpr auto kWriterKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/device/kernels/dataflow/"
     "writer_update_padded_kv_cache.cpp";

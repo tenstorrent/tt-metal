@@ -1,6 +1,6 @@
 # L2 nightly LLK unit test matrix — full gtest suite under slow dispatch.
 #
-# Merge-gate coverage lives in tests/pipeline_reorg/llk_smoke_merge_gate_tests.yaml.
+# Merge-gate coverage lives in tests/pipeline_reorg/llk_merge_gate_tests.yaml.
 #
 # Each entry: name, cmd, skus, team, arch, dispatch_mode.
 # For sd entries the impl prepends TT_METAL_SLOW_DISPATCH_MODE=1 at invocation time.

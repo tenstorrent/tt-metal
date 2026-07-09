@@ -36,6 +36,16 @@ class Sharding:
         return cls(placements, dist_shape)
 
     @property
+    def placements(self) -> list | None:
+        """Per-mesh-axis ttnn placements (``PlacementShard`` / ``PlacementReplicate``), or None on a unit mesh."""
+        return self._placements
+
+    @property
+    def dist_shape(self) -> list[int] | None:
+        """Distribution shape: the mesh extent the tensor is laid out over per axis, or None on a unit mesh."""
+        return self._dist_shape
+
+    @property
     def is_fully_replicated(self) -> bool:
         """True if no mesh axis shards this tensor (single device, or replicated on every axis)."""
         return self._placements is None or not any(isinstance(p, ttnn.PlacementShard) for p in self._placements)

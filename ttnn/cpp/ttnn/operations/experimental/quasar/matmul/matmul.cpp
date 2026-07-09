@@ -17,6 +17,7 @@
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/sparse/sparse_matmul_device_operation.hpp"
 
 namespace ttnn::operations::experimental::quasar::matmul {
@@ -220,7 +221,8 @@ static ttnn::Tensor bound_matmul(
 
     ttnn::Tensor input_tensor_b_adjusted = input_tensor_b;
     if (input_tensor_b.logical_shape().rank() == 1) {
-        input_tensor_b_adjusted = ttnn::reshape(input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}));
+        input_tensor_b_adjusted = ttnn::operations::experimental::quasar::reshape(
+            input_tensor_b, ttnn::Shape({input_tensor_b.logical_shape()[-1], 1}));
     } else if (needs_manual_transpose_b) {
         input_tensor_b_adjusted = ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config());
     }
@@ -255,7 +257,7 @@ static ttnn::Tensor bound_matmul(
                              .at(0);
 
     if (input_tensor_b.logical_shape().rank() == 1) [[unlikely]] {
-        output_tensor = ttnn::reshape(
+        output_tensor = ttnn::operations::experimental::quasar::reshape(
             output_tensor,
             utilities::compute_matmul_output_shape(
                 input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b));
@@ -285,10 +287,10 @@ static ttnn::Tensor bound_matmul(
 
         TT_FATAL(desired_vol == current_vol, "Invalid optional output tensor");
 
-        output_tensor = ttnn::reshape(output_tensor, desired_shape);
+        output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, desired_shape);
 
     } else if (bias.has_value()) {
-        output_tensor = ttnn::reshape(output_tensor, result_shape);
+        output_tensor = ttnn::operations::experimental::quasar::reshape(output_tensor, result_shape);
     }
 
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {

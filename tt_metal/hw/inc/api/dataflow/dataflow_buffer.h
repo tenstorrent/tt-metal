@@ -76,8 +76,11 @@ public:
 
     uint16_t get_id() const { return logical_dfb_id_; }
 
+    // Returns the size of each entry in the DFB
     uint32_t get_entry_size() const;
     uint32_t get_stride_size() const;
+    // Returns the total number of entries that can be stored in the DFB
+    uint32_t get_total_num_entries() const;
 
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
@@ -85,6 +88,15 @@ public:
     void wait_front(uint16_t num_entries) { wait_front_impl(num_entries); }
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
     // Explicit sync APIs end
+
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+    // Test-only free helpers (defined in internal/tt-2xx/dataflow_buffer_test_helpers.h,
+    // NOT part of the public DFB API). Granted friend access to advance the
+    // implicit-sync shadow state alongside the HW counter. See that header for
+    // semantics + usage rules.
+    friend void preload_posted_counter(DataflowBuffer&, uint16_t);
+    friend void preload_acked_counter(DataflowBuffer&, uint16_t);
+#endif
 
 #ifndef COMPILE_FOR_TRISC
 #ifndef ARCH_QUASAR

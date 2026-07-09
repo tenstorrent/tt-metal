@@ -68,6 +68,7 @@ inline void _llk_unpack_reduce_init_(
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW));
+    cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
     _llk_unpack_reduce_mop_config_<REDUCE_DIMENSION>(buf_desc_id_0, buf_desc_id_1, tensor_shape, num_tiles);
 }
 

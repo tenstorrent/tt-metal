@@ -33,10 +33,13 @@ void kernel_main() {
     constexpr auto cb_xabs = intermed_id + 0;
     CircularBuffer cb_xabs_obj(cb_xabs);         // |x|
     constexpr auto cb_xpow = intermed_id + 1;    // |x|^p
+    CircularBuffer cb_xpow_obj(cb_xpow);
     constexpr auto cb_xpowadd = intermed_id + 2;
     CircularBuffer cb_xpowadd_obj(cb_xpowadd);   // Add[|x|^p * exp(log(|x|) * decimal)]
     constexpr auto cb_logx = intermed_id + 3;    // log(|x|)
+    CircularBuffer cb_logx_obj(cb_logx);
     constexpr auto cb_exp_lxmd = intermed_id + 4;  // exp(log(|x|) * decimal)
+    CircularBuffer cb_exp_lxmd_obj(cb_exp_lxmd);
     constexpr auto cb_correct_xpow = intermed_id + 5;
     CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
 
@@ -100,7 +103,15 @@ void kernel_main() {
         tile_regs_release();
 
         // |x + decimal|^p
-        power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
+        power_tile_to_cb(
+            cb_xabs_obj,
+            cb_xpow_obj,
+            cb_logx_obj,
+            cb_decimal_obj,
+            cb_exp_lxmd_obj,
+            cb_correct_xpow_obj,
+            p,
+            p_is_negative);
 
         if (tile_idx == 0) {
             tile_regs_acquire();

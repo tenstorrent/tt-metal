@@ -27,6 +27,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
+    auto mesh_device = devices_[0];
+    if (mesh_device->compute_with_storage_grid_size().x < 2) {
+        GTEST_SKIP() << "This test requires at least 2 worker nodes.";
+    }
     if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         log_error(
             tt::LogTest,
@@ -35,8 +39,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
         log_error(tt::LogTest, "For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)");
     }
 
-    IDevice* dev = devices_[0]->get_devices()[0];
-    auto mesh_device = devices_[0];
+    IDevice* dev = mesh_device->get_devices()[0];
 
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;

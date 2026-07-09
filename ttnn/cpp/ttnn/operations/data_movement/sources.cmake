@@ -85,6 +85,8 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     reshape_view/device/reshape_tiled_program_factory.cpp
     reshape_view/device/reshape_device_operation.cpp
     reshape_view/reshape.cpp
+    roll/device/roll_device_operation.cpp
+    roll/device/roll_program_factory.cpp
     roll/roll.cpp
     scatter/scatter.cpp
     scatter/tosa_scatter.cpp
@@ -128,7 +130,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     tilize/device/tilize_multi_core_block_program_factory.cpp
     tilize/device/tilize_single_core_program_factory.cpp
     tilize/device/tilize_multi_core_sharded_program_factory.cpp
-    tilize/device/tilize_multi_core_width_sharded_program_factory.cpp
     tilize/tilize.cpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.cpp
     tilize_with_val_padding/device/factories/tilize_with_val_padding_single_core_program_factory.cpp

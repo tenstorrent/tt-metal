@@ -7,14 +7,15 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 
-constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;
-constexpr uint32_t cb_weights = tt::CBIndex::c_1;
-constexpr uint32_t cb_dispatch_table = tt::CBIndex::c_2;
-constexpr uint32_t cb_indices = tt::CBIndex::c_3;
-constexpr uint32_t cb_output = tt::CBIndex::c_16;
-constexpr uint32_t cb_rowmajor = tt::CBIndex::c_17;
+constexpr uint32_t cb_combine_input_id = tt::CBIndex::c_0;
+constexpr uint32_t cb_weights_id = tt::CBIndex::c_1;
+constexpr uint32_t cb_dispatch_table_id = tt::CBIndex::c_2;
+constexpr uint32_t cb_indices_id = tt::CBIndex::c_3;
+constexpr uint32_t cb_output_id = tt::CBIndex::c_16;
+constexpr uint32_t cb_rowmajor_id = tt::CBIndex::c_17;
 
 constexpr uint32_t num_experts = get_compile_time_arg_val(0);
 constexpr uint32_t emb_dim_cb_tiles = get_compile_time_arg_val(1);
@@ -54,25 +55,32 @@ void kernel_main() {
     uint32_t num_chunks = get_arg_val<uint32_t>(1);
     constexpr uint32_t total_token_tiles = TOKENS_PER_CHUNK * emb_dim_cb_tiles;
 
+    CircularBuffer cb_combine_input(cb_combine_input_id);
+    CircularBuffer cb_weights(cb_weights_id);
+    CircularBuffer cb_dispatch_table(cb_dispatch_table_id);
+    CircularBuffer cb_indices(cb_indices_id);
+    CircularBuffer cb_output(cb_output_id);
+    CircularBuffer cb_rowmajor(cb_rowmajor_id);
+
     if constexpr (use_dispatch_table_skip) {
         // Wait for writer to finish pre-loading dispatch table (loaded once for all chunks)
-        cb_wait_front(cb_dispatch_table, dispatch_table_num_pages);
+        cb_dispatch_table.wait_front(dispatch_table_num_pages);
     }
 
-    binary_op_init_common(cb_combine_input, cb_weights, cb_output);
+    binary_op_init_common(cb_combine_input_id, cb_weights_id, cb_output_id);
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         if constexpr (use_dispatch_table_skip) {
             // Wait for writer to load this chunk's indices (one chunk at a time)
-            cb_wait_front(cb_indices, TOKENS_PER_CHUNK);
+            cb_indices.wait_front(TOKENS_PER_CHUNK);
         }
 
-        cb_reserve_back(cb_rowmajor, total_token_tiles);
+        cb_rowmajor.reserve_back(total_token_tiles);
 
         // Process one expert at a time: both input (c_0) and weight (c_1) are streamed
         // one expert at a time by reader and writer respectively.
         for (uint32_t i = 0; i < TOKENS_PER_CHUNK; ++i) {
-            mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
+            mul_tiles_bcast_scalar_init_short(cb_combine_input_id, cb_weights_id);
 
             // first_active tracks whether we've picked the accumulator-initializing
             // expert yet: the DeepSeek path looks for a locally-mapped expert via
@@ -81,15 +89,15 @@ void kernel_main() {
             // the last expert is forced through to initialise the accumulator.
             bool first_active = true;
             for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-                cb_wait_front(cb_combine_input, emb_dim_cb_tiles);
-                cb_wait_front(cb_weights, 1);
+                cb_combine_input.wait_front(emb_dim_cb_tiles);
+                cb_weights.wait_front(1);
 
                 bool skip_expert = false;
                 bool must_zero_init = false;
                 if constexpr (use_dispatch_table_skip) {
-                    uint32_t expert_id = read_tile_value_uint16(cb_indices, i, expert_idx);
+                    uint32_t expert_id = read_tile_value_uint16(cb_indices_id, i, expert_idx);
                     // Check dispatch table: -1 (0xFFFFFFFF) means non-local
-                    uint32_t chip_id = read_tile_value(cb_dispatch_table, 0, expert_id);
+                    uint32_t chip_id = read_tile_value(cb_dispatch_table_id, 0, expert_id);
                     bool is_local = (chip_id != 0xFFFFFFFF);
 
                     // On the last expert, if none were local, we must process it to
@@ -101,13 +109,13 @@ void kernel_main() {
                 } else {
                     // Read weight value — if zero, skip (but always process at least one
                     // expert so the accumulator gets initialized with valid data)
-                    uint32_t weight_val = read_tile_value(cb_weights, 0, 0);
+                    uint32_t weight_val = read_tile_value(cb_weights_id, 0, 0);
                     skip_expert = (weight_val == 0) && !first_active;
                 }
 
                 if (skip_expert) {
-                    cb_pop_front(cb_combine_input, emb_dim_cb_tiles);
-                    cb_pop_front(cb_weights, 1);
+                    cb_combine_input.pop_front(emb_dim_cb_tiles);
+                    cb_weights.pop_front(1);
                     continue;
                 }
 
@@ -121,31 +129,31 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
-                    mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input, cb_weights, j, 0, j);
+                    mul_tiles_bcast<BroadcastType::SCALAR>(cb_combine_input_id, cb_weights_id, j, 0, j);
                 }
 
                 tile_regs_commit();
                 tile_regs_wait();
 
                 for (uint32_t j = 0; j < emb_dim_cb_tiles; j++) {
-                    pack_tile<true>(j, cb_rowmajor, i * emb_dim_cb_tiles + j);
+                    pack_tile<true>(j, cb_rowmajor_id, i * emb_dim_cb_tiles + j);
                 }
 
                 tile_regs_release();
 
-                cb_pop_front(cb_combine_input, emb_dim_cb_tiles);
-                cb_pop_front(cb_weights, 1);
+                cb_combine_input.pop_front(emb_dim_cb_tiles);
+                cb_weights.pop_front(1);
             }
             pack_reconfig_l1_acc(0);
         }
 
         if constexpr (use_dispatch_table_skip) {
             // Release this chunk's indices so writer can load the next chunk's
-            cb_pop_front(cb_indices, TOKENS_PER_CHUNK);
+            cb_indices.pop_front(TOKENS_PER_CHUNK);
         }
 
-        cb_push_back(cb_rowmajor, total_token_tiles);
+        cb_rowmajor.push_back(total_token_tiles);
 
-        compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor, cb_output>(1);
+        compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor_id, cb_output_id>(1);
     }
 }

@@ -45,8 +45,8 @@ struct TensorPrefetcherConfig {
 };
 
 // Returns true if the Tensor prefetcher is supported on `mesh_device`, i.e.
-// programmable DRAM cores are available (Blackhole with
-// TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns false,
+// programmable DRAM cores are available (Blackhole with firmware >= 19.12.0.0 and
+// either no harvested DRAM channels or a single device). When this returns false,
 // StartTensorPrefetcher would TT_FATAL, so callers (e.g. tests) can use this
 // to skip rather than fail.
 bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
@@ -71,6 +71,23 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 struct TensorPrefetcherInput {
     std::reference_wrapper<const MeshTensor> tensor;
     uint32_t block_count = 0;
+    // Per-receiver streaming rotation (receiver-contiguous layout only). Empty = batched
+    // (whole-tensor) delivery. When non-empty, the kernel delivers this tensor's K-blocks in
+    // the host-specified rotated order: at push step p, the receiver at global receiver
+    // position r sources physical block (rotation[r] + p) mod block_count. This lets the
+    // consuming matmul stream blocks in FIFO order and start before the whole tensor arrives
+    // (allowing a shallow GCB), and gives the host full control over which block leads each
+    // receiver rather than fixing it to the topology position.
+    //
+    // When non-empty, `rotation` must have exactly `total_receivers` (== ring size ==
+    // block_count) entries, each in [0, block_count), indexed by global receiver position. That
+    // position is derived from the weight's shard distribution: ROUND_ROBIN_1D (strided) and
+    // CONTIGUOUS_1D (contiguous) receiver-contiguous weights are both supported; the host maps
+    // each receiver's (bank, slab index) to its global position accordingly. For the standard
+    // ring matmul, rotation[r] = r reproduces the natural topology order. The matmul must be
+    // built to consume in the matching order, else it deadlocks. The host is responsible for
+    // supplying a rotation consistent with the consumer's ring topology.
+    std::vector<uint32_t> rotation = {};
 };
 
 // Build per-device Programs (one DRISC kernel per DRAM sender core), allocate
@@ -84,8 +101,8 @@ struct TensorPrefetcherInput {
 //
 // Preconditions (TT_FATAL):
 //   - No other prefetcher is currently active on this mesh device.
-//   - DRAM programmable cores are available on this mesh
-//     (TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1).
+//   - DRAM programmable cores are available on this mesh (Blackhole with firmware
+//     >= 19.12.0.0 and either no harvested DRAM channels or a single device).
 void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPrefetcherConfig& config);
 
 // Queue one prefetch request. Non-blocking.
@@ -102,6 +119,9 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
+//   - Per-tensor `rotation` (on each TensorPrefetcherInput) is documented on that struct; a
+//     non-empty rotation enables streaming and sets the per-receiver delivery order, the only
+//     knob that varies delivery order within a request.
 //   - `cq_id` is the command queue on which a trace may be recording. When that
 //     CQ is mid trace-capture, the request is captured into the trace instead of
 //     being sent immediately, and is (re)sent on every replay of that trace

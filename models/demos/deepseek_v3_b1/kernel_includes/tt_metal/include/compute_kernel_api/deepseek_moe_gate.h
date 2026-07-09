@@ -6,7 +6,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #ifdef TRISC_MATH
 #ifdef ARCH_BLACKHOLE
 #include "../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_deepseek_moe_gate_topk_single_face.h"
@@ -28,7 +28,7 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
         // Init sigmoid (SFPU)
         sigmoid_tile_init<false>();
         // Init transpose wh (FPU)
-        transpose_wh_init_short(icb0);
+        transpose_init(icb0);
     } else {
         // Init copy add (FPU)
         UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::Both)));
@@ -47,7 +47,7 @@ template <bool enable_sigmoid = false, bool is_32bit = false>
 ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
     if constexpr (enable_sigmoid) {
         // Transpose wh (FPU)
-        transpose_wh_tile(icb0, 0, 0);
+        transpose_tile(icb0, 0, 0);
         // Sigmoid (SFPU)
         sigmoid_tile<VectorMode::RC_custom, false>(0);
         // Init add binary reuse (FPU)

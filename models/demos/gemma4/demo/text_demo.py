@@ -988,7 +988,7 @@ def run_generation(
 
         benchmark_data.save_partial_run_json(
             profiler,
-            run_type="demo",
+            run_type="demo_perf",
             ml_model_name="gemma4",
             ml_model_type="llm",
             device_name=determine_device_name(mesh_device),

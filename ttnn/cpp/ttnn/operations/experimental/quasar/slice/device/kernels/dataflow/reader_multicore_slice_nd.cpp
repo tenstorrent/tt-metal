@@ -9,39 +9,16 @@
  * execution, implementing slice logic for N-dimensional tensors (1D, 2D, 3D, 4D, 5D, etc.)
  * with work distribution across multiple cores for improved performance.
  *
- * Key Responsibilities:
- * - Read assigned portion of input tensor data from DRAM using TensorAccessor
- * - Apply slice logic (start, end, step) for all dimensions dynamically
- * - Handle different data types with proper element size calculations
- * - Process assigned rows for this core based on work distribution
- * - Output sliced rows to circular buffer for writer kernel consumption
+ * Metal 2.0: named tensor binding (tensor::in); the per-program dim/slice arrays
+ * (input_dims, output_dims, slice_starts/ends/steps — identical for every core) arrive as
+ * common runtime varargs; only the per-core work split (num_rows / start_row) is a per-core RTA.
  *
- * Architecture:
- * - Uses TensorAccessor for efficient DRAM address generation
- * - Processes data row-by-row for optimal memory access patterns
- * - Supports slicing with configurable start, end, and step parameters for all dimensions
- * - Handles 1D, 2D, 3D, 4D, 5D+ tensors with dynamic nested loops
- * - Multi-core work distribution: each core processes a subset of output rows
- *
- * Memory Management:
- * - DRAM alignment: 32-byte boundaries for memory controller optimization
- * - L1 alignment: 16-byte boundaries for L1 cache efficiency
- * - Circular buffer: Double buffering for continuous data flow
- *
- * Data Type Support:
- * - Element size determined at compile time for performance
- * - Dynamic element size passed as runtime argument for flexibility
- *
- * Performance Optimizations:
- * - Minimal branching in inner loops for consistent execution
- * - Efficient memory copy operations using NOC async transfers
- * - Cache-friendly access patterns aligned to memory hierarchy
- * - Parallel processing with load balancing across multiple cores
- *
- * N-Dimensional Processing:
- * - Dynamic nested loops based on tensor rank
- * - Generic address calculation using stride-based indexing
- * - Row concept: for rank R, rows = product(dims[0:R-1]), width = dims[R-1]
+ * Common-vararg layout (each block tensor_rank long):
+ *   [0*R, 1*R)  input_dims
+ *   [1*R, 2*R)  output_dims
+ *   [2*R, 3*R)  slice_starts
+ *   [3*R, 4*R)  slice_ends
+ *   [4*R, 5*R)  slice_steps
  *
  * Compatible with: TTNN framework, ROW_MAJOR_LAYOUT tensors, 1D-ND dimensions, multi-core execution
  */
@@ -52,50 +29,41 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // Runtime arguments - first get basic parameters
-    uint32_t rt_args_idx = 0;
-    uint32_t src_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t tensor_rank = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t element_size = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_rows_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t start_row_for_this_core = get_arg_val<uint32_t>(rt_args_idx++);
-
     // Compile-time arguments
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t compile_time_element_size = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t tensor_rank = get_arg(args::tensor_rank);
+    constexpr uint32_t element_size = get_arg(args::element_size);
 
-    // Get dimension arrays from runtime arguments
-    // Layout: input_dims[rank], output_dims[rank], slice_starts[rank], slice_ends[rank], slice_steps[rank]
-    // Read input dimensions
-    volatile tt_l1_ptr uint32_t* input_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
+    // Per-core runtime arguments (named).
+    uint32_t num_rows_for_this_core = get_arg(args::num_rows_for_this_core);
+    uint32_t start_row_for_this_core = get_arg(args::start_row_for_this_core);
 
-    // Read output dimensions
-    volatile tt_l1_ptr uint32_t* output_dims = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    // Read slice parameters
-    volatile tt_l1_ptr uint32_t* slice_starts = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    volatile tt_l1_ptr uint32_t* slice_ends = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
-    rt_args_idx += tensor_rank;
-
-    volatile tt_l1_ptr uint32_t* slice_steps = (volatile tt_l1_ptr uint32_t*)(get_arg_addr(rt_args_idx));
+    // Dimension / slice arrays from common runtime varargs (identical for all cores).
+    uint32_t input_dims[tensor_rank];
+    uint32_t output_dims[tensor_rank];
+    uint32_t slice_starts[tensor_rank];
+    uint32_t slice_ends[tensor_rank];
+    uint32_t slice_steps[tensor_rank];
+    for (uint32_t i = 0; i < tensor_rank; ++i) {
+        input_dims[i] = get_common_vararg(0 * tensor_rank + i);
+        output_dims[i] = get_common_vararg(1 * tensor_rank + i);
+        slice_starts[i] = get_common_vararg(2 * tensor_rank + i);
+        slice_ends[i] = get_common_vararg(3 * tensor_rank + i);
+        slice_steps[i] = get_common_vararg(4 * tensor_rank + i);
+    }
 
     // Calculate sizes - working with rows, not tiles
     uint32_t input_bytes_per_row = input_dims[tensor_rank - 1] * element_size;
     uint32_t output_bytes_per_row = output_dims[tensor_rank - 1] * element_size;
 
     // Set up TensorAccessor for input data - use row size as page size
-    const auto s0 = TensorAccessor(src_args, src_addr);
+    const auto s0 = TensorAccessor(tensor::in);
 
     Noc noc;
-    // Create CircularBuffer for Device 2.0 API
-    CircularBuffer cb_out(cb_id_out);
+    // Create DataflowBuffer for Device 2.0 API
+    DataflowBuffer cb_out(dfb::cb_out);
 
     // Multi-core work distribution using iterative approach with explicit coordinate tracking
     // Track current position in N-dimensional space

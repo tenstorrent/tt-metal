@@ -5,30 +5,34 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t i = 0;
-    uint32_t total_size_bytes = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t num_chunks = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t chunk_size_bytes = get_arg_val<uint32_t>(i);
-    i += 1;
-    uint32_t remainder_chunk_size_bytes = get_arg_val<uint32_t>(i);
-    i += 1;
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t dst_cb_id = get_compile_time_arg_val(1);
+    // total_size_bytes is derived from the tensor spec (aligned size per bank), NOT from any
+    // buffer storage address, so it is safe to deliver via a named runtime arg: it stays valid
+    // across program-cache hits with different storage of the same spec.
+    uint32_t total_size_bytes = get_arg(args::total_size_bytes);
 
     Noc noc;
-    CircularBuffer src_cb(src_cb_id);
-    CircularBuffer dst_cb(dst_cb_id);
 
-    uint32_t src_cb_base_addr = src_cb.get_read_ptr();
-    uint32_t dst_cb_base_addr = dst_cb.get_write_ptr();
+    // The resident input/output shards are reached by L1 base address from local TensorAccessors
+    // (no borrowed self-loop DFBs, which Metal 2.0 forbids on DM kernels). These base addresses are
+    // the real L1 addresses of those buffers, refreshed by the framework on every program-cache hit.
+    // We deliberately recompute the move-chunk size from these base pointers in-kernel rather than
+    // receiving the host-computed (output_addr - input_addr) delta via a runtime arg, which would go
+    // stale on a cache hit with different storage and silently read/write the wrong addresses.
+    uint32_t src_cb_base_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::input).get_noc_addr(0));
+    uint32_t dst_cb_base_addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(TensorAccessor(tensor::output).get_noc_addr(0));
+
+    // The op only takes this (backwards, intra-L1, overlapping) path when the output buffer is at a
+    // higher address than the input buffer, so the delta is strictly positive.
+    uint32_t chunk_size_bytes = dst_cb_base_addr - src_cb_base_addr;
+    uint32_t num_chunks = total_size_bytes / chunk_size_bytes;
+    uint32_t remainder_chunk_size_bytes = total_size_bytes % chunk_size_bytes;
 
     // Copy from top of src cb to top of dst cb (backwards)
     uint32_t src_cb_addr = src_cb_base_addr + total_size_bytes;

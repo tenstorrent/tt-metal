@@ -25,6 +25,7 @@ from helpers.param_config import (
     input_output_formats,
     is_invalid_quasar_sfpu_format_combination,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -45,6 +46,7 @@ from helpers.test_variant_parameters import (
     SFPU_TILE_INDICES,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
 )
 from helpers.tile_constants import MAX_NUM_FACES, MAX_TILE_ELEMENTS
@@ -123,6 +125,10 @@ def _run_sfpu_binary_llk_golden(
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(UnpackerEngine.UnpDest),
             DEST_SYNC(),
+            # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
+            # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
+            # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
@@ -311,7 +317,7 @@ _FLOAT_OPS = [
     implied_math_format=lambda formats_dest_acc: _get_valid_implied_math_formats(
         formats_dest_acc[0]
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_float_quasar(
     formats_dest_acc, implied_math_format, tile_indices, binary_op, mathop
@@ -518,6 +524,10 @@ def _run_max_min(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
             ),
             DEST_SYNC(),
+            # The shared unary-SFPU dispatch in sfpu_operations_quasar.h has a typecast
+            # branch that references the non-dependent globals TYPECAST_IN_FORMAT /
+            # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
+            TYPECAST_FORMATS(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
@@ -562,7 +572,7 @@ def _run_max_min(
             else (DestAccumulation.No,)
         ),
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_float_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,
@@ -592,7 +602,7 @@ def test_eltwise_binary_sfpu_max_min_float_quasar(
         dest_acc_for_format=lambda fmt: (DestAccumulation.Yes,),
         implied_math_formats=(ImpliedMathFormat.No,),
     ),
-    tile_indices=_TILE_INDEX_VARIANTS,
+    tile_indices=runtime(_TILE_INDEX_VARIANTS),
 )
 def test_eltwise_binary_sfpu_max_min_int32_quasar(
     formats_dest_acc_implied_math_is_max_input_dims,

@@ -80,7 +80,7 @@ MorehNormOperation::spec_return_value_t MorehNormOperation::compute_output_specs
             TensorLayout(tensor_args.input.dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
     }
 
-    ttnn::SmallVector<uint32_t> shape;
+    ttsl::SmallVector<uint32_t> shape;
     for (int i = 0; i < input_rank; ++i) {
         bool is_reduced_dim = (i == dim);
         if (is_reduced_dim && !is_tile_dim) {

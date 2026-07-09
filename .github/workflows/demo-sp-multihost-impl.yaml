@@ -18,6 +18,10 @@ on:
         default: "sp1"
         description: "Single pod configuration (sp1, sp4, sp5)"
 
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
   load-test-matrix:
     name: Load Test Matrix for ${{ inputs.sp-config }}

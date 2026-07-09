@@ -22,6 +22,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/conv2d.hpp"
 #include "ttnn/operations/experimental/quasar/conv2d/device/conv2d_device_operation.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
@@ -33,6 +35,7 @@
 #include "ttnn/operations/experimental/quasar/move/move.hpp"
 #include "ttnn/operations/experimental/quasar/pad/pad.hpp"
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/experimental/quasar/to_device/to_device.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 
 namespace ttnn::operations::conv {
@@ -132,7 +135,8 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
     const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
     const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
 
-    input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
+    input_tensor = ttnn::operations::experimental::quasar::reshape(
+        input_tensor, flattened_input_shape, flattened_padded_input_shape);
     const ttnn::Shape& input_shape = flattened_input_shape;
 
     if (needs_shard_or_reshard) {
@@ -157,10 +161,11 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
                 parallel_config.shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED) {
                 // Workaround #13979 ttnn::tilize doesn't support BLOCK_SHARDED layout.
                 // Route the (already tile-aligned) common case through quasar tilize so its kernels run
-                // from the quasar tree; fall back to core to_layout only when val-padding is required.
-                Tensor input_tensor_tilized = conv_act_requires_tile_padding_qsr(input_tensor)
-                                                  ? ttnn::to_layout(input_tensor, Layout::TILE)
-                                                  : ttnn::operations::experimental::quasar::tilize(input_tensor);
+                // from the quasar tree; fall back to quasar to_layout only when val-padding is required.
+                Tensor input_tensor_tilized =
+                    conv_act_requires_tile_padding_qsr(input_tensor)
+                        ? ttnn::operations::experimental::quasar::to_layout(input_tensor, Layout::TILE)
+                        : ttnn::operations::experimental::quasar::tilize(input_tensor);
                 if (conv_config.deallocate_activation && !input_tensor.memory_config().is_dram()) {
                     input_tensor.deallocate(/*force*/ true);
                     input_tensor_tilized = ttnn::operations::experimental::quasar::move(input_tensor_tilized);
@@ -198,7 +203,7 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
                 input_tensor = resharded_input_tensor;
             }
         } else {
-            input_tensor = ttnn::to_device(
+            input_tensor = ttnn::operations::experimental::quasar::to_device(
                 input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
         }
     }
@@ -1036,7 +1041,8 @@ Result conv2d_DRAM(
     }
 
     const auto unflattened_input_shape = ttnn::Shape{batch_size, input_height, input_width, in_channels};
-    input_tensor_on_device = ttnn::reshape(input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
+    input_tensor_on_device = ttnn::operations::experimental::quasar::reshape(
+        input_tensor_on_device, unflattened_input_shape, unflattened_input_shape);
     TT_FATAL(input_tensor_on_device.memory_config().is_dram(), "Conv DRAM expects the input tensor to be in DRAM.");
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -1085,7 +1091,8 @@ Result conv2d_DRAM(
     const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
     const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
 
-    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
+    dram_output_tensor = ttnn::operations::experimental::quasar::reshape(
+        dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
 
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }

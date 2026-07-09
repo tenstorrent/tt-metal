@@ -23,6 +23,7 @@ import gc
 import json
 import os
 import time
+from pathlib import Path
 
 import pytest
 import torch
@@ -32,6 +33,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -69,6 +71,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     load_debug_trace,
     load_reference_cache,
     save_reference_cache,
+    slice_debug_trace,
     slice_non_padded,
     tokenize_prompt_to_isl,
 )
@@ -214,17 +217,46 @@ def run_model(
 
     # Priority 1: debug trace on disk
     trace = None
-    trace_dir = (
+    trace_dir = None
+    trace_sliced = False
+    trace_match = (
         find_trace_dir(input_source, isl_total, padding_side, use_pretrained, n_routed_experts)
         if pcc_validation
         else None
     )
-    if trace_dir is not None:
+    if trace_match is not None:
+        trace_dir, trace_isl = trace_match
         trace = load_debug_trace(trace_dir, num_layers=num_layers)
+        if trace_isl > isl_total:
+            trace = slice_debug_trace(trace, isl_total)
+            trace_sliced = True
+            logger.info(f"Sliced trace {trace_dir.name} from native isl={trace_isl} to requested isl={isl_total}")
         logger.info(
             f"Loaded debug trace from {trace_dir} "
-            f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers})"
+            f"(trace n_layers={trace.metadata.get('n_layers')}, test num_layers={num_layers}, "
+            f"native_isl={trace_isl}, sliced={trace_sliced})"
         )
+    # Fallback: a variant may pin an explicit golden trace via variant.test_prefill_trace_default that
+    # find_trace_dir's (R1-centric, use_pretrained/256-expert) TRACE_LOOKUP doesn't cover. load_debug_trace
+    # reads both the single_file and chunked_group_a_v1 layouts and slices to isl_total, so the single-shot
+    # test just chops the prefix it needs (e.g. the first 5120 rows == a 5120 single-shot prefill).
+    elif pcc_validation and getattr(variant, "test_prefill_trace_default", None):
+        _pinned = variant.test_prefill_trace_default
+        if _pinned and os.path.isdir(_pinned) and os.path.exists(os.path.join(_pinned, "metadata.json")):
+            trace_dir = Path(_pinned)
+            trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
+            # load_debug_trace(isl=...) chops the per-row tensors (token_ids/decoder/kv) to isl_total, but
+            # the stored logits/next_token_id stay the full-sequence products (never isl-sliced). Mark the
+            # trace sliced when we chopped a longer golden, so the later full-model logits/first-token
+            # checks are skipped — otherwise trace_full_model stays True and they compare this shorter
+            # prefill against the 55k golden's final-token logits and false-fail.
+            native_isl = len(trace.metadata.get("token_ids", []))
+            if native_isl > isl_total:
+                trace_sliced = True
+            logger.info(
+                f"Loaded pinned debug trace from {trace_dir} "
+                f"(num_layers={num_layers}, isl={isl_total}, native_isl={native_isl}, sliced={trace_sliced})"
+            )
 
     cache_key = ReferenceCacheKey(
         weight_type=weight_type,
@@ -482,7 +514,7 @@ def run_model(
             first_token_id, _, tt_intermediates = transformer(
                 tt_tokens,
                 tt_kvpe_cache,
-                number_of_non_padded_tokens=number_of_non_padded_tokens,
+                actual_isl=number_of_non_padded_tokens,
                 return_intermediates=True,
                 read_profiler=False,
                 temperature=temperature,
@@ -540,7 +572,7 @@ def run_model(
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
-            number_of_non_padded_tokens=number_of_non_padded_tokens,
+            actual_isl=number_of_non_padded_tokens,
             return_intermediates=pcc_validation,
             read_profiler=False,
             temperature=temperature,
@@ -699,7 +731,9 @@ def run_model(
         # --- Logits PCC check (last-token logits vs trace reference) ---
         # Trace logits / next-token are products of the full traced model. They are
         # only meaningful when the TT model ran the same number of layers as the trace.
-        trace_full_model = trace is not None and num_layers == trace.metadata.get("n_layers")
+        # A sliced trace's stored logits/next-token belong to the full (longer) sequence,
+        # so they are not a valid reference for the shorter prefill — skip those checks.
+        trace_full_model = trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers")
         if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
             try:
                 _, logits_pcc = comp_pcc(trace.logits.float(), tt_intermediates["logits"].float())
@@ -709,10 +743,12 @@ def run_model(
                 logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
                 pcc_results.append(("logits", -1.0))
         elif trace is not None and not trace_full_model:
-            logger.info(
-                f"Skipping trace logits/first-token checks: "
-                f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
+            reason = (
+                "trace sliced to a shorter isl (full-sequence logits/next-token invalid)"
+                if trace_sliced
+                else f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
             )
+            logger.info(f"Skipping trace logits/first-token checks: {reason}")
 
         profiler.end("pcc_validation")
 
@@ -737,7 +773,8 @@ def run_model(
         )
 
         # First-token cross-check against the reference
-        if trace is not None and num_layers == trace.metadata.get("n_layers"):
+        # (skipped for a sliced trace: its next_token_id is the full sequence's, not the prefix's)
+        if trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers"):
             token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
             if token_match is False:
                 failures.append(("first_token_match", -1.0))
@@ -1063,6 +1100,110 @@ def test_kimi_prefill_transformer(
     tokenizer,
     request,
 ):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        num_layers,
+        n_routed_experts,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        determinism_check,
+        num_iterations,
+        input_source,
+        use_pretrained,
+        return_kv_cache,
+        temperature,
+        weight_cache_path,
+        is_ci_env,
+        is_ci_v2_env,
+        tokenizer,
+        request,
+    )
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
+@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
+@pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
+@pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
+@pytest.mark.parametrize("input_source", ["json_prompts"])
+@pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "isl_total, dispatch_buffer_capacity_factor",
+    [(SEQ_LEN_5K, 8)],
+    ids=["5k"],
+)
+@pytest.mark.parametrize(
+    "num_layers",
+    [
+        5,
+        12,
+        pytest.param(78, marks=pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer prefill only on Galaxy")),
+    ],
+    ids=["5_layers", "12_layers", "78_layers"],
+)
+@pytest.mark.parametrize(
+    "n_routed_experts, gate_fallback_mode",
+    [(256, GateComputeMode.DEVICE)],
+    ids=["e256_device"],
+)
+@pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
+@pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    num_layers,
+    n_routed_experts,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    determinism_check,
+    num_iterations,
+    input_source,
+    use_pretrained,
+    return_kv_cache,
+    temperature,
+    weight_cache_path,
+    is_ci_env,
+    is_ci_v2_env,
+    tokenizer,
+    request,
+):
+    # Full-transformer end-to-end validates against the GPU trace (variant.test_prefill_trace_default;
+    # approach B) — MLA/DSA + MoE correctness live in their op-level tests.
     run_model(
         variant,
         config_only,

@@ -53,8 +53,10 @@ void kernel_main() {
     const auto cb_id_mask_h = cb_id++;
     const auto cb_id_mask_w = cb_id++;
 
-    fill_cb_with_value(cb_id_scaler, scaler);
-    fill_cb_with_value(cb_id_eps, eps);
+    CircularBuffer cb_scaler(cb_id_scaler);
+    CircularBuffer cb_eps(cb_id_eps);
+    fill_cb_with_value(cb_scaler, scaler);
+    fill_cb_with_value(cb_eps, eps);
 
     const bool do_mask_h = (origin_h % TILE_H) != 0;
     const auto mask_h = do_mask_h ? origin_h % TILE_H : TILE_H;
@@ -63,10 +65,12 @@ void kernel_main() {
     const auto mask_w = do_mask_w ? origin_w % TILE_W : TILE_W;
 
     if (do_mask_h) {
-        generate_mask_h(cb_id_mask_h, mask_h);
+        CircularBuffer cb_mask_h(cb_id_mask_h);
+        generate_mask_h(cb_mask_h, mask_h);
     }
     if (do_mask_w) {
-        generate_mask_w(cb_id_mask_w, mask_w);
+        CircularBuffer cb_mask_w(cb_id_mask_w);
+        generate_mask_w(cb_mask_w, mask_w);
     }
 
     // input

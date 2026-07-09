@@ -32,6 +32,10 @@ struct dispatch_s_static_config_t {
     // co-located DispatchKernel and to the RT-profiler core kernels.
     std::optional<uint32_t> realtime_profiler_msg_addr;
 
+    std::optional<uint32_t> dispatch_telemetry_addr;
+    std::optional<bool> dispatch_telemetry_disabled;
+    std::optional<uint32_t> dispatch_telemetry_control_addr;
+
     // Configuration for DEVICE_PRINT dispatch. Populated only when the dprint server
     // exists and dispatch_s_enabled() is true. enabled stays 0 otherwise and the kernel
     // compiles the feature out via #if DEVICE_PRINT_DISPATCH_ENABLED.

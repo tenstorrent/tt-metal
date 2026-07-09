@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -28,7 +28,7 @@ FORCE_INLINE void transpose_and_pack(
     // Pack using the DESTINATION CB format: input_cb may be bf16 (higher-precision
     // intermediate) while dest_cb is the original bfp8/bfp4 output format.
     reconfig_data_format_srca(input_cb_index);
-    transpose_wh_init_short(input_cb_index);
+    transpose_init(input_cb_index);
     pack_reconfig_data_format(dest_cb_index);
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
@@ -36,7 +36,7 @@ FORCE_INLINE void transpose_and_pack(
     for (uint32_t i = 0; i < total_tiles; ++i) {
         // Transpose tile from WH to HW format
         tile_regs_acquire();
-        transpose_wh_tile(input_cb_index, i, 0);
+        transpose_tile(input_cb_index, i, 0);
         tile_regs_commit();
 
         dest_cb.reserve_back(1);
@@ -83,10 +83,10 @@ FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uin
  */
 FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset) {
     reconfig_data_format_srca(cb);
-    transpose_wh_init_short(cb);
+    transpose_init(cb);
 
     // Transpose first tile to destination register
-    transpose_wh_tile(cb, 0, base_offset);
+    transpose_tile(cb, 0, base_offset);
 }
 
 /**
@@ -134,9 +134,8 @@ void kernel_main() {
     constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
+    compute_kernel_hw_startup(input_val_cb_index, input_ind_cb_index, output_val_cb_index);
     ckernel::topk_tile_init();
-    transpose_wh_init(input_val_cb_index, output_val_cb_index);
-    transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
 
     CircularBuffer input_val_cb(input_val_cb_index);
     CircularBuffer input_ind_cb(input_ind_cb_index);

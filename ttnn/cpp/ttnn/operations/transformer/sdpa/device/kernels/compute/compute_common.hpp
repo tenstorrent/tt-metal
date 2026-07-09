@@ -1126,14 +1126,16 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t out_cb,
     uint32_t num_padded,
     uint32_t num_cols,
-    uint32_t num_rows) {
+    uint32_t num_rows,
+    uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     uint32_t start = num_cols - num_padded;
 
     copy_tile_to_dst_init_short(neginf_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        stamp_tile_range_l1_acc<dst_batch>(neginf_cb, neginf_tile_idx, out_cb, row * num_cols + start, num_padded);
+        stamp_tile_range_l1_acc<dst_batch>(
+            neginf_cb, neginf_tile_idx, out_cb, (row_base + row) * num_cols + start, num_padded);
     }
 
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1156,7 +1158,8 @@ void apply_partial_mask_lightweight(
     uint32_t out_cb,
     uint32_t boundary_col,
     uint32_t num_cols,
-    uint32_t num_rows) {
+    uint32_t num_rows,
+    uint32_t row_base = 0) {  // first out_cb tile-row of this query band; nonzero when heads span >1 DEST band
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1165,7 +1168,7 @@ void apply_partial_mask_lightweight(
         copy_tile(mask_cb, partial_tile_idx, 0);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile<true>(0, out_cb, row * num_cols + boundary_col);
+        pack_tile<true>(0, out_cb, (row_base + row) * num_cols + boundary_col);
         tile_regs_release();
     }
 
@@ -2440,121 +2443,4 @@ void sdpa_ring(
         use_zigzag_balancing,
         is_last_ring_iter,
         chunked);
-}
-
-/**
- * Windowed SDPA with user-provided mask.
- */
-template <
-    uint32_t cb_qk_im,
-    uint32_t cb_identity_scale_in,
-    uint32_t Sq_chunk_t,
-    uint32_t Sk_chunk_t,
-    uint32_t DHt,
-    uint32_t scale_fp32>
-void sdpa_windowed(
-    const uint32_t Skt,
-    const uint32_t qk_in0_block_w,
-    const uint32_t qk_subblock_w,
-    const uint32_t qk_subblock_h,
-    const uint32_t qk_in0_num_subblocks,
-    const uint32_t qk_in1_num_subblocks,
-    const uint32_t qk_num_blocks,
-    const uint32_t out_in0_block_w,
-    const uint32_t out_subblock_w,
-    const uint32_t out_subblock_h,
-    const uint32_t out_in0_num_subblocks,
-    const uint32_t out_in1_num_subblocks,
-    const uint32_t out_num_blocks,
-    const uint32_t local_q_start,
-    const uint32_t q_chunks_per_core,
-    const uint32_t q_chunk_tiles,
-    const uint32_t k_chunk_tiles,
-    const uint32_t qk_chunk_tiles,
-    const uint32_t out_chunk_tiles,
-    const uint32_t cb_q_in,
-    const uint32_t cb_k_in,
-    const uint32_t cb_v_in,
-    const uint32_t cb_mask_in,
-    const uint32_t cb_col_identity,
-    const uint32_t cb_out_im_A,
-    const uint32_t cb_out_im_B,
-    const uint32_t cb_max_A,
-    const uint32_t cb_max_B,
-    const uint32_t cb_sum_A,
-    const uint32_t cb_sum_B,
-    const uint32_t cb_exp_max_diff,
-    const uint32_t cb_out) {
-    sdpa_inner_loop<
-        STANDARD,
-        cb_qk_im,
-        cb_identity_scale_in,
-        0,  // cb_attention_sink (not used)
-        0,  // cb_scale_in (not used)
-        Sq_chunk_t,
-        Sk_chunk_t,
-        0,  // NH (not used)
-        DHt,
-        DHt,    // vDHt = DHt
-        false,  // use_attention_sink (not used)
-        true,   // use_provided_mask (used)
-        false,  // use_padded_mask (not used)
-        false,  // use_joint_mask (not used)
-        false,  // is_chunked (not used)
-        scale_fp32,
-        0>(  // sliding_window_size (not used)
-        Skt,
-        qk_in0_block_w,
-        qk_subblock_w,
-        qk_subblock_h,
-        qk_in0_num_subblocks,
-        qk_in1_num_subblocks,
-        qk_num_blocks,
-        out_in0_block_w,
-        out_subblock_w,
-        out_subblock_h,
-        out_in0_num_subblocks,
-        out_in1_num_subblocks,
-        out_num_blocks,
-        0,                  // iter_q_start
-        q_chunks_per_core,  // iter_q_end
-        0,                  // q_num_chunks (not used)
-        local_q_start,
-        0,  // chunked_q_chunk_offset (not used)
-        0,  // iter_k_chunk_start
-        0,  // iter_k_chunk_end (not used -- uses Skt)
-        q_chunk_tiles,
-        k_chunk_tiles,
-        k_chunk_tiles,
-        qk_chunk_tiles,
-        out_chunk_tiles,
-        0,      // mask_chunk_0 (not used)
-        0,      // mask_chunk_1 (not used)
-        0,      // ring_iter (not used)
-        0,      // ring_id (not used)
-        0,      // num_local_k_chunks (not used)
-        0,      // local_padded_Nt (not used)
-        0,      // logical_nt (not used)
-        false,  // ring_iter_needs_global_n_mask (not used)
-        false,  // ring_iter_needs_joint_n_mask (not used)
-        false,  // local_n_needs_masking (not used)
-        0,      // global_n_mask_chunk_id (not used)
-        0,      // local_n_mask_chunk_id (not used)
-        0,      // joint_n_mask_chunk_id (not used)
-        cb_q_in,
-        cb_k_in,
-        cb_v_in,
-        cb_mask_in,
-        cb_col_identity,
-        cb_out_im_A,
-        cb_out_im_B,
-        cb_max_A,
-        cb_max_B,
-        cb_sum_A,
-        cb_sum_B,
-        cb_exp_max_diff,
-        0,  // cb_lse_in (not used)
-        0,  // cb_lse_out (not used)
-        0,  // cb_prev_out (not used)
-        cb_out);
 }

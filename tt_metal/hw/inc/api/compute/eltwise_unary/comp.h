@@ -6,14 +6,20 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifndef ARCH_QUASAR
 #include "sfpu/ckernel_sfpu_comp.h"
 #include "ckernel_sfpu_comp.h"
 #include "ckernel_sfpu_unary_comp.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
+#else
+#include "ckernel_sfpu_comp.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
 #endif
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 // unary ne : if x != value --> 1.0, else 0.0
 // clang-format off
 /**
@@ -331,6 +337,7 @@ ALWI void unary_le_tile_int32(uint32_t idst, uint32_t param0) {
  * Please refer to documentation for any_init.
  */
 ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
+#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -347,10 +354,239 @@ ALWI void unary_le_tile_init() { MATH(SFPU_UNARY_INIT(unary_le)); }
  */
 // clang-format on
 ALWI void gtz_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::greater_than_zero), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_zero_comp,
+        (APPROX, DataFormat::Float32, SfpuType::greater_than_zero, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC));
+#endif
 }
 
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void gtz_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(greater_than_zero));
+#else
+    MATH(SFPU_UNARY_INIT(greater_than_zero, sfpu::init_zero_comp));
+#endif
+}
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element is not equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void nez_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_zero_comp,
+        (APPROX, DataFormat::Float32, SfpuType::not_equal_zero, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void nez_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(not_equal_zero));
+#else
+    MATH(SFPU_UNARY_INIT(not_equal_zero, sfpu::init_zero_comp));
+#endif
+}
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element is greater than or equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void gez_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_comp,
+        (APPROX, SfpuType::greater_than_equal_zero),
+        idst,
+        VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_zero_comp,
+        (APPROX, DataFormat::Float32, SfpuType::greater_than_equal_zero, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void gez_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(greater_than_equal_zero));
+#else
+    MATH(SFPU_UNARY_INIT(greater_than_equal_zero, sfpu::init_zero_comp));
+#endif
+}
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element of a tile is less than zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void ltz_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_zero_comp,
+        (APPROX, DataFormat::Float32, SfpuType::less_than_zero, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void ltz_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(less_than_zero));
+#else
+    MATH(SFPU_UNARY_INIT(less_than_zero, sfpu::init_zero_comp));
+#endif
+}
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element of a tile is equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void eqz_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_zero_comp,
+        (APPROX, DataFormat::Float32, SfpuType::equal_zero, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void eqz_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(equal_zero));
+#else
+    MATH(SFPU_UNARY_INIT(equal_zero, sfpu::init_zero_comp));
+#endif
+}
+
+// clang-format off
+/**
+ * Will store in the output of the compute core True if each element is less than or equal to zero.
+ * The DST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void lez_tile(uint32_t idst) {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_equal_zero), idst, VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_zero_comp,
+        (APPROX, DataFormat::Float32, SfpuType::less_than_equal_zero, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC));
+#endif
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void lez_tile_init() {
+#ifndef ARCH_QUASAR
+    MATH(SFPU_UNARY_INIT(less_than_equal_zero));
+#else
+    MATH(SFPU_UNARY_INIT(less_than_equal_zero, sfpu::init_zero_comp));
+#endif
+}
+
+// Integer comparison-to-zero variants. These read int32/uint operands from Dest, which on Quasar
+// requires 32-bit unpack-to-Dest that is not supported yet, so the whole block stays gated off there.
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is greater than zero.
@@ -375,30 +611,6 @@ ALWI void gtz_tile_int32(uint32_t idst) {
         VectorMode::RC));
 }
 
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void gtz_tile_init() { MATH(SFPU_UNARY_INIT(greater_than_zero)); }
-
-// clang-format off
-/**
- * Will store in the output of the compute core True if each element is not equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void nez_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
-}
-
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element is not equal to zero.
@@ -416,35 +628,6 @@ ALWI void nez_tile(uint32_t idst) {
 ALWI void nez_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::not_equal_zero), idst, VectorMode::RC));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void nez_tile_init() { MATH(SFPU_UNARY_INIT(not_equal_zero)); }
-
-// clang-format off
-/**
- * Will store in the output of the compute core True if each element is greater than or equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void gez_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE,
-        DST_ACCUM_MODE,
-        calculate_comp,
-        (APPROX, SfpuType::greater_than_equal_zero),
-        idst,
-        VectorMode::RC));
 }
 
 // clang-format off
@@ -471,30 +654,6 @@ ALWI void gez_tile_int32(uint32_t idst) {
         VectorMode::RC));
 }
 
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void gez_tile_init() { MATH(SFPU_UNARY_INIT(greater_than_equal_zero)); }
-
-// clang-format off
-/**
- * Will store in the output of the compute core True if each element of a tile is less than zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void ltz_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
-}
-
 // clang-format off
 /**
  * Will store in the output of the compute core True if each element of a tile is less than zero.
@@ -512,30 +671,6 @@ ALWI void ltz_tile(uint32_t idst) {
 ALWI void ltz_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp_int, (APPROX, SfpuType::less_than_zero), idst, VectorMode::RC));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void ltz_tile_init() { MATH(SFPU_UNARY_INIT(less_than_zero)); }
-
-// clang-format off
-/**
- * Will store in the output of the compute core True if each element of a tile is equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void eqz_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::equal_zero), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -577,7 +712,6 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
 }
 
 // clang-format off
-
 /**
  * Will store in the output of the compute core True if each element of a tile is equal to zero.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -594,30 +728,6 @@ ALWI void eqz_tile_uint16(uint32_t idst) {
 ALWI void eqz_tile_uint32(uint32_t idst) {
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_eqz_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
-}
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void eqz_tile_init() { MATH(SFPU_UNARY_INIT(equal_zero)); }
-
-// clang-format off
-/**
- * Will store in the output of the compute core True if each element is less than or equal to zero.
- * The DST register buffer must be in acquired state via *acquire_dst* call.
- * This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
-ALWI void lez_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX, SfpuType::less_than_equal_zero), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -686,10 +796,6 @@ ALWI void nez_tile_uint32(uint32_t idst) {
     MATH((SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_nez_uint32, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC)));
 }
-
-/**
- * Please refer to documentation for any_init.
- */
-ALWI void lez_tile_init() { MATH(SFPU_UNARY_INIT(less_than_equal_zero)); }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

@@ -137,11 +137,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_math_eltwise_sfpu_init_();
-    _init_square_();
+    init_square();
 
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, _calculate_square_, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC);
+        SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, calculate_square, (SFPU_ITERATIONS), params.DST_INDEX + i, VectorMode::RC);
     }
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

@@ -91,32 +91,31 @@ enum class EnvVarID {
     // ========================================
     // HARDWARE CONFIGURATION
     // ========================================
-    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,              // Enable HW cache invalidation
-    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,              // Disable relaxed memory ordering
-    TT_METAL_ENABLE_GATHERING,                          // Enable instruction gathering
-    TT_METAL_FABRIC_BW_TELEMETRY,                       // Enable fabric bandwidth telemetry
-    TT_METAL_FABRIC_TELEMETRY,                          // Enable fabric telemetry
-    TT_FABRIC_PROFILE_RX_CH_FWD,                        // Enable fabric RX channel forwarding profiling
-    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,           // Enable channel trimming resource usage capture
-    TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
-    TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
-    TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
-    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
-    TT_METAL_FORCE_REINIT,                              // Force context reinitialization
-    TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
-    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
-    TT_METAL_SLOW_DISPATCH_MODE,                        // Use slow dispatch mode
-    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,               // Skip Ethernet cores during retrain
-    TT_METAL_VALIDATE_PROGRAM_BINARIES,                 // Validate kernel binary integrity
-    TT_METAL_DISABLE_DMA_OPS,                           // Disable DMA operations
-    RELIABILITY_MODE,                                   // Fabric reliability mode (strict/relaxed)
-    TT_METAL_DISABLE_MULTI_AERISC,                      // Disable multi-erisc mode (inverted logic, enabled by default)
-    TT_METAL_USE_MGD_2_0,                               // Use mesh graph descriptor 2.0
-    TT_METAL_FORCE_JIT_COMPILE,                         // Force JIT compilation
-    TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
-    TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
-    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
-    TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Enable Blackhole DRAM programmable cores
+    TT_METAL_ENABLE_HW_CACHE_INVALIDATION,     // Enable HW cache invalidation
+    TT_METAL_DISABLE_RELAXED_MEM_ORDERING,     // Disable relaxed memory ordering
+    TT_METAL_ENABLE_GATHERING,                 // Enable instruction gathering
+    TT_METAL_FABRIC_BW_TELEMETRY,              // Enable fabric bandwidth telemetry
+    TT_METAL_FABRIC_TELEMETRY,                 // Enable fabric telemetry
+    TT_FABRIC_PROFILE_RX_CH_FWD,               // Enable fabric RX channel forwarding profiling
+    TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE,  // Enable channel trimming resource usage capture
+    TT_METAL_FABRIC_TRIMMING_PROFILE,          // Path to channel trimming profile YAML for import
+    TT_METAL_FABRIC_TRIMMING_OVERRIDE,         // Path to channel trimming global override YAML
+    TT_METAL_ENABLE_FABRIC_VC2,                // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,  // Enable experimental VC1 inter-mesh pass-through
+    TT_METAL_FORCE_REINIT,                     // Force context reinitialization
+    TT_METAL_DISABLE_FABRIC_TWO_ERISC,         // Disable fabric 2-ERISC mode
+    TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,     // Log kernel compilation commands
+    TT_METAL_SLOW_DISPATCH_MODE,               // Use slow dispatch mode
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
+    TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
+    TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
+    RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
+    TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
+    TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
+    TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
+    TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
+    TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,   // Simulator tensor preload bypasses FD CQ copies
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -213,8 +212,7 @@ enum class EnvVarID {
     // LLK SANITIZER
     // For detailed description look at tt-llk/sanitizer/settings.h
     // ========================================
-    TT_METAL_LLK_SANITIZER,         // Enable LLK sanitizer (master switch)
-    TT_METAL_LLK_SANITIZER_METHOD,  // Report method: "assert" or "print"
+    TT_METAL_LLK_SANITIZER,  // Enable LLK sanitizer (master switch)
     TT_METAL_LLK_SANITIZER_PEDANTIC,
     TT_METAL_LLK_SANITIZER_WARN,
     TT_METAL_LLK_SANITIZER_ERROR,
@@ -425,7 +423,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_KERNEL_PATH
         // Path to kernel source files.
-        // Default: Uses TT_METAL_RUNTIME_ROOT/tt_metal/kernels if not set
+        // Default: resolved relative to TT_METAL_RUNTIME_ROOT if not set
         // Usage: export TT_METAL_KERNEL_PATH=/path/to/kernels
         case EnvVarID::TT_METAL_KERNEL_PATH:
             this->is_kernel_dir_env_var_set = true;
@@ -725,14 +723,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_DISABLE_MULTI_AERISC:
             log_info(tt::LogMetal, "Disabling multi-erisc mode with TT_METAL_DISABLE_MULTI_AERISC");
             this->enable_2_erisc_mode = false;
-            break;
-
-        // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
-        // Enable DRAM programmable cores in the Blackhole HAL on silicon.
-        // Default: false
-        // Usage: export TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1
-        case EnvVarID::TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES:
-            this->enable_blackhole_dram_programmable_cores = is_env_enabled(value);
             break;
 
         // TT_METAL_USE_MGD_2_0
@@ -1475,21 +1465,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
         }
 
-        // TT_METAL_LLK_SANITIZER_METHOD
-        // Sets the sanitizer report method: "assert" or "print".
-        // Usage: export TT_METAL_LLK_SANITIZER_METHOD=print
-        case EnvVarID::TT_METAL_LLK_SANITIZER_METHOD: {
-            std::string_view method(value);
-            if (method == "assert") {
-                this->sanitizer_settings.method = SanitizerReportMethod::Assert;
-            } else if (method == "print") {
-                this->sanitizer_settings.method = SanitizerReportMethod::Print;
-            } else {
-                TT_THROW("Invalid TT_METAL_LLK_SANITIZER_METHOD: '{}'. Valid values: assert, print", value);
-            }
-            break;
-        }
-
         // TT_METAL_LLK_SANITIZER_PEDANTIC
         // Usage: export TT_METAL_LLK_SANITIZER_PEDANTIC=1
         case EnvVarID::TT_METAL_LLK_SANITIZER_PEDANTIC:
@@ -2140,7 +2115,6 @@ std::string RunTimeOptions::get_sanitizer_hash() const {
     const auto& san = get_sanitizer_settings();
     std::string hash_str;
     hash_str += std::to_string(san.enabled);
-    hash_str += std::to_string(static_cast<int>(san.method));
     hash_str += optional_hash(san.pedantic);
     hash_str += optional_hash(san.warn);
     hash_str += optional_hash(san.error);

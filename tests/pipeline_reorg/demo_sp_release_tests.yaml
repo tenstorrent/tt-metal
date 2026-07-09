@@ -22,10 +22,10 @@
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_HF_MODEL=/mnt/models/deepseek-ai/DeepSeek-R1-0528
     export HF_HOME=/mnt/MLPerf/huggingface/hub
-    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and no_determinism and iter5 and dense and pcc" -vvv --tb=short
-    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and no_determinism and iter5 and moe and pcc" -vvv --tb=short
-    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and dense and smoke and random" -vvv --tb=short
-    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and moe and smoke and random" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and no_determinism and iter5 and dense and pcc and not pretrained" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and no_determinism and iter5 and moe and pcc and not pretrained" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and dense and smoke and random and not pretrained" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "8x4 and non_balanced and fabric2d and with_determinism and iter5 and moe and smoke and random and not pretrained" -vvv --tb=short
     EXPECT_NUM_TESTS=1 \
     TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache-prefill-fresh \
     TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden-32a3e8b6/ \
@@ -47,6 +47,7 @@
     EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer0" -vvv --tb=short
     EXPECT_NUM_TESTS=1 TT_DS_PREFILL_HOST_REF_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-prefill-golden pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_8x4 and fabric2d and layer3" -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy -vvv --tb=short
+    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_deepseek_v3_moe_perf_galaxy_pad50 -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_deepseek_v3_mla_perf_galaxy -vvv --tb=short
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py::test_kimi_mla_chunked_perf_galaxy -vvv --tb=short
   model: deepseek_prefill
@@ -63,14 +64,29 @@
     EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "2x4 and random and scaled_sl and check_pcc and seq5k and fabric2d" -vvv --tb=short
     EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and kimi and cpu and 2x4 and fabric2d'
     EXPECT_NUM_TESTS=1 python -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k 'maxedge-1u and ds and cpu and 2x4 and fabric2d'
-    # deepseek and kimi moe blocks
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device" -vvv --tb=short --timeout=1800
-    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and 5k and not 25k" -vvv --tb=short --timeout=1800
+    # deepseek and kimi moe blocks. NOTE: pcc-device-256 (DSv3) is pinned exact + `not pad50` so it stays
+    # 1 test — bare `pcc-device` would substring-match `pcc-device-glm-256` and inflate the count.
+    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device-256 and not pad50" -vvv --tb=short --timeout=1800
+    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "linear-8 and 5k and not 25k and not perf" -vvv --tb=short --timeout=1800
   model: deepseek_prefill
   skus:
     bh_loudbox:
       timeout: 30
   owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: models
+
+- name: "(bh loudbox) GLM-5.1 Prefill modules"
+  cmd: |
+    # GLM-5.1 counterparts to the Kimi lines above. GLM's MLA is DSA/sparse (no absorbed-MLA analog), so
+    # it's its own stage. sparse MLA: `line` fabric (ring/fabric2d don't train on a partial-Galaxy box) +
+    # its own MLA ref cache; no EXPECT_NUM_TESTS since _sparse_cases emits a box-dependent seq count.
+    DS_SPARSE_FABRIC=line GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 2x4 and line" -vvv --tb=short
+    EXPECT_NUM_TESTS=1 pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "linear-8 and pcc-device-glm-256 and not pad50" -vvv --tb=short --timeout=1800
+  model: deepseek_prefill
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
 # ============================================================================

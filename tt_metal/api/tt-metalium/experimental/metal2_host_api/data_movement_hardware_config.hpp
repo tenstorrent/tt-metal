@@ -61,7 +61,11 @@ struct DataMovementHardwareConfig {
         //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
         //  - This feature is mainly for debug purposes, or for backwards-compatible code style.
         // Any bound DFB not listed here will use implicit sync by default.
-        Group<DFBSpecName> disable_implicit_sync_for;
+        Group<DFBSpecName> disable_dfb_implicit_sync_for;
+
+        // Opt out of DFB implicit sync for ALL the DFBs this kernel binds.
+        // (The per-kernel hammer; equivalent to listing every bound DFB above.)
+        bool disable_dfb_implicit_sync_for_all = false;
     };
     // For a Gen2 DM kernel, providing the Gen2Config is optional.
     std::optional<Gen2Config> gen2_config = std::nullopt;

@@ -53,22 +53,22 @@ namespace {
 
 // Helper functions that return MeshCoordinateRange spanning various parts of the T3000 device.
 const MeshCoordinateRange& t3k_bottom_row() {
-    static tt::stl::Indestructible<MeshCoordinateRange> bottom_row(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> bottom_row(MeshCoordinate{1, 0}, MeshCoordinate{1, 3});
     return bottom_row.get();
 }
 
 const MeshCoordinateRange& t3k_top_row() {
-    static tt::stl::Indestructible<MeshCoordinateRange> top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, 3});
     return top_row.get();
 }
 
 const MeshCoordinateRange& t3k_full_grid() {
-    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{1, 3});
+    static ttsl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{1, 3});
     return full_grid.get();
 }
 
 const MeshCoordinateRange& tg_full_grid() {
-    static tt::stl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
+    static ttsl::Indestructible<MeshCoordinateRange> full_grid(MeshCoordinate{0, 0}, MeshCoordinate{3, 7});
     return full_grid.get();
 }
 
@@ -514,7 +514,14 @@ TEST_F(MeshTraceTestSuite, MeshTraceAsserts) {
         1, mesh_device_->compute_with_storage_grid_size(), seed);
     workload->add_program(all_devices, std::move(*programs[0]));
     auto trace_id = BeginTraceCapture(mesh_device_.get(), 0);
-    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true), std::runtime_error);
+    try {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, true);
+        FAIL() << "Expected EnqueueMeshWorkload to fail while tracing uncached program binaries";
+    } catch (const std::runtime_error& e) {
+        const std::string error_message = e.what();
+        EXPECT_NE(error_message.find("Cannot load new binaries during trace capture."), std::string::npos);
+        EXPECT_NE(error_message.find("Warm up before capturing a trace."), std::string::npos);
+    }
     EXPECT_THROW(Finish(mesh_device_->mesh_command_queue()), std::runtime_error);
     mesh_device_->end_mesh_trace(0, trace_id);
 }

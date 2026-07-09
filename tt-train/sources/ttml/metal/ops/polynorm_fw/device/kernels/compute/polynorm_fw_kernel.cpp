@@ -61,7 +61,7 @@ void reduce_sum_pows_to_inv_rms_triplet() {
     constexpr uint32_t reg_a2 = 2U;  // sum(x^6) → inv_rms(x^3)
 
     // Row-reduce the three power sums into reg_a0/reg_a1/reg_a2.
-    reconfig_data_format(cb_sum_pows, cb_scaler);
+    reconfig_data_format(cb_scaler, cb_sum_pows);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, cb_inv_rms);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/0U, 0U, reg_a0);
     reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum_pows, cb_scaler, /*itile=*/1U, 0U, reg_a1);

@@ -76,7 +76,7 @@ void kernel_main() {
 
         for (uint32_t r = 0; r < rem; r++) {
             uint64_t src_noc_addr =
-                get_noc_addr(i + r + tile_offset, src_a);  // not contiguous for sequential r, can be banked
+                src_a.get_noc_addr(i + r + tile_offset);  // not contiguous for sequential r, can be banked
             auto addr = l1_write_addr + (r * tile_bytes);
             noc_async_read(src_noc_addr, addr, tile_bytes);
         }

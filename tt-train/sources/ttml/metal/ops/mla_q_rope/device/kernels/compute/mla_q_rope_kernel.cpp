@@ -39,7 +39,7 @@ ALWI void process_rope_group(const uint32_t num_tiles) {
     cb_wait_front(q_pe_cb, num_tiles);
     cb_reserve_back(rotated_in_interm_cb, num_tiles);
 
-    mm_init_short(q_pe_cb, trans_mat_cb);
+    matmul_init(q_pe_cb, trans_mat_cb);
     tile_regs_acquire();
     for (uint32_t j = 0U; j < num_tiles; ++j) {
         matmul_tiles(q_pe_cb, trans_mat_cb, j, 0U, j);
@@ -112,7 +112,7 @@ ALWI void process_rope_group(const uint32_t num_tiles) {
 void kernel_main() {
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
-    mm_init(q_pe_cb, trans_mat_cb, rotated_in_interm_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(q_pe_cb, trans_mat_cb, rotated_in_interm_cb);
     binary_op_init_common(rotated_in_interm_cb, cos_cb, rope_out_cb);
 
     cb_wait_front(trans_mat_cb, 1U);

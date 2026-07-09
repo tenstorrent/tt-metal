@@ -18,6 +18,7 @@
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
+#include <tt_stl/strong_type.hpp>
 
 // ============================================================================
 //  DataflowBufferSpec API
@@ -40,8 +41,10 @@
 // INVARIANT: At the node level, a DFB instance has exactly one producer kernel
 //   instance and exactly one consumer kernel instance. You must respect this
 //   invariant across the DataflowBufferSpec's endpoint bindings.
-//   It is legal to bind more than one KernelSpec producer (or consumer) to a
-//   DFB endpoint, provided that they have:
+//   This is a per-node rule, not a per-spec one: you MAY bind more than one
+//   KernelSpec to a producer (or consumer) endpoint, because their non-overlapping
+//   node sets each still contribute exactly one instance per node. Such multiple
+//   bindings on one endpoint are legal provided they have:
 //     - non-overlapping node coverage, AND
 //     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
@@ -66,8 +69,8 @@
 
 namespace tt::tt_metal::experimental {
 
-// DFBSpecName is defined in advanced_options.hpp (included above) — the lowest
-// header that references it.
+// Name identifying a DataflowBufferSpec within a ProgramSpec.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 //------------------------------------------------
 // DataflowBufferSpec

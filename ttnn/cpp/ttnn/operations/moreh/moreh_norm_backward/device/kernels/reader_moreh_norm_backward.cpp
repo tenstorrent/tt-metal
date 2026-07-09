@@ -91,7 +91,8 @@ void kernel_main() {
     // output_grad
     const auto output_grad_addrg = TensorAccessor(output_grad_args, output_grad_addr);
 
-    fill_cb_with_value(cb_id_decimal, decimal);
+    CircularBuffer cb_decimal(cb_id_decimal);
+    fill_cb_with_value(cb_decimal, decimal);
 
     Noc noc;
     CircularBuffer cb_input(cb_id_input);

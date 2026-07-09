@@ -142,9 +142,9 @@ def test_transpose_dest_int8(
     unpack_to_dest,
 ):
     """
-    Test transpose_wh_tile with Int8 format using the haloize unpack path.
+    Test transpose_tile with Int8 format using the haloize unpack path.
 
-    Int8 uses the non-unpack-to-dest path in transpose_wh_init/tile:
+    Int8 uses the non-unpack-to-dest path in transpose_init/transpose_tile:
     the unpacker performs transpose_of_faces + within_face_16x16_transpose (haloize), and
     the math thread uses A2D datacopy with is_int_fpu_en=true to reconstruct Int8 in DEST.
     No _llk_math_transpose_dest_ call is made — the unpacker already produced the transposed tile.

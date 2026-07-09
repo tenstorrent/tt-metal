@@ -41,6 +41,8 @@ void kernel_main() {
     const uint32_t kv_addr = get_arg_val<uint32_t>(3);  // dual-NoC K-half gather
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(4);
+    // Block-cyclic remap (BC_ENABLE): all its constants are compile-time defines (the cache length T is hashed
+    // for this path) — no runtime arg here. See sparse_sdpa_gather.hpp for the remap.
 
     constexpr uint32_t row_bytes = vDHt * tt::constants::TILE_WIDTH * out_elem_bytes;  // V_DIM bytes per head-row
     constexpr uint32_t block_tiles = (H / tt::constants::TILE_HEIGHT) * vDHt;          // Sqt*vDHt: the [H,V_DIM] block
@@ -63,8 +65,7 @@ void kernel_main() {
         cb_scale,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        /*reduce_factor=*/1,
-        /*compute_uses_reduce_tile=*/true>();
+        /*reduce_factor=*/1>();
 
     // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
     // within-tile reduction in normalize_row_streaming.

@@ -164,13 +164,28 @@ int main(int argc, char** argv) {
 
     bool device_opened = false;
     uint32_t tests_ran = 0;
+    // Skip/execution accounting so the end-of-run summary can explain what actually executed
+    // instead of only emitting a single "completed" line on success. See #48783.
+    uint32_t groups_skipped_filter = 0;
+    uint32_t groups_skipped_platform = 0;
+    uint32_t groups_skipped_mesh_passthrough = 0;
+    uint32_t groups_skipped_unsupported = 0;
+    uint32_t groups_skipped_topology = 0;
+    uint32_t tests_executed = 0;
+    // Per-group outcome (name, status) for the end-of-run report, in execution order.
+    std::vector<std::pair<std::string, std::string>> group_results;
+    group_results.reserve(raw_test_configs.size());
     for (auto& test_config : raw_test_configs) {
         if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
+            groups_skipped_filter++;
+            group_results.emplace_back(test_config.name, "SKIP:filter");
             continue;
         }
         if (builder.should_skip_test_on_platform(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
+            groups_skipped_platform++;
+            group_results.emplace_back(test_config.name, "SKIP:platform");
             continue;
         }
         if (builder.should_skip_test_for_disabled_mesh_passthrough(test_config)) {
@@ -179,6 +194,8 @@ int main(int argc, char** argv) {
                 "Skipping Test Group: {} because sequential_mesh_passthrough requires "
                 "TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1",
                 test_config.name);
+            groups_skipped_mesh_passthrough++;
+            group_results.emplace_back(test_config.name, "SKIP:mesh_passthrough");
             continue;
         }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
@@ -204,6 +221,8 @@ int main(int argc, char** argv) {
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);
+            groups_skipped_unsupported++;
+            group_results.emplace_back(test_config.name, "SKIP:unsupported_config");
             continue;
         }
 
@@ -220,10 +239,13 @@ int main(int argc, char** argv) {
         if (builder.should_skip_test_on_topology(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to topology skip policy", test_config.name);
             test_context.close_devices();
+            groups_skipped_topology++;
+            group_results.emplace_back(test_config.name, "SKIP:topology");
             continue;
         }
         tests_ran++;
         device_opened = true;
+        group_results.emplace_back(test_config.name, "RAN");
 
         for (uint32_t iter = 0; iter < test_config.num_top_level_iterations; ++iter) {
             log_info(tt::LogTest, "Starting top-level iteration {}/{}", iter + 1, test_config.num_top_level_iterations);
@@ -242,6 +264,7 @@ int main(int argc, char** argv) {
 
             for (auto& built_test : built_tests) {
                 log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
+                tests_executed++;
 
                 // Prepare allocator and memory maps for this specific test
                 test_context.prepare_for_test(built_test);
@@ -347,31 +370,54 @@ int main(int argc, char** argv) {
         test_context.setup_ci_artifacts();
     }
 
-    // Check if any tests failed validation and throw at the end
-    if (test_context.has_test_failures()) {
-        const auto& failed_tests = test_context.get_all_failed_tests();
-        log_error(tt::LogTest, "=== FINAL TEST SUMMARY ===");
-        log_error(tt::LogTest, "Total failed tests: {}", failed_tests.size());
+    // Always emit a run summary so a successful run is auditable -- how many groups ran, how
+    // many were skipped and why, and how many individual tests executed -- rather than only a
+    // single "completed" line. This also makes a run that executed nothing obvious. See #48783.
+    const auto total_groups = raw_test_configs.size();
+    const auto groups_skipped_total = groups_skipped_filter + groups_skipped_platform +
+                                      groups_skipped_mesh_passthrough + groups_skipped_unsupported +
+                                      groups_skipped_topology;
+    const auto& failed_tests = test_context.get_all_failed_tests();
+
+    log_info(tt::LogTest, "=========== TEST RUN SUMMARY ===========");
+    log_info(tt::LogTest, "Test groups: {} total, {} ran, {} skipped", total_groups, tests_ran, groups_skipped_total);
+    if (groups_skipped_total > 0) {
+        log_info(
+            tt::LogTest,
+            "  skipped breakdown: filter={}, platform={}, mesh_passthrough={}, unsupported_config={}, topology={}",
+            groups_skipped_filter,
+            groups_skipped_platform,
+            groups_skipped_mesh_passthrough,
+            groups_skipped_unsupported,
+            groups_skipped_topology);
+    }
+    log_info(tt::LogTest, "Per-group results:");
+    for (const auto& [group_name, group_status] : group_results) {
+        log_info(tt::LogTest, "  [{}] {}", group_status, group_name);
+    }
+    log_info(tt::LogTest, "Tests: {} executed, {} failed", tests_executed, failed_tests.size());
+    if (!failed_tests.empty()) {
         log_error(tt::LogTest, "Failed tests:");
         for (const auto& failed_test : failed_tests) {
             log_error(tt::LogTest, "  - {}", failed_test);
         }
-        TT_THROW("Some tests failed golden comparison validation. See summary above.");
     }
-
-    auto total_tests_count = raw_test_configs.size();
-    if (tests_ran < total_tests_count) {
-        log_warning(
-            tt::LogTest,
-            "{} out of {} test groups did not run (filtered, skipped, or unsupported)",
-            total_tests_count - tests_ran,
-            total_tests_count);
-    }
-
-    if (device_opened) {
+    if (test_context.has_test_failures()) {
+        log_error(tt::LogTest, "Result: FAILED - some tests failed golden comparison validation");
+    } else if (device_opened) {
+        // NOTE: keep this exact phrase. External harnesses (tools/scaleout/exabox/
+        // run_fabric_tests.sh and analyze_fabric_results.py) count occurrences of
+        // "All tests completed successfully" as the per-rank success marker.
         log_info(tt::LogTest, "All tests completed successfully");
     } else {
-        log_info(tt::LogTest, "No tests found for provided filter");
+        log_warning(
+            tt::LogTest, "Result: no test groups executed (all {} filtered, skipped, or unsupported)", total_groups);
+    }
+    log_info(tt::LogTest, "========================================");
+
+    // Fail the run (non-zero exit) if any tests failed validation.
+    if (test_context.has_test_failures()) {
+        TT_THROW("Some tests failed golden comparison validation. See summary above.");
     }
     return 0;
 }

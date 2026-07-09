@@ -26,7 +26,7 @@ on:
         type: choice
         options:
           - all
-          - QuietBox 2 (2xP300)
+          - bh_quietbox_2
       build-type:
         required: false
         type: choice
@@ -118,10 +118,6 @@ jobs:
 
           with open("tests/pipeline_reorg/blackhole_demo_tests.yaml") as f:
               tests = yaml.safe_load(f) or []
-          with open(".github/blackhole_demo_systems.yaml") as f:
-              systems = yaml.safe_load(f) or {}
-
-          sku_to_system = {s["sku"]: s["name"] for s in systems.get("systems", [])}
 
           selected_model = os.environ["SELECTED_MODEL"]
           system_filter = os.environ["SYSTEM_TYPE_FILTER"]
@@ -137,8 +133,7 @@ jobs:
               if selected_model != "all" and m != selected_model:
                   continue
               if system_filter != "all":
-                  if not any(sku_to_system.get(sku) == system_filter
-                             for sku in (t.get("skus") or {}).keys()):
+                  if system_filter not in (t.get("skus") or {}):
                       continue
               if m not in matching_models:
                   matching_models.append(m)

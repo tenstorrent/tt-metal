@@ -11,15 +11,17 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/experimental/quasar/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/reshape_view/reshape.hpp"
+#include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/experimental/quasar/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/hal.hpp>
@@ -239,7 +241,8 @@ static std::vector<Tensor> pool2d_L1(
         if (!is_tensor_already_flattened) {
             const auto flattened_input_shape = conv::flatten_4d_shape(input_tensor.logical_shape());
             const auto flattened_padded_input_shape = conv::flatten_4d_shape(input_tensor.padded_shape());
-            input_tensor_flattened = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
+            input_tensor_flattened = ttnn::operations::experimental::quasar::reshape(
+                input_tensor, flattened_input_shape, flattened_padded_input_shape);
             input_tensor_shape = flattened_input_shape;
         }
         // Calculate padding needed for channels dimension
@@ -249,10 +252,11 @@ static std::vector<Tensor> pool2d_L1(
         // Apply zero padding to channels if needed - we need it in case when output dtype is block float because if we
         // have random values it would affect common exponent calculation
         if (padding_needed > 0 && is_block_float(dtype)) {
-            ttnn::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
+            ttsl::SmallVector<std::array<uint32_t, 2>> pad_spec = {{0, 0}, {0, 0}, {0, 0}, {0, padding_needed}};
             input_tensor_flattened = ttnn::pad(input_tensor_flattened, pad_spec, 0.0f);
         }
-        input_tensor_sharded = ttnn::to_memory_config(input_tensor_flattened, in_memory_config, std::nullopt);
+        input_tensor_sharded = ttnn::operations::experimental::quasar::to_memory_config(
+            input_tensor_flattened, in_memory_config, std::nullopt);
         out_memory_config = input_tensor_sharded.memory_config();
 
     } else {
@@ -378,7 +382,8 @@ static std::vector<Tensor> pool2d_L1(
     // format and return the result
     if (memory_config.has_value() && memory_config.value() != out_memory_config) {
         for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
+            output_tensor = ttnn::operations::experimental::quasar::to_memory_config(
+                output_tensor, memory_config.value(), std::nullopt);
         }
     }
 
@@ -902,7 +907,8 @@ static std::vector<Tensor> pool2d_DRAM(
 
     // Only reshape if the current shape doesn't match what we need
     if (input_tensor.logical_shape() != unflattened_input_shape) {
-        input_tensor_for_slicing = ttnn::reshape(input_tensor, unflattened_input_shape, unflattened_input_shape);
+        input_tensor_for_slicing = ttnn::operations::experimental::quasar::reshape(
+            input_tensor, unflattened_input_shape, unflattened_input_shape);
     }
 
     // Create output tensors for DRAM slicing
@@ -1003,7 +1009,8 @@ static std::vector<Tensor> pool2d(
 
         ttnn::Shape reshaped_logical({1, input_h, input_w, channels});
         ttnn::Shape reshaped_padded({1, padded_shape[0], padded_shape[1], padded_shape[2]});
-        input_tensor_4d = ttnn::reshape(input_tensor, reshaped_logical, reshaped_padded);
+        input_tensor_4d =
+            ttnn::operations::experimental::quasar::reshape(input_tensor, reshaped_logical, reshaped_padded);
     } else if (rank == 2) {
         // Rank-2 tensor: [H, W] -> [1, H, W, 1]
         log_debug(
@@ -1022,7 +1029,8 @@ static std::vector<Tensor> pool2d(
 
         ttnn::Shape reshaped_logical({1, input_h, input_w, 1});
         ttnn::Shape reshaped_padded({1, padded_shape[0], padded_shape[1], 1});
-        input_tensor_4d = ttnn::reshape(input_tensor, reshaped_logical, reshaped_padded);
+        input_tensor_4d =
+            ttnn::operations::experimental::quasar::reshape(input_tensor, reshaped_logical, reshaped_padded);
     } else if (rank != 4) {
         TT_FATAL(false, "Pool2D: Input tensor must be rank 2, 3, or 4, got rank {}", rank);
     }
@@ -1095,10 +1103,10 @@ static std::vector<Tensor> pool2d(
         //     conversion would untilize+typecast and is more expensive than the algorithmic win).
         Tensor input = input_tensor_4d;
         if (input.memory_config() != reduce_mem) {
-            input = ttnn::to_memory_config(input, reduce_mem);
+            input = ttnn::operations::experimental::quasar::to_memory_config(input, reduce_mem);
         }
         if (input.layout() != Layout::ROW_MAJOR && !spatial_is_tile_aligned && !input_is_block_float_tile) {
-            input = ttnn::to_layout(input, Layout::ROW_MAJOR);
+            input = ttnn::operations::experimental::quasar::to_layout(input, Layout::ROW_MAJOR);
         }
 
         // Canonicalize to (batch_size, 1, H*W, C) form using an explicit logical+padded reshape.
@@ -1118,12 +1126,13 @@ static std::vector<Tensor> pool2d(
         uint32_t hw_padded_per_batch = total_padded_spatial / batch_size;
         ttnn::Shape canonical_logical({batch_size, 1, hw, channels});
         ttnn::Shape canonical_padded({batch_size, 1, hw_padded_per_batch, channels_padded});
-        Tensor canonical = ttnn::reshape(input, canonical_logical, canonical_padded);
+        Tensor canonical = ttnn::operations::experimental::quasar::reshape(input, canonical_logical, canonical_padded);
 
         // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
         // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
         // Replace once ttnn::sum gains equivalent handling.
-        Tensor output = ttnn::operations::reduction::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
+        Tensor output =
+            ttnn::operations::experimental::quasar::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
         // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
         // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
         const auto& output_padded_shape = output.padded_shape();
@@ -1135,16 +1144,16 @@ static std::vector<Tensor> pool2d(
         } else {
             ttnn::Shape correct_logical({1, 1, batch_size, channels});
             ttnn::Shape correct_padded({1, 1, output_padded_shape[0], output_padded_shape[3]});
-            output = ttnn::reshape(output, correct_logical, correct_padded);
+            output = ttnn::operations::experimental::quasar::reshape(output, correct_logical, correct_padded);
         }
 
         if (output.layout() != output_layout) {
-            output = ttnn::to_layout(output, output_layout, std::nullopt, reduce_mem);
+            output = ttnn::operations::experimental::quasar::to_layout(output, output_layout, std::nullopt, reduce_mem);
         }
         // Honor caller's requested output memory config when feasible. We skip re-sharding
         // because a shard spec sized for the input H×W can't fit the 1×1 output.
         if (honor_requested_out_mem && output.memory_config() != requested_out_mem) {
-            output = ttnn::to_memory_config(output, requested_out_mem);
+            output = ttnn::operations::experimental::quasar::to_memory_config(output, requested_out_mem);
         }
         return {output};
     }

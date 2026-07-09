@@ -12,6 +12,7 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& scores = tensor_args.scores;
     const auto& bias = tensor_args.bias;
+    const auto& padding_config = tensor_args.padding_config;
 
     TT_FATAL(scores.storage_type() == tt::tt_metal::StorageType::DEVICE, "Scores tensor must be on device");
     TT_FATAL(bias.storage_type() == tt::tt_metal::StorageType::DEVICE, "Bias tensor must be on device");
@@ -23,6 +24,22 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(bias.dtype() == tt::tt_metal::DataType::FLOAT32, "Bias tensor must be FLOAT32");
     TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
+
+    // Optional per-device [num_real_tokens, pad_side] config used to sentinel-mark padded token rows.
+    if (padding_config.has_value()) {
+        TT_FATAL(
+            padding_config->storage_type() == tt::tt_metal::StorageType::DEVICE,
+            "Padding config tensor must be on device");
+        TT_FATAL(padding_config->buffer() != nullptr, "Padding config tensor must be allocated");
+        TT_FATAL(
+            padding_config->dtype() == tt::tt_metal::DataType::UINT32, "Padding config tensor must be UINT32");
+        TT_FATAL(
+            padding_config->layout() == tt::tt_metal::Layout::ROW_MAJOR,
+            "Padding config tensor must be ROW_MAJOR layout");
+        TT_FATAL(
+            padding_config->logical_shape()[-1] >= 2,
+            "Padding config tensor must contain at least [num_real_tokens, pad_side]");
+    }
 
     const uint32_t experts = scores.logical_shape()[-1];
 
@@ -107,7 +124,9 @@ moe_grouped_topk(
     float route_scale,
     float epsilon,
     bool stable_sort,
-    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config) {
+    ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::ScoreFunc score_func,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& padding_config) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::MoeGroupedTopkDeviceOperation;
 
@@ -119,8 +138,9 @@ moe_grouped_topk(
         route_scale,
         epsilon,
         stable_sort,
+        score_func,
         output_mem_config.value_or(scores.memory_config())};
-    auto tensor_args = OperationType::tensor_args_t{scores, bias};
+    auto tensor_args = OperationType::tensor_args_t{scores, bias, padding_config};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -17,6 +17,20 @@ MATH_FIDELITY = {
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
+# Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
+# mapped to the values the matmul fused-activation path expects. Each value is
+# either a bare ttnn.UnaryOpType (no parameter) or a (UnaryOpType, param0)
+# tuple; nanobind's implicit caster handles both forms.
+#
+# "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
+# "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
+# "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh").
+_FUSED_GELU_VARIANTS = {
+    "gelu": (ttnn.UnaryOpType.GELU, False),
+    "gelu_fast": (ttnn.UnaryOpType.GELU, True),
+    "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
+}
+
 
 class Linear(Module):
     """
@@ -33,15 +47,9 @@ class Linear(Module):
             self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        if self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "gelu_tanh":
-            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
-            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
-            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
-            self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
 
         """
@@ -96,21 +104,6 @@ def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     return tmp
 
 
-def gelu_tanh_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    #
-    # This unfused decomposition is higher precision than the fused tanh-LUT GELU
-    # (ttnn.UnaryOpType.GELU, True) and recovers PCC on the Wan text embedder, which
-    # regressed when the fused LUT path was introduced. The cube is computed as
-    # x * x * x (instead of ttnn.pow(x, 3)) to keep the decomposition explicit and
-    # avoid relying on ttnn.pow implementation details.
-    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
-    x_cubed = ttnn.multiply(ttnn.multiply(x, x), x)
-    inner = ttnn.add(x, ttnn.multiply(x_cubed, 0.044715))
-    one_plus_tanh = ttnn.add(ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi)), 1.0)
-    return ttnn.multiply(ttnn.multiply(x, one_plus_tanh), 0.5)
-
-
 class ColParallelLinear(Module):
     """
     Linear layer with column parallel weights
@@ -138,15 +131,9 @@ class ColParallelLinear(Module):
             # Double out features for fused swiglu activation
             self.out_features = self.out_features * 2
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        if self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "gelu_tanh":
-            # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
-            # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
-            # NaN on negative inputs and corrupt the audio decoder ("mesh of 4 voices" artifact).
-            self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, True)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -467,8 +454,6 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return ttnn.silu(t)
     if activation_fn == "decomposed_gelu":
         return gelu_decomposed(t)
-    if activation_fn == "gelu_tanh_decomposed":
-        return gelu_tanh_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
     if activation_fn == "swiglu":

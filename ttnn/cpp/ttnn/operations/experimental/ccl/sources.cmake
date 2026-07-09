@@ -88,6 +88,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_SRCS
     all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_device_operation.cpp
     all_to_all_dispatch_metadata/device/all_to_all_dispatch_metadata_program_factory.cpp
     moe_compute/moe_compute.cpp
+    moe_compute/moe_core_placement.cpp
     moe_compute/moe_compute_utils.cpp
     moe_compute/device/moe_compute_device_operation.cpp
     moe_compute/device/moe_compute_program_factory.cpp

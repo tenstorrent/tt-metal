@@ -3,6 +3,7 @@
 # Source MPI interface validation utility
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+source "$SCRIPT_DIR/utils/host_utils.sh"
 
 # Function to display help
 show_help() {
@@ -100,6 +101,8 @@ if [[ -z "$HOSTS" ]]; then
     show_help
     exit 1
 fi
+
+check_duplicate_hosts "$HOSTS" || exit 1
 
 if [[ -z "$DOCKER_IMAGE" ]]; then
     echo "Error: --image is required"

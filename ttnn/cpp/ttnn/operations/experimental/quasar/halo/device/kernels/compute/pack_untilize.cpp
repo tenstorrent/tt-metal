@@ -6,19 +6,23 @@
 
 #include "ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/compute/pack_untilize.h"
+#include "experimental/kernel_args.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 constexpr uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
-#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
 void kernel_main() {
-    constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t out_cb_id0 = get_compile_time_arg_val(1);
-    constexpr uint32_t out_cb_id1 = get_compile_time_arg_val(2);
-    constexpr uint32_t tiles_per_row = get_compile_time_arg_val(3);  // number of tiles along width of shard
-    constexpr uint32_t block_size = get_compile_time_arg_val(4);  // number of tiles along height that make up a block
+    // Metal 2.0 named bindings:
+    //   dfb::src           - borrowed input shard (compute consumes, untilizes)
+    //   dfb::untilize_out0 - untilized output for reader0 (even blocks)
+    //   dfb::untilize_out1 - untilized output for reader1 (odd blocks)
+    constexpr uint32_t src_cb_id = dfb::src;
+    constexpr uint32_t out_cb_id0 = dfb::untilize_out0;
+    constexpr uint32_t out_cb_id1 = dfb::untilize_out1;
+    constexpr uint32_t tiles_per_row = get_arg(args::tiles_per_row);  // number of tiles along width of shard
+    constexpr uint32_t block_size = get_arg(args::block_size);  // number of tiles along height that make up a block
 
-    const uint32_t total_blocks = get_arg_val<uint32_t>(0);
+    const uint32_t total_blocks = get_arg(args::total_blocks);
 
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 

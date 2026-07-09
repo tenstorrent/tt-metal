@@ -541,10 +541,12 @@ bool get_broadcast_batch(
 // currently advisory.
 // TODO(#44529): convert this back to TT_FATAL once all callers have been updated.
 void warn_if_allowed_worker_cores_missing(
-    const std::optional<operations::matmul::MatmulProgramConfig>& program_config, std::string_view entry_point) {
+    const std::optional<operations::matmul::MatmulProgramConfig>& program_config,
+    [[maybe_unused]] std::string_view entry_point) {
     if (!program_config.has_value()) {
         return;
     }
+    /* The following spammed CI logs too much; leave it in place to convert to TT_FATAL in the future.
     std::visit(
         [&](const auto& pc) {
             if constexpr (requires { pc.allowed_worker_cores; }) {
@@ -561,6 +563,7 @@ void warn_if_allowed_worker_cores_missing(
             }
         },
         program_config.value());
+        */
 }
 
 // Cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
@@ -1533,7 +1536,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         TT_FATAL(
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x ==
                                 input_tensor_a.shard_spec()->grid.bounding_box().end_coord.x,
-                            "Grid bounding box x coordinates must match, got start: {} vs end: {}",
+                            "When input tensor A is HEIGHT_SHARDED, it must have a single-column shard grid for "
+                            "MatmulMultiCoreReuseMultiCastProgramConfig (got x={} to x={}). Use "
+                            "MatmulMultiCoreReuseProgramConfig for multi-column HEIGHT_SHARDED inputs.",
                             input_tensor_a.shard_spec()->grid.bounding_box().start_coord.x,
                             input_tensor_a.shard_spec()->grid.bounding_box().end_coord.x);
                     }

@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/quasar/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_in0,
@@ -23,7 +24,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    CircularBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
                  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
@@ -41,9 +42,9 @@ ALWI void process_tile(
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    CircularBuffer exp_cb_bcast(CB_BCAST);
-    CircularBuffer exp_cb_other(CB_OTHER);
-    CircularBuffer exp_cb_llk_post(cb_llk_post);
+    DataflowBuffer exp_cb_bcast(CB_BCAST);
+    DataflowBuffer exp_cb_other(CB_OTHER);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
 
     unary_op_init_common(cb_left, cb_out);
     BINARY_SFPU_INIT
