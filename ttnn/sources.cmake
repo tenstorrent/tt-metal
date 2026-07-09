@@ -417,18 +417,8 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
 
 set(TTNN_P2P_PYBIND cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
 
-set(CCL_TTNN_SRCS_PYBIND
-    cpp/ttnn/operations/ccl/ccl_nanobind.cpp
-    cpp/ttnn/operations/ccl/all_broadcast/all_broadcast_nanobind.cpp
-    cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_nanobind.cpp
-    cpp/ttnn/operations/ccl/reduce_to_root/reduce_to_root_nanobind.cpp
-    cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_nanobind.cpp
-    cpp/ttnn/operations/ccl/broadcast/broadcast_nanobind.cpp
-    cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_nanobind.cpp
-    cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter_nanobind.cpp
-    cpp/ttnn/operations/ccl/all_gather/all_gather_nanobind.cpp
-    cpp/ttnn/operations/ccl/all_reduce/all_reduce_nanobind.cpp
-)
+# ccl/'s own nanobind sources are registered directly on the `ttnn` target
+# from ttnn/cpp/ttnn/operations/ccl/CMakeLists.txt — not listed here.
 
 set(DEBUG_TTNN_SRCS_PYBIND
     cpp/ttnn/operations/debug/debug_nanobind.cpp

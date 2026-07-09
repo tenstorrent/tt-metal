@@ -122,3 +122,26 @@ install(
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)
+
+# Python bindings for this op are registered directly on the shared `ttnn`
+# Python module target here, in the owning team's own file, rather than in
+# the centrally-owned ttnn/sources.cmake — the target itself is necessarily
+# shared (nanobind builds one Python extension module), but which file lists
+# a given op's own registration source doesn't need to be. `ttnn` only
+# exists when WITH_PYTHON_BINDINGS is on, hence the guard.
+if(TARGET ttnn)
+    target_sources(
+        ttnn
+        PRIVATE
+            ccl_nanobind.cpp
+            all_broadcast/all_broadcast_nanobind.cpp
+            all_gather/all_gather_nanobind.cpp
+            all_reduce/all_reduce_nanobind.cpp
+            all_to_all_combine/all_to_all_combine_nanobind.cpp
+            all_to_all_dispatch/all_to_all_dispatch_nanobind.cpp
+            broadcast/broadcast_nanobind.cpp
+            mesh_partition/mesh_partition_nanobind.cpp
+            reduce_scatter/reduce_scatter_nanobind.cpp
+            reduce_to_root/reduce_to_root_nanobind.cpp
+    )
+endif()
