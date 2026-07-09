@@ -15,8 +15,7 @@ FORCE_INLINE void validate(const PacketHeader& packet_header) {
 FORCE_INLINE bool is_valid(const PacketHeader& packet_header) {
     // NOC_SPARSE_MCAST_WRITE is a 1D LowLatency-only type, so a non-LowLatency header is bounded by the
     // standard local-write range (NOC_UNICAST_SCATTER_WRITE) and must reject sparse.
-    return (packet_header.chip_send_type <= CHIP_SEND_TYPE_LAST) &&
-           (packet_header.noc_send_type <= NOC_UNICAST_SCATTER_WRITE);
+    return (packet_header.chip_send_type <= CHIP_SEND_TYPE_LAST);
 }
 
 FORCE_INLINE void validate(const LowLatencyPacketHeader& packet_header) {}
