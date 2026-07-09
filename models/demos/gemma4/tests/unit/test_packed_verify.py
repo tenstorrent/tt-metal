@@ -56,6 +56,7 @@ _MOE_UNSUPPORTED_REASON = (
     "checkpoints (e.g. gemma-4-26B-A4B). Dense targets (12B, 31B) run this test."
 )
 
+
 def _is_pli_model(model_path):
     """True for per-layer-input (MatFormer) checkpoints (e.g. gemma-4-E2B/E4B).
 
