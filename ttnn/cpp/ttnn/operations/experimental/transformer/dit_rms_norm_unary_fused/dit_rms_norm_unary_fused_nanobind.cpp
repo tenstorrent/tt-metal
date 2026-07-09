@@ -9,6 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 
 #include "dit_rms_norm_unary_fused.hpp"
@@ -38,6 +39,32 @@ ttnn::Tensor dit_rms_norm_unary_fused_wrapper(
         weight,
         bias,
         residual_input_tensor,
+        memory_config,
+        program_config,
+        compute_kernel_config,
+        act_param);
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> dit_rms_norm_unary_fused_residual_sum_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& residual_input_tensor,
+    float epsilon,
+    const std::optional<ttnn::Tensor>& weight,
+    const std::optional<ttnn::Tensor>& bias,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<std::string>& activation) {
+    std::optional<ttnn::operations::unary::UnaryWithParam> act_param = std::nullopt;
+    if (activation.has_value()) {
+        act_param = ttnn::operations::unary::utils::string_to_unary_with_param(activation.value());
+    }
+    return ttnn::experimental::dit_rms_norm_unary_fused_residual_sum(
+        input_tensor,
+        residual_input_tensor,
+        epsilon,
+        weight,
+        bias,
         memory_config,
         program_config,
         compute_kernel_config,
@@ -118,6 +145,45 @@ void bind_dit_rms_norm_unary_fused(nb::module_& mod) {
             nb::arg("weight") = nb::none(),
             nb::arg("bias") = nb::none(),
             nb::arg("residual_input_tensor") = nb::none(),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("activation") = nb::none()));
+
+    const char* doc_residual_sum = R"doc(
+        dit_rms_norm_unary_fused_residual_sum(input_tensor, residual_input_tensor, epsilon=1e-5, weight=None, bias=None, *, memory_config=None, program_config=None, compute_kernel_config=None, activation=None)
+
+        Like ``dit_rms_norm_unary_fused`` with a residual, but also returns the pre-add sum
+        ``input_tensor + residual_input_tensor``. Lets a resnet block fuse its terminal add into the next
+        block's norm: the next norm consumes ``(h, residual)`` and emits both the normed result and the
+        materialized sum the skip connection needs, avoiding a standalone add op and its activation re-read.
+
+        Only the interleaved TILE RMSNorm path is supported. Returns ``(normed, sum)``.
+        )doc";
+
+    ttnn::bind_function<"dit_rms_norm_unary_fused_residual_sum", "ttnn.experimental.">(
+        mod,
+        doc_residual_sum,
+        ttnn::overload_t(
+            &ttnn::experimental::dit_rms_norm_unary_fused_residual_sum,
+            nb::arg("input_tensor"),
+            nb::arg("residual_input_tensor"),
+            nb::arg("epsilon") = 1e-5f,
+            nb::arg("weight") = nb::none(),
+            nb::arg("bias") = nb::none(),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("program_config") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("activation") = nb::none()),
+        ttnn::overload_t(
+            &dit_rms_norm_unary_fused_residual_sum_wrapper,
+            nb::arg("input_tensor"),
+            nb::arg("residual_input_tensor"),
+            nb::arg("epsilon") = 1e-5f,
+            nb::arg("weight") = nb::none(),
+            nb::arg("bias") = nb::none(),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("program_config") = nb::none(),

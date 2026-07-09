@@ -244,6 +244,8 @@ target_link_libraries(
         TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
+        TTNN::Ops::Experimental::NeighborPadConv3d
+        TTNN::Ops::Experimental::NeighborPadHalo
         TTNN::Ops::Moreh
         TTNN::Ops::Transformer
 )

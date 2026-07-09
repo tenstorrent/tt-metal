@@ -96,6 +96,13 @@ void kernel_main() {
 #endif
     CircularBuffer cb_x(cb_x_id);
 
+#ifdef OUTPUT_RESIDUAL_SUM
+    // Second output: the pre-add sum, teed off in bf16 for a downstream resnet skip-add. cb_x is fp32
+    // (fp32_dest_acc), so the tee needs its own packer format — see the dual-pack below.
+    constexpr auto cb_x_out_id = get_named_compile_time_arg_val("cb_x_out");
+    CircularBuffer cb_x_out(cb_x_out_id);
+#endif
+
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in_rm_id, cb_in_rm_id, cb_in_id);
 #elif defined(FUSE_PRE_ADD)
@@ -152,14 +159,30 @@ void kernel_main() {
             cb_inb.pop_front(block.full_block_size());
 
             cb_x.reserve_back(block.full_block_size());
+#ifdef OUTPUT_RESIDUAL_SUM
+            cb_x_out.reserve_back(block.full_block_size());
+#endif
 
             tile_regs_wait();
             for (auto i : block.local()) {
                 pack_tile(i, cb_x_id);
             }
+#ifdef OUTPUT_RESIDUAL_SUM
+            // Tee the same DST tiles to the bf16 sum output. cb_x is fp32, so reconfig the packer to
+            // cb_x_out's format, pack, then restore to cb_x's format for the next block iteration (the
+            // pack_reconfig before this loop set it to cb_x once).
+            pack_reconfig_data_format(cb_x_out_id);
+            for (auto i : block.local()) {
+                pack_tile(i, cb_x_out_id);
+            }
+            pack_reconfig_data_format(cb_x_id);
+#endif
             tile_regs_release();
 
             cb_x.push_back(block.full_block_size());  // push the sum into the same buffer
+#ifdef OUTPUT_RESIDUAL_SUM
+            cb_x_out.push_back(block.full_block_size());
+#endif
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in_id, cb_x_id, cb_inb_id, cb_scaler_id);
