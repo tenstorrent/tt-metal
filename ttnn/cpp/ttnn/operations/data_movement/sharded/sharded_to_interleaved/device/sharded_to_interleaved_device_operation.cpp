@@ -71,13 +71,19 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
     }
     if (input_tensor.layout() == Layout::TILE) {
         auto tile = input_tensor.tensor_spec().tile();
-        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        // Match interleaved_to_sharded: allow tiny tile heights (e.g. 16x32); require standard tile width.
+        if (tile.get_width() != tt::constants::TILE_WIDTH) {
             return {
                 false,
                 fmt::format(
-                    "sharded_to_interleaved requires standard 32x32 tiles, got {}x{}",
+                    "sharded_to_interleaved requires tile width {}, got {}x{}",
+                    tt::constants::TILE_WIDTH,
                     tile.get_height(),
                     tile.get_width())};
+        }
+        if (tile.get_height() < tt::constants::TILE_HEIGHT &&
+            (input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B)) {
+            return {false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B"};
         }
         if (tensor_args.preallocated_output.has_value()) {
             auto out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
@@ -106,11 +112,13 @@ TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
     // Without this, when the source shard width exceeds the destination's logical width, the writer
     // kernel writes more bytes per stick than the destination tensor's stick page can hold, causing
     // inter-stick byte overlap and data corruption.
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32 and would mismatch CB sizing in the program factory.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             args.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
+            input_tensor.tensor_spec().page_config(),
             args.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));

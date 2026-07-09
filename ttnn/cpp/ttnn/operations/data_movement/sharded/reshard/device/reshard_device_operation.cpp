@@ -283,11 +283,15 @@ std::pair<bool, std::string> ReshardDeviceOperation::validate_inputs(
     } else {
         if (input_tensor.layout() == Layout::TILE) {
             auto tile = input_tensor.tensor_spec().tile();
-            if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+            // Match interleaved_to_sharded: allow tiny tile heights (e.g. 16x32); require standard tile width.
+            if (tile.get_width() != tt::constants::TILE_WIDTH) {
                 return {
                     false,
                     fmt::format(
-                        "reshard requires standard 32x32 tiles, got {}x{}", tile.get_height(), tile.get_width())};
+                        "reshard requires tile width {}, got {}x{}",
+                        tt::constants::TILE_WIDTH,
+                        tile.get_height(),
+                        tile.get_width())};
             }
             if (tensor_args.preallocated_output.has_value()) {
                 auto out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
@@ -313,10 +317,13 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input;
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the sharded L1 bank relative to the CB
+    // sized from the input tile in the program factory.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
-            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+            input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
 Tensor ReshardDeviceOperation::create_output_tensors(

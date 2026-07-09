@@ -28,6 +28,9 @@ namespace ttnn::prim {
 namespace {
 
 // Anonymous-namespace helper unique to interleaved_to_sharded to avoid unity-build collisions.
+// `tile` must be set for TILE-layout CBs: CircularBufferConfig copies it into tiles_[cb],
+// and JIT uses that for unpack_tile_size / get_tile_size(cb). Omitting it falls back to
+// default 32x32 and corrupts tiny-tile (e.g. 16x32 BFP8) L1 strides.
 void push_i2s_cb_pair(
     ProgramDescriptor& desc,
     uint32_t cb_index,
@@ -36,20 +39,19 @@ void push_i2s_cb_pair(
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
     Buffer* bound_buffer,
-    std::optional<Tile> tile = std::nullopt ) {
+    std::optional<Tile> tile = std::nullopt) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
-    std::optional<TileDescriptor> tile_descriptor = std::nullopt;
-    if (tile) {
-        tile_descriptor = tt::tt_metal::TileDescriptor(tile.value());
+
+    CBFormatDescriptor format_desc;
+    format_desc.buffer_index = static_cast<uint8_t>(cb_index);
+    format_desc.data_format = data_format;
+    format_desc.page_size = page_size;
+    if (tile.has_value()) {
+        format_desc.tile = TileDescriptor(tile.value());
     }
-    cb.format_descriptors.push_back(CBFormatDescriptor{
-        .buffer_index = static_cast<uint8_t>(cb_index),
-        .data_format = data_format,
-        .page_size = page_size,
-        .tile=tile_descriptor
-    });
+    cb.format_descriptors.push_back(std::move(format_desc));
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
 }
