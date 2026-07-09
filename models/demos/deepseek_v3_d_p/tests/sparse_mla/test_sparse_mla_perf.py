@@ -82,6 +82,8 @@ context (no manual rope bump).
 """
 
 import copy
+import datetime
+import json
 import os
 from dataclasses import dataclass
 from unittest import mock
@@ -125,6 +127,11 @@ VARIANTS = ("deepseek_v32", "glm_5_1")
 VARIANT = os.environ.get("DS_PERF_VARIANT", "deepseek_v32")
 _CONFIG_BUILDERS = {"deepseek_v32": deepseek_v32_hf_config, "glm_5_1": glm_hf_config}
 
+# Fabric transport being profiled — single source for BOTH the impl's device_params and the run manifest,
+# so the recorded provenance can never drift from what actually ran (FABRIC_2D is the production transport;
+# FABRIC_1D exhibited the multi-hop line-broadcast hang).
+PERF_FABRIC = ttnn.FabricConfig.FABRIC_2D
+
 
 def _subdir(variant: str, mode: str) -> str:
     """Per-(variant, mode) tracy profiler subdir (raw device reports + per-scenario summary CSVs). Keeps
@@ -155,6 +162,105 @@ def _scenario_csv(out_dir, scenario: str, variant: str, mode: str) -> str:
     """Per-(scenario, variant, mode) summary CSV path under the tracy profiler dir (next to the raw reports)."""
     root, ext = os.path.splitext(_csv_name(variant, mode))
     return os.path.join(out_dir, f"{root}_{scenario}{ext}")
+
+
+_REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _git_head() -> dict:
+    """Commit + branch of the working tree, read straight from the .git metadata — NO subprocess, NO
+    dirty/diff. The workflow makes the recorded commit truthful by construction: the caller commits before
+    profiling, and the skill's run wrapper enforces a clean tree when not run by hand — so there is no
+    working-tree delta to fingerprint. Handles a linked worktree (`.git` is a file redirecting to a gitdir,
+    as the baseline sweep uses) and both HEAD forms: a symbolic ref (resolved via the loose ref, then
+    packed-refs in the common dir) or a bare detached SHA. Best-effort — any failure degrades to nulls so
+    provenance never breaks the run."""
+    try:
+        d = _REPO_DIR
+        while not os.path.exists(os.path.join(d, ".git")):
+            parent = os.path.dirname(d)
+            if parent == d:
+                return {"commit": None, "branch": None}
+            d = parent
+        git_entry = os.path.join(d, ".git")
+        if os.path.isfile(git_entry):  # worktree: '.git' file → 'gitdir: <path>'
+            gitdir = open(git_entry).read().split("gitdir:", 1)[1].strip()
+            gitdir = os.path.normpath(os.path.join(d, gitdir))
+        else:
+            gitdir = git_entry
+        commondir_file = os.path.join(gitdir, "commondir")  # refs/packed-refs live in the common dir
+        common = (
+            os.path.normpath(os.path.join(gitdir, open(commondir_file).read().strip()))
+            if os.path.exists(commondir_file)
+            else gitdir
+        )
+        head = open(os.path.join(gitdir, "HEAD")).read().strip()
+        if not head.startswith("ref:"):
+            return {"commit": head, "branch": None}  # detached HEAD → bare SHA
+        ref = head.split("ref:", 1)[1].strip()
+        branch = ref[len("refs/heads/") :] if ref.startswith("refs/heads/") else ref
+        loose = os.path.join(common, ref)
+        if os.path.exists(loose):
+            return {"commit": open(loose).read().strip(), "branch": branch}
+        packed = os.path.join(common, "packed-refs")  # ref may only exist packed
+        if os.path.exists(packed):
+            for line in open(packed):
+                line = line.strip()
+                if line and not line.startswith(("#", "^")) and line.endswith(" " + ref):
+                    return {"commit": line.split(" ", 1)[0], "branch": branch}
+        return {"commit": None, "branch": branch}
+    except Exception as e:  # noqa: BLE001 — provenance must never break the run
+        logger.warning(f"run manifest: could not read git HEAD ({e}); commit/branch will be null")
+        return {"commit": None, "branch": None}
+
+
+def _write_run_manifest(report_dir, *, variant, scenario, attn_mode, command, workload) -> None:
+    """Drop a lean run_manifest.json into the tracy ``reports/<ts>/`` dir. Records ONLY what cannot be
+    reconstructed from git (given the commit) or from the co-located ops CSV:
+      * commit / branch — the code-state anchor (read subprocess-free from .git; no dirty flag — the
+        workflow commits before profiling);
+      * device / mesh / fabric — where and how it ran (runtime facts, not in source);
+      * build.so_mtime — the stale-build guard (not in git, not in the CSV);
+      * command — a copy-paste reproducer (env-prefixed).
+    Deliberately omitted because they are recoverable: commit subject/time & the full model config (from
+    ``git show <commit>`` + reference/{variant}_config.py), the workload sizes (derived from config + mesh
+    + scenario), and per-op measurements (the ops_perf_results CSV sitting in this same dir). Never raises."""
+    try:
+        so = os.path.normpath(os.path.join(_REPO_DIR, *([os.pardir] * 5), "ttnn", "ttnn", "_ttnn.so"))
+        so_mtime = (
+            datetime.datetime.fromtimestamp(os.path.getmtime(so), datetime.timezone.utc).isoformat()
+            if os.path.exists(so)
+            else None
+        )
+        reproducer = (
+            f"DS_PERF_VARIANT={variant} DS_PERF_SCENARIO={scenario} DS_PERF_ATTN_MODE={attn_mode} "
+            f"DS_PERF_CACHE={CACHE_TOKENS} DS_PERF_CHUNK={CHUNK_TOKENS} DS_PERF_LONG_CACHE={LONG_CACHE_TOKENS} "
+            f"{command}"
+        )
+        head = _git_head()
+        manifest = {
+            "schema_version": 2,
+            "variant": variant,
+            "scenario": scenario,
+            "attn_mode": attn_mode,
+            "commit": head["commit"],
+            "branch": head["branch"],
+            "device": {
+                "num_devices": workload.num_devices,
+                "box": workload.system_name,
+                "mesh_sp": workload.sp,
+                "mesh_tp": workload.tp,
+                "fabric": getattr(PERF_FABRIC, "name", str(PERF_FABRIC)),
+            },
+            "build": {"so_mtime": so_mtime},
+            "command": reproducer,
+        }
+        path = os.path.join(report_dir, "run_manifest.json")
+        with open(path, "w") as f:
+            json.dump(manifest, f, indent=2)
+        logger.info(f"run manifest written to {path}")
+    except Exception as e:  # noqa: BLE001 — provenance must never break the run
+        logger.warning(f"run manifest: failed to write ({e}); this dump will lack provenance")
 
 
 def _local_cache_tokens(galaxy_cache: int, sp: int) -> int:
@@ -257,7 +363,7 @@ def _require_perf(request):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": PERF_FABRIC,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
@@ -476,6 +582,24 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
     csv_out = _scenario_csv(PROFILER_ARTIFACTS_DIR / subdir, scenario, variant, attn_mode)
     by_op.reset_index().to_csv(csv_out, index=False)
     logger.info(f"per-op CSV written to {os.path.abspath(csv_out)}")
+
+    # Provenance: drop run_manifest.json next to the raw report so every dump self-documents the code,
+    # command, device, config and measured total that produced it. The reports/<ts>/ dir is never
+    # clobbered, so this survives across subsequent runs (unlike the summary CSV).
+    try:
+        from tracy.process_model_log import get_latest_ops_log_filename
+
+        report_dir = os.path.dirname(get_latest_ops_log_filename(subdir))
+        _write_run_manifest(
+            report_dir,
+            variant=variant,
+            scenario=scenario,
+            attn_mode=attn_mode,
+            command=command,
+            workload=workload,
+        )
+    except Exception as e:  # noqa: BLE001 — provenance must never break the run
+        logger.warning(f"run manifest: could not resolve report dir ({e}); skipping")
 
     # cold only: per-cache-fill-iteration breakdown. The aggregate above sums all chunks; this shows
     # how the per-chunk critical path grows as the cache fills (the point of the cold scenario). Each
