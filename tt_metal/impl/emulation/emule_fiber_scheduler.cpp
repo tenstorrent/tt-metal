@@ -440,17 +440,14 @@ void FiberScheduler::run_until_idle() {
     }
 
     unsigned W;
-    {   // Publish the whole program in ONE critical section: reset counters + progress, size + fill
-        // the ready queues, AND bump generation_ atomically. generation_ must not be bumped in a
-        // separate locked block: a worker preempted past the previous program's wake could then
-        // observe the new W_ paired with a STALE generation_, pass `w < W_`, run inner_loop an
-        // extra time and double-count workers_done_ past W_ — stalling the done_cv_ wait below
-        // forever (watchdog trip / hang). See tt-emule docs/fiber-engine.md.
+    {   // Publish counters + progress, W_, the ready queues, and ++generation_ in ONE mu_ critical
+        // section, so a worker released for a generation never pairs a new W_ with a stale generation_.
+        // See tt-emule docs/fiber-engine.md §9.4 (the workers_done_ overshoot / done_cv_ wedge it avoids).
         std::lock_guard<std::mutex> g(p_->mu_);
-        if (p_->all_.empty()) {
+        p_->active_ = static_cast<unsigned>(p_->all_.size());
+        if (p_->active_ == 0) {
             return;   // nothing to run; the pool stays parked
         }
-        p_->active_ = static_cast<unsigned>(p_->all_.size());
         p_->idle_ = 0;
         p_->running_ = 0;
         p_->workers_done_ = 0;
@@ -477,9 +474,9 @@ void FiberScheduler::run_until_idle() {
                      p_->active_, W, p_->K_);
     }
 
-    // Watchdog up before the pool is released (notify_all below): a parked worker cannot wake until
-    // that notify, so the run is covered. Created after the dispatch block so a throw there can't
-    // leave a joinable thread. See tt-emule docs/fiber-engine.md.
+    // Watchdog before notify_all so it covers the run; created after the dispatch block so a throw
+    // there can't leave a joinable thread. (A spurious start_cv_ wakeup could start a worker in the
+    // brief gap before this line — benign: the watchdog spawns at once and a hang can't complete that fast.)
     p_->run_active_.store(true, std::memory_order_release);
     std::thread wd([this] { p_->watchdog(); });
 
