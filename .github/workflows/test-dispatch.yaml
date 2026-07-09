@@ -203,7 +203,7 @@ jobs:
           echo "Shard files for ${{ matrix.hw }}:"; ls -la shards/
           # Always pull the latest probe from the coverage repo's main so the
           # merge logic matches whatever produced the shards.
-          curl -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-ops-coverage/main/eltwise_support_probe.py -o probe.py
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-ops-coverage/main/eltwise_support_probe.py -o probe.py
           python3 probe.py --merge shards/shard-*.csv --out eltwise_support_matrix.csv
           echo "Combined file for ${{ matrix.hw }}:"; ls -la eltwise_support_matrix.csv
         shell: bash
