@@ -138,9 +138,9 @@ class TtIndexer:
 
         mem = ttnn.DRAM_MEMORY_CONFIG if device else None
 
-        def repl(t, short):  # k_norm runs on the reduced 128-wide key, so it is replicated across TP
+        def repl(t, short, transpose=False):  # replicate across TP (transpose=True: host [out,in] -> device [in,out])
             return ttnn.as_tensor(
-                t.contiguous().to(torch.bfloat16),
+                (t.T if transpose else t).contiguous().to(torch.bfloat16),
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat16,
@@ -162,11 +162,13 @@ class TtIndexer:
                 cache_file_name=_cache_name(short),
             )
 
-        # wq_b is column-parallel: shard its H_idx*D_idx OUTPUT across tp (each chip builds H_idx/tp
-        # heads; qr is replicated → no reduce). wk / weights_proj contract over hidden (TP-sharded), so
-        # they upload transposed and sharded on that contraction axis → partials reduced by _tp_rs_ag.
+        # wq_b is REPLICATED (all H_idx heads on every chip) so the indexer_score head-sum is COMPLETE
+        # on-chip — no TP logit all-reduce. (Was col-parallel/TP-head-sharded; replicating trades a small
+        # matmul/score compute bump for dropping the ~end_pos-wide 2-CCL logit all-reduce.) Cache name
+        # "wq_b_repl" (not "wq_b") so a stale col-sharded tensorbin can never alias this layout. wk /
+        # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by _tp_rs_ag.
         result = {
-            "wq_b": shard(wq_b, 1, "wq_b"),  # [q_lora_rank, H_idx*D_idx] col-sharded on out
+            "wq_b": repl(wq_b, "wq_b_repl", transpose=True),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
             "wk": shard(wk, 0, "wk"),  # [dim, D_idx] sharded on dim
             "weights_proj": shard(wproj, 0, "weights_proj"),  # [dim, H_idx] sharded on dim
             "k_norm": repl(knorm, "k_norm"),  # [D_idx]
@@ -563,45 +565,39 @@ class TtIndexer:
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, 1, S/sp, (H_idx/tp)*D_idx] — queries stay SP-sharded (no all-gather; each chip scores its own rows)
-        heads_local = a.index_n_heads // self.tp_factor  # this chip's indexer heads (col-parallel wq_b)
+        )  # [1, 1, S/sp, H_idx*D_idx] — ALL heads (wq_b replicated); queries stay SP-sharded (rotation-safe)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
-            q, num_heads=heads_local, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )  # [1, H_idx/tp, S/sp, D_idx]
+            q, num_heads=a.index_n_heads, num_kv_heads=0, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )  # [1, H_idx, S/sp, D_idx] — all heads resident
         if self._blockcyclic:  # block-cyclic indexed rope (same op/tables as the key rope + MLA q_pe)
             q_dev = self._bc_rope_pe(q, rope_tensors, start_pos)
         else:
             q_dev = self._device_rope_pe(q, glob, start_pos, sp_shard=True)  # per-chip natural query positions
 
-        # weights_proj: device stem -> reduce-scatter the H_idx heads across tp (each chip keeps the
-        # reduced H_idx/tp slice matching its wq_b heads) -> SP gather -> scale -> [1, 1, glob, H_idx/tp].
+        # weights_proj: device stem -> FULL all-reduce over tp (all H_idx heads, matching the replicated
+        # wq_b heads) -> scale -> [1, 1, S/sp, H_idx].
         wts = ttnn.linear(
             hidden_states,
             self._idx_wproj,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        wts = self._tp_rs_ag(wts, rs_only=True)  # reduce-scatter on the head dim -> this chip's heads
+        wts = self._tp_rs_ag(wts)  # full all-reduce (RS+AG) over tp -> all H_idx head-weights, replicated
         # Indexer softmax scale = index_head_dim**-0.5 (NO mscale), matching the reference IndexerCPU
         # (model.py: softmax_scale = head_dim**-0.5). Distinct from MLA's qk_head_dim*mscale**2 scale —
         # though as a uniform positive multiplier it cannot change the top-k selection regardless.
-        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * a.index_head_dim**-0.5)  # SP-sharded [1,1,S/sp,H_idx/tp]
+        wts = ttnn.multiply(wts, a.index_n_heads**-0.5 * a.index_head_dim**-0.5)  # [1,1,S/sp,H_idx] repl on tp
 
-        # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx),
-        # so no triu mask add here. Each chip scores only its H_idx/tp heads -> a PARTIAL logit
-        # (the head-sum is separable; the -inf mask is head-independent so it survives the sum).
-        # HB=0 keeps all H_idx/tp heads resident (fits L1 for tp>=2, i.e. <=32 heads/chip); tp=1 has
-        # all 64 heads on one chip and must head-stream (HB=16).
-        hb = 0 if self.tp_factor > 1 else 16
-        # Indexer kernel knobs: QC=2 (q_chunk=64), KC=8 (k_chunk=256) capped to Skv/32 (the op requires
-        # KC <= Skv/32; inert at the model's DSA K). HB=0 keeps all heads resident; HB=16 streams (tp=1).
-        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=min(256, end_pos), head_group_size=hb)
-        # SP-sharded queries: each chip scores only its S/sp rows vs the full key cache, with a per-device
-        # causal offset so the mask is correct without computing the full glob logits on every chip. The op
-        # derives that offset itself from the mesh coordinate: with cluster_axis=sp_axis, chip r uses
-        # chunk_start = chunk_start_idx + r*Sq, and Sq = S/sp = seq_len here, so chunk_start = start_pos +
-        # sp_rank*seq_len. topk below then stays SP-sharded ([1,1,S/sp,k]) — fed straight to sparse_mla.
-        # indexer_score wants per-head weights [1, H_idx/tp, S/sp, 1]; wts is [1, 1, S/sp, H_idx/tp].
+        # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx), so no triu
+        # mask here. All H_idx heads are resident on-chip (wq_b replicated), so head_group_size=0 reads the
+        # key cache ONCE — but that needs L1 headroom, so k_chunk shrinks to 64 (vs 256 for a head-sharded
+        # slice). q_chunk=64 divides the per-chip query tile count (S/sp).
+        cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=min(64, end_pos), head_group_size=0)
+        # SP-sharded queries (rotation-safe): each chip scores its S/sp rows vs the full block-cyclic key
+        # cache, with a per-device causal offset from cluster_axis=sp_axis (chip r: chunk_start = start_pos
+        # + r*Sq, Sq=S/sp=seq_len). All H_idx heads on-chip -> the logit is COMPLETE (no partial-logit
+        # all-reduce). topk stays SP-sharded ([1,1,S/sp,k]) -> fed straight to sparse_mla.
+        # indexer_score wants per-head weights [1, H_idx, S/sp, 1]; wts is [1, 1, S/sp, H_idx].
         weights = ttnn.permute(wts, (0, 3, 2, 1))
         if self._blockcyclic:
             # _gather_index_kbuf slices this (user, layer) slot then gathers it to replicated full-T; the op
@@ -639,15 +635,9 @@ class TtIndexer:
                 program_config=cfg,
                 cluster_axis=self.sp_axis,
             )
-        # All-reduce(SUM) the partial logits over tp -> full head-summed logit before top-k. The op emits
-        # ROW_MAJOR; _tp_rs_ag (reduce_scatter+all_gather) runs in TILE, so round-trip the layout.
-        if self.tp_factor > 1:
-            # The op emits ROW_MAJOR; round-trip to TILE for the all-reduce. Passing RM straight to the
-            # CCL is correct but ~10 ms slower — ttnn's RM reduce_scatter/all_gather tilize-with-padding
-            # internally and add RM concats, costing more than this explicit ~6 ms tilize/untilize.
-            logits = ttnn.to_layout(logits, ttnn.TILE_LAYOUT)
-            logits = self._tp_rs_ag(logits)  # RS+AG over tp_axis == all-reduce SUM (reduce accumulates fp32)
-            logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
+        # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
+        # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
         # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
         # 0xFFFFFFFF sentinel that sparse_mla drops. topk_large_indices: 16 <= k <= 2048, multiple of 16.
         # index_topk is a multiple of 16, so k is too iff end_pos is — assert it at the caller contract
