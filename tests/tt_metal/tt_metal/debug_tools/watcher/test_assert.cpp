@@ -124,7 +124,11 @@ static void RunTest(
                     // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
                     // of a Quasar compute HW-fault test.
                     assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
-                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
+                    if (is_quasar) {
+                        assert_kernel_spec.hw_config = experimental::ComputeGen2Config{};
+                    } else {
+                        assert_kernel_spec.hw_config = experimental::ComputeGen1Config{};
+                    }
                     break;
                 }
                 default: TT_THROW("Unsupported processor class type for TENSIX");

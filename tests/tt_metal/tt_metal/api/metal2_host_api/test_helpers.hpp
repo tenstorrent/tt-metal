@@ -130,7 +130,7 @@ inline KernelSpec MakeMinimalGen2ComputeKernel(std::string name, uint32_t num_th
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = ComputeHardwareConfig{ComputeGen2Config{}},
+        .hw_config = ComputeGen2Config{},
     };
 }
 
@@ -140,7 +140,7 @@ inline KernelSpec MakeMinimalGen1ComputeKernel(std::string name, uint32_t num_th
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = ComputeHardwareConfig{ComputeGen1Config{}},
+        .hw_config = ComputeGen1Config{},
     };
 }
 

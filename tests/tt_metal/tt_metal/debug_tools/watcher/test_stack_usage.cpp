@@ -101,7 +101,7 @@ void RunOneTest(
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = experimental::ComputeGen2Config{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
