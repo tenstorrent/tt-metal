@@ -16,13 +16,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
-from models.tt_transformers.tt.common import (
-    calculate_prefill_warmup_seq_lens,
-    cap_seq_lens_to_max_prefill_chunk_size,
-    get_base_model_name,
-)
 
 
 class ModelArgs:
@@ -53,26 +47,19 @@ class ModelArgs:
         self.optimizations = None
         self.cache_hf = cache_hf
 
-        # MiniMax-M3 specific paths - use HF_MODEL environment variable (tt_transformers standard)
-        # Default paths are internal CI paths for automated testing
-        default_models = [
-            "/mnt/MLPerf/tt_dnn-models/MiniMaxAI/MiniMax-M3",  # Internal CI path
-        ]
-
-        # Use first available model as default, or HF_MODEL environment variable override
-        default_path = None
-        for model_path in default_models:
-            if os.path.exists(model_path):
-                default_path = model_path
-                break
-
-        if default_path is None:
-            default_path = default_models[-1]  # Fallback to first in list
-
-        # Use HF_MODEL environment variable (consistent with tt_transformers)
-        dir = os.getenv("HF_MODEL", default_path)
-        self.model_path = dir
-        self.weights_path = dir
+        # Weights come from the HF_MODEL environment variable (tt_transformers standard); there is
+        # no built-in default path. Dummy-weights mode needs no checkpoint, so a name-only
+        # placeholder is enough to satisfy the model-name check below.
+        hf_model = os.getenv("HF_MODEL")
+        if hf_model is None:
+            if not self.dummy_weights:
+                raise ValueError(
+                    "HF_MODEL is not set. Point it at a MiniMax-M3 checkpoint directory, "
+                    "or construct ModelArgs with dummy_weights=True."
+                )
+            hf_model = "MiniMax-M3"  # placeholder (dummy weights — no checkpoint load)
+        self.model_path = hf_model
+        self.weights_path = hf_model
 
         logger.info(
             f"Using MiniMax-M3 model from: {self.model_path}"
@@ -117,90 +104,6 @@ class ModelArgs:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # MiniMax-M3 doesn't use vision processor
-
-        self.disable_batched_prefill = True
-        self.capped_warmup_seq_len = 2048
-        self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
-
-    def get_warmup_prefill_supported_seq_lens(self):
-        DEFAULT_VALUE = self.capped_warmup_seq_len
-        # This dictionary is used to override the default ceil warmup prefill value
-        model_specific_ceil_warmup_lengths = {
-            # e.g. "MiniMax-M3": 4096
-        }
-
-        max_seq_len_to_warmup = model_specific_ceil_warmup_lengths.get(self.base_model_name, DEFAULT_VALUE)
-        if max_seq_len_to_warmup > self.capped_warmup_seq_len:
-            max_seq_len_to_warmup = self.capped_warmup_seq_len
-
-        to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
-            max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
-        )
-
-        to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
-
-        return to_warmup_seq_lens
-
-    def filter_warmup_seq_lens(self, to_warmup_seq_lens):
-        # TODO: Add more model-specific filtering here
-        # This filtering is based on the current PR's (https://github.com/tenstorrent/tt-metal/pull/33143) sequence lengths that are used for warmup
-
-        # TODO: https://github.com/tenstorrent/tt-metal/issues/33722
-        # (no model-specific warmup carve-out needed)
-
-        for seq_len in to_warmup_seq_lens:
-            if seq_len >= 64 * 1024:
-                to_warmup_seq_lens = to_warmup_seq_lens[: to_warmup_seq_lens.index(seq_len)]
-                break
-        return to_warmup_seq_lens
-
-    @property
-    def base_model_name(self):
-        return get_base_model_name(self.model_name)
-
-    def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
-        """
-        This function is used to determine if trace should be enabled for the prefill.
-        Tracing is used only for certain sequence lengths, because for bigger sequence lengths, op2op gaps are already small, so we don't need tracing.
-        # TODO: Support chunked prefill with tracing - https://github.com/tenstorrent/tt-metal/issues/32056
-        """
-
-        allowed_seq_lens = self.trace_prefill_supported_seq_lens
-
-        return (
-            prefill_seq_len in allowed_seq_lens
-            and prefill_seq_len <= self.max_prefill_chunk_size
-            and prefill_seq_len <= self.max_seq_len
-            and num_cached_tokens == 0
-        )
-
-    def get_trace_prefill_supported_seq_lens(self):
-        # No supported sequence lengths for MiniMax-M3 yet, see issue below
-        # TODO: https://github.com/tenstorrent/tt-metal/issues/32818
-        default_supported_seq_lens = {}
-
-        # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
-        model_specific_supported_seq_lens = {
-            "MiniMax-M3": {
-                "T3K": [128],
-                "BHGLX": [128],
-                "TG": [128],
-            }
-            # exmaple : #base_model_name : {device_name : [sequence_lengths]}
-        }
-
-        model_name = self.model_name
-        device_name = determine_device_name(self.mesh_device)
-
-        # If there is no entry for a model in model_specific_supported_seq_lens, use the entry in default_supported_seq_lens
-        result = model_specific_supported_seq_lens.get(model_name, {}).get(
-            device_name, default_supported_seq_lens.get(device_name)
-        )
-
-        if result is not None:
-            return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
-        else:
-            return []
 
     def encode_prompt(self, prompt_text, instruct=False, system_prompt_text=None):
         """
@@ -329,53 +232,3 @@ class ModelArgs:
         if layer_idx is None:
             return prefix
         return f"{prefix}layers.{layer_idx}."
-
-    @property
-    def max_grid_size(self):
-        """Return maximum grid size for the device"""
-        return ttnn.CoreGrid(y=8, x=8)  # Standard grid size
-
-
-def determine_device_name(mesh_device):
-    """
-    Determine device name based on number of devices and architecture.
-
-    Args:
-        mesh_device (MeshDevice): MeshDevice object
-
-    Returns:
-        str: Device name (e.g., "CPU", "N150", "P100", etc.)
-
-    Raises:
-        ValueError: If architecture or device count is unsupported
-    """
-    num_devices = mesh_device.get_num_devices() if mesh_device else 0
-    arch_name = ttnn.get_arch_name()
-    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None  # CoreCoord with (x, y)
-
-    if num_devices == 0:
-        return "CPU"
-
-    if is_blackhole():
-        dict_device_names = {
-            1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
-            2: "P300",
-            4: "P150x4",
-            8: "P150x8",
-            32: "BHGLX",
-        }
-    elif is_wormhole_b0():
-        dict_device_names = {
-            1: "N150",
-            2: "N300",
-            4: "N150x4",
-            8: "T3K",
-            32: "TG",
-        }
-    else:
-        raise ValueError(f"Unsupported architecture: {arch_name}")
-
-    if num_devices in dict_device_names:
-        return dict_device_names[num_devices]
-    else:
-        raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
