@@ -227,6 +227,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_pack_matmul_(0, 0);
+                // Drain the packer each iteration (STALLWAIT on PACK) so the profiler ZONE_END is
+                // captured after the packer completes. Without it the pack thread leaves TILE_LOOP
+                // with the packer still in flight and the ZONE_END wall-clock reads back as 0,
+                // producing negative measured cycles. Matches the L1_TO_L1 branch and the
+                // Blackhole/Wormhole reference (matmul_perf.cpp).
+                _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
         }
         else

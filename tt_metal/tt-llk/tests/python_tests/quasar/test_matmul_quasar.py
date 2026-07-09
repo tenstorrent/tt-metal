@@ -332,7 +332,7 @@ def test_matmul(
 
     if is_perf:
         configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
-        res_from_L1 = configuration.run(perf_report).result
+        configuration.run(perf_report)
         return
 
     # The shared source keys off PERF_RUN_TYPE. PerfConfig injects it per run type;

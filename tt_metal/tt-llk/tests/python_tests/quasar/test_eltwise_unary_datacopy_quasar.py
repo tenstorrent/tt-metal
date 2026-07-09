@@ -15,6 +15,7 @@ from helpers.llk_params import (
     DestAccumulation,
     DestSync,
     ImpliedMathFormat,
+    PerfRunType,
     UnpackerEngine,
     format_dict,
 )
@@ -25,6 +26,7 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -33,9 +35,11 @@ from helpers.test_variant_parameters import (
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    PERF_RUN_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -45,8 +49,18 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
+def datacopy_implied_math_formats(format, *, is_perf=False):
+    if is_perf:
+        return [ImpliedMathFormat.Yes]
+    if format.input_format.is_mx_format():
+        return [ImpliedMathFormat.Yes]
+    return [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+
+
 def generate_eltwise_unary_datacopy_combinations(
     formats_list: List[FormatConfig],
+    *,
+    is_perf=False,
 ):
     """
     Generate eltwise_unary_datacopy combinations.
@@ -61,8 +75,36 @@ def generate_eltwise_unary_datacopy_combinations(
         in_fmt = fmt.input_format
 
         dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
-        dest_sync_modes = (DestSync.Half, DestSync.Full)
+        dest_sync_modes = (
+            (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+        )
         data_copy_types = (DataCopyType.A2D, DataCopyType.B2D)
+
+        if is_perf:
+            tile_dims = (16, 16)
+            tile_shape = construct_tile_shape(tile_dims)
+            dimensions = [32, 32]
+            for dest_acc in dest_acc_modes:
+                if (
+                    in_fmt != DataFormat.Float32
+                    and fmt.output_format == DataFormat.Float32
+                    and dest_acc == DestAccumulation.No
+                ):
+                    continue
+                for dest_sync in dest_sync_modes:
+                    for data_copy_type in data_copy_types:
+                        combinations.append(
+                            (
+                                fmt,
+                                dest_acc,
+                                data_copy_type,
+                                runtime(dimensions),
+                                dest_sync,
+                                runtime(0),
+                                runtime(tile_dims),
+                            )
+                        )
+            continue
 
         for dest_acc in dest_acc_modes:
             if (
@@ -122,23 +164,30 @@ DATACOPY_FORMATS = input_output_formats(
 ALL_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
     DATACOPY_FORMATS
 )
+PERF_DATACOPY_COMBINATIONS = generate_eltwise_unary_datacopy_combinations(
+    DATACOPY_FORMATS,
+    is_perf=True,
+)
 
 
 @pytest.mark.quasar
 @parametrize(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices=ALL_DATACOPY_COMBINATIONS,
     # don't generate the No variant for them. combo[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: (
-        [ImpliedMathFormat.Yes]
-        if formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[
-            0
-        ].input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes, ImpliedMathFormat.No]
+    implied_math_format=lambda formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices: datacopy_implied_math_formats(
+        formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0]
     ),
+    run_types=[[PerfRunType.L1_TO_L1]],
+    loop_factor=[1],
 )
 def test_eltwise_unary_datacopy_quasar(
     formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices,
     implied_math_format,
+    run_types,
+    loop_factor,
+    *,
+    is_perf=False,
+    perf_report=None,
 ):
     (
         formats,
@@ -181,10 +230,13 @@ def test_eltwise_unary_datacopy_quasar(
         tile_shape=tile_shape,
     )
 
-    configuration = TestConfig(
-        "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/eltwise_unary_datacopy_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(data_copy_type),
             UNPACKER_ENGINE_SEL(
@@ -194,15 +246,16 @@ def test_eltwise_unary_datacopy_quasar(
             ),
             DEST_SYNC(dest_sync_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(tile_shape.face_r_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
             DEST_INDEX(dest_index),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -216,15 +269,26 @@ def test_eltwise_unary_datacopy_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        unpack_to_dest=False,
-        dest_acc=dest_acc,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        disable_format_inference=(
+        "unpack_to_dest": False,
+        "dest_acc": dest_acc,
+        "disable_format_inference": (
             implied_math_format == ImpliedMathFormat.Yes
             and formats.input_format.is_mx_format()
         ),
-    )
+    }
 
+    if is_perf:
+        configuration = PerfConfig(run_types=run_types, **test_config_kwargs)
+        configuration.run(perf_report)
+        return
+
+    configuration = TestConfig(
+        **{
+            **test_config_kwargs,
+            "templates": test_config_kwargs["templates"]
+            + [PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
+        },
+    )
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

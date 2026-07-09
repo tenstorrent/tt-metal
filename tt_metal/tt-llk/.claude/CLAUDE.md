@@ -42,6 +42,7 @@ Execution model: RISC-V cores push instructions to corresponding coprocessor thr
 | Running tests | `run-test` (`.claude/skills/run-test/SKILL.md`) | Dispatches llk-test-runner with correct scenario flags |
 | Debugging kernel errors | `debug-kernel` (`.claude/skills/debug-kernel/SKILL.md`) | Dispatches llk-debugger with inferred arch/kernel type |
 | Porting kernels between architectures | `port-kernel` (`.claude/skills/port-kernel/SKILL.md`) | Launches source + target sages, reads test harness |
+| Adding Quasar perf tests | `add-quasar-perf-test` (`.claude/skills/add-quasar-perf-test/SKILL.md`) | Reuses correctness tests, wires `PerfConfig`, and adds `PerfRunType` source paths |
 
 Trigger examples for `arch-lookup`:
 - "How does SFPMAD work?", "What is BroadcastType?", "How does unpack handle Float16?"
