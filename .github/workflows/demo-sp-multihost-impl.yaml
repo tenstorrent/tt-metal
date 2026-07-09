@@ -231,13 +231,17 @@ jobs:
             ' || true
 
           run_cluster_validation() {
+            local attempt="$1"
+            local output_path="/tmp/cluster_validation_logs/run_${GITHUB_RUN_ID}_attempt_${attempt}"
+            mkdir -p "$output_path"
             mpirun --pernode --tag-output \
               /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
               --send-traffic \
               --hard-fail \
               --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
               --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-              --num-iterations 5
+              --num-iterations 5 \
+              --output-path "$output_path"
           }
 
           verify_chip_enumeration() {
@@ -246,6 +250,23 @@ jobs:
               count=$(jq ".device_info | length" <<< "$snapshot")
               echo "$(hostname): tt_devices=${count}"
               test "${count}" -ge 32
+            '
+          }
+
+          # ARC can enumerate in tt-smi before firmware is ready for MetalContext init.
+          warm_up_devices() {
+            mpirun --pernode --tag-output bash -lc '
+              for i in 1 2 3 4 5 6; do
+                snapshot=$(tt-smi --snapshot_no_tty --snapshot 2>/dev/null) || snapshot=""
+                count=$(jq ".device_info | length" <<< "${snapshot:-{}}" 2>/dev/null || echo 0)
+                if [ "${count}" -ge 32 ] && jq -e ".device_info[0].board_info" <<< "${snapshot}" >/dev/null 2>&1; then
+                  echo "$(hostname): device warm-up OK on attempt ${i}"
+                  exit 0
+                fi
+                echo "$(hostname): device warm-up attempt ${i}/6 not ready (tt_devices=${count})"
+                sleep 10
+              done
+              exit 1
             '
           }
 
@@ -260,6 +281,9 @@ jobs:
             else
               echo "WARNING: tt-smi -r failed"
             fi
+
+            echo "--- Sleeping 15s between PCIe and Galaxy reset ---"
+            sleep 15
 
             echo "--- Step 2/2: tt-smi -glx_reset (Galaxy tray reset) ---"
             if mpirun --pernode --tag-output tt-smi -glx_reset; then
@@ -290,8 +314,8 @@ jobs:
             fi
 
             if [ "$reset_success" = true ]; then
-              echo "--- Sleeping 15s after reset to allow links/services to settle ---"
-              sleep 15
+              echo "--- Sleeping 60s after reset for ARC/firmware to settle ---"
+              sleep 60
 
               echo "--- Verifying chip enumeration before cluster validation ---"
               if ! verify_chip_enumeration; then
@@ -301,14 +325,22 @@ jobs:
             fi
 
             if [ "$reset_success" = true ]; then
+              echo "--- Warming up devices before cluster validation ---"
+              if ! warm_up_devices; then
+                echo "WARNING: Device warm-up failed on attempt $attempt"
+                reset_success=false
+              fi
+            fi
+
+            if [ "$reset_success" = true ]; then
               echo "--- Running cluster validation ---"
-              if run_cluster_validation; then
+              if run_cluster_validation "$attempt"; then
                 validation_success=true
               else
                 echo "WARNING: Validation failed on attempt $attempt"
               fi
             else
-              echo "WARNING: Skipping validation because reset/enumeration failed on attempt $attempt"
+              echo "WARNING: Skipping validation because reset/enumeration/warm-up failed on attempt $attempt"
             fi
 
             if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
@@ -317,8 +349,8 @@ jobs:
             fi
 
             if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
-              echo "Sleeping 30s before retry..."
-              sleep 30
+              echo "Sleeping 60s before retry..."
+              sleep 60
             fi
           done
 
