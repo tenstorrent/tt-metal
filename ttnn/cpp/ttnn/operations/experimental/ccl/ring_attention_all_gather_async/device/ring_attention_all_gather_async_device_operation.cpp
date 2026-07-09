@@ -203,6 +203,68 @@ ring_attention_all_gather_async_build_operation_args(
             .input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }
 
+std::vector<tt::tt_metal::DynamicRuntimeArg> RingAttentionAllGatherAsyncDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Re-apply the hash-excluded out_ready GlobalSemaphore L1 addresses to the cached program on every
+    // dispatch (the non-Buffer analog of the BufferBinding fast path). RingAttentionAllGatherAsyncParams
+    // excludes `semaphore` from the program-cache key (see attribute_values), so a cache hit with a
+    // different / reallocated GlobalSemaphore set would otherwise reuse the address baked at the first
+    // miss. The factory bakes these same four slots on the cache-miss build; both paths use the shared
+    // ring_attention_all_gather_async_dynamic constants so the slot layout cannot drift. The addresses
+    // are mesh-uniform, so they are coord-independent (mesh_dispatch_coordinate is unused) and this
+    // per-coord call re-emits an identical arg set for each program in the workload.
+    namespace dyn = ring_attention_all_gather_async_dynamic;
+
+    const auto& semaphore = operation_attributes.semaphore;
+    // The factory dereferences semaphore.at(kForwardSemaphoreIdx / kBackwardSemaphoreIdx) unconditionally
+    // on the cache-miss build, so a cache hit implies both are present; guard defensively regardless.
+    const uint32_t max_semaphore_idx =
+        dyn::kForwardSemaphoreIdx > dyn::kBackwardSemaphoreIdx ? dyn::kForwardSemaphoreIdx : dyn::kBackwardSemaphoreIdx;
+    if (semaphore.size() <= max_semaphore_idx) {
+        return {};
+    }
+    const auto forward_sem_addr = static_cast<uint32_t>(semaphore[dyn::kForwardSemaphoreIdx].address());
+    const auto backward_sem_addr = static_cast<uint32_t>(semaphore[dyn::kBackwardSemaphoreIdx].address());
+
+    // Re-derive the sender worker cores exactly as build_ring_attention_all_gather_program_descriptor()
+    // does: it calls ring_attention_all_gather_async_multi_core_with_workers_helper without a
+    // core_grid_offset or core_allocation_strategy, so choose_worker_cores runs with CoreCoord(0, 0) and
+    // ROW_MAJOR. All inputs are hashed structural params (num_links, sub_device_id) or the device, so the
+    // core set is stable across cache hits (no freeze hazard).
+    auto* mesh_device = tensor_args.input_tensor[0].device();
+    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        operation_attributes.num_links,
+        dyn::kNumSendersPerLink,
+        mesh_device,
+        operation_attributes.sub_device_id,
+        CoreCoord(0, 0),
+        std::nullopt,
+        ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(static_cast<std::size_t>(operation_attributes.num_links) * dyn::kNumSendersPerLink * 2);
+    for (uint32_t link = 0; link < operation_attributes.num_links; ++link) {
+        // Mirror the factory's per-link core assignment: pair slot 1 == forward sender, slot 0 == backward.
+        const CoreCoord forward_core = sender_worker_cores[(link * dyn::kNumSendersPerLink) + 1];
+        const CoreCoord backward_core = sender_worker_cores[link * dyn::kNumSendersPerLink];
+
+        // Forward reader + writer bake semaphore[kForwardSemaphoreIdx].
+        dynamic_args.push_back(
+            {dyn::kReaderForwardKernelIdx, forward_core, dyn::kReaderSemaphoreArg, forward_sem_addr});
+        dynamic_args.push_back(
+            {dyn::kWriterForwardKernelIdx, forward_core, dyn::kWriterSemaphoreArg, forward_sem_addr});
+        // Backward reader + writer bake semaphore[kBackwardSemaphoreIdx].
+        dynamic_args.push_back(
+            {dyn::kReaderBackwardKernelIdx, backward_core, dyn::kReaderSemaphoreArg, backward_sem_addr});
+        dynamic_args.push_back(
+            {dyn::kWriterBackwardKernelIdx, backward_core, dyn::kWriterSemaphoreArg, backward_sem_addr});
+    }
+    return dynamic_args;
+}
+
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {

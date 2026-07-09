@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <optional>
 #include <tuple>
 #include <vector>
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
@@ -33,6 +35,18 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+
+    // The out_ready GlobalSemaphore addresses are excluded from the program-cache hash
+    // (RingAttentionAllGatherAsyncParams::attribute_values omits `semaphore`), so they are DYNAMIC:
+    // the factory bakes them for the cache-miss build and this method re-applies them to the cached
+    // program on every dispatch, so a cache hit with a different / reallocated semaphore set cannot
+    // reuse a frozen address. Slot layout mirrors the factory via the shared
+    // ring_attention_all_gather_async_dynamic constants.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>
