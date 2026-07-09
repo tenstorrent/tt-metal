@@ -30,9 +30,8 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
 )
 
 
-def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int, grid: ttnn.CoreCoord):
     """Program configs for the gate / up / down matmuls on Blackhole."""
-    grid = ttnn.CoreCoord(11, 9)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
@@ -67,9 +66,8 @@ def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int
     return gate, up, down
 
 
-def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int, grid: ttnn.CoreCoord):
     """Program configs for the gate / up / down matmuls on Wormhole."""
-    grid = ttnn.CoreCoord(8, 7)
     gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=4,
@@ -420,9 +418,15 @@ class TtSharedExpert(LightweightModule):
         ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
         # ===== Inlined shared expert FFN — height-sharded sub-device matmuls =====
-        # Available compute grid: BH = 11x9, WH = 8x7.
+        # The matmul grid is anchored at the sub-device's start corner, so it must fit inside
+        # the confined region. Derive it from the sub-device bounding box (e.g. 10x10 when
+        # dispatch owns one edge column); fall back to the full worker grid when unconfined.
         TILE = 32
-        max_cores = 11 * 9 if is_blackhole() else 8 * 7
+        if self.subdevice_cores is not None:
+            grid = self.subdevice_cores.bounding_box().grid_size()
+        else:
+            grid = ttnn.CoreCoord(11, 9) if is_blackhole() else ttnn.CoreCoord(8, 7)
+        max_cores = grid.x * grid.y
 
         # Pick the largest divisor of M_tiles that fits in the sub-device — gives
         # max parallelism with no padding waste.
@@ -436,11 +440,11 @@ class TtSharedExpert(LightweightModule):
         down_n_tiles = self.down_proj.padded_shape[-1] // TILE
         if is_blackhole():
             gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles
+                per_core_M, gate_n_tiles, down_n_tiles, grid
             )
         else:
             gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
-                per_core_M, gate_n_tiles, down_n_tiles
+                per_core_M, gate_n_tiles, down_n_tiles, grid
             )
 
         # 1) Compute gate and up projections

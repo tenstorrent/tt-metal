@@ -648,10 +648,12 @@ class TtMoe(LightweightModule):
 
         # Env experiment (no overlap, dispatch-on-edge): the shared expert just ran on the
         # full grid with no manager loaded. Force a full device sync so the shared expert is
-        # completely finished before dispatch starts (truly sequential, no on-chip overlap),
-        # then load the manager so dispatch is confined to its edge sub-device.
-        if self._dispatch_edge_no_overlap:
+        # completely finished before dispatch starts (truly sequential, no on-chip overlap).
+        if self._dispatch_edge_no_overlap or self._dispatch_core_grid_override:
             ttnn.synchronize_device(self.mesh_device)
+        # edge_no_overlap confines dispatch to a sub-device; load its manager now. The
+        # core-grid override path passes cores to the op directly and has no manager.
+        if self._dispatch_edge_no_overlap:
             self.mesh_device.load_sub_device_manager(self.sd_manager_id)
 
         # ========================================
@@ -667,6 +669,11 @@ class TtMoe(LightweightModule):
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
         )
+        # Dispatch-on-edge experiments: full device barrier right after dispatch so none of its
+        # fabric/NoC traffic is still in flight when downstream ops (and the next layer's ring
+        # SDPA) run. Pairs with the pre-dispatch sync above to fully quiesce dispatch.
+        if self._dispatch_edge_no_overlap or self._dispatch_core_grid_override:
+            ttnn.synchronize_device(self.mesh_device)
         if self.overlap_shared_expert_with_dispatch or self._dispatch_edge_no_overlap:
             self.mesh_device.clear_loaded_sub_device_manager()
         # padding_config was shared with both the gate and dispatch; free it now that

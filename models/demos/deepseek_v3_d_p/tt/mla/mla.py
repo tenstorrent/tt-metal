@@ -1076,7 +1076,9 @@ class ttMLA:
     def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
         # Single-shot prefill: materialize V before causal ring SDPA.
         self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
+        ttnn.synchronize_device(self.mesh_device)
         tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
+        ttnn.synchronize_device(self.mesh_device)
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -1102,6 +1104,7 @@ class ttMLA:
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
+        ttnn.synchronize_device(self.mesh_device)
         return attn_out
 
     def _cache_batch_idx(self, cache_user_id: int, cache_layer_idx: int) -> int:
