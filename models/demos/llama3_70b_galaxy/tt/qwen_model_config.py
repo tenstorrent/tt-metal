@@ -1085,9 +1085,8 @@ class TtQwenModelArgs(TtModelArgs):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            # Ring matmul needs K and N divisible by RING_SIZE (24). Logical K=1280 is not;
-            # use dim_padded_24_cores//4 (=1536) to match SHARDED_ATTN_INPUT_RING_MEMCFG.
-            self.qkv_k_ring = self.dim_padded_24_cores // 4
+            # Match main: logical per-device K = dim // 4 (=1280), ring N = 12288 // 8 (=1536).
+            self.qkv_k_ring = self.dim // 4
             qkv_shape_ring = (self.qkv_k_ring, self.qkv_n_ring)
             self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=qkv_shape_ring[0],
@@ -1133,11 +1132,10 @@ class TtQwenModelArgs(TtModelArgs):
                     ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
                 ]
             )
-            # all_reduce_create_qkv_heads requires buffer_volume >= output_shard_volume * ring_size.
-            # With output shard (32x128) and ring_size=10, minimum is 40960 elements -> width 1280.
-            rs_interim_shard_w = 1280
+            # Match main width (512). The Blackhole no-prefetch path re-widens this to 1280 in TT_CCL
+            # (interim-shard guard) where the all_reduce_create_qkv_heads buffer minimum requires it.
             self.model_config["RS_CREATE_HEADS_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, rs_interim_shard_w),
+                shape=(32, 512),
                 core_grid=RS_CREATE_HEADS_PACKET_WORKER_CRS,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1506,7 +1504,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, rs_interim_shard_w),
+                shape=(32, 512),
                 core_grid=PACKET_WORKER_CRS,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

@@ -186,29 +186,14 @@ class TtLlamaAttention(LightweightModule):
                     ttnn.ShardOrientation.ROW_MAJOR,
                 ),
             )
-        self._qkv_n_ring = getattr(configuration, "qkv_n_ring", self._qkv_n_local)
-        cols = int(configuration.cluster_shape[1])
-        self._k_local = self.hidden_size // cols
-        self._k_ring = getattr(configuration, "qkv_k_ring", self._k_local)
-        qkv_list_for_tt = qkv_list
-        if self.is_qwen and self._qkv_n_ring > self._qkv_n_local:
-            qkv_list_for_tt = []
-            for qkv in qkv_list:
-                if qkv.shape[-1] < self._qkv_n_ring:
-                    qkv = torch.nn.functional.pad(qkv, (0, self._qkv_n_ring - qkv.shape[-1]))
-                qkv_list_for_tt.append(qkv)
-        qkv_cat_col = torch.cat(qkv_list_for_tt, dim=-1).unsqueeze(0).unsqueeze(0)
-        qkv_cat = qkv_cat_col
-        # Pad global K (dim=5120 -> 6144) for ring matmul only; per-device k_ring=1536.
-        if self.is_qwen and self._k_ring * int(configuration.cluster_shape[1]) > self.hidden_size:
-            k_pad = self._k_ring * int(configuration.cluster_shape[1]) - self.hidden_size
-            qkv_cat = torch.nn.functional.pad(qkv_cat_col, (0, 0, 0, k_pad))
+        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        # Ring: per-device [k_ring, qkv_n_ring] e.g. [1536, 1536] (K/N padded for RING_SIZE=24).
-        wqkv_cache_tag = (
-            "wqkv_sharded_2d_prefetcher_kring1536_nring1536" if self.is_qwen else "wqkv_sharded_2d_prefetcher"
-        )
-        wqkv_dram_cache_tag = "wqkv_sharded_2d_dram_kring1536_nring1536" if self.is_qwen else "wqkv_sharded_2d_dram"
+        # Ring stuff
+        # Llama3: 9216, 12288
+        # Qwen3: 6144, 12288
+
+        # Llama3: [1, 1, 8192, 10240] -> [2304, 1536]
+        # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
@@ -216,7 +201,7 @@ class TtLlamaAttention(LightweightModule):
             device=self.mesh_device,
             memory_config=self.model_config["SHARDED_QKV_RING_MEMCFG"],
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape),
-            cache_file_name=cache_name(wqkv_cache_tag),
+            cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
         self.wqkv_interleaved = ttnn.as_tensor(
             qkv_cat,
@@ -225,67 +210,13 @@ class TtLlamaAttention(LightweightModule):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape),
-            cache_file_name=cache_name(wqkv_dram_cache_tag),
+            cache_file_name=cache_name("wqkv_sharded_2d_dram"),  ## TODO: Fix caching
         )
-        # DRAM interleaved weights with logical k_local=1280 (no global K-pad) for dram QKV matmul.
-        self.wqkv_col = self.wqkv_interleaved
-        self.wqkv_dram_shard = self.wqkv_col
-        if self.is_qwen:
-            self.wqkv_col = ttnn.as_tensor(
-                qkv_cat_col,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape
-                ),
-                cache_file_name=cache_name("wqkv_sharded_2d_dram_k1280_nring1536_interleaved"),
-            )
-            self.wqkv_dram_shard = ttnn.as_tensor(
-                qkv_cat_col,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=configuration.create_dram_sharded_mem_config(self._k_local, self._qkv_n_ring),
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape
-                ),
-                cache_file_name=cache_name("wqkv_sharded_2d_dram_k1280_nring1536_dram_shard"),
-            )
-            # Per-device matmul: logical N=qkv_n_local (1280), interleaved DRAM (no DRAM-sharded
-            # program config — that hangs on BH no-prefetch, job 11751). Mirrors MLP w2 path.
-            qkv_cat_per_device = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-            self.wqkv_per_device = ttnn.as_tensor(
-                qkv_cat_per_device,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape
-                ),
-                cache_file_name=cache_name("wqkv_sharded_2d_dram_k1280_n1280_per_device_interleaved"),
-            )
-        elif not configuration.use_prefetcher:
-            # Blackhole no-prefetch (non-qwen, e.g. Llama-70B): the decode/prefill QKV matmul uses a
-            # per-device interleaved-DRAM weight (qkv_cat over the device group), summed across the
-            # mesh columns on device afterwards. Same construction as the qwen path but with this
-            # model's native qkv dims (no ring K/N padding).
-            qkv_cat_per_device = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-            self.wqkv_per_device = ttnn.as_tensor(
-                qkv_cat_per_device,
-                dtype=self.dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(3, 2), mesh_shape=configuration.cluster_shape
-                ),
-                cache_file_name=cache_name("wqkv_sharded_2d_dram_per_device_interleaved"),
-            )
-        else:
-            self.wqkv_per_device = None
+        # Blackhole no-prefetch per-device QKV weight: the interleaved-DRAM weight over the device
+        # group (native qkv dims, no ring K/N padding), summed across mesh columns on device after
+        # the matmul. Same tensor as wqkv_interleaved; Wormhole/prefetcher uses the ring self.wqkv
+        # above and never touches this.
+        self.wqkv_per_device = None if configuration.use_prefetcher else self.wqkv_interleaved
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
@@ -447,21 +378,6 @@ class TtLlamaAttention(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.wo)
         self.tt_ccl = tt_ccl
 
-    def _pad_activation_k_for_ring_qkv(self, x_tt):
-        """Pad activation K to k_ring (1536) so ring matmul K is divisible by RING_SIZE (24)."""
-        try:
-            k_act = int(x_tt.shape[-1])
-        except Exception:
-            k_act = self._k_local
-        if k_act >= self._k_ring:
-            return x_tt
-        pad_w = self._k_ring - k_act
-        return ttnn.pad(
-            x_tt,
-            padding=[(0, 0), (0, 0), (0, 0), (0, pad_w)],
-            value=0.0,
-        )
-
     def _apply_decode_qk_norm(self, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD):
         if self.model_config.get("USE_PREFETCHER", False):
             return self._apply_decode_qk_norm_sharded(q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD)
@@ -611,9 +527,8 @@ class TtLlamaAttention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
         if self.model_config["USE_PREFETCHER"]:
-            x_qkv = self._pad_activation_k_for_ring_qkv(x)
-            xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, k_ring]
-                x_qkv,
+            xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
+                x,
                 self.wqkv,
                 program_config=self.model_config["XQKV_DECODE_RING_PROGCFG"],
                 memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
@@ -622,8 +537,6 @@ class TtLlamaAttention(LightweightModule):
                 dtype=ttnn.bfloat16,
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id,
             )
-            if x_qkv is not x:
-                ttnn.deallocate(x_qkv)
         else:
             # No-prefetch (Blackhole) per-device QKV: column-sharded activation @ interleaved DRAM
             # wqkv [k_local, qkv_n_local], auto program config + interleaved output (a DRAM-sharded

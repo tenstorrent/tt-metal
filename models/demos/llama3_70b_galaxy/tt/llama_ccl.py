@@ -1202,8 +1202,9 @@ class TT_CCL:
             self.persistent_buffers[B * seqlen].get(buffer_key, None) if B * seqlen in self.persistent_buffers else None
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
-        # Cap to the links physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
-        num_links = min(4, self.model_config["GALAXY_NUM_LINKS"])
+        # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
+        # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
+        num_links = 4 if self.use_prefetcher else min(4, self.model_config["GALAXY_NUM_LINKS"])
         # Seeing better performance for longer sequence lengths with num_workers_per_link = 4
         if seqlen > 128:
             num_workers_per_link = 4
@@ -1375,8 +1376,9 @@ class TT_CCL:
         )
         # persistent_buffers = None
 
-        # Cap to the links physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
-        num_links = min(4, self.model_config["GALAXY_NUM_LINKS"])
+        # Wormhole / prefetcher path keeps main's fixed link count (4); Blackhole caps to the links
+        # physically available on the mesh (Blackhole Galaxy exposes 2, not 4).
+        num_links = 4 if self.use_prefetcher else min(4, self.model_config["GALAXY_NUM_LINKS"])
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1433,7 +1435,8 @@ class TT_CCL:
             core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 
         div_axis = core_grid.x if force_transpose else core_grid.y
-        max_links = self.model_config["GALAXY_NUM_LINKS"]
+        # Wormhole / prefetcher path is unconstrained (matches main); Blackhole caps to GALAXY_NUM_LINKS.
+        max_links = 4 if self.use_prefetcher else self.model_config["GALAXY_NUM_LINKS"]
         num_links = 1
         for nl in [4, 3, 2, 1]:
             if nl <= max_links and div_axis % nl == 0:
@@ -1623,7 +1626,6 @@ def tt_distributed_rmsnorm(
     mesh_device,
     compute_kernel_config,
     tt_ccl=None,
-    output_dtype=None,
 ):
     use_2d_grid = False
 
@@ -1637,8 +1639,7 @@ def tt_distributed_rmsnorm(
     )
     tt_stats.deallocate(True)
 
-    # Run distributed rmsnorm part 2. output_dtype lets the caller keep the norm output bf8 even when
-    # the residual input is bf16 (BH no-prefetch), so downstream matmul activations stay small in L1.
+    # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
         inp,
         tt_stats_gathered,
@@ -1646,7 +1647,6 @@ def tt_distributed_rmsnorm(
         weight=gamma,
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
-        dtype=output_dtype,
     )
     # tt_stats_gathered.deallocate(True)
     # inp.deallocate(True)
@@ -1668,11 +1668,7 @@ def tt_sharded_distributed_rmsnorm(
     use_noc1_only=False,
     ccl_topology=None,
 ):
-    # Keep a fixed decode norm boundary contract from model config.
-    if inp.memory_config() != ln_sharded_input_memcfg:
-        inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
-    if res is not None and res.memory_config() != ln_sharded_input_memcfg:
-        res = ttnn.to_memory_config(res, memory_config=ln_sharded_input_memcfg)
+    # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
     cluster_axis = 1
