@@ -18,7 +18,7 @@
 //
 // Source addresses are specified as (cb_id, offset) rather than absolute L1
 // addresses so that program-cache reuse works correctly after
-// UpdateDynamicDataflowBufferAddress updates the backing buffer.
+// UpdateDynamicCircularBufferAddress updates the backing buffer.
 
 void kernel_main() {
     constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
