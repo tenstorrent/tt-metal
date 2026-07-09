@@ -148,7 +148,7 @@ FORCE_INLINE
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
     // NOC_SPARSE_MCAST_WRITE (enum value 8) sits above the contiguous standard range. Handling it as
     // an early, unlikely branch (compiled out entirely when the feature is disabled) keeps the standard
-    // switch below bounded to the dense 0..NOC_SEND_TYPE_LAST range, so its jump table is unchanged.
+    // switch below bounded to the dense 0..NOC_UNICAST_SCATTER_WRITE range, so its jump table is unchanged.
     if constexpr (tt::tt_fabric::enable_sparse_mcast_write) {
         if (noc_send_type == tt::tt_fabric::NocSendType::NOC_SPARSE_MCAST_WRITE) [[unlikely]] {
             // chip_idx/write_idx select this chip's page group; the router advances both before
@@ -170,8 +170,9 @@ FORCE_INLINE
             return;
         }
     }
-    // Standard local-write types are 0..NOC_SEND_TYPE_LAST; nothing above that range reaches this point.
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
+    // Standard local-write types are 0..NOC_UNICAST_SCATTER_WRITE; nothing above that range reaches this
+    // point (sparse returned above, and the gap types between it and sparse never hit the local-write path).
+    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {

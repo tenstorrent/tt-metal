@@ -107,12 +107,12 @@ enum NocSendType : uint8_t {
     // per-chip destination address (1D only). Unlike scatter (multiple addresses on one chip),
     // each address here belongs to a different chip along the sparse-multicast line.
     NOC_SPARSE_MCAST_WRITE = 8,
-    // Last type valid on the standard local-write path; the validate/is_valid checks bound by this.
-    // NOC_SPARSE_MCAST_WRITE sits above it deliberately: it is valid ONLY on 1D LowLatency headers,
-    // enforced explicitly in is_valid rather than by this range.
-    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE,
-    // Highest defined type; bounds the execute reachability guard and telemetry iteration.
-    NOC_SEND_TYPE_MAX = NOC_SPARSE_MCAST_WRITE
+    // Highest defined send type. Bounds telemetry iteration and is_valid on LowLatency headers (the
+    // only header type allowed to carry NOC_SPARSE_MCAST_WRITE). The dense standard local-write range
+    // still ends at NOC_UNICAST_SCATTER_WRITE; the reachability guard and non-LowLatency validation
+    // reference that directly, since the gap types (multicast/read) between it and sparse never reach
+    // those paths.
+    NOC_SEND_TYPE_LAST = NOC_SPARSE_MCAST_WRITE
 };
 // Compile-time gate for chip-sparse-multicast handling in the per-packet router/transmission hot
 // paths. When enabled, the sparse path is kept off the common path: WRITE_AND_FORWARD resolves the
