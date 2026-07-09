@@ -1376,9 +1376,12 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BinaryNgDeviceOperation::get_dynami
     constexpr uint32_t kComputeKernelIdx = 2;
 
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    // Reserve hint only: per core we re-emit reader + writer + compute args; each kernel has at most
-    // ~a dozen runtime args, so 40/core is a conservative upper bound that avoids reallocation.
-    dynamic_args.reserve(per_core.cores.size() * 40);
+    // Reserve the exact number of args we're about to emit (reader + writer + compute per core).
+    size_t total_args = 0;
+    for (size_t i = 0; i < per_core.cores.size(); ++i) {
+        total_args += per_core.reader[i].size() + per_core.writer[i].size() + per_core.compute[i].size();
+    }
+    dynamic_args.reserve(total_args);
 
     auto emit = [&](uint32_t kernel_idx,
                     const CoreCoord& core,
