@@ -860,8 +860,9 @@ class TTVibeVoiceGenerator:
         # prefill + all generated tokens; negative cache is reset per speech segment
         # (reused buffer), so it only needs to span one segment ≤ max_steps.
         if self._ref_lm is None:
-            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
-            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
+            _kv_dtype = ttnn.float32 if os.environ.get("VV_FP32_KV") == "1" else ttnn.bfloat16
+            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8, dtype=_kv_dtype)
+            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8, dtype=_kv_dtype)
         else:
             kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
             kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
