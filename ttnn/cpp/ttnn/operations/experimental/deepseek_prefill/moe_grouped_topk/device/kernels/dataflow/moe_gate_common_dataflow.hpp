@@ -60,7 +60,6 @@ FORCE_INLINE void generate_reduce_scalar(
     uint32_t face_3_write_addr = write_addr + 2 * score_tile::face_size_bytes;
     uint32_t face_4_write_addr = write_addr + 3 * score_tile::face_size_bytes;
     noc.write_zeros_l1_barrier();
-    // Device 2.0 migration: legacy primitive retained: intra-core L1->L1 loopback copy (no clean D2 form)
     noc_async_read(get_noc_addr(write_addr), face_3_write_addr, score_tile::face_line_bytes);
     noc_async_read(
         get_noc_addr(write_addr + score_tile::face_size_bytes), face_4_write_addr, score_tile::face_line_bytes);
