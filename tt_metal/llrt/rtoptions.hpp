@@ -214,6 +214,7 @@ class RunTimeOptions {
     bool profiler_trace_tracking = false;
     bool profiler_cpp_post_process = false;
     bool profiler_sum = false;
+    bool profiler_accumulate = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     uint32_t profiler_perf_counter_mode = 0;
@@ -622,6 +623,7 @@ public:
     bool get_profiler_mid_run_dump() const { return profiler_mid_run_dump; }
     bool get_profiler_cpp_post_process() const { return profiler_cpp_post_process; }
     bool get_profiler_sum() const { return profiler_sum; }
+    bool get_profiler_accumulate() const { return profiler_accumulate; }
     std::optional<uint32_t> get_profiler_program_support_count() const { return profiler_program_support_count; }
     void set_profiler_program_support_count(uint32_t profiler_program_support_count) {
         this->profiler_program_support_count = profiler_program_support_count;
