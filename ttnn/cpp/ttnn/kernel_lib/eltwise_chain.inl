@@ -488,7 +488,15 @@ struct InputStream {
         }
     }
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::BulkDrain>) {
+        if constexpr (is_one_of_v<Policy, InputLifecycle::BulkDrain>) {
+            // BulkDrain pops one tile per iter with no per-tile wait, so it must wait for the WHOLE
+            // walk (Ht*Wt, + TileOffset base) upfront — NOT window<IndexMode>, which is 1 for the
+            // Scalar index BulkDrain is restricted to. Waiting 1 would silently rely on the producer
+            // having already staged every tile.
+            DataflowBuffer(Cb).wait_front(Ht * Wt + tile_base_value<Offset>(tile_base));
+        } else if constexpr (is_one_of_v<Policy, InputLifecycle::Bulk, InputLifecycle::HeldBulk>) {
+            // Bulk stages its window once and pops at end; HeldBulk holds it — a held Scalar operand
+            // legitimately waits window<Scalar>=1 (see the Bulk+Scalar held-operand contract).
             DataflowBuffer(Cb).wait_front(window_count(Ht, Wt));
         }
     }
@@ -847,7 +855,10 @@ struct BinaryFpu : BinaryFpuTag {
     // B side is skipped; otherwise each side delegates to its own InputStream.
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
         if constexpr (same_dfb) {
-            if constexpr (is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk, InputLifecycle::BulkDrain>) {
+            if constexpr (is_one_of_v<APolicy, InputLifecycle::BulkDrain>) {
+                // See InputStream::wait_upfront — BulkDrain waits the whole walk, not window<Scalar>.
+                a.wait_n(Ht * Wt + same_dfb_base_max());
+            } else if constexpr (is_one_of_v<APolicy, InputLifecycle::Bulk, InputLifecycle::HeldBulk>) {
                 a.wait_n(detail::window<AIndex>(Ht, Wt) + same_dfb_base_max());
             }
         } else {

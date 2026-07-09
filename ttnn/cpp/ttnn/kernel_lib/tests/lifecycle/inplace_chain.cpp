@@ -9,7 +9,7 @@
 // occupy cb_x. Per-iter order is wait->read->POP then RESERVE->pack->push, so in-place is safe ONLY
 // when the output reserves incrementally (per-tile/chunk) AND the input pops incrementally. The
 // `life` cases are exactly the safe pairs; each must pass (no-hang + correct values):
-//   0  BulkDrain + Streaming (Scalar)   wait 1 upfront (Stage 0 pre-filled cb_x), then pop1/reserve1/push1 per tile
+//   0  BulkDrain + Streaming (Scalar)   wait all n upfront, then pop1/reserve1/push1 per tile
 //   1  Chunked   + Chunked   (Block)    wait/pop K, then reserve/push K, per chunk
 //   2  Streaming + Streaming (Scalar)   wait1/pop1, then reserve1/push1, per tile
 // Any upfront-reserve output (Bulk / ReserveAllPush*) would deadlock and is deliberately not built.
