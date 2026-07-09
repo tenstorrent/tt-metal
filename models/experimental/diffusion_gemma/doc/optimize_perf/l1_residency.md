@@ -65,12 +65,21 @@ there are ~6–8 norm calls/layer × 30 layers. `DG_NORM_FULLCANVAS=1` runs **on
 edit) and hands the L1 output straight back. RMSNorm is per-row independent of `block_h`, so the math
 is per-row equivalent.
 
-**Isolated micro** (`bench_norm_fullcanvas.py`, 2L, 40 iters):
+**Isolated micro** (`bench_norm_fullcanvas.py`, 2L, 40 iters). Covers BOTH `_chunked_norm_forward`
+branches — the weighted gemma4 fast-path AND the `with_scale=False`/`tt_weight=None` branch
+(`_rms_norm_dram` vs `_fullcanvas_norm(weight=None)`), exercised by a `_NoWeightNorm` stub. A model
+scan (`RESULT_NORM_KIND`) confirms exactly one denoise-path norm takes the no-weight branch at >32
+rows — **`moe.router.norm`** (`with_scale=False`); every layer norm (input/post-attn/pre-ff/post-ff,
+moe post-ff) is weighted:
 
 | norm | chunked ms | full-canvas ms | speedup | PCC |
 |---|---:|---:|---:|---:|
-| input_layernorm (weighted) | 1.319 | 0.134 | **9.8×** | 0.999998 |
-| post_feedforward_layernorm | 1.347 | 0.139 | **9.7×** | 0.999997 |
+| input_layernorm (weighted) | 1.31 | 0.15 | **8.6×** | 0.999994 |
+| post_feedforward_layernorm (weighted) | 1.32 | 0.14 | **9.2×** | 1.000015 |
+| **no-weight stub** (= `moe.router.norm` branch) | 0.68 | 0.14 | **4.8×** | 1.000050 |
+
+(PCC values ≈1.0 both branches — per-row equivalent; the ~2e-6 delta is the bf16 reduction-order noted
+below. Run-to-run the weighted speedup measured 8.6–9.8×.)
 
 **Traced e2e** (`bench_lever_e2e.py`, 30L, `baseline` vs `norm`, seed 0):
 
@@ -79,9 +88,11 @@ is per-row equivalent.
 | @48 | 17.855 | **20.676** | **+15.8%** | 14.3376 | 12.3815 | a9f0d18709b07d1e → **ead6eaa16dee8a57** |
 | @12 | 49.841 | **61.476** | **+23.3%** | 5.1364 | 4.1642 | 24393ba7aad6077c → **dbb6d6f142940846** |
 
-Derived per-step (subtracting ~1.4 s commit): baseline ≈ 0.270 ms→ **norm ≈ 0.229 s/step — ~41 ms/step
-saved (~15%)**. Output stays coherent ("a diffusion language model is a generative model that produces
-text by iteratively refining a sequence of random noise into coherent language…").
+Derived per-step (subtracting the ~1.57 s commit measured in `early_halt.md`): baseline ≈ 0.266 →
+**norm ≈ 0.225 s/step — ~41 ms/step saved (~15%)**. Output stays coherent ("a diffusion language model
+is a generative model that produces text by iteratively refining a sequence of random noise into
+coherent language…"). The block-latency delta (−1.956 s/block @48) is ~13× the ~1.5% run-to-run
+baseline noise (block 14.12–14.34 s across runs), so the win is well above the noise floor.
 
 **Caveat — NOT bit-identical.** `committed_sha` differs (per-norm PCC 0.999998, not 1.0): `block_h=8`
 vs 8×`block_h=1` uses a different **bf16 reduction/accumulation order** in the sharded LayerNorm
@@ -172,3 +183,26 @@ dominated by the weight-bound expert matmul (~92% of the 256 GB/s roofline, immo
 terminal argmax/entropy over the 262144 vocab (blocked in-repo by the 18-bit-index fp32-reduction
 wall). HIGH-4 attacks neither of those; it removes the norm/slice/concat glue layered on top, which is
 why it is a real +15.8% while the MoE-activation levers are a wash.
+
+## Stage-review follow-ups / residual risk
+
+- **gemma4 gate — this commit is clean; the branch-level `git diff main` is not (pre-existing, not
+  dg-08).** `git diff-tree fbabe620f21 -- models/demos/gemma4/` is **empty** — the dg-08 commit touches
+  only DiffusionGemma-local files. The literal `git diff main -- models/demos/gemma4/` reads non-empty
+  only because local `main` is ~842 commits stale (bulk = merged upstream Gemma4 PRs) plus the
+  separately-owned DiffusionGemma footprint edits (#47464 commit-decode, the 1-line experts dealloc =
+  optimize-playbook ceiling #4 / plan.md R0.4/R-new). Both are cross-stage and out of dg-08 scope; the
+  meaningful commit-scoped invariant (dg-08 adds nothing to gemma4) holds. Fast-forwarding local `main`
+  would make the automated `git diff main` gate checkable again.
+- **Default-flip gate for `DG_NORM_FULLCANVAS`.** Flipping the default ON must first clear a dg-05
+  decision-fidelity check that the full-canvas norm agrees with the torch/HF reference as well as the
+  chunked baseline does (both ~0.84 under #48291) — i.e. that the flip changes *which* equally-valid
+  bf16 output, not *whether* it is faithful. The no-weight branch (`moe.router.norm`) is now
+  isolated-PCC-verified per-row-equivalent (1.00005), so the only open item for the flip is the
+  compounding non-bit-identity of the committed argmax, which is exactly what the fidelity check settles.
+- **Watcher scope.** `DG_NORM_FULLCANVAS=1` was watcher-verified on a short smoke (4 steps / 1 block,
+  `TT_METAL_WATCHER_DISABLE_ETH=1`): the full-canvas `rms_norm` + I2S/S2I kernels all execute, watcher
+  attaches/detaches clean, zero violation strings in `generated/watcher/watcher.log`. A full @48 /
+  multi-block watcher soak is deferred (acceptable for an opt-in lever; do it as part of the default-flip
+  gate). Raw logs backing every number here live in the run scratchpad (not committed, per the
+  artifact policy); the committed docs/JSON mirror them to the digit.

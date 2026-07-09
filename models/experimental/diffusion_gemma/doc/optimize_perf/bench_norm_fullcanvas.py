@@ -2,17 +2,21 @@
 # SPDX-License-Identifier: Apache-2.0
 """dg-08 L1-residency pass HIGH-4 — collapse the chunked RMSNorm to one full-canvas width-sharded norm.
 
-Per-norm correctness + timing, single mesh-open (contended box). For each real layer RMSNorm on a
-256-row canvas: PCC(chunked-path, full-canvas-path) — must be ~1.0 (RMSNorm is per-row, so block_h=8
-is bit-identical to 8x block_h=1) — and chunked vs full-canvas device time (the slice/concat glue the
-full-canvas path removes). Covers BOTH branches: weighted (input_layernorm, has tt_weight) and the
-with_scale=False no-weight per-... norm path (via a norm stub).
+Per-norm correctness + timing, single mesh-open (contended box). For each candidate RMSNorm on a
+256-row canvas: PCC(chunked-path, full-canvas-path) — RMSNorm is per-row so block_h=8 is per-row
+EQUIVALENT to 8x block_h=1 (expect ~0.99999x, NOT exactly 1.0: the bf16 reduction/accumulation ORDER
+differs) — and chunked vs full-canvas device time (the slice/concat glue the full-canvas path removes).
+Covers BOTH branches taken by ``_chunked_norm_forward``: the WEIGHTED gemma4 ``norm.forward`` fast-path
+(input_layernorm etc., has tt_weight) AND the with_scale=False / tt_weight=None branch (``_rms_norm_dram``
+vs ``_fullcanvas_norm(weight=None)``), exercised by a ``_NoWeightNorm`` stub. Also logs, via
+RESULT_NORM_KIND, whether each REAL denoise-path layer norm actually takes the no-weight branch (so a
+default-flip gate knows if that branch even fires at >32 rows in practice).
 
 Run (device-free window):
   DG_CKPT=/home/zni/dg_models/diffusiongemma-26B-A4B-it \
     python models/experimental/diffusion_gemma/doc/optimize_perf/bench_norm_fullcanvas.py --iters 40
 
-Markers: RESULT_NORM name=.. chunked_ms=.. full_ms=.. pcc=..
+Markers: RESULT_NORM name=.. chunked_ms=.. full_ms=.. pcc=.. ; RESULT_NORM_KIND name=.. with_scale=.. has_weight=..
 """
 from __future__ import annotations
 
@@ -74,10 +78,45 @@ def run(iters, canvas_length):
                 moe_layer = lyr
                 break
 
-        # Candidate norms to test: weighted layer norms + the with_scale=False router-ish norm path.
+        # Report which REAL denoise-path layer norms take the no-weight (with_scale=False,
+        # tt_weight=None) branch at >32 rows -> tells a default-flip gate if _fullcanvas_norm(weight=None)
+        # even fires in practice. Inspect a representative set across the layer + MoE + router.
+        real_norms = [
+            ("input_layernorm", getattr(layer, "input_layernorm", None)),
+            ("post_attention_layernorm", getattr(layer, "post_attention_layernorm", None)),
+            ("pre_feedforward_layernorm", getattr(layer, "pre_feedforward_layernorm", None)),
+            ("post_feedforward_layernorm", getattr(layer, "post_feedforward_layernorm", None)),
+        ]
+        if moe_layer is not None:
+            real_norms += [
+                ("moe.post_feedforward_layernorm", getattr(moe_layer, "post_feedforward_layernorm", None)),
+                ("moe.router.norm", getattr(getattr(moe_layer, "moe", None), "router", None)),
+            ]
+        for nm, obj in real_norms:
+            if obj is None:
+                continue
+            n = getattr(obj, "norm", obj)  # router exposes .norm
+            ws = getattr(n, "with_scale", None)
+            hw = getattr(n, "tt_weight", None) is not None
+            print(f"RESULT_NORM_KIND name={nm} with_scale={ws} has_weight={hw}", flush=True)
+
+        # Candidate norms to PCC/time: weighted layer norms + a with_scale=False no-weight STUB that
+        # forces _chunked_norm_forward's no-weight branch (_rms_norm_dram vs _fullcanvas_norm(weight=None)).
+        class _NoWeightNorm:
+            with_scale = False
+            tt_weight = None
+
+            def __init__(self, eps):
+                self.eps = eps
+
+            def forward(self, x):  # only used on the <=32-row path; >32 rows gate to dram/fullcanvas
+                return ttnn.rms_norm(x, epsilon=self.eps)
+
+        eps = float(getattr(layer.input_layernorm, "eps", 1e-6))
         norms = [("input_layernorm", layer.input_layernorm)]
         if moe_layer is not None:
             norms.append(("post_feedforward_layernorm", moe_layer.post_feedforward_layernorm))
+        norms.append(("noweight_stub", _NoWeightNorm(eps)))
 
         def mk_hidden(scale=1.0):
             host = torch.randn(1, 1, canvas_length, H, dtype=torch.float32) * scale

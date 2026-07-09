@@ -256,6 +256,16 @@ conversion round-trips were never the lever — the chunked-norm slice/concat wa
 **Watcher:** clean on `DG_NORM_FULLCANVAS=1` with `TT_METAL_WATCHER_DISABLE_ETH=1` (the plain-watcher
 ACTIVE_ETH kernel-config-buffer overflow is the known watcher+fabric limitation, not a norm defect).
 
+**Stage review (independent, xhigh): clean-pass** @ commit `fbabe620f21`. No P1/P2. All 6 headline
+claims re-derived from the raw `RESULT_*`/`E2E_RESULT` logs; zero gemma4 files in the commit; the
+non-bit-identical HIGH-4 win correctly landed opt-in default-OFF under gate D. Follow-ups addressed
+post-review: (1) closed the reviewer's no-weight-branch gap — `bench_norm_fullcanvas.py` now tests a
+`with_scale=False` stub (PCC 1.00005, per-row-equivalent, 4.8×) and logs `RESULT_NORM_KIND`, which
+confirms `moe.router.norm` is the ONLY denoise norm taking that branch; (2) fixed the bench docstring
+overclaim + a units typo + the doc/summary commit-constant mismatch (now both ~1.57s → ~41 ms/step);
+(3) documented the branch-level `git diff main` gate provenance (stale local main, not dg-08) and the
+default-flip / watcher-soak gates in `l1_residency.md` §Stage-review follow-ups.
+
 ---
 
 **Stage review (independent, xhigh): clean-pass** @ commit `b88f2c361f8` (+ follow-up doc/comment
