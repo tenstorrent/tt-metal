@@ -15,7 +15,7 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -23,6 +23,13 @@
 #                    on hang with full triage + watcher log dump.
 #   --run-all        Run all tests instead of stopping on first failure (-x).
 #                    Useful for eval scoring where you need full pass/fail counts.
+#   --profile        Run under the Tracy device profiler (python -m tracy -r). Emits
+#                    a per-op CSV (generated/profiler/reports/<ts>/ops_perf_results*.csv)
+#                    and prints its path as "SAFE_PYTEST: PROFILER CSV: <path>" next to
+#                    the result line. Requires a Tracy-enabled build. NOTE: the tracy
+#                    wrapper masks pytest's exit code, so a profiled run is reported
+#                    PASS as long as profiling completed, regardless of the underlying
+#                    test result. Hangs are still detected and still reset the device.
 #   --sim-workers N  Sim only: pytest-xdist worker count. Each worker dlopens
 #                    its own libttsim (no shared device state). Default is 16.
 #                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
@@ -43,6 +50,7 @@
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
 #   --dev    - Debug mode with watcher, asserts, and triage (see above).
+#   --profile - Tracy device profiling with per-op CSV report (see above).
 #
 # Exit codes:
 #   0 - All tests passed
@@ -68,6 +76,7 @@ LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
 TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
+PROFILE_REPORTS_DIR="${REPO_DIR}/generated/profiler/reports"
 
 # --- Device-lock contention profiling ---
 # When $TT_DEVICE_TIMING_LOG is set, on EXIT we append one JSON line:
@@ -121,6 +130,7 @@ PYTEST_STDOUT_LOG="/tmp/safe-pytest-stdout-$$.log"
 # --- Parse flags ---
 DEV_MODE=false
 FAIL_FAST=true
+PROFILE_MODE=false
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
 # Precompile (parallel JIT warm pass) is ON by default. Broad runs are the common case and benefit;
@@ -147,6 +157,11 @@ while [[ $# -gt 0 ]]; do
             ;;
         --run-all)
             FAIL_FAST=false
+            shift
+            ;;
+        --profile)
+            # Run the real pytest under the Tracy device profiler (see PYTEST_CMD below).
+            PROFILE_MODE=true
             shift
             ;;
         --sim-workers)
@@ -220,7 +235,7 @@ fi
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -295,6 +310,25 @@ precompile_warm() {
         return 0
     fi
     echo "PRECOMPILE: ✓ warmup complete in $((t1-t0))s — the real run below reuses it. Log: $clog" >&2
+}
+
+# --- Profiler CSV reporting (--profile) ---
+# Newest ops_perf_results CSV before the run; snapshotted just before pytest (below).
+PROFILE_CSV_BEFORE=""
+
+# Print this run's per-op CSV path. `python -m tracy -r` writes a fresh
+# reports/<ts>/ subdir per run, so we report the newest only if it differs from
+# the pre-run snapshot — otherwise this run produced none and it's a stale leftover.
+# Plain echo (stdout) so it lands next to the SAFE_PYTEST_RESULT line.
+emit_profiler_csv() {
+    [[ "$PROFILE_MODE" == true ]] || return 0
+    local csv
+    csv=$(ls -t "${PROFILE_REPORTS_DIR}"/*/ops_perf_results*.csv 2>/dev/null | head -1)
+    if [[ -n "$csv" && "$csv" != "$PROFILE_CSV_BEFORE" ]]; then
+        echo "SAFE_PYTEST: PROFILER CSV: ${csv}"
+    else
+        echo "SAFE_PYTEST: WARNING: --profile set but this run produced no ops_perf_results CSV"
+    fi
 }
 
 # --- Total-run timer ---
@@ -394,6 +428,19 @@ if [[ -f python_env/bin/activate ]]; then
     fi
 else
     echo "SAFE_PYTEST: WARNING: python_env not found; using system Python"
+fi
+
+# --- Profiling preflight ---
+# `python -m tracy` needs a Tracy-enabled build and tracy deps (e.g. websockets).
+# Probe the import it does at startup (tracy.__main__ -> tracy.serve_wasm) so a
+# missing dep fails fast here instead of as a confusing mid-run traceback (and
+# before the precompile warm pass wastes a device-open).
+if [[ "$PROFILE_MODE" == true ]]; then
+    if ! python3 -c "import tracy.serve_wasm" 2>/dev/null; then
+        echo "SAFE_PYTEST_ERROR: --profile requested but 'python -m tracy' is unavailable"
+        echo "SAFE_PYTEST: Ensure a Tracy-enabled build and tracy deps (e.g. 'pip install websockets')"
+        exit 3
+    fi
 fi
 
 # --- Pre-flight: pytest-xdist required for sim parallelism (SIM_WORKERS > 1) ---
@@ -509,7 +556,14 @@ fi
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
-PYTEST_CMD=(pytest "${TEST_PATH}")
+# --profile: wrap pytest in the Tracy profiler. `python -m tracy -r` runs pytest
+#   as a child and post-processes results into ops_perf_results*.csv on pass or
+#   fail. Its exit-code masking is handled at the result check below.
+if [[ "$PROFILE_MODE" == true ]]; then
+    PYTEST_CMD=(python -m tracy -r -m pytest "${TEST_PATH}")
+else
+    PYTEST_CMD=(pytest "${TEST_PATH}")
+fi
 if [[ "$FAIL_FAST" == true ]]; then
     PYTEST_CMD+=(-x)
 fi
@@ -520,6 +574,12 @@ if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
     PYTEST_CMD+=(-n "$SIM_WORKERS")
 fi
 PYTEST_CMD+=("$@")
+
+# Snapshot the newest CSV now, so emit_profiler_csv can tell this run's report
+# from a pre-existing one afterward.
+if [[ "$PROFILE_MODE" == true ]]; then
+    PROFILE_CSV_BEFORE=$(ls -t "${PROFILE_REPORTS_DIR}"/*/ops_perf_results*.csv 2>/dev/null | head -1)
+fi
 
 # Signal handling: if this script is killed (e.g. parent process gets SIGTERM
 # and we get reparented to init, or a watchdog kills us), forward SIGKILL to
@@ -558,10 +618,14 @@ CHILD_PID=
 echo "========================================"
 
 # --- Handle result ---
-if [[ $EXIT_CODE -eq 0 ]]; then
+# The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
+# when the underlying test failed OR hung, so without it a hang would be reported
+# PASS and skip the device reset. An empty triage log means no hang fired.
+if [[ $EXIT_CODE -eq 0 && ! -s "$TRIAGE_LOG" ]]; then
     rm -f "$DIRTY_FLAG"
     rm -f "$TRIAGE_LOG"
     rm -f "$PYTEST_STDOUT_LOG"
+    emit_profiler_csv
     echo "SAFE_PYTEST_RESULT: PASS"
     exit 0
 fi
