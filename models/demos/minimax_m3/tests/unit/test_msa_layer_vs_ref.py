@@ -25,7 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention.config import AttentionConfig
 from models.demos.minimax_m3.tt.attention.msa import index_branch_forward, msa_indexer_sparse
 from models.demos.minimax_m3.tt.attention.operations import (
@@ -171,7 +171,7 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         use_qk_norm=True,
         use_gemma_norm=True,
     )
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
+    mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     rope_setup = create_rope_setup(mesh_device=mesh_device, hf_config=hf_config, datatype=ttnn.bfloat16)
     trans_mats = rope_setup.get_both_trans_mats()

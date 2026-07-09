@@ -4,7 +4,7 @@
 from torch import nn
 
 import ttnn
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, get_default_num_links
 
 
@@ -25,7 +25,7 @@ class RMSNorm(nn.Module):
             torch_weight = None
 
         # Use MeshConfig for clean parallelization
-        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1]))
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
         self.is_distributed = False  # self.mesh_config.tp > 1
         self.tt_weight = ttnn.as_tensor(
             torch_weight,

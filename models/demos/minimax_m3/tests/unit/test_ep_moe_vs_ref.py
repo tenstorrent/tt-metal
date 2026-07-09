@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.mlp import MLP
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
@@ -107,7 +107,7 @@ def test_ep_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     hf_config = SimpleNamespace(**c)
     assert hf_config.num_local_experts == E and hf_config.hidden_size == HIDDEN, "config.json is not stock M3"
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
+    mesh_config = MeshConfig((rows, cols), tp=cols)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     mlp = MLP(
         mesh_device=mesh_device,

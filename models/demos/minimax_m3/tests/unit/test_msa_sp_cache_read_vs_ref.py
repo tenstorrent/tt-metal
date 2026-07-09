@@ -19,7 +19,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention.msa import msa_sp_attention
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
@@ -49,7 +49,7 @@ def test_msa_sp_cache_read(mesh_device, device_params, chunk_local, n_prior, res
     v = torch.randn(1, NKV, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
     ik = torch.randn(1, 1, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
     def shard(t, split_heads):
@@ -159,7 +159,7 @@ def test_msa_sp_cache_read_ndshard_pcc(mesh_device, device_params, chunk_local, 
     v = torch.randn(1, NKV, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
     ik = torch.randn(1, 1, T, HEAD_DIM, dtype=torch.bfloat16) * 0.1
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
     def shard(t, split_heads):

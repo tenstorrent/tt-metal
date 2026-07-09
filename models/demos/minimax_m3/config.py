@@ -2,96 +2,54 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-This module defines the MeshConfig class which manages parallelization strategies
-across a mesh of devices for the MiniMax-M3 MoE model.
+MeshConfig — prefill-time mesh parallelization for the MiniMax-M3 MoE model.
+
+TP shards features across one mesh axis (default: cols); the other axis (rows) carries
+sequence-parallel prefill (SP = number of rows) and the expert-parallel MoE. Those degrees
+are derived from the mesh shape + tp_axis, so the only knob is TP.
 """
 
-from dataclasses import dataclass
-from enum import Enum
+from loguru import logger
 
 import ttnn
 
-
-class Mode(Enum):
-    """Execution mode for model forward pass"""
-
-    DECODE = "decode"
-    PREFILL = "prefill"
-
-
-@dataclass
-class ModeConfig:
-    """Per-mode parallelization configuration"""
-
-    tp: int  # Tensor parallel size
-    ep: int = 1  # Expert parallel size
-    sp: int = 1  # Sequence parallel size
-
-    def __post_init__(self):
-        if self.tp < 1 or self.ep < 1 or self.sp < 1:
-            raise ValueError(f"Parallelism values must be >= 1: tp={self.tp}, ep={self.ep}, sp={self.sp}")
+# The single configuration validated on hardware (Blackhole Galaxy): (8,4), TP=4 -> SP=8, EP=32.
+_VALIDATED_MESH_SHAPE = (8, 4)
+_VALIDATED_TP = 4
 
 
 class MeshConfig:
-    """Mode-aware mesh parallelization with dataclass-based mode configs"""
+    """Prefill mesh parallelization. TP is the only knob; SP/EP follow from the mesh shape."""
 
-    def __init__(
-        self,
-        mesh_shape,
-        decode: ModeConfig,
-        prefill: ModeConfig = None,
-        tp_axis: int = 1,
-    ):
+    def __init__(self, mesh_shape, tp, tp_axis: int = 1):
         """
         Args:
             mesh_shape: (rows, cols) - any mesh size
-            decode: ModeConfig for decode mode
-            prefill: ModeConfig for prefill mode (defaults to tp=decode.tp, sp=rows, ep=1)
-            tp_axis: Which mesh axis is TP (0=rows, 1=cols, default: 1)
-
-        Default behavior:
-            - Decode: Typically ep=rows (expert-parallel), sp=1
-            - Prefill: Automatically sp=rows (sequence-parallel), ep=1
+            tp: tensor-parallel size (shards features along tp_axis)
+            tp_axis: which mesh axis is TP (0=rows, 1=cols, default: 1). The other axis
+                carries sequence-parallel prefill (SP = size of that axis) and the EP MoE.
         """
         self.mesh_shape = tuple(mesh_shape)
+        self.tp = tp
         self.tp_axis = tp_axis
         self.ep_axis = 0 if tp_axis == 1 else 1
         self.sp_axis = self.ep_axis
+        self.total_devices = self.mesh_shape[0] * self.mesh_shape[1]
+        self._validate()
 
-        self.total_devices = mesh_shape[0] * mesh_shape[1]
-
-        # Store mode configs
-        self.decode = decode
-        # Default prefill: Same TP, use rows for SP (sequence parallel), EP=1
-        self.prefill = prefill or ModeConfig(tp=decode.tp, sp=mesh_shape[0], ep=1)
-
-        # Validate both configs
-        self._validate_config(self.decode, Mode.DECODE)
-        self._validate_config(self.prefill, Mode.PREFILL)
-
-        # Legacy attributes point to decode config
-        self.tp = self.decode.tp
-        self.ep = self.decode.ep
-        self.sp = self.decode.sp
-        self.dp = self.total_devices // (self.decode.tp * self.decode.ep)
-
-    def _validate_config(self, config: ModeConfig, mode: Mode):
-        """Validate a mode config fits the mesh"""
-        dp = self.total_devices // (config.tp * config.ep)
-        if config.tp * dp * config.ep != self.total_devices:
-            raise ValueError(
-                f"{mode.value}: TP({config.tp}) × DP({dp}) × EP({config.ep}) != total_devices({self.total_devices})"
+    def _validate(self):
+        tp_dim_size = self.mesh_shape[self.tp_axis]
+        if self.tp > tp_dim_size:
+            raise ValueError(f"TP({self.tp}) > mesh_{self.tp_axis}_size({tp_dim_size})")
+        if self.total_devices % self.tp != 0:
+            raise ValueError(f"TP({self.tp}) does not divide total_devices({self.total_devices})")
+        if (self.mesh_shape, self.tp) != (_VALIDATED_MESH_SHAPE, _VALIDATED_TP):
+            logger.warning(
+                f"MeshConfig(mesh_shape={self.mesh_shape}, tp={self.tp}) is untested — only "
+                f"mesh_shape={_VALIDATED_MESH_SHAPE}, tp={_VALIDATED_TP} (SP=8, EP=32) is validated on hardware."
             )
 
-        tp_dim_size = self.mesh_shape[self.tp_axis]
-        if config.tp > tp_dim_size:
-            raise ValueError(f"{mode.value}: TP({config.tp}) > mesh_{self.tp_axis}_size({tp_dim_size})")
-
-    def get_config(self, mode: Mode) -> ModeConfig:
-        """Type-safe mode config access"""
-        return self.decode if mode == Mode.DECODE else self.prefill
-
-    def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None, mode: Mode = Mode.DECODE):
+    def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None):
         """Unified 2D sharding - replaces all individual mappers"""
         if mesh_dims is None:
             # Default: shard along TP axis only
@@ -112,10 +70,9 @@ class MeshConfig:
         """Sequence sharding (for KV cache)"""
         return self.shard_mapper(mesh_device, tensor_dim=-3)
 
-    def shard_size(self, total_size, mode: Mode = Mode.DECODE):
+    def shard_size(self, total_size):
         """Size per device for tensor parallel sharding"""
-        config = self.get_config(mode)
-        return total_size // config.tp
+        return total_size // self.tp
 
     def allreduce(self, tensor, ccl_manager, memory_config=None, pad_size=None, axis=0):
         """
@@ -196,29 +153,5 @@ class MeshConfig:
         )
 
     def __repr__(self):
-        decode_dp = self.total_devices // (self.decode.tp * self.decode.ep)
-        prefill_dp = self.total_devices // (self.prefill.tp * self.prefill.ep)
-        decode_str = f"decode[TP={self.decode.tp}, EP={self.decode.ep}, SP={self.decode.sp}, DP={decode_dp}]"
-        prefill_str = f"prefill[TP={self.prefill.tp}, EP={self.prefill.ep}, SP={self.prefill.sp}, DP={prefill_dp}]"
-        return f"MeshConfig({self.mesh_shape}, {decode_str}, {prefill_str})"
-
-
-# Convenience factory functions for common configurations
-def mesh_2x4():
-    # decode: TP=4, EP=2, DP=1; prefill: TP=4, SP=2, EP=1, DP=1
-    return MeshConfig((2, 4), decode=ModeConfig(tp=4, ep=2))
-
-
-def mesh_4x8():
-    # decode: TP=8, EP=4, DP=1; prefill: TP=8, SP=4, EP=1, DP=4
-    return MeshConfig((4, 8), decode=ModeConfig(tp=8, ep=4))
-
-
-def mesh_4x4():
-    # decode: TP=4, EP=4, DP=1; prefill: TP=4, SP=4, EP=1, DP=1
-    return MeshConfig((4, 4), decode=ModeConfig(tp=4, ep=4))
-
-
-def mesh_1x8():
-    # decode: TP=8, EP=1, DP=1; prefill: TP=8, SP=1, EP=1, DP=1 (no SP on single row)
-    return MeshConfig((1, 8), decode=ModeConfig(tp=8, ep=1))
+        sp = self.mesh_shape[self.sp_axis]
+        return f"MeshConfig({self.mesh_shape}, tp={self.tp}, sp={sp}, tp_axis={self.tp_axis})"

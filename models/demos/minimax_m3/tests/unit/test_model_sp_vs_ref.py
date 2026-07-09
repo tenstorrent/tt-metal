@@ -25,7 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import Model
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
@@ -194,7 +194,7 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
     state = convert_hf_qkv_to_meta_format_partial(state, HEAD_DIM, ROTARY_DIM)
 
     # prefill mode auto-defaults to SP=rows, EP=1, TP=cols (see MeshConfig.__init__)
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
     model = Model(
@@ -345,7 +345,7 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
                 state[p + f"block_sparse_moe.experts.{e}.w2.weight"] = w2
     state = convert_hf_qkv_to_meta_format_partial(state, HEAD_DIM, ROTARY_DIM)
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     model = Model(
         mesh_device=mesh_device,
@@ -484,7 +484,7 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
                 state[p + f"block_sparse_moe.experts.{e}.w2.weight"] = w2
     state = convert_hf_qkv_to_meta_format_partial(state, HEAD_DIM, ROTARY_DIM)
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     model = Model(
         mesh_device=mesh_device,
@@ -630,7 +630,7 @@ def test_model_sp_msa_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
                 state[p + f"block_sparse_moe.experts.{e}.w2.weight"] = w2
     state = convert_hf_qkv_to_meta_format_partial(state, HEAD_DIM, ROTARY_DIM)
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     model = Model(
         mesh_device=mesh_device,

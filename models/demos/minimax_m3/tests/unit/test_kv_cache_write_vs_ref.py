@@ -29,7 +29,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
@@ -156,7 +156,7 @@ def test_kv_cache_write_vs_ref(mesh_device, device_params, layer_kind, seq_len, 
     # inferred from shape: 4 for index_q, 1 for index_k) — same partial-RoPE convention as main Q/K.
     state = convert_hf_qkv_to_meta_format_partial(hf_state, HEAD_DIM, ROTARY_DIM)
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))  # prefill auto: SP=rows, TP=cols
+    mesh_config = MeshConfig((rows, cols), tp=tp)  # prefill auto: SP=rows, TP=cols
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
     from types import SimpleNamespace

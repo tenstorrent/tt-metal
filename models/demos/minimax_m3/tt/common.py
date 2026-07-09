@@ -31,9 +31,7 @@ def create_tt_model(
 
     # Use provided mesh_config or create optimal MeshConfig for the mesh shape
     if mesh_config is None:
-        from models.demos.minimax_m3.config import ModeConfig
-
-        mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
+        mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
     # Create MiniMax-M3 ModelArgs
     model_args = ModelArgs(

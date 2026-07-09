@@ -18,7 +18,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.dense_mlp import DenseMLP
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
@@ -60,7 +60,7 @@ def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, re
 
     hf_config = SimpleNamespace(hidden_size=hidden, swiglu_limit=limit, swiglu_alpha=alpha)
     state_dict = {"gate_proj.weight": gate_w, "up_proj.weight": up_w, "down_proj.weight": down_w}
-    mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
+    mesh_config = MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
     # TP>1 needs CCL for the down-proj all-reduce; at TP=1 it's unused.
     ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 

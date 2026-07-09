@@ -55,7 +55,7 @@ def _dbg_logits(tag, t, save_path=None):
 
 
 from models.common.sampling.generator import SamplingGenerator
-from models.demos.minimax_m3.config import MeshConfig, Mode, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.minimax_m3.utils.substate import substate
 from models.tt_transformers.tt.common import rope_scaling_model_factory
@@ -186,9 +186,7 @@ class Model:
         # Use mode-aware MeshConfig (stores separate configs for prefill and decode)
         # Decode: EP=rows for expert parallelism, SP=1
         # Prefill: EP=1, SP=rows for sequence parallelism (auto-defaults)
-        self.mesh_config = mesh_config or MeshConfig(
-            mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0], sp=1)
-        )
+        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16
@@ -366,10 +364,6 @@ class Model:
 
         return instance
 
-    def switch_mode(self, mode: Mode):
-        # No-op; required by tt_transformers generator interface.
-        return None
-
     def _forward_layers_and_head(
         self,
         hidden_states,
@@ -403,8 +397,6 @@ class Model:
         Returns:
             logits: Output logits
         """
-        mode = Mode.PREFILL
-
         # Process through decoder layers
         _dbg = os.getenv("DEBUG_LAYERS") == "1"
         if _dbg:
@@ -659,10 +651,9 @@ class Model:
         Host-side TP gather: the generator moves logits to CPU before calling
         this method, so on-device allgather is not possible here.
         """
-        config = self.mesh_config.get_config(Mode.PREFILL)
-        if config.tp > 1:
+        tp = self.mesh_config.tp
+        if tp > 1:
             device_tensors = ttnn.get_device_tensors(tt_out)
-            tp = config.tp
             torch_output = torch.cat([ttnn.to_torch(device_tensors[i]) for i in range(tp)], dim=-1)
         else:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])

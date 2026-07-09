@@ -43,7 +43,7 @@ _THIS = "models/demos/minimax_m3/tests/perf/test_model_perf.py"
 def _build_random_model(mesh, layers, experts, seq):
     from types import SimpleNamespace
 
-    from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+    from models.demos.minimax_m3.config import MeshConfig
     from models.demos.minimax_m3.tt.ccl import CCLManager
     from models.demos.minimax_m3.tt.model import Model
     from models.demos.minimax_m3.utils.general_utils import get_default_num_links
@@ -72,7 +72,7 @@ def _build_random_model(mesh, layers, experts, seq):
         for e in range(E):
             ep = pf + f"block_sparse_moe.experts.{e}."
             sd[ep + "w1.weight"], sd[ep + "w3.weight"], sd[ep + "w2.weight"] = rn(I, H), rn(I, H), rn(H, I)
-    mesh_config = MeshConfig((4, 8), decode=ModeConfig(tp=8, ep=4))
+    mesh_config = MeshConfig((4, 8), tp=8)
     ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
     model = Model(
         mesh_device=mesh,
@@ -91,7 +91,7 @@ def _build_random_model(mesh, layers, experts, seq):
 def _build_real_model(mesh, seq):
     from transformers import AutoConfig
 
-    from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+    from models.demos.minimax_m3.config import MeshConfig
     from models.demos.minimax_m3.tt.ccl import CCLManager
     from models.demos.minimax_m3.tt.model import Model
     from models.demos.minimax_m3.tt.model_config import ModelArgs
@@ -100,7 +100,7 @@ def _build_real_model(mesh, seq):
     ma = ModelArgs(mesh_device=mesh)
     cfg = AutoConfig.from_pretrained(ma.model_path, trust_remote_code=True)
     sd = ModelArgs.load_state_dict(ma.weights_path)
-    mesh_config = MeshConfig((4, 8), decode=ModeConfig(tp=8, ep=4))
+    mesh_config = MeshConfig((4, 8), tp=8)
     ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
     model = Model(
         mesh_device=mesh,

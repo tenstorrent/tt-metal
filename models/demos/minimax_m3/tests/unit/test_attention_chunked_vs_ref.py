@@ -24,7 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
@@ -83,7 +83,7 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
         }
     state = convert_hf_qkv_to_meta_format_partial(hf_state, HEAD_DIM, ROTARY_DIM)
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     hf_config = SimpleNamespace(
         hidden_size=HIDDEN,
@@ -254,7 +254,7 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
         }
     state = convert_hf_qkv_to_meta_format_partial(hf_state, HEAD_DIM, ROTARY_DIM)
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=tp, ep=sp))
+    mesh_config = MeshConfig((rows, cols), tp=tp)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
     hf_config = SimpleNamespace(
         hidden_size=HIDDEN,

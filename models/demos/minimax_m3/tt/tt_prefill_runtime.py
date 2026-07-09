@@ -76,7 +76,7 @@ class TtPrefillRuntime:
         self._build_indexed_rope()
 
     def _build_model(self, state_dict: dict) -> None:
-        from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+        from models.demos.minimax_m3.config import MeshConfig
         from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
         from .ccl import CCLManager
@@ -88,7 +88,7 @@ class TtPrefillRuntime:
             f"max_seq_len={self.config.max_seq_len} chunk_size={self.config.chunk_size} "
             f"num_users={self.config.num_users} mesh_shape={self.config.mesh_shape}"
         )
-        mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
+        mesh_config = MeshConfig((rows, cols), tp=cols)
         ccl = CCLManager(
             self.mesh_device, num_links=get_default_num_links(self.mesh_device), topology=self.config.topology
         )

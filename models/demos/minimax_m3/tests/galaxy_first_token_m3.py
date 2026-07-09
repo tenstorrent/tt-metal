@@ -42,7 +42,7 @@ PROMPTS = [
 
 
 def main():
-    from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+    from models.demos.minimax_m3.config import MeshConfig
     from models.demos.minimax_m3.tt.ccl import CCLManager
     from models.demos.minimax_m3.tt.model import Model
     from models.demos.minimax_m3.tt.model_config import ModelArgs
@@ -74,7 +74,7 @@ def main():
         print("[ft-m3] loading real bf16 weights (mmap) + EP placement (slow first run, builds cache) ...", flush=True)
         state_dict = ModelArgs.load_state_dict(model_args.weights_path)
         cache = model_args.weight_cache_path(ttnn.bfloat8_b)
-        mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
+        mesh_config = MeshConfig((rows, cols), tp=cols)
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
         model = Model(
             mesh_device=mesh,

@@ -48,7 +48,7 @@ PASSAGE = (
 
 
 def main():
-    from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+    from models.demos.minimax_m3.config import MeshConfig
     from models.demos.minimax_m3.tt.ccl import CCLManager
     from models.demos.minimax_m3.tt.model import Model
     from models.demos.minimax_m3.tt.model_config import ModelArgs
@@ -140,7 +140,7 @@ def main():
             state_dict = {}
         else:
             state_dict = ModelArgs.load_state_dict(model_args.weights_path)
-        mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
+        mesh_config = MeshConfig((rows, cols), tp=cols)
         ccl = CCLManager(mesh, num_links=get_default_num_links(mesh), topology=ttnn.Topology.Linear)
         # ep_seq_len_per_chip = per-device token count (640 for SP). DP uses the full seq (5120).
         # Override via EP_SEQ_PER_CHIP to isolate dispatch-buffer sizing issues.

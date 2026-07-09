@@ -22,7 +22,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
@@ -56,7 +56,7 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     v = torch.randn(1, NKV, seq_len, HEAD_DIM) * 0.1
     ref = _torch_gqa_causal(q.float(), k.float(), v.float())  # [1, NQ, S, HD]
 
-    mesh_config = MeshConfig((rows, cols), decode=ModeConfig(tp=cols, ep=rows))
+    mesh_config = MeshConfig((rows, cols), tp=cols)
     sp_axis, tp_axis = mesh_config.sp_axis, mesh_config.tp_axis  # 0 (rows), 1 (cols)
     ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
