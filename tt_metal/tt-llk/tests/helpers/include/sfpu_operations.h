@@ -412,6 +412,10 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
     }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(signbit_init);
+    }
     else if constexpr (OPERATION == SfpuType::sine)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(sine_init<APPROX_MODE>);
