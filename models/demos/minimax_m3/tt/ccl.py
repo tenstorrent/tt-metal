@@ -94,7 +94,7 @@ class CCLManager:
         Get semaphores for all gather ping pong operations.
 
         Returns:
-            List of 3 semaphores for the current ping pong cycle
+            List of 2 semaphores for the current ping pong cycle
         """
         cur_idx = self.ag_ping_pong_idx
         n_sems = 2

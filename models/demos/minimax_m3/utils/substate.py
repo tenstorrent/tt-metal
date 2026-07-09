@@ -78,5 +78,3 @@ def indexed_substates(state: dict[str, torch.Tensor], key: str) -> list[dict[str
         if not s:
             return result
         result.append(s)
-
-    return []

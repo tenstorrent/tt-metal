@@ -56,7 +56,7 @@ class RMSNorm(nn.Module):
             # If the activation is sharded, we need to use an optimized rmsnorm
 
             tt_gathered_stats_memory_config = ttnn.create_sharded_memory_config(
-                shape=[1, 1, 32, 32 * self.mesh_shape[1]],
+                shape=[1, 1, 32, 32 * self.mesh_device.shape[1]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

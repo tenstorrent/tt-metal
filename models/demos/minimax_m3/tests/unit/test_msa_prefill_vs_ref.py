@@ -31,7 +31,10 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 
-sys.path.insert(0, os.path.join("tests/ttnn/unit_tests/operations/sdpa"))
+# Locate the shared sparse-SDPA test util relative to the repo root (5 levels up from this
+# file), so the import works regardless of pytest's invocation cwd.
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), *([".."] * 5)))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "tests/ttnn/unit_tests/operations/sdpa"))
 from sparse_sdpa_msa_test_utils import sparse_attention_ref_msa  # noqa: E402
 
 # Per-device TP=4 slice of M3: 64 q / 4 kv -> 16 q / 1 kv; 1 index-q head + 1 shared index-k; num_groups=1.
