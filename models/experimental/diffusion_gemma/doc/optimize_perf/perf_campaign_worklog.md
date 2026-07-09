@@ -266,6 +266,19 @@ overclaim + a units typo + the doc/summary commit-constant mismatch (now both ~1
 (3) documented the branch-level `git diff main` gate provenance (stale local main, not dg-08) and the
 default-flip / watcher-soak gates in `l1_residency.md` §Stage-review follow-ups.
 
+**DG_NORM_FULLCANVAS default-flip gate (dg-05 decision fidelity) — RUN, FAILED → STAYS OPT-IN**
+(full detail: `norm_fullcanvas_flip_gate.md` + `norm_fullcanvas_flip_agreement.json`). Ran
+`decision_agreement.py` chunked(default) vs full-canvas, 30L / 16 steps, injected noise, clean argmax,
+production MoE, everything pinned except `DG_NORM_FULLCANVAS`: **committed clean-argmax match 0.145**
+(bar ≥0.95 — WORSE than the rejected bfp8's 0.227), argmax agree 0.544, accept IoU 0.504, entropy PCC
+0.659 (the last two ≈ identical to bfp8's 0.501 / 0.631). The 2e-6/norm bf16 reduction-order difference
+chaos-amplifies under #48291 (no argmax cushion, 30L×16 steps) to flip ~85% of committed tokens vs the
+current default. Both trajectories coherent-then-degenerate (neither validated more faithful — the flip
+changes *which* equally-(un)faithful bf16 output, not *whether* it is faithful). Per the flip rule
+(hold vs chunked within the #48291 bar) 0.145 ≪ 0.95 → **default stays OFF; no code change.** A flip
+would require an absolute HF-vs-TT check + ideally #48291 resolved. The +15.8% @48 win remains available
+opt-in.
+
 ---
 
 **Stage review (independent, xhigh): clean-pass** @ commit `b88f2c361f8` (+ follow-up doc/comment

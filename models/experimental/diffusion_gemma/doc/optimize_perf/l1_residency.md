@@ -16,7 +16,7 @@ steady-state tok/s), not just isolated-op timing.
 
 | lever | flag | isolated micro | **traced e2e @48** | landed |
 |---|---|---|---|---|
-| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, PCC 0.999998 | **17.86 → 20.68 t/s (+15.8%)** | **opt-in (default off); recommend flip pending decision-fidelity** |
+| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, PCC 0.999998 | **17.86 → 20.68 t/s (+15.8%)** | **opt-in (default off); flip gate FAILED → stays opt-in** (see `norm_fullcanvas_flip_gate.md`) |
 | HIGH-1 gather + HIGH-2 down L1 | `DG_MOE_L1` | MoE fwd −3.2% (gather −57%), bit-identical | 18.13→18.02 (−0.6%), 53.2→53.4 @12 (wash) | opt-in, default off |
 | MED-5 gate/up L1 | `DG_MOE_L1=chain` | `batched_experts` flat | no-op by construction | no |
 | HIGH-3 residual-stream L1 | — | coupled (every consumer takes DRAM) | not measured standalone | no |
@@ -194,12 +194,20 @@ why it is a real +15.8% while the MoE-activation levers are a wash.
   optimize-playbook ceiling #4 / plan.md R0.4/R-new). Both are cross-stage and out of dg-08 scope; the
   meaningful commit-scoped invariant (dg-08 adds nothing to gemma4) holds. Fast-forwarding local `main`
   would make the automated `git diff main` gate checkable again.
-- **Default-flip gate for `DG_NORM_FULLCANVAS`.** Flipping the default ON must first clear a dg-05
-  decision-fidelity check that the full-canvas norm agrees with the torch/HF reference as well as the
-  chunked baseline does (both ~0.84 under #48291) — i.e. that the flip changes *which* equally-valid
-  bf16 output, not *whether* it is faithful. The no-weight branch (`moe.router.norm`) is now
-  isolated-PCC-verified per-row-equivalent (1.00005), so the only open item for the flip is the
-  compounding non-bit-identity of the committed argmax, which is exactly what the fidelity check settles.
+- **Default-flip gate for `DG_NORM_FULLCANVAS` — RUN, FAILED → stays opt-in** (full detail:
+  `norm_fullcanvas_flip_gate.md`). The dg-05 `decision_agreement.py` harness (chunked default vs
+  full-canvas, 30L / 16-step, injected noise, clean argmax, everything pinned except the flag) measured
+  **committed clean-argmax match = 0.145** (bar ≥0.95) — ~85% of committed tokens differ from the
+  current default, *worse* than the already-rejected bfp8 experts lever (0.227), with entropy PCC 0.659
+  and accept IoU 0.504 statistically indistinguishable from bfp8 (0.631 / 0.501). Cause = #48291
+  chaos-amplification: the 2e-6/norm bf16 reduction-order difference has no argmax cushion and cascades
+  over 30L×16 steps through the accept/renoise loop. Both outputs are coherent-then-degenerate (neither
+  validated more faithful — "different", not proven "worse"), but per the flip rule ("hold vs the
+  current chunked default within the #48291 bar") 0.145 ≪ 0.95 fails decisively. A future flip would
+  need an *absolute* HF-vs-TT check (full-canvas-vs-HF ≈ chunked-vs-HF) and ideally #48291 resolved
+  (which removes the chaos-amplification and makes the flip safe anyway). The no-weight branch
+  (`moe.router.norm`) is isolated-PCC-verified per-row-equivalent (1.00005) — so the failure is the
+  compounding argmax non-bit-identity, exactly as the gate settles.
 - **Watcher scope.** `DG_NORM_FULLCANVAS=1` was watcher-verified on a short smoke (4 steps / 1 block,
   `TT_METAL_WATCHER_DISABLE_ETH=1`): the full-canvas `rms_norm` + I2S/S2I kernels all execute, watcher
   attaches/detaches clean, zero violation strings in `generated/watcher/watcher.log`. A full @48 /
