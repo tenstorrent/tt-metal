@@ -352,7 +352,7 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 150
     bh_galaxy: 470
-    bh_spsg: 713
+    bh_spsg: 721
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

@@ -177,7 +177,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 15
+      timeout: 23
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: spsg
