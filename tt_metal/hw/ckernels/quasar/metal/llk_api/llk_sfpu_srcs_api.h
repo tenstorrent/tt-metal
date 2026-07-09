@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,9 +11,6 @@
 #include "llk_defs.h"
 #include "llk_math_eltwise_sfpu_common.h"
 #include "llk_srcs.h"
-
-using namespace ckernel;
-using namespace ckernel::math;
 
 // SrcS unary SFPU pipeline: UNP_S -> SrcS -> SFPU -> PACK1 -> L1, on the ISOLATE_SFPU TRISC.
 // SrcS index convention: input in the first slice (SFPU_SRCS_BASE_ADDR), result in the third
@@ -40,7 +37,7 @@ using namespace ckernel::math;
  * @param implied_math_format: When false, disables implied SrcS math format for this TRISC.
  */
 template <std::uint8_t INSTRN_COUNT = 1>
-inline void _llk_sfpu_srcs_init_(
+inline void llk_sfpu_srcs_init(
     const std::uint32_t l1_in_addr_16B,
     const DataFormat unpack_S_src_format,
     const DataFormat unpack_S_dst_format,
@@ -49,40 +46,39 @@ inline void _llk_sfpu_srcs_init_(
     const DataFormat pack_S_src_format,
     const DataFormat pack_S_dst_format,
     const std::uint8_t buf_desc_id_pack,
-    const bool implied_math_format)
-{
-    const bool srcs_32bit_mode = _is_srcs_32bit_mode_(unpack_S_dst_format);
-    const std::uint32_t ydim   = srcs_dims::ydim(srcs_32bit_mode);
+    const bool implied_math_format) {
+    const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
+    const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
 
     // Unpack BD: L1 input -> SrcS
     buffer_descriptor_u bd_unpack = {0};
     tdma_descriptor_t td_unpack;
-    bd_unpack.f.l1_addr_16B   = l1_in_addr_16B;
-    bd_unpack.f.format        = static_cast<std::uint8_t>(unpack_S_src_format);
-    bd_unpack.f.x_dim         = srcs_dims::XDIM;
-    bd_unpack.f.y_dim         = ydim;
-    bd_unpack.f.z_dim         = srcs_dims::ZDIM;
-    td_unpack.buf_desc        = bd_unpack;
-    td_unpack.buf_desc_id     = buf_desc_id_unpack;
+    bd_unpack.f.l1_addr_16B = l1_in_addr_16B;
+    bd_unpack.f.format = static_cast<std::uint8_t>(unpack_S_src_format);
+    bd_unpack.f.x_dim = ckernel::trisc::srcs_dims::XDIM;
+    bd_unpack.f.y_dim = ydim;
+    bd_unpack.f.z_dim = ckernel::trisc::srcs_dims::ZDIM;
+    td_unpack.buf_desc = bd_unpack;
+    td_unpack.buf_desc_id = buf_desc_id_unpack;
     td_unpack.reg_data_format = static_cast<std::uint8_t>(unpack_S_dst_format);
-    _configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
+    ckernel::trisc::_configure_buf_desc_table_(td_unpack.buf_desc_id, td_unpack.buf_desc);
     _llk_unpack_configure_unary_<p_unpacr::UNP_S>(td_unpack);
 
     // Pack BD: SrcS -> L1 output
     buffer_descriptor_u bd_pack = {0};
     tdma_descriptor_t td_pack;
-    bd_pack.f.l1_addr_16B   = l1_out_addr_16B;
-    bd_pack.f.format        = static_cast<std::uint8_t>(pack_S_dst_format);
-    bd_pack.f.x_dim         = srcs_dims::XDIM;
-    bd_pack.f.y_dim         = ydim;
-    bd_pack.f.z_dim         = srcs_dims::ZDIM;
-    td_pack.buf_desc        = bd_pack;
-    td_pack.buf_desc_id     = buf_desc_id_pack;
+    bd_pack.f.l1_addr_16B = l1_out_addr_16B;
+    bd_pack.f.format = static_cast<std::uint8_t>(pack_S_dst_format);
+    bd_pack.f.x_dim = ckernel::trisc::srcs_dims::XDIM;
+    bd_pack.f.y_dim = ydim;
+    bd_pack.f.z_dim = ckernel::trisc::srcs_dims::ZDIM;
+    td_pack.buf_desc = bd_pack;
+    td_pack.buf_desc_id = buf_desc_id_pack;
     td_pack.reg_data_format = static_cast<std::uint8_t>(pack_S_src_format);
-    _configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
+    ckernel::trisc::_configure_buf_desc_table_(td_pack.buf_desc_id, td_pack.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK1>(td_pack);
 
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !implied_math_format;
+    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::math::TRISC_ID] = !implied_math_format;
 
     _llk_unpack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
     _llk_pack_srcs_config_for_tile_<INSTRN_COUNT>(srcs_32bit_mode);
@@ -96,42 +92,39 @@ inline void _llk_sfpu_srcs_init_(
  * valids. The load/store base addresses and per-slice row count are computed here and passed to
  * @p sfpu_op, so the op carries no SrcS bookkeeping.
  *
- * @tparam INSTRN_COUNT: Must match the value passed to _llk_sfpu_srcs_init_.
+ * @tparam INSTRN_COUNT: Must match the value passed to llk_sfpu_srcs_init.
  * @tparam SfpuOp: Callable sfpu_op(int load_base_addr, int store_base_addr, int num_sfpu_iterations).
  * @param num_tiles: Number of 32x32 tiles to process.
  * @param unpack_S_dst_format: SrcS format used to derive geometry.
- * @param buf_desc_id_unpack: Unpack buffer descriptor ID (from _llk_sfpu_srcs_init_).
- * @param buf_desc_id_pack: Pack buffer descriptor ID (from _llk_sfpu_srcs_init_).
+ * @param buf_desc_id_unpack: Unpack buffer descriptor ID (from llk_sfpu_srcs_init).
+ * @param buf_desc_id_pack: Pack buffer descriptor ID (from llk_sfpu_srcs_init).
  * @param sfpu_op: Per-slice SFPU computation.
  */
 template <std::uint8_t INSTRN_COUNT = 1, typename SfpuOp>
-inline void _llk_sfpu_srcs_(
+inline void llk_sfpu_srcs(
     const std::uint32_t num_tiles,
     const DataFormat unpack_S_dst_format,
     const std::uint8_t buf_desc_id_unpack,
     const std::uint8_t buf_desc_id_pack,
-    SfpuOp&& sfpu_op)
-{
-    const bool srcs_32bit_mode      = _is_srcs_32bit_mode_(unpack_S_dst_format);
-    const std::uint32_t ydim        = srcs_dims::ydim(srcs_32bit_mode);
-    const std::uint32_t slice_count = srcs_dims::slice_count(srcs_32bit_mode);
+    SfpuOp&& sfpu_op) {
+    const bool srcs_32bit_mode = ckernel::trisc::_is_srcs_32bit_mode_(unpack_S_dst_format);
+    const std::uint32_t ydim = ckernel::trisc::srcs_dims::ydim(srcs_32bit_mode);
+    const std::uint32_t slice_count = ckernel::trisc::srcs_dims::slice_count(srcs_32bit_mode);
 
-    const int num_sfpu_iterations = static_cast<int>(ydim >> 1); // SFP_ROWS == 2
-    const int load_base_addr      = ckernel::math::SFPU_SRCS_BASE_ADDR;
-    const int store_base_addr     = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * static_cast<int>(ydim);
+    const int num_sfpu_iterations = static_cast<int>(ydim >> 1);  // SFP_ROWS == 2
+    const int load_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR;
+    const int store_base_addr = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * static_cast<int>(ydim);
 
-    for (std::uint32_t i = 0; i < num_tiles; ++i)
-    {
-        _llk_unpack_srcs_<INSTRN_COUNT>(buf_desc_id_unpack, i * slice_count); // Sets dvalid for SFPU to read
+    for (std::uint32_t i = 0; i < num_tiles; ++i) {
+        _llk_unpack_srcs_<INSTRN_COUNT>(buf_desc_id_unpack, i * slice_count);  // Sets dvalid for SFPU to read
 
         // Pack is issued before the SFPU loop: the SFPU loop fills the instruction buffer and can
         // clog it, leading to hangs if the pack is queued after.
-        _llk_pack_srcs_<INSTRN_COUNT>(buf_desc_id_pack, i * slice_count); // Sets dvalid for SFPU to write
+        _llk_pack_srcs_<INSTRN_COUNT>(buf_desc_id_pack, i * slice_count);  // Sets dvalid for SFPU to write
 
-        for (std::uint32_t slice = 0; slice < slice_count; slice++)
-        {
+        for (std::uint32_t slice = 0; slice < slice_count; slice++) {
             sfpu_op(load_base_addr, store_base_addr, num_sfpu_iterations);
-            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>(); // Clears dvalid for SFPU read and write
+            _llk_math_eltwise_sfpu_srcs_clear_vlds_<true, true>();  // Clears dvalid for SFPU read and write
         }
     }
 }

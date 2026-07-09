@@ -100,7 +100,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "llk_sfpu_srcs.h"
+#include "llk_sfpu_srcs_api.h"
 #include "llk_srcs.h"
 #include "params.h"
 
@@ -118,7 +118,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t buf_desc_id_unpack = 0;
     constexpr std::uint32_t buf_desc_id_pack   = 8;
 
-    _llk_sfpu_srcs_init_(
+    llk_sfpu_srcs_init(
         L1_ADDRESS(params.buffer_S[0]),
         static_cast<DataFormat>(formats.unpack_S_src),
         static_cast<DataFormat>(formats.unpack_S_dst),
@@ -129,7 +129,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         buf_desc_id_pack,
         IMPLIED_MATH_FORMAT);
 
-    _llk_sfpu_srcs_(
+    llk_sfpu_srcs(
         num_tiles,
         static_cast<DataFormat>(formats.unpack_S_dst),
         buf_desc_id_unpack,
