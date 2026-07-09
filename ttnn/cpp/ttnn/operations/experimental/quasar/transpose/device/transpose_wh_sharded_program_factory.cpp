@@ -139,7 +139,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     ttnn::ComputeKernelConfig compute_cfg{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     if (src0_cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_to_dest_mode.emplace(CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        compute_cfg.unpack_to_dest_mode = {{CB_IN0, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
 
     KernelSpec compute_spec{

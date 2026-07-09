@@ -217,12 +217,12 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
     auto make_compute_hw = [&]() -> ComputeHardwareConfig {
-        ttnn::ComputeKernelConfig cfg{
+        ttnn::ComputeKernelConfig hw{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
-            cfg.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+            hw.unpack_to_dest_mode.emplace(IN_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
         }
-        return ttnn::to_compute_hardware_config(device->arch(), cfg);
+        return ttnn::to_compute_hardware_config(device->arch(), hw);
     };
     const std::filesystem::path compute_source(
         "ttnn/cpp/ttnn/operations/experimental/quasar/untilize/device/kernels/compute/"

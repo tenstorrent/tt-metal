@@ -171,8 +171,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     if (src0_cb_data_format == tt::DataFormat::Float32) {
         // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
         // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
-        compute_cfg.unpack_to_dest_mode.emplace(CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
-        compute_cfg.unpack_to_dest_mode.emplace(CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32);
+        compute_cfg.unpack_to_dest_mode = {
+            {CB_IN, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32},
+            {CB_TILIZE, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
 
     // Output binding: ht<=8 -> compute self-loops the borrowed output shard directly; ht>8 -> compute

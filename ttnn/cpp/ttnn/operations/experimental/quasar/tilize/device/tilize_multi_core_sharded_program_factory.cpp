@@ -102,7 +102,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreShardedProgramFactory::c
     ttnn::ComputeKernelConfig compute_hw{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
     if (fp32_llk_acc) {
-        compute_hw.unpack_to_dest_mode.emplace(INPUT_DFB, UnpackToDestMode::UnpackToDestFp32);
+        compute_hw.unpack_to_dest_mode = {{INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
     }
     KernelSpec compute{
         .unique_id = COMPUTE_KERNEL,
