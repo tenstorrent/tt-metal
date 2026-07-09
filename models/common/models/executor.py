@@ -194,18 +194,18 @@ def _plan_batched_prefill(model_args, empty_slots, prompt_lens, num_cached_per_u
     return batched_groups, sequential_positions
 
 
-def _build_batched_prefill_group(
-    tokens, prompt_lens, page_table, empty_slots, positions, padded_batch, prefill_seq_len, block_size
-):
+def _build_batched_prefill_group(tokens, prompt_lens, page_table, positions, padded_batch, prefill_seq_len, block_size):
     """Pack one group of users into folded batched-prefill inputs.
 
-    ``positions`` are indices into ``empty_slots`` for the (up to ``padded_batch``) real users in this
-    group. Returns ``(folded_tokens [1, padded_batch*prefill_seq_len], group_page_table [padded_batch,
-    num_blocks], group_idxs, last_token_idxs)``. ``group_idxs`` are the positions in ``empty_slots`` of
-    the real users (used to index ``tokens``/``prompt_lens``/the output); the page table is built with
-    one LOCAL row per real user (row i = that user's physical blocks), so the attention KV-fill loop and
-    the captured trace use local batch_idx 0..padded_batch-1 — identical across every group, which lets
-    a single trace replay for all groups.
+    ``positions`` are the (up to ``padded_batch``) positional row indices into
+    ``tokens``/``prompt_lens``/``page_table`` for the real users in this group — the same integers the
+    plan uses to index ``empty_slots``, since those tensors are laid out in empty-slot order. Returns
+    ``(folded_tokens [1, padded_batch*prefill_seq_len], group_page_table [padded_batch, num_blocks],
+    group_idxs, last_token_idxs)``. ``group_idxs`` are those row indices (used to index
+    ``tokens``/``prompt_lens``/the output); the page table is built with one LOCAL row per real user
+    (row i = that user's physical blocks), so the attention KV-fill loop and the captured trace use
+    local batch_idx 0..padded_batch-1 — identical across every group, which lets a single trace replay
+    for all groups.
     """
     num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
     folded = torch.zeros(1, padded_batch * prefill_seq_len, dtype=tokens.dtype)
@@ -837,7 +837,7 @@ class EagerLLMExecutor:
                 )
                 prefill_results.extend(
                     self._prefill_forward_batched_group(
-                        tokens, page_table, prompt_lens, empty_slots, positions_g, padded_batch_g, prefill_seq_len_g
+                        tokens, page_table, prompt_lens, positions_g, padded_batch_g, prefill_seq_len_g
                     )
                 )
 
@@ -1094,18 +1094,17 @@ class EagerLLMExecutor:
             {"idx": idx, "last_token_idx": local_i, "logits": logits_host} for local_i, idx in enumerate(group_idxs)
         ]
 
-    def _prefill_forward_batched_group(
-        self, tokens, page_table, prompt_lens, empty_slots, positions, padded_batch, prefill_seq_len
-    ):
-        """Eager batched prefill for ONE uniform-length bucket group: process ``positions`` (indices
-        into ``empty_slots``) in sub-groups of ``padded_batch``, one forward per sub-group, then extract
-        each user's last-token logits. Returns a list of per-user result dicts."""
+    def _prefill_forward_batched_group(self, tokens, page_table, prompt_lens, positions, padded_batch, prefill_seq_len):
+        """Eager batched prefill for ONE uniform-length bucket group: process ``positions`` (row
+        indices into ``tokens``/``prompt_lens``/``page_table``) in sub-groups of ``padded_batch``, one
+        forward per sub-group, then extract each user's last-token logits. Returns a list of per-user
+        result dicts."""
         block_size = get_block_size(self._kv_cache) if self._kv_cache is not None else 32
         prefill_results = []
         for g0 in range(0, len(positions), padded_batch):
             sub_positions = positions[g0 : g0 + padded_batch]
             folded, group_pt, group_idxs, last_token_idxs = _build_batched_prefill_group(
-                tokens, prompt_lens, page_table, empty_slots, sub_positions, padded_batch, prefill_seq_len, block_size
+                tokens, prompt_lens, page_table, sub_positions, padded_batch, prefill_seq_len, block_size
             )
             tokens_embd, cos, sin, pt_tt = self._prepare_batched_prefill_device_inputs(
                 folded, group_pt, prefill_seq_len
@@ -1667,7 +1666,7 @@ class TracedLLMExecutor:
                 )
                 prefill_results.extend(
                     self._prefill_forward_batched_group_traced(
-                        tokens, page_table, prompt_lens, empty_slots, positions_g, padded_batch_g, prefill_seq_len_g
+                        tokens, page_table, prompt_lens, positions_g, padded_batch_g, prefill_seq_len_g
                     )
                 )
 
@@ -1957,7 +1956,7 @@ class TracedLLMExecutor:
         return hidden
 
     def _prefill_forward_batched_group_traced(
-        self, tokens, page_table, prompt_lens, empty_slots, positions, padded_batch, prefill_seq_len
+        self, tokens, page_table, prompt_lens, positions, padded_batch, prefill_seq_len
     ):
         """Traced batched prefill for ONE uniform-length bucket group: one batched (traced when
         allowed) pass per sub-group of padded_batch users, then last-token extraction. Only full
@@ -1970,7 +1969,7 @@ class TracedLLMExecutor:
         for g0 in range(0, len(positions), padded_batch):
             sub_positions = positions[g0 : g0 + padded_batch]
             folded, group_pt, group_idxs, last_token_idxs = _build_batched_prefill_group(
-                tokens, prompt_lens, page_table, empty_slots, sub_positions, padded_batch, prefill_seq_len, block_size
+                tokens, prompt_lens, page_table, sub_positions, padded_batch, prefill_seq_len, block_size
             )
             if can_trace and len(group_idxs) == padded_batch:
                 hidden = self._easy_trace_batched_prefill(
@@ -2730,11 +2729,14 @@ def run_perf_benchmark(
 # Prompt parity with TTTv1: the demos feed ``eval_repeat_prompts_batch32.json`` — the same
 # numeric sequence-continuation prompts TTTv1's ci-eval-32 case uses (simple_text_demo.py).
 # Caveat: the self-consistency assert requires bit-exact reproduction of a prompt's greedy
-# output across batch slots. Degenerate repetitive output (e.g. a small model looping on one
-# token) sits on argmax near-ties whose resolution shifts with batch position (batched-matmul
-# / all-gather FP non-associativity), so it is NOT slot-invariant and will fail the assert. On
-# TTTv2-1B these prompts degenerate and the case fails — a real gap to close (compare against
-# TTTv1's own ci-eval-32 on the same model to confirm whether TTTv1 stays coherent here).
+# output across batch slots. With the CI default (host argmax) decoding is slot-invariant and
+# deterministic, so the case passes and is gated in CI with no xfail. The residual risk is
+# on-device sampling on DEGENERATE repetitive output (a small model looping on one token): such
+# output sits on argmax near-ties whose resolution can shift with batch position (batched-matmul
+# / all-gather FP non-associativity) and would not be slot-invariant. This has NOT been observed
+# for TTTv2-1B — the case is green on N300 under both host and on_device_topk (batched prefill on
+# and off). If a future model's prompts degenerate under on-device sampling, prefer the host-argmax
+# default for this case (or add per-model prompts) rather than treating it as a harness bug.
 
 
 def load_eval_repeat_prompts_batch32() -> list[str]:

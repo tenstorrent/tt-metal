@@ -968,9 +968,11 @@ def _run_eval_repeat_batch32(model: Llama32_1BTransformer1D, mesh_device):
     def allocate_kv_cache(executor):
         return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
 
-    # TTTv1 ci-eval-32 numeric prompts (parity). NOTE: on small models these can degenerate into
-    # repetitive loops whose argmax ties flip by batch slot, failing the assert — see
-    # run_eval_repeat_batch32; that failure is a real gap, not a harness bug.
+    # TTTv1 ci-eval-32 numeric prompts (parity). NOTE: on small models these can in principle
+    # degenerate into repetitive loops whose argmax ties flip by batch slot under on-device sampling
+    # (see run_eval_repeat_batch32). Not observed for llama32_1b: this case is green on N300 under
+    # both host and on_device_topk, so it is gated in CI with no xfail; the host-argmax default is
+    # slot-invariant and deterministic.
     prompts = load_eval_repeat_prompts_batch32()
 
     def tokenize_fn(ps):
