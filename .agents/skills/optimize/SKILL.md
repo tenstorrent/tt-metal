@@ -7,6 +7,20 @@ description: Optimize per-device performance of runnable TTNN code, preserving c
 
 This skill assumes you have runnable TTNN code with passing correctness tests. If not, first use the appropriate bringup or debugging skill. This guide is written for autoregressive LLMs with prefill and decode phases. If the target model differs, map each requirement to the nearest equivalent path and record that mapping; do not drop correctness or performance evidence.
 
+## Core levers (do these first)
+
+Empirical priors for a single-chip LLM decoder, in order. Treat them as inspiration, not mandates: aim for each, do the best you can, and keep what measures better.
+
+1. Fix topology before tuning knobs: run `$graph-rewrite`, then the operation-topology audit.
+2. Check the modules in "Code Paths Worth Reading": if one is close or expected to be similar, reuse it, or copy its decisions into your hand-rolled path.
+3. [if forge recs exist] Seed initial layout/precision from `forge_sharding_recommendations.json` onto the rewritten graph as a first candidate, then re-tune with the levers below ("Core Optimization Rules").
+4. DRAM-shard dominant decode matmuls (OPT-004; "Matmul Choices").
+5. Chain ops L1-resident on a consistent shard spec so they avoid reshards and DRAM round-trips (OPT-003).
+6. Sweep precision and fidelity per tensor group, and verify the chosen policy in the measured `tt-perf-report` rows (OPT-007, OPT-013, OPT-014; "Precision And Fidelity").
+7. Reconcile roofline vs device-time vs end-to-end decode from one traced run ("Performance Accounting").
+
+## Scope and ground rules
+
 This guide does not choose a completely new model-level parallelization strategy from scratch, such as TP vs DP vs EP for the whole model. But if you are optimizing an existing multi-device TTNN path, changing activation layout, residual layout, collective placement, fused CCL+matmul use, and helper-module decomposition is in scope. Do not treat the inherited multichip implementation as fixed when the perf report shows material collectives, resharding, or layout movement.
 
 Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is required to always measure the performance of a traced execution run; untraced/eager decode performance is not acceptable optimized evidence. Teacher-forcing decode must also use the traced path. For complete model or serving paths, avoidable host gaps are part of the optimization target and must be removed rather than merely noted. Always perform optimization using real tensor shapes, sequence shapes, batch size, sharding, and dtypes. Do not shrink hidden sizes, head counts, sequence lengths, or weight shapes just to make evidence easier to collect.
@@ -25,9 +39,9 @@ Profile warmed prefill and decode separately. Use `tt-perf-report` to find bottl
 
 Before operation-level optimization and knob tuning first use $graph-rewrite skill to optimize the structure of the graph. This will reduce the number of operations, and improve the data movement and layout of the graph.
 
-If `doc/functional_decoder/forge_sharding_recommendations.json` exists (left by `$forge-functional-decoder`), read it before starting the on-device sharding search and seed from it instead of the functional DRAM defaults. It records the forge emit's per-op layout, shard spec, program config, weights layout, fusions, and compute-kernel precision. Legalize each emitted grid and shard-core count to your target device's real compute grid at runtime (`mesh_device.compute_with_storage_grid_size()`), shrinking or re-deriving any that do not fit. Apply the emitted layout/precision as the first candidate, then re-tune — the emitted program-config strategy is shape-specialized and only a hint, not necessarily optimal. Rejecting an emitted layout needs a recorded before/after and reason like any other candidate; do not silently leave the op at the DRAM default. Note the file's absence if missing.
-
 Before local knob tuning, do an operation-topology audit of the measured path. Read the code and perf report together, then write a small table with the current operation sequence, material repeated matmuls, material collectives, reshard/layout conversions, candidate fused or lower-movement replacements, dtype/fidelity constraints for each candidate, and the action taken. This is not a comparison to any one existing model. Derive it from the target model's dataflow: if multiple projections consume the same activation, if a collective feeds a matmul, if a matmul is immediately followed by a collective, or if tensors gather/reshard only to satisfy a local helper, that is optimization work.
+
+If `doc/functional_decoder/forge_sharding_recommendations.json` exists (left by `$forge-functional-decoder`), seed the sharding search from it instead of the functional DRAM defaults; it records per-op layout, shard spec, program config, weights layout, fusions, and precision. It predates the graph rewrites, so map each entry by op role and apply it to the ops the rewrites did not already optimize (skip fused/replaced ops, adapt merged ones). Legalize each emitted grid and `core_count` to the target compute grid (`mesh_device.compute_with_storage_grid_size()`), keeping high recommended core counts high. Applying a sharded layout adds `memory_config`/reshard conversions at its boundaries: that is worth it when it builds a chain of sharded L1 ops, so try to form that chain, but a lone shard a consumer immediately undoes is wasteful, so weigh it there. Apply the emitted layout/precision as the first candidate, then re-tune. Leaving an op below its recommendation or at a DRAM default needs a recorded before/after and reason. Note the file's absence if missing.
 
 For multi-device decode, audit topology as coherent families, not isolated knobs. For every material row/column-parallel boundary, compare the feasible families:
 
@@ -217,11 +231,14 @@ If this checklist is not completed, go back and perform those optimization steps
 
 Use this reference while optimizing functional TTNN code. It captures repo-local optimization patterns and the strongest current LLM guidance. If you are not optimizing an LLM, use your best judgement about what applies in your case.
 
+Prefer the reusable modules below when the model fits their contract. When it does not, do not drop to op defaults: read the closest module and replicate its sharding, layout, program configs, and precision in your hand-rolled path, staying as close to it as the target allows, and record the exact contract that blocked direct reuse. A hand-rolled path is a reason to copy the module's decisions, not to abandon them.
+
 ## Code Paths Worth Reading
 
 - `tech_reports/LLMs/llms.md`: LLM memory configs, matmul variants, DRAM-sharded matmul guidance, and perf-report interpretation.
 - `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
 - `models/common/modules/mlp/mlp_1d.py`: decode/prefill MLP split, DRAM-sharded decode matmuls, sharded outputs, and precision knobs.
+- `models/common/modules/rmsnorm/rmsnorm_1d.py`: reusable RMSNorm with a sharded decode path (`to_sharded` input, `LayerNormShardedMultiCoreProgramConfig`, sharded output) and an interleaved fallback; use it, or its `_create_sharded_norm_program_config` math, when hand-rolling `ttnn.rms_norm` so a material norm does not run on 1 core.
 - `models/common/modules/lm_head/lm_head_1d.py`: reusable LM-head output projection with vocab splitting, LM-head dtype, DRAM-sharded weight memory config, input/output memory configs, and decode program config.
 - `models/common/tests/modules/lm_head/test_lm_head_1d.py`: expected LM-head construction, weight splitting, memory config, and PCC checks.
 - `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
@@ -239,6 +256,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - Use SDPA/FlashDecode/FlashAttention ops instead of hand-built attention primitives when the target model fits their contracts.
 - Explicitly configure `memory_config`, `program_config`, and `compute_kernel_config` for important ops. Defaults are often correct but suboptimal.
 - Choose shard specs and core grids that divide tensor dimensions cleanly into tiles. Padding in sharded paths is a common source of bugs or wasted work.
+- Start material ops on a large clean core grid, but treat that as the starting point for the sharding/core/config search, not the goal: fewer cores with wider shards can win when they unlock a larger `in0_block_w`/output block or avoid a reshard (OPT-004/011/014). Deliberately reducing cores with evidence is fine; a material op silently collapsing to 1 core or a tiny grid (check the `tt-perf-report` `Cores` column) is not, and needs a recorded before/after and reason. Holds with or without forge recommendations.
 - For DRAM-sharded decode matmul, weights should be width-sharded in DRAM and activations/outputs width-sharded in L1 on the matching core grid.
 - Keep the primary optimization target single-user batch-1 prefill/decode. This is not permission to remove larger-batch support; preserve correct batch handling and verify up to batch/concurrency 32 for complete model and serving paths when hardware and memory allow it. For MoE decoders on non-Galaxy systems, preserve gate-selected active-expert execution and prefer the GPT-OSS `ttnn.sparse_matmul` path for sparse expert projections plus score weighting and expert reduction. Dense all-expert execution is a debug baseline, not the optimized target.
 
@@ -292,7 +310,7 @@ For dense MLP or expert gate/up/down geometry work, include the best legal reduc
 
 For each dominant matmul role, the final report must list shape, dtype/fidelity, program class, logical program core count or grid source, input shard shape in tiles, `in0_block_w`, `per_core_M`, `per_core_N`, output subblock fields when exposed, input and output memory configs, bandwidth classification, traced latency, correctness result, and kept/rejected decision. If `tt-perf-report` marks a dominant DRAM-sharded matmul `SLOW`, reports low DRAM utilization, reports missing output subblock information, or shows a small `in0_block_w` on a material row, do not accept the stage until a precision-locked block-geometry sweep has tried larger legal `in0_block_w` divisors, including non-powers-of-two and `16` when legal, or recorded a precise L1/divisibility/op-contract blocker.
 
-### OPT-005: Keep logical decode batch separate from tile padding
+### OPT-005: Keep logical decode batch separate from tile padding [guardrail]
 
 Decoder kernels often use tile-padded activation rows, such as one logical token padded to 32 rows. Those padded rows are a tensor-layout contract, not extra active users. Do not change logical batch, active user count, page-table semantics, or KV-cache indexing just to satisfy an op shape check. A result with the right matmul shape but the wrong active batch is a different workload.
 
@@ -300,7 +318,7 @@ When reporting or comparing decode attention, list logical user batch, tile-padd
 
 If an optimized decoder candidate changes logical batch from the target workload, the stage is not optimized for that target, even if PCC passes and the matmul rows look good. Such a run can be kept only as a separate throughput-scaling experiment, clearly labeled with active batch and excluded from single-user decoder signoff.
 
-### OPT-006: Sign off cumulative optimized contracts, not isolated wins
+### OPT-006: Sign off cumulative optimized contracts, not isolated wins [guardrail]
 
 Optimized decoder work is cumulative. Before a new focused experiment, write the strongest prior correct candidate's required contracts: projection topology, weight dtypes and math fidelity by tensor group, KV-cache dtype/layout, logical batch and tile padding, attention program config, residual/norm memory layout, dominant matmul geometry, and known required layout transitions. The new candidate must preserve those contracts unless the experiment is explicitly testing one of them.
 
@@ -318,7 +336,7 @@ Do not reject BFP4 attention because BFP4 MLP failed, because BFP8 activations w
 
 The final report must list QKV/output-projection dtype and fidelity, weight memory config, row times, SDPA/cache side effects, correctness, follow-on cache-use evidence when cache PCC is the concern, and kept/rejected decision. If attention projections remain BFP8 or BF16 while QKV, Q/K/V, output projection, or fused attention matmul rows are material, the stage is not optimized without a real-weight BFP4 attention trial or a precise op/correctness blocker.
 
-### OPT-008: Compare row-parallel output projection decompositions
+### OPT-008: Compare row-parallel output projection decompositions [if multi-device]
 
 For tensor-parallel row-parallel output projections, choose the algebra before choosing the CCL primitive. Compare the two main legal decompositions: local-input/full-output matmul followed by reduce or reduce-scatter, and gathered-input/local-output matmul followed by all-gather when the residual boundary needs replicated hidden state. The second family often appears as fused all-gather plus matmul with output-sharded weights. Do not reject it because a matmul-reduce-scatter candidate failed, because a sharded-residual carry-forward probe failed, or because the functional implementation uses local full-output weights.
 
@@ -326,7 +344,7 @@ When testing fused all-gather plus output projection, repack or reshard the proj
 
 The final report for a material row-parallel output projection must list which decomposition was selected, the weight sharding/layout for each candidate, fused op rank/layout requirements, CCL transfer count, program config, row times, whole-layer latency, correctness, and exact blocker for rejected decompositions. If the fused all-gather-matmul path fails with L1 circular-buffer allocation, report the requested and available bytes plus the tensor shapes and program config that produced them; then try the smallest legal local-output candidate before treating the fused family as blocked.
 
-### OPT-009: Make repeated decode CCL buffers persistent when legal
+### OPT-009: Make repeated decode CCL buffers persistent when legal [if multi-device]
 
 For repeated traced decode collectives, async CCL is not complete by itself. If an all-gather, reduce-scatter, all-reduce, or fused CCL+matmul row is material and runs every token or every layer, try the API's persistent or preallocated output, intermediate, and ring buffers when available. This applies to hidden all-gathers after output projections, reduce-scatters after row-parallel matmuls, LM-head or logits collectives, expert collectives, and fused CCL+matmul rows.
 
@@ -352,7 +370,7 @@ Keep the model-visible boundary contract fixed while testing the working shard. 
 
 The final report must list the boundary memory config, candidate working memory configs, shard shapes in tiles, legal and rejected `in0_block_w`/subblock values, exact divisibility or L1 errors, added layout rows, row times, whole-layer latency, correctness, and kept/rejected decision. A dominant matmul group blocked by an error like "shard inner tiles must be divisible by `in0_block_w`" is not optimized until a wider working-shard candidate has been measured or a precise blocker is recorded.
 
-### OPT-012: Do not let synthetic precision stress veto real-weight wins
+### OPT-012: Do not let synthetic precision stress veto real-weight wins [guardrail]
 
 Random-weight and synthetic-activation precision cases are stress probes, not the definition of the optimized dtype/fidelity policy. When a lower-precision or lower-fidelity candidate is faster on real target-model weights plus recorded or real target activations, and it passes the stage's real-weight PCC, trace replay, and runtime checks, do not reject it only because a synthetic/random-weight "representative semantics" check falls below a PCC threshold against a higher-precision reference. That result may mean the synthetic distribution is adversarial or not representative of the target model.
 
@@ -360,7 +378,7 @@ If synthetic coverage fails while real target-model evidence passes, either keep
 
 The final report must list the real-weight PCCs, synthetic PCCs if run, traced latencies, and which evidence actually decided the policy. Do not create a passing test suite by marking the lower-precision synthetic case as an expected diagnostic failure while selecting the slower fallback. If such a test exists, its purpose is diagnostic coverage; it is not an acceptance gate.
 
-### OPT-013: Prove dtype policy reached the measured ops
+### OPT-013: Prove dtype policy reached the measured ops [guardrail]
 
 A dtype/fidelity policy is not implemented until the measured runtime rows show it. Policy names, dataclass defaults, JSON summaries, and constructor arguments are only intent. Before accepting a reduced-precision candidate, inspect `tt-perf-report` or an equivalent profiler artifact for each dominant matmul row and confirm the row's input dtype, weight dtype, output dtype, and math fidelity match the selected policy.
 
