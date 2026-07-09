@@ -208,7 +208,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Shard files for ${{ matrix.hw }}/${{ matrix.shape }}:"; ls -la shards/
-          curl -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-performance-dashboard/main/perf_measurement_script.py -o driver.py
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL https://raw.githubusercontent.com/Aswincloud/ttnn-performance-dashboard/main/perf_measurement_script.py -o driver.py
           python3 driver.py --merge shards/shard-*.json
           # Name the combined file after the board+shape so our repo can tell them apart.
           f=$(ls -1 eltwise_perf_results_*_final.json | head -1)
