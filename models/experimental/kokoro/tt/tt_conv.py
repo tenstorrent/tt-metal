@@ -22,6 +22,58 @@ import torch.nn.functional as F
 import ttnn
 
 
+# --- Opt-in prepared-weight caching for metal-trace capture ---------------------------------
+# ``ttnn.conv1d`` / ``ttnn.conv_transpose2d`` prepare (tilize + reshard) their weights on host and
+# UPLOAD them to device on every invocation.  That host->device write is illegal inside
+# ``ttnn.begin_trace_capture`` ("Writes are not supported during trace capture"), so the generator
+# forward cannot be trace-captured while convs re-upload weights each call.
+#
+# When trace weight-prep is enabled, the FIRST call to each conv site asks the op to hand back the
+# tensors it prepared (``return_weights_and_bias=True``) and caches them on device; every later call
+# reuses those prepared tensors (weights already on device -> no upload), which is what makes the
+# graph trace-capturable.  Reusing the op's own prepared weights is byte-identical to the raw path
+# (verified PCC = 1.0 for both conv1d and conv_transpose2d), so this changes only *where* the weight
+# prep happens, never the math.  Default OFF: every existing (non-traced) caller is untouched.
+_TRACE_WEIGHT_PREP_ENABLED = False
+_TRACE_PREP_CACHE: dict = {}
+
+
+def set_trace_weight_prep(enabled: bool) -> None:
+    """Enable/disable conv prepared-weight caching (see module note). Off by default."""
+    global _TRACE_WEIGHT_PREP_ENABLED
+    _TRACE_WEIGHT_PREP_ENABLED = bool(enabled)
+
+
+def clear_trace_weight_prep_cache() -> None:
+    """Drop all cached prepared conv weights. Call before closing the owning device."""
+    _TRACE_PREP_CACHE.clear()
+
+
+def _prep_signature(x, out_dtype, extra) -> tuple:
+    """Cache key discriminator: identical (shape, dtype, mem-config, out-dtype, site) -> same prep."""
+    return (
+        tuple(int(d) for d in x.shape),
+        str(x.dtype),
+        str(x.memory_config()),
+        str(out_dtype),
+    ) + tuple(extra)
+
+
+def _weights_for_conv(params, sig):
+    """Resolve (weight, bias, want_weights_and_bias) honouring the trace-prep cache.
+
+    ``sig is None`` (prep disabled, or a code path that opts out) -> raw weights, no reuse.
+    Cache hit -> reuse the on-device prepared tensors. Cache miss with prep enabled -> raw weights
+    but ask the op to return its prepared tensors so the caller can store them under ``sig``.
+    """
+    if sig is None:
+        return params.weight, params.bias, False
+    cached = _TRACE_PREP_CACHE.get((id(params), sig))
+    if cached is not None:
+        return cached[0], cached[1], False
+    return params.weight, params.bias, True
+
+
 def upload_conv1d_params_from_module(
     conv: nn.Conv1d,
     _device,
@@ -575,13 +627,15 @@ def tt_conv1d_nlc(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
         )
 
-    y, out_len = ttnn.conv1d(
+    _sig = _prep_signature(x_nlc, out_dtype, extra=("conv1d", L)) if _TRACE_WEIGHT_PREP_ENABLED else None
+    _w, _b, _want_wb = _weights_for_conv(params, _sig)
+    _res = ttnn.conv1d(
         input_tensor=x_nlc,
-        weight_tensor=params.weight,
+        weight_tensor=_w,
         in_channels=params.in_channels,
         out_channels=params.out_channels,
         device=device,
-        bias_tensor=params.bias,
+        bias_tensor=_b,
         kernel_size=params.kernel_size,
         stride=params.stride,
         padding=params.padding,
@@ -593,7 +647,13 @@ def tt_conv1d_nlc(
         groups=params.groups,
         dtype=out_dtype,
         return_output_dim=True,
+        return_weights_and_bias=_want_wb,
     )
+    if _want_wb:
+        y, out_len, _wb = _res
+        _TRACE_PREP_CACHE[(id(params), _sig)] = (_wb[0], _wb[1])
+    else:
+        y, out_len = _res
     if len(y.shape) == 4 and y.shape[0] == 1:
         y = ttnn.squeeze(y, 0)
     if len(y.shape) == 4 and y.shape[1] == 1:
@@ -929,13 +989,21 @@ def tt_conv_transpose1d_nlc(
             if _use_dram_slice
             else None
         )
-        y, out_hw = ttnn.conv_transpose2d(
+        # Prepared-weight reuse only on the non-DRAM-sliced path (the sliced path's weight prep is
+        # entangled with the slice config; the generator's ups never slice).
+        _sig = (
+            _prep_signature(x, out_dtype, extra=("ctH", seq))
+            if (_TRACE_WEIGHT_PREP_ENABLED and _height_slice_cfg is None)
+            else None
+        )
+        _w, _b, _want_wb = _weights_for_conv(params, _sig)
+        _res = ttnn.conv_transpose2d(
             input_tensor=x,
-            weight_tensor=params.weight,
+            weight_tensor=_w,
             in_channels=params.in_channels,
             out_channels=params.out_channels,
             device=device,
-            bias_tensor=params.bias,
+            bias_tensor=_b,
             kernel_size=(params.kernel_size, 1),
             stride=(params.stride, 1),
             padding=(params.padding, 0),
@@ -951,7 +1019,13 @@ def tt_conv_transpose1d_nlc(
             dram_slice_config=_height_slice_cfg,
             mirror_kernel=params.mirror_kernel,
             return_output_dim=True,
+            return_weights_and_bias=_want_wb,
         )
+        if _want_wb:
+            y, out_hw, _wb = _res
+            _TRACE_PREP_CACHE[(id(params), _sig)] = (_wb[0], _wb[1])
+        else:
+            y, out_hw = _res
         oh, ow = int(out_hw[0]), int(out_hw[1])
         flat = oh * ow
         y = ttnn.reshape(y, (y.shape[0], flat, y.shape[3]), memory_config=memory_config)
@@ -961,13 +1035,15 @@ def tt_conv_transpose1d_nlc(
             y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=memory_config)
         return y
 
-    y, out_hw = ttnn.conv_transpose2d(
+    _sig = _prep_signature(x, out_dtype, extra=("ctW", seq)) if _TRACE_WEIGHT_PREP_ENABLED else None
+    _w, _b, _want_wb = _weights_for_conv(params, _sig)
+    _res = ttnn.conv_transpose2d(
         input_tensor=x,
-        weight_tensor=params.weight,
+        weight_tensor=_w,
         in_channels=params.in_channels,
         out_channels=params.out_channels,
         device=device,
-        bias_tensor=params.bias,
+        bias_tensor=_b,
         kernel_size=(1, params.kernel_size),
         stride=(1, params.stride),
         padding=(0, params.padding),
@@ -982,6 +1058,12 @@ def tt_conv_transpose1d_nlc(
         dtype=out_dtype,
         mirror_kernel=params.mirror_kernel,
         return_output_dim=True,
+        return_weights_and_bias=_want_wb,
     )
+    if _want_wb:
+        y, out_hw, _wb = _res
+        _TRACE_PREP_CACHE[(id(params), _sig)] = (_wb[0], _wb[1])
+    else:
+        y, out_hw = _res
     y = ttnn.reshape(y, (y.shape[0], out_hw[1], y.shape[3]), memory_config=memory_config)
     return y

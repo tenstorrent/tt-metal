@@ -20,11 +20,19 @@ def device(request):
 
         @pytest.mark.parametrize("device", [{"num_command_queues": 2}], indirect=True)
 
-    Unset keys fall back to: ``l1_small_size=24576``, ``num_command_queues=1``.
+    Unset keys fall back to: ``l1_small_size=24576``, ``num_command_queues=1``,
+    ``trace_region_size=0`` (0 = tracing disabled; set it to reserve a DRAM trace
+    region for ``ttnn.begin_trace_capture``).
     """
     params: dict = getattr(request, "param", {})
     l1_small_size = params.get("l1_small_size", 24576)
     num_command_queues = params.get("num_command_queues", 1)
-    dev = ttnn.open_device(device_id=0, l1_small_size=l1_small_size, num_command_queues=num_command_queues)
+    trace_region_size = params.get("trace_region_size", 0)
+    dev = ttnn.open_device(
+        device_id=0,
+        l1_small_size=l1_small_size,
+        num_command_queues=num_command_queues,
+        trace_region_size=trace_region_size,
+    )
     yield dev
     ttnn.close_device(dev)
