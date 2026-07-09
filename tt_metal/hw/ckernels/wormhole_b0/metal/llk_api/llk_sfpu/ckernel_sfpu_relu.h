@@ -30,21 +30,30 @@ inline void relu_clamp_uint(uint threshold) {
         LAYOUT == sfpi::DataLayout::U16 || LAYOUT == sfpi::DataLayout::U32,
         "relu_clamp_uint requires DataLayout::U16 or U32 (uint8 dispatches through U32)");
     const vUInt t = static_cast<unsigned>(threshold);
-    const vUInt t_hi = t >> 16;
-    const vUInt t_lo = t & 0xFFFF;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt x = dst_reg[0].mode<LAYOUT>();
-        vUInt x_hi = x >> 16;
-        vUInt x_lo = x & 0xFFFF;
-        if constexpr (IS_LOWER_BOUND) {
-            // relu_min: max(x, t): take the threshold on lanes where x < t
-            v_if((x_hi < t_hi) || ((x_hi == t_hi) && (x_lo < t_lo))) { x = t; }
-            v_endif;
+        if constexpr (LAYOUT == sfpi::DataLayout::U32) {
+            // full-range: compare on 16-bit halves to avoid the >= 2^31 subtract overflow
+            const vUInt t_hi = t >> 16, t_lo = t & 0xFFFF;
+            vUInt x_hi = x >> 16, x_lo = x & 0xFFFF;
+            if constexpr (IS_LOWER_BOUND) {
+                // relu_min: max(x, t): take the threshold on lanes where x < t
+                v_if((x_hi < t_hi) || ((x_hi == t_hi) && (x_lo < t_lo))) { x = t; }
+                v_endif;
+            } else {
+                // relu_max/relu6: min(x, t): take the threshold on lanes where x > t
+                v_if((x_hi > t_hi) || ((x_hi == t_hi) && (x_lo > t_lo))) { x = t; }
+                v_endif;
+            }
         } else {
-            // relu_max/relu6: min(x, t): take the threshold on lanes where x > t
-            v_if((x_hi > t_hi) || ((x_hi == t_hi) && (x_lo > t_lo))) { x = t; }
-            v_endif;
+            if constexpr (IS_LOWER_BOUND) {
+                v_if(x < t) { x = t; }
+                v_endif;
+            } else {
+                v_if(x > t) { x = t; }
+                v_endif;
+            }
         }
         dst_reg[0].mode<LAYOUT>() = x;
         dst_reg++;

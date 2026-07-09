@@ -893,6 +893,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_uint32({}, 6u);", idst)};
             }
             if (input_dtype == DataType::INT32) {
+                // 0x40c00000u == bit_cast<float>(6.0f); the _relu_max_ int32 path reinterprets the
+                // threshold via Converter::as_float, so this decodes back to the integer limit 6.
                 return {"relu_max_tile_init();", fmt::format("relu_max_tile_int32({}, 0x40c00000u);", idst)};
             }
             return {"relu_max_tile_init();", fmt::format("relu_max_tile({}, 0x40c00000u);", idst)};
