@@ -1629,9 +1629,17 @@ def test_reshard_between_L1_and_DRAM(
     # Operation under test: reshard between the input and output memory configs.
     tt_output = ttnn.to_memory_config(tt_input, output_mem_config)
 
-    # Read back through a DRAM-interleaved tensor and compare against the input.
+    # Read the reshard output back through a DRAM-interleaved tensor.
     tt_output = ttnn.to_memory_config(tt_output, dram_interleaved)
     torch_result = tt_output.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    passing, output = comp_equal(torch_tensor, torch_result)
+    # Golden: the reshard *input* read back through the same interleaved path. Comparing
+    # against this (rather than the original torch tensor) measures only reshard fidelity,
+    # which is a bit-exact page copy, and excludes the block-float (bf8_b/bf4_b) rounding
+    # applied when the tensor was first created - otherwise bf8_b/bf4_b would show PCC ~0.99
+    # purely from that quantization, not from the reshard.
+    tt_input_golden = ttnn.to_memory_config(tt_input, dram_interleaved)
+    torch_golden = tt_input_golden.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    passing, output = comp_equal(torch_golden, torch_result)
     assert passing, output
