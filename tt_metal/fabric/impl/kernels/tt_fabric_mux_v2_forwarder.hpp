@@ -10,6 +10,10 @@ namespace tt::tt_fabric::mux_v2::kernel {
 
 constexpr uint32_t kForwarderServiceBurstSize = ct_args::forwarder_service_burst_size;
 
+// Downstream payload/header transport is posted.
+// Router free-slot credit updates stay non-posted inside setup_stateful_send_cmd_bufs.
+constexpr bool kUsePostedDownstreamWrites = true;
+
 static_assert(
     ct_args::shared_trid_ring_capacity <= (NOC_MAX_TRANSACTION_ID + 1),
     "Forwarder shared TRID ring capacity exceeds available transaction IDs");
@@ -90,11 +94,11 @@ inline void try_forward_channel_packet(
 
     if constexpr (!DrainMode) {
         const uint32_t trid = shared_trid_ring.get_next_transaction_id();
-        fabric_connection.send_current_slot_stateful_non_blocking_from_address_with_trid(
+        fabric_connection.send_current_slot_stateful_non_blocking_from_address_with_trid<kUsePostedDownstreamWrites>(
             packet_l1_address, packet_size_bytes, trid, noc_index);
         shared_trid_ring.publish_logical_channel_id(logical_channel_id, trid);
     } else {
-        fabric_connection.send_current_slot_stateful_non_blocking_from_address(
+        fabric_connection.send_current_slot_stateful_non_blocking_from_address<kUsePostedDownstreamWrites>(
             packet_l1_address, packet_size_bytes, noc_index);
     }
 
@@ -139,7 +143,7 @@ inline void run_forwarder(ForwarderContext& context) {
     noc_semaphore_wait(manager_init_done_sem_ptr, 1);
 
     shared_trid_ring.initialize();
-    fabric_connection.setup_stateful_send_cmd_bufs</*posted=*/false>(noc_index);
+    fabric_connection.setup_stateful_send_cmd_bufs<kUsePostedDownstreamWrites>(noc_index);
     const uint8_t data_noc_cmd_buf = fabric_connection.get_stateful_send_data_noc_cmd_buf();
     uint32_t cached_downstream_free_slots = fabric_connection.get_num_free_write_slots();
 
@@ -162,6 +166,11 @@ inline void run_forwarder(ForwarderContext& context) {
         }
     }
 
+    // Drain posted payload/header writes before teardown. Keep close handshake non-posted
+    // (BH has known issues with posted inline writes on the connection path).
+    if constexpr (kUsePostedDownstreamWrites) {
+        noc_async_posted_writes_flushed(noc_index);
+    }
     fabric_connection.close();
 
     noc_async_write_barrier();
