@@ -126,9 +126,9 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
     // Preserve the legacy explicit RISCV_0 / NOC RISCV_0_default placement.
     DataMovementHardwareConfig brisc_hw;
     if (input.device()->arch() == tt::ARCH::QUASAR) {
-        brisc_hw = DataMovementGen2Config{};
+        brisc_hw = DataMovement2xxConfig{};
     } else {
-        brisc_hw = DataMovementGen1Config{
+        brisc_hw = DataMovement1xxConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
         };
@@ -146,9 +146,9 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyLocalShardFactory<local_is
     // Preserve the legacy explicit RISCV_1 / NOC RISCV_1_default placement.
     DataMovementHardwareConfig ncrisc_hw;
     if (input.device()->arch() == tt::ARCH::QUASAR) {
-        ncrisc_hw = DataMovementGen2Config{};
+        ncrisc_hw = DataMovement2xxConfig{};
     } else {
-        ncrisc_hw = DataMovementGen1Config{
+        ncrisc_hw = DataMovement1xxConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
         };

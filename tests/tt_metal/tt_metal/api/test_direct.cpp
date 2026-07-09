@@ -242,12 +242,12 @@ bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, 
     experimental::DataMovementHardwareConfig reader_dm_cfg;
     experimental::DataMovementHardwareConfig writer_dm_cfg;
     if (is_quasar) {
-        reader_dm_cfg = experimental::DataMovementGen2Config{};
-        writer_dm_cfg = experimental::DataMovementGen2Config{};
+        reader_dm_cfg = experimental::DataMovement2xxConfig{};
+        writer_dm_cfg = experimental::DataMovement2xxConfig{};
     } else {
-        reader_dm_cfg = experimental::DataMovementGen1Config{
+        reader_dm_cfg = experimental::DataMovement1xxConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_dm_cfg = experimental::DataMovementGen1Config{
+        writer_dm_cfg = experimental::DataMovement1xxConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
     }
 
@@ -424,12 +424,12 @@ bool reader_datacopy_writer(
     experimental::DataMovementHardwareConfig reader_dm_cfg;
     experimental::DataMovementHardwareConfig writer_dm_cfg;
     if (is_quasar) {
-        reader_dm_cfg = experimental::DataMovementGen2Config{};
-        writer_dm_cfg = experimental::DataMovementGen2Config{};
+        reader_dm_cfg = experimental::DataMovement2xxConfig{};
+        writer_dm_cfg = experimental::DataMovement2xxConfig{};
     } else {
-        reader_dm_cfg = experimental::DataMovementGen1Config{
+        reader_dm_cfg = experimental::DataMovement1xxConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
-        writer_dm_cfg = experimental::DataMovementGen1Config{
+        writer_dm_cfg = experimental::DataMovement1xxConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
     }
 
@@ -466,14 +466,14 @@ bool reader_datacopy_writer(
         unpack_modes = {{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}};
     }
     if (is_quasar) {
-        compute_hw_config = experimental::ComputeGen2Config{
+        compute_hw_config = experimental::Compute2xxConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .unpack_to_dest_en = fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_modes,
         };
     } else {
-        compute_hw_config = experimental::ComputeGen1Config{
+        compute_hw_config = experimental::Compute1xxConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .unpack_to_dest_mode = unpack_modes,

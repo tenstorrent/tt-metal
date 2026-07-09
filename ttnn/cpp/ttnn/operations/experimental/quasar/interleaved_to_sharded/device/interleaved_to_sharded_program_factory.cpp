@@ -294,7 +294,7 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
                       "eltwise_copy.cpp",
             .dfb_bindings = {ConsumerOf(I2S_INPUT_DFB, "in0"), ProducerOf(I2S_OUTPUT_DFB, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = ComputeGen2Config{},
+            .hw_config = Compute2xxConfig{},
         });
     }
 

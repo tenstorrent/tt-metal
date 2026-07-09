@@ -241,9 +241,9 @@ ProgramArtifacts create_sharded_artifacts(
 
     m2::DataMovementHardwareConfig writer_hw;
     if (a.device()->arch() == tt::ARCH::QUASAR) {
-        writer_hw = m2::DataMovementGen2Config{};
+        writer_hw = m2::DataMovement2xxConfig{};
     } else {
-        writer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
+        writer_hw = m2::DataMovement1xxConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
     }
 
     m2::KernelSpec writer_spec{

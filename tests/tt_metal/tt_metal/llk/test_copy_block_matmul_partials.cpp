@@ -114,9 +114,9 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        reader_hw_config = experimental::DataMovementGen1Config{
+        reader_hw_config = experimental::DataMovement1xxConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
     }
     experimental::KernelSpec reader_spec{
@@ -133,9 +133,9 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        writer_hw_config = experimental::DataMovementGen1Config{
+        writer_hw_config = experimental::DataMovement1xxConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
     }
     experimental::KernelSpec writer_spec{
@@ -165,13 +165,13 @@ void run_single_core_copy_block_matmul_partials(
             unpack_modes = {{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}};
         }
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            compute_hw_config = experimental::ComputeGen2Config{
+            compute_hw_config = experimental::Compute2xxConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
                 .unpack_to_dest_mode = unpack_modes,
             };
         } else {
-            compute_hw_config = experimental::ComputeGen1Config{
+            compute_hw_config = experimental::Compute1xxConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
                 .unpack_to_dest_mode = unpack_modes,
