@@ -20,6 +20,10 @@ def random_torch_tensor(dtype, shape):
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.uint32:
         return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint8:
+        return torch.randint(0, 256, shape, dtype=torch.uint8)
+    if dtype == ttnn.float32:
+        return torch.rand(shape, dtype=torch.float32)
     return torch.rand(shape).bfloat16().float()
 
 
@@ -1523,3 +1527,111 @@ def test_reshard_variant6_reverse_dealloc_order(device):
 
     ttnn.synchronize_device(device)
     assert tt_embeddings.shape == ttnn.Shape([batch_size, seq_len, hidden_size])
+
+
+# ---------------------------------------------------------------------------
+# Resharding between L1 and DRAM - tracked in
+# https://github.com/tenstorrent/tt-metal/issues/49224
+#
+# Sweeps ttnn.to_memory_config across every combination of input/output buffer
+# type (L1/DRAM), memory layout (height/width/block sharded, interleaved), data
+# type and page layout (tile / row-major). Many of these combinations are
+# currently broken (wrong data or an op-side raise); this test reproduces the
+# whole space so the sweep flips green once the op is fixed.
+# ---------------------------------------------------------------------------
+
+_L1_DRAM_SCHEMES = [
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ttnn.TensorMemoryLayout.INTERLEAVED,
+]
+_L1_DRAM_SCHEME_IDS = ["HS", "WS", "BS", "I"]
+
+_L1_DRAM_DTYPES = [
+    ttnn.float32,
+    ttnn.bfloat16,
+    ttnn.int32,
+    ttnn.uint16,
+    ttnn.uint32,
+    ttnn.uint8,
+    ttnn.bfloat8_b,
+    ttnn.bfloat4_b,
+]
+_L1_DRAM_DTYPE_IDS = ["f32", "bf16", "i32", "u16", "u32", "u8", "bf8_b", "bf4_b"]
+
+_L1_DRAM_INT_DTYPES = {ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8}
+
+
+def _l1_dram_mem_config(scheme, buffer_type, height, width, grid_size):
+    """Build a MemoryConfig for a 256x256 tensor for the given scheme/buffer type."""
+    if scheme == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return ttnn.MemoryConfig(memory_layout=scheme, buffer_type=buffer_type)
+
+    if scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        if grid_size.x < 8:
+            pytest.skip("Device grid too small for 8-core height sharding")
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        shard_shape = (height // 8, width)
+    elif scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        if grid_size.x < 8:
+            pytest.skip("Device grid too small for 8-core width sharding")
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+        shard_shape = (height, width // 8)
+    else:  # BLOCK_SHARDED
+        if grid_size.x < 4 or grid_size.y < 4:
+            pytest.skip("Device grid too small for 4x4 block sharding")
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
+        shard_shape = (height // 4, width // 4)
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(scheme, buffer_type, shard_spec)
+
+
+@pytest.mark.parametrize("dtype", _L1_DRAM_DTYPES, ids=_L1_DRAM_DTYPE_IDS)
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE", "RM"])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["in_L1", "in_DRAM"])
+@pytest.mark.parametrize("input_scheme", _L1_DRAM_SCHEMES, ids=["in_" + s for s in _L1_DRAM_SCHEME_IDS])
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["out_L1", "out_DRAM"])
+@pytest.mark.parametrize("output_scheme", _L1_DRAM_SCHEMES, ids=["out_" + s for s in _L1_DRAM_SCHEME_IDS])
+def test_reshard_between_L1_and_DRAM(
+    device, dtype, layout, input_buffer_type, input_scheme, output_buffer_type, output_scheme
+):
+    """
+    Sweep ttnn.to_memory_config resharding between L1 and DRAM, see
+    https://github.com/tenstorrent/tt-metal/issues/49224.
+
+    Round-trips a 256x256 tensor: build it in the input memory config, reshard
+    to the output memory config (the op under test), read it back through a
+    DRAM-interleaved tensor and check it matches the input.
+    """
+    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        pytest.skip("Illegal layout/dtype config: block-float requires TILE layout")
+
+    grid_size = device.compute_with_storage_grid_size()
+
+    height, width = 256, 256
+    shape = [1, 1, height, width]
+
+    dram_interleaved = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
+    )
+    input_mem_config = _l1_dram_mem_config(input_scheme, input_buffer_type, height, width, grid_size)
+    output_mem_config = _l1_dram_mem_config(output_scheme, output_buffer_type, height, width, grid_size)
+
+    torch_tensor = random_torch_tensor(dtype, shape)
+
+    # Build the input tensor in its memory config (interleaved DRAM -> input config).
+    tt_tensor = ttnn.Tensor(torch_tensor, dtype).to(layout)
+    tt_tensor = tt_tensor.to(device, dram_interleaved)
+    tt_input = ttnn.to_memory_config(tt_tensor, input_mem_config)
+
+    # Operation under test: reshard between the input and output memory configs.
+    tt_output = ttnn.to_memory_config(tt_input, output_mem_config)
+
+    # Read back through a DRAM-interleaved tensor and compare against the input.
+    tt_output = ttnn.to_memory_config(tt_output, dram_interleaved)
+    torch_result = tt_output.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    passing, output = comp_equal(torch_tensor, torch_result)
+    assert passing, output
