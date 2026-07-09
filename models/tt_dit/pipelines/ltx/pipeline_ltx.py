@@ -474,9 +474,8 @@ class LTXPipeline:
         """
         if self._owned_audio_submesh is not None:
             ttnn.synchronize_device(self._owned_audio_submesh)
-            # The adopted adapter owns both mel-decoder + vocoder; dropping it releases the
-            # submesh-resident audio device tensors (ltx-rt set tt_audio_decoder /
-            # tt_vocoder_with_bwe to None directly; those are now adapter-backed properties).
+            # The adapter owns both mel-decoder + vocoder (exposed via the tt_mel_decoder /
+            # tt_vocoder_with_bwe properties); dropping it frees the submesh-resident audio tensors.
             self._audio_adapter = None
             self.audio_ccl_manager = self.vae_ccl_manager
             self.audio_mesh_device = self.mesh_device

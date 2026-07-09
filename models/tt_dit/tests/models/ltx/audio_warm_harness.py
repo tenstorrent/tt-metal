@@ -39,7 +39,7 @@ ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 def _stage_decode(pipeline, latent, num_frames):
     """One decode, returning (mel_ms, voc_ms, total_ms). Mirrors decode_audio's stage split
     but measured here so it works regardless of LTX_TIME_STAGES."""
-    z = pipeline.tt_audio_decoder.z_channels
+    z = pipeline.tt_mel_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
     ttnn.synchronize_device(pipeline.audio_mesh_device)
     t0 = time.perf_counter()
@@ -58,7 +58,7 @@ def _probe_split(pipeline, latent, num_frames, reps, label):
     TRACED leg. If its wall does NOT shrink when traced (host dispatch removed), the stage is
     device-bound and op-count reduction — not trace — is the durable lever."""
     vwb = pipeline.tt_vocoder_with_bwe
-    z = pipeline.tt_audio_decoder.z_channels
+    z = pipeline.tt_mel_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
     mel = pipeline._decode_mel(audio_spatial)
     voc_ms, bwe_ms = [], []
@@ -194,7 +194,7 @@ def test_warm_harness(
     pipeline._traced = False
     pipeline.tt_vocoder_with_bwe.use_trace = False
     pipeline.tt_vocoder_with_bwe.use_trace_bwe = False
-    pipeline.tt_audio_decoder.use_trace = False
+    pipeline.tt_mel_decoder.use_trace = False
     eager_total, _ = _avg_leg(pipeline, latent, num_frames, eager_reps, warmups, "EAGER")
     if probe:
         _probe_split(pipeline, latent, num_frames, max(eager_reps, 3), "EAGER")
@@ -208,7 +208,7 @@ def test_warm_harness(
         # reps silently run eager. Mirrors _new_audio_decoder's env gating.
         pipeline.tt_vocoder_with_bwe.use_trace = os.environ.get("LTX_VOC_TRACE", "1") != "0"
         pipeline.tt_vocoder_with_bwe.use_trace_bwe = os.environ.get("LTX_BWE_TRACE", "1") != "0"
-        pipeline.tt_audio_decoder.use_trace = os.environ.get("LTX_VAE_TRACE", "1") != "0"
+        pipeline.tt_mel_decoder.use_trace = os.environ.get("LTX_VAE_TRACE", "1") != "0"
         traced_total, _ = _avg_leg(pipeline, latent, num_frames, traced_reps, max(warmups, 2), "TRACED")
         if probe:
             _probe_split(pipeline, latent, num_frames, max(traced_reps, 3), "TRACED")
