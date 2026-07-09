@@ -516,7 +516,8 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_major=*/true);
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
     std::vector<CoreCoord> forwarder_cores;
-    for (uint32_t f = 0; f < num_forwarders; f++) {
+    forwarder_cores.reserve(num_forwarders);
+for (uint32_t f = 0; f < num_forwarders; f++) {
         forwarder_cores.push_back(all_cores_vec[num_workers + f]);
     }
 
