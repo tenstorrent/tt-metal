@@ -42,6 +42,28 @@ def upload_bcthw(
     return x_bthwc
 
 
+def upload_bcthw_spatial(
+    mesh_device: ttnn.MeshDevice,
+    z_bcthw: torch.Tensor,
+    *,
+    h_mesh_axis: int = 0,
+    w_mesh_axis: int = 1,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+) -> ttnn.Tensor:
+    """Host BCTHW -> H/W-sharded device BTHWC (channels already padded on host)."""
+    from models.experimental.hunyuan_image_3_0.tt.vae.spatial import mesh_mapper_hw_spatial
+
+    host = (z_bcthw.bfloat16() if dtype == ttnn.bfloat16 else z_bcthw.float()).permute(0, 2, 3, 4, 1).contiguous()
+    return ttnn.from_torch(
+        host,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper_hw_spatial(mesh_device, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis),
+    )
+
+
 def download_bcthw(mesh_device: ttnn.MeshDevice, tensor_bthwc: ttnn.Tensor) -> torch.Tensor:
     """Device BTHWC -> host BCTHW."""
     x_bcthw = bthwc_to_bcthw(tensor_bthwc)
