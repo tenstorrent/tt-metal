@@ -326,7 +326,9 @@ class LTXDistilledPipeline(LTXPipeline):
             # The single-generate eager decode is bit-identical to the replay, so the AV mp4 is
             # unchanged; multi-gen runs keep the warmup capture so every real decode replays (else
             # gen#1 would decode into the garbage-emitting capture pass).
-            if in_capture_pass:
+            if os.environ.get("LTX_SKIP_AUDIO", "0") in ("1", "true", "True"):
+                logger.info("LTX_SKIP_AUDIO=1: skipping warmup audio decode (video-only perf iteration)")
+            elif in_capture_pass:
                 logger.info("capture pass: skipping audio decode (vocoder prep_run=False; real warmup inits it)")
             elif iter_fast:
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
@@ -926,11 +928,18 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
-        t0 = time.time()
-        audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
-        t_audio_decode = time.time() - t0
-        timings.append(("Audio decode", t_audio_decode))
-        logger.info(f"Audio decode: {t_audio_decode:.1f}s")
+        # decode_audio runs after the video stages + trace capture and shares no device state with
+        # them, so LTX_SKIP_AUDIO leaves the video output and every video trace bit-identical — the
+        # run just carries no audio. Gives a deterministic (PCC 1.0) video-only reference for qgates.
+        if os.environ.get("LTX_SKIP_AUDIO", "0") in ("1", "true", "True"):
+            logger.info("LTX_SKIP_AUDIO=1: skipping audio decode (video-only perf iteration)")
+            audio_obj = None
+        else:
+            t0 = time.time()
+            audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
+            t_audio_decode = time.time() - t0
+            timings.append(("Audio decode", t_audio_decode))
+            logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
         self.last_timings = list(timings)
         # The denoise stages are the generation cost with no Watchdog of their own; surface
