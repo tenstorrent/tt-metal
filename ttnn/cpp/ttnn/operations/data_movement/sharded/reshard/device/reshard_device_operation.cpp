@@ -86,7 +86,16 @@ ReshardDeviceOperation::program_factory_t ReshardDeviceOperation::select_program
             }
             return ReshardSameHeightFactory</*local_is_output*/ false>{};
         }
-        return ReshardGenericFactory{};
+        // ReshardGenericFactory uses a legacy reader kernel (reshard_reader.cpp) that issues raw
+        // NOC reads against a single shard base address, which is correct only for L1-sharded
+        // buffers. When a DRAM buffer is involved on either side, fall through to the ND reshard
+        // path below, which addresses both DRAM banks and L1 cores uniformly via TensorAccessor.
+        // See tenstorrent/tt-metal#49224.
+        const bool dram_involved = input_tensor.memory_config().buffer_type() == BufferType::DRAM ||
+                                   out_mem_config.buffer_type() == BufferType::DRAM;
+        if (!dram_involved) {
+            return ReshardGenericFactory{};
+        }
     }
     auto input_buffer_type = input_tensor.memory_config().buffer_type();
     auto output_buffer_type = out_mem_config.buffer_type();
