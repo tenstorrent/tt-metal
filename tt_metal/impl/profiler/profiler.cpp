@@ -69,7 +69,9 @@ namespace tt::tt_metal {
 
 namespace {
 kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
-    return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
+    return static_cast<kernel_profiler::PacketTypes>(
+        (timer_id >> kernel_profiler::PROFILER_TIMER_PACKET_TYPE_SHIFT) &
+        kernel_profiler::PROFILER_TIMER_PACKET_TYPE_MASK);
 }
 
 void add_program_sub_device_meta_data(nlohmann::json& meta_data, tt::ChipId device_id, uint32_t runtime_id) {
@@ -1623,8 +1625,9 @@ void DeviceProfiler::readRiscProfilerResults(
                     opTime_L = 0;
                 } else if (!oneStartFound) {
                     // Pre-sentinel data: capture TS_DATA and advance past its 4-slot layout.
-                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
-                    uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                    uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
+                                        kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
+                    uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                     if (timer_id || time_H) {
                         kernel_profiler::PacketTypes pre_packet_type = get_packet_type(timer_id);
                         if (pre_packet_type == kernel_profiler::TS_DATA) {
@@ -1679,13 +1682,14 @@ void DeviceProfiler::readRiscProfilerResults(
                     pre_sentinel_markers.clear();
 
                 } else if (oneStartFound) {
-                    uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
+                    uint32_t timer_id = (data_buffer.at(index) >> kernel_profiler::PROFILER_MARKER_TIMER_ID_SHIFT) &
+                                        kernel_profiler::PROFILER_MARKER_TIMER_ID_MASK;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
                     switch (packet_type) {
                         case kernel_profiler::ZONE_START:
                         case kernel_profiler::ZONE_END: {
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             if (timer_id || time_H) {
                                 uint32_t time_L = data_buffer.at(index + 1);
 
@@ -1749,7 +1753,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             break;
                         }
                         case kernel_profiler::TS_DATA: {
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             uint32_t time_L = data_buffer.at(index + 1);
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             uint32_t data_H = data_buffer.at(index);
@@ -1771,7 +1775,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             continue;
                         }
                         case kernel_profiler::TS_EVENT: {
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             uint32_t time_L = data_buffer.at(index + 1);
                             readDeviceMarkerData(
                                 device_markers_for_core_risc,
@@ -1788,7 +1792,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         }
                         case kernel_profiler::TS_DATA_16B: {
                             // Header
-                            uint32_t time_H = data_buffer.at(index) & 0xFFF;
+                            uint32_t time_H = data_buffer.at(index) & kernel_profiler::PROFILER_MARKER_TS_HIGH_MASK;
                             uint32_t time_L = data_buffer.at(index + 1);
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
 
@@ -1926,7 +1930,7 @@ void DeviceProfiler::readDeviceMarkerData(
     updateFirstTimestamp(timestamp);
 
 #if defined(TRACY_ENABLE)
-    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
+    if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_DEBUGGING_STATIC_ID) {
         NOCDebugState* noc_debug_state = MetalContext::instance(context_id).noc_debug_state().get();
         if (noc_debug_state) {
             const metal_SocDescriptor& soc_desc =
@@ -1966,7 +1970,7 @@ void DeviceProfiler::readTsData16BMarkerData(
 
     nlohmann::json meta_data;
 #if defined(TRACY_ENABLE)
-    if ((timer_id & 0xFFFF) == kernel_profiler::NOC_TRACING_STATIC_ID) {
+    if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
 
         EMD event_metadata(data);

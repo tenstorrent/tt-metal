@@ -170,17 +170,22 @@ __attribute__((noinline)) void init_profiler(
 
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
         for (uint32_t i = GUARANTEED_MARKER_1_H; i < CUSTOM_MARKERS; i++) {
-            // TODO(MO): Clean up magic numbers
-            profiler_data_buffer[riscID].data[i] = 0x80000000;
+            profiler_data_buffer[riscID].data[i] = PROFILER_MARKER_VALID;
         }
     }
 #endif
 }
 
-constexpr uint32_t get_const_id(uint32_t id, PacketTypes type) { return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF)); }
+constexpr uint32_t get_const_id(uint32_t id, PacketTypes type) {
+    return (
+        (id & PROFILER_TIMER_STATIC_ID_MASK) |
+        ((type << PROFILER_TIMER_PACKET_TYPE_SHIFT) & PROFILER_MARKER_TIMER_ID_MASK));
+}
 
 inline __attribute__((always_inline)) uint32_t get_id(uint32_t id, PacketTypes type) {
-    return ((id & 0xFFFF) | ((type << 16) & 0x7FFFF));
+    return (
+        (id & PROFILER_TIMER_STATIC_ID_MASK) |
+        ((type << PROFILER_TIMER_PACKET_TYPE_SHIFT) & PROFILER_MARKER_TIMER_ID_MASK));
 }
 
 template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
@@ -218,12 +223,15 @@ inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t i
     uint64_t wall_clock = quasar_read_wall_clock_64();
     uint32_t time_low = static_cast<uint32_t>(wall_clock);
     uint32_t time_high = static_cast<uint32_t>(wall_clock >> 32);
-    profiler_data_buffer[myRiscID].data[index] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (time_high & 0xFFF);
+    profiler_data_buffer[myRiscID].data[index] =
+        PROFILER_MARKER_VALID | ((timer_id & PROFILER_MARKER_TIMER_ID_MASK) << PROFILER_MARKER_TIMER_ID_SHIFT) |
+        (time_high & PROFILER_MARKER_TS_HIGH_MASK);
     profiler_data_buffer[myRiscID].data[index + 1] = time_low;
 #else
     volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
     profiler_data_buffer[myRiscID].data[index] =
-        0x80000000 | ((timer_id & 0x7FFFF) << 12) | (p_reg[WALL_CLOCK_HIGH_INDEX] & 0xFFF);
+        PROFILER_MARKER_VALID | ((timer_id & PROFILER_MARKER_TIMER_ID_MASK) << PROFILER_MARKER_TIMER_ID_SHIFT) |
+        (p_reg[WALL_CLOCK_HIGH_INDEX] & PROFILER_MARKER_TS_HIGH_MASK);
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 #endif
 }
@@ -237,7 +245,7 @@ inline __attribute__((always_inline)) void mark_time_at_index_with_stamp(
 
 inline __attribute__((always_inline)) void mark_padding() {
     if (wIndex < PROFILER_L1_VECTOR_SIZE) {
-        profiler_data_buffer[myRiscID].data[wIndex] = 0x80000000;
+        profiler_data_buffer[myRiscID].data[wIndex] = PROFILER_MARKER_VALID;
         profiler_data_buffer[myRiscID].data[wIndex + 1] = 0;
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
     }
@@ -272,7 +280,8 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
         if (sums[i] > 0) {
             if (wIndex < PROFILER_L1_VECTOR_SIZE) {
                 profiler_data_buffer[myRiscID].data[wIndex] =
-                    0x80000000 | ((get_id(sumIDs[i], ZONE_TOTAL) & 0x7FFFF) << 12);
+                    PROFILER_MARKER_VALID |
+                    ((get_id(sumIDs[i], ZONE_TOTAL) & PROFILER_MARKER_TIMER_ID_MASK) << PROFILER_MARKER_TIMER_ID_SHIFT);
                 profiler_data_buffer[myRiscID].data[wIndex + 1] = sums[i];
                 wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
             }

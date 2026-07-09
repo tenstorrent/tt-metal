@@ -68,6 +68,36 @@ static_assert(
     "PROFILER_ID_RISC_BITS too small to hold PROFILER_MAX_RISC_COUNT processors");
 static_assert(PROFILER_ID_TRACE_SHIFT + PROFILER_ID_TRACE_BITS <= 32, "ID_LH identity fields overflow 32 bits");
 
+// ---- Marker H-word bit layout (shared device packer / host decoder) ----
+// A profiler marker is two uint32 words. The H-word packs a validity bit, the timer id, and the high
+// bits of the timestamp; the following L-word holds the low 32 bits of the timestamp:
+//   bit 31                       : PROFILER_MARKER_VALID  (marker-present flag)
+//   [TIMER_ID_SHIFT , +TIMER_ID_BITS): timer id
+//   [TS_HIGH_SHIFT , +TS_HIGH_BITS)  : high bits of the timestamp
+// Device (kernel_profiler.hpp) and host (profiler.cpp) MUST use these same constants so packing stays in sync.
+static constexpr std::uint32_t PROFILER_MARKER_TS_HIGH_BITS = 12;
+static constexpr std::uint32_t PROFILER_MARKER_TIMER_ID_BITS = 19;
+static constexpr std::uint32_t PROFILER_MARKER_TS_HIGH_SHIFT = 0;
+static constexpr std::uint32_t PROFILER_MARKER_TIMER_ID_SHIFT =
+    PROFILER_MARKER_TS_HIGH_SHIFT + PROFILER_MARKER_TS_HIGH_BITS;
+static constexpr std::uint32_t PROFILER_MARKER_TS_HIGH_MASK = (1u << PROFILER_MARKER_TS_HIGH_BITS) - 1;
+static constexpr std::uint32_t PROFILER_MARKER_TIMER_ID_MASK = (1u << PROFILER_MARKER_TIMER_ID_BITS) - 1;
+static constexpr std::uint32_t PROFILER_MARKER_VALID =
+    1u << (PROFILER_MARKER_TIMER_ID_SHIFT + PROFILER_MARKER_TIMER_ID_BITS);
+static_assert(PROFILER_MARKER_VALID == 0x80000000u, "marker valid flag must be bit 31");
+static_assert(
+    PROFILER_MARKER_TIMER_ID_SHIFT + PROFILER_MARKER_TIMER_ID_BITS == 31,
+    "marker H-word: timer-id field must sit just below the valid bit");
+
+// timer id sub-layout: [packet type : 3 bits @ 16][static id : 16 bits @ 0], within the marker timer-id field.
+static constexpr std::uint32_t PROFILER_TIMER_STATIC_ID_BITS = 16;
+static constexpr std::uint32_t PROFILER_TIMER_STATIC_ID_MASK = (1u << PROFILER_TIMER_STATIC_ID_BITS) - 1;
+static constexpr std::uint32_t PROFILER_TIMER_PACKET_TYPE_SHIFT = PROFILER_TIMER_STATIC_ID_BITS;
+static constexpr std::uint32_t PROFILER_TIMER_PACKET_TYPE_MASK = 0x7;  // 3-bit packet type
+static_assert(
+    PROFILER_TIMER_PACKET_TYPE_SHIFT + 3 <= PROFILER_MARKER_TIMER_ID_BITS,
+    "timer id: packet type must fit within the marker timer-id field");
+
 enum ControlBuffer {
     HOST_BUFFER_END_INDEX_BR_ER = 0,
     HOST_BUFFER_END_INDEX_NC,
