@@ -105,8 +105,11 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
         uint8_t ew_hops = 0;
         uint8_t ns_direction = 0;
         uint8_t ew_direction = 0;
-        // Z (intra-mesh skip link) is a dedicated, top-priority dimension. A route may take at most one
-        // Z hop, after z_before NS links and before any EW link.
+        // Z (intra-mesh skip link) is a dedicated dimension carrying at most one hop per route. Rather
+        // than pin it to a specific axis, z_before records how many cardinal hops (NS then EW, in
+        // dimension order) precede the Z hop. This lets the skip sit anywhere in the route: inside the
+        // NS run (NS-axis skip) or inside the EW run (EW-axis skip, e.g. a wide 8x16 mesh). z_present
+        // marks that the route contains a single Z hop.
         uint8_t z_present = 0;
         uint8_t z_before = 0;
 
@@ -155,10 +158,12 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
                         prev_chip,
                         curr_chip);
                 }
+                if (!seen_z) {
+                    ++z_before;
+                }
                 ++ew_hops;
             } else if (d == RoutingDirection::Z) {
                 TT_ASSERT(!seen_z, "More than one Z (skip) hop per route is not supported: chip {}", curr_chip);
-                TT_ASSERT(!seen_ew, "Z must precede EW in dimension order: chip {}", curr_chip);
                 z_present = 1;
                 seen_z = true;
             } else {
@@ -167,9 +172,11 @@ void intra_mesh_routing_path_t<2, true>::calculate_chip_to_all_routing_fields(
             prev_chip = curr_chip;
         }
 
-        // turn_point marks the NS->EW turn position; the Z hop adds one entry ahead of the turn.
-        paths[dst_chip_id].set(
-            ns_hops, ew_hops, ns_direction, ew_direction, (uint8_t)(ns_hops + z_present), z_present, z_before);
+        // turn_point marks the NS->EW turn position in the emitted route. A Z hop only shifts the turn
+        // when it is spliced inside (or right after) the NS run, i.e. z_before <= ns_hops; an EW-axis
+        // skip sits after the turn and does not move it.
+        const uint8_t turn_point = (uint8_t)(ns_hops + ((z_present && z_before <= ns_hops) ? 1 : 0));
+        paths[dst_chip_id].set(ns_hops, ew_hops, ns_direction, ew_direction, turn_point, z_present, z_before);
     }
 }
 
