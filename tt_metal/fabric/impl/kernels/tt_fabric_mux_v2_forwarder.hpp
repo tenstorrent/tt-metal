@@ -33,8 +33,10 @@ struct ForwarderSharedTridRingPublisher {
 
     uint32_t get_next_transaction_id() const { return write_count & ct_args::shared_trid_ring_mask; }
 
-    void publish_logical_channel_id(uint32_t logical_channel_id) {
-        entries_ptr[write_count & ct_args::shared_trid_ring_mask] = logical_channel_id;
+    // `trid` must be the value from get_next_transaction_id() for the current write_count
+    // (ring index == TRID). Caller issues the NOC write first, then publishes.
+    void publish_logical_channel_id(uint32_t logical_channel_id, uint32_t trid) {
+        entries_ptr[trid] = logical_channel_id;
         write_count += 1;
         header_ptr->write_count = write_count;
     }
@@ -90,7 +92,7 @@ inline void try_forward_channel_packet(
         const uint32_t trid = shared_trid_ring.get_next_transaction_id();
         fabric_connection.send_current_slot_stateful_non_blocking_from_address_with_trid(
             packet_l1_address, packet_size_bytes, trid, noc_index);
-        shared_trid_ring.publish_logical_channel_id(logical_channel_id);
+        shared_trid_ring.publish_logical_channel_id(logical_channel_id, trid);
     } else {
         fabric_connection.send_current_slot_stateful_non_blocking_from_address(
             packet_l1_address, packet_size_bytes, noc_index);
