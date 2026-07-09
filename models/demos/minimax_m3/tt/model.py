@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.demos.minimax_m3.config import MeshConfig
-from models.demos.minimax_m3.utils.general_utils import get_cache_file_name, get_default_num_links
+from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.substate import substate
 from models.tt_transformers.tt.common import rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
@@ -272,49 +272,6 @@ class Model:
         args.sampling_dp = self.sampling_dp
         args.use_topk_logprobs = True
         return args
-
-    @classmethod
-    def create_transformer_compatible(
-        cls,
-        args,
-        dtype,
-        mesh_device,
-        state_dict,
-        tensor_cache_path,
-        attention_class=None,
-        rope_setup_class=None,
-        mesh_config=None,
-        users_row_sharded=False,
-        use_throughput_experts=False,
-    ):
-        """Constructor compatible with tt_transformers.Transformer interface"""
-        # Create a dummy CCL manager for MiniMax-M3
-        from models.demos.minimax_m3.tt.ccl import CCLManager
-
-        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
-
-        # Create instance using direct initialization
-        instance = cls.__new__(cls)
-        instance.__init__(
-            mesh_device=mesh_device,
-            hf_config=args.hf_config,
-            state_dict=state_dict,
-            ccl_manager=ccl_manager,
-            dtype=dtype,
-            tensor_cache_path=tensor_cache_path,
-            mesh_config=mesh_config,
-            max_local_batch_size=args.max_local_batch_size,
-            users_row_sharded=users_row_sharded,
-            use_throughput_experts=use_throughput_experts,
-        )
-
-        # Add tt_transformers compatible attributes
-        instance.args = args
-        instance.vocab_size = args.vocab_size
-        instance.n_layers = args.n_layers
-        instance.dtype = dtype
-
-        return instance
 
     def _forward_layers_and_head(
         self,
