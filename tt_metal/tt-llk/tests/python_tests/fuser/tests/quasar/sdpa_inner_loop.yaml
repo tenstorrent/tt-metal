@@ -1,11 +1,12 @@
 # Simplified SDPA inner loop for Quasar.
-# Exercises: multi-stage reconfigs, reduce with MAX pooling and reduce_to_tile,
-# datacopy+SFPU fusion, matmul, eltwise multiply.
+# Mirrors the WH/BH sdpa_inner_loop_step pipeline:
+# QKT matmul, reduce max, sub+exp (datacopy+SFPU), eltwise broadcast multiply,
+# attn_v matmul, reciprocal (datacopy+SFPU), normalize (eltwise broadcast multiply).
 
 # dest_acc: true
 
 operands:
-  # Q: query tile
+  # Q: query tile block
   - name: "Q"
     dims: [32, 64]
     format: "Float16_b"
@@ -23,11 +24,6 @@ operands:
     dims: [64, 64]
     format: "Float16_b"
     const_value: 1.0
-  # norm scale: column vector for broadcast normalize
-  - name: "norm_scale"
-    dims: [32, 32]
-    format: "Float16_b"
-    const_value: 0.5
   # intermediates and outputs
   - name: "qkt"
     dims: [32, 64]
@@ -35,13 +31,19 @@ operands:
   - name: "row_max"
     dims: [32, 64]
     format: "Float16_b"
-  - name: "exp_out"
+  - name: "sub_exp_out"
     dims: [32, 64]
     format: "Float16_b"
-  - name: "norm_out"
+  - name: "sub_exp_sum"
     dims: [32, 64]
     format: "Float16_b"
   - name: "attn_v"
+    dims: [32, 64]
+    format: "Float16_b"
+  - name: "sum_recip"
+    dims: [32, 64]
+    format: "Float16_b"
+  - name: "output"
     dims: [32, 64]
     format: "Float16_b"
 
@@ -75,8 +77,8 @@ operations:
       - output: "row_max"
         packer: "Packer"
 
-  # Step 3: exp_out = exp(datacopy(qkt))
-  # Datacopy loads qkt into DEST, then SFPU Exp
+  # Step 3: sub_exp = exp(datacopy(qkt))
+  # Dual pack: sub_exp_out with ZERO_RELU, sub_exp_sum with L1 accumulation
   - math:
       - type: "Fpu"
         operation: "Datacopy"
@@ -84,33 +86,23 @@ operations:
         math_fidelity: "LoFi"
         src_a: "qkt"
         src_b: "identity_scale"
+    block_size: [32, 64]
+    pack:
       - type: "UnarySfpu"
         operation: "Exp"
         approximation_mode: true
         iterations: 32
-    block_size: [32, 64]
-    pack:
-      - output: "exp_out"
+      - output: "sub_exp_out"
         packer: "Packer"
+        pack_relu: "ZERO_RELU"
+      - output: "sub_exp_sum"
+        packer: "Packer"
+        pack_l1_accumulation: 1
 
-  # Step 4: norm_out = exp_out * norm_scale (COL broadcast)
+  # Step 4: attn_v = sub_exp_out[32,64] x V[64,64] -> [32,64]
   - math:
       - type: "Fpu"
-        src_a: "exp_out"
-        src_b: "norm_scale"
-        operation: "Elwmul"
-        unpacker: "UnpackerAB"
-        broadcast_type: "COL"
-        math_fidelity: "HiFi2"
-    block_size: [32, 64]
-    pack:
-      - output: "norm_out"
-        packer: "Packer"
-
-  # Step 5: attn_v = norm_out[32,64] x V[64,64] -> [32,64]
-  - math:
-      - type: "Fpu"
-        src_a: "norm_out"
+        src_a: "sub_exp_out"
         src_b: "V"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
@@ -118,4 +110,35 @@ operations:
     block_size: [32, 64]
     pack:
       - output: "attn_v"
+        packer: "Packer"
+
+  # Step 5: sum_recip = reciprocal(sub_exp_sum)
+  # Datacopy loads sum into DEST, then SFPU reciprocal
+  - math:
+      - type: "Fpu"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+        src_a: "sub_exp_sum"
+        src_b: "identity_scale"
+      - type: "UnarySfpu"
+        operation: "Reciprocal"
+        iterations: 32
+    block_size: [32, 64]
+    pack:
+      - output: "sum_recip"
+        packer: "Packer"
+
+  # Step 6: output = attn_v * bcast_col(sum_recip) — normalize
+  - math:
+      - type: "Fpu"
+        src_a: "attn_v"
+        src_b: "sum_recip"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "COL"
+        math_fidelity: "LoFi"
+    block_size: [32, 64]
+    pack:
+      - output: "output"
         packer: "Packer"
