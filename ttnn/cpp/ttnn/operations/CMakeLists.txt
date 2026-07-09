@@ -5,11 +5,12 @@
 # needing to be pinged, and without touching ttnn/CMakeLists.txt. Same idea
 # as ttnn/cpp/ttnn/operations/experimental/CMakeLists.txt, one level up.
 #
-# Only the ops below have been migrated in so far — everything else under
-# operations/ (eltwise, experimental, moreh, bernoulli, etc.) either already
-# has its own dedicated CMakeLists.txt or is still add_subdirectory()'d
-# directly from ttnn/CMakeLists.txt. Folding in more is later work, one team
-# at a time.
+# Everything ownerless is migrated in here too. Not yet migrated: eltwise,
+# experimental (both have their own dedicated CMakeLists.txt already), moreh
+# and kernel_helper_functions (already single add_subdirectory()/
+# target_link_libraries() lines — no scattering to fix, so nothing gained by
+# moving them), and transformer/ (one CMake target spanning multiple teams'
+# code — needs an actual target split before ownership can split too).
 
 # metalium-developers-convolutions
 add_subdirectory(conv)
@@ -28,10 +29,27 @@ add_subdirectory(matmul)
 add_subdirectory(normalization)
 add_subdirectory(reduction)
 
-# Umbrella target for everything migrated into this file so far: ttnncpp
-# links this one target instead of enumerating these 11 op libraries itself.
-# Add/remove entries here when adding/removing one of the ops above — never
-# in ttnn/CMakeLists.txt.
+# No team-specific CODEOWNERS rule — falls back to the ops-leads catch-all
+# today. Kept as the status quo owner rather than guessed at.
+add_subdirectory(bernoulli)
+add_subdirectory(creation)
+add_subdirectory(core)
+add_subdirectory(debug)
+add_subdirectory(examples)
+add_subdirectory(full)
+add_subdirectory(full_like)
+add_subdirectory(index_fill)
+add_subdirectory(kv_cache)
+add_subdirectory(loss)
+add_subdirectory(prefetcher)
+add_subdirectory(rand)
+add_subdirectory(randn)
+add_subdirectory(uniform)
+
+# Umbrella target for everything migrated into this file: ttnncpp links this
+# one target instead of enumerating these op libraries itself. Add/remove
+# entries here when adding/removing one of the ops above — never in
+# ttnn/CMakeLists.txt.
 add_library(ttnn_op_operations_shared INTERFACE)
 add_library(TTNN::Ops::OperationsShared ALIAS ttnn_op_operations_shared)
 target_link_libraries(
@@ -48,6 +66,20 @@ target_link_libraries(
         TTNN::Ops::Matmul
         TTNN::Ops::Normalization
         TTNN::Ops::Reduction
+        TTNN::Ops::Bernoulli
+        TTNN::Ops::Creation
+        TTNN::Ops::Core
+        TTNN::Ops::Debug
+        TTNN::Ops::Examples
+        TTNN::Ops::Full
+        TTNN::Ops::FullLike
+        TTNN::Ops::IndexFill
+        TTNN::Ops::KvCache
+        TTNN::Ops::Loss
+        TTNN::Ops::Prefetcher
+        TTNN::Ops::Rand
+        TTNN::Ops::Randn
+        TTNN::Ops::Uniform
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -75,4 +107,18 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Matmul>
         $<TARGET_OBJECTS:TTNN::Ops::Normalization>
         $<TARGET_OBJECTS:TTNN::Ops::Reduction>
+        $<TARGET_OBJECTS:TTNN::Ops::Bernoulli>
+        $<TARGET_OBJECTS:TTNN::Ops::Creation>
+        $<TARGET_OBJECTS:TTNN::Ops::Core>
+        $<TARGET_OBJECTS:TTNN::Ops::Debug>
+        $<TARGET_OBJECTS:TTNN::Ops::Examples>
+        $<TARGET_OBJECTS:TTNN::Ops::Full>
+        $<TARGET_OBJECTS:TTNN::Ops::FullLike>
+        $<TARGET_OBJECTS:TTNN::Ops::IndexFill>
+        $<TARGET_OBJECTS:TTNN::Ops::KvCache>
+        $<TARGET_OBJECTS:TTNN::Ops::Loss>
+        $<TARGET_OBJECTS:TTNN::Ops::Prefetcher>
+        $<TARGET_OBJECTS:TTNN::Ops::Rand>
+        $<TARGET_OBJECTS:TTNN::Ops::Randn>
+        $<TARGET_OBJECTS:TTNN::Ops::Uniform>
 )
