@@ -182,10 +182,10 @@ Kernel::Kernel(
 void Kernel::register_kernel_with_watcher() {
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
-        // Watcher server should always be available... unless the target is a mock device
+        // Null for mock and emulated targets (no watcher created); nothing to register.
         TT_FATAL(
-            MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock,
-            "Watcher server is unavailable, and the target is not a mock device");
+            MetalContext::instance().get_cluster().is_mock_or_emulated(),
+            "Watcher server is unavailable, and the target is not a mock or emulated device");
         this->watcher_kernel_id_ = -1;
         return;
     }
@@ -198,7 +198,7 @@ void Kernel::register_kernel_with_watcher() {
 }
 
 void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device, const std::string& binary_root) const {
-    // Skip if watcher server not available (e.g., during mock device testing)
+    // Skip if watcher server not available (e.g. mock or emulated targets)
     auto& watcher = MetalContext::instance().watcher_server();
     if (!watcher) {
         return;
