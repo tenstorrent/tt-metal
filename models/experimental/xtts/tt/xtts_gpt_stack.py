@@ -30,10 +30,15 @@ class TtXttsGptStack(LightweightModule):
         self.ln_f_bias = _to_device(state_dict["gpt.gpt.ln_f.bias"], device)
 
     def forward(self, x):
-        """Run the full stack. ``x`` is ``[batch, seq, hidden]`` on device."""
+        """Run the full stack. ``x`` is ``[batch, seq, hidden]`` on device.
+
+        Each block frees its own input internally; here we free the final block
+        output once ``ln_f`` has consumed it."""
         for block in self.blocks:
             x = block(x)
-        return ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        ttnn.deallocate(x)
+        return y
 
     def forward_prefill(self, x):
         """Prefill the prompt. Returns ``(ln_f(hidden), kv)`` where ``kv`` is the
@@ -42,8 +47,9 @@ class TtXttsGptStack(LightweightModule):
         for block in self.blocks:
             x, k, v = block.forward_prefill(x)
             kv.append((k, v))
-        x = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
-        return x, kv
+        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        ttnn.deallocate(x)
+        return y, kv
 
     def forward_decode(self, x, kv):
         """Decode one token. ``kv`` is the per-layer cache list; returns the
@@ -52,5 +58,6 @@ class TtXttsGptStack(LightweightModule):
         for block, (k, v) in zip(self.blocks, kv):
             x, k, v = block.forward_decode(x, k, v)
             new_kv.append((k, v))
-        x = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
-        return x, new_kv
+        y = ttnn.layer_norm(x, weight=self.ln_f_weight, bias=self.ln_f_bias, epsilon=LAYER_NORM_EPS)
+        ttnn.deallocate(x)
+        return y, new_kv
