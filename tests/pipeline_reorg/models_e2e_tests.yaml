@@ -18,7 +18,12 @@
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True
+    # The DRAM prefetcher does not yet support more than one repeat batch (issue #47820):
+    # cover the eval repeat-batch loop with the prefetcher DISABLED (perf reporting skipped
+    # so only the prefetcher run sets perf), and cover the prefetcher path with a SINGLE
+    # repeat batch (this run reports/validates perf). See #47820 for the multi-batch work.
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --skip_perf_report
+    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32" --use_prefetcher True --repeat_batches 1
     pytest --timeout 420 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching" --use_hf_rope
   model: llama3.1-8b
   skus:
@@ -32,7 +37,7 @@
       timeout: 11
       tier: 2
     bh_quietbox_2:
-      timeout: 11
+      timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
