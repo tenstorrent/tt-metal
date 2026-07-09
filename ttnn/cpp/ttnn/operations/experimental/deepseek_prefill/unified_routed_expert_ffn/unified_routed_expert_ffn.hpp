@@ -11,6 +11,8 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+#include "device/unified_routed_expert_ffn_types.hpp"  // RoutedExpertActivation
+
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
 
 // Single-op fused per-expert FFN for DeepSeek V3 prefill on Blackhole.
@@ -57,7 +59,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t local_expert_id,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt,
-    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt);
+    const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
@@ -79,11 +82,13 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& up_projs,
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
-    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 
 namespace ttnn {
+using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_ffn;
 using operations::experimental::deepseek_prefill::unified_routed_expert_ffn::unified_routed_expert_moe;
 }  // namespace ttnn

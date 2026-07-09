@@ -97,8 +97,11 @@ void bind_reduction_prod_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            nb::overload_cast<const Tensor&, const Tensor&, SmallVector<int64_t>&, const std::optional<MemoryConfig>&>(
-                &ttnn::prod),
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                ttsl::SmallVector<int64_t>&,
+                const std::optional<MemoryConfig>&>(&ttnn::prod),
             nb::arg("input_tensor"),
             nb::arg("output_tensor"),
             nb::kw_only(),

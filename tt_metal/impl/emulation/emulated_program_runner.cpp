@@ -731,6 +731,26 @@ static void apply_x86_rewrites(std::string& src) {
         l1_named_arg_ptr_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
 
+    // Persistent / compile-time L1 addresses dereferenced directly:
+    // `reinterpret_cast<volatile tt_l1_ptr T*>(<bare identifier>)` where the operand
+    // is a ct-arg/constexpr L1 offset (e.g. dm1::metadata_persistent_addr,
+    // core::q_arrival_sem_addr, dm0::indices_addr — from a tensor buffer_address()).
+    // Silicon derefs that raw L1 offset directly; on the host the offset is an
+    // unmapped address → SIGSEGV (or, when it happens to land in a mapped page, a
+    // stale read → downstream CB deadlock). Route it through the __emule_local_l1_to_ptr
+    // chokepoint like the get_arg forms above.
+    //
+    // The operand is restricted to a bare (optionally ::-qualified) identifier ON
+    // PURPOSE: it must NOT match `&cb_config[...]` (a real host pointer — translating
+    // it would corrupt the address) or `get_write_ptr(cb)` (already an absolute host
+    // address). A bare identifier is either a ct-arg constant (an offset, needs
+    // translation) or a local holding a get_*_ptr result (absolute → __emule_l1_translate
+    // returns it unchanged, so the wrap is a no-op). Both are safe.
+    static const std::regex l1_ptr_cast_re(
+        R"(reinterpret_cast<([^>;]*tt_l1_ptr[^>;]*\*)>\s*\(\s*([A-Za-z_][A-Za-z0-9_:]*)\s*\))");
+    src = emule_line_preserving_replace(
+        src, l1_ptr_cast_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>($2)))");
+
     // reinterpret_cast<uint32_t>(ptr): an L1 pointer collapsed to its 32-bit
     // device address (no-op on silicon, "cast loses information" on the host).
     // emule L1 addresses are the low 32 bits of host pointers, so truncate via
@@ -788,10 +808,19 @@ static void preprocess_tu_recursive(
     const std::filesystem::path out_dir_canon = std::filesystem::weakly_canonical(out_dir);
 
     static const std::regex include_re(R"RE(#[ \t]*include[ \t]*"([^"]+)")RE");
+    // Directive rewrites for includes patched into a mirror path (see the escaping
+    // branch below): applied to `src` after the loop, back-to-front so offsets stay valid.
+    struct IncDirectiveRewrite {
+        size_t pos;
+        size_t len;
+        std::string text;
+    };
+    std::vector<IncDirectiveRewrite> directive_rewrites;
     for (std::sregex_iterator it(src.begin(), src.end(), include_re), end; it != end; ++it) {
-        const std::string inc_name = (*it)[1].str();
+        const std::smatch& m = *it;
+        const std::string inc_name = m[1].str();
         std::error_code ec;
-        const std::filesystem::path candidate = src_dir / inc_name;
+        const std::filesystem::path candidate = src_dir / inc_name;  // absolute inc_name → itself
         if (!std::filesystem::exists(candidate, ec)) {
             // Resolved via a -I path (emule api/, system headers, repo-rooted kernel-common). Not ours
             // to patch — pointer-truncation idioms there are handled by -fms-extensions (see the JIT
@@ -799,19 +828,78 @@ static void preprocess_tu_recursive(
             continue;
         }
         const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
-        if (canon.empty() || !done.insert(canon).second) {
-            continue;  // cycle / already patched
-        }
-        const std::filesystem::path out_inc = std::filesystem::weakly_canonical(
-            std::filesystem::path(out_dir) / inc_name);
-        // Refuse to write outside the temp dir (e.g. inc_name with leading "..").
-        const std::string out_inc_str = out_inc.string();
-        if (out_inc_str.compare(0, out_dir_canon.string().size(), out_dir_canon.string()) != 0) {
-            done.erase(canon);
+        if (canon.empty()) {
             continue;
         }
-        std::filesystem::create_directories(out_inc.parent_path(), ec);
-        preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
+        const std::filesystem::path out_inc =
+            std::filesystem::weakly_canonical(std::filesystem::path(out_dir) / inc_name);
+        const std::string out_inc_str = out_inc.string();
+        const std::string& out_dir_str = out_dir_canon.string();
+        // Path-boundary-aware containment: a bare string-prefix compare would treat
+        // /tmp/dir2/x as under /tmp/dir, so require the match to end on a separator.
+        const bool under_out_dir = out_inc_str.size() > out_dir_str.size() &&
+                                   out_inc_str.compare(0, out_dir_str.size(), out_dir_str) == 0 &&
+                                   out_inc_str[out_dir_str.size()] == '/';
+        if (under_out_dir) {
+            // Maps cleanly UNDER out_dir (relative include): write the shadow copy and
+            // let `-I out_dir` make the compiler find it before the original. Directive
+            // stays as-is.
+            if (!done.insert(canon).second) {
+                continue;  // cycle / already patched
+            }
+            std::filesystem::create_directories(out_inc.parent_path(), ec);
+            preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
+        } else {
+            // ESCAPES out_dir — an absolute include (kernel codegen can emit
+            // `#include "/abs/.../op.hpp"`) or a ".." path. The compiler resolves the
+            // absolute directive directly, bypassing `-I out_dir`, so a shadow copy
+            // can't redirect it. Mirror the real file under out_dir and REPOINT the
+            // #include directive at the patched mirror — otherwise op headers keep
+            // their raw `reinterpret_cast<tt_l1_ptr T*>(<persistent L1 addr>)` derefs,
+            // which segfault on the host. The mirror's `#line` still names the real
+            // file, so DWARF / ASAN backtraces are unaffected.
+            if (!std::filesystem::path(canon).is_absolute()) {
+                continue;  // only mirror real absolute paths
+            }
+            // Only mirror an escaping include that the L1 rewrite above will actually
+            // change — i.e. one carrying a bare-identifier `reinterpret_cast<tt_l1_ptr
+            // T*>(ident)` persistent-address deref (an op header). Mirroring a shared
+            // header reached elsewhere via -I (whose only tt_l1_ptr cast takes `&buf[i]`
+            // and is deliberately NOT rewritten) would create a second copy that
+            // `#pragma once` can't dedupe against the original → redefinition errors.
+            // Probe with the SAME operand constraint as l1_ptr_cast_re so the two stay
+            // in lockstep. The file exists (checked above); if it cannot be read here,
+            // do NOT silently skip — that would leave a persistent-L1 deref unpatched
+            // and reintroduce the segfault — so fail loudly instead.
+            {
+                std::ifstream probe(canon);
+                if (!probe) {
+                    throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + canon);
+                }
+                std::stringstream pss;
+                pss << probe.rdbuf();
+                const std::string content = pss.str();
+                static const std::regex l1cast_probe(
+                    R"(reinterpret_cast<[^>;]*tt_l1_ptr[^>;]*\*>\s*\(\s*[A-Za-z_][A-Za-z0-9_:]*\s*\))");
+                if (!std::regex_search(content, l1cast_probe)) {
+                    continue;  // no translatable L1 cast — leave the directive; shared original used
+                }
+            }
+            const std::filesystem::path mirror = std::filesystem::path(out_dir) / "_patched_inc" / canon.substr(1);
+            const std::string mirror_str = mirror.string();
+            directive_rewrites.push_back(
+                {static_cast<size_t>(m.position(0)),
+                 static_cast<size_t>(m.length(0)),
+                 "#include \"" + mirror_str + "\""});
+            if (!done.insert(canon).second) {
+                continue;  // already patched via another includer; directive repointed above
+            }
+            std::filesystem::create_directories(mirror.parent_path(), ec);
+            preprocess_tu_recursive(canon, mirror_str, out_dir, done);
+        }
+    }
+    for (auto rit = directive_rewrites.rbegin(); rit != directive_rewrites.rend(); ++rit) {
+        src.replace(rit->pos, rit->len, rit->text);
     }
 
     std::ofstream out(out_path);
@@ -913,6 +1001,18 @@ static void emit_metal2_namespaces(
             named_compile_args.begin(), named_compile_args.end());
         std::sort(cta_entries.begin(), cta_entries.end());
         for (const auto& [name, value] : cta_entries) {
+            // Namespaced compile-time args carry a dotted name (e.g. "cp.dst"),
+            // which is not a valid flat C++ identifier, so emitting
+            // `constexpr CtaVal<uint32_t> cp.dst{...}` here would fail to compile;
+            // skip them to keep the flat `args::` form namespaced-safe. This change
+            // does NOT emit the matching `ct_args::<ns>` structs — that is a separate
+            // emission step (it needs a Kernel::process_named_ct_arg_namespaces API);
+            // a kernel that references `ct_args::<ns>` requires that step to be
+            // present, so skipping here only prevents invalid flat C++, it does not
+            // itself make namespaced args available.
+            if (name.find('.') != std::string::npos) {
+                continue;
+            }
             f << "constexpr ::experimental::CtaVal<uint32_t> " << name << "{" << value << "u};\n";
         }
         f << "}  // namespace args\n";
@@ -1663,6 +1763,15 @@ static void collect_kernels(
             const auto& ksrc = kernel->kernel_source();
             std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
 
+            // Thread each kernel's configured include roots into its JIT -I flags.
+            // Kernels can declare extra include paths (Kernel::process_include_paths)
+            // so root-rooted includes resolve at compile time; silicon's build wires
+            // these through the compiler include dirs, so mirror that here.
+            std::string kernel_extra_inc = extra_inc;
+            kernel->process_include_paths([&kernel_extra_inc](const std::string& p) {
+                kernel_extra_inc += " -I\"" + p + "\"";
+            });
+
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
             auto defines = build_kernel_defines(
@@ -1717,6 +1826,20 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
+                // Per-kernel include roots (Kernel::process_include_paths) change
+                // which headers resolve, and therefore the compiled artifact, so
+                // fold them into the key. Without this, two kernels that share
+                // src_path/compile_args/named_compile_args/defines but differ in
+                // include configuration would alias in the JIT cache (in-memory
+                // g_jit_cache and deferred_compiles) and a disk-cached .so built
+                // under a different include config could be reused. Kernels with no
+                // extra include roots keep their previous key (backward-compatible).
+                if (kernel_extra_inc != extra_inc) {
+                    char inc_hex[FNV_HEX_BUF_SIZE];
+                    std::snprintf(inc_hex, sizeof(inc_hex), "%016lx", fnv1a_hash(kernel_extra_inc));
+                    key += ":inc";
+                    key += inc_hex;
+                }
                 // ASAN builds are -g; keep their cache distinct from the lean build.
                 if (emule_asan_enabled()) {
                     key += ":asan_g";
@@ -1740,7 +1863,7 @@ static void collect_kernels(
                         g_jit_cache[key] = disk_fn;
                     } else {
                         deferred_compiles[key] =
-                            DeferredCompile{src_path, compile_args, named_compile_args, defs, extra_inc, bindings};
+                            DeferredCompile{src_path, compile_args, named_compile_args, defs, kernel_extra_inc, bindings};
                     }
                 }
             };
