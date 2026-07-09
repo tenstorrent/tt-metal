@@ -276,6 +276,14 @@ ttnn/examples/**/kernels/ @tenstorrent/metalium-developers-mmfusedreduce @tensto
 
 ttnn/cpp/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+# operations/ is physically shared by every op-owning team, same idea as
+# operations/experimental/CMakeLists.txt one level down. Jointly owned by
+# whichever teams currently have ops migrated into it (see the file itself
+# for the up-to-date list) plus infra. metalium-developers-ops-leads is
+# listed because it's the status-quo fallback owner for several ops here
+# that have no team-specific CODEOWNERS rule of their own — not a
+# deliberate, active owner, just what already resolves today.
+ttnn/cpp/ttnn/operations/CMakeLists.txt @tenstorrent/metalium-developers-convolutions @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
