@@ -69,7 +69,7 @@ jobs:
             runs: 30
     name: "repro (${{ matrix.name }})"
     runs-on: ${{ fromJSON(matrix.runs-on) }}
-    timeout-minutes: 40
+    timeout-minutes: 75
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -99,7 +99,10 @@ jobs:
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: Setup job
         uses: ./docker-job/.github/actions/setup-job
-        timeout-minutes: 10
+        # Bumped from 10: artifact/blob storage is currently running ~9-10min per download
+        # (separate, known platform issue per Andrew — not related to this investigation),
+        # which was blowing through the old budget before our script ever ran.
+        timeout-minutes: 30
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
