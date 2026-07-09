@@ -1816,22 +1816,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     top_left_core_physical.y,
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
-                m2::KernelRunArgs::CommonRuntimeArgValues args;
-                args["out_start_tile_id_w"] = out_start_tile_id_w;
+                writer_sender_run_args.runtime_arg_values["out_start_tile_id_w"][core] = out_start_tile_id_w;
                 if (has_bias) {
-                    args["bias_tile_offset"] = bias_tile_offset;
+                    writer_sender_run_args.runtime_arg_values["bias_tile_offset"][core] = bias_tile_offset;
                 }
-                args["mcast_dest_noc_start_x"] = mcast[0];
-                args["mcast_dest_noc_start_y"] = mcast[1];
-                args["mcast_dest_noc_end_x"] = mcast[2];
-                args["mcast_dest_noc_end_y"] = mcast[3];
-                args["weights_mcast_num_dests"] = total_active_num_cores - 1;
-                args["weights_mcast_num_cores"] = total_num_cores - 1;
+                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_x"][core] = mcast[0];
+                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_y"][core] = mcast[1];
+                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_x"][core] = mcast[2];
+                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_y"][core] = mcast[3];
+                writer_sender_run_args.runtime_arg_values["weights_mcast_num_dests"][core] = total_active_num_cores - 1;
+                writer_sender_run_args.runtime_arg_values["weights_mcast_num_cores"][core] = total_num_cores - 1;
                 // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
-                args["remaining_tiles_to_push"] = 0u;
-                for (const auto& [name, value] : args) {
-                    writer_sender_run_args.runtime_arg_values[name][core] = value;
-                }
+                writer_sender_run_args.runtime_arg_values["remaining_tiles_to_push"][core] = 0u;
             }
         }
     }
@@ -1861,15 +1857,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     writer_receiver_run_args.runtime_arg_values["is_sender_core"][core] = (uint32_t)is_sender_core;
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
-                    m2::KernelRunArgs::CommonRuntimeArgValues args;
-                    args["noop"] = (uint32_t)is_no_op_core;
-                    args["weights_mcast_sender_noc_x"] = top_left_core_physical.x;
-                    args["weights_mcast_sender_noc_y"] = top_left_core_physical.y;
+                    writer_receiver_run_args.runtime_arg_values["noop"][core] = (uint32_t)is_no_op_core;
+                    writer_receiver_run_args.runtime_arg_values["weights_mcast_sender_noc_x"][core] =
+                        top_left_core_physical.x;
+                    writer_receiver_run_args.runtime_arg_values["weights_mcast_sender_noc_y"][core] =
+                        top_left_core_physical.y;
                     // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
-                    args["remaining_tiles_to_push"] = 0u;
-                    for (const auto& [name, value] : args) {
-                        writer_receiver_run_args.runtime_arg_values[name][core] = value;
-                    }
+                    writer_receiver_run_args.runtime_arg_values["remaining_tiles_to_push"][core] = 0u;
                 }
             }
         }
