@@ -27,9 +27,10 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
     const tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(operation_attributes.output_dtype);
     const bool convert_dtype = input_cb_data_format != output_cb_data_format;
+    const auto& tile = input_tensor.tensor_spec().tile();
 
-    uint32_t input_unit_size =
-        tilized ? tt::tile_size(input_cb_data_format) : input_tensor.padded_shape()[-1] * input_tensor.element_size();
+    uint32_t input_unit_size = tilized ? tile.get_tile_size(input_cb_data_format)
+                                       : input_tensor.padded_shape()[-1] * input_tensor.element_size();
     const bool sharded = input_tensor.memory_config().memory_layout() != TensorMemoryLayout::INTERLEAVED;
     if (sharded && !tilized) {
         input_unit_size = input_tensor.memory_config().shard_spec()->shape[1] * input_tensor.element_size();
@@ -41,7 +42,7 @@ bool can_use_specialized_factory(const CopyParams& operation_attributes, const C
     uint32_t total_cb_size = num_input_units * aligned_input_unit_size;
 
     if (convert_dtype) {
-        uint32_t output_unit_size = tilized ? tt::tile_size(output_cb_data_format)
+        uint32_t output_unit_size = tilized ? tile.get_tile_size(output_cb_data_format)
                                             : input_tensor.padded_shape()[-1] * tt::datum_size(output_cb_data_format);
         if (sharded && !tilized) {
             output_unit_size =
@@ -135,18 +136,23 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(input_tensor_a.layout() == Layout::TILE, "Only tile layout supports dtype conversion");
     }
 
-    // Check that the tile shape is the same for the input and output tensors
     if (input_tensor_a.layout() == Layout::TILE) {
-        const auto output_tile = tensor_args.preallocated_output.has_value()
-                                     ? tensor_args.preallocated_output.value().tensor_spec().tile()
-                                     : tt::tt_metal::TensorLayout(
-                                           output_dtype,
-                                           tt::tt_metal::PageConfig(input_tensor_a.layout()),
-                                           operation_attributes.output_mem_config)
-                                           .get_tile();
+        const auto& tile = input_tensor_a.tensor_spec().tile();
+        TT_FATAL(tile.get_width() == TILE_WIDTH, "copy requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
+        // Reject tiny heights for blocked formats on either side of a dtype conversion.
+        const bool tiny_height = tile.get_height() < TILE_HEIGHT;
+        const bool blocked_dtype = output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B ||
+                                   input_tensor_a.dtype() == DataType::BFLOAT8_B ||
+                                   input_tensor_a.dtype() == DataType::BFLOAT4_B;
         TT_FATAL(
-            input_tensor_a.tensor_spec().tile().get_tile_shape() == output_tile.get_tile_shape(),
-            "Input and output tensors must have the same tile shape when layout is TILE");
+            !(tiny_height && blocked_dtype),
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+        if (tensor_args.preallocated_output.has_value()) {
+            const auto& out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
+            TT_FATAL(
+                tile.get_tile_shape() == out_tile.get_tile_shape(),
+                "Input and output tensors must have the same tile shape when layout is TILE");
+        }
     }
 }
 
@@ -157,11 +163,12 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
     }
 
     const Tensor& input_tensor = tensor_args.input;
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
+    const auto& page_config = input_tensor.tensor_spec().page_config();
 
     auto output_layout = tt::tt_metal::TensorLayout(
-        operation_attributes.output_dtype,
-        tt::tt_metal::PageConfig(input_tensor.layout()),
-        operation_attributes.output_mem_config);
+        operation_attributes.output_dtype, page_config, operation_attributes.output_mem_config);
     auto output_padded_shape = output_layout.compute_padded_shape(
         input_tensor.logical_shape());  // We need to account for the fact that the output tensor may have a different
                                         // padded_shape due to having a different shard_spec.
@@ -169,10 +176,29 @@ CopyDeviceOperation::spec_return_value_t CopyDeviceOperation::compute_output_spe
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
+            page_config,
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             output_padded_shape))};
+}
+
+ttsl::hash::hash_t CopyDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input;
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile = input_tensor.tensor_spec().tile();
+    auto program_factory = select_program_factory(operation_attributes, tensor_args);
+    return tt::tt_metal::operation::hash_operation<CopyDeviceOperation>(
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.backwards,
+        input_tensor.dtype(),
+        input_tensor.memory_config(),
+        input_tensor.layout(),
+        input_tensor.padded_shape(),
+        program_factory.index(),
+        tile.get_height(),
+        tile.get_width());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>

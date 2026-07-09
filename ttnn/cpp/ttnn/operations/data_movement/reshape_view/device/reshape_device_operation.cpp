@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::prim {
 
@@ -26,15 +27,31 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::UINT32 or
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32,
         "Can only work with bfloat16/float32 or int32/uint32 tensors");
+    if (input_tensor_a.layout() == Layout::TILE) {
+        const auto& tile = input_tensor_a.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_width() == tt::constants::TILE_WIDTH,
+            "reshape requires tile width {}, got {}",
+            tt::constants::TILE_WIDTH,
+            tile.get_width());
+        // Blocked formats are not accepted by this device op (typecast happens upstream), but keep the
+        // guard so a future dtype expansion cannot silently run tiny-tile + blocked paths.
+        TT_FATAL(
+            !(tile.get_height() < tt::constants::TILE_HEIGHT &&
+              (input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B)),
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+    }
 }
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
     return TensorSpec(
         operation_attributes.logical_output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
             tensor_args.input.dtype(),
-            tt::tt_metal::PageConfig(tensor_args.input.layout()),
+            tensor_args.input.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
             operation_attributes.logical_output_shape,
             operation_attributes.padded_output_shape));
@@ -50,6 +67,8 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     log_trace(tt::LogOp, "ReshapeViewDeviceOperation::compute_program_hash is called");
 
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile = tensor_args.input.tensor_spec().tile();
 
     // don't hash on operation_attributes_t::recreate_mapping_tensor
     return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
@@ -59,7 +78,9 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
         operation_attributes.sub_core_grid.has_value() ? operation_attributes.sub_core_grid.value()
                                                        : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         tensor_args,
-        program_factory.index());
+        program_factory.index(),
+        tile.get_height(),
+        tile.get_width());
 }
 
 tt::tt_metal::Tensor reshape_view(
