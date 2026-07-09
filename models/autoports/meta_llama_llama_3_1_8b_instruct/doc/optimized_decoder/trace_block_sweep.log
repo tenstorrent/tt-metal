@@ -1,0 +1,60 @@
+2026-07-09 09:56:02.611 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-09 09:56:05.055 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-09 09:56:05.055 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-09 09:56:05.055 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:91)
+2026-07-09 09:56:05.055 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-09 09:56:05.056 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:569)
+2026-07-09 09:56:05.057 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-09 09:56:05.064 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-09 09:56:05.064 | info     |             UMD | IOMMU: disabled (cluster.cpp:142)
+2026-07-09 09:56:05.064 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-09 09:56:05.064 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-09 09:56:05.064 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-09 09:56:05.068 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-09 09:56:05.248 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-09 09:56:05.248 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+2026-07-09 09:56:05.248 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-09 09:56:05.248 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-09 09:56:05.249 | warning  |          Always | Unknown motherboard 'ROG STRIX X670E-E GAMING WIFI' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-09 09:56:05.249 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-09 09:56:05.249 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-09 09:56:05.254 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mvasiljevic/tt-metal/tt_metal/pre-compiled/1184890701409116563/ (build_env_manager.cpp:347)
+2026-07-09 09:56:05.450 | info     |           Metal | D2HSocket: Using hugepage fallback for device 0 (data_dev_addr=0x3fffe000, pcie_xy_enc=0xc08) (d2h_socket.cpp:125)
+2026-07-09 09:56:06.069 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985505 GHz, device_time_at_sync=96323111078852 cycles (realtime_profiler_manager.cpp:1127)
+TRACE_BLOCK_ROW {"in0_block_w": 8, "best_ms": 1.475, "median_ms": 1.492, "times_ms": [1.492, 1.501, 1.494, 1.494, 1.489, 1.482, 1.475]}
+TRACE_BLOCK_ROW {"in0_block_w": 32, "best_ms": 1.285, "median_ms": 1.492, "times_ms": [1.299, 1.492, 1.503, 1.494, 1.285, 1.492, 1.294]}
+nanobind: leaked 1 instances!
+ - leaked instance 0x7f69c2e2f8e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 13 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.tensor.Tensor"
+ - ... skipped remainder
+nanobind: leaked 199 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_output_tensors"
+ - leaked function ""
+ - leaked function "buffer_page_size"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-09 09:56:12.427 | info     |    BuildKernels | JIT cache stats: 81/81 hits (100.0%) [81 cached, 9 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-09 09:56:12.427 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-09 09:56:12.430 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-09 09:56:12.430 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-09 09:56:12.433 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-09 09:56:12.433 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-09 09:56:12.433 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

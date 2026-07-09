@@ -1,16 +1,24 @@
 {
   "hf_model": "meta-llama/Llama-3.1-8B-Instruct",
   "hf_advertised_context": 131072,
-  "current_supported_context": 8,
+  "current_supported_context": 128,
   "largest_validated_prefill_seq": 8,
-  "decode_status": "pending_emitted_decode_version",
-  "prefill_status": "functional_decoder_validated_short_prefill",
-  "limiting_reason": "functional_stage_validation_scope",
+  "optimized_largest_validated_logical_prefill_seq": 5,
+  "optimized_largest_validated_decode_position": 33,
+  "decode_status": "optimized_decoder_validated_paged_decode_short_context",
+  "prefill_status": "functional_decoder_validated_short_prefill_and_optimized_decoder_validated_non_aligned_prefill",
+  "optimized_cache_dtype": "BFLOAT8_B",
+  "optimized_cache_layout": "paged_kv_cache_shape_[max_num_blocks,num_key_value_heads,page_block_size,head_dim]",
+  "optimized_tested_page_block_size": 32,
+  "optimized_tested_max_num_blocks": 128,
+  "optimized_tested_batch": 32,
+  "limiting_reason": "stage_validation_scope",
   "notes": [
     "HF max_position_embeddings is 131072 for the local LlamaConfig.",
-    "This stage validated single-layer prefill at batch 32 for seq_len 1, 4, and 8 only; downstream stages must extend validation before claiming long-context readiness.",
-    "The supplied forge graph is decode-shaped around a cached length of 128; this functional decoder translates the layer math into prefill and deliberately does not implement decode or paged KV.",
-    ".agents/scripts/check_context_contract.py currently treats any below-HF context as a failure unless DRAM-limited; this stage is below advertised because validation scope is short prefill, not because of a proven DRAM limit."
+    "The functional stage validated single-layer prefill at batch 32 for seq_len 1, 4, and 8 only; downstream stages must extend validation before claiming long-context readiness.",
+    "The optimized decoder validates non-aligned real-weight prefill at seq_len 5 and paged decode with BFP8 KV cache at prefix length 5 plus repeated decode positions 31, 32, and 33 across a page boundary.",
+    "The optimized paged cache test configuration uses page_block_size 32 and max_num_blocks 128, matching the supplied decode-shaped forge graph cached-length scope.",
+    ".agents/scripts/check_context_contract.py currently treats any below-HF context as a failure unless DRAM-limited; this stage remains below advertised because validation scope is short-context single-layer testing, not because of a proven DRAM limit."
   ],
   "evidence": {
     "test_command": "timeout 900 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_functional_decoder.py --tb=short -s",
@@ -27,6 +35,27 @@
         "pcc": 0.999874
       }
     ],
-    "synthetic_seq_lens": [1, 8]
+    "synthetic_seq_lens": [1, 8],
+    "optimized_decoder": {
+      "test_command": "timeout 1200 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py --tb=short -s",
+      "watcher_command": "timeout 1200 env TT_METAL_WATCHER=10 pytest -q models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py -k 'not perf' --tb=short -s",
+      "real_weight_prefill_seq5_pcc": 0.999991,
+      "real_weight_decode_prefix5_pcc": 0.999991,
+      "repeated_decode_pcc": [
+        {
+          "position": 31,
+          "pcc": 0.999992
+        },
+        {
+          "position": 32,
+          "pcc": 0.999992
+        },
+        {
+          "position": 33,
+          "pcc": 0.999991
+        }
+      ],
+      "trace_replay_pcc_threshold": 0.9999
+    }
   }
 }

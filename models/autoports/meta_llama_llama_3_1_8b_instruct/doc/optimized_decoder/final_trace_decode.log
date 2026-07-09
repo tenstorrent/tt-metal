@@ -1,0 +1,85 @@
+2026-07-09 09:57:20.540 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /localdev/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, split-0.11.0, timeout-2.4.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, benchmark-5.2.3, anyio-4.14.1
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_perf_decode_trace_signposted 2026-07-09 09:57:22.197 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-09 09:57:22.197 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-09 09:57:22.198 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:91)
+2026-07-09 09:57:22.198 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-09 09:57:22.198 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:569)
+2026-07-09 09:57:22.199 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-09 09:57:22.224 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-09 09:57:22.224 | info     |             UMD | IOMMU: disabled (cluster.cpp:142)
+2026-07-09 09:57:22.224 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-09 09:57:22.224 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-09 09:57:22.225 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-09 09:57:22.228 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-09 09:57:22.238 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-09 09:57:22.238 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+2026-07-09 09:57:22.238 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-09 09:57:22.238 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-09 09:57:22.238 | warning  |          Always | Unknown motherboard 'ROG STRIX X670E-E GAMING WIFI' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-07-09 09:57:22.239 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-09 09:57:22.239 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-09 09:57:22.244 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mvasiljevic/tt-metal/tt_metal/pre-compiled/1184890701409116563/ (build_env_manager.cpp:347)
+2026-07-09 09:57:22.397 | info     |           Metal | D2HSocket: Using hugepage fallback for device 0 (data_dev_addr=0x3fffe000, pcie_xy_enc=0xc08) (d2h_socket.cpp:125)
+2026-07-09 09:57:23.018 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=0.985511 GHz, device_time_at_sync=96374756123394 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-09 09:57:26.131 | INFO     | tracy:signpost:49 - PERF_DECODE_TRACE
+2026-07-09 09:57:26.133 | INFO     | tracy:signpost:49 - PERF_DECODE_TRACE_END
+OPT_DECODE_TRACE_PREFIX_31_WARMED_MS=1.750
+PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /localdev/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.93s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_perf_decode_trace_signposted
+1.01s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_perf_decode_trace_signposted
+0.12s teardown models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_perf_decode_trace_signposted
+=========================== short test summary info ============================
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_perf_decode_trace_signposted
+============================== 1 passed in 4.93s ===============================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f2aa1945908 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7f2aa1f6bfd8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 20 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "pad"
+ - leaked function "__init__"
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-07-09 09:57:28.007 | info     |    BuildKernels | JIT cache stats: 66/66 hits (100.0%) [66 cached, 6 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-09 09:57:28.007 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-09 09:57:28.009 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-09 09:57:28.009 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-09 09:57:28.012 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-09 09:57:28.012 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-09 09:57:28.012 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
