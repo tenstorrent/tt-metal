@@ -165,13 +165,8 @@ void kernel_main() {
     // reader multicasts it on NoC 0. A local same-core (BRISC reader <-> NCRISC
     // writer) handshake orders the two: up_go (reader: slot reserved) and
     // up_done (writer: up landed in L1), monotonic counters.
-    // D2.0 NoC handle forcing NoC 1 for the UP_SPLIT `up` DRAM read, concurrent
-    // with the reader's NoC-0 `gate` read.
     Noc noc_up(1);
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
-    // D2.0 Semaphore wrappers for the UP_SPLIT local (same-core NCRISC<->BRISC)
-    // handshake. Monotonic counters: wait_min() blocks until the semaphore is at
-    // least the sequence value, set() stores it.
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
     uint32_t up_seq = 0;
