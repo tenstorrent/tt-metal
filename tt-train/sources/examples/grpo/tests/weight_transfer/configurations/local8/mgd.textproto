@@ -1,23 +1,9 @@
 # Mesh Graph Descriptor for the DDP -> per-submesh weight transfer test.
-#
-# Two [1, 4] meshes (one per MPI rank), each covering FOUR chips:
-#   * Rank 0 (TTML, WeightBridge sender)   -> mesh_id 0, a [1, 4] DDP mesh.
-#   * Rank 1 (TTT,  WeightBridge receiver) -> mesh_id 1, a [1, 4] parent mesh
-#     that the application splits into four [1, 1] submeshes.
-# The FABRIC graph wires the two meshes together so the per-submesh
-# ttnn.experimental.send_async/recv_async links can route across them.
+# Two [1, 4] meshes (one per MPI rank): rank 0 the DDP mesh, rank 1 a parent split
+# into four [1, 1] submeshes.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# This declares a [1, 4] line per rank spanning four chips (e.g. two
-# eth-linked N300 boards). The exact device_topology, channel counts, and
-# inter-mesh connections MUST match your physical wiring:
-#   * On a T3K (8 chips, single host, 2x4) you would more naturally declare
-#     one [2, 4] mesh and bind each rank to one [1, 4] row, or two [1, 4]
-#     meshes mapped onto the two rows.
-#   * On 4x N300 boards you need the four chips of each rank to be
-#     eth-connected in a line for the [1, 4] mesh to be routable.
-# Adjust this file (and rank_bindings.yaml) for your machine; the Python
-# test logic is hardware-agnostic and does not depend on these exact values.
+# device_topology / channel counts / inter-mesh connections MUST match your wiring.
 
 mesh_descriptors {
   name: "M0"

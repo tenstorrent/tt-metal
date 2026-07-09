@@ -41,7 +41,7 @@ to the other every step.
 [How to run](#how-to-run).
 
 `GRPOTrainer` is unaware of the rank split. It calls
-`completer.generate(...)`; `LlamaGRPOCompleter` hides the cross-rank
+`completer.generate(...)`; `LlamaCompleterRemoteRollout` hides the cross-rank
 RPC inside that call. The [trainer doc](../../../../docs/GRPO_TRAINER.md)
 covers the model- and rank-agnostic API; everything below is
 specific to this two-rank deployment.
@@ -52,7 +52,7 @@ specific to this two-rank deployment.
 
 | Class | Side | Role |
 |-------|------|------|
-| `LlamaGRPOCompleter`  | TTML | Concrete `GRPOCompleter`. Owns the ttml policy. Routes `generate(...)` and `push_weights()` to the peer rank via `inference_client`. |
+| `LlamaCompleterRemoteRollout`  | TTML | Concrete `GRPOCompleter`. Owns the ttml policy. Routes `generate(...)` and `push_weights()` to the peer rank via `inference_client`. |
 | `MPIRolloutClient`  | TTML | MPI client + `WeightBridge` owner. Constructed before the completer; its constructor blocks until the peer's server is up. |
 | `MPIRolloutServer`  | TTT  | Dispatches `OP_GENERATE` / `OP_TRANSFER` / `OP_SHUTDOWN` to user-supplied callbacks. Blocks in `serve_forever()` until shutdown. |
 | `TttGenerationWorker` | TTT  | Hosts the `tt-transformers.Transformer` and a captured decode trace. Exposes `generate` and `update_weights` callbacks. |
@@ -61,10 +61,10 @@ specific to this two-rank deployment.
 
 ---
 
-## LlamaGRPOCompleter
+## LlamaCompleterRemoteRollout
 
 ```python
-from utils.llama_grpo_completer import LlamaGRPOCompleter, LlamaCompletionCtx
+from utils.llama_grpo_completer import LlamaCompleterRemoteRollout, LlamaCompletionCtx
 ```
 
 Llama-specific implementation of `GRPOCompleter`. Loads the ttml
@@ -73,7 +73,7 @@ the KV cache, and dispatches generation requests over MPI to the TTT
 rank.
 
 ```python
-completer = LlamaGRPOCompleter(
+completer = LlamaCompleterRemoteRollout(
     ctx=LlamaCompletionCtx(
         max_tokens_to_complete=256,
         temperature=0.7,
@@ -115,7 +115,7 @@ import os
 from datasets import load_dataset
 from utils.mpi_rollout import MPIRolloutClient
 from utils.llama_grpo_completer import (
-    LlamaCompletionCtx, LlamaGRPOCompleter, WeightSyncCallback,
+    LlamaCompletionCtx, LlamaCompleterRemoteRollout, WeightSyncCallback,
 )
 from ttml.trainers import GRPOTrainer, get_grpo_config
 
@@ -127,7 +127,7 @@ client = MPIRolloutClient(peer_rank=TTT_RANK, device=mesh_device)
 
 dataset = load_dataset("google/boolq", split="train").map(format_example)
 
-completer = LlamaGRPOCompleter(
+completer = LlamaCompleterRemoteRollout(
     ctx=LlamaCompletionCtx(
         max_tokens_to_complete=256,
         temperature=0.7,
@@ -277,7 +277,7 @@ is what keeps the inference worker in sync with the trainer.
 `GRPOTrainer` itself supports single-rank training: write a
 `GRPOCompleter` whose `generate(...)` runs locally on the same mesh
 as the policy, drop the `inference_client` kwarg, and skip the
-`WeightSyncCallback`. The current `LlamaGRPOCompleter` requires
+`WeightSyncCallback`. The current `LlamaCompleterRemoteRollout` requires
 `inference_client`, so a single-rank Llama use-case would need a new
 completer subclass; the trainer is unchanged.
 

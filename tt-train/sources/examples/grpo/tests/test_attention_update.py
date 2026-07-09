@@ -1,25 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Mechanical pytest tests for ``Attention.update`` (no forward pass).
-
-Two tests, both side-step the attention formula entirely:
-
-1. **Read-back.** Push HF-format constant-valued ``q_proj`` / ``k_proj``
-   / ``v_proj`` / ``o_proj`` tensors through ``Attention.update`` and
-   read the live internal ``wqkv`` / ``wo`` buffers back to torch. Using
-   the same constant for Q/K/V means the internal fused
-   ``[Q | K | V]`` wqkv must come back uniformly equal to that
-   constant.
-
-2. **Buffer-address preservation.** Snapshot ``buffer_address()`` before
-   and after a second update; ``ttnn.copy`` must overwrite the existing
-   device buffer rather than allocate a new one (otherwise captured
-   traces and the DRAM prefetcher's stashed addresses would silently
-   stop pointing at live data).
-
-Uses ``dummy_weights=True`` -- no HF auth required.
-"""
+"""Mechanical tests for ``Attention.update`` (no forward pass); dummy weights."""
 
 from __future__ import annotations
 
@@ -41,13 +23,8 @@ def attn():
 
 
 def _push_constants(attn, wqkv_const: float, wo_const: float) -> None:
-    """Build constant HF-shape ``q_proj`` / ``k_proj`` / ``v_proj`` /
-    ``o_proj`` tensors and push them through ``Attention.update``.
-
-    Using one constant for all of Q/K/V keeps the readback assertion
-    simple: the internal fused wqkv must come back uniformly equal to
-    ``wqkv_const``.
-    """
+    """Push constant HF-shape q/k/v/o_proj through ``Attention.update``.
+    One constant for all of Q/K/V => fused wqkv reads back uniformly equal."""
     H = attn.hidden_size
     D = attn.head_dim
     n_q = attn.n_heads * D

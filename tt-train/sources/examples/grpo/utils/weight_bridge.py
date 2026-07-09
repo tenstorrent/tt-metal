@@ -1,41 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Cross-rank weight transport: a small ``WeightBridge`` abstraction.
+"""Cross-rank weight transport (``WeightBridge`` ABC + ``HostWeightBridge``).
 
-``WeightBridge`` is a pure interface (ABC) with four methods -- ``connect``,
-``send_weights``, ``receive_weights`` and ``barrier``. One concrete transport
-implements it:
-
-- :class:`HostWeightBridge` -- moves each weight to host (``torch.save`` over
-  MPI) and re-materialises it replicated onto every receiver target (submesh).
-  No fabric; the cost is a host/PCIe round-trip of ~model size per target.
-
-Instances are built with the ``init_sender`` / ``init_receiver`` classmethod
-factories (there is no public role-switching constructor).
-
-Weight-dict format
-==================
-
-``dict[str, ttnn.Tensor]`` -- HuggingFace safetensors-style keys mapping to
-weight tensors. Every tensor is ``bfloat16``, ``TILE_LAYOUT``,
-``DRAM_MEMORY_CONFIG`` (interleaved), 4D ``(1, 1, rows, cols)`` and *fully
-replicated* across its local mesh (every mesh axis ``PlacementReplicate``).
-``send_weights`` requires this on the sender's ``[1, N]`` mesh.
-``receive_weights`` returns a ``list[dict]`` -- one dict per receiver target
-(submesh) -- each tensor satisfying the same contract on that target. Keys
-are iterated in sorted order. This matches ``LlamaCompositeKV.export_to_hf_dict``
-output and the ``Transformer.update_weights`` input contract.
-
-Tag namespace
-=============
-
-- ``WeightBridge`` (this module): MPI tags 1..6 (manifest length/body, two
-  handshake directions, weight-blob length/body for the host transport).
-- Rollout RPC (:mod:`utils.mpi_rollout`): MPI tags 10..13.
-
-Disjoint tag namespaces let both protocols share the same MPI distributed
-context simultaneously without crosstalk.
+MPI tags here (1..6) must stay disjoint from the rollout RPC tags (10..13 in
+utils.mpi_rollout) so both protocols can share one MPI context without crosstalk.
 """
 
 from __future__ import annotations
@@ -51,41 +20,24 @@ from ttnn._ttnn.multi_device import recv_bytes as _mpi_recv_bytes
 from ttnn._ttnn.multi_device import send_bytes as _mpi_send_bytes
 
 
-# ---------------------------------------------------------------------------
-# Public constants
-# ---------------------------------------------------------------------------
-
 SENDER_RANK: int = 0
 RECEIVER_RANK: int = 1
 
-# Back-compat aliases (used by utils.mpi_rollout and the tests).
 TTML_RANK: int = SENDER_RANK
 TTT_RANK: int = RECEIVER_RANK
-
-
-# ---------------------------------------------------------------------------
-# Internal constants
-# ---------------------------------------------------------------------------
 
 _ROLE_SENDER: str = "sender"
 _ROLE_RECEIVER: str = "receiver"
 
-# MPI tag namespace (1..6).
 _MANIFEST_LEN_TAG: int = 1
 _MANIFEST_BODY_TAG: int = 2
 # Per-direction handshake tags so a send cannot self-match the same rank's recv.
 _HANDSHAKE_TAG_FROM_SENDER: int = 3
 _HANDSHAKE_TAG_FROM_RECEIVER: int = 4
-# Host transport: per-weight length-prefixed blobs.
 _WEIGHT_LEN_TAG: int = 5
 _WEIGHT_BLOB_TAG: int = 6
 
 _HANDSHAKE_PAYLOAD: bytes = b"ready"
-
-
-# ---------------------------------------------------------------------------
-# Module-level shared helpers (both impls use these; the ABC stays pure)
-# ---------------------------------------------------------------------------
 
 
 def _require_distributed_context(owner: str) -> int:
@@ -194,7 +146,7 @@ def _replicate_from_host(host_tensor, device: "ttnn.MeshDevice") -> "ttnn.Tensor
 
 
 def _torch_save_bytes(t) -> bytes:
-    import torch  # noqa: F401 -- torch is only needed on the host transport path
+    import torch  # noqa: F401
 
     buf = io.BytesIO()
     torch.save(t, buf)
@@ -207,24 +159,12 @@ def _torch_load_bytes(blob: bytes):
     return torch.load(io.BytesIO(blob), weights_only=True)
 
 
-# ---------------------------------------------------------------------------
-# WeightBridge -- pure interface
-# ---------------------------------------------------------------------------
-
-
 class WeightBridge(ABC):
     """Cross-rank transport for a replicated HF-keyed weight dict.
 
-    Weight-dict format (see the module docstring): ``dict[str, ttnn.Tensor]``,
-    each tensor bf16 / TILE / DRAM-interleaved / 4D ``(1, 1, *, *)`` / fully
-    replicated across its mesh. ``send_weights`` requires this on the sender
-    mesh; ``receive_weights`` returns a ``list[dict]`` (one per receiver
-    submesh), each satisfying the contract on that submesh.
-
-    Build instances with the concrete impls' ``init_sender`` / ``init_receiver``
-    classmethods. Lifecycle: construct -> ``connect()`` (both ranks) ->
-    ``send_weights`` (sender) / ``receive_weights`` (receiver), paired and the
-    same number of times -> ``barrier()``.
+    Lifecycle: construct -> ``connect()`` (both ranks) -> ``send_weights``
+    (sender) / ``receive_weights`` (receiver), paired the same number of
+    times -> ``barrier()``.
     """
 
     @abstractmethod
@@ -244,17 +184,10 @@ class WeightBridge(ABC):
         """Two-rank fence so the sender keeps its source tensors alive until drained."""
 
 
-# ---------------------------------------------------------------------------
-# HostWeightBridge -- MPI byte transfer, no fabric
-# ---------------------------------------------------------------------------
-
-
 class HostWeightBridge(WeightBridge):
     """Move weights via host: ``torch.save`` over MPI, then re-upload to each target.
 
-    Always works (no fabric); the cost is a host/PCIe round-trip of ~model size
-    per receiver target. The receiver's ``mesh`` argument is accepted for a
-    uniform factory signature but unused -- host uploads straight to each submesh.
+    No fabric; the cost is a host/PCIe round-trip of ~model size per target.
     """
 
     def __init__(
@@ -277,7 +210,7 @@ class HostWeightBridge(WeightBridge):
         else:
             if not submeshes:
                 raise ValueError("HostWeightBridge.init_receiver requires a non-empty submeshes list.")
-            self._mesh = mesh  # accepted for signature parity; unused by the host path
+            self._mesh = mesh  # signature parity; unused by the host path
             self._targets = list(submeshes)
 
     @classmethod

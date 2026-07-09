@@ -1,23 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Construction-equivalence pytest test for ``MLP.update``.
+"""Construction-equivalence test for ``MLP.update`` (real weights, HF auth).
 
-Real Llama-3.2-1B-Instruct weights (HF auth required). Round-trip on
-every MLP layer:
-
-    1.  Generate greedily with the real, ``__init__``-loaded weights -> ``tokens_A``.
-    2.  Snapshot every layer's ``w1`` / ``w2`` / ``w3`` back to HF-shape
-        torch ``gate_proj`` / ``up_proj`` / ``down_proj`` tensors.
-    3.  Overwrite every layer with a constant (deliberately break the model).
-    4.  Generate again -> ``tokens_broken`` (sanity: must differ from
-        ``tokens_A``, otherwise the overwrite was a no-op).
-    5.  Restore every layer via ``MLP.update(gate_proj=..., up_proj=...,
-        down_proj=...)``.
-    6.  Generate again -> ``tokens_B``.
-    7.  Assert ``tokens_A == tokens_B`` byte-for-byte.
-
-Mirrors ``test_attention_update_construction.py``'s structure.
+Round-trip per layer: generate -> snapshot w1/w2/w3 -> overwrite with a constant
+(must change output) -> restore via update -> generate must match the original.
 """
 
 from __future__ import annotations
@@ -40,12 +27,8 @@ def completer():
 
 
 def _snapshot_mlp_hf(mlp):
-    """Read ``w1`` / ``w2`` / ``w3`` back as HF-shape torch tensors.
-
-    Internal storage is HF transposed (``self.w1`` / ``self.w3`` are
-    ``(1, 1, H, I)``; ``self.w2`` is ``(1, 1, I, H)``). To get HF Linear
-    shape back: squeeze to 2D and transpose.
-    """
+    """Read ``w1`` / ``w2`` / ``w3`` back as HF-shape torch tensors (internal
+    storage is HF transposed, so squeeze to 2D and transpose)."""
     gate = to_torch_2d(mlp.w1).transpose(0, 1).contiguous()  # (H, I) -> (I, H)
     up = to_torch_2d(mlp.w3).transpose(0, 1).contiguous()
     down = to_torch_2d(mlp.w2).transpose(0, 1).contiguous()  # (I, H) -> (H, I)
