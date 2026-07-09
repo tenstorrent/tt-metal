@@ -36,7 +36,7 @@ using AllGatherFn = ttnn::Tensor (*)(
 
 void bind_all_gather(nb::module_& mod) {
     const auto* doc = R"doc(
-        Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified :attr:`dim`. If the :attr:`input_tensor` has unaligned row-major pages or padded tiles on the gather :attr:`dim`, a slower composite all-gather implementation is used.
+        Performs an all-gather collective operation that gathers data from all devices into a new output tensor, concatenated along the specified :attr:`dim`. It automatically specializes for the active Fabric configuration (topology, packet size, etc.). If the :attr:`input_tensor` has unaligned row-major pages or padded tiles on the gather :attr:`dim`, a slower composite all-gather implementation is used.
 
         Args:
             input_tensor (ttnn.Tensor): Input tensor to be gathered.
@@ -59,8 +59,11 @@ void bind_all_gather(nb::module_& mod) {
             ttnn.Tensor: The gathered tensor, with output_shape = input_shape for all the unspecified dimensions, and output_shape[dim] = input_shape[dim] * num_devices, where num_devices is the number of devices along the `cluster_axis` if specified, else the total number of devices in the mesh.
 
         Example:
-            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
+            >>> router_config = ttnn.FabricRouterConfig()
+            >>> router_config.max_packet_payload_size_bytes = 4096
+            >>> ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router_config)
             >>> mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+            >>> full_tensor = torch.randn([1, 1, 32, 256], dtype=torch.bfloat16)
             >>> ttnn_tensor = ttnn.from_torch(
                             full_tensor,
                             dtype=input_dtype,
