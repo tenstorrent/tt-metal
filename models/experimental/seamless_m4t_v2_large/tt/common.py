@@ -269,32 +269,63 @@ def matmul_program_config(
     )
 
 
-# Text-encoder TP block-sharded matmul: tuned ``in0_block_w`` per (k, n) on an 8×8 grid.
-_ENCODER_TP_BS_GRID = 8
+# Text-encoder TP block-sharded matmul: tuned ``in0_block_w`` cap per (k, n); grid is picked per shape.
 _ENCODER_TP_BS_IBW = {
-    (1024, 768): 4,  # QKV       (k = hidden, n = 3*hidden/tp); per-core Kt/8 = 4
-    (256, 1024): 8,  # out_proj  (k = hidden/tp); per-core Kt/8 = 1 -> clamped to 1
+    (1024, 768): 4,  # QKV       (k = hidden, n = 3*hidden/tp)
+    (256, 1024): 8,  # out_proj  (k = hidden/tp)
     (1024, 2048): 4,  # fc1      (k = hidden, n = ffn_dim/tp)
-    (2048, 1024): 8,  # fc2      (k = ffn_dim/tp); per-core Kt/8 = 8
+    (2048, 1024): 8,  # fc2      (k = ffn_dim/tp)
 }
-_ENCODER_TP_IN0_MEM_CACHE: dict[tuple[int, int], ttnn.MemoryConfig] = {}
+_ENCODER_TP_IN0_MEM_CACHE: dict[tuple[int, int, int], ttnn.MemoryConfig] = {}
 
 
-def encoder_tp_matmul_in0_memory_config(device: ttnn.Device, m: int, k: int) -> Optional[ttnn.MemoryConfig]:
+def _pick_encoder_tp_bs_grid(
+    device: ttnn.Device,
+    *,
+    mt: int,
+    kt: int,
+    nt: int,
+    ibw_cap: int,
+) -> Optional[tuple[int, int, int]]:
+    """Pick ``(gx, gy, ibw)`` for encoder TP block-sharded matmul.
+
+    Prefers higher ``in0_block_w`` (better K reuse on thin layers like out_proj) then core count.
+    """
+    cg = device.compute_with_storage_grid_size()
+    best: Optional[tuple[int, int, int]] = None
+    best_score = -1
+    for gx in range(1, int(cg.x) + 1):
+        if nt % gx or kt % gx:
+            continue
+        kt_per_core = kt // gx
+        for gy in range(1, int(cg.y) + 1):
+            if mt % gy:
+                continue
+            ibw = _largest_divisor_at_most(kt_per_core, ibw_cap)
+            if kt_per_core % ibw:
+                continue
+            score = gx * gy * 1000 + ibw
+            if score > best_score:
+                best_score = score
+                best = (gx, gy, ibw)
+    return best
+
+
+def encoder_tp_matmul_in0_memory_config(
+    device: ttnn.Device, m: int, k: int, n: int, *, ibw_cap: int
+) -> Optional[ttnn.MemoryConfig]:
     """L1 block-sharded in0 layout shared by TP matmul and fused LN (``[1, 1, m, k]``)."""
-    key = (m, k)
+    key = (m, k, n)
     cached = _ENCODER_TP_IN0_MEM_CACHE.get(key)
     if cached is not None:
         return cached
-    gx = gy = _ENCODER_TP_BS_GRID
-    cg = device.compute_with_storage_grid_size()
-    if gx > cg.x or gy > cg.y:
+    if m % TILE or k % TILE or n % TILE:
         return None
-    if m % TILE or k % TILE:
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    picked = _pick_encoder_tp_bs_grid(device, mt=mt, kt=kt, nt=nt, ibw_cap=ibw_cap)
+    if picked is None:
         return None
-    mt, kt = m // TILE, k // TILE
-    if mt % gy or kt % gx:
-        return None
+    gx, gy, _ = picked
     cached = ttnn.create_sharded_memory_config(
         (1, 1, m, k),
         core_grid=ttnn.CoreGrid(y=gy, x=gx),
@@ -309,18 +340,27 @@ def encoder_tp_matmul_in0_ln_config(
     device: ttnn.Device,
     m: int,
     k: int,
-    cache: dict[tuple[int, int], Tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig]],
+    n: int,
+    cache: dict[tuple[int, int, int], Tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig]],
 ) -> Optional[Tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig]]:
     """LN shard layout aligned with ``encoder_tp_matmul_in0_memory_config`` for direct matmul feed."""
-    key = (m, k)
+    ibw_cap = _ENCODER_TP_BS_IBW.get((k, n))
+    if ibw_cap is None:
+        return None
+    key = (m, k, n)
     cached = cache.get(key)
     if cached is not None:
         return cached
-    in0_mem = encoder_tp_matmul_in0_memory_config(device, m, k)
+    if m % TILE or k % TILE or n % TILE:
+        return None
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    picked = _pick_encoder_tp_bs_grid(device, mt=mt, kt=kt, nt=nt, ibw_cap=ibw_cap)
+    if picked is None:
+        return None
+    gx, gy, _ = picked
+    in0_mem = encoder_tp_matmul_in0_memory_config(device, m, k, n, ibw_cap=ibw_cap)
     if in0_mem is None:
         return None
-    gx = gy = _ENCODER_TP_BS_GRID
-    mt, kt = m // TILE, k // TILE
     block_h = mt // gy
     block_w = kt // gx
     subblock_w = _largest_divisor_at_most(block_w, 4)
@@ -347,32 +387,22 @@ def encoder_tp_block_sharded_matmul(
     """Tuned block-sharded 2D matmul for a text-encoder TP linear.
 
     Returns ``(program_config, in0_block_sharded_mem, out_block_sharded_mem)`` for a tuned
-    ``(k, n)``, or ``None`` if the shape isn't tuned or doesn't tile-fit the 8x8 grid (caller
+    ``(k, n)``, or ``None`` if the shape isn't tuned or doesn't tile-fit the compute grid (caller
     then falls back to its default linear).  in0 and out are L1 ``BLOCK_SHARDED`` across the
     grid; the matmul height-shards M over grid rows and width-shards N over grid columns.
     """
     ibw_cap = _ENCODER_TP_BS_IBW.get((k, n))
     if ibw_cap is None:
         return None
-    gx = gy = _ENCODER_TP_BS_GRID
-    cg = device.compute_with_storage_grid_size()
-    if gx > cg.x or gy > cg.y:
-        return None
     if m % TILE or k % TILE or n % TILE:
         return None
     mt, kt, nt = m // TILE, k // TILE, n // TILE
-    # 2D block-shard divisibility: gy | Mt, gx | Nt, gx | Kt (K split across grid columns).
-    if mt % gy or nt % gx or kt % gx:
+    picked = _pick_encoder_tp_bs_grid(device, mt=mt, kt=kt, nt=nt, ibw_cap=ibw_cap)
+    if picked is None:
         return None
-    # in0 is BLOCK_SHARDED: each core owns kt_per_core = Kt/gx K-tiles (not full Kt).
-    # Cap ibw by per-core K tiles (Kt/gx), not global Kt.
-    kt_per_core = kt // gx
-    ibw = _largest_divisor_at_most(kt_per_core, ibw_cap)
-    if kt_per_core % ibw:
-        return None
+    gx, gy, ibw = picked
     per_core_m = mt // gy
     per_core_n = nt // gx
-    # Block-sharded output requires out_subblock_h == 1; widen only along N (h*w <= 4).
     out_subblock_w = _largest_divisor_at_most(per_core_n, 4)
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
@@ -387,7 +417,7 @@ def encoder_tp_block_sharded_matmul(
         fused_activation=fused_activation,
     )
     grid = ttnn.CoreGrid(y=gy, x=gx)
-    in0_mem = encoder_tp_matmul_in0_memory_config(device, m, k)
+    in0_mem = encoder_tp_matmul_in0_memory_config(device, m, k, n, ibw_cap=ibw_cap)
     if in0_mem is None:
         return None
     out_mem = ttnn.create_sharded_memory_config(

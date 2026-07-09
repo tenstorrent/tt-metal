@@ -457,6 +457,7 @@ class TTSeamlessM4Tv2Encoder:
         output_sharded: bool = False,
         matmul_fusion_m: Optional[int] = None,
         matmul_fusion_k: Optional[int] = None,
+        matmul_fusion_n: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Sharded multicore LN. Set ``output_sharded=True`` to feed a matmul without an S2I.
 
@@ -472,9 +473,13 @@ class TTSeamlessM4Tv2Encoder:
             # unsharded path below.
             if self._tp_bs_ln and output_sharded:
                 fused_ln = None
-                if matmul_fusion_m is not None and matmul_fusion_k is not None:
+                if matmul_fusion_m is not None and matmul_fusion_k is not None and matmul_fusion_n is not None:
                     fused_ln = encoder_tp_matmul_in0_ln_config(
-                        self.device, matmul_fusion_m, matmul_fusion_k, self._tp_ln_fusion_cache
+                        self.device,
+                        matmul_fusion_m,
+                        matmul_fusion_k,
+                        matmul_fusion_n,
+                        self._tp_ln_fusion_cache,
                     )
                 if fused_ln is not None:
                     sharded_mem_config, sharded_pc = fused_ln
@@ -584,6 +589,15 @@ class TTSeamlessM4Tv2Encoder:
             out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
         return out
 
+    @staticmethod
+    def _tp_chunk_shard_aligned(start: int, chunk_rows: int, per_core_m: int) -> bool:
+        """True when ``[start, start+chunk_rows)`` respects block-sharded M tile boundaries."""
+        if start % TILE or chunk_rows % TILE:
+            return False
+        start_t = start // TILE
+        rows_t = chunk_rows // TILE
+        return start_t % per_core_m == 0 and rows_t % per_core_m == 0
+
     def _linear_tp_chunked(
         self,
         x: ttnn.Tensor,
@@ -604,11 +618,25 @@ class TTSeamlessM4Tv2Encoder:
     ) -> ttnn.Tensor:
         """Long-seq TP block-sharded matmul via ``ceil(m / chunk_m)`` tuned chunk kernels."""
         num_chunks = (m + chunk_m - 1) // chunk_m
-        compute_cfg = self._chunked_tp_linear_compute_cfg() if num_chunks > 1 else self._linear_ln_compute_cfg
+        compute_cfg = self._chunked_tp_linear_compute_cfg()
+        full_tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
+        per_core_m = int(full_tuned[0].per_core_M) if full_tuned is not None else int(program_config.per_core_M)
 
         use_sharded_input = ttnn.is_sharded(x)
         x_inter = x
         owns_x_inter = False
+        if use_sharded_input:
+            misaligned = False
+            for i in range(num_chunks):
+                start = i * chunk_m
+                end = min(start + chunk_m, m)
+                if not self._tp_chunk_shard_aligned(start, end - start, per_core_m):
+                    misaligned = True
+                    break
+            if misaligned:
+                x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+                use_sharded_input = False
+                owns_x_inter = True
         if not use_sharded_input:
             if len(x_inter.shape) == 3:
                 reshaped = ttnn.reshape(x_inter, (m, k))
@@ -676,6 +704,8 @@ class TTSeamlessM4Tv2Encoder:
                 ttnn.deallocate(x_bs)
             out_inter = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
             ttnn.deallocate(out_bs)
+            if len(out_inter.shape) > 2:
+                out_inter = ttnn.reshape(out_inter, (chunk_m, n))
             if chunk_rows < chunk_m:
                 out_inter = ttnn.slice(
                     out_inter,
@@ -761,7 +791,7 @@ class TTSeamlessM4Tv2Encoder:
                 in0_mem=in0_mem,
                 out_mem=out_mem,
                 memory_config=memory_config,
-                compute_kernel_config=self._linear_ln_compute_cfg,
+                compute_kernel_config=self._chunked_tp_linear_compute_cfg(),
             )
 
         # Untuned-shape fallback: block-sharded LN input is not valid here — convert to interleaved.
@@ -993,6 +1023,8 @@ class TTSeamlessM4Tv2Encoder:
             self._long_seq_mc = sharded_hidden_mem if long_seq else None
 
         tp_fused_ln = self._tp_bs_ln and tp > 1 and m_tiles > 1
+        qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1]) if tp > 1 else None
+        fc1_n = int(parameters.layers[0].ffn.fc1.weight.shape[-1]) if tp > 1 else None
 
         for i in range(num_layers):
             layer = parameters.layers[i]
@@ -1007,6 +1039,7 @@ class TTSeamlessM4Tv2Encoder:
                 output_sharded=((not long_seq) and (tp == 1)) or tp_fused_ln,
                 matmul_fusion_m=token_rows if tp_fused_ln else None,
                 matmul_fusion_k=hidden_size if tp_fused_ln else None,
+                matmul_fusion_n=qkv_n if tp_fused_ln else None,
             )
             attn_out = self._attention(
                 normed,
@@ -1034,6 +1067,7 @@ class TTSeamlessM4Tv2Encoder:
                 output_sharded=((not long_seq) and (tp == 1)) or tp_fused_ln,
                 matmul_fusion_m=token_rows if tp_fused_ln else None,
                 matmul_fusion_k=hidden_size if tp_fused_ln else None,
+                matmul_fusion_n=fc1_n if tp_fused_ln else None,
             )
             if tp > 1:
                 # TP FFN: column-parallel fc1 (output = ffn_dim//tp), row-parallel fc2 (output = H).
