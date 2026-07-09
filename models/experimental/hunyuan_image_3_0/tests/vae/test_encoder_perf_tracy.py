@@ -43,7 +43,7 @@ Environment overrides:
     HY_ENCODER_PERF_STEP=512         # square sweep step (default 512²,1024²,1536²,2048²)
     HY_ENCODER_PERF_FULL_RESO=1      # use every ResolutionGroup aspect ratio (33+ sizes)
     HY_ENCODER_PERF_ITERS=3          # timed forward passes per signpost window
-    HY_ENCODER_W_SPATIAL=1           # shard W on mesh axis 1 (2×2); conv halos + dist GN
+    HY_ENCODER_W_SPATIAL=1           # H/W spatial on 2×2 (axis0=H, axis1=W); conv halos + dist GN
     HY_ENCODER_PERF_WARMUP=1         # warmup passes before each timed window
     HY_ENCODER_PERF_MIN_ONLY=1       # only smallest size (quick smoke)
     HY_ENCODER_PERF_MAX_ONLY=1       # only largest size
@@ -64,7 +64,11 @@ import ttnn
 from models.experimental.hunyuan_image_3_0.ref.tokenizer.resolution import ResolutionGroup
 from models.experimental.hunyuan_image_3_0.ref.vae.encoder import IN_CHANNELS, PIXEL_T
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
-from models.experimental.hunyuan_image_3_0.tests.vae.test_utils import pad_encoder_channels_bcthw, upload_bcthw
+from models.experimental.hunyuan_image_3_0.tests.vae.test_utils import (
+    pad_encoder_channels_bcthw,
+    upload_bcthw,
+    upload_bcthw_spatial,
+)
 from models.experimental.hunyuan_image_3_0.tt.vae.encoder import VAEEncoderTTNN
 
 
@@ -152,20 +156,7 @@ def _run_encoder_forward(
     w_spatial: bool = False,
 ) -> None:
     if w_spatial:
-        from models.experimental.hunyuan_image_3_0.tt.vae.decoder import bcthw_to_bthwc
-        from models.experimental.hunyuan_image_3_0.tt.vae.spatial import mesh_mapper_hw_spatial
-
-        host = x_bcthw.bfloat16().permute(0, 2, 3, 4, 1).contiguous()
-        x_bcthw_tt = ttnn.from_torch(
-            host,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper_hw_spatial(mesh_device, w_mesh_axis=1),
-        )
-        x_bthwc = bcthw_to_bthwc(x_bcthw_tt)
-        ttnn.deallocate(x_bcthw_tt, force=False)
+        x_bthwc = upload_bcthw_spatial(mesh_device, x_bcthw)
     else:
         x_bthwc = upload_bcthw(mesh_device, x_bcthw)
     out = encoder(x_bthwc)
@@ -206,6 +197,7 @@ def _profile_encoder_forward(
         pixel_h=pixel_h,
         pixel_w=pixel_w,
         ccl_manager=ccl,
+        h_mesh_axis=0 if w_spatial else None,
         w_mesh_axis=1 if w_spatial else None,
     )
     x = _make_encoder_input(pixel_h, pixel_w)

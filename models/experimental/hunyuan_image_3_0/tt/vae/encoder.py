@@ -25,6 +25,7 @@ from models.experimental.hunyuan_image_3_0.tt.vae.decoder import (
     dcae_space_to_depth_bthwc,
     encoder_head_shortcut_bthwc,
 )
+from models.experimental.hunyuan_image_3_0.tt.vae.spatial import norm_sharded
 from models.experimental.hunyuan_image_3_0.tt.vae.encoder_weights import (
     init_encoder_conv_in as init_encoder_conv_in_weights,
     init_encoder_down as init_encoder_down_weights,
@@ -296,7 +297,11 @@ class EncoderHeadTTNN(Module):
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         shortcut = encoder_head_shortcut_bthwc(x_bthwc, self.out_channels, self.group_size)
 
-        h = self.norm_out(x_bthwc)
+        ccl = getattr(self, "_sp_ccl", None)
+        if ccl is None:
+            h = self.norm_out(x_bthwc)
+        else:
+            h = norm_sharded(self.norm_out, x_bthwc, ccl, h_mesh_axis=self._sp_h, w_mesh_axis=self._sp_w)
         h = ttnn.silu(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         conv_out = self.conv_out(h)
         ttnn.deallocate(h, force=False)
@@ -310,9 +315,10 @@ class VAEEncoderTTNN(Module):
     """Full VAE encoder: conv_in -> down -> mid -> head.
 
     Default: replicated 2×2 mesh, DRAM interleaved activations.
-    Set ``HY_ENCODER_W_SPATIAL=1`` (or pass ``w_mesh_axis=1``) to shard width across
-    the mesh — convs use neighbor-pad halos; norms use distributed group_norm.
-    Input must be uploaded with ``mesh_mapper_hw_spatial(..., w_mesh_axis=1)``.
+    Set ``HY_ENCODER_W_SPATIAL=1`` (or pass ``h_mesh_axis=0``, ``w_mesh_axis=1``) for
+    H/W spatial on a 2×2 mesh — convs use neighbor-pad halos; norms use distributed
+    group_norm. Input must be uploaded with ``upload_bcthw_spatial`` or
+    ``mesh_mapper_hw_spatial(..., h_mesh_axis=0, w_mesh_axis=1)``.
     """
 
     def __init__(
@@ -336,8 +342,11 @@ class VAEEncoderTTNN(Module):
 
         from models.experimental.hunyuan_image_3_0.tt.vae.spatial import enable_vae_spatial, encoder_w_spatial_enabled
 
-        if w_mesh_axis is None and encoder_w_spatial_enabled():
-            w_mesh_axis = 1
+        if encoder_w_spatial_enabled():
+            if h_mesh_axis is None:
+                h_mesh_axis = 0
+            if w_mesh_axis is None:
+                w_mesh_axis = 1
         self.w_mesh_axis = w_mesh_axis
         self.h_mesh_axis = h_mesh_axis
         self.ccl = ccl_manager
