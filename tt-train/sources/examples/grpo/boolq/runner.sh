@@ -3,30 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Launches the 2-rank GRPO BoolQ training example via tt-run.
-#
-# Topology (--topology, default 2x2; mirrors tests/weight_transfer/runner.sh):
-#   2x2 -> configurations/local4 (4 chips total)
-#     Rank 0 (TTML): owns one N300 board, opens a [1, 2] DDP mesh, drives
-#                    training via ttml + GRPOTrainer.
-#     Rank 1 (TTT):  owns one N300 board, opens a [1, 2] parent mesh split
-#                    into two [1, 1] submeshes, one tt-transformers
-#                    generation worker per submesh, served over RPC.
-#   4x4 -> configurations/local8 (8 chips total)
-#     Same as above but [1, 4] meshes / four submeshes (two boards per rank).
-#     NOTE: 4x4 currently hangs somewhere in the cross-rank handshake.
-#
-# The selected --topology is exported as GRPO_BOOLQ_TOPOLOGY (and forwarded to
-# both ranks via mpirun -x) so boolq_training_example.py opens the matching
-# ttml DDP mesh / ttt submeshes.
-#
-# tt-run wraps mpirun:
-#   --rank-binding   maps each MPI rank to a (mesh_id, mesh_host_rank)
-#                    and sets per-rank env (e.g. TT_VISIBLE_DEVICES).
-#   --mpi-args       passed straight to mpirun. We use --hostfile here
-#                    so both ranks land on localhost.
-#
-# Override config locations with --rank-bindings / --hostfile if you
-# adapt this to a multi-host or larger-mesh setup.
+# --topology: 2x2 (default, configurations/local4) or 4x4 (local8).
+# NOTE: 4x4 currently hangs somewhere in the cross-rank handshake.
 
 set -euo pipefail
 
@@ -59,8 +37,7 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# Map the topology to its configurations/<dir>. --hostfile / --rank-bindings
-# still win if the caller passes them explicitly.
+# Map the topology to its configurations/<dir> (explicit flags still win).
 case "${TOPOLOGY}" in
     2x2) CONFIG_DIR="local4" ;;
     4x4) CONFIG_DIR="local8" ;;
@@ -76,12 +53,8 @@ esac
 # Both ranks read this to open the matching mesh / submesh count.
 export GRPO_BOOLQ_TOPOLOGY="${TOPOLOGY}"
 
-# tt-run resolves the relative `mesh_graph_desc_path` inside
-# rank_bindings.yaml against (1) TT_METAL_HOME, (2) the launch
-# directory (cwd at tt-run invocation), and (3) cwd at resolution
-# time -- not against the rank_bindings file's own directory. cd into
-# the example dir so "configurations/<dir>/mgd.textproto" resolves
-# here.
+# cd here so the relative mesh_graph_desc_path in rank_bindings.yaml resolves
+# (tt-run resolves it against cwd, not the rank_bindings file's directory).
 cd "${EX_DIR}"
 
 CMD="python3 ${SCRIPT}"

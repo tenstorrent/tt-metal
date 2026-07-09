@@ -13,7 +13,7 @@ Speed strategy:
   * Tiny random-init Llama (1 layer, hidden=64, head_dim=32).
   * Skip the HuggingFace weight download by monkey-patching
     ``snapshot_download`` and ``load_from_safetensors`` in
-    ``utils.llama_completer`` to no-ops; the model keeps its random init.
+    ``utils.llama_grpo_completer`` to no-ops; the model keeps its random init.
   * ``max_completion_length=4`` so autoregressive generation is cheap.
   * Exactly one optimizer step (``gradient_accumulation_steps=1``,
     ``num_iterations=1``, ``prompts_to_train=2``). On this single device
@@ -46,7 +46,7 @@ from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
 
 
-# The ``LlamaGRPOCompleter`` reference implementation lives under the
+# The ``LlamaCompleterRemoteRollout`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
 # import path so this test can use it without copy-pasting the completer.
 _GRPO_EXAMPLES_DIR = os.path.join(
@@ -59,7 +59,7 @@ _GRPO_EXAMPLES_DIR = os.path.join(
 if _GRPO_EXAMPLES_DIR not in sys.path:
     sys.path.insert(0, _GRPO_EXAMPLES_DIR)
 
-from utils.llama_completer import LlamaCompletionCtx, LlamaGRPOCompleter  # noqa: E402
+from utils.llama_grpo_completer import LlamaCompletionCtx, LlamaCompleterRemoteRollout  # noqa: E402
 
 
 HF_MODEL_ID = "unsloth/Llama-3.2-1B-Instruct"  # not gated
@@ -134,7 +134,7 @@ CAPITALS_SYSTEM_PROMPT = (
 
 @pytest.fixture(autouse=True)
 def _reuse_open_device(monkeypatch):
-    """Override ``LlamaGRPOCompleter.setup_device`` to reuse the already-open
+    """Override ``LlamaCompleterRemoteRollout.setup_device`` to reuse the already-open
     AutoContext device instead of calling ``open_device`` again.
 
     Other tests in ``tests/python/`` lazily open the AutoContext device on
@@ -145,7 +145,7 @@ def _reuse_open_device(monkeypatch):
     without leaking device-management code into the test body.
     """
     monkeypatch.setattr(
-        LlamaGRPOCompleter,
+        LlamaCompleterRemoteRollout,
         "setup_device",
         lambda self, device_config: ttml.autograd.AutoContext.get_instance().get_device(),
     )
@@ -193,7 +193,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path):
     """
     np.random.seed(0)
 
-    completer = LlamaGRPOCompleter(
+    completer = LlamaCompleterRemoteRollout(
         ctx=LlamaCompletionCtx(
             max_tokens_to_complete=4,
             temperature=1.0,
@@ -321,12 +321,12 @@ def test_capitals_one_by_one_equals_single_batch():
     """Greedy generation must give the same output one-by-one and batched.
 
     Loads the real Llama-3.2-1B-Instruct weights (no monkey-patch) and runs
-    the same four prompts through ``LlamaGRPOCompleter.generate_str`` twice:
+    the same four prompts through ``LlamaCompleterRemoteRollout.generate_str`` twice:
     once one prompt at a time, once as a single batch. With temperature=0
     and ``num_generations=1`` the outputs must match exactly; any drift
     indicates a batching / padding / mask bug in the generation path.
     """
-    completer = LlamaGRPOCompleter(
+    completer = LlamaCompleterRemoteRollout(
         ctx=LlamaCompletionCtx(
             max_tokens_to_complete=256,
             temperature=0.0,

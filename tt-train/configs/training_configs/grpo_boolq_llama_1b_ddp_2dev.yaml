@@ -15,16 +15,16 @@ training_config:
 
   grpo_config:
     epsilon: 0.2
-    per_device_train_batch_size: 4
+    per_device_train_batch_size: 2
     num_iterations: 1
     gradient_accumulation_steps: 4
     logging_steps: 1
     checkpointing: false
     checkpoint_interval: 0
-    prompts_to_train: 1600
+    prompts_to_train: 160
     temperature: 1.5
     max_completion_length: 256
-    num_generations: 8
+    num_generations: 4
     warmup_steps: 0
 
 device_config:

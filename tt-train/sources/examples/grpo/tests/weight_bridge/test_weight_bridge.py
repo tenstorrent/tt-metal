@@ -1,17 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Transport-level unit test for :class:`HostWeightBridge`.
+"""Transport-level unit test for :class:`HostWeightBridge` (4->4).
 
-Exercises the sender -> per-submesh fan-out with a small *synthetic* replicated
-weight dict -- no HF model, no generate. The shape is 4->4 (4 sender chips ->
-4 receiver submeshes): rank 0 (sender) opens a ``[1, 4]`` mesh and sends a
-handful of deterministic bf16/TILE/DRAM tensors replicated across it; rank 1
-(receiver) opens a ``[1, 4]`` parent, splits it into four ``[1, 1]`` submeshes,
-receives, and asserts every submesh holds the exact sent values.
-
-Launched under tt-run with world_size == 2 (see ``runner_weight_bridge.sh``,
-``configurations/4_4``). Self-skips otherwise.
+Rank 0 sends synthetic bf16/TILE/DRAM tensors replicated over a ``[1, 4]`` mesh;
+rank 1 splits a ``[1, 4]`` parent into four ``[1, 1]`` submeshes and asserts each
+holds the exact sent values. Runs under tt-run with world_size == 2; self-skips
+otherwise (see ``runner_weight_bridge.sh``).
 """
 
 from __future__ import annotations
@@ -32,8 +27,7 @@ if _WORLD_SIZE != 2:
 
 _MPI_RANK = int(os.environ["OMPI_COMM_WORLD_RANK"])
 
-# Fabric is pinned FABRIC_2D by the autouse _set_fabric_2d fixture in
-# tests/conftest.py before any device opens (both ranks must match).
+# Fabric pinned FABRIC_2D by conftest's autouse fixture (both ranks must match).
 import ttnn  # noqa: E402
 
 from utils.weight_bridge import (  # noqa: E402
@@ -105,8 +99,7 @@ def _receiver_side(parent, submeshes, num_submeshes) -> None:
     assert isinstance(per_submesh, list), f"receive_weights must return a list, got {type(per_submesh)}"
     assert len(per_submesh) == num_submeshes, f"expected {num_submeshes} dicts, got {len(per_submesh)}"
 
-    # Report every (submesh == physical device, key) instead of aborting on the
-    # first mismatch, so a single run shows which devices hold good data.
+    # Collect all mismatches instead of aborting on the first, to show per-device status.
     failures = []  # (submesh_index, key, reason)
     for i, got_dict in enumerate(per_submesh):
         if sorted(got_dict.keys()) != sorted(expected.keys()):
@@ -179,8 +172,8 @@ def test_host_weight_bridge() -> None:
         try:
             _receiver_side(parent, submeshes, NUM_SUBMESHES)
         finally:
-            # Release the child submeshes before closing the parent: a parent
-            # mesh cannot close while a submesh still holds its command queue.
+            # Release submeshes before closing the parent: the parent can't close
+            # while a submesh still holds its command queue.
             submeshes = None
             gc.collect()
             ttnn.close_mesh_device(parent)

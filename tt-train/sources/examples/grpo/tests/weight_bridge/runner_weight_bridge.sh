@@ -2,15 +2,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 #
-# Launches the 2-rank HostWeightBridge transport unit test via tt-run.
-# Shape 4->4: 4 chips per rank (8 total, the configurations/4_4 topology):
-#   rank 0 opens a [1, 4] sender mesh; rank 1 opens a [1, 4] parent and splits
-#   it into four [1, 1] submeshes.
-#
-# tt-run wraps mpirun. --rank-binding maps each MPI rank to a (mesh_id,
-# mesh_host_rank) and sets per-rank env (e.g. TT_VISIBLE_DEVICES); --mpi-args is
-# passed straight to mpirun. Override config locations with --rank-bindings /
-# --hostfile to match your machine.
+# Launches the 2-rank HostWeightBridge transport unit test via tt-run (4->4).
+# Override config locations with --rank-bindings / --hostfile for your machine.
 
 set -euo pipefail
 
@@ -41,16 +34,11 @@ while [[ "$#" -gt 0 ]]; do
     shift
 done
 
-# tt-run resolves the relative `mesh_graph_desc_path` inside rank_bindings.yaml
-# against (1) TT_METAL_HOME, (2) the launch directory, and (3) cwd -- not against
-# the rank_bindings file's own directory. cd into the weight_bridge dir so
-# "configurations/4_4/mgd.textproto" resolves here.
+# cd here so the relative mesh_graph_desc_path in rank_bindings.yaml resolves
+# (tt-run resolves it against cwd/TT_METAL_HOME, not the bindings file's dir).
 cd "${WB_DIR}"
 
-# `pytest -s` keeps the rank-tagged prints visible; -p no:cacheprovider avoids a
-# stale .pytest_cache shared across ranks. `--rootdir` pins pytest's rootdir to
-# the grpo tests dir so the parent conftest.py (sys.path setup, fabric config)
-# is picked up the same way as a non-tt-run run.
+# --rootdir pins pytest's rootdir so the parent conftest.py is picked up.
 CMD="python3 -m pytest -s -p no:cacheprovider --rootdir=${TESTS_DIR} ${TEST_FILE}"
 
 "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" \

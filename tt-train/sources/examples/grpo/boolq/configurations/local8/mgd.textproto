@@ -1,23 +1,12 @@
-# Mesh Graph Descriptor for the 4->4 GRPO BoolQ training example.
-#
-# Two [1, 4] meshes (one per MPI rank), each covering FOUR chips:
-#   * Rank 0 (TTML, GRPOTrainer driver + WeightBridge sender) -> mesh_id 0,
-#     a [1, 4] DDP mesh.
-#   * Rank 1 (TTT,  WeightBridge receiver) -> mesh_id 1, a [1, 4] parent mesh
-#     that the example splits into four [1, 1] submeshes.
-# The FABRIC graph wires the two meshes together so the cross-rank
-# handshake/transport can route across them.
+# Mesh Graph Descriptor for the 4->4 GRPO BoolQ example: two [1, 4] meshes
+# (one per MPI rank), each covering four chips; the FABRIC graph wires them
+# together for the cross-rank transport.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# This declares a [1, 4] line per rank spanning four chips (e.g. two
-# eth-linked N300 boards). The exact device_topology, channel counts, and
-# inter-mesh connections MUST match your physical wiring:
-#   * On a T3K (8 chips, single host, 2x4) you would more naturally declare
-#     one [2, 4] mesh and bind each rank to one [1, 4] row.
-#   * On 4x N300 boards you need the four chips of each rank to be
-#     eth-connected in a line for the [1, 4] mesh to be routable.
-# Adjust this file (and rank_bindings.yaml) for your machine; the Python
-# example logic is hardware-agnostic and does not depend on these exact values.
+# The [1, 4] line per rank (e.g. two eth-linked N300 boards) and the channel
+# counts / inter-mesh connections MUST match your physical wiring; the four
+# chips of each rank must be eth-connected in a line to be routable. Adjust
+# this file (and rank_bindings.yaml) for your machine.
 
 mesh_descriptors {
   name: "M0"
