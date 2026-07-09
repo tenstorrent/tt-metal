@@ -49,6 +49,12 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //      writer places this expert's output directly into `output` (the shared
 //      buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert
 //      step (no temp-buffer DRAM round-trip). Requires `output` to be set.
+//   input_m_tiles: optional per-expert M in tiles. Defaults to x's allocated
+//      M (x_padded[-2]/TILE). Supply it when x is a shared buffer wider than
+//      one expert's region so the op sizes its grid/chunks to this expert only.
+//   read_x_at_offset: when true, x is a shared buffer and the reader offsets
+//      its x reads by expert_region_offsets[global_id] (fusing ttnn::extract).
+//      Requires expert_region_offsets. False => x is per-expert (rows at 0).
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -60,6 +66,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
+    const std::optional<uint32_t>& input_m_tiles = std::nullopt,
+    bool read_x_at_offset = false,
     RoutedExpertActivation activation = RoutedExpertActivation::Silu);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
