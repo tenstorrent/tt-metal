@@ -90,6 +90,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_m
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import make_hidden
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
@@ -234,11 +235,13 @@ def _require_perf(request):
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
         }
     ],
-    ids=["line"],
+    ids=["fabric2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("variant", ["deepseek_v32"], indirect=True, ids=["deepseek_v32"])
