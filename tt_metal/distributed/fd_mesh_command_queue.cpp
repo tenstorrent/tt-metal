@@ -184,15 +184,14 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     }
 
     // Log warnings instead of aborting - destructors should never throw or abort.
-    // These conditions indicate a problem but the process should be allowed to continue
-    // so that subsequent tests can run and the device can be properly reset.
+    // Only observe reader-owned state here: the completion reader thread may still
+    // pop completion_queue_reads_ and update num_outstanding_reads_ until join().
     if (!is_mock) {
         if (!completion_queue_reads_.empty()) {
             log_warning(
                 LogMetal,
                 "FDMeshCommandQueue destructor: completion reader queue is not empty. "
                 "This may indicate a device hang or timeout occurred.");
-            completion_queue_reads_.clear();
         }
 
         for (const auto& queue : read_descriptors_) {
@@ -205,7 +204,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
             }
         }
 
-        if (auto reads = num_outstanding_reads_.exchange(0); reads != 0) {
+        if (auto reads = num_outstanding_reads_.load(); reads != 0) {
             log_warning(
                 LogMetal,
                 "FDMeshCommandQueue destructor: {} outstanding reads remaining. "
@@ -221,6 +220,11 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         reader_thread_cv_.notify_one();
     }
     completion_queue_reader_thread_.join();
+
+    // After join(), this destructor has exclusive ownership of reader state and
+    // can safely perform destructive cleanup.
+    completion_queue_reads_.clear();
+    num_outstanding_reads_.store(0);
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
