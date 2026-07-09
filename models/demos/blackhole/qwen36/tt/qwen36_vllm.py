@@ -35,6 +35,11 @@ from typing import Mapping, Optional
 
 import torch
 from loguru import logger
+
+import ttnn
+from models.demos.blackhole.qwen36.tt.common import create_tt_model
+from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
+from models.tt_transformers.tt.generator import Generator
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 from vllm.model_executor.models.qwen3_5 import (
     Qwen3_5ProcessingInfo,
@@ -42,11 +47,6 @@ from vllm.model_executor.models.qwen3_5 import (
     Qwen3VLMultiModalProcessor,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
-
-import ttnn
-from models.demos.blackhole.qwen36.tt.common import create_tt_model
-from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch
-from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
 _PREFILL_WARMUP_BUCKET = 4096
@@ -64,7 +64,34 @@ class TT_Qwen3_5ProcessingInfo(Qwen3_5ProcessingInfo):
 class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
-    model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}
+    # supports_async_decode is declared False (despite decode_forward's split-submission
+    # contract itself being safe — see git history) because vllm_tt_plugin's "steady decode
+    # fast path" (async_decode.py: can_use_steady_decode_fast_path) activates whenever
+    # BOTH async_scheduling and perform_device_sampling are True, and that fast path assumes
+    # a model can carry token/position continuity purely on-device between steps. Qwen can't:
+    # rope is host-recomputed every decode step (see _tt_vllm_always_refresh_decode_trace_inputs
+    # in model.py), and the GDN layers' recurrent scan corrupts irrecoverably if the same
+    # position is ever submitted twice — which is exactly what the fast path did empirically
+    # (confirmed via debug logging: the same (token, position) pair issued twice in a row).
+    # Declaring supports_async_decode=False makes platform.py force async_scheduling off
+    # unconditionally (see vllm_tt_plugin/platform.py's "declare support" check), which is the
+    # only reliable way to keep the fast path from ever engaging — the tt-inference-server CLI
+    # override plumbing can request "async_scheduling: false" but the wrapper script's
+    # boolean-to-CLI-flag conversion can only emit "enabled" or "omit the flag" for a bool,
+    # never force it off, so a CLI-level override doesn't actually work for this.
+    #
+    # On-device sampling itself (decode only): Qwen36Model loads a second, vocab-sharded LM
+    # head weight and a real SamplingGenerator (see model.py __init__) when running on a
+    # multi-die mesh, so this is safe to enable for the deployed TP config on its own — the
+    # bug above is specifically in the async-scheduling overlap layered on top, not in the
+    # sampling math (validated exactly matching host argmax via
+    # tests/test_on_device_sampling.py). Requires vLLM's sample_on_device_mode="decode_only"
+    # (not "all" — prefill_forward below was never updated to support on-device sampling).
+    model_capabilities = {
+        "supports_prefix_caching": False,
+        "supports_async_decode": False,
+        "supports_sample_on_device": True,
+    }
 
     @classmethod
     def get_max_tokens_all_users(
