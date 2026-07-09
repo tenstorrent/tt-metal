@@ -392,6 +392,20 @@ pattern. This parameter is crucial for achieving optimal performance in
 </dd>
 </dl>
 
+<dl class="py property">
+<dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.stream_in1">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">stream_in1</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.stream_in1" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Stream in1 weights from the GCB in ring-rotated FIFO order (gather_in0 + DRAM-sender
+GCB only). When true, each weight block is consumed as it arrives instead of waiting
+for the whole tensor, so the GCB can be sized to a small live window. The weight MUST
+be queued for streaming (the <code class="docutils literal notranslate"><span class="pre">(weight,</span> <span class="pre">block_count,</span> <span class="pre">rotation)</span></code> form of
+<code class="docutils literal notranslate"><span class="pre">queue_tensor_prefetcher_request</span></code>, passing the per-receiver ring-rotation list) to
+match, else the matmul deadlocks. Defaults to false.</p>
+</dd>
+</dl>
+
 <dl class="py attribute">
 <dt class="sig sig-object py" id="ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.to_json">
 <span class="sig-name descname"><span class="pre">to_json</span></span><a class="headerlink" href="#ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig.to_json" title="Permalink to this definition"></a>

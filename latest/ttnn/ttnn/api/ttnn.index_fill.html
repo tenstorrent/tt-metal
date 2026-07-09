@@ -272,7 +272,14 @@
 <dt>Memory Support:</dt>
 <dd>
 <ul class="simple">
-<li><p>Interleaved: DRAM and L1</p></li>
+<li><p>Interleaved (DRAM or L1): output may be any supported layout</p></li>
+<li><p>Height sharded (DRAM or L1): output may be any supported layout</p></li>
+<li><p>Width sharded (DRAM or L1): output may be interleaved, height sharded, width sharded,
+or block sharded; for width/block sharded output the column shard width
+(shard_spec.shape[1]) must match the input</p></li>
+<li><p>Block sharded (DRAM or L1): output may be interleaved, height sharded, block sharded,
+or width sharded; for width/block sharded output the column shard width
+(shard_spec.shape[1]) must match the input</p></li>
 </ul>
 </dd>
 <dt>Limitations:</dt>
