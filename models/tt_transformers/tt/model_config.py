@@ -688,10 +688,18 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # Either the KV heads shard evenly across devices, or (GQA with fewer KV
+            # heads than devices, e.g. Qwen3.5-MoE: 2 KV heads on a 4-device mesh) each
+            # KV head is replicated across num_devices/n_kv_heads devices. Both are
+            # valid TP layouts; models handle the replication case in their own TP config.
+            assert (
+                self.n_kv_heads % self.cluster_shape[1] == 0 or self.cluster_shape[1] % self.n_kv_heads == 0
+            ), "n_kv_heads and num_devices must divide one another (shard or replicate KV heads)"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / max(
+                1, self.n_kv_heads // self.cluster_shape[1]
+            )
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
