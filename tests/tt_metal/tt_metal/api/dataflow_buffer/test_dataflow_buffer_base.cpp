@@ -56,19 +56,15 @@ static std::string M2ImplicitSyncParamName(const ::testing::TestParamInfo<bool>&
 // canonical for Quasar, so only configs with UNIQUE coverage are kept here --
 //   * the three 1Sx1S cases (num_p==num_c==1) which also run on WH/BH (see
 //     DFB_SKIP_IF_UNSUPPORTED), and
-//   * configs with no 2.0 twin (DM->DM 4Sx4{S,A} over the Quasar DM budget; the
-//     Tensix->DM ALL column; DM->Tensix 6Sx4A).
+//   * configs with no 2.0 twin (DM->DM 4Sx4{S,A} over the Quasar DM budget;
+//     DM->Tensix 6Sx4A, which needs BLOCKED).
+// (The Tensix->DM ALL column was ported into the 2.0 sweep below.)
 // ====================================================================================
 DFB_TEST_BUF(DM,       1Sx1S, DM,     DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP, 18)
 DFB_TEST    (DMTensix, 1Sx1S, DM,     TENSIX, 1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST_BUF(DM,       4Sx4S, DM,     DM,     4, STRIDED, 4, STRIDED, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4), 29)
-DFB_TEST    (TensixDM, 1Sx4A, TENSIX, DM,     1, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (TensixDM, 4Sx1A, TENSIX, DM,     4, STRIDED, 1, ALL, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (DM,       4Sx4A, DM,     DM,     4, STRIDED, 4, ALL, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4))
-DFB_TEST    (TensixDM, 4Sx4A, TENSIX, DM,     4, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (TensixDM, 4Sx2A, TENSIX, DM,     4, STRIDED, 2, ALL, DFB_NO_EXTRA_SKIP)
-DFB_TEST    (TensixDM, 2Sx4A, TENSIX, DM,     2, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (DMTensix, 6Sx4A, DM,     TENSIX, 6, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 
 // Metal 2.0 single-DFB config sweep
@@ -174,6 +170,13 @@ DFB_TEST_2_0(DMTensixTest1xDFB4Sx2A, DM, TENSIX, 4, STRIDED, 2, ALL)
 DFB_TEST_2_0(DMTensixTest1xDFB4Sx4A, DM, TENSIX, 4, STRIDED, 4, ALL)
 DFB_TEST_2_0(DMTensixTest1xDFB6Sx1A, DM, TENSIX, 6, STRIDED, 1, ALL)
 DFB_TEST_2_0(DMTensixTest1xDFB6Sx2A, DM, TENSIX, 6, STRIDED, 2, ALL)
+
+// ALL — Tensix→DM (ported from the legacy sweep: Tensix producer + ALL DM consumer)
+DFB_TEST_2_0(TensixDMTest1xDFB1Sx4A, TENSIX, DM, 1, STRIDED, 4, ALL)
+DFB_TEST_2_0(TensixDMTest1xDFB2Sx4A, TENSIX, DM, 2, STRIDED, 4, ALL)
+DFB_TEST_2_0(TensixDMTest1xDFB4Sx1A, TENSIX, DM, 4, STRIDED, 1, ALL)
+DFB_TEST_2_0(TensixDMTest1xDFB4Sx2A, TENSIX, DM, 4, STRIDED, 2, ALL)
+DFB_TEST_2_0(TensixDMTest1xDFB4Sx4A, TENSIX, DM, 4, STRIDED, 4, ALL)
 
 // instantiations (each fixture instantiated exactly once in the whole binary)
 INSTANTIATE_TEST_SUITE_P(

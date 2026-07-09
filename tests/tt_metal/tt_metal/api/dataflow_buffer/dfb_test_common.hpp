@@ -679,12 +679,15 @@ inline void run_single_dfb_program_2_0(
     if (p.producer_type == M2PorCType::TENSIX && p.consumer_type == M2PorCType::TENSIX) {
         GTEST_SKIP() << "Tensix→Tensix unsupported (no NoC transfer)";
     }
-    // DM→DM ALL with implicit sync deadlocks (no DM↔DM remapper). Legacy
-    // skips this case via DFB_SKIP_DM_DM_ALL_IMPLICIT_SYNC; M2 needs the
-    // same gate or the per-config DFB_TEST_2_0 path hangs.
-    if (p.producer_type == M2PorCType::DM && p.consumer_type == M2PorCType::DM && p.cap == m2::DFBAccessPattern::ALL &&
-        p.implicit_sync) {
-        GTEST_SKIP() << "DM→DM ALL with implicit_sync not supported (legacy parity)";
+    // An ALL (broadcast) DM consumer under implicit sync deadlocks: the broadcast
+    // credit path is not driven for a DM consumer regardless of producer -- DM→DM
+    // has no DM↔DM remapper, and a Tensix producer cannot post the DM consumer's
+    // implicit credits (the ISR poster is DM-only). The explicit-sync variant is
+    // fine. Legacy skipped DM→DM ALL implicit via DFB_SKIP_DM_DM_ALL_IMPLICIT_SYNC;
+    // the DM-consumer ALL case (DM→DM and Tensix→DM) needs the same gate or the
+    // per-config DFB_TEST_2_0 path hangs.
+    if (p.consumer_type == M2PorCType::DM && p.cap == m2::DFBAccessPattern::ALL && p.implicit_sync) {
+        GTEST_SKIP() << "ALL DM consumer with implicit_sync not supported (legacy parity)";
     }
 
     IDevice* device = mesh_device->get_devices()[0];
