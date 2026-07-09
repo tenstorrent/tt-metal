@@ -659,6 +659,11 @@ class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
             adapter.update_canvas_rope_buffers(start_pos)
 
         # Reset threaded state from this block's fresh canvas init + zeroed self-cond signal.
+        # halt_bufs.prev_argmax is intentionally NOT reset per block: step 0 (the only step that
+        # would read a stale cross-block prev) is never a halt candidate (eval_halt requires
+        # step >= n_stable == 1), and step 0 overwrites prev_argmax with this block's argmax_0
+        # before step 1 reads it — so the carried value only ever feeds the never-evaluated
+        # step-0 mismatch.
         ttnn.copy(init_canvas, self.canvas_buf)
         if hasattr(init_canvas, "deallocate"):
             init_canvas.deallocate(True)

@@ -218,3 +218,11 @@ data-dependency), so a per-step sync adds only a host round-trip, not a pipeline
 it is a ~2% net loss today. Flip when #48291 lifts the entropy floor below 0.005 (early-halt then fires
 and beats fixed-48 for any converged block) or a schedule cut lowers the step budget. This is the
 in-repo mechanism half of `path_to_100tps.md` lever 8; the quality half stays gated on #48291.
+
+**Stage review (independent, xhigh): clean-pass** @ commit `b88f2c361f8` (+ follow-up doc/comment
+clarifications). No required work. Confirmed: on-device single-scalar halt (not the retired 5-tensor
+readback), host branch == eager StableAndConfident rule, trace-safe capture, Guard 1 byte-identical,
+Guard 2 eager-faithful firing (scheme A exact; scheme B commit correct under convergence-stability, so
+scheme A is the default), honest #48291 no-op framing, self-consistent overhead/break-even arithmetic,
+and the dg-08 commit adds NOTHING to `models/demos/gemma4/`. (Reviewer noted a pre-existing 1-line
+`experts/operations.py` dealloc from dg-04 #47464 — out of dg-08 scope, flagged to that owner.)

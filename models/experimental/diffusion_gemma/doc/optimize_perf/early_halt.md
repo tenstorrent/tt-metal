@@ -4,7 +4,9 @@
 canvas has converged) **while keeping the traced path's dispatch savings**, so a converged
 block runs fewer than the fixed ≤48 steps. The traced loop is otherwise **fixed-48**
 (early-halt was lost when the loop was traced — a static Metal trace fixes the step count);
-model-faithful throughput at 48 steps ≈ **17.92 t/s** (`perf_campaign_worklog.md`).
+model-faithful throughput at 48 steps ≈ **17.9–18.2 t/s** (`perf_campaign_worklog.md`; this stage's
+own fixed-48 run measured 18.20 t/s — the ~2% spread across runs is timing variance, same committed
+tokens `a9f0d18709b07d1e`, and the overhead/break-even below uses a single internally-consistent run).
 
 **Bottom line (honest).** The mechanism is built, correct (bit-identical to the fixed-48
 traced path when it does not fire; bit-identical to the eager StableAndConfident reference at
