@@ -294,6 +294,7 @@ class TtPrefillTransformer(LightweightModule):
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -366,6 +367,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_user_id=cache_user_id,
                 actual_isl=actual_isl,
                 padding_side=self.padding_side,
+                index_kv_cache=index_kv_cache,
             )
             signpost(f"forward_layer_{i}_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:

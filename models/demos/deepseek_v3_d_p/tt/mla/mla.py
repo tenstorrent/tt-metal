@@ -441,6 +441,7 @@ class ttMLA:
                 ccl_topology=self.ccl_topology,
                 seq_len=seq_len,
                 slot_num=slot_num,
+                layer_num=self.layer_num,
                 is_chunked=is_chunked,
             )
         else:
@@ -1038,6 +1039,7 @@ class ttMLA:
             start_pos=kv_actual_isl or 0,
             rope_tensors=rope_tensors,
             cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
             index_kv_cache=index_kv_cache,
         )
 
@@ -1179,10 +1181,12 @@ class ttMLA:
 
         cache_batch_idx = self._cache_batch_idx(cache_user_id, cache_layer_idx)
 
-        # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Gather it on device and hand it to
-        # sparse_sdpa still block-cyclic — the op remaps the natural top-k indices to physical pages
-        # in-kernel (block_cyclic_chunk_local = per-shard chunk = seq_len_local), so no host reorder.
-        # The whole multi-user cache is handed over; sparse_sdpa selects this slot via cache_batch_idx.
+        # Chunked: the prefix lives in the BLOCK-CYCLIC cache. Slice this (user, layer) slot out and
+        # gather ONLY that slot on device, then hand it to sparse_sdpa still block-cyclic — the op remaps
+        # the natural top-k indices to physical pages in-kernel (block_cyclic_chunk_local = per-shard
+        # chunk = seq_len_local), so no host reorder. Slicing the slot BEFORE the gather keeps the
+        # all-gather to a single [1,1,T,576] slot (gathering the whole B=num_users*num_layers cache OOMs
+        # at 78 layers). The gathered kv is batch-1, so cache_batch_idx is unset (None) below.
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             kvpe_cache,
             tt_kvpe,
@@ -1192,12 +1196,13 @@ class ttMLA:
             kv_actual_global=kv_actual_isl,
             cluster_axis=self.sp_axis,
         )
-        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache)
+        kvpe_dev = self._gather_kvpe_prefix(kvpe_cache, cache_batch_idx)
         ttnn.deallocate(tt_kvpe)
 
-        # Sparse attention runs over latent V; project to v_head_dim afterwards.
+        # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
+        # sliced to this slot (batch-1), so no cache_batch_idx.
         attn_out = self._sparse_mla(
-            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=cache_batch_idx
+            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
         )
         ttnn.deallocate(kvpe_dev)
         ttnn.deallocate(tt_q)
@@ -1401,22 +1406,37 @@ class ttMLA:
             ttnn.deallocate(out_all_heads)
         return ret
 
-    def _gather_kvpe_prefix(self, kvpe_cache):
+    def _gather_kvpe_prefix(self, kvpe_cache, cache_batch_idx):
         """On-device read-back of the chunked KVPE prefix for sparse attention. The cache is
         ND-sharded / block-cyclic across SP, in the op's format (bf16 or fp8_e4m3, ROW_MAJOR — the
         sparse cache is uncompressed). sparse_sdpa consumes it replicated and remaps the
         natural-position indices to physical block-cyclic pages in-kernel (invP), so the buffer is
-        LEFT in block-cyclic order — no host reorder. Pipeline (all on device): ND→interleaved, SP
+        LEFT in block-cyclic order — no host reorder.
+
+        SLOT SELECT BEFORE THE GATHER: the persistent cache is [B, 1, seq_len_cache, 576], B =
+        num_users*num_layers (user-major slots). Slice the active (user, layer) slot out of dim 0 FIRST,
+        then all-gather only that single [1, 1, seq_len_cache, 576] slot over SP — NOT the whole B-slot
+        cache. At 78 layers the full-cache gather is ~5 GB (×2 in-flight → OOM against the near-full
+        78-layer weights); the single-slot gather is B× smaller. The gathered kv is then batch-1, so
+        sparse_sdpa needs NO cache_batch_idx (the op requires B==1 when cache_batch_idx is unset). This
+        mirrors the dense ring_mla single-slot gather (kv_cache_batch_idx → batch-1 scratch).
+
+        Pipeline (all on device): ND→interleaved, slot slice (no-op for a single-slot cache), SP
         all-gather to full-T (no-op at sp==1). The cache is already in the op format, so there is NO
-        read-back dtype/layout conversion — the all-gather moves the native cache format directly.
-        Returns the WHOLE multi-user cache [B, 1, seq_len_cache, 576] (block-cyclic, B =
-        num_users*num_layers user-major slots); sparse_sdpa selects this user/layer slot itself via
-        cache_batch_idx (no host slot-slice). The unwritten suffix is never addressed since indices
-        stay < populated."""
+        read-back dtype/layout conversion. The unwritten suffix is never addressed since indices stay
+        < populated."""
         cache_i = ttnn.to_memory_config(kvpe_cache, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
+        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (single-slot cache → skip)
+            sel = ttnn.slice(
+                cache_i,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, 1, cache_i.shape[2], cache_i.shape[3]],
+            )
+            ttnn.deallocate(cache_i)
+            cache_i = sel
         full = self._all_gather(
             cache_i, dim=2, cluster_axis=self.sp_axis
-        )  # → [B,1,seq_len_cache,576] repl, block-cyclic
+        )  # → [1,1,seq_len_cache,576] repl, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full
