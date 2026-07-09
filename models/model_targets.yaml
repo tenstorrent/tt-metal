@@ -553,12 +553,14 @@ targets:
       p300x2:
         entries:
           - status: active
-            # Perf seeded from data-parallel run 27016350392 (b4 aggregate);
-            # accuracy is the token-matching (b1) target.
+            # Perf seeded from the ci-eval-32 DRAM-prefetcher run (batch 32, single repeat
+            # batch) on bh_quietbox_2 — the config that actually reports perf here (#47820).
+            # The previous values were a data-parallel b4 aggregate and did not apply to the
+            # batch-32 eval run. Accuracy is the token-matching (b1) target.
             perf:
-              prefill_time_to_first_token: 19
-              decode_t/s/u: 20.88
-              decode_t/s: 83.5
+              prefill_time_to_first_token: 28
+              decode_t/s/u: 57
+              decode_t/s: 1824
             accuracy:
               top1: 90.0
               top5: 97.6
