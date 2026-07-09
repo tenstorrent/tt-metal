@@ -415,10 +415,10 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 /// processes `block_size` tiles across `block_size` DEST lanes (lane j at slot
 /// dst_slot + j * chain_lane_width); `block_size == 1` is the per-tile shape.
 ///
-/// DEST footprint `block_size * chain_lane_width <= DEST_AUTO_LIMIT` is the caller's
-/// responsibility — query `chain_max_block_v<Chain>` and static_assert at the call site
-/// for a build-time check. Streaming CB-reader chains consume one tile per iter, so the
-/// chain silently clamps block_size to 1 for them (`!chain_supports_block_v<Chain>`).
+/// The chain clamps `block_size` at runtime so `block_size * chain_lane_width` always fits DEST
+/// (`DEST_AUTO_LIMIT`): an oversized value can't overflow DEST, it only costs extra outer
+/// iterations. Streaming CB-reader chains consume one tile per iter, so block_size is clamped to 1
+/// for them.
 
 // =============================================================================
 // 4. Policy enums — CB lifecycle, indexing, reconfig, broadcast
@@ -625,7 +625,7 @@ struct RandTile;
 /// Index-mode (OperandKind) and block-mode behavior match the enum docs above: Block /
 /// Row / Col / Scalar pick the per-iter tile index; any `is_upfront` element takes the
 /// upfront-block path; Streaming chains clamp block_size to 1. Row/Col need a non-streaming
-/// policy. Query `chain_supports_block_v` / `chain_max_block_v` for a build-time block check.
+/// policy.
 template <SetupOwner SO = SetupOwner::Chain, class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
 

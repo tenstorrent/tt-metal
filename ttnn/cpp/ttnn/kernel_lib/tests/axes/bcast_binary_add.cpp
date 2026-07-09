@@ -7,11 +7,12 @@
 //   ROW    -> B row 0 down all rows   -> out[r][c] = A[r][c] + B[0][c]
 //   COL    -> B col 0 across all cols -> out[r][c] = A[r][c] + B[r][0]
 //   SCALAR -> B element [0][0]        -> out[r][c] = A[r][c] + B[0][0]
-// The caller owns init_bcast; the chain owns per-element work. dim is compile-time so init_bcast
-// and BinaryFpu stay in lockstep. A random B makes ROW vs COL differ, so an axis swap fails PCC.
+// The caller does only the dim-agnostic hw init (compute_kernel_hw_startup); the chain emits the
+// broadcast init AND compute itself from BroadcastDim. A random B makes ROW vs COL differ, so an
+// axis swap fails PCC.
 
 #include <cstdint>
-#include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
@@ -24,8 +25,9 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
 
+    compute_kernel_hw_startup(cb_a, cb_b, cb_out);
+
     if constexpr (dim == 2) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_a, cb_b, cb_out);
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
@@ -38,7 +40,6 @@ void kernel_main() {
                 BinaryDataFormatReconfig::None>{},
             PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
     } else if constexpr (dim == 1) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::COL>(cb_a, cb_b, cb_out);
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<
@@ -51,7 +52,6 @@ void kernel_main() {
                 BinaryDataFormatReconfig::None>{},
             PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
     } else {  // dim == 3 -> Scalar
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR>(cb_a, cb_b, cb_out);
         eltwise_chain(
             EltwiseShape::tiles(n),
             BinaryFpu<

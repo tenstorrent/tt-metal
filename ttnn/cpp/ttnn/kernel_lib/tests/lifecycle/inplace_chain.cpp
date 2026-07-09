@@ -13,6 +13,9 @@
 //   1  Chunked   + Chunked   (Block)    wait/pop K, then reserve/push K, per chunk
 //   2  Streaming + Streaming (Scalar)   wait1/pop1, then reserve1/push1, per tile
 // Any upfront-reserve output (Bulk / ReserveAllPush*) would deadlock and is deliberately not built.
+// In-place safety is a pure function of this (InputLifecycle, OutputLifecycle) pairing; the compute
+// elements between read and pack (DestReuseBinary, SFPU ops, ...) are DEST-internal and don't affect
+// it — every case here holds the compute constant (Exp) and varies only the lifecycle pair.
 //
 // 3 stages keep the writer off cb_x: stage 0 Bulk-fills cb_x from the reader, stage A is the
 // in-place transform under test, stage B Bulk-copies cb_x to cb_out for the writer.

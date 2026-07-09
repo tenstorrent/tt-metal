@@ -217,17 +217,17 @@ def test_2arg_combined(device, num_tiles, fp32_dest_acc_en):
 # =============================================================================
 # Mixed prev (srca has prev, srcb first-emit)
 # =============================================================================
-# Chain: CopyTile(CbA, D0) -> BinaryFpu(CbB, CbC, D0) -> PackTile(CbOut).
-# At BinaryFpu (element 1): prev_a=CbA (from CopyTile), curr_a=CbB → srca _with_dt;
-# prev_b=NO_PREV_CB, curr_b=CbC → srcb single-arg first-emit.
-# Net semantic = CbB + CbC (CopyTile's D0 overwritten by BinaryFpu).
+# Chain: CopyTile(CbA->D0) -> BinaryFpu(CbB,CbC->D1) -> AddBinary(D0+D1->D0) -> PackTile(CbOut).
+# At BinaryFpu: prev_a=CbA (from CopyTile), curr_a=CbB → srca _with_dt; prev_b=NO_PREV_CB, curr_b=CbC
+# → srcb single-arg first-emit. Every result feeds the output — net = CbA + (CbB + CbC) — so a
+# botched srca reconfig (CbA->CbB) drops PCC (CbA is load-bearing, not discarded).
 @pytest.mark.parametrize("num_tiles", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_mixed_prev(device, num_tiles, fp32_dest_acc_en):
     shape = [1, 1, 32, 32 * num_tiles]
     dt_a, dt_b, dt_c, dt_out = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.bfloat16
 
-    _, tt_a = _make_input(shape, dt_a, device, seed=61)
+    torch_a, tt_a = _make_input(shape, dt_a, device, seed=61)
     torch_b, tt_b = _make_input(shape, dt_b, device, seed=62)
     torch_c, tt_c = _make_input(shape, dt_c, device, seed=63)
 
@@ -250,9 +250,9 @@ def test_mixed_prev(device, num_tiles, fp32_dest_acc_en):
     output = ttnn.generic_op([tt_a, tt_b, tt_c, tt_out], program)
     torch_out = ttnn.to_torch(output).to(torch.float32)
 
-    golden = torch_b.to(torch.float32) + torch_c.to(torch.float32)
+    golden = torch_a.to(torch.float32) + torch_b.to(torch.float32) + torch_c.to(torch.float32)
     pcc_ok, pcc_msg = comp_pcc(golden, torch_out, _pcc_threshold([dt_a, dt_b, dt_c, dt_out]))
-    logger.info(f"case C | num_tiles={num_tiles} | fp32_dest_acc_en={fp32_dest_acc_en} | {pcc_msg}")
+    logger.info(f"mixed-prev | num_tiles={num_tiles} | fp32_dest_acc_en={fp32_dest_acc_en} | {pcc_msg}")
     assert pcc_ok, pcc_msg
 
 
