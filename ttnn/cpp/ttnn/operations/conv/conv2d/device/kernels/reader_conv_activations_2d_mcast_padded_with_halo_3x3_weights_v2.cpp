@@ -13,7 +13,7 @@
 #include "api/debug/dprint_pages.h"
 #endif
 
-// Multicasts activation data from src_dfb to dst_cb across cores in the multicast rectangle.
+// Multicasts activation data from src_dfb to dst_dfb across cores in the multicast rectangle.
 // Three cases depending on the sender's role and number of multicast destinations:
 //   is_receiver_core && act_mcast_num_cores > 0:  mcast with INCLUDE_SRC loopback
 //   is_receiver_core && act_mcast_num_cores == 0: local self-write (mcast loopback hangs with 0 destinations)
@@ -49,7 +49,7 @@ void multicast_data(
     }
 }
 
-// Multicast activation data from the local circular buffer to multiple destinations (dst_cb in receiver cores).
+// Multicast activation data from the local circular buffer to multiple destinations (dst_dfb in receiver cores).
 // This function sends a block of data (the activation block) using NOC multicast commands, it avoids waiting for the
 // whole block to be available in the source CB before starting the multicast, instead waits for enough tiles to do one
 // multicast of NOC_MAX_BURST_SIZE size. This is because under the hood, the multicast splits the data into chunks of
