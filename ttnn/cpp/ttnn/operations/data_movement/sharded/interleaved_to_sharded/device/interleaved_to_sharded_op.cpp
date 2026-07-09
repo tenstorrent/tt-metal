@@ -101,10 +101,14 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
                     tt::constants::TILE_WIDTH,
                     tile.get_width())};
         }
-        if(tile.get_height() < tt::constants::TILE_HEIGHT && (input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B)) {
+        // if(tile.get_height() < tt::constants::TILE_HEIGHT && (input_tensor.dtype() == DataType::BFLOAT8_B || input_tensor.dtype() == DataType::BFLOAT4_B)) {
+        //     return {false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B"};
+        // }
+        if(tile.get_height() < tt::constants::TILE_HEIGHT && (operation_attributes.output_dtype== DataType::BFLOAT8_B || operation_attributes.output_dtype == DataType::BFLOAT4_B)) {
             return {false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B"};
-         }
+        }
         if (tensor_args.output_tensor.has_value()) {
+
             auto out_tile = tensor_args.output_tensor.value().tensor_spec().tile();
             if (out_tile != tile) {
                 return {false, "Output tensor tile shape must match input tensor tile shape"};

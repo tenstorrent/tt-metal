@@ -99,6 +99,10 @@ def _parse_enum_tail(value: str) -> str:
 
 
 def parse_dtype(name: str):
+    # key = _parse_enum_tail(name)
+    # if key not in DTYPE_MAP:
+    #     raise ValueError(f"Unsupported dtype: {name}")
+    # return DTYPE_MAP[key]
     # Force bfloat16 for all replay tensors/ops (ignore profiled dtype).
     del name  # profiled dtype intentionally unused
     return ttnn.bfloat16
