@@ -423,6 +423,7 @@ def chunk_gated_delta_rule_seq(
         lower_causal = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
 
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
+    _l1 = ttnn.L1_MEMORY_CONFIG if (chunk_size > 64 and _os.environ.get("QWEN_GDN_SLAB_L1") == "1") else _cmc
 
     # ---- Decay preprocessing ----
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
@@ -444,10 +445,10 @@ def chunk_gated_delta_rule_seq(
 
     decay_col = ttnn.reshape(decay, [batch, chunk_size, 1], memory_config=None)
     decay_row = ttnn.reshape(decay, [batch, 1, chunk_size], memory_config=None)
-    L_diff = ttnn.subtract(decay_col, decay_row, memory_config=_cmc)
+    L_diff = ttnn.subtract(decay_col, decay_row, memory_config=_l1)
     del decay_col, decay_row
 
-    L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=_cmc)
+    L_diff_masked = ttnn.multiply(L_diff, tril_mask, memory_config=_l1)
     ttnn.deallocate(L_diff)
     L_diff_clamped = ttnn.clip(L_diff_masked, min=-20.0, max=0.0)
     ttnn.deallocate(L_diff_masked)
@@ -457,29 +458,29 @@ def chunk_gated_delta_rule_seq(
     # ---- kk = k_beta @ k.T ----
     del k
     k_c = ttnn.move(k_c)
-    k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_cmc)
-    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
+    k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=_l1)
+    kk = ttnn.matmul(k_beta_c, k_c_t, memory_config=_l1, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_t)
 
     _ck("kk", kk)
     # ---- L_mat = I + kk * L_mask ----
-    L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_cmc), memory_config=_cmc)
+    L_mat = ttnn.add(_eye_1cc, ttnn.multiply(kk, L_mask, memory_config=_l1), memory_config=_l1)
     ttnn.deallocate(kk)
     _ck("L_mat", L_mat)
 
     # ---- Normalize to unit-diagonal: L_unit = D^{-1} L_mat ----
-    D_mat = ttnn.multiply(L_mat, _eye_1cc, memory_config=_cmc)
-    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=_cmc)
+    D_mat = ttnn.multiply(L_mat, _eye_1cc, memory_config=_l1)
+    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=_l1)
     _ck("D_diag", D_diag)
-    D_inv = ttnn.reciprocal(D_diag, memory_config=_cmc)
+    D_inv = ttnn.reciprocal(D_diag, memory_config=_l1)
     _ck("D_inv", D_inv)
     ttnn.deallocate(D_diag)
-    D_inv_row = ttnn.reshape(D_inv, [batch, chunk_size, 1], memory_config=_cmc)
+    D_inv_row = ttnn.reshape(D_inv, [batch, chunk_size, 1], memory_config=_l1)
 
-    L_strict = ttnn.subtract(L_mat, D_mat, memory_config=_cmc)
+    L_strict = ttnn.subtract(L_mat, D_mat, memory_config=_l1)
     ttnn.deallocate(D_mat)
     ttnn.deallocate(L_mat)
-    N = ttnn.multiply(D_inv_row, L_strict, memory_config=_cmc)
+    N = ttnn.multiply(D_inv_row, L_strict, memory_config=_l1)
     ttnn.deallocate(L_strict)
     L_unit = ttnn.add(_eye_1cc, N, memory_config=_cmc)
     ttnn.deallocate(N)
@@ -487,6 +488,7 @@ def chunk_gated_delta_rule_seq(
     v_beta_sc = ttnn.multiply(D_inv_row, v_beta_c, memory_config=_cmc)
     del v_beta_c
     k_beta_decay = ttnn.multiply(k_beta_c, decay_exp, memory_config=_cmc)
+    ttnn.deallocate(k_beta_c)  # dead after this; was leaking 12 MiB to fn end (R2)
     k_bd_sc = ttnn.multiply(D_inv_row, k_beta_decay, memory_config=_cmc)
     ttnn.deallocate(k_beta_decay)
     ttnn.deallocate(D_inv_row)
@@ -543,15 +545,14 @@ def chunk_gated_delta_rule_seq(
 
     L_mask_4d = ttnn.reshape(L_mask, [BH, num_chunks, chunk_size, chunk_size], memory_config=None)
     L_mask_4d = ttnn.to_layout(L_mask_4d, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    lower_causal_4d = ttnn.reshape(lower_causal, [1, 1, chunk_size, chunk_size], memory_config=None)
-    combined_mask_4d = ttnn.multiply(L_mask_4d, lower_causal_4d, memory_config=_cmc)
-    ttnn.deallocate(L_mask_4d)
     k_c_4d_t = ttnn.transpose(k_c_4d, 2, 3, memory_config=_cmc)
+    ttnn.deallocate(k_c_4d)  # dead after the transpose (R2)
     qk_4d = ttnn.matmul(q_c_4d, k_c_4d_t, memory_config=_cmc, compute_kernel_config=_hifi_cfg)
     ttnn.deallocate(k_c_4d_t)
-    intra_attn_4d = ttnn.multiply(qk_4d, combined_mask_4d, memory_config=_cmc)
+    ttnn.deallocate(q_c_4d)  # dead after the matmul (R2)
+    intra_attn_4d = ttnn.multiply(qk_4d, L_mask_4d, memory_config=_cmc)
     ttnn.deallocate(qk_4d)
-    ttnn.deallocate(combined_mask_4d)
+    ttnn.deallocate(L_mask_4d)
 
     # ---- Reshape preprocessing outputs to 4D for the C++ kernel ----
     def _to4d_f32(t, d1, d2):
