@@ -203,6 +203,18 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         placement = "separate chips" if vae_dev is not device else "shared with DiT"
         print(f"[{label}] VAE decode: ON DEVICE (ttnn) on {list(vae_dev.get_device_ids())} ({placement})", flush=True)
 
+    if os.environ.get("HY_TT_QWEN", "0") == "1":
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
+
+        # Qwen2.5-VL mllm text encode on device, on its own submesh (its 7B weights
+        # can't co-reside with the resident DiT).
+        qwen_dev = _qe.HY_QWEN_SUBMESH
+        if qwen_dev is not None:
+            pipe.text_encoder = _qe.TTQwenTextEncoderAdapter(pipe.text_encoder, qwen_dev)
+            print(f"[{label}] Qwen text-encode: ON DEVICE (ttnn) on {list(qwen_dev.get_device_ids())}", flush=True)
+        else:
+            print(f"[{label}] HY_TT_QWEN set but no Qwen submesh carved; text-encode stays on CPU", flush=True)
+
     out = pipe(
         prompt="A cat walks on the grass, realistic",
         height=height,

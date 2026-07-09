@@ -92,19 +92,25 @@ def mesh_device(request, silicon_arch_name, device_params):
     # Stash the VAE submesh on the vae_decoder MODULE (not this conftest): pytest
     # loads conftest under a private name, so a conftest global isn't visible to the
     # test via the package path, but the module below is imported identically by both.
+    from models.demos.hf_eager.hunyuanvideo_1_5.tt import qwen_encoder as _qe
     from models.demos.hf_eager.hunyuanvideo_1_5.tt import vae_decoder as _vd
 
     _vd.HY_VAE_SUBMESH = None
+    _qe.HY_QWEN_SUBMESH = None
     if req_shape != parent_shape:
         # Fabric is live on the FULL parent; the submesh is just a device-subset
         # view over already-trained links.
         submesh_device = parent_device.create_submesh(ttnn.MeshShape(*req_shape))
-        # On-device VAE: carve a SECOND same-shape submesh on the next block of
-        # physical chips (offset by req rows) so the VAE decode runs on separate
-        # chips from the resident DiT -- no DRAM co-residence, no deallocation.
+        # On-device VAE / Qwen: carve additional same-shape submeshes on the next
+        # blocks of physical chips (offset by req rows) so each heavy stage runs on
+        # its own chips -- no DRAM co-residence with the resident DiT, no dealloc.
         if os.environ.get("HY_TT_VAE", "0") == "1" and req_shape[0] * 2 <= parent_shape[0]:
             _vd.HY_VAE_SUBMESH = parent_device.create_submesh(
                 ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(req_shape[0], 0)
+            )
+        if os.environ.get("HY_TT_QWEN", "0") == "1" and req_shape[0] * 3 <= parent_shape[0]:
+            _qe.HY_QWEN_SUBMESH = parent_device.create_submesh(
+                ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(req_shape[0] * 2, 0)
             )
     yielded = submesh_device if submesh_device is not None else parent_device
     from loguru import logger
@@ -117,6 +123,7 @@ def mesh_device(request, silicon_arch_name, device_params):
     yield yielded
 
     _vd.HY_VAE_SUBMESH = None
+    _qe.HY_QWEN_SUBMESH = None
     if submesh_device is not None:
         ttnn.close_mesh_device(submesh_device)
     for sm in parent_device.get_submeshes():
