@@ -850,7 +850,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 29> kTestCases = {{
+constexpr std::array<TestCaseConfig, 32> kTestCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -882,6 +882,34 @@ constexpr std::array<TestCaseConfig, 29> kTestCases = {{
         .num_packets = kShortPacketCount,
         .packet_payload_size_bytes = 128,
         .num_buffers_per_channel = 1,
+    },
+    // Non-pow2 buffer counts exercise the forwarder generic slot-wrap path
+    // (num_buffers_per_channel_is_pow2 == false). bufs=3 is covered by the
+    // staging StageRingFull case below; this case adds modulus 5 + higher fan-in.
+    TestCaseConfig{
+        .name = "NonPow2Buffers_5Bufs_MultiSender",
+        .num_senders = 8,
+        .num_packets = kShortPacketCount,
+        .packet_payload_size_bytes = 128,
+        .num_buffers_per_channel = 5,
+    },
+    // Odd channel counts are not a separate codegen path, but cover stream-id /
+    // scratch / manager scan sizing that pow2 sender counts miss.
+    TestCaseConfig{
+        .name = "OddChannels_3Senders",
+        .num_senders = 3,
+        .num_packets = kMediumPacketCount,
+        .packet_payload_size_bytes = 128,
+        .num_buffers_per_channel = 4,
+    },
+    TestCaseConfig{
+        .name = "NonPow2Buffers_3Bufs_StageRingFull",
+        .num_senders = 4,
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 3,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageRingFull,
+        .stage_count = 3,
     },
     TestCaseConfig{
         .name = "Stress_MultiSender_DefaultPayload_Riscv0",
