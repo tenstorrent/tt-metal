@@ -1,7 +1,25 @@
 # FIBO on TTNN — Trace the denoise transformer (flux1 pattern)
 
 **Date:** 2026-07-09
-**Status:** Design approved (user chose Approach A + re-capture-per-prompt), ready for implementation plan
+**Status:** IMPLEMENTED + verified on 2x2 Blackhole. The design below is the *original* plan; the two-tracer approach it describes proved incorrect on device and was reworked to **one trace per step**. See "Bring-up outcome" immediately below for the final design and results; the original design text is kept for its reasoning.
+
+---
+
+## Bring-up outcome (supersedes the two-tracer parts of the Design below)
+
+The denoise trace is implemented, correct, and faster. Final design (in `pipeline_bria_fibo.py`):
+
+- **One trace per step**, not one per CFG branch. `_traced_step` runs *both* CFG forwards + the guidance `lerp` and returns the combined velocity; a single `Tracer` wraps it. Two separate traces sharing the submesh + CCLManager corrupted each other on replay (~0 PCC). A single trace per device is the pattern every other tt_dit pipeline uses.
+- **Captured conditioning is reused on replay.** Fresh conditioning is passed only on the capturing call; every replay passes `tracer.inputs["cond"]`/`["uncond"]`. `ttnn.copy` of the replicated+sharded conditioning into the captured buffers on replay corrupts it (this is exactly why flux1 passes `inputs[...]` on replay). Only `latent`/`timestep` are copied each step.
+- **Dedicated VAE CCLManager** (`self._vae_ccl_manager`), like wan/ltx's dit-vs-vae managers, so untraced VAE/latent-gather all-gathers don't desync the resident denoise trace's ping-pong buffers/semaphores.
+- **Untraced allocation run in `__init__`** (like flux1), so the on-device VAE decode's buffers are allocated *before* any trace is captured — otherwise the first traced decode allocates during an active trace and corrupts the image.
+- `prep_run=True` on the single tracer; re-capture keyed on `(cfg_on, cond_len, uncond_len)`; `trace_region_size` raised to 200 MB (one trace ≈ 70 MB; both CFG forwards resident).
+
+**Verified (2x2 Blackhole, 1024², 30 steps, gs=5.0):** traced latent bit-exact vs untraced (PCC 1.0 across the capture + replay generations and after a prompt-length recapture); untraced golden-PCC gate unchanged (99.12% at gs=5.0, 99.77% at gs=1.0); traced vs untraced denoise **1.57 → 1.99 it/s (~27%)**, total 22.06 s → 18.11 s, decoded images identical. Modest because each step is compute-bound (~0.65 s), so dispatch overhead is a small fraction — but the trace path is now the substrate for the matmul-tuning / batched-CFG follow-ups.
+
+---
+
+**Original status:** Design approved (user chose Approach A + re-capture-per-prompt), ready for implementation plan
 **Target hardware:** Blackhole Quietbox (4× P150), 2×2 mesh
 **Branch:** `fibo-pipeline` (perf follow-up on the completed sub-project 4; builds on the perf-harness in `2026-07-09-fibo-perf-harness-design.md`)
 **Scope:** Add opt-in TTNN tracing of the FIBO denoise transformer forward to `BriaFiboPipeline`, mirroring the `flux1` pipeline (the template FIBO was built from), to cut the denoise wall-clock (the ~64% bucket the perf harness measures). Solver + CFG-combine stay untraced; VAE/encoder tracing is a documented follow-up.
