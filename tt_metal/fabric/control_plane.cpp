@@ -2685,6 +2685,63 @@ void ControlPlane::generate_intermesh_connectivity() {
     this->collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts();
     this->collect_and_merge_intermesh_exit_peer_fabric_node_id_pairs_from_all_hosts();
     sort_intermesh_exit_peer_fabric_node_id_pairs(intermesh_exit_peer_fabric_node_id_pairs_);
+
+    // Inter-mesh routing validation against the Mesh Graph Descriptor.
+    //
+    // The count check above only compares the *total* number of assigned connections, so a single
+    // mesh boundary that resolved zero routers (e.g. every candidate cable for it was dropped by a
+    // Z/non-Z direction mismatch during port assignment) can still pass while another boundary has
+    // extra links. That leaves the control plane in a state where a requested inter-mesh connection
+    // has no resolved exit/peer routers, which only surfaces much later in a downstream consumer as a
+    // cryptic failure (e.g. generate_blitz_decode_pipeline: "No inter-mesh connection from mesh X to
+    // mesh Y"). Validate per mesh pair here, at control-plane init, so it fails against the MGD
+    // instead of progressing out of the control plane.
+    auto num_resolved_between = [this](uint32_t src_mesh, uint32_t dst_mesh) -> std::size_t {
+        auto src_it = intermesh_exit_peer_fabric_node_id_pairs_.find(MeshId(src_mesh));
+        if (src_it == intermesh_exit_peer_fabric_node_id_pairs_.end()) {
+            return 0;
+        }
+        auto dst_it = src_it->second.find(MeshId(dst_mesh));
+        return dst_it == src_it->second.end() ? 0 : dst_it->second.size();
+    };
+    const auto& requested_intermesh_ports = this->mesh_graph_->get_requested_intermesh_ports();
+    if (!requested_intermesh_ports.empty()) {
+        // Strict mode: the exact requested channel count must be resolved for every mesh pair.
+        for (const auto& [src_mesh, dst_to_ports] : requested_intermesh_ports) {
+            for (const auto& [dst_mesh, port_specs] : dst_to_ports) {
+                std::size_t requested = 0;
+                for (const auto& port_spec : port_specs) {
+                    requested += std::get<2>(port_spec);
+                }
+                const std::size_t resolved = num_resolved_between(src_mesh, dst_mesh);
+                TT_FATAL(
+                    resolved == requested,
+                    "Inter-mesh routing validation failed (strict): the Mesh Graph Descriptor requests {} "
+                    "connection(s) between mesh {} and mesh {}, but {} were resolved during control plane "
+                    "initialization. Every requested inter-mesh connection must resolve routers on both ends.",
+                    requested,
+                    src_mesh,
+                    dst_mesh,
+                    resolved);
+            }
+        }
+    } else {
+        // Relaxed mode: fewer channels than requested are tolerated, but every requested mesh pair
+        // must resolve at least one connection -- zero means the meshes are disconnected.
+        for (const auto& [src_mesh, dst_to_channels] : this->mesh_graph_->get_requested_intermesh_connections()) {
+            for (const auto& [dst_mesh, requested_channels] : dst_to_channels) {
+                TT_FATAL(
+                    num_resolved_between(src_mesh, dst_mesh) > 0,
+                    "Inter-mesh routing validation failed (relaxed): the Mesh Graph Descriptor requests a connection "
+                    "({} channel(s)) between mesh {} and mesh {}, but ZERO connections were resolved during control "
+                    "plane initialization (all candidate cables were dropped, e.g. by a Z/non-Z direction mismatch). "
+                    "Every requested inter-mesh connection must resolve at least one router.",
+                    requested_channels,
+                    src_mesh,
+                    dst_mesh);
+            }
+        }
+    }
 }
 
 void ControlPlane::collect_and_merge_intermesh_exit_fabric_node_ids_from_all_hosts() {
