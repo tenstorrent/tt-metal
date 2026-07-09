@@ -23,10 +23,11 @@ using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
 // ===========================================================================
-// UNIVERSAL BLOCKS: run for every program config (independent of which config is chosen).
+// VALIDATIONS FOR ALL CONFIGS: run for every program config, independent of which config
+// is chosen.
 // ===========================================================================
 
-// Universal Block-1: basic operand check. Inputs must be on the same device, tilized,
+// Operand Basics: inputs must be on the same device, tilized,
 // have a 32-wide inner tile dim (the hardware matmul works on 32x32 tiles), and both
 // be floating-point.
 void validate_matmul_operand_basics(
@@ -55,7 +56,7 @@ void validate_matmul_operand_basics(
         is_floating_point(input_tensor_b.dtype()), "Unsupported data format for input B: {}", input_tensor_b.dtype());
 }
 
-// Universal Block-2: matrix dimension check. Ranks, K/M/N > 0, and A's K equals B's K.
+// Matrix Dimensions: checks ranks, K/M/N > 0, and that A's K equals B's K.
 // The a_shape/b_shape passed in are already transpose-adjusted, so K sits at [-1] for A
 // (width) and [-2] for B (height); B's K is read manually after b.rank >= 2 is verified.
 void validate_matmul_matrix_dimensions(
@@ -86,9 +87,9 @@ void validate_matmul_matrix_dimensions(
     TT_FATAL(Kt_a == Kt_b, "K dimension in tiles must match between input A ({}) and input B ({})", Kt_a, Kt_b);
 }
 
-// Universal Block-3: bfloat4 tile-size check. A bfloat4 input needs each tile dim >= 4.
-// Only A's height and B's width are checked; the other two dims (A's width, B's height)
-// are the K axis, already forced to 32 by Universal Block-1, so they can't be < 4.
+// Bfloat4 Tile Size: checks that a bfloat4 input has each tile dim >= 4. Only A's height
+// and B's width are checked; the other two dims (A's width, B's height) are the K axis,
+// already forced to 32 by the Operand Basics check above, so they can't be < 4.
 void validate_matmul_bfloat4_tile_dims(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -111,9 +112,9 @@ void validate_matmul_bfloat4_tile_dims(
     }
 }
 
-// Universal Block-4: optional tensor check. At most one optional input (bias). A
-// caller-provided output tensor must match the computed spec; otherwise the requested
-// output mem-config must be compatible with it (1D block-sharded == HEIGHT/WIDTH sharded).
+// Optional Tensors: checks at most one optional input (bias). A caller-provided output
+// tensor must match the computed spec; otherwise the requested output mem-config must be
+// compatible with it (1D block-sharded == HEIGHT/WIDTH sharded).
 void validate_matmul_optional_tensors(
     const MatmulParams& attributes, const MatmulDeviceOperation::tensor_args_t& args) {
     const auto& optional_output_tensors = args.optional_output_tensors;
@@ -194,9 +195,9 @@ void validate_matmul_optional_tensors(
     }
 }
 
-// Universal Block-5: batch compatibility. bcast -> B must be single-batch; non-bcast
-// -> A and B must match rank + batch dims, unless A's batch is 1 and reused across B
-// (the Mcast1D in0-reuse exception).
+// Batch Compatibility: checks bcast -> B must be single-batch; non-bcast -> A and B must
+// match rank + batch dims, unless A's batch is 1 and reused across B (the Mcast1D
+// in0-reuse exception).
 void validate_matmul_batch_compatibility(
     const MatmulParams& attributes,
     const Tensor& input_tensor_a,
@@ -262,9 +263,9 @@ void validate_matmul_batch_compatibility(
     }
 }
 
-// Universal Block-6: input tensor count. Normally exactly 2 inputs (activation +
-// weight). Exception: the Mcast1D multi-tensor path (global_cb + DRAM-sharded weight)
-// allows 1 activation + N weights, which must share shape/spec/layout/dtype.
+// Input Count: checks there are normally exactly 2 inputs (activation + weight).
+// Exception: the Mcast1D multi-tensor path (global_cb + DRAM-sharded weight) allows
+// 1 activation + N weights, which must share shape/spec/layout/dtype.
 void validate_matmul_input_count(
     const MatmulParams& attributes,
     const std::vector<Tensor>& input_tensors,
@@ -316,9 +317,9 @@ void validate_matmul_input_count(
     }
 }
 
-// Universal Block-7: bias shape check. Runs only when a bias is present. A valid bias
-// is a single tile-row, N-wide, batch-1, tilized row vector whose tile size and width
-// line up with the matmul output.
+// Bias Shape: runs only when a bias is present. Checks the bias is a single tile-row,
+// N-wide, batch-1, tilized row vector whose tile size and width line up with the
+// matmul output.
 void validate_matmul_bias_shape(
     const std::optional<const Tensor>& optional_bias,
     const tt::tt_metal::Tile& in0_tile,
@@ -364,9 +365,9 @@ void validate_matmul_bias_shape(
         b_shape[-1]);
 }
 
-// Universal Block-8: untilize_out check. untilize_out means "give me row-major output."
-// Allowed only with an explicit BF16/FP32 output dtype on the Mcast1D config;
-// runs for every config so it can reject untilize_out on the other five.
+// Untilize Output: untilize_out means "give me row-major output." Allowed only with an
+// explicit BF16/FP32 output dtype on the Mcast1D config; this check runs for every
+// config so it can reject untilize_out on every other config.
 void validate_matmul_untilize_out(
     const MatmulParams& attributes, const operations::matmul::MatmulProgramConfig& chosen_program_config) {
     if (!attributes.untilize_out) {
@@ -391,12 +392,13 @@ void validate_matmul_untilize_out(
 }
 
 // ===========================================================================
-// SHARED-SUBSET BLOCKS: each runs for several (but not all) configs, branching
-// internally per config. Messages are config-named.
+// VALIDATIONS FOR MULTIPLE PROGRAM CONFIGS: each function here runs for several (but not
+// all) program configs that need the same checks, branching internally per config.
+// Messages are config-named.
 // ===========================================================================
 
-// Shared Block-1: block/subblock configuration. Runs for Reuse, Mcast2D, Mcast1D
-// (MultiCore, DRAMSharded, BatchedDRAMSharded skip it).
+// Block/Subblock Configuration: runs for Reuse, Mcast2D, Mcast1D (MultiCore, DRAMSharded,
+// BatchedDRAMSharded skip it).
 void validate_matmul_block_and_subblock_configuration(
     const MatmulParams& attributes,
     const ttnn::Shape& a_shape_padded,
@@ -509,8 +511,8 @@ void validate_matmul_nonzero_block_dims(
     TT_FATAL(per_core_N != 0, "{}: per_core_N is 0, which is not valid", config_name);
 }
 
-// Shared Block-2: compute-grid + per-core dims. Skips MultiCore. For every other config it
-// checks in0_block_w / per_core_M / per_core_N are non-zero (via the helper above); Reuse/
+// Compute Grid & Per-Core Dims: skips MultiCore. For every other config it checks
+// in0_block_w / per_core_M / per_core_N are non-zero (via the helper above); Reuse/
 // Mcast2D/Mcast1D also check the program grid is non-zero and fits the device (Mcast1D
 // gather_in0 skips that grid check — its grid comes from the input A shard grid).
 void validate_matmul_compute_grid_and_per_core_dims(
@@ -610,9 +612,9 @@ void check_output_shard_grid_within_extent(
         extent);
 }
 
-// Shared Block-3: work distribution + gather ring topology. Runs for Reuse/Mcast2D/Mcast1D.
-// Checks output blocks fit the cores; for Mcast1D gather_in0 also checks the ring setup
-// (A sharded, sub-device present, hop cores not overlapping).
+// Work Distribution & Gather Ring: runs for Reuse/Mcast2D/Mcast1D. Checks output blocks
+// fit the cores; for Mcast1D gather_in0 also checks the ring setup (A sharded, sub-device
+// present, hop cores not overlapping).
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -746,8 +748,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
         chosen_program_config);
 }
 
-// Shared Block-4: Reuse config only. Each L1-sharded input's shard grid must fit within
-// the device grid. Non-sharded inputs and DRAM inputs are not checked.
+// Sharded Operand Grids: Reuse config only. Each L1-sharded input's shard grid must fit
+// within the device grid. Non-sharded inputs and DRAM inputs are not checked.
 void validate_matmul_sharded_operand_grids_within_program_compute_grid(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -773,9 +775,9 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         chosen_program_config);
 }
 
-// Shared Block-5: Reuse config only. If an input is sharded across N cores, the total
-// number of output blocks must be a multiple of N so the work splits evenly across those
-// cores; otherwise the program factory can't distribute it and fails.
+// Output Block Divisibility: Reuse config only. If an input is sharded across N cores,
+// the total number of output blocks must be a multiple of N so the work splits evenly
+// across those cores; otherwise the program factory can't distribute it and fails.
 void validate_matmul_reuse_sharded_output_block_divisibility(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -818,7 +820,7 @@ void validate_matmul_reuse_sharded_output_block_divisibility(
         chosen_program_config);
 }
 
-// Shared Block-6: bias support by config. Reuse rejects bias; other configs allow it.
+// Bias Support: checks bias support by config. Reuse rejects bias; other configs allow it.
 void validate_matmul_bias(
     const std::optional<const Tensor>& optional_bias,
     const operations::matmul::MatmulProgramConfig& chosen_program_config) {
@@ -1023,8 +1025,8 @@ void warn_if_allowed_worker_cores_missing(
         */
 }
 
-// Shared Block-7: Mcast1D on a sub-device (non-gather). Checks the matmul grid fits on
-// the sub-device's cores.
+// Sub-Device Worker Grid: Mcast1D on a sub-device (non-gather). Checks the matmul grid
+// fits on the sub-device's cores.
 void validate_matmul_mcast1d_subdevice_worker_grid(
     const Tensor& input_tensor_a,
     const MatmulParams& attributes,
@@ -1109,9 +1111,9 @@ void validate_output_subblock_block_divides_per_core_n(
 }
 
 // ===========================================================================
-// PER-CONFIG VALIDATORS. One function per program config, holding the checks that
-// fire for that config only. Dispatched from validate_on_program_cache_miss via one
-// std::visit.
+// PROGRAM CONFIG SPECIFIC VALIDATIONS: one function per program config, holding the
+// checks that fire for that config only. Dispatched from validate_on_program_cache_miss
+// via one std::visit.
 // ===========================================================================
 
 // MultiCore config: the un-optimized fallback. Rejects tiny outer tiles and requires
