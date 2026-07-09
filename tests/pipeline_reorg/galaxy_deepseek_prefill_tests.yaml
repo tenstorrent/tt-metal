@@ -1,4 +1,4 @@
-# This file defines the test matrix for the Galaxy DeepSeek Prefill tests pipeline.
+# This file defines the test matrix for the Blaze Models Prefill tests pipeline.
 
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
