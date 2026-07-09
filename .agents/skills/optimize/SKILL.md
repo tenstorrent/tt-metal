@@ -7,6 +7,8 @@ description: Optimize per-device performance of runnable TTNN code, preserving c
 
 This skill assumes you have runnable TTNN code with passing correctness tests. If not, first use the appropriate bringup or debugging skill. This guide is written for autoregressive LLMs with prefill and decode phases. If the target model differs, map each requirement to the nearest equivalent path and record that mapping; do not drop correctness or performance evidence.
 
+# Orientation
+
 ## Where to start
 
 Roughly in priority order. Treat them as inspiration, not mandates: aim for each, do the best you can, and keep what measures better.
@@ -78,6 +80,8 @@ When optimizing a complete full model in the repo-local autonomous bringup flow,
 Before finishing non-vLLM optimization, review a current `tt-perf-report` output. If an applicable optimization remains untried, try it. If it fails, debug the failure. If a TTNN op or runtime limitation blocks the optimization, keep a small repro or exact failure evidence. Do not leave a known optimization for a later stage unless another skill explicitly owns it. For vLLM serving optimization, review the serving benchmark and contract evidence instead; do not create a profiler run to satisfy this paragraph.
 
 Sometimes you will encounter a ttnn limitation or a bug. If, for example, you try an optimization and find that L1 buffers overlap (insufficient L1 space) do not take this as an excuse to give up on that optimization entirely. Instead, dive in to the code of the op and its shapes and configs and understand how you can reduce the L1 requirements in this part of the model. Or perhaps your specific shapes is not supported by the op and you need another one. Or the op does not support padding -> change the model contract so the tensors are manually padded in torch before conversion - all these things are in scope. If the failure crosses several ops, kernels, layouts, or planner/runtime boundaries and you are not making progress, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Solve problems. Be curious. Be tenacious. Be creative. Be brilliant!
+
+# Optimization
 
 ## Optimization Recommendations
 
@@ -306,6 +310,8 @@ Use the architecture-appropriate config class when optimizing non-Wormhole targe
 
 For larger-core devices, do not hard-code a Wormhole-shaped 8x4 or 32-core decode layout as the only optimized layout. Sweep legal core grids as a coherent layout: residual/intermediate memory configs, norm program grids, matmul program configs, and shard specs must agree. A first validation error such as a shard grid not fitting an op's program grid means adapt the layout/program-grid contract or use `$autofix`; it is not enough evidence to reject the larger grid.
 
+# Measure and report
+
 ## `tt-perf-report`
 
 Do not use this section to collect vLLM serving-stage evidence. vLLM and optimized-vLLM stages intentionally skip Tracy, `tt-perf-report`, and device-profiler collection to protect T3K hardware.
@@ -479,13 +485,13 @@ Final optimized evidence checklist - these items MUST be completed:
 
 If this checklist is not completed, go back and perform those optimization steps. For decoder/module-level work the main focus is on-device performance. For complete model and serving work, host orchestration, synchronizations, readbacks, and input-refresh overhead are also in scope and must be driven out of the measured path where the runtime contract allows it.
 
-# Useful Optimization Knowledge
+# Reference
 
 Use this reference while optimizing functional TTNN code. It captures repo-local optimization patterns and the strongest current LLM guidance. If you are not optimizing an LLM, use your best judgement about what applies in your case.
 
-Prefer the reusable modules below when the model fits their contract. When it does not, do not drop to op defaults: read the closest module and replicate its sharding, layout, program configs, and precision in your hand-rolled path, staying as close to it as the target allows, and record the exact contract that blocked direct reuse. A hand-rolled path is a reason to copy the module's decisions, not to abandon them.
-
 ## Code Paths Worth Reading
+
+Prefer the reusable modules below when the model fits their contract. When it does not, do not drop to op defaults: read the closest module and replicate its sharding, layout, program configs, and precision in your hand-rolled path, staying as close to it as the target allows, and record the exact contract that blocked direct reuse. A hand-rolled path is a reason to copy the module's decisions, not to abandon them.
 
 - `tech_reports/LLMs/llms.md`: LLM memory configs, matmul variants, DRAM-sharded matmul guidance, and perf-report interpretation.
 - `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
@@ -497,6 +503,8 @@ Prefer the reusable modules below when the model fits their contract. When it do
 - `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before optimizing token-out sampling.
 - `models/demos/gpt_oss/tt/experts/README.md`, `models/demos/gpt_oss/tt/experts/decode.py`, `models/demos/gpt_oss/tt/experts/prefill.py`, `models/demos/gpt_oss/tt/experts/weights.py`, `models/demos/gpt_oss/tt/experts/config.py`, and `models/demos/gpt_oss/tt/topk.py`: default routed MoE active-expert path using `ttnn.sparse_matmul`.
 - `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
+
+# Environment and meta
 
 ## T3K Reset Recovery
 
