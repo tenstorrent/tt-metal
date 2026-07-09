@@ -338,6 +338,7 @@ ttsl::hash::hash_t DitFusedDistributedRmsnormDeviceOperation::compute_program_ha
     return tt::tt_metal::operation::hash_operation<DitFusedDistributedRmsnormDeviceOperation>(
         args.epsilon,
         args.num_heads_per_device,
+        args.per_head_norm,
         args.dtype,
         args.output_mem_config,
         args.cluster_axis,
