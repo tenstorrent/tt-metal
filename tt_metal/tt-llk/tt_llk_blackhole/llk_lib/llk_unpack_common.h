@@ -127,7 +127,9 @@ inline void _llk_unpack_configure_stoch_rnd_()
  *
  * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
  * @tparam dim_stride_target: Whether to reprogram dim/stride, values = <IGNORE/FACE_ROW_MAJOR>
- * @tparam to_from_int8: Reconfiguring to/from an Int8 format (requires FP32 dest mode).
+ * @tparam skip_int8: Skip re-deriving the SrcA signedness bit from the new format. Leave false (the default)
+ *                    unless the caller guarantees the reconfig never crosses an Int8/UInt8/Int32 boundary and
+ *                    wants to avoid the extra RMW; skipping it can leave a stale SrcAUnsigned bit (tt-metal#34499).
  * @param unpack_src_format: New source data format of operand A in L1.
  * @param unpack_dst_format: New destination data format operand A is converted to.
  * @param tile_size: New tile size of operand A stored to the tile-size GPR.
@@ -139,8 +141,7 @@ inline void _llk_unpack_configure_stoch_rnd_()
  *       8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float); otherwise the previous unsigned/INT8
  *       state is left stale and the next op misinterprets the operand.
  */
-// TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
@@ -167,9 +168,16 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         llk::san::IGNORE);
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
-    if constexpr (to_from_int8)
+    if constexpr (!skip_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
+        // Always re-derive SrcAUnsigned from the new format so a reconfig cannot leave a stale signedness bit
+        // (tt-metal#34499). For non-int8 formats this simply writes 0, which is exactly what a reconfig away
+        // from UInt8 needs. FP32 dest is required only when the new format actually drives int8/int32 math,
+        // so gate the assertion on the format value rather than at compile time.
+        LLK_ASSERT(
+            is_fp32_dest_acc_en ||
+                !(masked_data_format(unpack_src_format) == to_underlying(DataFormat::Int8) || unpack_src_format == to_underlying(DataFormat::Int32)),
+            "Reconfiguring unpack to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcAUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
 
@@ -211,7 +219,9 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  *
  * @tparam is_fp32_dest_acc_en: Whether the dest register accumulates in FP32.
  * @tparam dim_stride_target: Whether to reprogram dim/stride, values = <IGNORE/FACE_ROW_MAJOR>
- * @tparam to_from_int8: Reconfiguring to/from an Int8 format (requires FP32 dest mode).
+ * @tparam skip_int8: Skip re-deriving the SrcB signedness bit from the new format. Leave false (the default)
+ *                    unless the caller guarantees the reconfig never crosses an Int8/UInt8/Int32 boundary and
+ *                    wants to avoid the extra RMW; skipping it can leave a stale SrcBUnsigned bit (tt-metal#34499).
  * @param unpack_src_format: New source data format of operand B in L1.
  * @param unpack_dst_format: New destination data format operand B is converted to.
  * @param tile_size: New tile size of operand B stored to the tile-size GPR.
@@ -223,8 +233,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  *       8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float); otherwise the previous unsigned/INT8
  *       state is left stale and the next op misinterprets the operand.
  */
-// TODO NC: Clean up as the part of tt-metal#34499
-template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
+template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t unpack_src_format,
     const std::uint32_t unpack_dst_format,
@@ -251,9 +260,16 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         llk::san::IGNORE);
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
-    if constexpr (to_from_int8)
+    if constexpr (!skip_int8)
     {
-        static_assert(is_fp32_dest_acc_en, "Reconfiguring unpack to/from Int8 formats requires FP32 Dest mode enabled");
+        // Always re-derive SrcBUnsigned from the new format so a reconfig cannot leave a stale signedness bit
+        // (tt-metal#34499). For non-int8 formats this simply writes 0, which is exactly what a reconfig away
+        // from UInt8 needs. FP32 dest is required only when the new format actually drives int8/int32 math,
+        // so gate the assertion on the format value rather than at compile time.
+        LLK_ASSERT(
+            is_fp32_dest_acc_en ||
+                !(masked_data_format(unpack_src_format) == to_underlying(DataFormat::Int8) || unpack_src_format == to_underlying(DataFormat::Int32)),
+            "Reconfiguring unpack to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcBUnsigned_RMW>((unpack_src_format == to_underlying(DataFormat::UInt8)) ? 1 : 0);
     }
 

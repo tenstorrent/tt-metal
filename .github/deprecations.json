@@ -40,6 +40,14 @@
       "introduced_by_pr": 49070,
       "grace": "30d",
       "owners": ["ncvetkovicTT"]
+    },
+    {
+      "id": "reconfig-data-format-signature-change",
+      "description": "The reconfig_data_format / reconfig_data_format_srca / reconfig_data_format_srcb overloads that take <to_from_int8, is_tile_dim_reconfig_en> are deprecated (tt-metal#34499). int8/unsigned state is now always derived from the format (to_from_int8 is ignored, closing a latent stale-bit bug), and the two-source form gained a SrcOrder tag (added as a same-name overload with no default on src_order) so matmul stops swapping operands by hand. In-repo call sites are already migrated to the current API (reconfig_data_format<SrcOrder>() and reconfig_data_format_skip_int8()); these deprecated bool overloads remain only for external callers during the grace period. The cleanup PR deletes them and the now-vestigial to_from_int8 flag.",
+      "files": ["tt_metal/hw/inc/api/compute/reconfig_data_format.h"],
+      "introduced_by_pr": 49119,
+      "grace": "30d",
+      "owners": ["ncvetkovicTT"]
     }
   ]
 }

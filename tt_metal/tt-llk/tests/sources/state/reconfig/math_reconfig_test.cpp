@@ -48,20 +48,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
             /* srca_data_format */ prev_a,
             /* srcb_data_format */ prev_b);
 
+        // tt-metal#34499: the reconfig path now always re-derives INT8_math_enabled from the new format
+        // (skip_int8 defaults to false), so a reconfig must land in the same ALU state as a fresh
+        // hw_configure for the new formats -- including across an int8 boundary -- with no opt-in flag.
         if (prev_a != next_a && prev_b != next_b)
         {
-            _llk_math_reconfig_data_format_<is_fp32_dest_acc_en, TO_FROM_INT8>(
+            _llk_math_reconfig_data_format_<is_fp32_dest_acc_en>(
                 /* srca_data_format */ next_a,
                 /* srcb_data_format */ next_b);
         }
         else if (prev_a != next_a)
         {
-            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en, TO_FROM_INT8>(
+            _llk_math_reconfig_data_format_srca_<is_fp32_dest_acc_en>(
                 /* srca_data_format */ next_a);
         }
         else if (prev_b != next_b)
         {
-            _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en, TO_FROM_INT8>(
+            _llk_math_reconfig_data_format_srcb_<is_fp32_dest_acc_en>(
                 /* srcb_data_format */ next_b);
         }
     }
