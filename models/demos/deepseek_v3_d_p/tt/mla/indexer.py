@@ -390,12 +390,13 @@ class TtIndexer:
         ttnn.deallocate(nope)
         return out
 
-    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor) -> ttnn.Tensor:
-        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [num_users,1,T,D_idx]
+    def _gather_index_kbuf(self, index_kbuf: ttnn.Tensor, cache_batch_idx: int) -> ttnn.Tensor:
+        """Read the block-cyclic ND-sharded key cache back to a replicated full-T [1,1,T,D_idx]
         (block-cyclic order preserved, bf16 TILE) for indexer_score_dsa's block-cyclic reader — the
-        analogue of ttMLA._gather_kvpe_prefix, but the score op consumes TILE so no RM/typecast step.
-        The op selects this user's slot via cache_batch_idx; the unwritten suffix is never scored
-        (future positions are causally masked).
+        analogue of ttMLA._gather_kvpe_prefix. We slice THIS (user,layer) slot BEFORE the all-gather so
+        the gather materializes one slot's full-T, not the whole num_users*num_layers cache replicated
+        (multiple GB at deep layer counts -> OOM). The caller scores it with cache_batch_idx=0; the
+        unwritten suffix is never scored (future positions are causally masked).
 
         PERF TODO: this SP all-gather is currently a blocking barrier — it materializes the whole full-T
         key cache before indexer_score_dsa runs. It should instead be FUSED INTO the score op (ring-joint
@@ -404,7 +405,15 @@ class TtIndexer:
         overlapping the CCL with the op's own compute instead of paying a full gather up front. Op-level
         change (ring indexer_score), not a host-side reorder."""
         cache_i = ttnn.to_memory_config(index_kbuf, ttnn.DRAM_MEMORY_CONFIG)  # ND_SHARDED → INTERLEAVED
-        full = self._sp_all_gather(cache_i, dim=2)  # [B,1,T,D_idx] replicated, block-cyclic
+        if cache_i.shape[0] > 1:  # user-major slot select BEFORE the gather (no-op for a single-slot cache)
+            sel = ttnn.slice(
+                cache_i,
+                [cache_batch_idx, 0, 0, 0],
+                [cache_batch_idx + 1, cache_i.shape[1], cache_i.shape[2], cache_i.shape[3]],
+            )
+            ttnn.deallocate(cache_i)
+            cache_i = sel
+        full = self._sp_all_gather(cache_i, dim=2)  # [1,1,T,D_idx] replicated, block-cyclic
         if self.sp_factor > 1:
             ttnn.deallocate(cache_i)
         return full
@@ -605,11 +614,14 @@ class TtIndexer:
             # It also needs the logits sliced to [0, end_pos) before top-k (that path validated correct at the
             # OP level, but is deferred). Investigate: slice-vs-stale-tail interaction + whether the extra
             # slice/copy is cheaper than the saved score/top-k work before turning this on.
+            # User-major slot: this layer's cache lives at user*num_layers + layer (same folding as
+            # write_k and ttMLA's KVPE cache_batch_idx), so a multi-layer model's layers don't clobber
+            # slot 0. _gather_index_kbuf slices that slot BEFORE the gather (deep-layer OOM avoidance),
+            # so k_full is a single slot [1, 1, T, D_idx] and the score op reads it with cache_batch_idx=0.
+            cache_batch_idx = cache_user_id * num_cache_layers + cache_layer_idx
             k_full = self._gather_index_kbuf(
-                index_kv_cache
-            )  # [num_users*num_layers, 1, T, D_idx] bf16 TILE, block-cyclic
-            # User-major slot select: this layer's cache lives at user*num_layers + layer (same folding as
-            # write_k and ttMLA's KVPE cache_batch_idx), so a multi-layer model's layers don't clobber slot 0.
+                index_kv_cache, cache_batch_idx
+            )  # [1, 1, T, D_idx] bf16 TILE, block-cyclic
             logits = ttnn.experimental.indexer_score_dsa(
                 q_dev,
                 k_full,
@@ -617,7 +629,7 @@ class TtIndexer:
                 chunk_start_idx=start_pos,
                 program_config=cfg,
                 cluster_axis=self.sp_axis,
-                cache_batch_idx=cache_user_id * num_cache_layers + cache_layer_idx,
+                cache_batch_idx=0,
                 block_cyclic_sp_axis=self.sp_axis,
                 block_cyclic_chunk_local=seq_len,  # per-chip chunk == chunk_size_global / sp
             )
