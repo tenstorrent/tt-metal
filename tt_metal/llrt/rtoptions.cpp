@@ -354,8 +354,13 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
 
     InitializeFromEnvVars();
 
-    if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
-        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
+    // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
+    // TT_METAL_DISABLE_MULTI_AERISC override) intact so that HAL construction and kernel compilation match
+    // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
+    // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
+    if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
+        this->runtime_target_device_ == tt::TargetDevice::Emule) {
+        log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
     }
 
