@@ -259,39 +259,9 @@ target_link_libraries(
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
-        TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::BcastTo
-        TTNN::Ops::Experimental::MultiScaleDeformableAttn
-        TTNN::Ops::Experimental::CCL
-        TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::Conv3d
-        TTNN::Ops::Experimental::Copy
-        TTNN::Ops::Experimental::TensorPrefetcher
-        TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
-        TTNN::Ops::Experimental::IsIn
-        TTNN::Ops::Experimental::Matmul
-        TTNN::Ops::Experimental::PaddedSlice
-        TTNN::Ops::Experimental::MinimalMatmul
-        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
-        TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
-        TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
-        TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
-        TTNN::Ops::Experimental::TopkLargeIndices
-        TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
-        TTNN::Ops::Experimental::IndexerScore
-        TTNN::Ops::Experimental::MoEGPT
-        TTNN::Ops::Experimental::PagedCache
-        TTNN::Ops::Experimental::PlusOne
-        TTNN::Ops::Experimental::Quasar
-        TTNN::Ops::Experimental::Reduction
-        TTNN::Ops::Experimental::Reshape
-        TTNN::Ops::Experimental::SliceWrite
-        TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::Transformer
-        TTNN::Ops::Experimental::UnaryBackward
-        TTNN::Ops::Experimental::Test
         TTNN::Ops::Full
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
@@ -514,39 +484,9 @@ add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
-add_subdirectory(cpp/ttnn/operations/experimental/adaptive_pool)
-add_subdirectory(cpp/ttnn/operations/experimental/quasar)
-add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
-add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl)
-add_subdirectory(cpp/ttnn/operations/experimental/cnn)
-add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
-add_subdirectory(cpp/ttnn/operations/experimental/copy)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
+add_subdirectory(cpp/ttnn/operations/experimental)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
-add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
-add_subdirectory(cpp/ttnn/operations/experimental/dropout)
-add_subdirectory(cpp/ttnn/operations/experimental/isin)
-add_subdirectory(cpp/ttnn/operations/experimental/matmul)
-add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate)
-add_subdirectory(cpp/ttnn/operations/experimental/topk_large_indices)
-add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
-add_subdirectory(cpp/ttnn/operations/experimental/indexer_score)
-add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
-add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
-add_subdirectory(cpp/ttnn/operations/experimental/plusone)
-add_subdirectory(cpp/ttnn/operations/experimental/reduction)
-add_subdirectory(cpp/ttnn/operations/experimental/reshape)
-add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
-add_subdirectory(cpp/ttnn/operations/experimental/ssm)
-add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
-add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
