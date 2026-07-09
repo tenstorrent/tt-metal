@@ -7,6 +7,7 @@ hub ids are snapshot_download'd first (AutoConfig on bare hub id is unreliable h
 Qwen3.5-specific params (GDN, partial RoPE, layer types) come from HF text config.
 load_state_dict/weight_cache_path override the base meta-key (wq/wk/wv) scheme.
 """
+
 import os
 from pathlib import Path
 
@@ -82,6 +83,22 @@ class Qwen36ModelArgs(ModelArgs):
         self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
+        # ------------------------------------------------------------------
+        # MoE (Qwen3.5-MoE / Qwen3-Next sparse layers). All read from the parsed
+        # HF text config. Absent on the dense 9B/27B, where num_experts defaults
+        # to 0 → is_moe_layer() is False everywhere and the validated dense
+        # Qwen36MLP path is byte-for-byte unchanged. For the 35B-A3B every layer
+        # is MoE (decoder_sparse_step=1, mlp_only_layers=[]) with a gated shared
+        # expert; see tt/moe/.
+        # ------------------------------------------------------------------
+        self.moe_num_experts = getattr(text_config, "num_experts", 0) or 0
+        self.moe_top_k = getattr(text_config, "num_experts_per_tok", 0) or 0
+        self.moe_intermediate_size = getattr(text_config, "moe_intermediate_size", 0) or 0
+        self.moe_shared_intermediate_size = getattr(text_config, "shared_expert_intermediate_size", None)
+        self.moe_norm_topk_prob = bool(getattr(text_config, "norm_topk_prob", True))
+        self.moe_decoder_sparse_step = getattr(text_config, "decoder_sparse_step", 1) or 1
+        self.moe_only_layers = set(getattr(text_config, "mlp_only_layers", None) or [])
+
         # Lazy import for CPU-only testing.
         if mesh_device is not None:
             import ttnn
@@ -154,6 +171,16 @@ class Qwen36ModelArgs(ModelArgs):
         self.gdn_out_weight_memcfg = None
         self.attn_wo_weight_memcfg = None
         self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
+
+        # MoE experts: per-device intermediate for the column/row TP shard of the
+        # sparse experts, tile-aligned so each device's shard is a whole number of
+        # tiles. The gemma4-style sparse_matmul path uses interleaved-DRAM expert
+        # weights and builds its own per-op program configs, so only the sharded
+        # dim is needed here (guarded — absent on the dense 9B/27B).
+        if self.moe_num_experts > 0:
+            self.moe_intermediate_per_device = (
+                (self.moe_intermediate_size // tp + tpc.TILE_SIZE - 1) // tpc.TILE_SIZE
+            ) * tpc.TILE_SIZE
 
         # DRAM-sharded matmul progcfgs (decode, M=1)
         M = 1
@@ -253,11 +280,36 @@ class Qwen36ModelArgs(ModelArgs):
         self.trust_remote_code_hf = True
         super()._set_hf_params(checkpoint_dir)
 
+    def _set_params_from_dict(self, config):
+        # Qwen3.5-MoE checkpoints have NO dense `intermediate_size` (every layer is
+        # sparse MoE), but the base ModelArgs still requires it (or ffn_dim_multiplier)
+        # to derive the dense `hidden_dim`. That hidden_dim is vestigial here — MoE
+        # layers route through tt/moe, not the dense MLP memcfgs — so inject the
+        # per-expert intermediate as a tile-aligned stand-in purely to satisfy the
+        # base. The dense 9B/27B carry a real intermediate_size and are untouched.
+        if not config.get("intermediate_size") and config.get("moe_intermediate_size"):
+            config = {**config, "intermediate_size": config["moe_intermediate_size"]}
+        super()._set_params_from_dict(config)
+
     def is_full_attention_layer(self, layer_idx: int) -> bool:
         return self.attention_type_list[layer_idx] == "full_attention"
 
     def is_deltanet_layer(self, layer_idx: int) -> bool:
         return self.attention_type_list[layer_idx] == "linear_attention"
+
+    def is_moe_layer(self, layer_idx: int) -> bool:
+        """True when this layer uses the sparse MoE MLP instead of the dense SwiGLU.
+
+        Follows the HF Qwen3-Next / Qwen3.5-MoE rule: a layer is MoE when there
+        are experts, it is not forced dense (mlp_only_layers), and it falls on
+        the decoder_sparse_step cadence. On the dense 9B/27B num_experts==0 so
+        this is always False and the Qwen36MLP path is byte-for-byte unchanged.
+        """
+        if self.moe_num_experts <= 0:
+            return False
+        if layer_idx in self.moe_only_layers:
+            return False
+        return (layer_idx + 1) % self.moe_decoder_sparse_step == 0
 
     def weight_cache_path(self, dtype=None):
         """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF

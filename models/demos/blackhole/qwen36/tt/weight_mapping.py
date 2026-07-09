@@ -11,6 +11,7 @@ Handles:
 - Renaming lm_head.weight → output.weight
 - Renaming embed_tokens → tok_embeddings
 """
+
 import json
 from pathlib import Path
 from typing import Dict
@@ -98,6 +99,20 @@ def remap_qwen36_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
                 remapped[f"{layer_prefix}.linear_attn.v_conv.weight"] = v_conv
                 continue
 
+            # MoE layers (Qwen3.5-MoE) pass their mlp.* keys through unchanged, to be
+            # consumed by tt/moe (load_expert_weights / router / shared expert):
+            #   mlp.gate.weight                         router      [E, H]
+            #   mlp.experts.gate_up_proj                fused       [E, 2I, H]
+            #   mlp.experts.down_proj                   fused       [E, H, I]
+            #   mlp.shared_expert.{gate,up,down}_proj.weight        (singular)
+            #   mlp.shared_expert_gate.weight           sigmoid gate [1, H]
+            # Normalize the DeepSeek-style plural spelling to the singular one the
+            # shared-expert loader expects (no-op on Qwen3.5-MoE, which is singular).
+            if sub_key.startswith("mlp.shared_experts."):
+                sub_key = sub_key.replace("mlp.shared_experts.", "mlp.shared_expert.", 1)
+                remapped[f"{layer_prefix}.{sub_key}"] = tensor
+                continue
+
             # All other keys pass through unchanged
             remapped[new_key] = tensor
             continue
@@ -170,9 +185,18 @@ def load_qwen36_state_dict_fp8(model_path) -> Dict[str, torch.Tensor]:
             continue
         if tensor.dtype == torch.float8_e4m3fn:
             scale_key = key + "_scale_inv"
-            dequantized[key] = (
-                dequant_fp8_block(tensor, raw[scale_key]) if scale_key in raw else tensor.to(torch.bfloat16)
-            )
+            if scale_key not in raw:
+                dequantized[key] = tensor.to(torch.bfloat16)
+            elif tensor.dim() <= 2:
+                dequantized[key] = dequant_fp8_block(tensor, raw[scale_key])
+            else:
+                # Fused MoE expert weights are 3D ([E, out, in]); dequant_fp8_block is
+                # 2D-only, so dequant each expert's [out, in] slice with its own scale
+                # block and stack back. (Unexercised by the current bf16 35B-A3B; here
+                # so a future FP8 MoE checkpoint dequantizes correctly instead of crashing.)
+                scale = raw[scale_key]
+                slices = [dequant_fp8_block(tensor[e], scale[e]) for e in range(tensor.shape[0])]
+                dequantized[key] = torch.stack(slices, dim=0)
         else:
             dequantized[key] = tensor
 
