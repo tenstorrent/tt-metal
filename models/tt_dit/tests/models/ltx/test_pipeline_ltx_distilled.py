@@ -211,7 +211,29 @@ def test_pipeline_distilled(
             prompt=prompt,
         )
 
+    # Output resolutions the served pipeline supports (its quality/resolution dropdown), each
+    # rounded up to the generate() %64 constraint. Every supported height must have a calibrated
+    # vbench entry below; the coverage assert ties the two so adding a resolution here without
+    # thresholds fails loud instead of KeyError-ing the gate at that height.
+    SUPPORTED_RESOLUTIONS = {(1280, 704), (1920, 1088)}  # (width, height)
+
+    # VBench floors per output height, each a small headroom below that resolution's measured
+    # scores. 704 (720p) is a coarser render than 1088 (1080p): its imaging_quality measures far
+    # lower, so its floor sits accordingly — that is the render, not a defect.
     vbench_thresholds_by_height = {
+        # Measured 720p (fast, traced replay, girl-singing prompt): subject 0.948, background
+        # 0.957, motion 0.995, dynamic 1.0, imaging 0.332. subject/background/motion floors keep
+        # the headroom the 1088 entry uses below its own fast-tier measured (~0.03-0.06). imaging
+        # sits ~0.03 below the measured 720p value: 720p renders coarser, and 1088's 0.645 imaging
+        # floor reflects a higher-quality tier (fast-tier 1088 imaging measures ~0.46) so it does
+        # not transfer to this fast-tier 720p entry.
+        704: {
+            "subject_consistency": 0.89,
+            "background_consistency": 0.92,
+            "motion_smoothness": 0.95,
+            "dynamic_degree": 1.0,
+            "imaging_quality": 0.30,
+        },
         1088: {
             "subject_consistency": 0.92,
             "background_consistency": 0.93,
@@ -220,6 +242,12 @@ def test_pipeline_distilled(
             "imaging_quality": 0.645,
         },
     }
+
+    _uncovered = {h for _w, h in SUPPORTED_RESOLUTIONS} - vbench_thresholds_by_height.keys()
+    assert not _uncovered, (
+        f"no vbench thresholds calibrated for supported height(s) {sorted(_uncovered)}; add an "
+        f"entry to vbench_thresholds_by_height for every resolution in {sorted(SUPPORTED_RESOLUTIONS)}"
+    )
 
     # RUN_VBENCH=0 skips the quality gate (e.g. perf-only iteration); defaults on so CI gates.
     run_vbench = os.environ.get("RUN_VBENCH", "1") in ("1", "true", "True")
@@ -232,6 +260,11 @@ def test_pipeline_distilled(
             return
         if int(ttnn.distributed_context_get_rank()) == 0:
             output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
+            if height not in vbench_thresholds_by_height:
+                raise AssertionError(
+                    f"no vbench thresholds calibrated for height {height}; calibrated heights are "
+                    f"{sorted(vbench_thresholds_by_height)}. Add an entry to vbench_thresholds_by_height."
+                )
             thresholds = vbench_thresholds_by_height[height]
             assert_vbench_quality(output_filename, prompt=prompt, thresholds=thresholds)
 
