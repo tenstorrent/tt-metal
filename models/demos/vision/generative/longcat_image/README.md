@@ -68,16 +68,22 @@ the TT text encoder clears ~1.0 vs the bf16 reference anyway).
 
 ## Run
 
-The Call-1 demo defaults to quality settings (512px / 24 steps / 512 tokens) and
-writes a PNG. **Use ≥ 512px** — 256px is out-of-distribution for this 1024px-class
-model and produces noise. `--compare_golden` adds a slow CPU reference pass (minutes)
-just to print an accuracy PCC; omit it for a normal ~2–3 min run.
+The Call-1 demo defaults to a lighter **512 px / 24 steps / 512 tokens** for a fast
+run and writes a PNG. The **HF reference defaults are 1024 px / 50 steps** (`guidance
+4.5`, `max_length 512`) — pass `--size 1024 --steps 50` to match them exactly; both fit
+on a single 32 GB Blackhole (1024 uses no more than one chip — no OOM). **Use ≥ 512 px**
+— 256 px is out-of-distribution for this 1024 px-class model and produces noise.
+`--compare_golden` adds a slow CPU reference pass (minutes) just to print an accuracy
+PCC; omit it for a normal run. (One HF default we do **not** match: `enable_prompt_rewrite`
+— HF rewrites the prompt via the encoder's autoregressive `generate()` before encoding;
+the TT path skips it, so images correspond to HF with prompt-rewrite off.)
 
 ```bash
-# Call 1: text -> image  (writes a PNG)
+# Call 1: text -> image  (writes a PNG). Demo default is 512px/24 steps for speed;
+# use --size 1024 --steps 50 to match the HF reference defaults exactly.
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_text_to_image \
     --prompt "a photograph of a cat sitting on a red sofa" \
-    --size 512 --steps 24 --guidance 4.5 --out my_image.png
+    --size 1024 --steps 50 --guidance 4.5 --out my_image.png
 #   add --cq 2            to run the denoise loop under trace + 2 command queues
 #   add --compare_golden  to also print e2e PCC vs the HF reference (slow)
 #   add --profile         to print per-stage wall-clock timing (text-encode/denoise/vae-decode/total)
@@ -87,10 +93,19 @@ just to print an accuracy PCC; omit it for a normal ~2–3 min run.
     --image <path.jpg> --prompt "change the cat to a dog" --compare_golden
 #   add --profile         to print per-stage wall-clock timing (edit-encode/vae-encode/denoise/vae-decode/total)
 
+# Warm server: DiT+VAE resident + traced across requests, text encoder on a 2nd chip
+# (needs 2 chips; opens a 1x2 MeshDevice). See "Warm server" below.
+./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_server \
+    --size 1024 --steps 50 --max_length 512 --cq 2 \
+    --device_id 0 --text_encoder_device_id 1
+
 # e2e gates (on device)
 ./python_env/bin/python -m pytest models/demos/vision/generative/longcat_image/tests/e2e/ -s
 
-# per-step device latency (trace replay; LONGCAT_PERF_CQ=2 for trace+2CQ)
+# per-step device latency (trace replay; LONGCAT_PERF_CQ=2 for trace+2CQ).
+# NOTE: this harness profiles at a small bounded size (128px / 32 tokens), so its
+# ms/step is a relative-optimization figure, NOT the full-resolution per-step cost
+# (see the Performance section for the full-model 512/1024 numbers).
 LONGCAT_PERF_CQ=1 ./python_env/bin/python -m pytest -s \
     models/demos/vision/generative/longcat_image/tests/e2e/test_text_to_image_perf.py
 ```
@@ -163,17 +178,22 @@ Per-stage timing is always on for the server (`profile=True`); pass `--profile`
 to the other two demos, or set `LONGCAT_PROFILE=1`, to get the same
 `[longcat-profile] <stage>: <ms>` breakdown from `LongCatImagePipelineTT`.
 
-Measured steady-state on QB2 (1x2 mesh, 512px, `--cq 2`), after the first
-(weights-upload) request: **~5.5 s end-to-end at 4 steps** (text-encode ~0.78 s
-×2, denoise ~3.67 s, VAE ~0.31 s); the first request additionally pays the
-one-time ~23 s encoder upload + ~47 s DiT warmup. The denoise (~0.9 s/step for the
-full model, warm trace replay) now dominates a many-step run.
+Measured steady-state on QB2 (1×2 mesh, `--cq 2`), after the first (warmup) request, at
+the HF-reference 50 steps: **~47.7 s end-to-end at 512 px** and **~214.9 s at 1024 px**.
+The full-model **denoise dominates** (~915 ms/step at 512, ~4.24 s/step at 1024);
+text-encode is ~0.77 s/branch (resident, resolution-independent) and VAE decode 0.31 s
+(512) / 1.35 s (1024). The one-time warmup (DiT trace capture + VAE warm-decode) and the
+first request's encoder-weight upload are paid once, not per request. See the Performance
+table below for the full breakdown.
 
 ## Performance
 
-Per-denoise-step device latency, each change e2e-PCC-verified (gate 0.95):
+**Per-step DiT optimization ladder** — measured by the bounded per-step perf harness
+(`test_text_to_image_perf.py`) at its small profiling size (**128 px / 32 tokens**); each
+change e2e-PCC-verified (gate 0.95). These are **relative** speedups for the denoise step,
+not the full-resolution per-step cost (see the full-model table below):
 
-| Config | ms/step | speedup |
+| Config | ms/step (128px/32tok) | speedup |
 | --- | --- | --- |
 | fp32 baseline | 125.1 | 1.00× |
 | bf16 DiT | 73.1 | 1.71× |
@@ -181,8 +201,21 @@ Per-denoise-step device latency, each change e2e-PCC-verified (gate 0.95):
 | + bf8_b linear weights | **60.1** | **2.08×** |
 | trace + 2CQ | 60.3 | ≈ 1CQ (parity) |
 
-End-to-end (512px / 24 steps), tracing the denoise loop: **~125 s vs ~179 s eager
-(~1.43×)** on top of the per-step wins.
+**Full-model end-to-end** — measured on QB2 (1×2 mesh: DiT+VAE resident/warm on chip 0,
+text encoder resident on chip 1), warm trace replay, `--cq 2`, steady-state (after the
+first request's one-time warmup), at the HF-reference 50 steps:
+
+| Setting | denoise / step | denoise (50) | text-enc ×2 | VAE | end-to-end |
+| --- | --- | --- | --- | --- | --- |
+| 512×512 / 50 steps | ~915 ms | 45.8 s | ~1.5 s | 0.31 s | **~47.7 s** |
+| 1024×1024 / 50 steps (HF default) | ~4.24 s | 211.8 s | ~1.5 s | 1.35 s | **~214.9 s** |
+
+Per-step scales ~4.6× from 512→1024 (image tokens 1024→4096; attention is O(n²) but only
+part of the step, so the blend lands near 4.6×, not 16×). The **denoise dominates** (96–99%
+of the run) — it is the optimization target. One-time warmup (not per request): DiT trace
+capture ~46 s (512) / ~58 s (1024) + VAE warm-decode ~0.5 s (512) / ~15 s (1024); the first
+request additionally pays ~23 s for the encoder weight upload. 1024 fits on one 32 GB chip
+(no OOM).
 
 ## Results
 
@@ -192,3 +225,10 @@ End-to-end (512px / 24 steps), tracing the denoise loop: **~125 s vs ~179 s eage
   trajectory-divergence compounding, not a regression.
 - The demo generates a coherent, prompt-accurate image (see the `e2e PCC=...` line
   printed on every run, pass or fail).
+- Warm-server generation verified coherent + prompt-accurate at the HF-reference
+  settings — **512 px and 1024 px, 50 steps** — across multiple back-to-back requests
+  (visually confirmed, not just timings). This exercises the multi-request correctness
+  fix: earlier, only the first warm request decoded correctly and every later one came
+  out solid black, because the VAE's weights were allocated after the DiT trace was
+  captured and got corrupted when the trace re-ran; `warmup()` now warms the VAE before
+  capturing the trace (see `tt/pipeline.py`).
