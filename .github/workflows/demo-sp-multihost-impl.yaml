@@ -97,6 +97,7 @@ jobs:
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
+      TT_EXABOX: "1"
     strategy:
       fail-fast: false
       matrix:

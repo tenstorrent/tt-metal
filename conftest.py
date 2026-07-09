@@ -47,6 +47,14 @@ def is_ci_env():
 
 
 @pytest.fixture(scope="function")
+def is_exabox_env():
+    """Exabox multihost CI (ttop allocations + NFS model mounts). Same restrictions as civ1/civ2."""
+    if os.getenv("TT_EXABOX") == "1":
+        return True
+    return os.path.isfile("/etc/ttop/hostfile")
+
+
+@pytest.fixture(scope="function")
 def is_single_card_n300(device):
     import ttnn
 

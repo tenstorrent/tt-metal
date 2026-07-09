@@ -147,6 +147,7 @@ def run_model(
     is_balanced,
     is_ci_env,
     is_ci_v2_env,
+    is_exabox_env,
     device_params,
 ):
     if use_pretrained and not variant.supports_pretrained:
@@ -248,7 +249,7 @@ def run_model(
             logger.info(f"  Output shape: {ref_output.shape}")
         else:
             assert not (
-                (is_ci_env or is_ci_v2_env) and not scale_down_sl
+                (is_ci_env or is_ci_v2_env or is_exabox_env) and not scale_down_sl
             ), "We should not execute CPU computation in the CI for max sl, output cache is missing"
 
             # Create position IDs
@@ -269,7 +270,7 @@ def run_model(
 
             ref_kvpe = hf_cache_layer_kv(ref_cache, 0)[0]  # layer 0
 
-            if not (is_ci_env or is_ci_v2_env):
+            if not (is_ci_env or is_ci_v2_env or is_exabox_env):
                 # Save to cache for future runs
                 cache_dir.mkdir(parents=True, exist_ok=True)
                 torch.save({"ref_output": ref_output, "ref_kvpe": ref_kvpe}, cache_path)
@@ -403,6 +404,7 @@ def test_ds_mla(
     is_balanced,
     is_ci_env,
     is_ci_v2_env,
+    is_exabox_env,
     device_params,
     variant,
 ):
@@ -417,6 +419,7 @@ def test_ds_mla(
         is_balanced,
         is_ci_env,
         is_ci_v2_env,
+        is_exabox_env,
         device_params,
     )
 
@@ -465,6 +468,7 @@ def test_kimi_mla(
     is_balanced,
     is_ci_env,
     is_ci_v2_env,
+    is_exabox_env,
     device_params,
     variant,
 ):
@@ -479,6 +483,7 @@ def test_kimi_mla(
         is_balanced,
         is_ci_env,
         is_ci_v2_env,
+        is_exabox_env,
         device_params,
     )
 
