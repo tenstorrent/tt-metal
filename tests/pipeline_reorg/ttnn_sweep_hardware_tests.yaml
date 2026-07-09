@@ -13,7 +13,7 @@
 # .github/time_budget.yaml. Timeouts are first-pass estimates.
 
 - name: ttnn sweeps hardware
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
     wh_n150_civ2:
       timeout: 60

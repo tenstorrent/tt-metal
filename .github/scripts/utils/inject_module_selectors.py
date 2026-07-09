@@ -81,13 +81,17 @@ def main() -> int:
     for entry in matrix:
         category = entry.get("category")
         if not category:
-            print(f"::warning::matrix entry '{entry.get('name')}' has no category; skipping", file=sys.stderr)
-            continue
-        # A category matching a compute test_group_name (mesh/lead_models lane) uses
-        # compute's mesh-routed modules; otherwise resolve an op family by prefix.
-        if category in test_group_modules:
+            # model_traced hardware / mesh-blackhole lane: no test_group to key on.
+            # The runner auto-detects its own hardware at run time and filters vectors
+            # to that lane, so hand it the full generated module set — dynamic and
+            # manifest-derived (only modules that actually generated vectors), which
+            # is what the old hardcoded --module-name model_traced meant to express.
+            selector = base_modules
+        elif category in test_group_modules:
+            # mesh / lead_models lane: compute already mesh-routed + suffix-truncated.
             selector = sorted(test_group_modules[category])
         else:
+            # op-category split: group the flat module set by dot-boundary prefix.
             selector = _selector_by_prefix(category, base_modules)
         if not selector:
             print(

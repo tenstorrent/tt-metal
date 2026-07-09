@@ -22,7 +22,7 @@
 # .github/time_budget.yaml. Timeouts are first-pass estimates.
 
 - name: ttnn sweeps mesh wormhole-n150
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
     wh_n150_civ2:
       timeout: 60
@@ -31,7 +31,7 @@
   category: wormhole-n150-sweeps
 
 - name: ttnn sweeps mesh wormhole-n300
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
     wh_n300_civ2:
       timeout: 60
@@ -40,7 +40,7 @@
   category: wormhole-n300-sweeps
 
 - name: ttnn sweeps mesh wormhole-t3k
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
     wh_llmbox:
       timeout: 120
@@ -49,7 +49,7 @@
   category: wormhole-t3k-sweeps
 
 - name: ttnn sweeps mesh wormhole-galaxy
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
     wh_galaxy:
       timeout: 200
@@ -60,7 +60,7 @@
 # Blackhole: no `category` (empty TEST_GROUP_NAME) -> each board auto-detects its
 # local mesh capability. One entry, fanned out per SKU by prepare_test_matrix.py.
 - name: ttnn sweeps mesh blackhole
-  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name model_traced --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --summary --suite-name model_traced'
   skus:
     bh_p150b_civ2:
       timeout: 60

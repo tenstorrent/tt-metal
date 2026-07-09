@@ -293,19 +293,19 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      # ── category split only: resolve each category to a concrete module CSV ──
-      # sweeps_runner.py --module-name needs an explicit list of real modules; a
-      # bare category resolves to nothing and the batch runs zero tests. Reuse
-      # compute_sweep_matrix.py (the same script main uses) to read the generated
-      # -vector manifest, then inject a per-category module_selector.
+      # ── resolve every split's entries to concrete module CSVs (all splits) ──
+      # sweeps_runner.py --module-name needs an explicit list of real modules; no
+      # YAML hardcodes it. compute_sweep_matrix.py (the same script main uses) reads
+      # the generated-vector manifest and inject_module_selectors.py maps it onto
+      # each entry: op-category -> prefix group, mesh/lead_models lane -> its routed
+      # test_group modules, no-category (hardware) -> full generated set (runtime
+      # hardware auto-detection then filters per runner).
       - name: Download sweep vectors
-        if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: sweeps-vectors
           path: /tmp/vectors
       - name: Compute module list from generated vectors
-        if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
         id: compute
         env:
           SWEEP_NAME: ${{ inputs.sweep-name }}
@@ -314,8 +314,7 @@ jobs:
         run: |
           python3 tests/sweep_framework/framework/compute_sweep_matrix.py \
             --write-to-file /tmp/compute_matrix.json > /dev/null
-      - name: Inject per-category module selectors
-        if: ${{ needs.prepare-sweep-vectors.outputs.split == 'category' }}
+      - name: Inject module selectors
         id: inject
         run: |
           # Persist build-matrix output (compact single-line JSON) to a file for
