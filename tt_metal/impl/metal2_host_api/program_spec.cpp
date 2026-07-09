@@ -59,11 +59,19 @@ struct CollectedSpecData {
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const CrossNodeDataflowBufferSpec*> cross_node_dfb_by_name;
     std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*> scratchpad_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
     std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
+
+    // Scratchpad binders (derived from kernel scratchpad bindings).
+    // Tracks which kernels bind a given ScratchpadSpec. More than one may, provided their node sets
+    // are disjoint; the per-node placement census in ValidateProgramSpec enforces that (it needs the
+    // kernel node sets, derived below). A kernel binds a given scratchpad at most once (enforced
+    // during collection), so each kernel appears at most once in a spec's binder list.
+    std::unordered_map<ScratchpadSpecName, std::vector<const KernelSpec*>> scratchpad_binders;
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and cross-node DFBs.
@@ -448,6 +456,67 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         }
     }
 
+    // Collect ScratchpadSpecs
+    for (const auto& scratchpad : spec.scratchpads) {
+        auto [it, inserted] = collected.scratchpad_by_name.try_emplace(scratchpad.unique_id, &scratchpad);
+        TT_FATAL(inserted, "Duplicate ScratchpadSpec name '{}'", scratchpad.unique_id);
+        TT_FATAL(
+            scratchpad.size_per_node != 0,
+            "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
+            "(did you forget to set size_per_node?).",
+            scratchpad.unique_id);
+    }
+
+    // Collect scratchpad bindings (structural checks here; the node-set placement check is in
+    // ValidateProgramSpec, which has the derived kernel node sets).
+    // A scratchpad is private, node-local L1. More than one KernelSpec may bind the same
+    // ScratchpadSpec, but only on disjoint node sets — the same node-local-resource discipline as a
+    // local DFB. Same-node co-binding (true sharing) is gated behind a future AdvancedOption and is
+    // rejected by the per-node census in ValidateProgramSpec.
+    for (const auto& kernel : spec.kernels) {
+        std::unordered_set<std::string> accessor_names;
+        std::unordered_set<ScratchpadSpecName> bound_specs;
+        for (const auto& binding : kernel.scratchpad_bindings) {
+            auto [it, inserted] = accessor_names.insert(binding.accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate scratchpad accessor_name '{}'",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                IsValidCppIdentifier(binding.accessor_name),
+                "Kernel '{}' scratchpad accessor_name '{}' must be a valid C++ identifier",
+                kernel.unique_id,
+                binding.accessor_name);
+            TT_FATAL(
+                collected.scratchpad_by_name.contains(binding.scratchpad_spec_name),
+                "Kernel '{}' references unknown scratchpad '{}'",
+                kernel.unique_id,
+                binding.scratchpad_spec_name);
+            // A kernel may bind a given scratchpad at most once. Two bindings would request two
+            // separate per-node allocations of the same spec under one kernel — muddy semantics, and
+            // a node-level violation of "one binding instance per node". This is structural (no node
+            // info needed), so it is caught here rather than in the placement census.
+            auto [sit, sinserted] = bound_specs.insert(binding.scratchpad_spec_name);
+            TT_FATAL(
+                sinserted,
+                "Kernel '{}' binds scratchpad '{}' more than once (latest under accessor_name '{}'). A "
+                "kernel may bind a given scratchpad at most once.",
+                kernel.unique_id,
+                binding.scratchpad_spec_name,
+                binding.accessor_name);
+            collected.scratchpad_binders[binding.scratchpad_spec_name].push_back(&kernel);
+        }
+    }
+    // Every declared scratchpad must be bound by some kernel: an unbound scratchpad would reserve L1
+    // that no kernel can reach.
+    for (const auto& scratchpad : spec.scratchpads) {
+        TT_FATAL(
+            collected.scratchpad_binders.contains(scratchpad.unique_id),
+            "ScratchpadSpec '{}' is declared but not bound by any kernel.",
+            scratchpad.unique_id);
+    }
+
     // Collect TensorParameters
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         auto [it, inserted] =
@@ -627,14 +696,14 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
 // Whether a Gen2 DM kernel opts out of implicit sync for a particular DFB.
 // Two routes lead to the same opt-out:
 //   - disable_dfb_implicit_sync_for_all: the per-kernel hammer, covering every DFB the kernel binds.
-//   - disable_implicit_sync_for: an explicit per-DFB list.
+//   - disable_dfb_implicit_sync_for: an explicit per-DFB list.
 // Precondition: the caller has already established this is a DM kernel with a gen2_config.
 bool DmKernelDisablesImplicitSync(
     const DataMovementHardwareConfig::Gen2Config& gen2_config, const DFBSpecName& dfb_name) {
     if (gen2_config.disable_dfb_implicit_sync_for_all) {
         return true;
     }
-    const auto& vec = gen2_config.disable_implicit_sync_for;
+    const auto& vec = gen2_config.disable_dfb_implicit_sync_for;
     return std::find(vec.begin(), vec.end(), dfb_name) != vec.end();
 }
 
@@ -797,15 +866,46 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     "KernelSpec '{}' targets Gen1 (WH/BH) but specifies neither a role hint "
                     "(READER/WRITER) nor an explicit Gen1 config. One is required.",
                     kernel.unique_id);
+
+                // Gen1 has exactly two DM processors: RISCV_0 (BRISC) and RISCV_1 (NCRISC).
+                // RISCV_2..RISCV_7 exist only on Gen2/Quasar. Reject them here, mirroring the legacy
+                // CreateDataMovementKernel "DM0 or DM1 only" guard. Resolving is safe now: the check
+                // above guarantees a role hint or an explicit Gen1 config is present.
+                const DataMovementProcessor processor = ResolveGen1Config(data_movement_config).processor;
+                TT_FATAL(
+                    processor == DataMovementProcessor::RISCV_0 || processor == DataMovementProcessor::RISCV_1,
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but requests DM processor RISCV_{}. Gen1 has only "
+                    "RISCV_0 and RISCV_1; RISCV_2..RISCV_7 exist only on Gen2/Quasar.",
+                    kernel.unique_id,
+                    static_cast<int>(processor));
             }
         }
     }
 
-    // On Gen1 (WH/BH), check that no two DM kernels on the same node claim the same processor.
-    // (The kernel's effective node set is derived from WorkUnitSpec membership.)
+    // On Gen1 (WH/BH), the DM kernels sharing a node must be mutually coherent:
+    //   1. Distinct DM processors (RISCV_0 vs RISCV_1) — no two kernels may pin the same RISC.
+    //   2. Agreeing NOC mode. noc_mode configures shared per-core NOC hardware (command-buffer
+    //      partitioning + completion-counter location) and is compiled into each kernel binary as
+    //      the NOC_MODE define (see kernel.cpp), so two kernels on a node with different modes are
+    //      incoherent. Mirrors the KernelGroup-construction guard ("KernelGroup must have the same
+    //      noc mode for all kernels"), surfaced here at spec-validation time with a clearer message.
+    //   3. In DM_DEDICATED_NOC mode, distinct NOCs. Each DM kernel's NoC traffic is statically
+    //      compiled to NOC_INDEX == config.noc (see kernel.cpp), so two dedicated-NOC kernels
+    //      pinned to the same NOC deadlock the device. This enforces the NOC-distinctness invariant
+    //      that KernelGroup finalize silently relies on (it writes brisc_noc_id = arg.noc for
+    //      RISCV_0 vs 1 - arg.noc for RISCV_1, which agree only when the two NOCs differ -- "safe
+    //      due to prior correctness validation"). The legacy CheckDataMovementConfig intended this
+    //      check but did not reliably enforce it for the common reader+writer pair (it runs before
+    //      the second DM kernel is registered). DM_DYNAMIC_NOC kernels are exempt: they may
+    //      intentionally share a NOC, freeing the other NOC for fabric.
+    // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
     if (is_gen1_arch()) {
-        // Maps (node, processor) -> the kernel that already claimed it
-        std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
+        // (node, processor) -> the kernel that already claimed it.
+        std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed_processor;
+        // node -> (noc mode, the kernel that first set it) — all DM kernels on a node must agree.
+        std::map<NodeCoord, std::pair<NOC_MODE, KernelSpecName>> node_noc_mode;
+        // (node, noc) -> the kernel that already claimed it (dedicated-NOC kernels only).
+        std::map<std::pair<NodeCoord, NOC>, KernelSpecName> claimed_noc;
         for (const auto& kernel : spec.kernels) {
             if (!kernel.is_data_movement_kernel()) {
                 continue;
@@ -815,15 +915,46 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
-                    auto key = std::make_pair(node, gen1.processor);
-                    auto [it, inserted] = claimed.try_emplace(key, kernel.unique_id);
+                    auto [proc_it, proc_inserted] =
+                        claimed_processor.try_emplace(std::make_pair(node, gen1.processor), kernel.unique_id);
                     TT_FATAL(
-                        inserted,
+                        proc_inserted,
                         "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both claim the same DM processor. ",
                         kernel.unique_id,
-                        it->second,
+                        proc_it->second,
                         node.x,
                         node.y);
+
+                    // All DM kernels on a node must agree on NOC mode -- it configures shared per-core NOC
+                    // hardware. Independent of the NOC-distinctness check below (which is gated per-kernel on
+                    // DM_DEDICATED_NOC); their source order does not affect behavior.
+                    auto [mode_it, mode_inserted] =
+                        node_noc_mode.try_emplace(node, std::make_pair(gen1.noc_mode, kernel.unique_id));
+                    TT_FATAL(
+                        mode_inserted || mode_it->second.first == gen1.noc_mode,
+                        "KernelSpec '{}' conflicts with '{}' on node ({}, {}): they set different NOC modes (one "
+                        "DM_DEDICATED_NOC, the other DM_DYNAMIC_NOC). All data movement kernels on a node must use "
+                        "the same NOC mode.",
+                        kernel.unique_id,
+                        mode_it->second.second,
+                        node.x,
+                        node.y);
+
+                    // NOC-distinctness applies only to statically-pinned (dedicated-NOC) kernels.
+                    if (gen1.noc_mode == NOC_MODE::DM_DEDICATED_NOC) {
+                        auto [noc_it, noc_inserted] =
+                            claimed_noc.try_emplace(std::make_pair(node, gen1.noc), kernel.unique_id);
+                        TT_FATAL(
+                            noc_inserted,
+                            "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both are dedicated-NOC data "
+                            "movement kernels pinned to NOC_{}, which hangs the device. Give them distinct NOCs, or "
+                            "use DM_DYNAMIC_NOC mode to intentionally share a NOC.",
+                            kernel.unique_id,
+                            noc_it->second,
+                            node.x,
+                            node.y,
+                            static_cast<int>(gen1.noc));
+                    }
                 }
             }
         }
@@ -930,11 +1061,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             kernel.unique_id);
     }
 
-    // Validate DM kernel disable_implicit_sync_for entries.
+    // Validate DM kernel disable_dfb_implicit_sync_for entries.
     //
     // Implicit sync is a Gen2-only, DM-only mechanism (ISR-based credit posting from NoC
     // transaction completion). A DM kernel can opt out per-DFB by listing the DFB's name in
-    // its Gen2Config::disable_implicit_sync_for vector, or opt out of all the DFBs it binds at
+    // its Gen2Config::disable_dfb_implicit_sync_for vector, or opt out of all the DFBs it binds at
     // once via Gen2Config::disable_dfb_implicit_sync_for_all. Either way the opt-out applies to the
     // side(s) of the DFB this kernel binds (producer, consumer, or both for a self-loop).
     //
@@ -958,10 +1089,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             for (const auto& binding : kernel.dfb_bindings) {
                 bound_dfbs.insert(binding.dfb_spec_name);
             }
-            for (const auto& dfb_name : dm_config.gen2_config->disable_implicit_sync_for) {
+            for (const auto& dfb_name : dm_config.gen2_config->disable_dfb_implicit_sync_for) {
                 TT_FATAL(
                     bound_dfbs.contains(dfb_name),
-                    "Kernel '{}' disable_implicit_sync_for entry references DFB '{}', which the kernel does not bind",
+                    "Kernel '{}' disable_dfb_implicit_sync_for entry references DFB '{}', which the kernel does not "
+                    "bind",
                     kernel.unique_id,
                     dfb_name);
             }
@@ -1273,6 +1405,51 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         "by the runtime. (ProgramSpec '{}' has {} cross-node DFB(s).)",
         spec.name,
         spec.cross_node_dataflow_buffers.size());
+
+    // Scratchpad placement census (multi-binding rule).
+    //
+    // A scratchpad is private, node-local L1. More than one KernelSpec may bind the same
+    // ScratchpadSpec, but only on disjoint nodes: each node hosting the scratchpad must run exactly
+    // one binding kernel instance, so the per-node region stays private to that one kernel.
+    // (Allocation and CRTA delivery are per-binding-kernel — allocate_scratchpads stacks each
+    // kernel's scratchpad onto its own cores' allocators — so disjoint bindings never interact.) Two
+    // binding kernels on the same node would be true sharing, which is deferred behind a future
+    // AdvancedOption and rejected here. Mirrors the local-DFB per-node census above. (A kernel
+    // binding the same scratchpad twice is already rejected during collection, so every binder here
+    // is a distinct kernel.)
+    for (const auto& scratchpad : spec.scratchpads) {
+        auto binders_it = collected.scratchpad_binders.find(scratchpad.unique_id);
+        if (binders_it == collected.scratchpad_binders.end() || binders_it->second.size() < 2) {
+            continue;  // unbound (caught earlier) or single binder — always legal.
+        }
+        // Tally binding-kernel instances per node. A std::map keeps iteration (and error messages)
+        // deterministic.
+        std::map<NodeCoord, std::vector<const KernelSpec*>> binders_on_node;
+        for (const KernelSpec* kernel : binders_it->second) {
+            for (const NodeCoord& node : corerange_to_cores(collected.kernel_node_set.at(kernel->unique_id))) {
+                binders_on_node[node].push_back(kernel);
+            }
+        }
+        for (const auto& [node, kernels] : binders_on_node) {
+            if (kernels.size() <= 1) {
+                continue;
+            }
+            std::string names;
+            for (const KernelSpec* kernel : kernels) {
+                names += (names.empty() ? "'" : ", '") + kernel->unique_id.get() + "'";
+            }
+            TT_FATAL(
+                false,
+                "ScratchpadSpec '{}' is bound by {} kernel instances on node {} ({}). A scratchpad is "
+                "private node-local L1; multiple kernels may bind the same scratchpad only on disjoint "
+                "nodes, so each node's instance stays private to one kernel. Sharing one node's "
+                "scratchpad across kernels is not yet supported — give each binding kernel disjoint nodes.",
+                scratchpad.unique_id,
+                kernels.size(),
+                node.str(),
+                names);
+        }
+    }
 
     // Validate borrowed-memory DFBs.
     //
@@ -2199,6 +2376,41 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
     return out;
 }
 
+// Per-kernel resolved scratchpad bindings:
+//  - one CRTA word per binding (the scratchpad's allocated L1 base address), in declaration order
+//  - the scratchpad section sits immediately after the TensorBinding section and before varargs, so
+//    each binding's absolute CRTA word index (and thus addr_crta_word) is fixed at codegen time
+//    (varargs are open-ended / runtime-counted, so a section placed after them would not be).
+// The allocated_address is left 0 here; allocate_scratchpads fills it once L1 is allocated.
+struct ScratchpadBindingsForKernel {
+    std::vector<ScratchpadBindingHandle> handles;
+    uint32_t section_words = 0;  // == number of scratchpad bindings
+};
+
+ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
+    const KernelSpec& kernel,
+    const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
+    size_t scratchpad_base_crta_word) {
+    ScratchpadBindingsForKernel out;
+    out.handles.reserve(kernel.scratchpad_bindings.size());
+
+    size_t crta_word_index = scratchpad_base_crta_word;
+    for (const auto& binding : kernel.scratchpad_bindings) {
+        const ScratchpadSpec* scratchpad_spec = scratchpad_by_name.at(binding.scratchpad_spec_name);
+
+        ScratchpadBindingHandle handle;
+        handle.accessor_name = binding.accessor_name;
+        handle.size_bytes = scratchpad_spec->size_per_node;
+        handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
+        // handle.allocated_address stays 0 until allocate_scratchpads runs.
+        out.handles.push_back(std::move(handle));
+        crta_word_index += 1;  // one address word per scratchpad binding
+    }
+
+    out.section_words = static_cast<uint32_t>(kernel.scratchpad_bindings.size());
+    return out;
+}
+
 // Create map of local accessor name -> logical DFB id
 tt::tt_metal::DataflowBufferLocalAccessorHandleMap MakeDataflowBufferLocalAccessorHandles(
     const KernelSpec& kernel_spec, const DFBNameToIdMap& dfb_name_to_id) {
@@ -2735,6 +2947,17 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // Create TensorBindingHandles for this kernel
         const std::vector<TensorBindingHandle>& tensor_binding_handles = ta_bindings.handles;
 
+        // Resolve scratchpad bindings for this kernel. The scratchpad section follows the TensorBinding
+        // section and precedes varargs, so it begins at the tensor-binding resolution's (pre-scratchpad)
+        // vararg offset; we then push the vararg section out by the scratchpad section's width so the
+        // crta_layout that flows into the kernel ctor reflects all four sections.
+        ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
+            kernel_spec,
+            collected.scratchpad_by_name,
+            /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
+        ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
+        ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
+
         // Named-args schema fields passed to the Kernel ctor. The names are used at JIT time to
         // emit kernel_args_generated.h and factor into the kernel cache key. The TensorBinding
         // address section is tracked separately (via tensor_binding_handles), so we pass the user
@@ -2813,6 +3036,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
                     ta_bindings.crta_layout);
             }
         }
+
+        // Attach the resolved scratchpad bindings to the kernel (set post-construction: their sizes are
+        // part of the kernel cache key, so this must run before the kernel is compiled). allocate_scratchpads
+        // will later fill each handle's allocated_address.
+        kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);

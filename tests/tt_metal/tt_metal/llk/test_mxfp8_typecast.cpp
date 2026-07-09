@@ -225,7 +225,7 @@ static vector<uint32_t> create_random_vector_of_mxfp8(
         v = dist(rng) + offset;
     }
 
-    auto span = tt::stl::make_const_span(fp32_vec);
+    auto span = ttsl::make_const_span(fp32_vec);
     vector<uint32_t> packed = pack_as_mx_tiles(fmt, span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
@@ -298,7 +298,7 @@ struct TileLayout {
 static TileLayout get_e5m2_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -307,7 +307,7 @@ static TileLayout get_e5m2_tile_layout() {
 static TileLayout get_e4m3_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, ttsl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};

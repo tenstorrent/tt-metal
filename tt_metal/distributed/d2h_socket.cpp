@@ -85,7 +85,7 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
     tt::tt_metal::HostBuffer host_buffer_view(
-        tt::stl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
+        ttsl::Span<uint32_t>(host_buffer_.get(), total_buffer_size_words), tt::tt_metal::MemoryPin(host_buffer_));
     pinned_memory_ =
         tt::tt_metal::experimental::PinnedMemory::Create(*mesh_device, device_range, host_buffer_view, true);
 
@@ -413,9 +413,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     }
 }
 
-bool D2HSocket::has_data() {
+bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
-    uint32_t num_bytes = page_size_;
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }

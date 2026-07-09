@@ -69,8 +69,8 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
 using ClusterToDescriptorMap = std::unordered_map<tt::tt_metal::ClusterType, std::string_view>;
 using FabricToClusterDescriptorMap = std::unordered_map<tt::tt_fabric::FabricType, ClusterToDescriptorMap>;
 
-const tt::stl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
-    tt::stl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
+const ttsl::Indestructible<FabricToClusterDescriptorMap>& cluster_type_to_mesh_graph_descriptor =
+    ttsl::Indestructible<FabricToClusterDescriptorMap>(FabricToClusterDescriptorMap{
         {tt::tt_fabric::FabricType::MESH,
          ClusterToDescriptorMap{
              {tt::tt_metal::ClusterType::N150, "n150_mesh_graph_descriptor.textproto"},

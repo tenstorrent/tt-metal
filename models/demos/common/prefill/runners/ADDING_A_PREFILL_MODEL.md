@@ -223,7 +223,7 @@ PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_H2D_SERVICE_ID=my_prefi
 # terminal B — producer (pushes PREFILL_STANDALONE_NCHUNKS chunks from the golden trace):
 PREFILL_MODEL=my_model PREFILL_SP=8 PREFILL_TP=4 PREFILL_H2D_SERVICE_ID=my_prefill \
 PREFILL_STANDALONE_NCHUNKS=11 \
-  python -m models.demos.common.prefill.runners.prefill_h2d_producer
+  python -m models.demos.common.prefill.runners.prefill_producer
 ```
 
 **Single-rank migration** — `PREFILL_ENABLE_MIGRATION=1` on the runner (requires the
