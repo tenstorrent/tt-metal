@@ -762,8 +762,6 @@ void emit_compute_scalar_descriptors(std::ostream& out, const JitBuildOptions& o
         "#define DST_SYNC_MODE DstSync::Sync{}\n",
         options.fp32_dest_acc_en,
         options.dst_full_sync_en ? "Full" : "Half");
-    // Quasar no longer emits UnpackToDestEn: it hardcodes it false in llk_defs.h and drives
-    // unpack-to-dest per operand via copy_tile_to_dst. WH/BH hardcode it in their own llk_defs.h.
 }
 
 void emit_math_scalar_descriptors(std::ostream& out, const tt_hlk_desc& desc) {

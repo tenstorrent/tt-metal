@@ -111,11 +111,14 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
  * @tparam is_fp32_dest_acc_en True if math destination is in 32-bit mode, false for 16-bit mode.
+ * @note Picks the regime from dest_filled_by_unpack, which copy_tile_to_dst_init sets once for the
+ * whole program. It is intentionally NOT cleared per section: with a single once-set init the flag is
+ * program-scoped, so clearing it here would flip tiles after the first back onto the regular path.
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     if (ckernel::trisc::dest_filled_by_unpack) {
-        // Unpack-to-dest: the unpacker owns the dest section base, so the packer just releases math
+        // Unpack-to-dest: the unpacker owns the dest section base, so the packer releases math
         // via MATH_PACK and follows the bank flip; no ZEROACC/THCON-offset dance.
         _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
         if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
@@ -127,12 +130,12 @@ inline void llk_pack_dest_section_done() {
 }
 
 /**
- * @brief Mark the pack thread's dest sections as unpack-to-dest.
- * Called from copy_tile_to_dst_init so tile_regs_release takes the unpack-to-dest section-done path
- * (packer follows the unpacker's bank via MATH_PACK) instead of the regular ZEROACC + THCON path.
- * @note Program-scoped: the pack thread cannot observe per-section which copy op ran (unlike math,
- * which sets its flag in the copy_tile_to_dst math call). A program that mixes copy_tile and
- * copy_tile_to_dst sections would need finer per-section signaling on the pack thread.
+ * @brief Mark the packer's dest sections as unpack-to-dest for the program.
+ * Called once from copy_tile_to_dst_init so tile_regs_release takes the unpack-to-dest section-done
+ * path (packer follows the unpacker's bank via MATH_PACK) instead of the regular ZEROACC + THCON path.
+ * @note Program-scoped: set once, not cleared per section (pack can't observe per-section which copy op
+ * ran, unlike math). A program that mixes copy_tile and copy_tile_to_dst would need finer per-section
+ * signaling on the pack thread.
  */
 inline void llk_pack_mark_dest_filled_by_unpack() {
     ckernel::trisc::dest_filled_by_unpack = true;

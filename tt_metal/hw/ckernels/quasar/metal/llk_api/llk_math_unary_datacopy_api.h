@@ -90,8 +90,9 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     } else if constexpr (unpack_to_dest) {
         // Unpack-to-dest: math is a sync-only forwarder (the unpacker writes DEST), no MOP to run.
         // This is the consumer half of the unpack->math handshake wait for the unpacker's UNPACK_MATH post, then
-        // consume it. Mark the section unpack-to-dest so tile_regs_commit skips math's SEC1 advance and
-        // tile_regs_release takes the unpack-to-dest pack path. The unpacker owns SEC0 and its bank flip.
+        // consume it. Mark dest_filled_by_unpack so tile_regs_commit skips math's SEC1 advance and
+        // tile_regs_release takes the unpack-to-dest pack path. The unpacker owns SEC0 and its bank flip, math should
+        // not advance in commit step.
         _llk_sync_wait_<p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, p_stall::STALL_ON_ZERO>(
             semaphore::UNPACK_MATH);
         _llk_sync_get_(semaphore::UNPACK_MATH);

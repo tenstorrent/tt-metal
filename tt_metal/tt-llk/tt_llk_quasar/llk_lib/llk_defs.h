@@ -128,9 +128,8 @@ enum class MathFidelity : std::uint8_t
     HiFi4 = 4
 };
 
-// Quasar drives unpack-to-dest per operand via copy_tile_to_dst (section-local trisc state), not a
-// program-wide flag, so UnpackToDestEn is hardcoded false: every legacy op (copy_tile, transpose,
-// tilize, ...) routes through regular SrcA unpack, and only copy_tile_to_dst reaches UNP_DEST.
+// Quasar drives unpack-to-dest per operand via copy_tile_to_dst, so UnpackToDestEn is hardcoded false.
+// Every legacy op (copy_tile, transpose, tilize, ...) routes through regular SrcA unpack, and only copy_tile_to_dst reaches UNP_DEST.
 // (WH/BH keep UnpackToDestEn = true here and infer routing from 32-bit format; UnpackToDestDis unused.)
 constexpr bool UnpackToDestEn = false;
 
