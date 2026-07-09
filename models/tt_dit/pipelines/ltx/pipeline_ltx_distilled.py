@@ -929,27 +929,6 @@ class LTXDistilledPipeline(LTXPipeline):
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
 
-        # An interior/last keyframe pins real-image latent statistics that abut generated neighbors;
-        # the decoder's causal temporal conv3d (past-only, k_t=3) rings a chroma halo FORWARD from that
-        # step into the pin's following frames. Feather each non-frame-0 pin's latent into its forward
-        # neighbor frame(s) (decaying) to soften the real-vs-generated step the conv3d amplifies —
-        # device-verified to collapse the fringe (1.36x->1.06x) without ghosting. Frame-0 i2v is left
-        # untouched (its forward neighbors already track the start); the last pin's forward neighbors
-        # fall off the clip. Env-tunable; 0.0 disables.
-        feather = float(os.environ.get("LTX_KF_FEATHER", "0.3"))
-        if feather > 0.0 and full_image_conds:
-            hw = latent_h * latent_w
-            C = s2_video.shape[-1]
-            sv = s2_video.reshape(s2_video.shape[0], latent_frames, hw, C)
-            for lat_idx, _, _ in full_image_conds:
-                if lat_idx == 0:
-                    continue
-                for d, w in ((1, feather), (2, feather * 0.5)):
-                    j = lat_idx + d
-                    if 0 <= j < latent_frames:
-                        sv[:, j] = (1.0 - w) * sv[:, j] + w * sv[:, lat_idx]
-            s2_video = sv.reshape(s2_video.shape[0], -1, C)
-
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = "float" if output_path is not None else output_type
         t0 = time.time()
