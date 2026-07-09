@@ -12,8 +12,8 @@ if [[ -z "${TT_METAL_HOME:-}" ]]; then
     exit 1
 fi
 
-WB_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/tests/weight_bridge"
-TESTS_DIR="${TT_METAL_HOME}/tt-train/sources/examples/grpo/tests"
+WB_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout/weight_bridge"
+TESTS_DIR="${TT_METAL_HOME}/tt-train/tests/python/grpo_remote_rollout"
 HOST_FILE="${WB_DIR}/configurations/4_4/hosts.txt"
 RANK_BINDINGS_FILE="${WB_DIR}/configurations/4_4/rank_bindings.yaml"
 TEST_FILE="${WB_DIR}/test_weight_bridge.py"
