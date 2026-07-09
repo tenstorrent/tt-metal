@@ -471,6 +471,9 @@ public:
     bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
     void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
 
+    void disable_watcher_assert() { watcher_disabled_features.insert(watcher_assert_str); }
+    void enable_watcher_assert() { watcher_disabled_features.erase(watcher_assert_str); }
+
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
 
