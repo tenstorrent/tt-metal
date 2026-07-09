@@ -132,10 +132,56 @@ FORCE_INLINE void fill_each_face_row0_partial(
 }
 
 // =============================================================================
+// Float to col-0 scaler bit conversion (matmul-based reduce)
+// =============================================================================
+
+template <DataFormat data_format>
+FORCE_INLINE uint32_t float_to_col0_scaler_bits(float value) {
+    static_assert(
+        data_format == DataFormat::Float16_b || data_format == DataFormat::Float32,
+        "float_to_col0_scaler_bits only supports Float16_b (bfloat16) and Float32 formats");
+
+    const uint32_t bits = __builtin_bit_cast(uint32_t, value);
+
+    if constexpr (data_format == DataFormat::Float32) {
+        return bits;
+    } else {
+        return static_cast<uint32_t>(static_cast<uint16_t>(bits >> 16));
+    }
+}
+
+// =============================================================================
+// Format-aware fill_tile_col0 (matmul-based reduce — column 0 of left-side faces)
+// =============================================================================
+
+template <DataFormat data_format>
+FORCE_INLINE void fill_face_col0_rows(volatile tt_l1_ptr uint32_t* face_ptr, uint32_t scaler, uint32_t rows_in_face) {
+    constexpr uint32_t row_size_u32 =
+        (data_format == DataFormat::Float32) ? ROW_SIZE_U32_FP32 : ROW_SIZE_U32;
+
+    for (uint32_t row = 0; row < rows_in_face; ++row) {
+        face_ptr[row * row_size_u32] = scaler;
+    }
+}
+
+template <DataFormat data_format, uint32_t face_rows, uint32_t faces_per_row>
+FORCE_INLINE void fill_tile_col0(volatile tt_l1_ptr uint32_t* ptr, uint32_t scaler) {
+    constexpr uint32_t face_size_u32 =
+        (data_format == DataFormat::Float32) ? FACE_SIZE_U32_FP32 : FACE_SIZE_U32;
+    constexpr uint32_t ROWS_PER_FACE = 16;
+
+    for (uint32_t face_row = 0; face_row < face_rows; ++face_row) {
+        const uint32_t face_idx = face_row * faces_per_row;
+        volatile tt_l1_ptr uint32_t* face_ptr = ptr + face_idx * face_size_u32;
+        fill_face_col0_rows<data_format>(face_ptr, scaler, ROWS_PER_FACE);
+    }
+}
+
+// =============================================================================
 // Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile>
 FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
     constexpr DataFormat data_format = get_dataformat(dfb_id);
     constexpr uint32_t tile_r_dim = get_tile_r_dim<dfb_id>();
@@ -167,16 +213,27 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     noc.async_write_zeros(dfb, get_tile_size(dfb_id));
     noc.write_zeros_l1_barrier();
 
-    uint32_t scaler = float_to_scaler_bits<data_format>(scaler_f);
-    if (scaler != 0) {
-        if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
-        } else {
-            if (valid_reduce_dim_elements_in_tile == full_dim) {
+    constexpr bool use_col0_fill = !compute_uses_reduce_tile &&
+        (pool_type == PoolType::SUM || pool_type == PoolType::AVG) &&
+        reduce_dim == ReduceDim::REDUCE_ROW;
+
+    if constexpr (use_col0_fill) {
+        uint32_t scaler = float_to_col0_scaler_bits<data_format>(scaler_f);
+        if (scaler != 0) {
+            fill_tile_col0<data_format, face_rows, faces_per_row>(addr_to_l1_ptr(write_addr), scaler);
+        }
+    } else {
+        uint32_t scaler = float_to_scaler_bits<data_format>(scaler_f);
+        if (scaler != 0) {
+            if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
                 fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
             } else {
-                fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row>(
-                    addr_to_l1_ptr(write_addr), scaler, valid_reduce_dim_elements_in_tile);
+                if (valid_reduce_dim_elements_in_tile == full_dim) {
+                    fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
+                } else {
+                    fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row>(
+                        addr_to_l1_ptr(write_addr), scaler, valid_reduce_dim_elements_in_tile);
+                }
             }
         }
     }
@@ -211,7 +268,8 @@ template <
     uint32_t dfb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
-    uint32_t reduce_factor>
+    uint32_t reduce_factor,
+    bool compute_uses_reduce_tile>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_elements_in_tile) {
     // -------------------------------------------------------------------------
     // 1. Compute scaler value
@@ -238,7 +296,7 @@ FORCE_INLINE void calculate_and_prepare_reduce_scaler(uint32_t valid_reduce_dim_
     // -------------------------------------------------------------------------
     // 2. Fill the DFB with the computed scaler
     // -------------------------------------------------------------------------
-    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(scaler_f, valid_reduce_dim_elements_in_tile);
+    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, compute_uses_reduce_tile>(scaler_f, valid_reduce_dim_elements_in_tile);
 }
 
 }  // namespace dataflow_kernel_lib
