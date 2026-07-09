@@ -51,13 +51,12 @@
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       CopyTile<dfb_in, Dst::D0, InputLifecycle::Streaming>{},
  *       Exp<>{},
- *       PackTile<dfb_out, Dst::D0, OutputLifecycle::Streaming>{});
+ *       PackTile<dfb_out, OutputLifecycle::Streaming>{});
  *
  *   // Streaming binary — A + B -> out (BinaryFpu writes DEST; the output buffer lives on PackTile)
  *   eltwise_chain(EltwiseShape::tiles(num_tiles),
  *       BinaryFpu<dfb_a, dfb_b, BinaryFpuOp::Add>{},
- *       PackTile<dfb_out, Dst::D0, OutputLifecycle::Streaming, OperandKind::Scalar,
- *                PackTileReconfig::Output>{});
+ *       PackTile<dfb_out, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
  *
  * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
  * resolved per element at compile time (fold-driven, emitted once at element entry), so there is

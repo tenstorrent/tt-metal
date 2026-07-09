@@ -4,8 +4,8 @@
 
 // OptionalChainElement gating a PackTile fan-out. CopyTile -> PackTile(cb_out0) ->
 // OptionalChainElement<ON, PackTile(cb_out1)>. ON: DEST packed to both cb_out0 and cb_out1 (distinct
-// CBs, no collision). OFF: the optional PackTile's FALSE stub must still be a valid chain element
-// (expose pack_dst_slot, which writer_pair_collide reads) and write only cb_out0.
+// CBs, no collision). OFF: the optional element is stripped from the chain entirely (as if absent) —
+// no stub, no pack-slot impersonation — so OFF compiles and writes only cb_out0.
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
