@@ -34,7 +34,6 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2>();
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-
     Noc noc;
     DataflowBuffer dfb_in(cb_id_in0);
     const auto s = TensorAccessor(src_args, src_addr);
