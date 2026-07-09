@@ -6,7 +6,7 @@
 
 This script runs the self-contained torch reference (models/demos/minimax_m3/reference/model.py)
 forward pass and extracts the KV cache (post-RoPE K, raw V) for each layer, saving it in the
-format expected by the prefill_runner's kv_cache_pcc_check().
+format the golden KV-cache PCC check (scripts/verify_golden_kv.py) expects.
 
 The reference is used instead of HuggingFace AutoModel because the shipped MiniMax-M3 checkpoint
 is a vision-language package (model_type=minimax_m3_vl) that ships no modeling code, so
