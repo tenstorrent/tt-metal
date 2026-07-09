@@ -68,24 +68,30 @@ struct ComputeGen1Config {
     // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
     bool bfp8_pack_precise = false;
 
-    // Per-DFB choice of how the unpacker delivers data into the math stage:
-    //   Default          - enables all dataformats (except Float32) to be unpacked into Dest
-    //                      or unpacked via SrcA/B regs (~19-bit elements; full FPU access)
-    //                    — Float32 unpacks via SrcA/B regs only
-    //   UnpackToDestFp32 — Float32 unpacks via Dest regs with full FP32 precision (SFPU only)
-    //                    - Buffer is incompatible with unpacking to SrcA/B regs
+    // Per-DFB choice for unpacking Float32 data into this compute kernel.
     //
-    // This choice matters only when ALL of the following hold for the DFB binding:
-    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
-    //   2. The DFB's data format is Float32.
-    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
+    // For Float32 data, the unpacker can deliver the data two ways:
+    //   Default          — Reduce to ~19-bit Tf32 and unpack via SrcA/B.
+    //                      Keeps the FPU available (matmul / binary eltwise).
+    //   UnpackToDestFp32 — Keep full FP32. It only fits in the 32-bit Dest register,
+    //                      so it unpacks straight to Dest — and since the FPU reads
+    //                      only SrcA/B, this DFB becomes SFPU-only.
     //
-    // You MUST provide an unpack_to_dest_mode entry for the DFB when all three conditions hold;
-    // failing to do so will trigger an error. Outside the triple an entry is optional: Default is
-    // always accepted, and UnpackToDestFp32 is tolerated where it is inert (non-consumer or
-    // non-Float32 — the hardware ignores the mode there, and legacy ops set it unconditionally).
-    // UnpackToDestFp32 always requires fp32_dest_acc_en=true, even where inert; otherwise it is
-    // rejected as incoherent (Dest is 16-bit and cannot hold full FP32).
+    // NOTE: Since SrcA/B are 19-bit and can't hold FP32, keeping full FP32 precision
+    //       forces the "Dest" path.
+    //
+    // A real choice exists (and an entry is REQUIRED) when all of the following hold:
+    //   1. The compute kernel is the DFB's consumer endpoint
+    //   2. The DFB's data format is Float32, and
+    //   3. fp32_dest_acc_en is true (else Dest is 16-bit and full FP32 is impossible).
+    //
+    // The two options differ in precision and which math engine can use the data, so
+    // you MUST provide an unpack_to_dest_mode entry for a DFB if the above conditions
+    // hold (no default is assumed). Failing to do so will trigger a compile-time error.
+    //
+    // If the above conditions do not hold, an unpack_to_dest_mode entry is optional.
+    // Default is always accepted; UnpackToDestFp32 is tolerated in "don't care" cases.
+    //
     ComputeUnpackToDestModes unpack_to_dest_mode;
 };
 
@@ -122,22 +128,13 @@ struct ComputeGen2Config {
     // running the unpack→math→pack semaphore handshake, independent of operand data format.
     bool unpack_to_dest_en = false;
 
-    // NOTE: This comment is now subtly wrong on Quasar!
-    // Per-DFB choice of how the unpacker delivers data into the math stage:
-    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
-    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
+    // NOTE: On Gen2 this field does NOT carry the semantics documented on ComputeGen1Config,
+    // and its final Gen2 behavior is still being settled.
+    // Key difference: on Quasar the SrcA/B-vs-Dest routing is driven by unpack_to_dest_en,
+    // applied regardless of data format — it is NOT inferred from this per-DFB mode the way
+    // it is on Gen1. Do NOT rely on a Gen1 reading of this field here.
     //
-    // This choice matters only when ALL of the following hold for the DFB binding:
-    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
-    //   2. The DFB's data format is Float32.
-    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
-    //
-    // You MUST provide an unpack_to_dest_mode entry for the DFB when all three conditions hold;
-    // failing to do so will trigger an error. Outside the triple an entry is optional: Default is
-    // always accepted, and UnpackToDestFp32 is tolerated where it is inert (non-consumer or
-    // non-Float32 — the hardware ignores the mode there, and legacy ops set it unconditionally).
-    // UnpackToDestFp32 always requires fp32_dest_acc_en=true, even where inert; otherwise it is
-    // rejected as incoherent (Dest is 16-bit and cannot hold full FP32).
+    // Tracked in issue #40980.
     ComputeUnpackToDestModes unpack_to_dest_mode;
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
