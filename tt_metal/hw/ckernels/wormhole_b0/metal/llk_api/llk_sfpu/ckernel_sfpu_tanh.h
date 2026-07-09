@@ -97,7 +97,7 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     // (5.876733921468257904052734375e-3))))));
     sfpi::vFloat result = PolynomialEvaluator::eval(
         val,
-        sfpi::vConst0,
+        0.0f,
         0.999004364013671875,
         3.0897438526153564453125e-2,
         -0.4890659749507904052734375,
