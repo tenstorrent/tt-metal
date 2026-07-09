@@ -47,7 +47,7 @@ def main():
     ap.add_argument("--image", default=None, help="input image path (a synthetic test image is used if omitted)")
     ap.add_argument("--prompt", default="change the square to a bright red circle")
     ap.add_argument("--negative_prompt", default="")
-    ap.add_argument("--steps", type=int, default=24)
+    ap.add_argument("--steps", type=int, default=50)  # HF reference default
     ap.add_argument("--guidance", type=float, default=4.5)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--target_area", type=int, default=1024 * 1024, help="output size target in px^2 (reference ~1MP)")

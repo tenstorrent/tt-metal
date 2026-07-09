@@ -68,22 +68,21 @@ the TT text encoder clears ~1.0 vs the bf16 reference anyway).
 
 ## Run
 
-The Call-1 demo defaults to a lighter **512 px / 24 steps / 512 tokens** for a fast
-run and writes a PNG. The **HF reference defaults are 1024 px / 50 steps** (`guidance
-4.5`, `max_length 512`) — pass `--size 1024 --steps 50` to match them exactly; both fit
-on a single 32 GB Blackhole (1024 uses no more than one chip — no OOM). **Use ≥ 512 px**
-— 256 px is out-of-distribution for this 1024 px-class model and produces noise.
-`--compare_golden` adds a slow CPU reference pass (minutes) just to print an accuracy
+The Call-1 demo defaults to **512 px / 50 steps / 512 tokens** and writes a PNG. Steps
+(50), guidance (4.5) and token budget (512) match the HF reference defaults; the only
+difference from HF is **resolution** — the demo uses 512 px where HF defaults to 1024 px
+(pass `--size 1024` to match exactly; 1024 fits on a single 32 GB Blackhole — no OOM).
+**Use ≥ 512 px** — 256 px is out-of-distribution for this 1024 px-class model and produces
+noise. `--compare_golden` adds a slow CPU reference pass (minutes) just to print an accuracy
 PCC; omit it for a normal run. (One HF default we do **not** match: `enable_prompt_rewrite`
 — HF rewrites the prompt via the encoder's autoregressive `generate()` before encoding;
 the TT path skips it, so images correspond to HF with prompt-rewrite off.)
 
 ```bash
-# Call 1: text -> image  (writes a PNG). Demo default is 512px/24 steps for speed;
-# use --size 1024 --steps 50 to match the HF reference defaults exactly.
+# Call 1: text -> image  (writes a PNG). Defaults to 512px / 50 steps;
+# add --size 1024 to match the HF reference resolution exactly.
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_text_to_image \
-    --prompt "a photograph of a cat sitting on a red sofa" \
-    --size 1024 --steps 50 --guidance 4.5 --out my_image.png
+    --prompt "a photograph of a cat sitting on a red sofa" --out my_image.png
 #   add --cq 2            to run the denoise loop under trace + 2 command queues
 #   add --compare_golden  to also print e2e PCC vs the HF reference (slow)
 #   add --profile         to print per-stage wall-clock timing (text-encode/denoise/vae-decode/total)
@@ -94,10 +93,10 @@ the TT path skips it, so images correspond to HF with prompt-rewrite off.)
 #   add --profile         to print per-stage wall-clock timing (edit-encode/vae-encode/denoise/vae-decode/total)
 
 # Warm server: DiT+VAE resident + traced across requests, text encoder on a 2nd chip
-# (needs 2 chips; opens a 1x2 MeshDevice). See "Warm server" below.
+# (needs 2 chips; opens a 1x2 MeshDevice). Defaults to 512px/50 steps; add --size 1024
+# for HF resolution. See "Warm server" below.
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_server \
-    --size 1024 --steps 50 --max_length 512 --cq 2 \
-    --device_id 0 --text_encoder_device_id 1
+    --cq 2 --device_id 0 --text_encoder_device_id 1
 
 # e2e gates (on device)
 ./python_env/bin/python -m pytest models/demos/vision/generative/longcat_image/tests/e2e/ -s

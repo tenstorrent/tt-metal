@@ -59,7 +59,7 @@ WARMUP_PROMPT = "a cat sitting on a mat"
 
 def main():
     ap = argparse.ArgumentParser(description="LongCat-Image interactive server (warm DiT+VAE, 2 chips)")
-    ap.add_argument("--steps", type=int, default=24)
+    ap.add_argument("--steps", type=int, default=50)  # HF reference default
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--max_length", type=int, default=512)
     ap.add_argument("--guidance", type=float, default=4.5)
