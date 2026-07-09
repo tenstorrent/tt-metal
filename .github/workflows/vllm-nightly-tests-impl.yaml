@@ -182,7 +182,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -196,7 +196,7 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 300000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "additional-server-args": "--max_model_len 131072 --max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
