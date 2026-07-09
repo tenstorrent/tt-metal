@@ -19,9 +19,9 @@ TASK 2 — eager vs traced at a fixed context (the trace win the vLLM path was m
   argmax; eager serving unchanged).
 
 TASK 3 — average early-halt steps/block over a prompt set (``early_halt`` config): the realized
-  ``denoise_steps_per_block`` distribution + average. HONEST: early-halt is prompt-dependent —
-  simple prompts converge and halt < 48; the harder ones run the full 48 under #48291. Reports the
-  ACTUAL per-prompt steps.
+  ``denoise_steps_per_block`` distribution + average. HONEST: early-halt is data-dependent in
+  principle, but under #48291 the confidence (entropy) gate never clears 0.005, so the expectation
+  is a no-op (~48 steps, halted=False). Reports the ACTUAL per-prompt steps whatever they are.
 
     DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1 DG_TRACE_REGION_SIZE=10737418240 \
       DG_CKPT=... python -u -m models.experimental.diffusion_gemma.doc.vllm_integration.bench_vllm_traced \

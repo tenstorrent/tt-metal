@@ -70,8 +70,9 @@ Post-build per-chip DRAM vs `max_model_len` (measured `ttnn.get_memory_view` DRA
 | 4096 | 13.46 | 8.41 | +0.19 (+3072 tok) | ✓ (traced 17.93 t/s) |
 | 32768 | 15.27 | 6.60 | +1.81 (+28672 tok) | eager ✓; **traced trace-region-gated** (see below) |
 
-Contiguous KV ≈ **63 KiB/tok** ((15.27−13.46)/(32768−4096) and (13.46−13.27)/(4096−1024) both ≈ 63),
-matching `dg-context-window-oom` (~66 KiB/tok). **DRAM-fit finding:** the traced serving path also
+Contiguous KV ≈ **66 KiB/tok** (`(15.27−13.46) GiB / (32768−4096) tok` = 66.2 KiB/tok;
+`(13.46−13.27)/(4096−1024)` = 64.8), matching `dg-context-window-oom` (~66 KiB/tok). **DRAM-fit
+finding:** the traced serving path also
 reserves `DG_TRACE_REGION_SIZE` (~8 GiB for the 48 single-step @30L traces); at `max_model_len=32768`
 the free DRAM (6.60 GiB) is already **below** that trace region, so **traced serving is DRAM-gated by
 the trace region well before the eager KV ceiling**. Traced serving therefore fits a smaller context
@@ -88,10 +89,12 @@ context ceiling / `--max-model-len` follows `doc/context_contract.json` (target 
 ## TASK 3 — realized early-halt steps per block
 
 `early_halt` config (`traced_early_halt_block`, scheme A, threshold 0.005) over a representative prompt
-set. **Early-halt is prompt-dependent, NOT a uniform no-op** — a correction to the dg-08 single-prompt
-finding (which used only the hard "diffusion" prompt and reported ≈48). Simple/short prompts converge to
-a confident block and halt < 48 (the live vLLM log already showed "Hello, how are you?" halting at step
-35/48); the harder prompt runs the full 48 under #48291.
+set. **Measured result: a uniform no-op — every prompt ran the full 48 steps (0/5 halted).** This
+confirms and BROADENS dg-08's single-prompt finding across a 5-prompt set: under the released config
+(seed 0, threshold 0.005, chat-templated prompts) the confidence (entropy) gate never clears 0.005, so
+no block halts early. In principle early-halt is data-dependent (dg-08 proved it fires + commits
+eager-faithfully when a block converges below the entropy threshold), but under #48291 that condition is
+not met on real output here.
 
 `bench_vllm_traced.py` `early_halt` config, seed 0, chat-templated, threshold 0.005, 1 block/prompt:
 
@@ -113,8 +116,9 @@ Note on the "35-step halt" in `README.md` § Live serving: that live run used a 
 6-token "Hello" prompt and a different seed/run; it does not reproduce under this measurement's config.
 The mechanism is correct and ready (dg-08 proved it halts + commits eager-faithfully when the
 confidence gate is satisfiable) — it simply does not fire on real output until #48291 lifts the entropy
-floor. Enabling `DG_DENOISE_EARLY_HALT` in serving therefore adds only the ~2% per-block sync overhead
-today (17.93 traced → 17.85 early_halt), so the fixed-48 traced loop is the serving default.
+floor. Enabling `DG_DENOISE_EARLY_HALT` in serving therefore only adds the per-block halt-scalar sync
+for no benefit today: measured here at **~0.5%** (17.93 traced → 17.85 early_halt, within block-timing
+noise; dg-08's per-step-sync upper bound was ~2%). So the fixed-48 traced loop is the serving default.
 
 ## Correctness
 
