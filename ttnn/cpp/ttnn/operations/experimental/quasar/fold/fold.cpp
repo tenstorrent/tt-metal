@@ -486,12 +486,25 @@ Tensor fold(
             processed_tensor =
                 ttnn::operations::experimental::quasar::transpose(processed_tensor, 2, 3, l1_interleaved);
         }
-        const uint32_t c_keep = real_c + pad_c_front + pad_c_back;  // golden per-group channels (e.g. 3+1=4)
-        const uint32_t c_aligned = tt::round_up(c_keep, 8u);        // 16B-aligned fold-input C width (8)
         const uint32_t groups = stride_h * stride_w;
+        uint32_t c_keep;
+        uint32_t c_aligned;
+        if (input_is_nhwc) {
+            // The caller uploaded channels-last already padded to a 16B-aligned width (Quasar row-major
+            // shards need bf16 width % 8 == 0). We do NOT pad C on device: the quasar pad op cannot inject
+            // channel padding on Quasar -- its RM factory self-loops cb_pad on a DM kernel, which Gen2
+            // rejects (program_spec.cpp:1309). So real_c is already the aligned width; recover the kept
+            // (real + pad_c) channel count per group from output_shape.
+            TT_FATAL(
+                output_shape.has_value(),
+                "Quasar channels-last fold (input_is_nhwc) requires output_shape to recover the kept channel count");
+            c_aligned = real_c;                                                // already aligned by caller
+            c_keep = static_cast<uint32_t>(output_shape.value()[3]) / groups;  // e.g. 16 / 4 = 4
+        } else {
+            c_keep = real_c + pad_c_front + pad_c_back;  // golden per-group channels (e.g. 3+1=4)
+            c_aligned = tt::round_up(c_keep, 8u);        // 16B-aligned fold-input C width (8)
 
-        // 2) Pad C up to the 16B-aligned width, while interleaved (no sub-16B row-major shard width).
-        {
+            // 2) Pad C up to the 16B-aligned width, while interleaved (no sub-16B row-major shard width).
             const auto s = processed_tensor.logical_shape();  // [N,H,W,real_c]
             const tt::tt_metal::Array4D padded_shape = {
                 static_cast<uint32_t>(s[0]), static_cast<uint32_t>(s[1]), static_cast<uint32_t>(s[2]), c_aligned};

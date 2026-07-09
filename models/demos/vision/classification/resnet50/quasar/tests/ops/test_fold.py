@@ -203,9 +203,14 @@ def test_quasar_fold(mesh_device, batch_size, use_transpose_as_fold):
             )
         else:
             # Quasar direct path: upload CHANNELS-LAST [N,H,W,C] interleaved L1 so fold skips the on-device
-            # NCHW->NHWC transpose (which has no Quasar kernel -> DataMovementKernel FATAL). input_is_nhwc
-            # tells fold C is already last; grid_size supplies the fold shard grid.
-            torch_input_nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+            # NCHW->NHWC transpose (no Quasar kernel -> DataMovementKernel FATAL). Also host-pad C up to the
+            # 16B-aligned width (bf16 -> multiple of 8): the quasar pad op can't inject channel padding on
+            # Quasar (its RM factory self-loops cb_pad on a DM kernel, rejected on Gen2), so we do it here.
+            # input_is_nhwc tells fold C is already last & aligned; output_shape gives the kept channels.
+            c_keep = c + pad_c  # 3 + 1 = 4
+            c_aligned = ((c_keep + 7) // 8) * 8  # 8 (16B-aligned bf16 width)
+            torch_input_nhwc = torch_input.permute(0, 2, 3, 1).contiguous()  # [N,H,W,c]
+            torch_input_nhwc = torch.nn.functional.pad(torch_input_nhwc, (0, c_aligned - c))  # C: c -> c_aligned
             tt_input = ttnn.from_torch(
                 torch_input_nhwc,
                 dtype=ttnn.bfloat16,
@@ -224,6 +229,7 @@ def test_quasar_fold(mesh_device, batch_size, use_transpose_as_fold):
             padding=[pad_h, pad_h, pad_w, pad_w, 0, pad_c],
             grid_size=shard_grid,
             input_is_nhwc=not use_transpose_as_fold,
+            output_shape=(None if use_transpose_as_fold else ttnn.Shape(list(golden.shape))),
         )
         _dbg(
             f"STAGE fold: done; tt_out spec shape={list(tt_out.shape)} layout={tt_out.layout} "
