@@ -52,8 +52,8 @@ void kernel_main() {
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const address_t ready_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
@@ -72,9 +72,9 @@ void kernel_main() {
     // A sink direction (num_iters == 0) has no upstream here and is never signalled, so it must not wait.
     if constexpr (do_init_barrier) {
         if (num_iters > 0) {
-            auto* ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready_sem);
-            noc_semaphore_wait_min(ready_ptr, 1);
-            noc_semaphore_set(ready_ptr, 0);
+            auto* barrier_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem);
+            noc_semaphore_wait_min(barrier_ptr, 1);
+            noc_semaphore_set(barrier_ptr, 0);
         }
     }
 

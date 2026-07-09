@@ -21,7 +21,7 @@ using namespace ::ttnn::ccl;
 // (CB producer, no fabric) reads iteration 0 from local input and later iterations from what upstream relayed
 // into our output; the writer (CB consumer) unicasts each stripe one hop to the neighbor's output (same
 // address on every device). Direction/topology are runtime args, so both kernels compile once and run on all
-// cores. Two semaphores: data_valid (relay gate + completion) and ready (init handshake).
+// cores. Two semaphores: barrier_sem (init handshake) and data_valid_sem (relay gate + completion).
 ////////////////////////////////////////////////////////////////
 
 AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_mesh_workload(
@@ -45,8 +45,8 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
     // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
     // Allocate the semaphore in L1_SMALL to avoid fragmenting the larger L1 memory pool.
     // Two semaphores:
-    // - ready: one-shot init handshake ("I'm alive") to the neighbor.
-    // - data_valid: chunks upstream has relayed into our output (relay gate + completion).
+    // - barrier_sem: one-shot init handshake ("I'm alive") to the neighbor.
+    // - data_valid_sem: chunks upstream has relayed into our output (relay gate + completion).
     bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
     auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
     if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
@@ -55,16 +55,17 @@ AllGatherUnicastFactory::cached_mesh_workload_t AllGatherUnicastFactory::create_
             "Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op "
             "allocations. Configure an L1_SMALL region to mitigate this.");
     }
+    auto barrier_sem =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     auto data_valid_sem =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto ready_sem = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
     log_debug(tt::LogOp, "All devices are ready, starting program execution");
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program =
-            create_at(operation_attributes, coord, tensor_args, output_tensor, data_valid_sem, ready_sem);
+            create_at(operation_attributes, coord, tensor_args, output_tensor, barrier_sem, data_valid_sem);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -77,8 +78,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     const ttnn::MeshCoordinate& sender_device_coord,
     const AllGatherInputs& tensor_args,
     const Tensor& output_tensor,
-    const tt::tt_metal::GlobalSemaphore& data_valid_sem,
-    const tt::tt_metal::GlobalSemaphore& ready_sem) {
+    const tt::tt_metal::GlobalSemaphore& barrier_sem,
+    const tt::tt_metal::GlobalSemaphore& data_valid_sem) {
     const auto& input_tensor = tensor_args.input_tensor;
     tt::tt_metal::Program program{};
     auto* mesh_device = input_tensor.device();
@@ -444,8 +445,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
             const uint32_t half = num_worker_output_chunks / 2;
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the
-            // data_valid target on the neighbor's mirror core; partner_core is the opposite-direction worker
-            // (same index w), the ready target.
+            // data_valid_sem target on the neighbor's mirror core; partner_core is the opposite-direction worker
+            // (same index w), the barrier_sem target.
             for (uint32_t dir = 0; dir < num_directions; ++dir) {
                 const bool is_forward = (dir == 0);
                 const CoreCoord core = worker_core(link, dir, w);
@@ -495,8 +496,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     final_count,               // last-iteration slice length (even-ring split)
                     input_tile_id_start,       // local data: input page start
                     input_tile_id_end,         // local data: input page end
-                    data_valid_sem.address(),  // data_valid L1 address
-                    ready_sem.address(),       // ready L1 address
+                    barrier_sem.address(),     // barrier_sem L1 address
+                    data_valid_sem.address(),  // data_valid_sem L1 address
                 };
                 tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, {core}, reader_rt_args);
 
@@ -510,12 +511,12 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
                     final_start,               // last-iteration slice start (even-ring split)
                     final_count,               // last-iteration slice length (even-ring split)
                     do_local_write ? 1u : 0u,  // write local data into local output on iteration 0
-                    data_valid_sem.address(),  // data_valid L1 address
-                    ready_sem.address(),       // ready L1 address
-                    (uint32_t)mirror_core.x,   // data_valid target (neighbor mirror core x)
-                    (uint32_t)mirror_core.y,   // data_valid target (neighbor mirror core y)
-                    (uint32_t)partner_core.x,  // ready target (neighbor partner core x)
-                    (uint32_t)partner_core.y,  // ready target (neighbor partner core y)
+                    barrier_sem.address(),     // barrier_sem L1 address
+                    data_valid_sem.address(),  // data_valid_sem L1 address
+                    (uint32_t)partner_core.x,  // barrier_sem target (neighbor partner core x)
+                    (uint32_t)partner_core.y,  // barrier_sem target (neighbor partner core y)
+                    (uint32_t)mirror_core.x,   // data_valid_sem target (neighbor mirror core x)
+                    (uint32_t)mirror_core.y,   // data_valid_sem target (neighbor mirror core y)
                     num_granular,              // leading sends the downstream relays
                 };
                 TT_FATAL(num_iters == 0 || neighbor.has_value(), "an active direction must have a neighbor");
@@ -558,8 +559,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         .worker_cores = worker_cores,
         .reader_kernel_id = reader_kernel_id,
         .writer_kernel_id = writer_kernel_id,
+        .barrier_sem = barrier_sem,
         .data_valid_sem = data_valid_sem,
-        .ready_sem = ready_sem,
     };
 
     return {std::move(program), std::move(shared_variables)};
@@ -575,23 +576,23 @@ void AllGatherUnicastFactory::override_runtime_arguments(
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
+        const uint32_t barrier_addr = shared_vars.barrier_sem.address();
         const uint32_t data_valid_addr = shared_vars.data_valid_sem.address();
-        const uint32_t ready_addr = shared_vars.ready_sem.address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernel_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernel_id);
         for (const auto& core : shared_vars.worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [12]=data_valid, [13]=ready
+            // reader: [0]=input_addr, [1]=output_addr, [12]=barrier_sem, [13]=data_valid_sem
             auto& reader_args = reader_args_by_core[core.x][core.y];
             reader_args[0] = input_addr;
             reader_args[1] = output_addr;
-            reader_args[12] = data_valid_addr;
-            reader_args[13] = ready_addr;
-            // writer: [0]=output_addr, [9]=data_valid, [10]=ready
+            reader_args[12] = barrier_addr;
+            reader_args[13] = data_valid_addr;
+            // writer: [0]=output_addr, [9]=barrier_sem, [10]=data_valid_sem
             auto& writer_args = writer_args_by_core[core.x][core.y];
             writer_args[0] = output_addr;
-            writer_args[9] = data_valid_addr;
-            writer_args[10] = ready_addr;
+            writer_args[9] = barrier_addr;
+            writer_args[10] = data_valid_addr;
         }
     }
 }

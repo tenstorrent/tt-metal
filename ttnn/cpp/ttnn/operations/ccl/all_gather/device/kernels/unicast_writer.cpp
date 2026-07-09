@@ -23,7 +23,7 @@ using address_t = uint32_t;
 // its sole backpressure is wait_front). Each iteration drains the CB and unicasts the stripe one hop to the
 // neighbor's output (same address); iteration 0 also writes this device's local data into local output.
 // Maintains the downstream reader's data_valid (= chunks delivered; see the note in unicast_common.hpp), and
-// sends its one-shot "alive" ready inc up front.
+// sends its one-shot "alive" barrier inc up front.
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
@@ -64,12 +64,12 @@ void kernel_main() {
     const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const address_t ready_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
-    const uint8_t data_valid_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor's mirror core (data_valid target)
-    const uint8_t data_valid_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    [[maybe_unused]] const uint8_t ready_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor's opposite-dir core
-    [[maybe_unused]] const uint8_t ready_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    [[maybe_unused]] const uint8_t barrier_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-dir core
+    [[maybe_unused]] const uint8_t barrier_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
+    const uint8_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_granular_sends = get_arg_val<uint32_t>(arg_idx++);  // leading sends the downstream relays
     [[maybe_unused]] size_t arg_for_fab = arg_idx;  // fabric connection args start here (non-mux path)
 
@@ -141,7 +141,7 @@ void kernel_main() {
 
     FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender);
 
-    // One 1-hop atomic-inc header for both the "alive" ready inc and the data_valid signals; destination and
+    // One 1-hop atomic-inc header for both the "alive" barrier inc and the data_valid signals; destination and
     // value (chunks) are set per send. Flush keeps a data_valid inc ordered after the payload it announces.
     auto sem_packet_header = PacketHeaderPool::allocate_header(1);
     fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
@@ -156,11 +156,11 @@ void kernel_main() {
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
     if constexpr (do_init_barrier) {
-        atomic_inc(safe_get_noc_addr(ready_noc_x, ready_noc_y, ready_sem, 0), 1);
+        atomic_inc(safe_get_noc_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem, 0), 1);
     }
 
     const uint64_t downstream_data_valid_addr =
-        safe_get_noc_addr(data_valid_noc_x, data_valid_noc_y, data_valid_sem, 0);
+        safe_get_noc_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem, 0);
     auto signal = [&](uint32_t chunks) { atomic_inc(downstream_data_valid_addr, chunks); };
 
     ///////////////////////////////////////////////////
