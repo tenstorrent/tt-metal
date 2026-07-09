@@ -14,6 +14,13 @@ inline uint32_t prng_next(uint32_t n) {
     return x;
 }
 
+// Derive a 16B-aligned payload size in [16, max_payload_size_bytes] from a PRNG state.
+// Sender and receiver must call this with the same seed value after the same prng_next step.
+inline uint32_t derive_aligned_payload_size_bytes(uint32_t seed, uint32_t max_payload_size_bytes) {
+    const uint32_t max_units = max_payload_size_bytes / 16;
+    return ((seed % max_units) + 1) * 16;
+}
+
 inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val) {
     constexpr uint32_t packet_word_stride_words = tt::tt_fabric::PACKET_WORD_SIZE_BYTES / sizeof(uint32_t);
     tt_l1_ptr uint32_t* addr = start_addr + (packet_word_stride_words - 1);

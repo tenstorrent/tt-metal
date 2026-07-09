@@ -17,6 +17,8 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 constexpr uint32_t receiver_slots_base_address = get_compile_time_arg_val(2);
 constexpr uint32_t sender_credit_handshake_address = get_compile_time_arg_val(3);
 constexpr bool is_2d_fabric = get_compile_time_arg_val(4) != 0;
+// CT args 5-8 are sender-only (eager staging / pattern / status trid); keep indices aligned.
+constexpr bool kRandomizePayloadSizeAndDelay = get_compile_time_arg_val(9) != 0;
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -48,7 +50,7 @@ void kernel_main() {
     uint32_t expected_val = 0;
     bool match = true;
     uint64_t bytes_received = 0;
-    const uint32_t packet_payload_words = packet_payload_size_bytes / static_cast<uint32_t>(sizeof(uint32_t));
+    const uint32_t max_packet_payload_size_bytes = packet_payload_size_bytes;
     uint32_t receiver_slot_id = 0;
     uint32_t pending_credits = 0;
 
@@ -56,23 +58,28 @@ void kernel_main() {
 
     for (uint32_t packet_idx = 0; packet_idx < num_packets; ++packet_idx) {
         seed = prng_next(seed);
-        expected_val = seed + (packet_payload_size_bytes / 16) - 1;
+        uint32_t this_packet_payload_size_bytes = max_packet_payload_size_bytes;
+        if constexpr (kRandomizePayloadSizeAndDelay) {
+            this_packet_payload_size_bytes = derive_aligned_payload_size_bytes(seed, max_packet_payload_size_bytes);
+        }
+        expected_val = seed + (this_packet_payload_size_bytes / 16) - 1;
 
-        const uint32_t packet_offset_bytes = receiver_slot_id * packet_payload_size_bytes;
+        // Slots are always strided by the configured max payload size.
+        const uint32_t packet_offset_bytes = receiver_slot_id * max_packet_payload_size_bytes;
         auto poll_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            receiver_slots_base_address + packet_offset_bytes + packet_payload_size_bytes - sizeof(uint32_t));
+            receiver_slots_base_address + packet_offset_bytes + this_packet_payload_size_bytes - sizeof(uint32_t));
         while (*poll_addr != expected_val) {
             invalidate_l1_cache();
         }
 
         auto packet_start = reinterpret_cast<tt_l1_ptr uint32_t*>(receiver_slots_base_address + packet_offset_bytes);
         match = check_packet_data(
-            packet_start, packet_payload_size_bytes / 16, seed, mismatch_addr, mismatch_val, expected_val);
+            packet_start, this_packet_payload_size_bytes / 16, seed, mismatch_addr, mismatch_val, expected_val);
         if (!match) {
             break;
         }
 
-        bytes_received += packet_payload_words * sizeof(uint32_t);
+        bytes_received += this_packet_payload_size_bytes;
         receiver_slot_id += 1;
         if (receiver_slot_id == num_receiver_slots) {
             receiver_slot_id = 0;

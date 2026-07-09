@@ -21,6 +21,10 @@ constexpr bool kEagerStaging = get_compile_time_arg_val(5) != 0;
 constexpr bool kUseStatefulLane = get_compile_time_arg_val(6) != 0;
 constexpr uint32_t kTestPattern = get_compile_time_arg_val(7);
 constexpr uint8_t kStatusReadTrid = static_cast<uint8_t>(get_compile_time_arg_val(8));
+constexpr bool kRandomizePayloadSizeAndDelay = get_compile_time_arg_val(9) != 0;
+
+constexpr uint32_t kMaxInterPacketDelayCycles = 1000;
+constexpr uint32_t kDelaySeedXor = 0xA5A5A5A5u;
 
 enum class StagingTestPattern : uint32_t {
     BasicSend = 0,
@@ -39,6 +43,7 @@ struct SendContext {
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
     uint32_t packet_header_buffer_address;
     uint32_t payload_buffer_address;
+    uint32_t max_packet_payload_size_bytes;
     uint32_t packet_payload_size_bytes;
     uint8_t receiver_noc_x;
     uint8_t receiver_noc_y;
@@ -47,6 +52,7 @@ struct SendContext {
     uint8_t dst_device_id;
     uint16_t dst_mesh_id;
     uint32_t seed;
+    uint32_t delay_seed;
     tt_l1_ptr uint32_t* payload_start_ptr;
     volatile tt_l1_ptr uint32_t* granted_credits_ptr;
     uint32_t credits_consumed;
@@ -69,12 +75,23 @@ FORCE_INLINE void prepare_packet_header(
     ctx.packet_header->to_noc_unicast_write(dest_command_header, ctx.packet_payload_size_bytes);
 }
 
+FORCE_INLINE void apply_inter_packet_delay(SendContext& ctx) {
+    if constexpr (!kRandomizePayloadSizeAndDelay) {
+        return;
+    }
+    ctx.delay_seed = prng_next(ctx.delay_seed);
+    const uint32_t delay_cycles = 1 + (ctx.delay_seed % kMaxInterPacketDelayCycles);
+    for (volatile uint32_t delay = 0; delay < delay_cycles; ++delay) {
+    }
+}
+
 template <bool Stateful>
 FORCE_INLINE void send_one_packet(SendContext& ctx) {
+    // Receiver slots are always strided by the configured max payload size.
     const uint64_t dest_noc_addr = get_noc_addr(
         ctx.receiver_noc_x,
         ctx.receiver_noc_y,
-        ctx.receiver_slots_base_address + (ctx.receiver_slot_id * ctx.packet_payload_size_bytes));
+        ctx.receiver_slots_base_address + (ctx.receiver_slot_id * ctx.max_packet_payload_size_bytes));
     const auto dest_command_header = tt::tt_fabric::NocUnicastCommandHeader{dest_noc_addr};
     if constexpr (Stateful) {
         ctx.sender.wait_for_empty_write_slot();
@@ -116,6 +133,9 @@ FORCE_INLINE void send_packet_steady(SendContext& ctx) {
         invalidate_l1_cache();
     }
     ctx.seed = prng_next(ctx.seed);
+    if constexpr (kRandomizePayloadSizeAndDelay) {
+        ctx.packet_payload_size_bytes = derive_aligned_payload_size_bytes(ctx.seed, ctx.max_packet_payload_size_bytes);
+    }
     fill_packet_data(ctx.payload_start_ptr, ctx.packet_payload_size_bytes / 16, ctx.seed);
 
     // Receiver returns credits by monotonically incrementing granted_credits_ptr.
@@ -130,6 +150,7 @@ FORCE_INLINE void send_packet_steady(SendContext& ctx) {
         ctx.receiver_slot_id = 0;
     }
     noc_async_writes_flushed();
+    apply_inter_packet_delay(ctx);
 }
 
 void kernel_main() {
@@ -179,6 +200,7 @@ void kernel_main() {
         .packet_header = packet_header,
         .packet_header_buffer_address = packet_header_buffer_address,
         .payload_buffer_address = payload_buffer_address,
+        .max_packet_payload_size_bytes = packet_payload_size_bytes,
         .packet_payload_size_bytes = packet_payload_size_bytes,
         .receiver_noc_x = receiver_noc_x,
         .receiver_noc_y = receiver_noc_y,
@@ -187,6 +209,7 @@ void kernel_main() {
         .dst_device_id = dst_device_id,
         .dst_mesh_id = dst_mesh_id,
         .seed = seed,
+        .delay_seed = seed ^ kDelaySeedXor,
         .payload_start_ptr = payload_start_ptr,
         .granted_credits_ptr = granted_credits_ptr,
         .credits_consumed = credits_consumed,

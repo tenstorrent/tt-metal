@@ -85,6 +85,9 @@ struct TestCaseConfig {
     uint32_t stage_count = 0;
     uint32_t idle_cycles = 0;
     uint8_t status_read_trid = 0xFF;  // 0xFF = kInvalidStatusReadTrid (blocking fallback)
+    // When set: per-packet randomized payload size (shared PRNG with receiver) and
+    // sender-only random inter-packet delay. Host byte-count checks are skipped.
+    bool randomize_payload_size_and_delay = false;
 };
 
 struct SenderMemoryLayout {
@@ -595,6 +598,7 @@ std::vector<uint32_t> make_common_compile_args(
         test_case.use_stateful_lane ? 1u : 0u,
         static_cast<uint32_t>(test_case.test_pattern),
         static_cast<uint32_t>(test_case.status_read_trid),
+        test_case.randomize_payload_size_and_delay ? 1u : 0u,
     };
 }
 
@@ -823,12 +827,14 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
         EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS)
             << "Receiver channel " << static_cast<uint32_t>(context.assignment.sender_logical_channel_id) << " failed";
 
-        EXPECT_EQ(read_word_count(sender_status), expected_bytes)
-            << "Sender byte count mismatch for channel "
-            << static_cast<uint32_t>(context.assignment.sender_logical_channel_id);
-        EXPECT_EQ(read_word_count(receiver_status), expected_bytes)
-            << "Receiver byte count mismatch for channel "
-            << static_cast<uint32_t>(context.assignment.sender_logical_channel_id);
+        if (!test_case.randomize_payload_size_and_delay) {
+            EXPECT_EQ(read_word_count(sender_status), expected_bytes)
+                << "Sender byte count mismatch for channel "
+                << static_cast<uint32_t>(context.assignment.sender_logical_channel_id);
+            EXPECT_EQ(read_word_count(receiver_status), expected_bytes)
+                << "Receiver byte count mismatch for channel "
+                << static_cast<uint32_t>(context.assignment.sender_logical_channel_id);
+        }
     }
 }
 
@@ -844,7 +850,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 27> kTestCases = {{
+constexpr std::array<TestCaseConfig, 29> kTestCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -1065,6 +1071,22 @@ constexpr std::array<TestCaseConfig, 27> kTestCases = {{
         .num_senders = 64,
         .num_packets = kLongPacketCount,
         .num_buffers_per_channel = 4,
+    },
+    // High channel count stress with per-packet randomized size + sender-only delay.
+    // Stresses forwarder header-size freshness under slot reuse; host byte-count checks skipped.
+    TestCaseConfig{
+        .name = "Stress_48Senders_RandomSizeDelay",
+        .num_senders = 48,
+        .num_packets = kLongPacketCount,
+        .num_buffers_per_channel = 4,
+        .randomize_payload_size_and_delay = true,
+    },
+    TestCaseConfig{
+        .name = "Stress_64Senders_RandomSizeDelay",
+        .num_senders = 64,
+        .num_packets = kLongPacketCount,
+        .num_buffers_per_channel = 4,
+        .randomize_payload_size_and_delay = true,
     },
 }};
 

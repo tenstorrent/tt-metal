@@ -110,7 +110,6 @@ inline bool service_channels(
 
     for (uint32_t channel_idx = 0; channel_idx < ct_args::num_channels; ++channel_idx) {
         auto& channel = context.channels[channel_idx];
-        invalidate_l1_cache();
         if (!channel.has_pending_packets()) {
             continue;
         }
