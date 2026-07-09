@@ -23,6 +23,30 @@
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
+# ─── seamless-m4t-v2-large ────────────────────────────────────────────────────
+
+- name: seamless-m4t-v2-large demo perf sweep (P150 1x1)
+  cmd: |
+    set -e
+    export MESH_DEVICE=P150
+    python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 360
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large demo perf sweep (BH-QB 1x4)
+  cmd: |
+    set -e
+    export MESH_DEVICE=BH-QB
+    python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
+  skus:
+    bh_quietbox_2:
+      timeout: 360
+  team: models
+  model-name: seamless-m4t-v2-large
+
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
 
 - name: mistral-small-3.1-24b e2e tests

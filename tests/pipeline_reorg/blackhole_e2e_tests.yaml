@@ -16,6 +16,35 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
+# --- seamless-m4t-v2-large ---
+- id: bh-p150-seamless-m4t-v2-e2e-sweep
+  name: seamless-m4t-v2-large e2e sweep (P150 1x1)
+  model-name: seamless-m4t-v2-large
+  cmd: |
+    set -e
+    export MESH_DEVICE=P150
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k sweep -v
+  skus:
+    bh_p150b_civ2:
+      timeout: 480
+  team: models
+
+- id: bh-qb-seamless-m4t-v2-e2e-sweep
+  name: seamless-m4t-v2-large e2e sweep (BH-QB 1x4)
+  model-name: seamless-m4t-v2-large
+  cmd: |
+    set -e
+    export MESH_DEVICE=BH-QB
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k sweep -v
+  skus:
+    bh_quietbox_2:
+      timeout: 720
+  team: models
+
 # --- e2e ---
 - id: bh-grid-110-cores-panoptic-deeplab-demo
   name: 110 cores panoptic-deeplab demo

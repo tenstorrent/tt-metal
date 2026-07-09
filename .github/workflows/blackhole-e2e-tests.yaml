@@ -30,6 +30,7 @@ on:
         options:
           - all
           - deepseek_prefill
+          - seamless-m4t-v2-large
       test-selection:
         description: 'Select e2e tests to run: all tests, or one test id'
         required: false
@@ -37,6 +38,8 @@ on:
         type: choice
         options:
           - all
+          - bh-p150-seamless-m4t-v2-e2e-sweep
+          - bh-qb-seamless-m4t-v2-e2e-sweep
       build-type:
         required: false
         type: choice
