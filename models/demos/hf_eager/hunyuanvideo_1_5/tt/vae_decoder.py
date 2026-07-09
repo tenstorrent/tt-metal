@@ -341,3 +341,38 @@ class HunyuanVideo15Decoder:
         h = self.norm_out(h)
         h = silu(h)
         return self.conv_out(h)
+
+
+class TTVAEDecodeAdapter:
+    """Drop-in replacement for a diffusers VAE whose .decode() runs on device.
+
+    Everything except decode() delegates to the real vae (config, scaling_factor,
+    compression ratios, dtype). Swap into a pipeline like the TTTransformer wrapper:
+        pipe.vae = TTVAEDecodeAdapter(pipe.vae, mesh_device)
+    Runs replicated across a multi-device mesh (result taken from device 0).
+    """
+
+    def __init__(self, real_vae, device, *, dtype=ttnn.bfloat16):
+        self.__dict__["_real"] = real_vae
+        self.__dict__["_device"] = device
+        self.__dict__["_dtype_tt"] = dtype
+        self.__dict__["_dec"] = HunyuanVideo15Decoder(real_vae.decoder, device=device, dtype=dtype)
+
+    def __getattr__(self, k):
+        return getattr(self.__dict__["_real"], k)
+
+    def decode(self, z, return_dict=True):
+        from diffusers.models.autoencoders.vae import DecoderOutput
+
+        dev = self.__dict__["_device"]
+        mm = ttnn.ReplicateTensorToMesh(dev) if dev.get_num_devices() > 1 else None
+        z_bthwc = ttnn.from_torch(
+            z.permute(0, 2, 3, 4, 1).contiguous().float(),
+            dtype=self.__dict__["_dtype_tt"],
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=dev,
+            mesh_mapper=mm,
+        )
+        out = self.__dict__["_dec"](z_bthwc)
+        v = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().permute(0, 4, 1, 2, 3).to(z.dtype)
+        return DecoderOutput(sample=v) if return_dict else (v,)

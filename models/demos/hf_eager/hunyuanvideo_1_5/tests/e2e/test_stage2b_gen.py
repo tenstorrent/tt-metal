@@ -190,6 +190,15 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
 
     pipe.transformer = TTTransformer(real_tf, tt, getattr(pipe, "guider", None), use_trace=use_trace)
 
+    # Optional: run VAE decode on device too (HY_TT_VAE=1). Replaces the CPU
+    # AutoencoderKLHunyuanVideo15.decode with the ttnn port, replicated across the
+    # mesh. See tt/vae_decoder.py.
+    if os.environ.get("HY_TT_VAE", "0") == "1":
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt.vae_decoder import TTVAEDecodeAdapter
+
+        pipe.vae = TTVAEDecodeAdapter(pipe.vae, device)
+        print(f"[{label}] VAE decode: ON DEVICE (ttnn)", flush=True)
+
     out = pipe(
         prompt="A cat walks on the grass, realistic",
         height=height,
