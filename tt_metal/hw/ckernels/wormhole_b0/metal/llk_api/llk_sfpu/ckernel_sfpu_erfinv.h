@@ -38,11 +38,11 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     // Newton step in the sqrt (~1.7e-3) is well within the algorithm's own error
     // budget; the second NR step was redundant here (2->1 iterations).
     sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
-    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 1>(calculated_value);
+    sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 2>(calculated_value);
     calculated_value = tmp + intermediate_result;
 
     // result = sqrt(calculated_value)
-    sfpi::vFloat result = sfpu_sqrt_custom<false, 1>(calculated_value);
+    sfpi::vFloat result = sfpu_sqrt_custom<false, 2>(calculated_value);
 
     return result;
 }
