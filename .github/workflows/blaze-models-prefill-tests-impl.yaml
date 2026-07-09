@@ -1,4 +1,4 @@
-name: "[internal] Blaze Models Prefill impl"
+name: "[internal] Blaze Models Prefill tests impl"
 
 on:
   workflow_call:

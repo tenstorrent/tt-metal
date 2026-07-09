@@ -1,4 +1,4 @@
-name: "Blaze Models Prefill"
+name: "Blaze Models Prefill tests"
 
 on:
   workflow_dispatch:
@@ -94,7 +94,7 @@ jobs:
     # Skip when only the perf checks were requested (they run in the focused job below).
     if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
     secrets: inherit
-    uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
+    uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -109,7 +109,7 @@ jobs:
     # Runs for the default "all" and when the sdpa_perf group is selected (alone or with others).
     if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
     secrets: inherit
-    uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
+    uses: ./.github/workflows/blaze-models-prefill-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
