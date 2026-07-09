@@ -47,6 +47,7 @@ from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWra
 from models.tt_dit.pipelines.cfg import create_submeshes
 from models.tt_dit.solvers import EulerSolver
 from models.tt_dit.utils import tensor as tt_tensor
+from models.tt_dit.utils.tracing import Tracer
 
 if TYPE_CHECKING:
     from PIL import Image
@@ -144,6 +145,16 @@ class BriaFiboPipeline:
         self._num_blocks = checkpoint._config.num_layers + checkpoint._config.num_single_layers
         ttnn.synchronize_device(self._submesh)
 
+        # Denoise trace: one Tracer per CFG branch (cond/uncond run at different, unpadded prompt
+        # token lengths, so each needs its own captured shape). prep_run=True compiles all programs
+        # at the real prompt shape before begin_trace_capture (variable-shape compile-before-capture
+        # safety). See docs/superpowers/specs/2026-07-09-fibo-denoise-trace-design.md.
+        self._tracers = {
+            name: Tracer(self._traced_step, device=self._submesh, prep_run=True, clone_prep_inputs=True)
+            for name in ("cond", "uncond")
+        }
+        self._captured_lengths: dict[str, int | None] = {"cond": None, "uncond": None}
+
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
         self._solver = EulerSolver()
 
@@ -187,6 +198,7 @@ class BriaFiboPipeline:
         latents: torch.Tensor | None = None,
         output_type: str = "pil",
         force_device_decode: bool = False,
+        traced: bool = False,
     ) -> list[Image.Image] | torch.Tensor:
         height = height if height is not None else self._height
         width = width if width is not None else self._width
@@ -210,7 +222,9 @@ class BriaFiboPipeline:
         )
 
         # 4. Denoise loop (CFG per step).
-        latent = self._denoise(cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length, guidance_scale)
+        latent = self._denoise(
+            cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length, guidance_scale, traced=traced
+        )
 
         # 5. Return the pre-VAE latent (PCC gate) or decode to an image.
         if output_type == "latent":
@@ -290,6 +304,8 @@ class BriaFiboPipeline:
         latent: ttnn.Tensor,
         spatial_sequence_length: int,
         guidance_scale: float,
+        *,
+        traced: bool = False,
     ) -> ttnn.Tensor:
         """Denoise loop, one Euler step per timestep. Syncs per step.
 
@@ -297,9 +313,18 @@ class BriaFiboPipeline:
         ``noise = uncond + guidance_scale * (cond - uncond)``. Without CFG (``guidance_scale <= 1`` ->
         ``uncond_branch is None``): a single cond forward per step (``noise = cond``), skipping the dead
         uncond forward + lerp.
+
+        When ``traced`` is set, the transformer forward is captured/replayed via ``_denoise_traced``
+        (the untraced body below is left byte-for-byte unchanged so it keeps backing the PCC gates).
         """
-        logger.info("denoising...")
         submesh = self._submesh
+
+        if traced:
+            return self._denoise_traced(
+                cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length, guidance_scale
+            )
+
+        logger.info("denoising...")
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             timestep = tt_tensor.from_torch(
                 torch.full((1, 1), float(t), dtype=torch.bfloat16), device=submesh, dtype=ttnn.bfloat16
@@ -322,6 +347,65 @@ class BriaFiboPipeline:
             latent = new_latent
 
             ttnn.synchronize_device(submesh)
+        return latent
+
+    def _denoise_traced(
+        self,
+        cond_branch: dict,
+        uncond_branch: dict | None,
+        timesteps,
+        latent: ttnn.Tensor,
+        spatial_sequence_length: int,
+        guidance_scale: float,
+    ) -> ttnn.Tensor:
+        """Traced denoise loop (mirrors pipeline_flux1.py:315-359).
+
+        Captures each branch's transformer forward on step 0 and replays it on later steps. The
+        constant conditioning (prompt/layers/ropes) is passed as the real tensor only on step 0 and as
+        the captured buffer (``tracer.inputs[...]``) thereafter, so it is not re-uploaded. The changing
+        ``latent`` is passed every step. CFG ``lerp`` and the Euler ``solver.step`` (per-step scalar)
+        stay untraced. One sync at the end (not per step) so the steps pipeline.
+        """
+        logger.info("denoising (traced)...")
+        submesh = self._submesh
+        branches = [("cond", cond_branch)]
+        if uncond_branch is not None:
+            branches.append(("uncond", uncond_branch))
+        self._ensure_traces(branches)
+
+        for i, t in enumerate(tqdm.tqdm(timesteps)):
+            timestep = tt_tensor.from_torch(
+                torch.full((1, 1), float(t), dtype=torch.bfloat16), device=submesh, dtype=ttnn.bfloat16
+            )
+            velocities: dict[str, ttnn.Tensor] = {}
+            for name, branch in branches:
+                tracer = self._tracers[name]
+                inp = tracer.inputs  # captured buffers, populated after step 0
+                velocities[name] = tracer(
+                    latent=latent,
+                    prompt=branch["prompt"] if i == 0 else inp["prompt"],
+                    timestep=timestep,
+                    layers=branch["layers"] if i == 0 else inp["layers"],
+                    spatial_rope=branch["spatial_rope"] if i == 0 else inp["spatial_rope"],
+                    prompt_rope=branch["prompt_rope"] if i == 0 else inp["prompt_rope"],
+                    spatial_sequence_length=spatial_sequence_length,
+                    prompt_sequence_length=branch["prompt_sequence_length"],
+                    traced=True,
+                    tracer_blocking_execution=False,
+                )
+
+            # Trace replay can clobber the tensor object passed as `latent`; the captured input buffer
+            # is the safe handle for the solver step (both branches copied the same value into it).
+            latent = self._tracers["cond"].inputs["latent"]
+
+            if uncond_branch is not None:
+                velocity = ttnn.lerp(velocities["uncond"], velocities["cond"], guidance_scale)
+            else:
+                velocity = velocities["cond"]
+
+            latent = self._solver.step(step=i, latent=latent, velocity_pred=velocity)
+
+        ttnn.synchronize_device(submesh)
         return latent
 
     def _prepare_branch(
@@ -377,6 +461,57 @@ class BriaFiboPipeline:
             spatial_sequence_length=spatial_sequence_length,
             prompt_sequence_length=branch["prompt_sequence_length"],
         )
+
+    def _traced_step(
+        self,
+        *,
+        latent: ttnn.Tensor,
+        prompt: ttnn.Tensor,
+        timestep: ttnn.Tensor,
+        layers,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length: int,
+        prompt_sequence_length: int,
+    ) -> ttnn.Tensor:
+        """The unit captured by the Tracer: one branch's transformer forward (velocity prediction).
+
+        All args are Tracer-valid (tensors, a list of tensors, tuples of tensors, int scalars). The
+        two seq-length scalars are constant for a fixed prompt+resolution, satisfying the tracer's
+        scalar-equality check on replay.
+        """
+        return self._transformer.forward(
+            spatial=latent,
+            prompt=prompt,
+            timestep=timestep,
+            text_encoder_layers=layers,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+            prompt_sequence_length=prompt_sequence_length,
+        )
+
+    def _ensure_traces(self, branches: list[tuple[str, dict]]) -> None:
+        """Release + rebuild a branch's tracer when its prompt token length changed since capture.
+
+        A trace bakes tensor shapes, so it is only reusable while ``prompt_sequence_length`` is fixed
+        (``spatial_sequence_length`` is fixed by resolution). Same prompt across runs -> reuse; a new
+        prompt -> recapture (amortized over that generation's steps).
+        """
+        for name, branch in branches:
+            length = branch["prompt_sequence_length"]
+            if self._captured_lengths[name] is not None and self._captured_lengths[name] != length:
+                self._tracers[name].release_trace()
+                self._tracers[name] = Tracer(
+                    self._traced_step, device=self._submesh, prep_run=True, clone_prep_inputs=True
+                )
+            self._captured_lengths[name] = length
+
+    def release_traces(self) -> None:
+        """Release both branch traces (call at teardown; mirrors pipeline_wan.py's release_traces)."""
+        for name, tracer in self._tracers.items():
+            tracer.release_trace()
+            self._captured_lengths[name] = None
 
     def _random_latents(
         self, *, height: int, width: int, seed: int, latents: torch.Tensor | None = None
