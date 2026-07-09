@@ -56,7 +56,6 @@ void py_module(nb::module_& mod) {
 
     bind_sdpa(mod);
     bind_sdpa_decode(mod);
-    bind_sdpa_windowed(mod);
     bind_gated_delta_attn_seq(mod);
 }
 

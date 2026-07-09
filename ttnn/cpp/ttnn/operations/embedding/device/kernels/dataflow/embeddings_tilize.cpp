@@ -54,9 +54,13 @@ void kernel_main() {
     uint32_t curr_row = input_start_id;
     uint32_t offset = input_start_offset;
     for (uint32_t i = 0; i < num_blocks; ++i) {
-        uint64_t noc_input_src_addr = input.get_noc_addr(curr_row) + offset;
-        noc_async_read<input_block_size_bytes>(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
-        noc_async_read_barrier();
+        noc.async_read<NocOptions::DEFAULT, input_block_size_bytes>(
+            input,
+            CoreLocalMem<uint32_t>(input_l1_addr),
+            input_block_size_bytes,
+            {.page_id = curr_row, .offset_bytes = offset},
+            {});
+        noc.async_read_barrier();
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
             const bool is_last = (chunk + 1 == num_chunks);

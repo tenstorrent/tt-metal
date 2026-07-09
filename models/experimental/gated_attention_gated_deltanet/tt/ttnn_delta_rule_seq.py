@@ -39,21 +39,13 @@ def _ck(name, t):
         print(f"  [dbg] {name}: <err {e}>", flush=True)
 
 
-# Mask helpers are shared with the existing (bf16) chunk path. Import from whichever
-# namespace this module is loaded under (`tt.` via the experimental sys.path shim, or
-# the fully-qualified package path).
-try:
-    from tt.ttnn_delta_rule_ops import (
-        _create_triu_ones_ttnn as _create_triu_ones,
-        _create_tril_ones_ttnn as _create_tril_ones,
-        l2_norm_ttnn,
-    )
-except ImportError:  # pragma: no cover
-    from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-        _create_triu_ones_ttnn as _create_triu_ones,
-        _create_tril_ones_ttnn as _create_tril_ones,
-        l2_norm_ttnn,
-    )
+# Mask helpers are shared with the existing (bf16) chunk path. Relative import resolves
+# whether this package is reached via its fully-qualified path or as a top-level `tt`.
+from .ttnn_delta_rule_ops import (
+    _create_triu_ones_ttnn as _create_triu_ones,
+    _create_tril_ones_ttnn as _create_tril_ones,
+    l2_norm_ttnn,
+)
 
 _TILE = 32
 
@@ -206,7 +198,7 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    mc = ttnn.DRAM_MEMORY_CONFIG
+    mc = ttnn.L1_MEMORY_CONFIG
 
     C = L.shape[1]
     batch = L.shape[0]
