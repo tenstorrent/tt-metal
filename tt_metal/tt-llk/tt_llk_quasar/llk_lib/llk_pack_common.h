@@ -128,6 +128,8 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
 
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK_MODE_RMW, ckernel::pack::EDGE_MASK_MODE_ZERO);
 
+    // This register specifies which datums will not have the mask applied
+    // The register is 16 bits, each bit corresponds to a datum in the 1x16 row in dest
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_ALL);
     // TODO: (RT) Clean this up using pack edge struct to match addresses
     //  Make it unified
@@ -135,6 +137,8 @@ inline void _llk_pack_reduce_mask_config_(const TensorShape& tensor_shape)
     {
         cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK1_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_EXCEPT_0);
 
+        // The registers below are 32 bits each, each 2 bits correspond to a row in a face
+        // each 2 bits specify the mask that will be applied (there are 4 masks possible)
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
         cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_1);
@@ -184,6 +188,7 @@ inline void _llk_pack_reduce_mask_clear_()
     // Edge mask mode is disabled
     cfg_rmw(THCON_PACKER0_REG1_EDGE_MASK0_RMW, ckernel::pack::EDGE_MASK_ROW_DATUMS_NONE);
 
+    // All packer faces are set to point to Mask0, which preserves all datums
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE0_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE1_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
     cfg_rmw(THCON_PACKER0_REG2_EDGE_MASK_SELECT_FACE2_RMW, ckernel::pack::EDGE_MASK_FACE_ALL_ROWS_MASK_0);
