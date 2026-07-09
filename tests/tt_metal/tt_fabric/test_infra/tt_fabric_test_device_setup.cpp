@@ -416,12 +416,25 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
                                (config.parameters.is_2D_routing_enabled) &&
                                (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST);
 
-    if (config.hops.has_value() && !is_torus_2d_unicast) {
+    // Skip-link (BH galaxy sub-torus) 2D unicast: on a mesh with intra-mesh Z skip links, the routing
+    // table can take a shorter wrap/skip route whose first-hop direction disagrees with the
+    // displacement-based hop map. The hop map is an unordered direction->count derived purely from
+    // coordinate displacement, so it cannot see skip/wrap links and can pick the opposite cardinal
+    // (e.g. displacement South for D4->D24 while the table routes D4 -N-> D0 -Z(D0<->D28)-> D28 -N-> D24)
+    // or a cardinal where the route buffer actually starts with FORWARD_Z. Injecting on that channel
+    // while the device route buffer expects the control-plane direction strands every packet. As with
+    // the is_torus_2d_unicast bypass, use the node-ID (control-plane) direction, which matches the route
+    // buffer. This is a topology-level skip: it applies to the whole run on skip-link meshes.
+    const bool is_skip_link_2d_unicast = config.parameters.is_2D_routing_enabled &&
+                                         (config.parameters.chip_send_type == ChipSendType::CHIP_UNICAST) &&
+                                         this->test_device_ptr_->has_intra_mesh_skip_links();
+
+    if (config.hops.has_value() && !is_torus_2d_unicast && !is_skip_link_2d_unicast) {
         // Use hops to determine direction (for static routing with explicit hops)
         // However, NeighborExchange topology does not support multi-hop.
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
     } else {
-        // Derive direction from src->dst node IDs
+        // Derive direction from src->dst node IDs (control-plane route, matches the device route buffer)
         outgoing_direction =
             this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id);
     }
@@ -1168,6 +1181,11 @@ RoutingDirection TestDevice::get_forwarding_direction(
 RoutingDirection TestDevice::get_forwarding_direction(
     const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const {
     return this->route_manager_->get_forwarding_direction(src_node_id, dst_node_id);
+}
+
+bool TestDevice::has_intra_mesh_skip_links() const {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_fabric_context().has_any_intra_mesh_z_router(control_plane);
 }
 
 std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const {

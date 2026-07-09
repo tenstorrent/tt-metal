@@ -68,6 +68,16 @@ RouterConnectionMapping RouterConnectionMapping::for_mesh_router(
     if (topology == Topology::Linear || topology == Topology::Ring) {
         // 1D topology: Only channel 1 connects to opposite direction peer
         // Ring is also 1D but with wrap-around (handled by FabricBuilder connection logic)
+        //
+        // Intra-mesh Z (skip-link) routers are not supported under 1D (Linear/Ring) routing yet: a Z
+        // endpoint has no single "opposite" direction and the 1D connection layout has no slot for a
+        // skip-link peer. Fail clearly here rather than hitting get_opposite_direction()'s default-case
+        // TT_FATAL ("Invalid routing direction for opposite calculation: 4"), which is opaque.
+        TT_FATAL(
+            direction != RoutingDirection::Z,
+            "Intra-mesh Z (skip-link) routers are unsupported for 1D (Linear/Ring) topology. Skip links require "
+            "2D (Mesh/Torus) routing; run this skip-link mesh graph descriptor under a Mesh/Torus topology, or "
+            "drop the skip_links for 1D runs.");
         RoutingDirection opposite = get_opposite_direction(direction);
         mapping.add_target(
             0,  // VC0

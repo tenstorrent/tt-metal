@@ -35,6 +35,10 @@ constexpr uint32_t to_sender_0_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_AC
 constexpr uint32_t to_sender_1_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_2_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_3_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_3_PKTS_ACKED_ID");
+// First-level-ack stream for the 5th VC0 sender channel (intra-mesh Z skip-link forwarding). 0 on any
+// router that does not have a 5-wide VC0 (index 4 is then the first VC1 sender, which has no first-level
+// ack). Host aliases it onto an otherwise-idle stream register for intra-mesh-Z MESH routers.
+constexpr uint32_t to_sender_4_pkts_acked_id = NAMED_CT_ARG("TO_SENDER_4_PKTS_ACKED_ID");
 constexpr uint32_t to_sender_0_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_0_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_1_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_1_PKTS_COMPLETED_ID");
 constexpr uint32_t to_sender_2_pkts_completed_id = NAMED_CT_ARG("TO_SENDER_2_PKTS_COMPLETED_ID");
@@ -566,8 +570,9 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
                                                       to_sender_1_pkts_acked_id,
                                                       to_sender_2_pkts_acked_id,
                                                       to_sender_3_pkts_acked_id,
-                                                      // VC1 (no first level acks)
-                                                      0,
+                                                      // VC0 5th sender (intra-mesh Z) when 5-wide, else VC1
+                                                      // sender 0 (0 == no first level ack)
+                                                      to_sender_4_pkts_acked_id,
                                                       0,
                                                       0,
                                                       0,
