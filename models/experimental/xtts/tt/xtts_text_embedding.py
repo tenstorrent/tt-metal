@@ -48,5 +48,10 @@ class TtXttsTextEmbedding(LightweightModule):
         pos_tt = ttnn.reshape(pos_tt, (1, seq))  # [seq] -> [1, seq]; broadcasts over batch on add
 
         tok = ttnn.to_layout(ttnn.embedding(ids_tt, self.text_emb_weight), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(ids_tt)
         pos = ttnn.to_layout(ttnn.embedding(pos_tt, self.text_pos_weight), ttnn.TILE_LAYOUT)
-        return ttnn.add(tok, pos)
+        ttnn.deallocate(pos_tt)
+        emb = ttnn.add(tok, pos)
+        ttnn.deallocate(tok)
+        ttnn.deallocate(pos)
+        return emb

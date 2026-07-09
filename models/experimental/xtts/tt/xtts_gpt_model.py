@@ -78,8 +78,13 @@ class TtXttsGptModel(LightweightModule):
         pos_tt = ttnn.reshape(pos_tt, (1, seq))  # [seq] -> [1, seq]; broadcasts over batch on add
 
         tok = ttnn.to_layout(ttnn.embedding(ids_tt, tok_weight), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(ids_tt)
         pos = ttnn.to_layout(ttnn.embedding(pos_tt, pos_weight), ttnn.TILE_LAYOUT)
-        return ttnn.add(tok, pos)
+        ttnn.deallocate(pos_tt)
+        emb = ttnn.add(tok, pos)
+        ttnn.deallocate(tok)
+        ttnn.deallocate(pos)
+        return emb
 
     def forward(self, text_ids, mel_ids, cond_latents=None):
         """text_ids / mel_ids are torch int tensors ``[batch, seq]``.
@@ -100,17 +105,25 @@ class TtXttsGptModel(LightweightModule):
             offset = cond_latents.shape[1]
 
         emb = ttnn.concat(parts, dim=1)  # [b, (n_cond +) text_len + mel_len, hidden]
-        enc = self.stack(emb)
+        ttnn.deallocate(text_emb)  # copied into emb; cond_latents is the caller's, left alone
+        ttnn.deallocate(mel_emb)
+        enc = self.stack(emb)  # frees emb internally
         if offset:
-            enc = ttnn.slice(enc, [0, offset, 0], [enc.shape[0], enc.shape[1], HIDDEN_SIZE])  # strip prompt
-        enc = ttnn.layer_norm(enc, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS)
+            enc_stripped = ttnn.slice(enc, [0, offset, 0], [enc.shape[0], enc.shape[1], HIDDEN_SIZE])  # strip prompt
+            ttnn.deallocate(enc)
+            enc = enc_stripped
+        enc_n = ttnn.layer_norm(enc, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS)
+        ttnn.deallocate(enc)
 
-        b = enc.shape[0]
-        text_part = ttnn.slice(enc, [0, 0, 0], [b, text_len, HIDDEN_SIZE])
-        mel_part = ttnn.slice(enc, [0, text_len, 0], [b, text_len + mel_len, HIDDEN_SIZE])
+        b = enc_n.shape[0]
+        text_part = ttnn.slice(enc_n, [0, 0, 0], [b, text_len, HIDDEN_SIZE])
+        mel_part = ttnn.slice(enc_n, [0, text_len, 0], [b, text_len + mel_len, HIDDEN_SIZE])
+        ttnn.deallocate(enc_n)
 
         text_logits = ttnn.linear(text_part, self.text_head_weight, bias=self.text_head_bias)
+        ttnn.deallocate(text_part)
         mel_logits = ttnn.linear(mel_part, self.mel_head_weight, bias=self.mel_head_bias)
+        ttnn.deallocate(mel_part)
         return text_logits, mel_logits
 
     # ------------------------------------------------------------------ #
@@ -126,7 +139,9 @@ class TtXttsGptModel(LightweightModule):
         No logits are produced here — see the note above."""
         text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
         prefix = ttnn.concat([cond_latents, text_emb], dim=1)  # [b, n_cond + text_len, hidden]
-        _, kv = self.stack.forward_prefill(prefix)
+        ttnn.deallocate(text_emb)  # copied into prefix; cond_latents is the caller's
+        prompt_ln, kv = self.stack.forward_prefill(prefix)  # frees prefix internally
+        ttnn.deallocate(prompt_ln)  # prompt-position outputs are unused (only the cache is kept)
         return kv
 
     def decode(self, token_id, mel_pos, kv):
@@ -141,12 +156,17 @@ class TtXttsGptModel(LightweightModule):
         ids_tt = ttnn.from_torch(ids, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32)
         pos_tt = ttnn.from_torch(pos, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32)
         tok = ttnn.to_layout(ttnn.embedding(ids_tt, self.mel_emb_weight), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(ids_tt)
         posn = ttnn.to_layout(ttnn.embedding(pos_tt, self.mel_pos_weight), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(pos_tt)
         x = ttnn.add(tok, posn)  # [b, 1, hidden]
+        ttnn.deallocate(tok)
+        ttnn.deallocate(posn)
 
-        hidden, kv = self.stack.forward_decode(x, kv)
+        hidden, kv = self.stack.forward_decode(x, kv)  # frees x internally
         latent = ttnn.layer_norm(
             hidden, weight=self.final_norm_weight, bias=self.final_norm_bias, epsilon=LAYER_NORM_EPS
         )
+        ttnn.deallocate(hidden)
         logits = ttnn.linear(latent, self.mel_head_weight, bias=self.mel_head_bias)
         return logits, latent, kv
