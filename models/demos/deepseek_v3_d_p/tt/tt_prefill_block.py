@@ -407,6 +407,8 @@ class TtPrefillBlock(LightweightModule):
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int], None]] = None,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
@@ -422,8 +424,12 @@ class TtPrefillBlock(LightweightModule):
             return_intermediates: if True, forward to TtMoe so it runs its
                 intermediates-gated checks (per-chip dispatch buffer overflow,
                 region-offset bounds). Has no effect on dense layers.
-            on_layer_complete: optional per-layer migration ack. In chunked prefill, after MLA writes
-                the chunk this block zeros the pad window past actual_end, flushes, then fires this.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                this layer's KV cache has been populated on device. In chunked prefill, after MLA writes
+                the chunk this block zeros the pad window past actual_end, then enqueues the ack via the
+                outbound_socket_service_sync device op on the same CQ — no host sync.
+            record_dev: the chunk's PrefillMetadata device tensor sent as the ack record; required when
+                d2h_service is set.
             actual_start: chunked-prefill absolute KV pos of this chunk's first real token (the cache
                 write offset = cumulative valid-KV count before it; None for single-shot). Selects
                 MLA's chunked path; requires the block to have been built with is_chunked=True.
@@ -459,13 +465,20 @@ class TtPrefillBlock(LightweightModule):
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
         # 32-row tiles, leaving stale data between the last real token (actual_end) and the next
-        # 128-boundary; zero that pad window so the decode side reads clean zeros. The synchronize
-        # flushes the (async) zero to device before on_layer_complete hands this layer's KV to the
-        # migration worker, which reads the cache over NoC out-of-band from the ttnn command queue —
-        # without the flush it could copy pre-zero data. layer_idx is GLOBAL (the scheduler orders acks
-        # across pipeline ranks); cache_layer_idx is the LOCAL per-rank cache slot.
-        if on_layer_complete is not None:
-            assert actual_end is not None, "actual_end required when on_layer_complete is set"
+        # 128-boundary; zero that pad window so the decode side reads clean zeros. The metadata send is
+        # enqueued on the same CQ right after the zero, so the record only reaches the host after the
+        # zero has executed on device — the ack (driven by record arrival) implies zero-complete with no
+        # host sync. cache_layer_idx is the LOCAL per-rank cache slot.
+        # Two mutually-exclusive layer-ack transports (at most one is set per run): the D2H-service path
+        # (d2h_service/record_dev) enqueues the ack via the outbound_socket_service_sync device op on the
+        # same CQ right after the zero — the record only reaches the host after the zero has executed, so
+        # the ack implies zero-complete with NO host sync. The callback path (on_layer_complete) instead
+        # flushes the (async) zero with synchronize_device before handing this layer's KV to the migration
+        # worker (which reads the cache over NoC out-of-band from the ttnn command queue). Either way the
+        # pad window past actual_end is zeroed once. cache_layer_idx is the LOCAL per-rank cache slot;
+        # on_layer_complete receives the GLOBAL layer_idx (the scheduler orders acks across pipeline ranks).
+        if on_layer_complete is not None or d2h_service is not None:
+            assert actual_end is not None, "actual_end required when a layer-ack signal is set"
             ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
                 kvpe_cache,
                 cache_user_id,
@@ -475,8 +488,12 @@ class TtPrefillBlock(LightweightModule):
                 seq_len_local * self.mla.sp_factor,
                 self.mla.sp_axis,
             )
-            ttnn.synchronize_device(self.mesh_device)
-            on_layer_complete(self.mla.layer_idx)
+            if d2h_service is not None:
+                assert record_dev is not None, "record_dev required when d2h_service is set"
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
+            if on_layer_complete is not None:
+                ttnn.synchronize_device(self.mesh_device)
+                on_layer_complete(self.mla.layer_idx)
 
         if self.kv_only:
             # KV cache filled (by MLA), migration callback fired. The block

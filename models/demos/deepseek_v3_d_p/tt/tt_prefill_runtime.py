@@ -227,6 +227,8 @@ class TtPrefillRuntime:
         actual_start: int,
         actual_end: int,
         request_id: int = 0,
+        d2h_service=None,
+        record_dev: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_cache`.
 
@@ -242,7 +244,8 @@ class TtPrefillRuntime:
         may be pad, so actual_end < actual_start + chunk_size). actual_end is the migration pad-zero
         boundary, passed straight through to MLA. The caller drives chunked prefill by
         calling this once per chunk, in order; a chunk's KV must be populated before the next reads
-        it. If a LayerAck channel is registered (set_layer_ack_channel), the model bumps it per layer.
+        it. If d2h_service + record_dev are passed, the model sends one per-layer ack completion signal back
+        to host (via the outbound_socket_service_sync device op) once each layer's KV cache is populated.
 
         Always returns None: no token is sampled. (When `kv_only_last_layer` is set on the config the
         last layer's compute is stripped down to the KV cache fill, which migration consumes, and the
@@ -257,6 +260,12 @@ class TtPrefillRuntime:
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
+            d2h_service: optional service used to send a layer-ack completion signal back to host once
+                each layer's KV cache has been populated on device. When set, each block zeros the cache
+                pad window and enqueues the ack via the outbound_socket_service_sync device op on the same
+                CQ (no host sync). When None, no ack or zeroing.
+            record_dev: the chunk's PrefillMetadata device tensor sent as each ack record; required when
+                d2h_service is set.
         """
         # Not gated on self.compiled: compile() warms up by calling prefill_chunk() once before
         # marking the runtime compiled. The model must exist, though.
@@ -287,6 +296,8 @@ class TtPrefillRuntime:
             kv_cache,
             actual_isl=actual_end - actual_start,
             on_layer_complete=on_layer_complete,
+            d2h_service=d2h_service,
+            record_dev=record_dev,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,

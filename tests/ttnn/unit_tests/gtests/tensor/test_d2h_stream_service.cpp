@@ -3,11 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <numeric>
 #include <optional>
+#include <string>
+#include <thread>
 #include <vector>
+
+#include <unistd.h>
 
 #include "gtest/gtest.h"
 
@@ -29,6 +35,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync.hpp"
+#include "ttnn/services/layer_ack_service.hpp"
+#include <internal/service/inter_process_counter_channel.hpp>
 
 namespace ttnn::distributed::test {
 namespace {
@@ -473,6 +481,87 @@ void run_d2h_metadata_only_case(
     }
 }
 
+// Drives `num_records` metadata-only sends with NO synchronize between them and asserts
+// the LayerAckService reader thread injected exactly one ack per record onto the counter
+// channel — then that stop() joins the reader promptly even though no final record arrives
+// to unblock it (bounded teardown). The full round-trip: device op -> D2H socket ->
+// read_metadata() -> inject(1) -> connector observes the count.
+void run_layer_ack_service_case(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    const tt::tt_metal::CoreRange& worker_cores,  // single core -> num_workers == 1
+    uint32_t metadata_size_bytes,
+    uint32_t fifo_size_bytes,
+    uint32_t num_records) {
+    TT_FATAL(metadata_size_bytes % sizeof(uint32_t) == 0, "metadata must be uint32-aligned");
+
+    // Metadata-only service (mirrors run_d2h_metadata_only_case).
+    tt::tt_metal::D2HStreamService::Config cfg{
+        .global_spec = std::nullopt,
+        .fifo_size_bytes = fifo_size_bytes,
+        .worker_cores = worker_cores,
+        .metadata_size_bytes = metadata_size_bytes,
+    };
+    tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
+
+    // Unique shm name per invocation: the owner ctor uses O_CREAT|O_EXCL and throws on a
+    // stale segment, so a fixed name would collide across the sweep's cases and reruns.
+    static std::atomic<uint32_t> seq{0};
+    const std::string shm = "/tt_test_layer_ack_" + std::to_string(::getpid()) + "_" + std::to_string(seq.fetch_add(1));
+
+    // Owner side: LayerAckService injects here. Connector side: stands in for the
+    // scheduler process and drains the count (pending()/try_consume_all() are
+    // connector-only; they throw on the owner).
+    tt::tt_metal::distributed::InterProcessCounterChannel ack_channel(shm);
+    auto consumer = tt::tt_metal::distributed::InterProcessCounterChannel::connect(shm);
+
+    tt::tt_metal::LayerAckService layer_ack(service, ack_channel);
+    layer_ack.start();
+
+    // Record: [1,1,1,n] uint32 replicated DRAM. Content is irrelevant to the ack count
+    // (LayerAckService reads then discards it), so build once and resend each iteration.
+    const uint32_t n = metadata_size_bytes / sizeof(uint32_t);
+    const auto record_spec = TensorSpec(
+        ttnn::Shape({1, 1, 1, n}),
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt}));
+    auto rep = create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = replicate_all(*mesh_device)});
+    Tensor record_dev = distribute_tensor(Tensor::from_vector<uint32_t>(std::vector<uint32_t>(n, 0), record_spec), *rep)
+                            .to_device(mesh_device.get());
+
+    // Simulate num_records layer completions: back-to-back device ops, no synchronize
+    // between them (that non-stalling cadence is the whole point of the LayerAck path).
+    for (uint32_t i = 0; i < num_records; ++i) {
+        ttnn::experimental::outbound_socket_service_sync(service, /*input=*/std::nullopt, /*metadata=*/record_dev);
+    }
+    // Ensure every device op has executed and pushed its record to the socket.
+    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+
+    // The reader consumes asynchronously; poll the connector until it observes all
+    // records (bounded, so a stuck reader fails the test instead of hanging it).
+    uint32_t seen = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (seen < num_records && std::chrono::steady_clock::now() < deadline) {
+        seen += consumer->try_consume_all();
+        if (seen < num_records) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    EXPECT_EQ(seen, num_records) << "LayerAckService must inject exactly one ack per record";
+
+    // Let any stray extra ack (there should be none) settle, then confirm none arrived.
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(consumer->try_consume_all(), 0u) << "LayerAckService injected spurious acks";
+
+    // Bounded teardown: no record is in flight, yet stop() must still join the reader
+    // promptly (the poll-based loop sees running_==false within a poll tick).
+    layer_ack.stop();
+
+    consumer->shutdown();
+    ack_channel.shutdown();
+}
+
 // Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
 // clusters; skip the whole suite on any other configuration so unsupported runners skip
 // cleanly instead of hitting the claim TT_FATAL.
@@ -834,6 +923,22 @@ TEST_F(D2HStreamServiceTest, MetadataOnly_WorkerOp_Sizes) {
     for (uint32_t md : {16u, 64u, 256u}) {
         SCOPED_TRACE(::testing::Message() << "metadata_size=" << md);
         run_d2h_metadata_only_case(this->mesh_device_, worker_cores, md, /*fifo_size_bytes=*/4096);
+    }
+}
+
+// LayerAckService in isolation: N metadata sends -> exactly N acks on the counter
+// channel, across a range of N, and stop() joins the reader without hanging even though
+// no final record unblocks it. Validates the full device-op -> read_metadata -> inject
+// round-trip before it is wired into the model.
+TEST_F(D2HStreamServiceTest, LayerAckService_CountsAndCleanStop) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
+    const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});  // single designated worker
+    for (uint32_t n : {1u, 61u, 200u}) {
+        SCOPED_TRACE(::testing::Message() << "num_records=" << n);
+        run_layer_ack_service_case(
+            this->mesh_device_, worker_cores, /*metadata_size_bytes=*/12, /*fifo_size_bytes=*/4096, /*num_records=*/n);
     }
 }
 
