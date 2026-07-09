@@ -975,9 +975,9 @@ def test_audio_decode_girl(mesh_device, mesh_shape, sp_axis, tp_axis, num_links,
     # absolute level (~−18 dB conv1d) is the fp32/bf16 floor, gated only against a gross spike.
     from models.tt_dit.tests.models.ltx.test_audio_components_ltx import _build_torch_stage_c_real
 
-    z = pipeline.tt_audio_decoder.z_channels
+    z = pipeline.tt_mel_decoder.z_channels
     audio_spatial = latent.reshape(1, latent.shape[1], z, latent.shape[2] // z).permute(0, 2, 1, 3).float()
-    mel = pipeline.tt_audio_decoder(audio_spatial)  # TT mel, fed to both TT and torch
+    mel = pipeline.tt_mel_decoder(audio_spatial)  # TT mel, fed to both TT and torch
     _ao._USE_CONV1D_DEPTHWISE = True
     w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
     with torch.no_grad():

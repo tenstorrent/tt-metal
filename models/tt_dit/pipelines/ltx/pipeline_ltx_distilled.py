@@ -136,7 +136,6 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
-    SUPPORTS_IMAGE_CONDITIONING = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -330,24 +329,21 @@ class LTXDistilledPipeline(LTXPipeline):
             if not iter_fast:
                 self._warmup_decode(num_frames, height, width)
 
-            # Build + JIT-compile the on-device audio decode on the exact latent
-            # shape generate() produces, so the first real audio decode loads
-            # from cache instead of building from the checkpoint (cold ~64s).
-            # The single-generate eager decode is bit-identical to the replay, so the AV mp4 is
-            # unchanged; multi-gen runs keep the warmup capture so every real decode replays (else
-            # gen#1 would decode into the garbage-emitting capture pass).
+            # Warm the on-device audio decode eagerly at the exact latent shape generate()
+            # produces: compiles kernels, initializes lazy device state, and frees back to a
+            # deterministic allocator free-list so the first real (traced) decode captures cleanly
+            # on warm state. The adopted ltx-perf vocoder/mel decoder are
+            # @traced_function(prep_run=False), so they do NOT self-warm — this eager warm (via
+            # _warmup_audio_decode, trace flags forced off) is what inits them; the first real
+            # generate then captures+executes correctly and every later decode replays.
+            # in_capture_pass / iter_fast are ltx-rt serving gates preserved from HEAD.
             if in_capture_pass:
                 logger.info("capture pass: skipping audio decode (vocoder prep_run=False; real warmup inits it)")
             elif iter_fast:
                 logger.info("LTX_ITER_FAST=1: skipping warmup audio decode (gen#0 decodes eagerly)")
             else:
-                logger.info("warmup audio decode (on-device)")
-                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
-                # The vocoder trace captures on the first POST-cold decode (not the cold one above),
-                # and that capturing pass emits clipped audio. A second warmup decode absorbs the
-                # capture so the first real generate is a clean replay.
-                if self._traced:
-                    self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+                logger.info("warmup audio decode (on-device, eager)")
+                self._warmup_audio_decode(torch.zeros(1, als.frames, self.in_channels), num_frames)
 
         # Warm the encoders last: they coresident-evict the VAE decoder (which already evicted the
         # DiT), so they never disturb the denoise/decode kernels compiled above.
@@ -611,8 +607,8 @@ class LTXDistilledPipeline(LTXPipeline):
             audio_lat = audio_lat * (1 - sigmas[0]) + noise_a * sigmas[0]
         else:
             torch.manual_seed(seed)
-            # Consume the same RNG draws the prior video_N-sized randn did, keeping the audio
-            # stream bit-identical to prior runs.
+            # Consume the same RNG draws a video_N-sized randn would, so the audio noise stream
+            # stays independent of video sequence length.
             _ = torch.randn(B, video_N_real, self.in_channels, dtype=torch.bfloat16)
             audio_lat_real = torch.randn(B, audio_N_real, self.in_channels, dtype=torch.bfloat16).float() * sigmas[0]
             audio_lat = torch.zeros(B, audio_N, self.in_channels)

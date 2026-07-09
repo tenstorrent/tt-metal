@@ -29,17 +29,12 @@ from safetensors.torch import load_file
 import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel, build_audio_masks, build_video_pad_mask
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoEncoder, read_vae_per_channel_stats, upsample_latent
-from ...parallel.config import (
-    AudioTCParallelConfig,
-    DiTParallelConfig,
-    EncoderParallelConfig,
-    ParallelFactor,
-    VaeHWParallelConfig,
-)
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils import walltime
@@ -361,8 +356,9 @@ class LTXPipeline:
         # deterministic in (path, resolution), so cache the host result and reuse it.
         self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
         self.upsampler: LTXLatentUpsampler | None = None
-        self.tt_audio_decoder = None
-        self.tt_vocoder_with_bwe = None
+        # Audio decode stack lives behind the adopted LTXAudioDecoderAdapter (ltx-perf refactor).
+        # tt_mel_decoder / tt_vocoder_with_bwe are read-only properties delegating to it.
+        self._audio_adapter: LTXAudioDecoderAdapter | None = None
 
         # decode_audio only touches the audio decoder + vocoder, so audio_only skips building
         # AND priming the 22B transformer / video VAE / upsampler — that prime is the bulk of a
@@ -460,8 +456,8 @@ class LTXPipeline:
                 tracer.release_trace()
         if self.tt_vocoder_with_bwe is not None:
             self.tt_vocoder_with_bwe.release_trace()
-        if self.tt_audio_decoder is not None:
-            self.tt_audio_decoder.release_trace()
+        if self.tt_mel_decoder is not None:
+            self.tt_mel_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -478,10 +474,24 @@ class LTXPipeline:
         """
         if self._owned_audio_submesh is not None:
             ttnn.synchronize_device(self._owned_audio_submesh)
-            self.tt_audio_decoder = None
-            self.tt_vocoder_with_bwe = None
+            # The adopted adapter owns both mel-decoder + vocoder; dropping it releases the
+            # submesh-resident audio device tensors (ltx-rt set tt_audio_decoder /
+            # tt_vocoder_with_bwe to None directly; those are now adapter-backed properties).
+            self._audio_adapter = None
             self.audio_ccl_manager = self.vae_ccl_manager
             self.audio_mesh_device = self.mesh_device
+
+    @property
+    def tt_mel_decoder(self):
+        """Underlying mel-VAE decoder ``Module`` (or ``None``) — used by ``release_traces``,
+        ``_decode_mel``, and ``decode_audio``. Backed by ``LTXAudioDecoderAdapter``."""
+        return self._audio_adapter.mel_decoder if self._audio_adapter is not None else None
+
+    @property
+    def tt_vocoder_with_bwe(self):
+        """Underlying vocoder+BWE ``Module`` (or ``None``) — used by ``release_traces`` and
+        ``decode_audio``. Backed by ``LTXAudioDecoderAdapter``."""
+        return self._audio_adapter.vocoder_with_bwe if self._audio_adapter is not None else None
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
@@ -1668,222 +1678,61 @@ class LTXPipeline:
         return video_lat[:, :video_N_real, :], audio_lat[:, :audio_N_real, :]
 
     def _new_audio_decoder(self) -> None:
-        """Construct audio decoder module shells from checkpoint config.
+        """Construct the audio decode stack via ``LTXAudioDecoderAdapter`` (ltx-perf refactor).
 
-        No weights are loaded — ``_prepare_audio_decoder`` handles that via the
-        disk cache the same way ``_prepare_vae`` does for the video VAE.
+        The adapter parses the checkpoint's ``audio_vae`` / ``vocoder`` config, builds the
+        ``MelDecoder`` (mel_decoder_ltx.py) + ``VocoderWithBWE``, selects the audio parallel
+        config, and sets the trace flags. It is built on the audio submesh (LTX_AUDIO_SUBMESH)
+        so the whole stack lives on ``audio_mesh_device`` / ``audio_ccl_manager`` — passing those
+        as the adapter's ``mesh_device`` / ``vae_ccl_manager`` reproduces ltx-rt's submesh
+        placement (the adapter derives its parallel config from that mesh's shape). No weights are
+        loaded here — ``_prepare_audio_decoder`` handles that via the adapter's disk cache.
         """
-        from ...models.audio_vae.audio_decoder_ltx import AudioDecoder
-        from ...models.audio_vae.bwe_ltx import MelSTFT, VocoderWithBWE
-        from ...models.audio_vae.vocoder_ltx import Vocoder
-
-        with safe_open(self.checkpoint_name, framework="pt") as f:
-            config = json.loads(f.metadata()["config"])
-
-        ad = config["audio_vae"]["model"]["params"]
-        ddconfig = ad["ddconfig"]
-        stft_cfg = config["audio_vae"].get("preprocessing", {}).get("stft", {})
-        mel_cfg = config["audio_vae"].get("preprocessing", {}).get("mel", {})
-        mel_bins = ddconfig.get("mel_bins") or mel_cfg.get("n_mel_channels")
-        if ddconfig.get("norm_type", "pixel") != "pixel" or ddconfig.get("causality_axis", "height") != "height":
-            logger.warning("Audio decoder: checkpoint requires unsupported norm/causality; skipping construction")
-            return
-
-        voc_cfg = config["vocoder"]["vocoder"]
-        bwe_cfg = config["vocoder"]["bwe"]
-
-        mesh_shape = tuple(self.audio_mesh_device.shape)
-        t_axis = 0 if mesh_shape[0] >= mesh_shape[1] else 1
-        t_factor = mesh_shape[t_axis]
-        c_axis = 1 - t_axis
-        c_factor = mesh_shape[c_axis]
-        channel_tp_on = os.environ.get("LTX_AUDIO_CHANNEL_TP", "0") == "1"
-        if t_factor > 1 and c_factor > 1 and channel_tp_on:
-            audio_parallel_config = AudioTCParallelConfig(
-                time_parallel=ParallelFactor(factor=t_factor, mesh_axis=t_axis),
-                channel_parallel=ParallelFactor(factor=c_factor, mesh_axis=c_axis),
-            )
-        elif t_factor > 1:
-            audio_parallel_config = ParallelFactor(factor=t_factor, mesh_axis=t_axis)
-        else:
-            audio_parallel_config = None
-        audio_ccl = self.audio_ccl_manager if audio_parallel_config is not None else None
-
-        self.tt_audio_decoder = AudioDecoder(
-            ch=ddconfig.get("ch", 128),
-            out_ch=ddconfig.get("out_ch", 2),
-            ch_mult=tuple(ddconfig.get("ch_mult", (1, 2, 4))),
-            num_res_blocks=ddconfig.get("num_res_blocks", 2),
-            attn_resolutions=tuple(ddconfig.get("attn_resolutions", ())),
-            resolution=ddconfig.get("resolution", 256),
-            z_channels=ddconfig.get("z_channels", 8),
-            mid_block_add_attention=ddconfig.get("mid_block_add_attention", False),
-            sample_rate=ad.get("sampling_rate", 16000),
-            mel_hop_length=stft_cfg.get("hop_length", 160),
-            is_causal=stft_cfg.get("causal", True),
-            mel_bins=mel_bins,
+        self._audio_adapter = LTXAudioDecoderAdapter(
+            self.checkpoint_name,
             mesh_device=self.audio_mesh_device,
-            dtype=ttnn.bfloat16,
+            vae_ccl_manager=self.audio_ccl_manager,
+            dit_parallel_config=self.parallel_config,
+            traced=self._traced,
         )
-
-        voc_keys = (
-            "resblock_kernel_sizes",
-            "upsample_rates",
-            "upsample_kernel_sizes",
-            "resblock_dilation_sizes",
-            "upsample_initial_channel",
-            "resblock",
-            "activation",
-            "use_tanh_at_final",
-            "use_bias_at_final",
-        )
-
-        def _tt_vocoder(cfg: dict, *, apply_final_activation: bool, parallel_config) -> Vocoder:
-            return Vocoder(
-                **{k: cfg[k] for k in voc_keys if k in cfg},
-                apply_final_activation=apply_final_activation,
-                mesh_device=self.audio_mesh_device,
-                dtype=ttnn.float32,
-                parallel_config=parallel_config,
-                ccl_manager=audio_ccl,
-            )
-
-        # Channel-TP the compute-bound BWE generator on meshes whose channel axis is wide enough
-        # to pay for the per-conv all-gather: at channel factor 2 (2x4) the gather tax loses
-        # (+135ms), so stay single-axis there; factor >= 4 (Galaxy 4x8/4x32) is the intended win.
-        # Bit-identical to single-axis on real weights. LTX_BWE_CHANNEL_TP overrides (0/1) for the
-        # Galaxy validation that confirms the factor-4 crossover (#46423).
-        if isinstance(audio_parallel_config, AudioTCParallelConfig):
-            override = os.environ.get("LTX_BWE_CHANNEL_TP")
-            use_bwe_ctp = override == "1" if override is not None else audio_parallel_config.channel_parallel.factor > 2
-            bwe_pc = audio_parallel_config if use_bwe_ctp else audio_parallel_config.time_parallel
-        else:
-            bwe_pc = audio_parallel_config
-        main_voc = _tt_vocoder(voc_cfg, apply_final_activation=True, parallel_config=audio_parallel_config)
-        bwe_voc = _tt_vocoder(bwe_cfg, apply_final_activation=False, parallel_config=bwe_pc)
-        mel_stft = MelSTFT(
-            filter_length=bwe_cfg["n_fft"],
-            hop_length=bwe_cfg["hop_length"],
-            win_length=bwe_cfg["n_fft"],
-            n_mel_channels=bwe_cfg["num_mels"],
-            mesh_device=self.audio_mesh_device,
-            dtype=ttnn.float32,
-        )
-        self.tt_vocoder_with_bwe = VocoderWithBWE(
-            vocoder=main_voc,
-            bwe_generator=bwe_voc,
-            mel_stft=mel_stft,
-            input_sampling_rate=bwe_cfg["input_sampling_rate"],
-            output_sampling_rate=bwe_cfg["output_sampling_rate"],
-            hop_length=bwe_cfg["hop_length"],
-            mesh_device=self.audio_mesh_device,
-            dtype=ttnn.float32,
-        )
-        # Capture-once/replay the main vocoder device graph when the pipeline runs traced.
-        # (Previously produced garbage audio: a ttnn trace bakes absolute buffer addresses, and the
-        # vocoder's prep_run alloc/free desynced them from the replay-time allocator state. Fixed in
-        # Vocoder.forward_traced — warm caches on a prior eager decode, then capture with
-        # prep_run=False so capture and every replay share the post-mel-VAE free-list. Gated by the
-        # test_audio_decode_girl conv1d-vs-torch oracle, which now runs under trace.)
-        # Main-vocoder trace defaults ON (wins on small/host-bound meshes — loudbox 2x4: 0.80s
-        # traced). On large/CCL-bound meshes it is net-negative (galaxy 4x8: 1.37s traced vs 1.07s
-        # eager — T-shard=8 AllGather/halo dominates, audio decode does not scale with chips), so
-        # set LTX_VOC_TRACE=0 there.
-        self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        # BWE/VAE trace default ON, gated on the transformer trace. At served frame counts
-        # (145f/1088x1920, bh 4x8) traced vocoder+BWE ~0.45s vs eager ~0.85s (full audio decode
-        # 0.50s vs 0.88s), so this is the default so a run can't silently miss it. The old
-        # default-OFF was measured on a pre-optimization audio path (BWE 1.74s traced); replay is
-        # bit-identical either way. LTX_BWE_TRACE=0 / LTX_VAE_TRACE=0 to force eager.
-        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "1") != "0"
-        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "1") != "0"
-        if isinstance(audio_parallel_config, AudioTCParallelConfig):
-            cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
-        elif audio_parallel_config is not None:
-            cfg_desc = f"T-shard={t_factor} axis{t_axis} (single-axis)"
-        else:
-            cfg_desc = "replicated"
-        logger.info(f"Constructed audio decoder shells (mesh {mesh_shape}, vocoder {cfg_desc})")
-
-    def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:
-        """Audio mel-VAE decoder weights from the checkpoint, prefix-stripped to the module keys."""
-        logger.info("Audio decoder cache miss — loading from checkpoint")
-        state: dict[str, torch.Tensor] = {}
-        with safe_open(self.checkpoint_name, framework="pt") as f:
-            for k in f.keys():
-                if k.startswith("audio_vae.decoder."):
-                    state[k.removeprefix("audio_vae.decoder.")] = f.get_tensor(k).float()
-                elif k.startswith("audio_vae.per_channel_statistics."):
-                    state[k.removeprefix("audio_vae.")] = f.get_tensor(k).float()
-        return state
-
-    def _vocoder_state_provider(self) -> dict[str, torch.Tensor]:
-        """Vocoder (+ BWE) weights from the checkpoint, prefix-stripped to the module keys."""
-        logger.info("Audio vocoder cache miss — loading from checkpoint")
-        state: dict[str, torch.Tensor] = {}
-        with safe_open(self.checkpoint_name, framework="pt") as f:
-            for k in f.keys():
-                if k.startswith("vocoder."):
-                    state[k.removeprefix("vocoder.")] = f.get_tensor(k).float()
-        return state
 
     def _prepare_audio_decoder(self) -> None:
-        """Load audio decoder + vocoder weights via the disk cache (mirrors ``_prepare_vae``).
+        """Delegate: load audio decoder + vocoder weights (see ``LTXAudioDecoderAdapter``).
 
-        The per-channel denormalize stats are re-injected separately after load: they are
-        non-Parameter buffers, so the binary cache path doesn't carry them and would
-        otherwise leave garbage stats (and a garbage audio track).
+        Mirrors ``_prepare_vae``; the adapter loads both modules via the disk cache and re-injects
+        the mel-VAE per-channel denormalize stats after load (non-Parameter buffers the binary
+        cache does not carry).
         """
-        if self.tt_audio_decoder is None or self.tt_vocoder_with_bwe is None:
+        if self._audio_adapter is not None:
+            self._audio_adapter.reload_weights()
+
+    def _warmup_audio_decode(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> None:
+        """Eager (untraced) audio decode at the real shape: compiles kernels, warms lazy device
+        state, and frees back to a deterministic allocator free-list so a later traced decode
+        captures cleanly. Required by the adopted ltx-perf audio trace path (the vocoder / mel
+        decoder are ``@traced_function(prep_run=False)``, so they do NOT self-warm before capture —
+        capture must run on already-warm state). No-op if the audio decoder is not configured."""
+        if self.tt_mel_decoder is None or self.tt_vocoder_with_bwe is None:
             return
-        if self.tt_audio_decoder.is_loaded() and self.tt_vocoder_with_bwe.is_loaded():
-            return
-
-        model_name = os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
-        blocking_key = conv3d_blocking_hash(self.tt_vocoder_with_bwe)
-        dec_subfolder = f"audio_dec_{blocking_key}" if blocking_key else "audio_dec"
-        voc_subfolder = f"audio_voc_{blocking_key}" if blocking_key else "audio_voc"
-
-        if not self.tt_audio_decoder.is_loaded():
-            cache_module.load_model(
-                self.tt_audio_decoder,
-                model_name=model_name,
-                subfolder=dec_subfolder,
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.audio_mesh_device.shape),
-                get_torch_state_dict=self._audio_decoder_state_provider,
-            )
-
-        if not self.tt_vocoder_with_bwe.is_loaded():
-            cache_module.load_model(
-                self.tt_vocoder_with_bwe,
-                model_name=model_name,
-                subfolder=voc_subfolder,
-                parallel_config=self.parallel_config,
-                mesh_shape=tuple(self.audio_mesh_device.shape),
-                get_torch_state_dict=self._vocoder_state_provider,
-            )
-
-        # Re-inject the mel-VAE per-channel stats from the checkpoint — see docstring.
-        with safe_open(self.checkpoint_name, framework="pt") as f:
-            self.tt_audio_decoder.set_per_channel_stats(
-                f.get_tensor("audio_vae.per_channel_statistics.std-of-means"),
-                f.get_tensor("audio_vae.per_channel_statistics.mean-of-means"),
-            )
-
-        logger.info("Loaded TTNN audio decoder + vocoder")
+        mel_d, voc = self.tt_mel_decoder, self.tt_vocoder_with_bwe
+        saved = (mel_d.use_trace, voc.use_trace, voc.use_trace_bwe)
+        mel_d.use_trace = voc.use_trace = voc.use_trace_bwe = False
+        try:
+            self.decode_audio(audio_latent, num_frames, fps=fps)
+        finally:
+            mel_d.use_trace, voc.use_trace, voc.use_trace_bwe = saved
 
     def _decode_mel(self, audio_spatial: torch.Tensor) -> torch.Tensor:
         """Run the mel-VAE decoder, traced (capture-once/replay) when the pipeline is traced."""
-        if self.tt_audio_decoder.use_trace:
-            return self.tt_audio_decoder.forward_traced(audio_spatial)
-        return self.tt_audio_decoder(audio_spatial)
+        if self.tt_mel_decoder.use_trace:
+            return self.tt_mel_decoder.forward_traced(audio_spatial)
+        return self.tt_mel_decoder(audio_spatial)
 
     def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
         """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 
         The single audio-decode entry point for every LTX pipeline: routes the latent
-        through ``AudioDecoder`` (mel-VAE) then ``VocoderWithBWE`` (vocoder + BWE).
+        through ``MelDecoder`` (mel-VAE) then ``VocoderWithBWE`` (vocoder + BWE).
         Both take and return torch tensors, handling device upload/download internally.
         ``num_frames``/``fps`` trim the output to the clip duration.
         """
@@ -1901,7 +1750,7 @@ class LTXPipeline:
         if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
             self.vae_decoder.deallocate_weights()
 
-        assert self.tt_audio_decoder is not None and self.tt_vocoder_with_bwe is not None, (
+        assert self.tt_mel_decoder is not None and self.tt_vocoder_with_bwe is not None, (
             "audio decoder shells not built — _new_audio_decoder() must run first "
             "(it does, via _instantiate_modules, when checkpoint_name is set at construction)"
         )
@@ -1910,7 +1759,7 @@ class LTXPipeline:
         # Unpatchify: (1, audio_N, 128) -> (1, z, audio_N, 128 // z)
         # (z=z_channels, 128 // z is the patchify freq).
         audio_N = audio_latent.shape[1]
-        z = self.tt_audio_decoder.z_channels
+        z = self.tt_mel_decoder.z_channels
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
         # Optional stage-wall split (LTX_TIME_STAGES=1): mel-VAE vs vocoder+BWE, to find
