@@ -26,14 +26,20 @@ void push_reshard_same_width_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    Buffer* bound_buffer,
+    std::optional<Tile> tile = std::nullopt) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
+    std::optional<TileDescriptor> tile_descriptor = std::nullopt;
+    if (tile) {
+        tile_descriptor = tt::tt_metal::TileDescriptor(tile.value());
+    }
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = static_cast<uint8_t>(cb_index),
         .data_format = data_format,
         .page_size = page_size,
+        .tile = tile_descriptor,
     });
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
@@ -67,10 +73,17 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
+    std::optional<Tile> tile = std::nullopt;
     if (local_tensor.layout() == Layout::TILE) {
-        unit_size = tt::tile_size(data_format);
-        local_units_per_shard = local_shard_spec.numel() / TILE_HW;
-        remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
+        tile = local_tensor.tensor_spec().tile();
+        unit_size = tile.value().get_tile_size(data_format);
+        const uint32_t tile_hw = tile.value().get_tile_hw();
+        TT_FATAL(
+            local_shard_spec.numel() % tile_hw == 0 && remote_shard_spec.numel() % tile_hw == 0,
+            "Shard numel must be divisible by tile hw {}",
+            tile_hw);
+        local_units_per_shard = local_shard_spec.numel() / tile_hw;
+        remote_units_per_shard = remote_shard_spec.numel() / tile_hw;
     } else {
         unit_size = static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());
         local_units_per_shard = local_shard_spec.shape[0];
@@ -97,7 +110,7 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
 
     // Local sharded CB. Bind to local buffer for dynamic-CB rebinding on cache hits via cb.buffer.
     push_reshard_same_width_cb_pair(
-        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
+        desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer, tile);
 
     if (unaligned) {
         // Scratch CB used by kernels when local/remote alignments differ.
@@ -108,7 +121,8 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
             remote_units_per_shard * remote_unit_size_padded,
             unit_size,
             all_cores,
-            /*bound_buffer=*/nullptr);
+            /*bound_buffer=*/nullptr,
+            tile);
     }
 
     // Reader/writer kernels share the same source and compile-time args.
