@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Output-lifecycle / CB-synchronization suite (G1 output side).
+// Output-lifecycle / CB-synchronization suite (output side).
 //
-// Identity copy out[i] = A[i] over n tiles. Input streams (chain owns). The OUTPUT PackTile uses a
-// selectable OutputLifecycle; the chain emits the reserve/push edges its lifecycle declares and the
-// compute kernel supplies whatever the chain does NOT. A reserve/push miscount hangs the writer
-// (BRISC) or overwrites an unpushed tile — so the test asserts no-hang AND correct values.
+// Identity copy out[i] = A[i] over n tiles; input streams. The output PackTile uses a selectable
+// OutputLifecycle; the chain emits the reserve/push edges it declares and this kernel supplies the
+// rest. A reserve/push miscount hangs the writer or overwrites an unpushed tile, so each case
+// asserts no-hang AND correct values.
 //
 //   life  OutputLifecycle        chain emits                          caller supplies
 //   0     Streaming              reserve 1 + push 1 / iter            nothing

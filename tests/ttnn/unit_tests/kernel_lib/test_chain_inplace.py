@@ -3,21 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-G1 (output side, in-place variant) — which (InputLifecycle, OutputLifecycle) pairs let a chain read
-AND write the SAME circular buffer. Run under --dev.
+In-place (output side): which (InputLifecycle, OutputLifecycle) pairs let a chain read AND write the
+SAME CB, overwriting a resident buffer with no second CB. Run under --dev.
 
-In-place is how an op overwrites a resident buffer with no second CB. It is CB-self-deadlock-prone:
-the packer's cb_reserve_back cannot succeed while the reader's tiles still occupy the buffer. The chain's per-iter order is  wait -> read -> POP  then  RESERVE -> pack -> push, so the pop
-frees a slot BEFORE the reserve asks for one -- but only if the output reserves INCREMENTALLY
-(per-tile / per-chunk). An upfront-reserve output (Bulk / ReserveAllPushPerTile / ReserveAllPushPerChunk)
-reserves N before the loop while the CB is full -> deadlock. See inplace_chain.cpp for the full rule.
+In-place is CB-self-deadlock-prone: the packer's reserve can't succeed while the reader's tiles
+still occupy the buffer. Per-iter order is wait->read->POP then RESERVE->pack->push, so it is safe
+only when BOTH the input pops and the output reserves incrementally (per-tile/chunk); an
+upfront-reserve output would deadlock. See inplace_chain.cpp for the rule.
 
-inplace_chain.cpp fills cb_x from the reader, runs exp(x) IN PLACE on cb_x under a selectable
-lifecycle pair, then copies cb_x out. Each case asserts BOTH no-hang (dispatch timeout under --dev
-trips triage) AND correct values (a miscounted reserve/pop reads or overwrites the wrong tile).
-
-Only the in-place-SAFE pairs are parametrized here (all must PASS). The deadlocking pairs
-(*upfront-reserve* output) are documented in inplace_chain.cpp and intentionally not run.
+inplace_chain.cpp runs exp(x) in place on cb_x under a selectable lifecycle pair. Only the safe pairs
+are parametrized (all must PASS): each asserts no-hang (--dev timeout trips triage) AND correct
+values. The deadlocking pairs are intentionally not run.
 """
 
 import torch
@@ -64,5 +60,5 @@ def test_inplace_chain_lifecycle(device, life, name):
     golden = torch.exp(torch_in.to(torch.float32))
     out = ttnn.to_torch(output).to(torch.float32)
     pcc_ok, msg = comp_pcc(golden, out, lib.pcc_threshold([dt]))
-    logger.info(f"G1 in-place lifecycle={name} | no-hang + {msg}")
+    logger.info(f"in-place lifecycle={name} | no-hang + {msg}")
     assert pcc_ok, f"in-place lifecycle {name}: {msg}"

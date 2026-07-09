@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Validation suite for the eltwise_chain reconfig fold change.
+Validation for the eltwise_chain data-format reconfig emission.
 
-  Proposal: ttnn/cpp/ttnn/kernel_lib/docs/chain_reconfig_with_dt_proposal.html
-  Test plan: ttnn/cpp/ttnn/kernel_lib/docs/chain_reconfig_with_dt_test_plan.html
-
-Each kernel under ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/ exercises one
-of the new emission cases A-F. Per-CB dtype assignment is set deliberately so
-the LLK's should_reconfigure_cbs runtime check sees mismatched formats and the
-new overload actually fires its reprogram (rather than the fast-path skip).
+Each kernel under ttnn/cpp/ttnn/kernel_lib/tests/chain_reconfig/ exercises one emission case (4-arg
+_with_dt, 2-arg combined, mixed-prev, single-side, pack-side, compile-time elision). Per-CB dtypes
+are chosen so the LLK's should_reconfigure_cbs sees mismatched formats and the reprogram actually
+fires (not the fast-path skip).
 """
 
 import torch
@@ -135,7 +132,7 @@ def _build_compute_kernel(kernel_name, num_tiles, fp32_dest_acc_en, core_grid):
 
 
 # =============================================================================
-# Case A — 4-arg reconfig_data_format(prev_a, curr_a, prev_b, curr_b) (_with_dt)
+# 4-arg reconfig_data_format(prev_a, curr_a, prev_b, curr_b) (_with_dt)
 # =============================================================================
 # Chain: BinaryFpu(CbA,CbB) -> BinaryFpu(CbC,CbD) -> PackTile(CbOut).
 # At element 1: srca rotates CbA->CbC with prev set AND srcb rotates CbB->CbD with prev set.
@@ -143,7 +140,7 @@ def _build_compute_kernel(kernel_name, num_tiles, fp32_dest_acc_en, core_grid):
 # Net semantic = CbC + CbD (first add overwritten in D0).
 @pytest.mark.parametrize("num_tiles", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
-def test_case_a_4arg_with_dt(device, num_tiles, fp32_dest_acc_en):
+def test_4arg_with_dt(device, num_tiles, fp32_dest_acc_en):
     shape = [1, 1, 32, 32 * num_tiles]
     dt_a, dt_b, dt_c, dt_d, dt_out = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16, ttnn.float32, ttnn.bfloat16
 
@@ -179,14 +176,14 @@ def test_case_a_4arg_with_dt(device, num_tiles, fp32_dest_acc_en):
 
 
 # =============================================================================
-# Case B — 2-arg combined reconfig_data_format(curr_a, curr_b) (no _with_dt)
+# 2-arg combined reconfig_data_format(curr_a, curr_b) (no _with_dt)
 # =============================================================================
 # Chain: BinaryFpu(CbA,CbB) -> PackTile(CbOut), first chain element.
 # Both srca and srcb are first-emit on the BinaryFpu, neither has prev. 2-arg combined fires.
 # CbA=bfp8, CbB=fp32 maxes format delta to catch argument-routing regressions.
 @pytest.mark.parametrize("num_tiles", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
-def test_case_b_2arg_combined(device, num_tiles, fp32_dest_acc_en):
+def test_2arg_combined(device, num_tiles, fp32_dest_acc_en):
     shape = [1, 1, 32, 32 * num_tiles]
     dt_a, dt_b, dt_out = ttnn.bfloat8_b, ttnn.float32, ttnn.bfloat16
 
@@ -218,7 +215,7 @@ def test_case_b_2arg_combined(device, num_tiles, fp32_dest_acc_en):
 
 
 # =============================================================================
-# Case C — Mixed prev (srca has prev, srcb first-emit)
+# Mixed prev (srca has prev, srcb first-emit)
 # =============================================================================
 # Chain: CopyTile(CbA, D0) -> BinaryFpu(CbB, CbC, D0) -> PackTile(CbOut).
 # At BinaryFpu (element 1): prev_a=CbA (from CopyTile), curr_a=CbB → srca _with_dt;
@@ -226,7 +223,7 @@ def test_case_b_2arg_combined(device, num_tiles, fp32_dest_acc_en):
 # Net semantic = CbB + CbC (CopyTile's D0 overwritten by BinaryFpu).
 @pytest.mark.parametrize("num_tiles", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
-def test_case_c_mixed_prev(device, num_tiles, fp32_dest_acc_en):
+def test_mixed_prev(device, num_tiles, fp32_dest_acc_en):
     shape = [1, 1, 32, 32 * num_tiles]
     dt_a, dt_b, dt_c, dt_out = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32, ttnn.bfloat16
 
@@ -260,14 +257,14 @@ def test_case_c_mixed_prev(device, num_tiles, fp32_dest_acc_en):
 
 
 # =============================================================================
-# Case D — Single-side _with_dt on srca
+# Single-side _with_dt on srca
 # =============================================================================
 # Chain: CopyTile(CbA, D0) -> CopyTile(CbB, D0) -> PackTile(CbOut).
 # At element 1: prev_a=CbA, curr_a=CbB → srca per-side _with_dt fires. srcb untouched throughout.
 # CbA=bfp8, CbB=bf16 spans block-float -> IEEE on srca. Net semantic = CbB.
 @pytest.mark.parametrize("num_tiles", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
-def test_case_d_singleside(device, num_tiles, fp32_dest_acc_en):
+def test_singleside(device, num_tiles, fp32_dest_acc_en):
     shape = [1, 1, 32, 32 * num_tiles]
     dt_a, dt_b, dt_out = ttnn.bfloat8_b, ttnn.bfloat16, ttnn.bfloat16
 
@@ -299,17 +296,17 @@ def test_case_d_singleside(device, num_tiles, fp32_dest_acc_en):
 
 
 # =============================================================================
-# Case E — Pack-side _with_dt: multi-pack heterogeneous output chain
+# Pack-side _with_dt: multi-pack heterogeneous output chain
 # =============================================================================
 # Chain: CopyTile(CbA, D0) -> PackTile(CbOut1, D0) -> PackTile(CbOut2, D0).
 # Both PackTiles read D0 (the CopyTile result = CbA) and pack to their respective output CBs with
 # different dtypes (CbOut1=bf16, CbOut2=bfp8). Heterogeneous pack CBs trigger the per-stage emission
-# path from pack_reconfig_hoisting_proposal.html §4.2: boot programs only the first opt-in pack
+# path: boot programs only the first opt-in pack
 # site; subsequent sites emit the 2-arg `pack_reconfig_data_format(prev_p, curr_p)` form before
 # their per-iter pack work, with wraparound for site 0 to handle iter-to-iter cycling.
 @pytest.mark.parametrize("num_tiles", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
-def test_case_e_pack_to_bfp8(device, num_tiles, fp32_dest_acc_en):
+def test_pack_to_bfp8(device, num_tiles, fp32_dest_acc_en):
     shape = [1, 1, 32, 32 * num_tiles]
     dt_a, dt_out1, dt_out2 = ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat8_b
 
@@ -348,7 +345,7 @@ def test_case_e_pack_to_bfp8(device, num_tiles, fp32_dest_acc_en):
 
 
 # =============================================================================
-# Case F — Compile-time elision (same CB on srca across consecutive elements)
+# Compile-time elision (same CB on srca across consecutive elements)
 # =============================================================================
 # Chain: CopyTile(CbA, D0) x3 -> PackTile(CbOut). curr_a == prev_a == CbA at elements 1, 2 →
 # reconf_a evaluates to false at compile time, no LLK emission past element 0.
@@ -361,7 +358,7 @@ def test_case_e_pack_to_bfp8(device, num_tiles, fp32_dest_acc_en):
 # tiles, and the golden picks every 3rd input tile.
 @pytest.mark.parametrize("num_iters", [1, 8, 64])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
-def test_case_f_elide(device, num_iters, fp32_dest_acc_en):
+def test_elide(device, num_iters, fp32_dest_acc_en):
     tiles_consumed_per_iter = 3
     total_input_tiles = tiles_consumed_per_iter * num_iters
     input_shape = [1, 1, 32, 32 * total_input_tiles]
