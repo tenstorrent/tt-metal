@@ -93,7 +93,7 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     }
     if (input_tensor.layout() == Layout::TILE) {
         auto tile = input_tensor.tensor_spec().tile();
-        if (tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
+        if (tile.get_width() != tt::constants::TILE_WIDTH) {
             return {false, fmt::format("interleaved_to_sharded requires standard 32x32 tiles, got {}x{}", tile.get_height(), tile.get_width())};
         }
         if (tensor_args.output_tensor.has_value()) {
