@@ -71,8 +71,8 @@ therefore effectively "pin to the single 512 bucket", enforced at two layers:
 
 Removing the fixed-14 s pin (to allow long single-shot / variable-length prefill) requires the tt-metal
 program-cache fix — the batch dim `-3` must be part of the prefill matmul program hash. This cannot be
-fixed at the model layer (bucketing still collides). Tracking issue + repro:
-`docs/prefill_program_cache_collision_issue.md` in this PR.
+fixed at the model layer (bucketing still collides). Tracking issue: tenstorrent/tt-metal#49451
+(repro + analysis: `docs/prefill_program_cache_collision_issue.md`).
 
 ## Reference golden
 

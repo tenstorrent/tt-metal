@@ -81,7 +81,8 @@ class Qwen3ASRDecoder(Transformer):
         # prefill followed by a 1024 prefill TT_FATALs (1024 alone is fine). Real ASR prompts are
         # always <=512 tokens, so min-512 pins every request to the single [1,1,512,d] shape and
         # sidesteps the collision. Caps single-shot at max_seq_len (2048 -> ~150s); trailing pad is
-        # causal-masked. See README "Known limitations" and docs/prefill_program_cache_collision_issue.md.
+        # causal-masked. Tracking issue: tenstorrent/tt-metal#49451 (see README "Known limitations"
+        # and docs/prefill_program_cache_collision_issue.md).
         S_pad = ((S + 511) // 512) * 512
         if S_pad != S:
             inputs_embeds = torch.nn.functional.pad(inputs_embeds, (0, 0, 0, S_pad - S))

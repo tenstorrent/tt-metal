@@ -1,4 +1,6 @@
-# tt-metal issue draft: prefill program-cache collision across the MLP reshape batch dim
+# Prefill program-cache collision across the MLP reshape batch dim
+
+> Filed as **tenstorrent/tt-metal#49451**.
 
 **Component:** `models/tt_transformers` (prefill path) + ttnn matmul program cache
 **Arch:** Blackhole (P150). Observed with a Qwen3-1.7B decoder built on `tt_transformers.tt.model.Transformer`.
