@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Scenario coverage: counter-wrap, ring-pressure, decoy, long-run edge cases (Metal 2.0).
+// Edge-case coverage: counter-wrap, ring-pressure, decoy, long-run (Metal 2.0).
 
 #include "dfb_test_common.hpp"
 

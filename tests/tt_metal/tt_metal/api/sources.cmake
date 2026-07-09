@@ -23,7 +23,7 @@ set(UNIT_TESTS_API_SOURCES
     dataflow_buffer/test_dataflow_buffer_base.cpp
     dataflow_buffer/test_dataflow_buffer_multinode.cpp
     dataflow_buffer/test_dataflow_buffer_intra.cpp
-    dataflow_buffer/test_dataflow_buffer_scenario.cpp
+    dataflow_buffer/test_dataflow_buffer_edge_cases.cpp
     dataflow_buffer/test_dataflow_buffer_overrides.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
