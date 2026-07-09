@@ -24,7 +24,7 @@ class HunyuanTtLMHead(LightweightModule):
     (out, in); `ttnn.linear` wants [in, out], so we transpose at load.
     """
 
-    def __init__(self, device, state_dict: dict, *, key: str = "lm_head.weight", weight_dtype=ttnn.bfloat16):
+    def __init__(self, device, state_dict: dict, *, key: str = "lm_head.weight", weight_dtype=ttnn.bfloat8_b):
         super().__init__()
         self.device = device
         w = state_dict[key].transpose(0, 1).contiguous()  # [H, V]
