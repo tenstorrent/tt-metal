@@ -1321,7 +1321,7 @@ def test_matmul_gather_in0_fp32_crossblock_reload_precision(device):
         ref,
         out,
         pcc_threshold=0.99,
-        frobenius_threshold=0.5,
+        frobenius_threshold=0.2,
         check_allclose=False,
         check_pcc=True,
         check_frobenius=True,

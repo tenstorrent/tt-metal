@@ -901,13 +901,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     compute_kernel_desc.core_ranges = CoreRangeSet(all_cores_with_work);
     compute_kernel_desc.compile_time_args = compute_kernel_args;
     compute_kernel_desc.defines = map_to_defines(mm_kernel_defines);
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
     {
         KernelDescriptor::NamedCompileTimeArgs named_compile_args = {
             {"cb_in0", tt::CBIndex::c_0},
             {"cb_in1", tt::CBIndex::c_1},
             {"cb_bias", tt::CBIndex::c_3},
             {"cb_out", tt::CBIndex::c_4},
-            {"cb_intermed0", tt::CBIndex::c_5},
+            {"cb_intermed0", cb_intermed0},
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
@@ -922,16 +923,14 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
     // When accumulating in fp32 with the K reduction split across blocks, the intermediate
-    // partials CB (cb_intermed0, c_5) holds Float32 and is reloaded into DEST between blocks by
+    // partials CB (cb_intermed0) holds Float32 and is reloaded into DEST between blocks by
     // copy_block_matmul_partials. Unless the CB is marked UnpackToDestFp32, that reload is routed
     // through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on
-    // every block boundary and accuracy degrades as the number of K-blocks grows. cb_intermed0 is
-    // consumed only by the reload datacopy (never as a matmul operand on SrcA/SrcB), so it can be
-    // marked directly without needing an aliased CB descriptor.
+    // every block boundary and accuracy degrades as the number of K-blocks grows.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_intermed0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -2369,12 +2368,13 @@ create_program_mcast_in0_in1(
         compute_kernel_args.push_back(row_broadcast_bias ? 1u : 0u);
     }
 
+    constexpr auto cb_intermed0 = tt::CBIndex::c_5;
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
         {"cb_in0", tt::CBIndex::c_0},
         {"cb_in1", tt::CBIndex::c_1},
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
-        {"cb_intermed0", tt::CBIndex::c_5},
+        {"cb_intermed0", cb_intermed0},
         {"cb_in0_transposed", tt::CBIndex::c_10},
         {"bias_ntiles", in1_per_core_w},
     };
@@ -2389,13 +2389,13 @@ create_program_mcast_in0_in1(
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
-    // fp32 K-partials (cb_intermed0, c_5) are reloaded into DEST between blocks; mark the CB
+    // fp32 K-partials (cb_intermed0) are reloaded into DEST between blocks; mark the CB
     // UnpackToDestFp32 so the reload goes directly to DEST instead of through SrcA (which would
     // truncate the fp32 partial to TF32). See the descriptor path above for the full rationale.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_intermed0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Create compute kernel
