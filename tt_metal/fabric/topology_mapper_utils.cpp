@@ -208,29 +208,6 @@ TopologyMappingResult map_mesh_to_physical(
                     "Failed to add required trait constraint for pinned ASIC positions in mesh {}", mesh_id.get());
                 return result;
             }
-
-            // Log pinnings
-            std::string pinnings_str;
-            bool first = true;
-            for (const auto& [fabric_node, pos] : fabric_node_to_position) {
-                if (!first) {
-                    pinnings_str += ", ";
-                }
-                first = false;
-                pinnings_str += fmt::format(
-                    "fabric_node={} (mesh_id={}, chip_id={}) -> ASIC position (tray={}, loc={})",
-                    fabric_node,
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    *pos.first,
-                    *pos.second);
-            }
-            log_info(
-                tt::LogFabric,
-                "TopologyMapper: Using {} pinning(s) for mesh {}: [{}]",
-                fabric_node_to_position.size(),
-                mesh_id.get(),
-                pinnings_str);
         }
     }
 
@@ -750,13 +727,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
                     error);
             }
         }
-        log_info(
-            tt::LogFabric,
-            "Physical groupings adjacency: '{}' found {} PSD placement(s) from {} committed grouping(s)",
-            mesh_name,
-            placements.size(),
-            groupings.size());
-
         // Build the shape graph from placements: ASIC footprints and PGD pinning both come from each PsdPlacement.
         const auto [mesh_groupings_vec, pinnings_vec] = mesh_groupings_and_pinnings_from_psd_placements(placements);
         mesh_physical_graphs[mesh_name] =
@@ -2008,9 +1978,6 @@ void log_pgd_pinning_follow_results(
         return;
     }
 
-    std::size_t followed_count = 0;
-    const std::size_t total_pins = mesh_it->second.size();
-
     for (const auto& [chip_id, expected_position] : mesh_it->second) {
         const FabricNodeId fabric_node(logical_mesh_id, chip_id);
         const auto mapping_it = fabric_node_to_asic.find(fabric_node);
@@ -2037,18 +2004,7 @@ void log_pgd_pinning_follow_results(
         }
 
         const AsicPosition& actual_position = position_it->second;
-        if (actual_position == expected_position) {
-            ++followed_count;
-            log_info(
-                tt::LogFabric,
-                "PGD preferred pinning followed: logical mesh {} chip_id={} -> ASIC {} at (tray={}, "
-                "asic_location={})",
-                logical_mesh_id.get(),
-                chip_id,
-                mapped_asic_id.get(),
-                actual_position.first.get(),
-                actual_position.second.get());
-        } else {
+        if (actual_position != expected_position) {
             log_warning(
                 tt::LogFabric,
                 "PGD preferred pinning not followed: logical mesh {} chip_id={} mapped to ASIC {} at "
@@ -2062,14 +2018,6 @@ void log_pgd_pinning_follow_results(
                 expected_position.second.get());
         }
     }
-
-    log_info(
-        tt::LogFabric,
-        "PGD preferred pinning summary: {}/{} followed for logical mesh {} (physical mesh {})",
-        followed_count,
-        total_pins,
-        logical_mesh_id.get(),
-        physical_mesh_id.get());
 }
 
 // Add the PGD-derived layout as PREFERRED (soft) intra-mesh constraints. Must be called AFTER the hard
@@ -2078,19 +2026,17 @@ void log_pgd_pinning_follow_results(
 // `physical_mesh_id` is a logical-chip-id -> ASIC position (TrayID + ASICLocation) layout, which is re-keyed onto
 // the logical FabricNodeId being solved for. Each pinned position is resolved to concrete ASIC(s) via
 // `asic_positions_to_asic_ids` and then restricted to `physical_mesh_node_set` (this physical mesh's sub-graph),
-// so a preference can never reference an out-of-mesh node. Returns the number of preferences added. No-op
-// (returns 0) when there is no pinning for this physical mesh.
-std::size_t add_pgd_pinning_preferred_constraints(
+// so a preference can never reference an out-of-mesh node. No-op when there is no pinning for this physical mesh.
+void add_pgd_pinning_preferred_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::map<MeshId, std::map<LogicalChipId, AsicPosition>>& mesh_pgd_pinnings,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
     const std::unordered_set<tt::tt_metal::AsicID>& physical_mesh_node_set,
     MeshId logical_mesh_id,
     MeshId physical_mesh_id) {
-    std::size_t preferred_pin_count = 0;
     auto mesh_it = mesh_pgd_pinnings.find(physical_mesh_id);
     if (mesh_it == mesh_pgd_pinnings.end()) {
-        return 0;
+        return;
     }
     for (const auto& [chip_id, asic_position] : mesh_it->second) {
         // Resolve the pinned physical position back to the ASIC(s) sitting at that tray/asic-location, restricted
@@ -2125,17 +2071,8 @@ std::size_t add_pgd_pinning_preferred_constraints(
                 physical_mesh_id.get());
             continue;
         }
-        log_info(
-            tt::LogFabric,
-            "PGD preferred pinning applied: logical mesh {} chip_id={} -> ASIC position (tray={}, asic_location={})",
-            logical_mesh_id.get(),
-            chip_id,
-            asic_position.first.get(),
-            asic_position.second.get());
         intra_mesh_constraints.add_preferred_constraint(FabricNodeId(logical_mesh_id, chip_id), preferred_asics);
-        ++preferred_pin_count;
     }
-    return preferred_pin_count;
 }
 
 // Parallel physical inter-mesh edges from one exit ASIC to a destination mesh (each edge is one link / channel).
@@ -2767,21 +2704,13 @@ TopologyMappingResult map_multi_mesh_to_physical(
                 const auto& physical_mesh_nodes = physical_graph.get_nodes();
                 const std::unordered_set<tt::tt_metal::AsicID> physical_mesh_node_set(
                     physical_mesh_nodes.begin(), physical_mesh_nodes.end());
-                const std::size_t preferred_pin_count = add_pgd_pinning_preferred_constraints(
+                add_pgd_pinning_preferred_constraints(
                     intra_mesh_constraints,
                     adjacency_map_physical.mesh_pgd_pinnings_,
                     asic_positions_to_asic_ids,
                     physical_mesh_node_set,
                     logical_mesh_id,
                     physical_mesh_id);
-                if (preferred_pin_count > 0) {
-                    log_info(
-                        tt::LogFabric,
-                        "Added {} preferred PGD pin(s) for logical mesh {} (physical mesh {})",
-                        preferred_pin_count,
-                        logical_mesh_id.get(),
-                        physical_mesh_id.get());
-                }
             }
 
             // Determine validation mode
