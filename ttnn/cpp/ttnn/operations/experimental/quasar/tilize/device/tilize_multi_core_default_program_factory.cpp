@@ -138,7 +138,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     ttnn::ComputeKernelConfig compute_config{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
     if (fp32_llk_acc) {
-        compute_config.unpack_to_dest_mode.emplace(MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32);
+        compute_config.unpack_to_dest_mode = {{MC_INPUT_DFB, UnpackToDestMode::UnpackToDestFp32}};
     }
     const char* compute_src = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     auto make_compute = [&](const KernelSpecName& id, uint32_t nblocks_per_core_arg) {

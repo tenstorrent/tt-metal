@@ -188,6 +188,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         TensorParameter{.unique_id = BLK_OUTPUT_TENSOR, .spec = output.tensor_spec()},
     };
 
+    ttnn::ComputeKernelConfig compute_config_template{
+        .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+
     uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
     for (const auto& g : groups) {
         // c_1 staging fake CB size (legacy push_cb_pair):
@@ -261,10 +264,9 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         });
 
         // Compute: consumes c_0 (in), produces c_16 (out).
-        ttnn::ComputeKernelConfig compute_config{
-            .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_llk_acc};
+        ttnn::ComputeKernelConfig compute_config = compute_config_template;
         if (fp32_llk_acc) {
-            compute_config.unpack_to_dest_mode.emplace(g.in, UnpackToDestMode::UnpackToDestFp32);
+            compute_config.unpack_to_dest_mode = {{g.in, UnpackToDestMode::UnpackToDestFp32}};
         }
         spec.kernels.push_back(KernelSpec{
             .unique_id = g.compute,
