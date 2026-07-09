@@ -365,11 +365,10 @@ def _height_sharded_l1_config(grid_end, shard_shape):
         # many whole matrices per core: 1024 padded [32, 64] matrices, 16 per core over an 8x8 grid;
         # logical height 17 is not tile-aligned so every matrix carries 15 interior pad rows to strip.
         ([32, 32, 17, 64], (7, 7), (512, 64)),
-        # batch == 1 per core, 64 matrices total: each core holds exactly one padded [32, 64] matrix.
-        # The old writer advanced the interleaved output pointer by the padded height (32) instead of
-        # the logical height, so every matrix past core 0 landed at the wrong row. The h17 rows carry
-        # interior row padding (17 real of 32) to strip; the h32 rows are tile-aligned (no row
-        # padding) and pair with non-tile-aligned widths (49/50) to isolate per-row column unpadding.
+        # batch == 1 per core, 64 matrices total: each core holds exactly one padded [32, 64] matrix,
+        # so each matrix lands at output row core_index * logical_height. The h17 rows carry interior
+        # row padding (17 real of 32) to strip; the h32 rows are tile-aligned (no row padding) and
+        # pair with non-tile-aligned widths (49/50) to isolate per-row column unpadding.
         ([64, 1, 17, 49], (7, 7), (32, 64)),
         ([64, 1, 32, 49], (7, 7), (32, 64)),
         ([64, 1, 17, 50], (7, 7), (32, 64)),
@@ -381,8 +380,9 @@ def _height_sharded_l1_config(grid_end, shard_shape):
         # width not tile-aligned: W 50 -> padded 64. Exercises per-row column unpadding (write 50 of
         # 64 columns) on top of the interior row unpadding.
         ([32, 32, 17, 50], (7, 7), (512, 64)),
-        # single logical matrix row-split across cores (global batch == 1): the legacy contiguous
-        # path, which must keep working unchanged. H 500 -> padded 512, 64 rows/core over 8 cores.
+        # single logical matrix row-split across cores (global batch == 1): H 500 -> padded 512, 64
+        # rows/core over 8 cores; every core copies its row range and the last core trims the
+        # trailing pad rows (500..511).
         ([1, 1, 500, 64], (7, 0), (64, 64)),
     ],
     ids=[
@@ -398,10 +398,10 @@ def _height_sharded_l1_config(grid_end, shard_shape):
     ],
 )
 def test_to_layout_sharded_to_interleaved_unpad(dtype, output_buffer_type, shape, grid_end, shard_shape, device):
-    # Height-sharded TILE input -> ROW_MAJOR INTERLEAVED output. untilize-with-unpadding must strip
-    # each matrix's interior tile pad rows (and any column padding) and land every matrix at its own
-    # logical row offset in the interleaved output. Regression for the batched HEIGHT_SHARDED ->
-    # INTERLEAVED path, previously blocked by a "Can only write unbatched output interleaved" fatal.
+    # Height-sharded TILE input -> ROW_MAJOR INTERLEAVED output. untilize-with-unpadding strips each
+    # matrix's interior tile pad rows (and any column padding) and lands every matrix at its own
+    # logical row offset in the interleaved output, for any batch and any alignment of matrices to
+    # cores.
     input_mem_config = _height_sharded_l1_config(grid_end, shard_shape)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
 
