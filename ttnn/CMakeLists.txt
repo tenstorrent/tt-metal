@@ -238,48 +238,14 @@ target_link_libraries(
         xtensor
     PRIVATE
         TTNN::Core
-        TTNN::Ops::Bernoulli
-        TTNN::Ops::CCL
-        TTNN::Ops::Conv
-        TTNN::Ops::Core
-        TTNN::Ops::Creation
-        TTNN::Ops::DataMovement
-        TTNN::Ops::Eltwise::Binary
-        TTNN::Ops::Eltwise::Binary::Backward
-        TTNN::Ops::Eltwise::Binary::NG
-        TTNN::Ops::Eltwise::Complex
-        TTNN::Ops::Eltwise::Complex::Binary
-        TTNN::Ops::Eltwise::Complex::Unary
-        TTNN::Ops::Eltwise::Complex::Unary::Backward
+        TTNN::Ops::OperationsShared
         TTNN::Ops::Eltwise::Quantization
-        TTNN::Ops::Eltwise::Ternary
-        TTNN::Ops::Eltwise::Ternary::Backward
-        TTNN::Ops::Eltwise::Unary
-        TTNN::Ops::Eltwise::Unary::Backward
-        TTNN::Ops::Embedding
-        TTNN::Ops::Embedding::Backward
-        TTNN::Ops::Examples
+        TTNN::Ops::Eltwise
         TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
-        TTNN::Ops::Full
-        TTNN::Ops::FullLike
-        TTNN::Ops::IndexFill
-        TTNN::Ops::KvCache
-        TTNN::Ops::Loss
-        TTNN::Ops::Matmul
         TTNN::Ops::Moreh
-        TTNN::Ops::Prefetcher
-        TTNN::Ops::Reduction
-        TTNN::Ops::SlidingWindow
         TTNN::Ops::Transformer
-        TTNN::Ops::Uniform
-        TTNN::Ops::Debug
-        TTNN::Ops::PointToPoint
-        TTNN::Ops::Pool
-        TTNN::Ops::Normalization
-        TTNN::Ops::Rand
-        TTNN::Ops::Randn
 )
 if(TT_INSTALL)
     install(
@@ -462,48 +428,14 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
 
-add_subdirectory(cpp/ttnn/operations/bernoulli)
-add_subdirectory(cpp/ttnn/operations/ccl)
-add_subdirectory(cpp/ttnn/operations/conv)
-add_subdirectory(cpp/ttnn/operations/creation)
-add_subdirectory(cpp/ttnn/operations/core)
-add_subdirectory(cpp/ttnn/operations/data_movement)
-add_subdirectory(cpp/ttnn/operations/debug)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/binary_ng)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_binary)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/complex_unary_backward)
+add_subdirectory(cpp/ttnn/operations)
+add_subdirectory(cpp/ttnn/operations/eltwise)
 add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
-add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
-add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary)
-add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
-add_subdirectory(cpp/ttnn/operations/embedding)
-add_subdirectory(cpp/ttnn/operations/embedding_backward)
-add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
-add_subdirectory(cpp/ttnn/operations/full)
-add_subdirectory(cpp/ttnn/operations/full_like)
-add_subdirectory(cpp/ttnn/operations/index_fill)
 add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
-add_subdirectory(cpp/ttnn/operations/kv_cache)
-add_subdirectory(cpp/ttnn/operations/loss)
-add_subdirectory(cpp/ttnn/operations/matmul)
 add_subdirectory(cpp/ttnn/operations/moreh)
-add_subdirectory(cpp/ttnn/operations/normalization)
-add_subdirectory(cpp/ttnn/operations/point_to_point)
-add_subdirectory(cpp/ttnn/operations/pool)
-add_subdirectory(cpp/ttnn/operations/prefetcher)
-add_subdirectory(cpp/ttnn/operations/rand)
-add_subdirectory(cpp/ttnn/operations/randn)
-add_subdirectory(cpp/ttnn/operations/reduction)
-add_subdirectory(cpp/ttnn/operations/sliding_window)
 add_subdirectory(cpp/ttnn/operations/transformer)
-add_subdirectory(cpp/ttnn/operations/uniform)
 add_subdirectory(examples)
