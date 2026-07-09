@@ -16,7 +16,7 @@ os.environ.setdefault("TT_LOGGER_LEVEL", "Error")
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[3]
-EXAMPLE_DIR = REPO_ROOT / "tt-train" / "sources" / "examples" / "grpo"
+EXAMPLE_DIR = REPO_ROOT / "tt-train" / "sources" / "examples" / "grpo_remote_rollout"
 
 for _p in (str(HERE), str(EXAMPLE_DIR), str(REPO_ROOT)):
     if _p not in sys.path:
