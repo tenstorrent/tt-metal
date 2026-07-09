@@ -278,11 +278,13 @@ class Ideogram4Pipeline:
         )
 
         # --- text encoder (TP=4) ---
-        hf = _tf.AutoModel.from_pretrained(qwen_repo, torch_dtype=torch.bfloat16)
-        lm = hf.language_model if hasattr(hf, "language_model") else hf.model.language_model
+        # Config only — the text-decoder fields live under Qwen3VLConfig.text_config. The real
+        # encoder weights come from the Ideogram fp8 checkpoint below, so there is no need to
+        # instantiate the 8B HF model just to read its config (which also random-inits the
+        # language_model weights and spams a "newly initialized" warning).
+        qcfg = _tf.AutoConfig.from_pretrained(qwen_repo).text_config
         enc_sd = _dq(f"{weights_dir}/text_encoder/model.safetensors")
         enc_sd = {k[len("language_model.") :]: v for k, v in enc_sd.items() if k.startswith("language_model.")}
-        qcfg = lm.config
         self.tokenizer = _tf.AutoTokenizer.from_pretrained(weights_dir, subfolder="tokenizer")
         self._enc_head_dim = qcfg.hidden_size // qcfg.num_attention_heads
         self._enc_mrope = qcfg.rope_scaling["mrope_section"]
@@ -312,7 +314,7 @@ class Ideogram4Pipeline:
             is_fsdp=True,
         )
         self.encoder.load_torch_state_dict(enc_sd)
-        del hf, lm, enc_sd
+        del enc_sd
         _gc.collect()
 
         # --- conditional + unconditional denoisers (TP=4, both resident) ---
