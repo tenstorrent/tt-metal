@@ -494,10 +494,10 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    experimental::KernelRunArgs::RuntimeArgValues reader_rta;
+    experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_rta = {
+        reader_named_rtas = {
             {"N", {{node, dims.N}}},
             {"Ht", {{node, dims.Ht}}},
             {"Wt", {{node, dims.Wt}}},
@@ -505,7 +505,7 @@ void run_single_core_reduce_program(
         };
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_rta = {
+        reader_named_rtas = {
             {"num_tiles", {{node, dims.num_tensor_tiles}}},
             {"scaler", {{node, *reinterpret_cast<uint32_t*>(&scaler)}}},
         };
@@ -517,7 +517,7 @@ void run_single_core_reduce_program(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = std::move(reader_rta),
+            .runtime_arg_values = std::move(reader_named_rtas),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
