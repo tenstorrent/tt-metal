@@ -151,16 +151,33 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
 
     // Num worker cores per direction per link. >1 requires an additional fabric mux core to own the fabric
     // connection and multiplex traffic.
-    // This is a major perf knob. This factory is only used for large tensors and 2 workers are sufficient to
-    // saturate performance for all large tensor sizes, so hardcoding to 2.
-    constexpr uint32_t workers_per_dir = 2;
+    // This is a major perf knob, below heuristic was determined from extensive test sweeps.
+    const uint32_t num_links = operation_attributes.axis_num_links[axis];
+    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
+    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
+    uint32_t workers_per_dir = 1;
+    if (input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+        workers_per_dir = 2;
+    } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
+        // More workers only help when the op is bandwidth-bound, which needs both large NOC transactions
+        // (page size) and enough steady-state bytes. Small-page tensors (e.g. block-float) stay
+        // per-page-overhead-bound even at tens of MB, so extra workers add only mux cost.
+        const uint32_t txn_bytes = std::min(input_page_size, output_page_size);  // NOC transaction size
+        const uint64_t total_output_bytes =
+            (uint64_t)output_tensor.buffer()->num_pages() * output_tensor.buffer()->aligned_page_size();
+        const uint64_t per_link_bytes = total_output_bytes / std::max(1u, num_links);
+        constexpr uint32_t bw_bound_txn_bytes = 1536;         // between block-float (<=1088) and bf16 (2048)
+        constexpr uint64_t bw_bound_link_bytes = 4500000ULL;  // gathered bytes/link where fabric link saturates
+        if (txn_bytes >= bw_bound_txn_bytes && per_link_bytes >= bw_bound_link_bytes) {
+            workers_per_dir = 4;
+        }
+    }
 
     constexpr uint32_t num_directions = 2;  // 0 = forward, 1 = backward
     const bool use_mux = workers_per_dir > 1;
     const uint32_t mux_per_dir = use_mux ? 1u : 0u;
     const uint32_t cores_per_dir = workers_per_dir + mux_per_dir;
     const uint32_t num_cores_per_link = num_directions * cores_per_dir;
-    const uint32_t num_links = operation_attributes.axis_num_links[axis];
 
     // all_cores contains workers + mux
     [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
@@ -260,9 +277,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // OutputStripeIterator derives the remaining iterator parameters at compile-time.
     ////////////////////////////////////////////////////////////////
 
-    const uint32_t input_page_size = input_tensor.buffer()->aligned_page_size();
-    const uint32_t output_page_size = output_tensor.buffer()->aligned_page_size();
-
     auto input_shape = input_tensor.padded_shape();
     uint32_t rank = input_shape.rank();
     int32_t gather_dim = operation_attributes.dim;
@@ -347,9 +361,17 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         tt::tt_metal::CircularBufferConfig(cb_depth * cb_page_size, {{cb0_id, df}}).set_page_size(cb0_id, cb_page_size);
     CreateCircularBuffer(program, worker_core_range, cb_src0_config);
 
+    // data_valid_granularity:
     // data_valid is signalled once per this many CB pages so a downstream can start relaying before the whole
     // stripe arrives. Larger = fewer syncs, smaller = finer pipelining.
-    const uint32_t data_valid_granularity = std::max(1u, num_input_pages / 8);
+    // This is a minor perf knob, below heuristic was determined from extensive test sweeps.
+    // Auto-selected to half the per-worker stripe: enough pipelining without the over-signalling that hurts
+    // small-page tensors at scale. Kept as a fraction of the stripe so it self-scales with tensor size, links,
+    // and workers.
+    const uint32_t total_slices = num_links * workers_per_dir;
+    const uint32_t outputs_per_cb_page = std::max(1u, cb_page_size / output_chunk_size);
+    const uint32_t cb_pages_per_stripe = std::max(1u, (num_output_chunks / total_slices) / outputs_per_cb_page);
+    const uint32_t data_valid_granularity = std::max(1u, cb_pages_per_stripe / 2u);
 
     // KERNEL CREATION
     // Reader
@@ -430,7 +452,6 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         }
     }
 
-    const uint32_t total_slices = num_links * workers_per_dir;
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
             const uint32_t slice_idx = (link * workers_per_dir) + w;
