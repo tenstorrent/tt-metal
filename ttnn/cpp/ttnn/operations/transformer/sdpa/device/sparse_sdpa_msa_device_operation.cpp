@@ -150,6 +150,37 @@ void SparseSDPAMsaOperation::validate_on_program_cache_miss(
     TT_FATAL((d * q.element_size()) % dram_align == 0, "q row bytes must be {}B aligned", dram_align);
     TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
     TT_FATAL((v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+
+    // Block-cyclic ("slab") cache: the invP block remap bakes T/sp and chunk_local (in blocks) as compile-time
+    // defines, so the layout must divide cleanly. Miss-only — the constants are hashed.
+    if (attrs.has_block_cyclic()) {
+        const uint32_t sp = attrs.block_cyclic->sp;
+        const uint32_t chunk_local = attrs.block_cyclic->chunk_local;
+        const uint32_t T = k.logical_shape()[2];
+        TT_FATAL(
+            sp > 0 && chunk_local > 0,
+            "block_cyclic sp/chunk_local must be > 0 (got sp {}, chunk_local {})",
+            sp,
+            chunk_local);
+        TT_FATAL(T % sp == 0, "block_cyclic: sp ({}) must divide T ({})", sp, T);
+        const uint32_t shard_len = T / sp;
+        TT_FATAL(
+            shard_len % chunk_local == 0,
+            "block_cyclic: chunk_local ({}) must divide shard_len T/sp ({})",
+            chunk_local,
+            shard_len);
+        // Remap is block-granular -> chunk_local and shard_len must be whole numbers of blocks.
+        TT_FATAL(
+            chunk_local % attrs.block_size == 0,
+            "block_cyclic: block_size ({}) must divide chunk_local ({})",
+            attrs.block_size,
+            chunk_local);
+        TT_FATAL(
+            shard_len % attrs.block_size == 0,
+            "block_cyclic: block_size ({}) must divide shard_len T/sp ({})",
+            attrs.block_size,
+            shard_len);
+    }
 }
 
 SparseSDPAMsaOperation::spec_return_value_t SparseSDPAMsaOperation::compute_output_specs(
@@ -171,7 +202,9 @@ SparseSDPAMsaOperation::tensor_return_value_t SparseSDPAMsaOperation::create_out
 ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     // Hash compile-time choices. Interleaved K/V T and cache_batch_idx are patched at dispatch.
-    // Sharded K/V shapes stay hashed because accessor strides depend on them.
+    // Sharded K/V shapes stay hashed because accessor strides depend on them. The block-cyclic path also
+    // hashes T: BC_SHARD_STRIDE_GAP (= T/sp - chunk_local) is baked as a compile-time define, so a different
+    // cache size must be a distinct program.
     return tt::tt_metal::operation::hash_operation<SparseSDPAMsaOperation>(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.block_size,
@@ -180,13 +213,16 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
         t.q.dtype(),
         t.k.dtype(),
         t.k.memory_config(),
-        t.k.memory_config().is_sharded() ? t.k.logical_shape() : tt::tt_metal::Shape{},
+        (t.k.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.k.logical_shape() : tt::tt_metal::Shape{},
         t.v.dtype(),
         t.v.memory_config(),
-        t.v.memory_config().is_sharded() ? t.v.logical_shape() : tt::tt_metal::Shape{},
+        (t.v.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.v.logical_shape() : tt::tt_metal::Shape{},
         t.v.logical_shape()[3],
         attrs.has_indexed_kv_cache(),
         attrs.causal_enabled(),
+        attrs.has_block_cyclic(),
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -318,7 +354,8 @@ Tensor sparse_sdpa_msa(
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
     std::optional<uint32_t> chunk_start_idx,
-    std::optional<uint32_t> cluster_axis) {
+    std::optional<uint32_t> cluster_axis,
+    std::optional<BlockCyclicLayout> block_cyclic) {
     using OperationType = ttnn::prim::SparseSDPAMsaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -326,6 +363,7 @@ Tensor sparse_sdpa_msa(
             .block_size = block_size,
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
+            .block_cyclic = block_cyclic,
             .chunk_start_idx = chunk_start_idx,
             .cluster_axis = cluster_axis,
         },

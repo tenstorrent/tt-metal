@@ -10,6 +10,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_vertical_tile_bf16 (causal partial-column mask tile)
+#include "block_cyclic_remap.hpp"      // logical_to_chunked_physical (block-cyclic cache, BC_ENABLE)
 
 constexpr uint32_t sentinel = 0xFFFFFFFFu;
 
@@ -177,8 +178,15 @@ void kernel_main() {
             ASSERT(block_id != sentinel);
 
             // Reader reserves the whole block; writer fills the lower half, reader fills the upper half.
-            uint32_t k_tile0 = k_batch_tile_offset + block_id * k_tiles_per_block;
-            uint32_t v_tile0 = v_batch_tile_offset + block_id * v_tiles_per_block;
+            // Block-cyclic cache: remap the logical block id to its physical block before addressing (invP).
+            // Addressing only — the sentinel search and the diagonal-block causal match stay on the logical id.
+            uint32_t phys_block = block_id;
+#ifdef BC_ENABLE
+            phys_block = tt::block_cyclic::logical_to_chunked_physical(
+                block_id, BC_CHUNK_LOCAL, BC_SP, BC_SHARD_STRIDE_GAP, BC_SLAB_STRIDE_GAP);
+#endif
+            uint32_t k_tile0 = k_batch_tile_offset + phys_block * k_tiles_per_block;
+            uint32_t v_tile0 = v_batch_tile_offset + phys_block * v_tiles_per_block;
             if constexpr (n_kv > 1) {
                 k_tile0 += kv_group * k_group_tile_stride;
                 v_tile0 += kv_group * v_group_tile_stride;

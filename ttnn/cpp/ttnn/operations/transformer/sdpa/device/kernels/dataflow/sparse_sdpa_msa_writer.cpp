@@ -12,6 +12,7 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "sparse_sdpa_msa_gather.hpp"  // per-NoC trid-ring (K_TRID_RING knob)
 #include "dataflow_common.hpp"         // fill_neginf_tile (persistent causal -inf mask tile)
+#include "block_cyclic_remap.hpp"      // logical_to_chunked_physical (block-cyclic cache, BC_ENABLE)
 
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 
@@ -100,8 +101,14 @@ void kernel_main() {
                 last = rq[1] != 0;
             }
             kreq_cb.pop_front(1);
-            uint32_t k_tile0 = k_batch_tile_offset + block_id * k_tiles_per_block;
-            uint32_t v_tile0 = v_batch_tile_offset + block_id * v_tiles_per_block;
+            // Block-cyclic cache: remap the logical block id (from the reader) to its physical block (invP).
+            uint32_t phys_block = block_id;
+#ifdef BC_ENABLE
+            phys_block = tt::block_cyclic::logical_to_chunked_physical(
+                block_id, BC_CHUNK_LOCAL, BC_SP, BC_SHARD_STRIDE_GAP, BC_SLAB_STRIDE_GAP);
+#endif
+            uint32_t k_tile0 = k_batch_tile_offset + phys_block * k_tiles_per_block;
+            uint32_t v_tile0 = v_batch_tile_offset + phys_block * v_tiles_per_block;
             if constexpr (n_kv > 1) {
                 k_tile0 += kv_group * k_group_tile_stride;
                 v_tile0 += kv_group * v_group_tile_stride;

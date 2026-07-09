@@ -9,6 +9,8 @@
 
 #include <stdint.h>
 
+#include "block_cyclic_remap.hpp"
+
 namespace sparse_sdpa {
 
 // Per-NoC trid-ring depth for each gather half (swept: 4 is the sweet spot — with the split halving each

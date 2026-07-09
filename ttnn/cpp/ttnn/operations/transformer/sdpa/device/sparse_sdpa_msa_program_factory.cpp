@@ -216,6 +216,24 @@ tt::tt_metal::ProgramDescriptor SparseSDPAMsaOperation::SparseSDPAMsaProgramFact
     writer_desc.common_runtime_args = writer_crt;
     writer_desc.config = tt::tt_metal::WriterConfigDescriptor{};
 
+    // Block-cyclic ("slab") cache: emit the invP remap constants as compile-time defines to both dataflow
+    // kernels, which each remap their gathered block ids. Constants are in BLOCK units (mirrors sparse_sdpa's
+    // add_bc_defines, which is in rows). No runtime arg — T is folded into the program hash for this path.
+    if (attrs.has_block_cyclic()) {
+        const uint32_t bc_sp = attrs.block_cyclic->sp;
+        const uint32_t bc_chunk_local_blk = attrs.block_cyclic->chunk_local / block_size;
+        const uint32_t bc_shard_len_blk = (t.k.logical_shape()[2] / bc_sp) / block_size;
+        std::map<std::string, std::string> bc_defs{
+            {"BC_ENABLE", "1"},
+            {"BC_SP", std::to_string(bc_sp)},
+            {"BC_CHUNK_LOCAL", std::to_string(bc_chunk_local_blk)},
+            {"BC_SHARD_STRIDE_GAP", std::to_string(bc_shard_len_blk - bc_chunk_local_blk)},
+            {"BC_SLAB_STRIDE_GAP", std::to_string(bc_chunk_local_blk * (bc_sp - 1))},
+        };
+        reader_desc.defines = tt::tt_metal::KernelDescriptor::Defines(bc_defs.begin(), bc_defs.end());
+        writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(bc_defs.begin(), bc_defs.end());
+    }
+
     auto [math_fidelity, math_approx, fp32_acc, packer_l1_acc, dst_full_sync] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), attrs.compute_kernel_config);
     (void)packer_l1_acc;

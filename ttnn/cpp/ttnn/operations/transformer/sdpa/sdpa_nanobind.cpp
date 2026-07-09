@@ -398,6 +398,11 @@ void bind_sdpa(nb::module_& mod) {
 		selects a different cached program. Requires bf16 q; fp8 q with this set is rejected.
             cluster_axis (int, optional): SP mesh axis used to derive the per-device chunk_start
                 (chunk_start_idx + rank*S) under sequence parallelism. Host-side only.
+            block_cyclic_sp_axis (int, optional): when set (with block_cyclic_chunk_local), the K/V cache is
+                striped block-cyclic across SP on this mesh axis; the gather remaps each logical block id to its
+                physical block in-kernel (invP), so no host reorder is needed. sp is read from the mesh.
+            block_cyclic_chunk_local (int, optional): per-shard chunk length (chunk_size_global / sp). Required
+                iff block_cyclic_sp_axis is set; cross-checked against q (must equal q_isl or tp*q_isl).
 
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, dtype = q.
@@ -416,7 +421,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("cache_batch_idx") = nb::none(),
         nb::arg("chunk_start_idx") = nb::none(),
-        nb::arg("cluster_axis") = nb::none());
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(
