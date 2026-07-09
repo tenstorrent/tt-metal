@@ -25,17 +25,23 @@ ttnn::Tensor repeat_interleave(
     const auto& input_a_shape = input_a.logical_shape();
     uint32_t input_rank = input_a_shape.rank();
     uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
+
+    // UINT8 must be typecast before any path (including the last-dim transpose path)
+    // because transpose and tilize/untilize kernels don't support 1-byte elements.
+    const DataType original_dtype = input_a.dtype();
+    const bool uint8_typecast = original_dtype == DataType::UINT8;
+    ttnn::Tensor working_input = uint8_typecast ? ttnn::typecast(input_a, DataType::BFLOAT16, mem_config) : input_a;
+
     if (normalized_dim == input_rank - 1) {
-        auto transposed_input = ttnn::transpose(input_a, -1, -2, mem_config);
+        auto transposed_input = ttnn::transpose(working_input, -1, -2, mem_config);
         auto repeated_input = ttnn::repeat_interleave(transposed_input, repeat, -2, mem_config);
-        return ttnn::transpose(repeated_input, -1, -2, mem_config);
+        auto result = ttnn::transpose(repeated_input, -1, -2, mem_config);
+        return uint8_typecast ? ttnn::typecast(result, original_dtype, mem_config) : result;
     }
 
-    ttnn::Tensor rm_input = input_a;
-    // Block-float dtypes need bf16 unpacking for ROW_MAJOR; UINT8 is converted because the
-    // tilize/untilize kernels don't support it (uint8 values are exactly representable in bf16).
-    bool typecast = input_a.dtype() == DataType::BFLOAT8_B || input_a.dtype() == DataType::BFLOAT4_B ||
-                    input_a.dtype() == DataType::UINT8;
+    ttnn::Tensor rm_input = working_input;
+    // Block-float dtypes need bf16 unpacking for ROW_MAJOR layout.
+    bool typecast = original_dtype == DataType::BFLOAT8_B || original_dtype == DataType::BFLOAT4_B;
     if (typecast) {
         rm_input = ttnn::typecast(rm_input, DataType::BFLOAT16, mem_config);
     }
@@ -68,7 +74,8 @@ ttnn::Tensor repeat_interleave(
     auto concatenated_tensor = ttnn::concat(combined_tensors, normalized_dim + 1);
     auto reshaped_tensor = ttnn::reshape(concatenated_tensor, ttnn::Shape(final_shape));
     auto original_layout = ttnn::to_layout(reshaped_tensor, input_a.layout());
-    return typecast ? ttnn::typecast(original_layout, input_a.dtype(), mem_config) : original_layout;
+    bool needs_castback = typecast || uint8_typecast;
+    return needs_castback ? ttnn::typecast(original_layout, original_dtype, mem_config) : original_layout;
 }
 
 }  // namespace ttnn

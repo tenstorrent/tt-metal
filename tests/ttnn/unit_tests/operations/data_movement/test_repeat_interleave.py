@@ -14,12 +14,13 @@ from tests.ttnn.utils_for_testing import assert_equal
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint16])
 def test_repeat_interleave(device, repeats, dim, dtype):
+    torch.manual_seed(42)
     if dtype == ttnn.uint16:
-        torch_dtype = torch.int16
-        torch_input_tensor = torch.randint(0, 100, (1, 1, 32, 32), dtype=torch_dtype)
+        torch_dtype = torch.int32
+        torch_input_tensor = torch.randint(0, (2**16) - 1, (1, 1, 32, 32), dtype=torch_dtype)
     else:
         torch_dtype = torch.bfloat16
-        torch_input_tensor = torch.rand(1, 1, 32, 32, dtype=torch_dtype)
+        torch_input_tensor = torch.randn(1, 1, 32, 32, dtype=torch_dtype) * 1000.0
 
     torch_result = torch.repeat_interleave(torch_input_tensor, repeats, dim=dim)
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
@@ -63,6 +64,7 @@ def test_repeat_interleave_preserves_fp32_precision(device, repeats, dim):
 
 @pytest.mark.skip(reason="ttnn.repeat_interleave only supports `repeats` as int")
 def test_repeat_interleave_with_repeat_tensor(device):
+    torch.manual_seed(42)
     torch_input_tensor = torch.rand(1, 2, 32, 32, dtype=torch.bfloat16)
     torch_repeats = torch.tensor([1, 2])
     torch_result = torch.repeat_interleave(torch_input_tensor, torch_repeats, dim=1)
