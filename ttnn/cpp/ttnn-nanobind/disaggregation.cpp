@@ -257,9 +257,7 @@ void bind_disaggregation_api(nb::module_& mod) {
             &KvChunkAddressTable::num_position_chunks,
             nb::arg("config_id") = 0,
             "Number of position chunks for a config (default 0).")
-        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.")
-
-
+        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.");
 
     // Protobuf serialization — the runner publishes the table to the
     // migration_worker (SET_TABLE consumes a serialized protobuf file path).
