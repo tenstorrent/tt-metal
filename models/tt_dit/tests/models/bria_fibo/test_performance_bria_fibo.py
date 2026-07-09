@@ -53,7 +53,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
 
     Sanity-asserts the produced image is valid + non-degenerate (proves the timed path really ran);
     it does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to see the log.
-    Runtime ~ (1 warmup + num_measured_runs) full generations (~30s each) + ~44s model build.
+    Runtime ~ (1 warmup + num_measured_runs) full generations (~22s each) + ~44s model build.
     """
     from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
 
@@ -121,6 +121,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
     arr = np.asarray(image[0])
     assert arr.shape == (height, width, 3), f"unexpected image shape {arr.shape}"
     assert arr.std() > 1.0, f"image looks degenerate (std={arr.std():.4f})"
+    assert np.unique(arr).size > 16, f"image looks degenerate ({np.unique(arr).size} unique values)"
 
     # Aggregate across measured runs and print the breakdown.
     avg = {s: sum(run[s] for run in runs) / len(runs) for s in STAGES}
