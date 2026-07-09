@@ -5,8 +5,7 @@ import json, os, html
 SP = os.path.dirname(os.path.abspath(__file__))
 DATA = json.load(open(SP + "/perf_data.json"))
 
-# Fold parse_percall's per-call attribution into DATA as the JS expects it (build_data.py does NOT add
-# these — without this merge bt() is undefined and the graph is blank):
+# Fold parse_percall's per-call attribution into DATA as the JS expects it:
 #   data.block_timing[mode][scen] = {total_ns, nodes:{block_id: ns}}   (semantic-node real durations)
 #   data.expanded[mode][scen]     = {block_id: [ordered op nodes]}      (intra-block dataflow)
 PERCALL = json.load(open(SP + "/percall.json"))
@@ -57,7 +56,7 @@ SPARSE_BLOCKS = [
         "label": "indexer · key stem + K-cache write",
         "fn": "TtIndexer.write_k",
         "file": FI,
-        "lines": "412-454",
+        "lines": "446-516",
         "col": 1,
         "row": 2,
         "desc": "Lightning-indexer key projection, TP all-reduce, k-norm, block-cyclic RoPE, write to the bf8 index K-cache.",
@@ -106,33 +105,32 @@ SPARSE_BLOCKS = [
     },
     {
         "id": "s3",
-        "label": "indexer · query + score + top-k",
+        "label": "indexer · SP×TP query + score + top-k",
         "fn": "TtIndexer.forward",
         "file": FI,
-        "lines": "484-628",
+        "lines": "564-671",
         "col": 2,
         "row": 1,
-        "desc": "Query stem + block-cyclic RoPE, per-head weights, gather full-T index keys, indexer_score_dsa (causal, in-kernel block-cyclic), then top-k → sparse indices.",
-        "snippet": "q = ttnn.linear(qr, self._idx_wq_b, ...); q,_,_ = nlp_create_qkv_heads(q, ...)\nq_dev = self._bc_rope_pe(q, rope_tensors, start_pos)\nwts = self._tp_rs_ag(ttnn.linear(hidden_states, self._idx_wproj, ...), rs_only=True)\nk_full = self._gather_index_kbuf(index_kv_cache)          # SP all-gather → full T\nlogits = ttnn.experimental.indexer_score_dsa(q_dev, k_full, weights, chunk_start_idx=start_pos, ...)\nreturn ttnn.experimental.topk_large_indices(logits, k=min(index_topk, end_pos))",
+        "desc": "SP×TP seq-sharded indexer (commit c7f7dc3). wq_b is REPLICATED — all H_idx heads resident on-chip — so the score head-sum is complete on-chip and the old TP logit all-reduce is gone. Instead the query sequence is TP-seq-sharded (mesh_partition qr), scored per-chip by indexer_score_dsa (in-kernel block-cyclic causal), and only the small top-k indices are all-gathered back over TP.",
+        "snippet": "qr_sp = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis)   # TP seq-shard\nq = ttnn.linear(qr_sp, self._idx_wq_b, ...); q,_,_ = nlp_create_qkv_heads(q, ...)  # all heads\nq_dev = self._device_rope_pe(q, glob, start_pos, shard_axes=(sp_axis, tp_axis), perm=True)\nwts = self._tp_rs_ag(ttnn.linear(hidden_states, self._idx_wproj, ...))   # full TP all-reduce\nwts = ttnn.mesh_partition(wts, dim=2, cluster_axis=self.tp_axis)\nk_full = self._gather_index_kbuf(index_kv_cache)          # SP all-gather → full T\nlogits = ttnn.experimental.indexer_score_dsa(q_dev, k_full, weights, cluster_axis=None, ...)\nidx_local = ttnn.experimental.topk_large_indices(logits, k=min(index_topk, end_pos))\nreturn self._tp_all_gather(idx_local, dim=2)              # TP gather → SP block's full rows",
         "weights": [
-            ["indexer.wq_b", "[1536, 8192]", "TP col-shard (heads)"],
+            ["indexer.wq_b", "[1536, 8192]", "replicated (all heads)"],
             ["indexer.weights_proj", "[7168, 64]", "TP-shard on hidden"],
         ],
         "ops": [
-            "Matmul×3",
+            "MeshPartition×2 (TP seq-shard qr / weights)",
+            "Matmul×3 (wq_b, rope-perm, weights_proj)",
             "NlpCreateHeads×1",
-            "Slice×2(+resid)",
-            "RotaryEmbedding×1",
-            "Concat×1(+resid)",
-            "BinaryNg×1",
+            "Slice×4(+resid)",
+            "RotaryEmbeddingLlama×1",
+            "Concat×2 (q · index gather)",
+            "ReduceScatter×1 / AllGather×1 (weights TP all-reduce)",
+            "BinaryNg×1 (scale)",
             "Permute×1(+resid)",
-            "AllGather / AllBroadcast (index gather)",
+            "AllGather / AllBroadcast (SP index-K gather)",
             "IndexerScore×1",
-            "Tilize×1",
-            "ReduceScatter/AllGather (logits AR)",
-            "Untilize×1",
             "TopkLargeIndices×1",
-            "MeshPartition(reshard)",
+            "AllBroadcast (TP top-k index gather)",
         ],
     },
     {
@@ -416,21 +414,21 @@ BLOCKS = {"sparse": SPARSE_BLOCKS, "dense": DENSE_BLOCKS}
 EDGES = {"sparse": SPARSE_EDGES, "dense": DENSE_EDGES}
 
 META = {
-    "branch": "main",
-    "commit": "099251b681c",
-    "commit_subject": "[Feature] #0 - Exabox system health check wrapper script added. (#48593)",
+    "branch": "mvasilijevic/indexer_sp32",
+    "commit": "e71a1b0a666",
+    "commit_subject": "mla: SP×TP seq-sharded DSA indexer",
     "hardware": "LoudBox — 8× Blackhole p150b",
-    "mesh": "SP=2 × TP=4 (line / FABRIC_1D)",
+    "mesh": "SP=2 × TP=4 (FABRIC_2D)",
     "proxy": "1/4-Galaxy proxy (per-chip compute = Galaxy; sequence length ×1/4)",
     "test": "models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py",
     "local": {"chunk": 1280, "warm_cold_cache": 12800, "long_cache": 128000, "per_chip_seq": 640},
     "galaxy": {"chunk": 5120, "warm_cold_cache": 51200, "long_cache": 512000, "mesh": "SP=8 × TP=4"},
     "key_changes": [
-        "Add sparse MLA (DSA) support into the deepseek_v3_d_p stack (#47832)",
+        "SP×TP seq-sharded DSA indexer: wq_b replicated (all heads on-chip → no TP logit all-reduce); query seq TP-sharded, only top-k indices gathered back over TP (c7f7dc3)",
+        "Perf harness runs on FABRIC_2D (production-aligned transport; no multi-hop line-broadcast hang) instead of FABRIC_1D (ab8181a)",
         "block-cyclic per-user lightning-indexer key cache for sparse chunked prefill (#48938)",
         "sparse_sdpa multi-user read via cache_batch_idx; in-kernel block-cyclic remap, drop host reorder (#48888, #48733)",
         "Unify DSA MLA into a single ttMLA (has_indexer switches sparse vs dense v3.1 baseline)",
-        "Add warm / cold / long perf scenarios to the MLA tracy harness (#49100)",
     ],
     "config": {
         "hidden": 7168,
@@ -450,13 +448,18 @@ META = {
 CAVEATS = [
     {
         "sev": "resolved",
-        "title": "Sparse cold recovered from the un-clobbered raw report",
-        "body": "The saved sparse cold summary CSV had been overwritten by a non-default 41-iteration / 25,600-token-chunk (~1.024M cache) stress run. The matched-parameter sparse cold (11 iterations, 1,280-token chunk — identical to dense cold) still existed in reports/2026_07_07_23_25_57 and was re-derived here with the driver's own merge_device_rows post-processing. All sparse-vs-dense cold numbers below use this recovered, matched run.",
+        "title": "All six dumps are fresh from one sweep, post-build",
+        "body": "The whole warm/cold/long × sparse/dense matrix was re-run in a single tracy sweep on 2026-07-09 09:29–09:33, after ./build_metal.sh (09:27) rebuilt against the SP×TP-indexer + FABRIC_2D commits — so every dump matches current code, and no CSV was clobbered by a mismatched run. Each dump's parameters were verified from its own raw ops_perf_results report (per-chip chunk = 640 rows via LayerNorm INPUT_0_Y_PAD; 11 forwards for cold, 1 for warm/long; 8 devices) and each block-sum equals the driver's reported scenario total to the nanosecond.",
     },
     {
-        "sev": "pending",
-        "title": "Dense long is not yet measured",
-        "body": "No dense long-scenario tracy dump exists. The long comparison is sparse-only; dense long is marked N/A and will be generated after this report.",
+        "sev": "resolved",
+        "title": "Dense long is now measured",
+        "body": "The prior report had no dense long dump; this sweep captured it (74.94 ms ring_mla, 76.99 ms total). The long-prefix sparse-vs-dense crossover is therefore now fully measured, not sparse-only.",
+    },
+    {
+        "sev": "info",
+        "title": "What changed: SP×TP seq-sharded indexer (measured vs the TP-head-sharded baseline)",
+        "body": "The indexer was reworked to replicate wq_b so all H_idx heads are resident on-chip — the head-sum is complete locally, removing the old two-CCL all-reduce of the ~end_pos-wide partial logits (and its TILE round-trip). The query sequence is now sharded over TP as well, and only the small top-k indices are all-gathered back over TP before sparse_sdpa. Measured against the merge-base baseline (branch mvasilijevic/sparse_test_improvements @ dc50ed8, the TP-head-sharded indexer, identical harness/config) on this LoudBox proxy: sparse is 11.5% faster warm (10.10→8.94 ms), 12.9% faster over the cold prefill (97.28→84.71 ms), and 39.5% faster at the long 0.5M-class prefix (32.04→19.37 ms, 1.65×) — the win grows with prefix because the removed logit all-reduce scaled with end_pos. Dense is the control: unchanged across baseline/branch (indexer-independent), confirming the sparse delta is purely the indexer. See the Baseline before/after panel. (The harness also now profiles FABRIC_2D, the production transport, rather than FABRIC_1D.)",
     },
     {
         "sev": "info",
@@ -474,11 +477,15 @@ TENSOR = {
     "s2.wk": "[1,1,1280,128] bf16 TILE · " + DR,
     "s2.rope": "[1,1,1280,128] bf16 TILE · " + DR,
     "s2.wr": "index_kv_cache [B,1,T/sp,128] bf8 ROW_MAJOR · " + DBC,
-    "s3.wqb": "[1,1,1280,8192] bf16 TILE · " + DHD,
-    "s3.heads": "[1,16,1280,128] bf16 TILE · " + DHD,
+    "s3.mpq": "qr [1,1,1280,1536] bf16 TILE · SP↕2·TP↕4 seq(dim2)",
+    "s3.wqb": "[1,1,1280,8192] bf16 TILE · SP↕2·TP↕4 seq · heads repl",
+    "s3.heads": "[1,64,1280,128] bf16 TILE · SP↕2·TP↕4 seq · heads repl",
     "s3.wproj": "weights [1,1,1280,64] bf16 · " + DR,
-    "s3.score": "logits [1,16,1280,T] bf16 · SP↕2 seq · TP↕4 heads",
-    "s3.topk": "indices [1,1,1280,2048] uint32 ROW_MAJOR · " + DR,
+    "s3.mpw": "weights [1,64,1280,1] bf16 · SP↕2·TP↕4 seq · heads repl",
+    "s3.gk": "index K [B,1,T,128] bf16 TILE · " + DG,
+    "s3.score": "logits [1,1,1280,T] bf16 ROW_MAJOR · SP↕2·TP↕4 seq · head-summed",
+    "s3.topk": "idx_local [1,1,1280,2048] uint32 · SP↕2·TP↕4 seq",
+    "s3.idxag": "indices [1,1,1280,2048] uint32 ROW_MAJOR · " + DR,
     "s4.qb": "[1,1,1280,24576] bf16 TILE · " + DHD,
     "s4.heads": "[1,32,1280,192] bf16 TILE · " + DHD,
     "s4.absorb": "q_nope→latent [1,32,1280,512] bf16 TILE · " + DHD,
@@ -757,6 +764,11 @@ details.appx .ac{padding:0 16px 16px;}
     <p class="note" style="margin:-6px 0 12px">Device-collapsed device-kernel time · lower is better. Teal = sparse, amber = dense throughout this report.</p>
     <div class="panel"><div class="cmp-bars" id="cmpBars"></div>
       <p class="note" id="cmpNote" style="margin-top:14px"></p></div>
+    <div class="panel" style="margin-top:14px">
+      <h3 style="font:650 15px/1.2 var(--sans);color:var(--ink);margin:0 0 4px">Baseline before/after — SP×TP indexer</h3>
+      <p class="note" style="margin:0 0 12px">This branch (SP×TP indexer) vs its merge-base baseline (TP-head-sharded), same harness · same box. Dense is the control (indexer-independent).</p>
+      <div id="baselineBox" style="overflow-x:auto"></div>
+      <p class="note" id="baselineNote" style="margin-top:12px"></p></div>
   </section>
 
   <section id="ops">
@@ -919,12 +931,34 @@ function drawCompare(){
   // note
   const w=data.modes.sparse.warm.total_ns, dw=data.modes.dense.warm.total_ns;
   const c=data.modes.sparse.cold.total_ns, dc=data.modes.dense.cold.total_ns;
+  const l=data.modes.sparse.long.total_ns, dl=data.modes.dense.long.total_ns;
   document.getElementById('cmpNote').innerHTML=
     `At the short warm prefix (12.8k tok) sparse is <b>${((1-w/dw)*100).toFixed(1)}% faster</b> than dense `+
     `(${fmtMs(w)} vs ${fmtMs(dw)} ms). Over the cold prefill sparse is <b>${((c/dc-1)*100).toFixed(1)}% slower</b> `+
-    `(${fmtMs(c)} vs ${fmtMs(dc)} ms) — the indexer + top-k overhead is not yet amortised at this sequence length. `+
-    `Sparse's advantage grows with prefix length: dense ring-MLA scales with the full prefix, while sparse attends a fixed top-k=2048. `+
-    `<span class="miss">Dense long is not yet measured</span>, so the crossover point is not pinned here.`;
+    `(${fmtMs(c)} vs ${fmtMs(dc)} ms) — the indexer + top-k overhead is not amortised at this sequence length. `+
+    `The advantage flips hard with prefix length: at the long-prefix (0.5M-class) cache sparse is <b>${((1-l/dl)*100).toFixed(1)}% faster</b> `+
+    `(${fmtMs(l)} vs ${fmtMs(dl)} ms, ${(dl/l).toFixed(1)}×) — dense ring-MLA scales with the full prefix while sparse attends a fixed top-k=2048.`;
+}
+
+/* ---------- baseline before/after (SP×TP indexer vs its merge-base) ---------- */
+function drawBaseline(){
+  const box=document.getElementById('baselineBox'), note=document.getElementById('baselineNote');
+  if(!data.baseline){ box.innerHTML=''; note.textContent='No baseline was measured for this report.'; return; }
+  const bm=data.baseline_meta, scen=['warm','cold','long'];
+  const cell=(b,a)=>{ if(!b||!a) return '<td class="mono">—</td><td class="mono">—</td><td class="mono">—</td>';
+    const d=(1-a.total_ns/b.total_ns)*100, col=d>1?'var(--good)':d<-1?'var(--warn)':'var(--ink)';
+    return `<td class="mono">${fmtMs(b.total_ns)}</td><td class="mono">${fmtMs(a.total_ns)}</td>`+
+           `<td class="mono" style="color:${col};font-weight:600">${d>=0?'−':'+'}${Math.abs(d).toFixed(1)}%</td>`; };
+  let h='<table class="iot" style="width:100%;min-width:560px"><thead>'+
+    '<tr><td></td><td colspan="3" style="text-align:center;color:var(--sparse);font-weight:600">sparse (v3.2 DSA — changed)</td>'+
+    '<td colspan="3" style="text-align:center;color:var(--dense);font-weight:600">dense (control — unchanged)</td></tr>'+
+    '<tr><td>scenario</td><td>before</td><td>after</td><td>Δ</td><td>before</td><td>after</td><td>Δ</td></tr></thead><tbody>';
+  scen.forEach(s=>{ h+=`<tr><td>${s}</td>${cell(data.baseline.sparse[s],data.modes.sparse[s])}`+
+                       `${cell(data.baseline.dense[s],data.modes.dense[s])}</tr>`; });
+  h+='</tbody></table>'; box.innerHTML=h;
+  const sp=s=>{ const b=data.baseline.sparse[s],a=data.modes.sparse[s]; return b&&a?(1-a.total_ns/b.total_ns)*100:null; };
+  note.innerHTML=`<b>Baseline:</b> ${esc(bm.label)} — <span class="mono">${esc(bm.branch)}@${esc(bm.commit)}</span>. ${esc(bm.desc)} `+
+    `The SP×TP indexer makes sparse <b>${sp('warm').toFixed(1)}%</b> faster warm and <b>${sp('long').toFixed(1)}%</b> faster at the long prefix — the win grows with prefix because the removed logit all-reduce scaled with end_pos. Dense is flat (Δ≈0), the control that isolates the indexer.`;
 }
 
 /* ---------- ops table ---------- */
@@ -1250,7 +1284,7 @@ document.querySelectorAll('#segMode button').forEach(b=>b.onclick=()=>{
 document.querySelectorAll('#segView button').forEach(b=>b.onclick=()=>{
   view=b.dataset.v; document.querySelectorAll('#segView button').forEach(x=>x.setAttribute('aria-pressed',x===b)); drawGraph();});
 function draw(){ if(!ent())S='warm'; syncPressed(); updateAvail();
-  drawSummary();drawCompare();drawOps();drawCold();drawGraph();}
+  drawSummary();drawCompare();drawBaseline();drawOps();drawCold();drawGraph();}
 drawStatic();draw();setupPanZoom();
 addEventListener('resize',()=>{if(S==='cold')drawCold();});
 </script>

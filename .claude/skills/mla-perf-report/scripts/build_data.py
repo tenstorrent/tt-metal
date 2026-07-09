@@ -79,7 +79,30 @@ for mode, d in SP.items():
     reps = sorted(glob.glob(f"{d}/reports/*/ops_perf_results_*.csv"))
     data["raw_reports"][mode] = [os.path.abspath(r) for r in reps]
 
-out = "/tmp/claude-1211414789/-localdev-mvasilijevic-tt-metal/0f0b040b-5dd5-4a93-b852-a5edd32a4cf9/scratchpad/perf_data.json"
+# Baseline axis: totals of the merge-base "before" code, discovered via run-manifest (discover.py).
+# data.baseline[mode][scenario] = total_ns; data.baseline_meta describes what the baseline is. The
+# branch (data.modes) is the "after". Dense is the control (indexer-independent) — should be ~flat.
+_SPdir = os.path.dirname(os.path.abspath(__file__))
+# ADAPT per run: point at the baseline commit's totals produced by `python discover.py <baseline_commit>`
+# (the merge-base "before", or a named baseline branch). Absent file -> no baseline axis in the report.
+BASELINE_TOTALS = os.path.join(_SPdir, "totals_dc50ed81dc5.json")  # commit-keyed baseline totals
+data["baseline"] = None
+if os.path.exists(BASELINE_TOTALS):
+    bt = json.load(open(BASELINE_TOTALS))  # keys "sparse/warm" -> {total_ns, calls, iters, dir}
+    bl = {"sparse": {}, "dense": {}}
+    for k, v in bt.items():
+        m, s = k.split("/")
+        bl[m][s] = {"total_ns": v["total_ns"], "total_calls": v["calls"]}
+    data["baseline"] = bl
+    data["baseline_meta"] = {
+        "commit": "dc50ed8",
+        "branch": "mvasilijevic/sparse_test_improvements",
+        "label": "TP-head-sharded indexer (pre-SP×TP)",
+        "desc": "merge-base 'before': the DSA indexer with the full-width TP logit all-reduce, "
+        "identical harness/config to the branch. Dense is unchanged (indexer-independent) — a control.",
+    }
+
+out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "perf_data.json")
 with open(out, "w") as f:
     json.dump(data, f, indent=1)
 
