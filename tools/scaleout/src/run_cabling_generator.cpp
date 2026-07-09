@@ -75,13 +75,14 @@ InputConfig parse_arguments(int argc, char** argv) {
         cxxopts::value<bool>()->default_value("false")->implicit_value("true"))(
         "include",
         "Opt-in sub-cluster filter: slash-delimited instance path selecting a node or subgraph to keep "
-        "(e.g. --include bh_galaxy_sp_0 --include bh_galaxy_sp_1/bh_galaxy_node_2). Repeatable. Only "
-        "connections whose endpoints are both within the selection are emitted. Single-file cabling only.",
+        "(e.g. --include bh_galaxy_sp_0 --include bh_galaxy_sp_1/bh_galaxy_node_2). Repeatable. A path "
+        "matches any instance whose full path ends with those segments. Only connections whose endpoints "
+        "are both within the selection are emitted.",
         cxxopts::value<std::vector<std::string>>())(
         "exclude",
-        "Opt-in sub-cluster filter: slash-delimited instance path to drop (e.g. --exclude bh_galaxy_sp_8). "
+        "Opt-in sub-cluster filter: slash-delimited instance path to drop (e.g. --exclude bh_galaxy_node_0). "
         "Repeatable. Applied after --include (removes from the kept set; if no --include is given, keeps "
-        "everything except the excluded paths). Single-file cabling only.",
+        "everything except the excluded paths).",
         cxxopts::value<std::vector<std::string>>())("h,help", "Print usage information");
 
     try {
@@ -142,10 +143,6 @@ InputConfig parse_arguments(int argc, char** argv) {
         // Check if cabling descriptor is a directory or file
         if (directory_exists(config.cabling_descriptor_path)) {
             config.is_cabling_directory = true;
-            if (result.contains("include") || result.contains("exclude")) {
-                throw std::invalid_argument(
-                    "--include/--exclude are only supported for a single cabling descriptor file, not a directory");
-            }
         } else if (file_exists(config.cabling_descriptor_path)) {
             config.is_cabling_directory = false;
             // Validate file extension for single file
@@ -223,11 +220,10 @@ int main(int argc, char** argv) {
         };
         print_paths("Include filter (sub-cluster)", config.include_paths);
         print_paths("Exclude filter (sub-cluster)", config.exclude_paths);
-        CablingGenerator cabling_generator(
-            config.cabling_descriptor_path,
-            config.deployment_descriptor_path,
-            config.include_paths,
-            config.exclude_paths);
+        CablingGenerator cabling_generator(config.cabling_descriptor_path, config.deployment_descriptor_path);
+        if (!config.include_paths.empty() || !config.exclude_paths.empty()) {
+            cabling_generator.apply_instance_filter(config.include_paths, config.exclude_paths);
+        }
 
         std::string factory_output = "out/scaleout/factory_system_descriptor" + config.output_name + ".textproto";
         std::string cabling_output = "out/scaleout/cabling_guide" + config.output_name + ".csv";

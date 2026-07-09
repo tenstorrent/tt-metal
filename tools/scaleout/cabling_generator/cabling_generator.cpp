@@ -576,6 +576,22 @@ HostId resolve_path_from_proto(
     throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
 }
 
+// Reject instance names that would break instance-path addressing. '/' and ',' are reserved: '/'
+// joins the segments of the FSD instance_path field and splits --include/--exclude paths, and ',' is
+// the CLI list separator for those flags.
+void validate_instance_name(const std::string& name, const std::string& template_name) {
+    if (name.empty()) {
+        throw std::runtime_error(fmt::format("Empty child instance name in graph template '{}'", template_name));
+    }
+    if (name.find('/') != std::string::npos || name.find(',') != std::string::npos) {
+        throw std::runtime_error(fmt::format(
+            "Instance name '{}' in graph template '{}' contains a reserved delimiter ('/' or ','); these are "
+            "used for the FSD instance_path field and --include/--exclude addressing",
+            name,
+            template_name));
+    }
+}
+
 // Builds a resolved graph instance from a graph instance and deployment descriptor.
 // Recursively build tree structure from protobuf graph instance
 // deployment_descriptor is optional - if nullptr, no validation is performed.
@@ -599,6 +615,7 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance_impl(
     // Build children based on template + instance mapping
     for (const auto& child_def : template_def.children()) {
         const std::string& child_name = child_def.name();
+        validate_instance_name(child_name, graph_instance.template_name());
         if (!graph_instance.child_mappings().contains(child_name)) {
             throw std::runtime_error(fmt::format(
                 "Child mapping not found: '{}' in instance '{}'", child_name, graph_instance.template_name()));
@@ -845,13 +862,9 @@ void CablingGenerator::initialize_cluster(
     // Validate host_id uniqueness across all nodes
     validate_host_id_uniqueness();
 
-    if (!include_paths_.empty() || !exclude_paths_.empty()) {
-        // Filtering also assigns dense host_ids and populates host_id_to_node_.
-        apply_instance_filter();
-    } else {
-        populate_host_id_to_node();
-        reassign_host_ids_dfs();
-    }
+    // Populate the host_id_to_node_ map
+    populate_host_id_to_node();
+    reassign_host_ids_dfs();
     generate_logical_chip_connections();
 }
 
@@ -1027,12 +1040,6 @@ void CablingGenerator::initialize_from_single_file(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
     auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
     initialize_cluster(cluster_descriptor, deployment_descriptor);
-    if (!include_paths_.empty() || !exclude_paths_.empty()) {
-        // Filtered (sub-cluster) run: host_ids are already a dense 0..M-1 space; source
-        // deployment_hosts_ directly from the original deployment host each survivor maps to.
-        build_filtered_deployment_hosts(deployment_descriptor);
-        return;
-    }
     populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
     // Order deployment_hosts_ by DFS-assigned host_id; rebuild falls back to the current
     // order internally when node names don't match hostnames (e.g. test fixtures).
@@ -1046,22 +1053,11 @@ void CablingGenerator::initialize_from_single_file(
 // Constructor with full deployment descriptor
 // cluster_descriptor_path can be a single file or a directory
 CablingGenerator::CablingGenerator(
-    const std::string& cluster_descriptor_path,
-    const std::string& deployment_descriptor_path,
-    const std::vector<std::vector<std::string>>& include_paths,
-    const std::vector<std::vector<std::string>>& exclude_paths) {
-    include_paths_ = include_paths;
-    exclude_paths_ = exclude_paths;
+    const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path) {
     if (!std::filesystem::exists(cluster_descriptor_path)) {
         throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
     }
     if (std::filesystem::is_directory(cluster_descriptor_path)) {
-        if (!include_paths_.empty() || !exclude_paths_.empty()) {
-            throw std::runtime_error(
-                "Instance filter (--include/--exclude) is not supported for a directory of cabling "
-                "descriptors; provide a single .textproto file: " +
-                cluster_descriptor_path);
-        }
         // Dispatch to the parsed-deployment overload, which slices the deployment per cabling file.
         auto deployment_descriptor = load_deployment_descriptor(deployment_descriptor_path);
         auto merged = build_from_directory(cluster_descriptor_path, deployment_descriptor);
@@ -2535,13 +2531,15 @@ std::string join_instance_path(const std::vector<std::string>& path) {
 
 }  // namespace
 
-void CablingGenerator::apply_instance_filter() {
-    if (!root_instance_ || (include_paths_.empty() && exclude_paths_.empty())) {
+void CablingGenerator::apply_instance_filter(
+    const std::vector<std::vector<std::string>>& include_paths,
+    const std::vector<std::vector<std::string>>& exclude_paths) {
+    if (!root_instance_ || (include_paths.empty() && exclude_paths.empty())) {
         return;
     }
 
-    const auto& includes = include_paths_;
-    const auto& excludes = exclude_paths_;
+    const auto& includes = include_paths;
+    const auto& excludes = exclude_paths;
 
     std::set<HostId> kept_host_ids;
     std::vector<bool> include_used(includes.size(), false);
@@ -2652,10 +2650,11 @@ void CablingGenerator::apply_instance_filter() {
     };
     prune_connections(prune_connections, *root_instance_);
 
-    // Dense remap raw -> 0..M-1 in DFS (children_order) order over the pruned graph.
+    // Dense remap old_id -> 0..M-1 in DFS (children_order) order over the pruned graph. survivor_old_ids
+    // records each survivor's pre-remap host_id (new dense id i -> old id) to rebuild deployment_hosts_.
     std::map<HostId, HostId> remap;
-    filtered_source_host_ids_.clear();
-    filtered_source_host_ids_.reserve(kept_host_ids.size());
+    std::vector<HostId> survivor_old_ids;
+    survivor_old_ids.reserve(kept_host_ids.size());
     HostId next_id{0};
     auto assign_dfs = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
         for (const auto& [name, is_node] : graph.children_order) {
@@ -2663,7 +2662,7 @@ void CablingGenerator::apply_instance_filter() {
                 auto it = graph.nodes.find(name);
                 if (it != graph.nodes.end()) {
                     remap[it->second.host_id] = next_id;
-                    filtered_source_host_ids_.push_back(it->second.host_id);
+                    survivor_old_ids.push_back(it->second.host_id);
                     next_id = HostId(*next_id + 1);
                 }
             } else if (auto sit = graph.subgraphs.find(name); sit != graph.subgraphs.end()) {
@@ -2699,39 +2698,27 @@ void CablingGenerator::apply_instance_filter() {
     };
     apply_remap(apply_remap, *root_instance_);
 
+    // Rebuild deployment_hosts_ to the survivors, indexed by the new dense host_id. The pre-filter
+    // list is host_id-indexed, so new id i is the old deployment_hosts_[survivor_old_ids[i]].
+    std::vector<Host> filtered_hosts;
+    filtered_hosts.reserve(survivor_old_ids.size());
+    for (const auto& old_id : survivor_old_ids) {
+        if (*old_id < deployment_hosts_.size()) {
+            filtered_hosts.push_back(deployment_hosts_[*old_id]);
+        }
+    }
+    deployment_hosts_ = std::move(filtered_hosts);
+
+    // Reset port availability consumed by the construction-time generate_logical_chip_connections()
+    // before regenerating chip connections for the pruned graph.
+    recreate_nodes_from_templates(*root_instance_);
+    populate_host_id_to_node();
+    generate_logical_chip_connections();
+
     log_info(
         tt::LogDistributed,
         "Instance filter selected {} node(s) from the cabling descriptor",
-        filtered_source_host_ids_.size());
-
-    populate_host_id_to_node();
-}
-
-void CablingGenerator::build_filtered_deployment_hosts(
-    const deployment::proto::DeploymentDescriptor& deployment_descriptor) {
-    deployment_hosts_.clear();
-    deployment_hosts_.reserve(filtered_source_host_ids_.size());
-    for (const auto& raw : filtered_source_host_ids_) {
-        if (*raw >= static_cast<uint32_t>(deployment_descriptor.hosts().size())) {
-            throw std::runtime_error(fmt::format(
-                "Filtered host_id {} is out of range of the deployment descriptor ({} hosts)",
-                *raw,
-                deployment_descriptor.hosts().size()));
-        }
-        const auto& proto_host = deployment_descriptor.hosts()[*raw];
-        std::string motherboard;
-        if (node_templates_.contains(proto_host.node_type())) {
-            motherboard = node_templates_.at(proto_host.node_type()).motherboard;
-        }
-        deployment_hosts_.emplace_back(Host{
-            .hostname = proto_host.host(),
-            .hall = proto_host.hall(),
-            .aisle = proto_host.aisle(),
-            .rack = proto_host.rack(),
-            .shelf_u = proto_host.shelf_u(),
-            .motherboard = motherboard,
-            .node_type = proto_host.node_type()});
-    }
+        deployment_hosts_.size());
 }
 
 void CablingGenerator::reassign_host_ids_dfs() {
