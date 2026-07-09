@@ -257,7 +257,7 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     // real memory-backed I/O, so it should skip only the TLB-window path and still install
     // the cluster.write_core() fallback for pcie_writer. As written, pcie_writer is left
     // null, so enabling H2D socket runtime I/O under emule would null-deref in
-    // notify_receiver() / write(). Compile/JIT-only mock (loudbox) flows are unaffected.
+    // notify_receiver() / write().
     if (cluster.is_mock_or_emulated()) {
         return;
     }

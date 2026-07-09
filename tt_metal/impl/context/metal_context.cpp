@@ -426,10 +426,6 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
         TT_THROW("Only one silicon MetalContext instance may exist; context_id 0 is already in use.");
     }
 
-    // Only the programmatic mock path needs to seed the descriptor. Env-var mock
-    // (TT_METAL_MOCK_CLUSTER_DESC_PATH) is parsed centrally by RunTimeOptions and surfaces
-    // via rtoptions().get_target_device() == Mock, which the ContextDescriptor reads in
-    // init_context_descriptor -- so no env-var detection is needed here.
     MetalEnvDescriptor desc{};
     if (auto mock_cluster_desc = experimental::get_mock_cluster_desc()) {
         log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", *mock_cluster_desc);

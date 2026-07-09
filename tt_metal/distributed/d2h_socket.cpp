@@ -223,7 +223,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     // real memory-backed I/O, so it should skip only the TLB-window path and still install
     // the cluster.write_core() fallback for pcie_writer_. As written, pcie_writer_ is left
     // null, so enabling D2H socket runtime I/O under emule would null-deref in
-    // notify_sender(). Compile/JIT-only mock (loudbox) flows are unaffected.
+    // notify_sender().
     if (cluster.is_mock_or_emulated()) {
         return;
     }
