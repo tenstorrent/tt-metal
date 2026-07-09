@@ -49,7 +49,7 @@ FORCE_INLINE void dit_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, c
     if constexpr (fuse_rope) {
         cb_reserve_back(transmat_cb, 1);
         const uint32_t transmat_wr_ptr = get_write_ptr(transmat_cb);
-        noc_async_read_tile(0, tmat_acc, transmat_wr_ptr);
+        noc_async_read_page(0, tmat_acc, transmat_wr_ptr);
         noc_async_read_barrier();
         cb_push_back(transmat_cb, 1);
     }

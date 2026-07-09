@@ -43,7 +43,7 @@
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
@@ -97,7 +97,7 @@ void kernel_main() {
     constexpr uint32_t tile_width = 32u;
     constexpr uint32_t reduce_width = num_tile_cols * tile_width;  // = feat_local
     // Reciprocal-LUT fallback: empty array -> the LLK computes 1/(N+1) by float division.
-    constexpr std::array<uint32_t, 0> no_lut{};
+    [[maybe_unused]] constexpr std::array<uint32_t, 0> no_lut{};
     // LUT pointer: typed std::array<uint32_t, reduce_width>* always (NOT gated on
     // use_recip_lut) so the discarded if-constexpr branch below still type-checks — this
     // kernel is a plain function, so both branches are semantically validated. It's only
@@ -188,7 +188,7 @@ void kernel_main() {
             welford_restore_state(mean_dst);
             // Reconfigure the unpacker back to the bf16 input for the transpose-fed welford.
             reconfig_data_format_srca(welford_zero_cb, input_cb);
-            transpose_wh_init_short(input_cb);
+            transpose_init(input_cb);
             uint32_t start_n = 0;
             if constexpr (streaming_low_l1 != 0) {
                 // Streamed 1st pass: wait + Welford + pop each block; LREG4/5 accumulate
@@ -196,7 +196,7 @@ void kernel_main() {
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     cb_wait_front(input_cb, block_size);
                     for (uint32_t i = 0; i < block_size; i++) {
-                        transpose_wh_tile(input_cb, i, welford_in_dst);
+                        transpose_tile(input_cb, i, welford_in_dst);
                         wf_update(welford_in_dst, start_n);
                         start_n += tile_width;
                     }
@@ -204,7 +204,7 @@ void kernel_main() {
                 }
             } else {
                 for (uint32_t col = 0; col < num_tile_cols; col++) {
-                    transpose_wh_tile(input_cb, col, welford_in_dst);
+                    transpose_tile(input_cb, col, welford_in_dst);
                     wf_update(welford_in_dst, start_n);
                     start_n += tile_width;
                 }
@@ -243,10 +243,10 @@ void kernel_main() {
             cb_wait_front(mean_cb, 1);
             cb_wait_front(invstd_cb, 1);
             reconfig_data_format_srca(mean_cb);
-            transpose_wh_init_short(mean_cb);
+            transpose_init(mean_cb);
             tile_regs_acquire();
-            transpose_wh_tile(mean_cb, 0, mean_dst);
-            transpose_wh_tile(invstd_cb, 0, var_dst);
+            transpose_tile(mean_cb, 0, mean_dst);
+            transpose_tile(invstd_cb, 0, var_dst);
             binop_with_scalar_tile_init();
             add_unary_tile(var_dst, eps_bits);
             // legacy rsqrt to match the composite dit_layernorm baseline (it uses
@@ -340,10 +340,10 @@ void kernel_main() {
             // Transpose merged mean / 1/std row 0 -> col 0.
             cb_wait_front(combine_cb, 2);
             reconfig_data_format_srca(combine_cb);
-            transpose_wh_init_short(combine_cb);
+            transpose_init(combine_cb);
             tile_regs_acquire();
-            transpose_wh_tile(combine_cb, 0, mean_dst);
-            transpose_wh_tile(combine_cb, 1, var_dst);
+            transpose_tile(combine_cb, 0, mean_dst);
+            transpose_tile(combine_cb, 1, var_dst);
             tile_regs_commit();
             cb_pop_front(combine_cb, 2);
             cb_reserve_back(mean_cb, 1);

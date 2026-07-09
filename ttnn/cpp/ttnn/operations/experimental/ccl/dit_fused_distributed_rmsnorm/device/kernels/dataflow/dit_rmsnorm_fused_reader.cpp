@@ -129,7 +129,7 @@ void kernel_main() {
         const auto recip_accessor = TensorAccessor(recip_args, recip_addr);
         constexpr uint32_t recip_bytes = num_tile_cols * 128u;  // reduce_width * sizeof(float)
         cb_reserve_back(recip_lut_cb, 1);
-        noc_async_read(get_noc_addr(0, recip_accessor), get_write_ptr(recip_lut_cb), recip_bytes);
+        noc_async_read(recip_accessor.get_noc_addr(0), get_write_ptr(recip_lut_cb), recip_bytes);
         noc_async_read_barrier();
         cb_push_back(recip_lut_cb, 1);
     }
@@ -167,7 +167,7 @@ void kernel_main() {
             cb_reserve_back(input_cb, tiles_in_block);
             uint32_t input_wr_ptr = get_write_ptr(input_cb);
             for (uint32_t i = 0; i < tiles_in_block; i++) {
-                noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
+                noc_async_read_page(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
                 input_wr_ptr += input_tile_bytes;
             }
             noc_async_read_barrier();
@@ -220,7 +220,7 @@ void kernel_main() {
                 uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t w_idx = tile_row * num_tile_cols + col_tile + i;
-                    noc_async_read_tile(w_idx, weight_accessor, weight_wr_ptr);
+                    noc_async_read_page(w_idx, weight_accessor, weight_wr_ptr);
                     weight_wr_ptr += weight_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -235,7 +235,7 @@ void kernel_main() {
                 uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
                     const uint32_t b_idx = tile_row * num_tile_cols + col_tile + i;
-                    noc_async_read_tile(b_idx, bias_accessor, bias_wr_ptr);
+                    noc_async_read_page(b_idx, bias_accessor, bias_wr_ptr);
                     bias_wr_ptr += bias_tile_bytes;
                 }
                 noc_async_read_barrier();
@@ -256,7 +256,7 @@ void kernel_main() {
                 cb_reserve_back(weight_cb, tiles_in_block);
                 uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    uint64_t weight_noc_addr = get_noc_addr(w_base + col_tile + i, weight_accessor);
+                    uint64_t weight_noc_addr = weight_accessor.get_noc_addr(w_base + col_tile + i);
                     noc_async_read(weight_noc_addr, weight_wr_ptr, weight_face_row_bytes);
                     noc_async_read(
                         weight_noc_addr + weight_face_bytes, weight_wr_ptr + weight_face_bytes, weight_face_row_bytes);
@@ -275,7 +275,7 @@ void kernel_main() {
                 cb_reserve_back(bias_cb, tiles_in_block);
                 uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                 for (uint32_t i = 0; i < tiles_in_block; i++) {
-                    uint64_t bias_noc_addr = get_noc_addr(b_base + col_tile + i, bias_accessor);
+                    uint64_t bias_noc_addr = bias_accessor.get_noc_addr(b_base + col_tile + i);
                     noc_async_read(bias_noc_addr, bias_wr_ptr, bias_face_row_bytes);
                     noc_async_read(bias_noc_addr + bias_face_bytes, bias_wr_ptr + bias_face_bytes, bias_face_row_bytes);
                     bias_wr_ptr += bias_tile_bytes;
@@ -301,7 +301,7 @@ void kernel_main() {
                     cb_reserve_back(weight_cb, tiles_in_block);
                     uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
-                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
+                        uint64_t weight_noc_addr = weight_accessor.get_noc_addr(col_tile + i);
                         noc_async_read(weight_noc_addr, weight_wr_ptr, weight_face_row_bytes);
                         noc_async_read(
                             weight_noc_addr + weight_face_bytes,
@@ -323,7 +323,7 @@ void kernel_main() {
                     cb_reserve_back(bias_cb, tiles_in_block);
                     uint32_t bias_wr_ptr = get_write_ptr(bias_cb);
                     for (uint32_t i = 0; i < tiles_in_block; i++) {
-                        uint64_t bias_noc_addr = get_noc_addr(col_tile + i, bias_accessor);
+                        uint64_t bias_noc_addr = bias_accessor.get_noc_addr(col_tile + i);
                         noc_async_read(bias_noc_addr, bias_wr_ptr, bias_face_row_bytes);
                         noc_async_read(
                             bias_noc_addr + bias_face_bytes, bias_wr_ptr + bias_face_bytes, bias_face_row_bytes);
@@ -392,8 +392,8 @@ void kernel_main() {
                             } else {
                                 src_idx = rope_batch_off + r_seq * head_dim_tiles + t;
                             }
-                            noc_async_read_tile(src_idx, rope_cos_accessor, rope_cos_wr_ptr);
-                            noc_async_read_tile(src_idx, rope_sin_accessor, rope_sin_wr_ptr);
+                            noc_async_read_page(src_idx, rope_cos_accessor, rope_cos_wr_ptr);
+                            noc_async_read_page(src_idx, rope_sin_accessor, rope_sin_wr_ptr);
                             rope_cos_wr_ptr += rope_cos_tile_bytes;
                             rope_sin_wr_ptr += rope_sin_tile_bytes;
                         }

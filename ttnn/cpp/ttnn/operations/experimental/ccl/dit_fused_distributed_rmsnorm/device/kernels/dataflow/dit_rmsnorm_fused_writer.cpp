@@ -244,7 +244,7 @@ void kernel_main() {
                 const uint32_t t_col = c - h * head_dim_tiles;
                 const uint32_t output_tile_idx =
                     h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
-                noc_async_write_tile(output_tile_idx, output_accessor, output_rd_ptr);
+                noc_async_write_page(output_tile_idx, output_accessor, output_rd_ptr);
                 output_rd_ptr += output_tile_bytes;
             }
             // _flushed (write request committed to NoC) instead of _barrier

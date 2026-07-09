@@ -154,7 +154,7 @@ void kernel_main() {
             const uint32_t page_idx = d * num_chunks_per_device + my_forwarder_index * max_rounds + round;
             for (uint32_t s = 0; s < num_stats; s++) {
                 const uint32_t tile_dst = gbase + (d * num_stats + s) * gathered_tile_bytes;
-                const uint64_t src = get_noc_addr(page_idx, stats_dram, my_slot * stick_bytes + s * kStatBytes);
+                const uint64_t src = stats_dram.get_noc_addr(page_idx, my_slot * stick_bytes + s * kStatBytes);
                 noc_async_read(src, tile_dst, kFaceRowBytes);                               // -> face_00 row0
                 noc_async_read(src + kFaceRowBytes, tile_dst + kFace01Off, kFaceRowBytes);  // -> face_01 row0
             }
@@ -184,7 +184,7 @@ void kernel_main() {
                     const uint32_t t_col = c - h * head_dim_tiles;
                     const uint32_t out_idx =
                         h * total_num_tile_rows * head_dim_tiles + tile_row * head_dim_tiles + t_col;
-                    noc_async_write_tile(out_idx, output_accessor, rd);
+                    noc_async_write_page(out_idx, output_accessor, rd);
                     rd += output_tile_bytes;
                 }
                 noc_async_writes_flushed();

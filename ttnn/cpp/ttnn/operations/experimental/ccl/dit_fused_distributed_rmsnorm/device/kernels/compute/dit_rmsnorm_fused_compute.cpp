@@ -37,8 +37,8 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
-#include "api/compute/transpose_wh.h"
-#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/transpose.h"
+#include "api/compute/transpose_dest.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -139,7 +139,8 @@ void kernel_main() {
 
     const uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
 
-    mm_init(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+    matmul_init(intermediate_cb, transformation_mat_cb);
     binary_op_init_common(input_cb, input_cb, input_cb);
 
     // One-time waits for reader-produced singletons.
@@ -297,13 +298,13 @@ void kernel_main() {
         // face_10 col0) -> row 0 (face_00 row0 + face_01 row0). Packed-AG (all-gather)
         // path only; is_tp_1 keeps col 0 and reduces locally (no forwarder involved).
         if constexpr (packed_ag_enabled != 0) {
-            transpose_wh_init_short(stats_local_cb);
+            transpose_init(stats_local_cb);
             pack_reconfig_data_format(stats_transposed_local_cb);
             {  // single row per iteration (chunk size is 1)
                 cb_wait_front(stats_local_cb, 1);
                 cb_reserve_back(stats_transposed_local_cb, 1);
                 tile_regs_acquire();
-                transpose_wh_tile(stats_local_cb, 0, 0);
+                transpose_tile(stats_local_cb, 0, 0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, stats_transposed_local_cb);
@@ -393,7 +394,7 @@ void kernel_main() {
                                     // All-gather path: the worker writer lands each device's stats in
                                     // ROW 0 of stats_transposed_gathered_cb (two contiguous 64 B face-rows).
                                     // FPU-add the ring_size row-0 tiles, then transpose the summed
-                                    // tile IN DST (row 0 -> col 0) with transpose_wh_dest — no CB
+                                    // tile IN DST (row 0 -> col 0) with transpose_dest — no CB
                                     // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
                                     // total (deferred past the sum) vs one per gathered tile.
                                     cb_wait_front(stats_transposed_gathered_cb, stats_tiles_cols);
@@ -410,8 +411,8 @@ void kernel_main() {
                                             stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
                                     }
                                     // row-0 sum -> col-0, in place (fp32 DST).
-                                    transpose_wh_dest_init_short<true>(stats_transposed_gathered_cb);
-                                    transpose_wh_dest<true>(0);
+                                    transpose_dest_init<true>(stats_transposed_gathered_cb);
+                                    transpose_dest<true>(0);
                                     binop_with_scalar_tile_init();
                                     mul_unary_tile(0, recip_h_full_bits);
                                     add_unary_tile(0, eps_bits);
@@ -631,7 +632,7 @@ void kernel_main() {
                                 if constexpr (fuse_rope) {
                                     reconfig_data_format(transformation_mat_cb, intermediate_cb);
                                     pack_reconfig_data_format(rotated_input_cb);
-                                    mm_block_init_short(intermediate_cb, transformation_mat_cb, 0, 1, block_size, 1);
+                                    matmul_block_init(intermediate_cb, transformation_mat_cb, 0, 1, block_size, 1);
                                     cb_wait_front(intermediate_cb, block_size);
                                     cb_reserve_back(rotated_input_cb, block_size);
                                     tile_regs_acquire();
@@ -797,7 +798,7 @@ void kernel_main() {
                             // intermediate_cb when fuse_rope). Rotate it, then RoPE-finalize.
                             reconfig_data_format(transformation_mat_cb, intermediate_cb);
                             pack_reconfig_data_format(rotated_input_cb);
-                            mm_block_init_short(
+                            matmul_block_init(
                                 intermediate_cb,
                                 transformation_mat_cb,
                                 /*transpose=*/0,
@@ -977,7 +978,7 @@ void kernel_main() {
                             // --- rotate this block: intermediate[front] * trans -> rotated[block] ---
                             reconfig_data_format(transformation_mat_cb, intermediate_cb);
                             pack_reconfig_data_format(rotated_input_cb);
-                            mm_block_init_short(
+                            matmul_block_init(
                                 intermediate_cb,
                                 transformation_mat_cb,
                                 /*transpose=*/0,
@@ -1045,7 +1046,7 @@ void kernel_main() {
                             // multiple (P_WEIGHT pushes full block_size/block), so rt_dim is
                             // always block_size; the RoPE finalize only consumes the valid
                             // tiles, so any padding rows packed here are never used.
-                            mm_block_init_short(
+                            matmul_block_init(
                                 intermediate_cb,
                                 transformation_mat_cb,
                                 /*transpose=*/0,
