@@ -314,14 +314,13 @@ inline void _llk_unpack_A_init_(
 }
 
 /**
- * @brief Restore unpacker datum-count state after single-operand (A) unpacking.
+ * @brief No-op teardown after single-operand (A) unpacking.
  *
- * Resets the X-dimension address counter for the unpacker used by this broadcast mode back to
- * a full face worth of datums.
+ * The unpacker x-start/x-end (datum-count) state is transient and reprogrammed by each operation's
+ * init (see tt-llk#1036), so there is nothing to restore here.
  *
  * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
- * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
- * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
+ * @note Call @ref _llk_unpack_A_init_ before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_()

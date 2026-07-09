@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
 
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
-    constexpr auto src_b_args =
+    [[maybe_unused]] constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
 
     Noc noc;

@@ -362,7 +362,8 @@ void py_module(nb::module_& mod) {
                CoreRangeSet hop_cores,
                std::size_t num_global_cb_receivers,
                bool untilize_out,
-               std::optional<CoreRangeSet> allowed_worker_cores) {
+               std::optional<CoreRangeSet> allowed_worker_cores,
+               bool stream_in1) {
                 std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
                 std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
 
@@ -382,7 +383,8 @@ void py_module(nb::module_& mod) {
                     std::move(hop_cores),
                     num_global_cb_receivers,
                     untilize_out,
-                    std::move(allowed_worker_cores)};
+                    std::move(allowed_worker_cores),
+                    stream_in1};
             },
             nb::kw_only(),
             nb::arg("compute_with_storage_grid_size"),
@@ -400,7 +402,8 @@ void py_module(nb::module_& mod) {
             nb::arg("hop_cores").noconvert() = nb::cast(CoreRangeSet()),
             nb::arg("num_global_cb_receivers").noconvert() = 1,
             nb::arg("untilize_out").noconvert() = false,
-            nb::arg("allowed_worker_cores") = nb::none())
+            nb::arg("allowed_worker_cores") = nb::none(),
+            nb::arg("stream_in1").noconvert() = false)
         .def_rw(
             "compute_with_storage_grid_size",
             &MatmulMultiCoreReuseMultiCast1DProgramConfig::compute_with_storage_grid_size,
@@ -518,12 +521,20 @@ void py_module(nb::module_& mod) {
             When set, overrides ``compute_with_storage_grid_size`` for determining the active
             compute grid. Accepts a ``CoreRangeSet`` describing the exact cores to use.
         )doc")
+        .def_rw("stream_in1", &MatmulMultiCoreReuseMultiCast1DProgramConfig::stream_in1, R"doc(
+            Stream in1 weights from the GCB in ring-rotated FIFO order (gather_in0 + DRAM-sender
+            GCB only). When true, each weight block is consumed as it arrives instead of waiting
+            for the whole tensor, so the GCB can be sized to a small live window. The weight MUST
+            be queued for streaming (the ``(weight, block_count, rotation)`` form of
+            ``queue_tensor_prefetcher_request``, passing the per-receiver ring-rotation list) to
+            match, else the matmul deadlocks. Defaults to false.
+        )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_block_h={}, out_block_w={}, out_subblock_h={}, out_subblock_w={}, per_core_M={}, per_core_N={}, "
                 "fuse_batch={}, fused_activation={}, mcast_in0={}, gather_in0={}, hop_cores={}, "
-                "num_global_cb_receivers={}, untilize_out={}, allowed_worker_cores={})",
+                "num_global_cb_receivers={}, untilize_out={}, allowed_worker_cores={}, stream_in1={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_block_h,
@@ -540,7 +551,8 @@ void py_module(nb::module_& mod) {
                 config.num_global_cb_receivers,
                 config.untilize_out,
                 config.allowed_worker_cores.has_value() ? fmt::format("{}", config.allowed_worker_cores.value())
-                                                        : "None");
+                                                        : "None",
+                config.stream_in1);
         });
 
     auto matmul_multi_core_reuse_multicast_dram_sharded_program_config =

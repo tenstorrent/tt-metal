@@ -46,6 +46,19 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
 
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+// Quasar DM cores access L1 through an uncached alias at MEM_L1_UNCACHED_BASE. Normalize
+// uncached addresses to their physical (cached) offset for bounds checks.
+inline uint64_t debug_normalize_l1_addr(uint64_t addr) {
+    if (addr >= MEM_L1_UNCACHED_BASE) {
+        return addr - MEM_L1_UNCACHED_BASE;
+    }
+    return addr;
+}
+#else
+inline uint64_t debug_normalize_l1_addr(uint64_t addr) { return addr; }
+#endif
+
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
@@ -171,6 +184,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
+    addr = debug_normalize_l1_addr(addr);
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
@@ -264,6 +278,7 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
 // Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
 inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
+    l1_addr = static_cast<uint32_t>(debug_normalize_l1_addr(l1_addr));
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         LocalCBInterface& cb = get_local_cb_interface(i);
         if (cb.fifo_size == 0) {
@@ -614,6 +629,7 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
 #else
     constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
+    addr = debug_normalize_l1_addr(addr);
     if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
             0,  // unused (not a noc transaction)

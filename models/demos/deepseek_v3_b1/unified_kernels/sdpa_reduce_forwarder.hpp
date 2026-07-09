@@ -168,7 +168,7 @@ struct SdpaReduceForwarder {
 
             noc_semaphore_set(r1_sem_ptr, 0);
             noc_semaphore_set(r2_sem_ptr, 0);
-            fabric_connection.close();
+            fabric_connection.template close<use_posted_transport_writes, forwarder_to_fabric_noc>();
 
             noc_async_full_barrier();
         }

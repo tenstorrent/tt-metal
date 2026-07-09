@@ -44,7 +44,10 @@ public:
     static constexpr uint32_t kAutoHostReadThreadCount = 32;
 
     struct Config {
-        TensorSpec global_spec;
+        // Payload spec streamed device -> host. std::nullopt = metadata-only mode: no DRAM
+        // backing tensor, only the metadata record is sent (metadata_size_bytes must be > 0),
+        // payload_size_bytes()==0, and reads go through read_metadata() (read_from_tensor throws).
+        std::optional<TensorSpec> global_spec;
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
         std::optional<distributed::MeshComposerConfig> composer_config;
         uint32_t fifo_size_bytes = 0;
@@ -74,6 +77,8 @@ public:
     D2HStreamService(D2HStreamService&&) = delete;
     D2HStreamService& operator=(D2HStreamService&&) = delete;
 
+    void read_metadata(ttsl::Span<std::byte> metadata);
+
     void read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata = {});
     void read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
     void notify_backing_ready();
@@ -92,6 +97,7 @@ public:
     CoreRange get_worker_cores() const;
     CoreCoord get_metadata_master_core() const;
     DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_transfer_done_sem_addr() const;
     DeviceAddr get_worker_metadata_addr() const;
     CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
@@ -113,6 +119,8 @@ private:
         uint32_t num_socket_pages);
 
     void signal_termination();
+    bool tensor_enabled() const;
+    void read_metadata_from_sockets(ttsl::Span<std::byte> metadata);
 
     enum class HostReadJobKind { None, Payload, Stop };
 
