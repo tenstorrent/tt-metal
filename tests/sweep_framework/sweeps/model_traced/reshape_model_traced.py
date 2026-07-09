@@ -254,6 +254,14 @@ def run(
             out = torch.reshape(per_chip_input, arg2)
             slices = tuple(slice(0, sz) for sz in tgt_shape)
             return out[slices]
+        # reshape-with-pad: target is LARGER than the input (e.g. (1,1,1,1024) ->
+        # (1,1,32,1024)). ttnn.reshape packs the input row-major into the first
+        # numel positions and zero-pads the rest (verified on device: row 0 = data,
+        # rows 1..31 = 0). Mirror that instead of a numel-mismatch torch.reshape.
+        if per_chip_tgt_numel > per_chip_numel:
+            out = torch.zeros(per_chip_tgt_numel, dtype=per_chip_input.dtype)
+            out[:per_chip_numel] = per_chip_input.reshape(-1)
+            return out.reshape(tgt_shape)
         return torch.reshape(per_chip_input, tgt_shape)
 
     try:

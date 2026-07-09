@@ -15,6 +15,7 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
+from models.demos.utils.model_targets import is_tolerance_key, resolve_perf_targets
 from models.demos.wormhole.mamba.reference.args import ModelMode
 from models.demos.wormhole.mamba.reference.decode_model import MambaPretrainedModelName
 from models.demos.wormhole.mamba.tt import model_config
@@ -373,12 +374,22 @@ def run_mamba_demo(
     )
     logger.info(f"Time to first token: {(1e3 * time_to_first_token):.2f} ms")
 
-    chunk_size_to_prefill_targets_tok_per_s = {32: 135.0, 128: 380.0}  # perf is different for different chunk sizes
-    targets = {
-        "prefill_t/s": chunk_size_to_prefill_targets_tok_per_s[prefill_chunk_size],
-        "decode_t/s": 346.0,
-        "decode_t/s/u": 10.8,
-    }
+    resolved_targets = resolve_perf_targets(
+        model_name=model_version.removeprefix("state-spaces/"),
+        sku=determine_device_name(device),
+        batch_size=batch_size,
+        # prefill chunk size is the runtime perf discriminator for this demo.
+        seq_len=prefill_chunk_size,
+    )
+    targets = {}
+    if resolved_targets:
+        targets = {key: float(value) for key, value in resolved_targets.items() if not is_tolerance_key(key)}
+    else:
+        logger.warning(
+            "No centralized perf targets found for "
+            f"model={model_version.removeprefix('state-spaces/')} "
+            f"sku={determine_device_name(device)} batch={batch_size} prefill_chunk_size={prefill_chunk_size}"
+        )
     warmup_iterations = {"inference_prefill": 0, "inference_decode": 0}
 
     # Save benchmark data (will only save if running in CI environment)
@@ -398,7 +409,16 @@ def run_mamba_demo(
     )
 
     if assert_on_performance_measurements:
-        verify_perf(measurements, targets, high_tol_percentage=1.20)
+        if resolved_targets:
+            verify_perf(
+                measurements,
+                model_name=model_version.removeprefix("state-spaces/"),
+                sku=determine_device_name(device),
+                batch_size=batch_size,
+                seq_len=prefill_chunk_size,
+            )
+        else:
+            logger.warning("Skipping performance checks because centralized perf targets are missing.")
     else:
         logger.warning(f"Skipping performance checks (this is expected for functional tests)")
 

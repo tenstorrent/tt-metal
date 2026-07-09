@@ -8,13 +8,8 @@ inputs:
     description: 'Allocation name'
     required: true
   spec:
-    description: 'Allocation spec'
-    required: false
-    default: ''
-  explicit:
-    description: 'List of explicit nodes (ignored when spec is provided)'
-    required: false
-    default: ''
+    description: 'Allocation spec (YAML body under spec.retryPolicy)'
+    required: true
   namespace:
     description: 'Target namespace for the allocation'
     required: false
@@ -23,31 +18,12 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Construct allocation manifest (explicit)
-      shell: bash
-      id: explicit
-      if: ${{ inputs.explicit != '' }}
-      run: |
-        cat <<EOF >> $GITHUB_ENV
-        ALLOCATION_MANIFEST<<ALLOCATION_EOF
-        apiVersion: tenstorrent.com/v1alpha1
-        kind: Allocation
-        metadata:
-          name: ${{ inputs.allocationName }}
-          namespace: ${{ inputs.namespace }}
-        spec:
-          retryPolicy: Always
-          allocationType: Explicit
-          explicit: [${{ inputs.explicit }}]
-        ALLOCATION_EOF
-        EOF
-
     - name: Construct allocation manifest (spec)
       shell: bash
-      id: spec
-      if: ${{ inputs.spec != '' }}
+      env:
+        ALLOCATION_SPEC: ${{ inputs.spec }}
       run: |
-        SPEC=$(printf '%s\n' '${{ inputs.spec }}' | sed 's/^/  /')
+        SPEC=$(printf '%s\n' "$ALLOCATION_SPEC" | sed 's/^/  /')
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
         apiVersion: tenstorrent.com/v1alpha1
@@ -61,14 +37,22 @@ runs:
         ALLOCATION_EOF
         EOF
 
+    - name: Get github ID token
+      shell: bash
+      id: token
+      run: |
+        IDTOKEN=$(curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL -H "Accept: application/json; api-version=2.0" -H "Content-Type: application/json" -d "{}" | jq -r '.value')
+        echo "::add-mask::${IDTOKEN}"
+        echo "idToken=${IDTOKEN}" >> $GITHUB_OUTPUT
+
     - name: Create Allocation
       shell: bash
       run: |
         echo "Creating allocation..."
-        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
+        printf "%s" "${ALLOCATION_MANIFEST}" | kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} apply -f -
 
     - name: Wait for allocation
       shell: bash
       run: |
         echo "Waiting for allocation to be ready..."
-        kubectl -n ${{ inputs.namespace }} wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
+        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m

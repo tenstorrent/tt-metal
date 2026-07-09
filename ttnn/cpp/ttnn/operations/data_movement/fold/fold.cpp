@@ -69,7 +69,7 @@ std::vector<Tensor> fold_with_transpose_(
     log_debug(tt::LogOp, "pad_output: {}", pad_output.logical_shape());
 
     auto transpose_hc_output = ttnn::prim::permute(
-        pad_output, ttnn::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
+        pad_output, ttsl::SmallVector<uint32_t>({0, 3, 1, 2}), std::make_optional(L1_mem_config), std::nullopt);
 
     log_debug(tt::LogOp, "transpose_hc_output: {}", transpose_hc_output.logical_shape());
 
@@ -374,7 +374,8 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
         new_shard_spec.grid = new_core_range;
 
-        auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        auto new_mem_config =
+            MemoryConfig(input.memory_config().memory_layout(), input.memory_config().buffer_type(), new_shard_spec);
         // need to reshard
         return ttnn::reshard(input, new_mem_config, std::nullopt);
     }
@@ -469,7 +470,7 @@ Tensor fold(
 
     // Apply padding if needed
     if (has_hw_padding || has_c_padding) {
-        ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
+        ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec;
         padding_spec.push_back({0, 0});                     // N dimension
         padding_spec.push_back({pad_top, pad_bottom});      // H dimension
         padding_spec.push_back({pad_left, pad_right});      // W dimension

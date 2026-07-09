@@ -608,7 +608,7 @@ class TtTransformer(LightweightModule):
                 ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
             )
 
-            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True)
             if isinstance(tt_out, list):
                 tt_out = tt_out[0]
             toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[output_device_idx]).float()[0, 0, 0, :1]
@@ -704,7 +704,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         tt_out_logits_saved=None,
         is_cur_pos_sharded=False,
-        return_logits=False,
+        on_device_logits=False,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -722,7 +722,7 @@ class TtTransformer(LightweightModule):
         )
         self._increment_decode_positions_device(current_pos, rot_mat_idxs, is_cur_pos_sharded)
 
-        if return_logits:
+        if not on_device_logits:
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,

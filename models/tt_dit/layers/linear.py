@@ -17,6 +17,20 @@ MATH_FIDELITY = {
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
+# Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
+# mapped to the values the matmul fused-activation path expects. Each value is
+# either a bare ttnn.UnaryOpType (no parameter) or a (UnaryOpType, param0)
+# tuple; nanobind's implicit caster handles both forms.
+#
+# "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
+# "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.
+# "gelu_tanh": FP32 tanh approximation, matches F.gelu(approximate="tanh").
+_FUSED_GELU_VARIANTS = {
+    "gelu": (ttnn.UnaryOpType.GELU, False),
+    "gelu_fast": (ttnn.UnaryOpType.GELU, True),
+    "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
+}
+
 
 class Linear(Module):
     """
@@ -33,9 +47,9 @@ class Linear(Module):
             self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        if self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         self.mesh_device = mesh_device
 
         """
@@ -79,20 +93,15 @@ class Linear(Module):
 def gelu_decomposed(x: ttnn.Tensor) -> ttnn.Tensor:
     # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
     # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    # Use a single scratch buffer that's reused for every intermediate so peak
+    # DRAM is x + scratch (2x input) instead of the naive 6x.
     sqrt_2 = math.sqrt(2.0)
-    x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
-    erf_x = ttnn.erf(x_div_sqrt2)
-    one_plus_erf = ttnn.add(erf_x, 1.0)
-    x_times_bracket = ttnn.multiply(x, one_plus_erf)
-    return ttnn.multiply(x_times_bracket, 0.5)
-
-
-def gelu_tanh(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU tanh approximation: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    sqrt_2_over_pi = math.sqrt(2.0 / math.pi)
-    inner = ttnn.add(x, ttnn.multiply(ttnn.pow(x, 3), 0.044715))
-    one_plus_tanh = 1.0 + ttnn.tanh(ttnn.multiply(inner, sqrt_2_over_pi))
-    return 0.5 * x * one_plus_tanh
+    tmp = ttnn.multiply(x, 1.0 / sqrt_2)
+    ttnn.erf(tmp, output_tensor=tmp)
+    ttnn.add(tmp, 1.0, output_tensor=tmp)
+    ttnn.multiply(x, tmp, output_tensor=tmp)
+    ttnn.multiply(tmp, 0.5, output_tensor=tmp)
+    return tmp
 
 
 class ColParallelLinear(Module):
@@ -122,9 +131,9 @@ class ColParallelLinear(Module):
             # Double out features for fused swiglu activation
             self.out_features = self.out_features * 2
         self.fused_activation_fn = None
-        if self.activation_fn == "gelu":
+        if self.activation_fn in _FUSED_GELU_VARIANTS:
+            self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
@@ -447,8 +456,6 @@ def _apply_activation_fn(t: ttnn.Tensor, activation_fn: str | None) -> ttnn.Tens
         return gelu_decomposed(t)
     if activation_fn == "quick_gelu":
         return t * ttnn.sigmoid(1.702 * t)  # quick approx gelu
-    if activation_fn == "gelu_tanh":
-        return gelu_tanh(t)
     if activation_fn == "swiglu":
         t, gate = ttnn.chunk(t, 2, -1)
         return t * ttnn.silu(gate)
@@ -474,3 +481,38 @@ def prepare_chunked_linear_output(
     if bias is not None:
         bias = state[bias_key].reshape([chunks, device_count, -1]).transpose(0, 1).reshape([-1])
         state[bias_key] = bias
+
+
+# =====================================================================
+# LoRA-aware Linear variants
+# =====================================================================
+# Each variant subclasses its base Linear + the shared LoRAMixin. The
+# mixin offers two execution paths chosen at construction with
+# ``lora_mode`` ('fuse' or 'runtime'); see models/tt_dit/layers/lora.py
+# for the trade-offs.
+from .lora import LoRAMixin  # noqa: E402
+
+
+class LoRALinear(LoRAMixin, Linear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_lora_state(mode=lora_mode)
+
+
+class LoRAColParallelLinear(LoRAMixin, ColParallelLinear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._init_lora_state(mode=lora_mode)
+
+
+class LoRARowParallelLinear(LoRAMixin, RowParallelLinear):
+    def __init__(self, *args, lora_mode: str = "fuse", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Runtime mode lacks the all-reduce the base path performs via
+        # reduce_scatter, so the delta and base sit at different mesh layouts.
+        if lora_mode == "runtime" and self._mesh_axis_size > 1:
+            raise ValueError(
+                "LoRARowParallelLinear with lora_mode='runtime' is unsupported "
+                f"at TP>1 (mesh_axis_size={self._mesh_axis_size}); use lora_mode='fuse'"
+            )
+        self._init_lora_state(mode=lora_mode)

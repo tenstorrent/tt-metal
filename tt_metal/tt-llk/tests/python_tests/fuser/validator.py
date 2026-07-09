@@ -16,9 +16,11 @@ construction. The dicts are:
 
 from typing import Annotated, ClassVar, List, Literal, Optional, Tuple
 
-from fuser.compute_node import ComputeNode
+from fuser.fpu_node import FpuNode
 from fuser.fused_math import ComputePipeline
 from fuser.fused_operation import FusedOperation
+from fuser.pack_node import PackNode
+from fuser.sfpu_node import SfpuNode
 from helpers.llk_params import (
     AccToDest,
     ApproximationMode,
@@ -36,6 +38,7 @@ from helpers.llk_params import (
     Transpose,
     UnpackToDest,
 )
+from helpers.tile_shape import TileShape, construct_tile_shape
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -43,6 +46,32 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+SUPPORTED_TILE_SIZES = {
+    (1, 32),
+    (2, 32),
+    (4, 32),
+    (8, 32),
+    (16, 32),
+    (32, 32),
+    (16, 16),
+    (32, 16),
+}
+
+
+def _tile_dims(ts: TileShape) -> Tuple[int, int]:
+    return (ts.total_row_dim(), ts.total_col_dim())
+
+
+def _is_sfpu_tile(dims: Tuple[int, int]) -> bool:
+    return dims in ((16, 32), (32, 32), (32, 16))
+
+
+def _has_transpose(schema) -> bool:
+    return (
+        schema.unpack_transpose_faces == Transpose.Yes
+        or schema.unpack_transpose_within_face == Transpose.Yes
+    )
 
 
 class UnarySfpuMathSchema(BaseModel):
@@ -78,7 +107,7 @@ class UnarySfpuMathSchema(BaseModel):
             raise ValueError(f"{v.name} is not a supported unary SFPU operation")
         return v
 
-    def to_compute_node(self, operands, output):
+    def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
@@ -86,7 +115,7 @@ class UnarySfpuMathSchema(BaseModel):
             self.dst_dest_tile_index,
             self.fill_const_value,
         )
-        return ComputeNode(unpacker=None, fpu=None, sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -126,7 +155,7 @@ class BinarySfpuMathSchema(BaseModel):
             raise ValueError(f"{v.name} is not a supported binary SFPU operation")
         return v
 
-    def to_compute_node(self, operands, output):
+    def to_node(self, operands):
         sfpu = type(self)._sfpu_cls(
             self.operation,
             self.approximation_mode,
@@ -135,7 +164,7 @@ class BinarySfpuMathSchema(BaseModel):
             self.src2_dest_tile_index,
             self.dst_dest_tile_index,
         )
-        return ComputeNode(unpacker=None, fpu=None, sfpu=sfpu)
+        return SfpuNode(sfpu=sfpu)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         return None
@@ -167,6 +196,7 @@ class FpuMathSchemaBase(BaseModel):
     unpack_transpose_faces: Transpose = Transpose.No
     math_fidelity: MathFidelity = MathFidelity.LoFi
     unpack_to_dest: UnpackToDest = UnpackToDest.No
+    reduce_to_tile: bool = False
     src_a: str = Field(..., min_length=1)
     src_b: str = Field(..., min_length=1)
 
@@ -196,7 +226,7 @@ class FpuMathSchemaBase(BaseModel):
                 pass
         return v
 
-    def to_compute_node(self, operands, output):
+    def to_node(self, operands):
         src_a = operands.get(self.src_a)
         src_b = operands.get(self.src_b)
 
@@ -208,9 +238,9 @@ class FpuMathSchemaBase(BaseModel):
                     raise ValueError(error_msg)
 
         if self.unpacker is not None:
-            unpacker_factory, unpacker_checks = type(self)._unpacker_map[self.unpacker]
-            if unpacker_checks is not None:
-                for check, error_msg in unpacker_checks:
+            _, checks = type(self)._unpacker_map[self.unpacker]
+            if checks is not None:
+                for check, error_msg in checks:
                     if check(self, src_a, src_b):
                         raise ValueError(error_msg)
 
@@ -233,11 +263,13 @@ class FpuMathSchemaBase(BaseModel):
             "clear_fp32_dst_acc": clear_fp32_dst_acc,
             "acc_to_dest": self.acc_to_dest,
             "unpack_to_dest": self.unpack_to_dest,
+            "reduce_to_tile": self.reduce_to_tile,
         }
         if self.unpacker is not None:
+            unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
             kwargs["unpacker"] = unpacker_factory(self)
 
-        return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
+        return FpuNode(fpu=fpu, src_a=src_a, src_b=src_b, **kwargs)
 
     def get_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
         fn = type(self)._output_dims.get(self.operation)
@@ -248,30 +280,65 @@ class FpuMathSchemaBase(BaseModel):
         return fn(src_a, src_b)
 
 
+class PackSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    _packer_map: ClassVar[dict] = {}
+
+    type: Literal["Pack"] = "Pack"
+    output: str = Field(..., min_length=1)
+    packer: str = "Packer"
+    pack_relu: PackerReluType = PackerReluType.NoRelu
+    relu_threshold: float = 0.0
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
+
+    @field_validator("packer", mode="after")
+    @classmethod
+    def validate_packer(cls, v):
+        if cls._packer_map and v not in cls._packer_map:
+            raise ValueError(f"Unknown packer: {v}")
+        return v
+
+    def to_node(self, operands):
+        output = operands.get(name=self.output)
+        output.is_output = True
+
+        packer_cls, checks = type(self)._packer_map[self.packer]
+        if checks is not None:
+            for check, error_msg in checks:
+                if check(self, output):
+                    raise ValueError(error_msg)
+
+        return PackNode(
+            packer=packer_cls(),
+            output=output,
+            pack_relu=self.pack_relu,
+            relu_threshold=self.relu_threshold,
+            pack_l1_accumulation=self.pack_l1_accumulation,
+        )
+
+
 class OperationSchemaBase(BaseModel):
     """Base schema for a fused operation with one output and one or more math nodes.
 
-    Each architecture subclass sets _packer_map and adds its own math list field.
+    Each architecture subclass adds its own math and pack list fields.
     Blackhole also overrides _arch_validate() for tilize detection and _arch_kwargs()
     to forward the bh_tilize flag to FusedOperation.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    _packer_map: ClassVar[dict] = {}
-
-    output: str = Field(..., min_length=1)
-    packer: str = "Packer"
     dest_sync: DestSync = DestSync.Half
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
-    pack_relu: PackerReluType = PackerReluType.NoRelu
-    relu_threshold: float = 0.0
-    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
+    pack: List[PackSchema] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     def validate_operation(self) -> "OperationSchemaBase":
-        if self.packer not in type(self)._packer_map:
-            raise ValueError(f"Unknown packer: {self.packer}")
+        if not any(isinstance(e, PackSchema) for e in self.pack):
+            raise ValueError("pack list must contain at least one Pack entry")
+        if not isinstance(self.pack[-1], PackSchema):
+            raise ValueError("pack list must end with a Pack entry")
+
         self._arch_validate()
         return self
 
@@ -281,50 +348,124 @@ class OperationSchemaBase(BaseModel):
     def _arch_kwargs(self) -> dict:
         return {}
 
-    def _get_packer_class(self):
-        cls, _ = type(self)._packer_map[self.packer]
-        return cls
+    def _resolve_output_tile_shape(self, operands) -> TileShape:
+        """Resolve the output/dest tile shape for this operation.
 
-    def to_fused_operation(self, operands):
-        output = operands.get(name=self.output)
-        math_ops = [m.to_compute_node(operands, output) for m in self.math]
-        output.is_output = True
+        For most ops, all operands share the same tile shape. For matmul,
+        output tile shape derives from input tile shapes: out_rows = in0_rows,
+        out_cols = in1_cols.
+        """
+        output_tile_shapes = []
+
+        for m in self.math:
+            if not hasattr(m, "src_a"):
+                continue
+            src_a_ts = operands.get(m.src_a).tile_shape
+            src_b_ts = operands.get(m.src_b).tile_shape
+
+            if m.operation in ("Matmul", "MatmulNoMop"):
+                out_tile_dims = (
+                    src_a_ts.total_row_dim(),
+                    src_b_ts.total_col_dim(),
+                )
+                output_tile_shapes.append(construct_tile_shape(out_tile_dims))
+            else:
+                if _tile_dims(src_a_ts) != _tile_dims(src_b_ts):
+                    raise ValueError(
+                        f"src_a tile shape {_tile_dims(src_a_ts)} != src_b tile shape "
+                        f"{_tile_dims(src_b_ts)} for {m.operation}"
+                    )
+                output_tile_shapes.append(src_a_ts)
+
+        pack_schemas = [e for e in self.pack if isinstance(e, PackSchema)]
+
+        if not output_tile_shapes:
+            output_tile_shapes = [
+                operands.get(e.output).tile_shape for e in pack_schemas
+            ]
+
+        first = output_tile_shapes[0]
+        for ts in output_tile_shapes[1:]:
+            if _tile_dims(ts) != _tile_dims(first):
+                raise ValueError(
+                    f"All math nodes must produce the same output tile shape. "
+                    f"Got {_tile_dims(first)} and {_tile_dims(ts)}"
+                )
+
+        for entry in pack_schemas:
+            pack_ts = operands.get(entry.output).tile_shape
+            if _tile_dims(pack_ts) != _tile_dims(first):
+                raise ValueError(
+                    f"Pack output '{entry.output}' tile shape {_tile_dims(pack_ts)} "
+                    f"does not match computed output tile shape {_tile_dims(first)}"
+                )
+
+        return first
+
+    def to_fused_operation(self, operands, dest_acc=False):
+        tile_shape = self._resolve_output_tile_shape(operands)
+
+        tile_r = tile_shape.total_row_dim()
+        tile_c = tile_shape.total_col_dim()
+        block_r, block_c = self.block_size
+
+        if block_r % tile_r != 0 or block_c % tile_c != 0:
+            raise ValueError(
+                f"Block size ({self.block_size}) must be a multiple of tile dimensions "
+                f"({tile_r}, {tile_c})"
+            )
+
+        block_tiles = (block_r // tile_r) * (block_c // tile_c)
+        dest_faces = 32 if self.dest_sync == DestSync.Half else 64
+        if dest_acc:
+            dest_faces //= 2
+        dest_tile_capacity = dest_faces // tile_shape.total_num_faces()
+
+        if block_tiles > dest_tile_capacity:
+            raise ValueError(
+                f"Block size {self.block_size} requires {block_tiles} tiles "
+                f"({block_tiles * tile_shape.total_num_faces()} faces) but dest can hold "
+                f"{dest_tile_capacity} tiles ({dest_faces} faces) with "
+                f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
+            )
+
+        pack_nodes = [entry.to_node(operands) for entry in self.pack]
+
+        math_ops = [m.to_node(operands) for m in self.math]
+
+        has_sfpu = any(isinstance(node, SfpuNode) for node in math_ops)
+        has_fpu = any(isinstance(node, FpuNode) for node in math_ops)
+        if has_sfpu and not has_fpu:
+            dims = _tile_dims(tile_shape)
+            if not _is_sfpu_tile(dims):
+                raise ValueError(
+                    f"Tile shape {dims} is not supported for SFPU operations. "
+                    f"Supported: [(16, 32), (32, 16), (32, 32)]"
+                )
 
         max_out_dims = self._calculate_max_output_dimensions(operands)
-        resolved_max_out_dims = (
-            max_out_dims if max_out_dims is not None else output.dimensions
-        )
-
-        _, checks = type(self)._packer_map[self.packer]
-        if checks is not None:
-            for check, error_msg in checks:
-                if check(self, output):
-                    raise ValueError(error_msg)
 
         reduce_dim = None
         for node in math_ops:
-            if node.fpu is not None and hasattr(node.fpu, "reduce_dim"):
+            if isinstance(node, FpuNode) and hasattr(node.fpu, "reduce_dim"):
                 reduce_dim = node.fpu.reduce_dim
                 break
 
         kwargs = {
             "block_size": self.block_size,
-            "pack_relu": self.pack_relu,
-            "relu_threshold": self.relu_threshold,
-            "pack_l1_accumulation": self.pack_l1_accumulation,
+            "tile_shape": tile_shape,
             "dest_sync": self.dest_sync,
             "reduce_dim": reduce_dim,
         }
         kwargs.update(self._arch_kwargs())
 
         return FusedOperation(
-            math=ComputePipeline(math_ops, self._get_packer_class()),
-            output=output,
-            max_output_dimensions=resolved_max_out_dims,
+            math=ComputePipeline(math_ops, pack_nodes),
+            max_output_dimensions=max_out_dims,
             **kwargs,
         )
 
-    def _calculate_max_output_dimensions(self, operands) -> Optional[Tuple[int, int]]:
+    def _calculate_max_output_dimensions(self, operands) -> Tuple[int, int]:
         dims = []
         for m in self.math:
             op_dims = m.get_output_dimensions(operands)
@@ -332,7 +473,11 @@ class OperationSchemaBase(BaseModel):
                 dims.append(op_dims)
 
         if not dims:
-            return None
+            dims = [
+                operands.get(e.output).dimensions
+                for e in self.pack
+                if isinstance(e, PackSchema)
+            ]
 
         bound_r = min(d[0] for d in dims)
         bound_c = min(d[1] for d in dims)

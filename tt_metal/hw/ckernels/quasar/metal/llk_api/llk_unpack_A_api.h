@@ -6,28 +6,11 @@
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_unary_broadcast_operands.h"
 #include "llk_unpack_unary_operand.h"
+#include "tensor_shape.h"
 
 /*************************************************************************
  * LLK UNPACK A
  *************************************************************************/
-
-/**
- *
- * @brief Initialize selected unpacker to unpack a single tile
- *
- * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
- * @tparam IS_32b_DEST_EN: Enable using Math destination Register in 32-bit mode
- * @param operand: The input operand circular buffer
- *
- * This function initializes unpacker0 to unpack a single tile
- * from the input circular buffer to srcA/dest register.
- */
-template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
-inline void llk_unpack_A_init(const std::uint32_t operand) {
-    const std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id, NUM_TILES, num_faces);
-}
 
 /**
  *
@@ -36,12 +19,14 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
  * Overload matching Blackhole/Wormhole API signature `(transpose_of_faces, within_face_16x16_transpose, operand)`.
  *
  * When `binary_reuse_dest != NONE`, uses the eltwise-binary dest-reuse init path (UNP_A, default tile/face counts).
- * Otherwise uses the unary / unary-broadcast path (`unp_sel` from `unpack_to_dest`, per-tile init args).
+ * Otherwise uses the unary / unary-broadcast path. For the non-broadcast path the UNP_DEST routing
+ * decision is made solely from the `unpack_to_dest` template parameter (no format inspection); when true,
+ * all operands (including 16-bit) are routed to DEST.
  *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar in dest-reuse path; kept for API parity
  * @tparam binary_reuse_dest: Dest reuse mode; when not NONE, selects the dest-reuse sub-path
- * @tparam unpack_to_dest: When true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B) — unary/broadcast only
+ * @tparam unpack_to_dest: When true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of format
  * @param transpose_of_faces: Non-zero enables transpose of 16x16 faces (unary/broadcast NONE path only)
  * @param within_face_16x16_transpose: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @param operand: The input operand logical dataflow buffer / CB id
@@ -56,6 +41,7 @@ inline void llk_unpack_A_init(
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     if constexpr (binary_reuse_dest != EltwiseBinaryReuseDestType::NONE) {
         static_assert(unpack_to_dest == false, "unpack_to_dest is not yet supported on Quasar");
         static_assert(acc_to_dest == false, "acc_to_dest is not yet supported on Quasar");
@@ -66,21 +52,30 @@ inline void llk_unpack_A_init(
             p_unpacr::UNP_A,
             false /* TRANSPOSE_EN */,
             false /* IS_32b_DEST_EN */,
-            binary_reuse_dest>(operand_id);
+            binary_reuse_dest>(operand_id, tensor_shape, 1);
     } else {
         if constexpr (BType == BroadcastType::NONE) {
-            constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
             LLK_ASSERT(
                 transpose_of_faces == within_face_16x16_transpose,
                 "Quasar unpack unary supports only full transpose (transpose_of_faces and within_face_16x16_transpose "
                 "must match)");
-            const std::uint32_t num_faces = get_operand_num_faces(operand_id);
+            // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
+            // operand is unpacked to DEST here too when the op writer requested it.
+            if constexpr (unpack_to_dest) {
+                _llk_unpack_unary_operand_init_<
+                    p_unpacr::UNP_DEST,
+                    false /*transpose*/,
+                    DST_ACCUM_MODE,
+                    binary_reuse_dest,
+                    true>(operand_id, tensor_shape, 1);
+                return;
+            }
             if (transpose_of_faces && within_face_16x16_transpose) {
-                _llk_unpack_unary_operand_init_<unp_sel, true, DST_ACCUM_MODE, binary_reuse_dest>(
-                    operand_id, 1, num_faces);
+                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest, false>(
+                    operand_id, tensor_shape, 1);
             } else {
-                _llk_unpack_unary_operand_init_<unp_sel, false, DST_ACCUM_MODE, binary_reuse_dest>(
-                    operand_id, 1, num_faces);
+                _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest, false>(
+                    operand_id, tensor_shape, 1);
             }
         } else {
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
@@ -95,10 +90,13 @@ inline void llk_unpack_A_init(
  *
  * @brief Unpacks a single operand for unary and unary-broadcast paths.
  *
+ * For the non-broadcast path the UNPACK_MATH / MATH_PACK semaphore handshake lives inside the primitive; the
+ * UNP_DEST routing decision is made solely from the `unpack_to_dest` template parameter (no format inspection).
+ *
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B)
+ * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of format
  * @param operand: The logical dataflow buffer id
  * @param tile_index: The index in the input CB to read from
  */
@@ -114,7 +112,14 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
     const std::uint32_t l1_tile_idx =
         local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx + tile_index;
     if constexpr (BType == BroadcastType::NONE) {
-        _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(l1_tile_idx);
+        const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+        if constexpr (unpack_to_dest) {
+            _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
+                l1_tile_idx, tensor_shape);
+        } else {
+            _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
+                l1_tile_idx, tensor_shape);
+        }
     } else {
         constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
         _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(l1_tile_idx);
@@ -128,7 +133,7 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: Broadcast path only — when true, unpack targets dest (UNP_A); otherwise SrcB (UNP_B)
+ * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of format
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
@@ -144,10 +149,17 @@ inline void llk_unpack_A_block(
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;
+    const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         WAYPOINT("UPAW");
         if constexpr (BType == BroadcastType::NONE) {
-            _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest>(rd_entry_idx + tile_index);
+            if constexpr (unpack_to_dest) {
+                _llk_unpack_unary_operand_<p_unpacr::UNP_DEST, binary_reuse_dest, true, DST_SYNC_MODE>(
+                    rd_entry_idx + tile_index, tensor_shape);
+            } else {
+                _llk_unpack_unary_operand_<p_unpacr::UNP_A, binary_reuse_dest, false, DST_SYNC_MODE>(
+                    rd_entry_idx + tile_index, tensor_shape);
+            }
         } else {
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
             _llk_unpack_unary_broadcast_operands_<unp_sel, unpack_to_dest>(rd_entry_idx + tile_index);
@@ -157,4 +169,4 @@ inline void llk_unpack_A_block(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_A_uninit(const std::uint32_t operand) {}
+inline void llk_unpack_A_uninit() {}

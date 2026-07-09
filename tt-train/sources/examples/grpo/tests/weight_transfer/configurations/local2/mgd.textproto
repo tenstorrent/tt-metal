@@ -1,16 +1,6 @@
-# Mesh Graph Descriptor for the 2-rank ttml -> tt-transformers weight
-# bridge test.
-#
-# Two [1, 2] meshes (one per rank), each covering one full N300 board.
-# Each board is one PCIe device with 2 chips; the full physical eth
-# topology must be declared here or ControlPlane::init_control_plane()
-# trips `Fabric node ID not yet assigned for ASIC id ...`. The FABRIC
-# graph wires the two boards together so
-# ttnn.experimental.send_async/recv_async (used by WeightBridge) can
-# route across them.
-#
-# The applications open asymmetric sub-meshes on top of this declared
-# layout -- see rank_bindings.yaml and test_bridge_transfer.py.
+# Mesh Graph Descriptor for the 2-rank ttml -> tt-transformers weight bridge test.
+# Two [1, 2] meshes (one per rank). The full physical eth topology must be declared
+# or ControlPlane::init_control_plane() trips `Fabric node ID not yet assigned ...`.
 
 mesh_descriptors {
   name: "M0"

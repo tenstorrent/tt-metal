@@ -13,6 +13,8 @@
 #include <enchantum/enchantum.hpp>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <unordered_set>
 #include <fmt/base.h>
 #include <google/protobuf/text_format.h>
 #include <tt-logger/tt-logger.hpp>
@@ -307,48 +309,55 @@ bool try_merge_torus_compatible_template(
     return true;
 }
 
+// All boards in a valid node share an architecture, so the first board is sufficient.
+std::optional<tt::ARCH> get_template_architecture(const Node& node_template) {
+    if (node_template.boards.empty()) {
+        return std::nullopt;
+    }
+    return node_template.boards.begin()->second.get_arch();
+}
+
 void validate_and_merge_node_templates(
     std::unordered_map<std::string, Node>& this_node_desc_name_to_node,
     const std::unordered_map<std::string, Node>& other_node_desc_name_to_node,
     const std::string& existing_source_file,
     const std::string& new_source_file) {
-    // Forward pass: validate/merge templates that exist in both
+    // Union templates across files. Same-name templates must agree on structure;
+    // disjoint templates are carried over (so e.g. REV_AB-only + REV_C-only merges work),
+    // but mixing architectures (e.g. WH + BH) is still rejected.
+    // Genuine same-instance-name conflicts are caught later in merge_resolved_graph_instances.
     for (const auto& [node_desc_name, other_template] : other_node_desc_name_to_node) {
         if (this_node_desc_name_to_node.contains(node_desc_name)) {
-            // Template exists in both - validate it matches
             const auto& this_template = this_node_desc_name_to_node.at(node_desc_name);
             validate_node_structure(this_template, other_template, node_desc_name, new_source_file);
             validate_inter_board_connections(
                 this_template, other_template, node_desc_name, existing_source_file, new_source_file);
+        } else if (try_merge_torus_compatible_template(
+                       this_node_desc_name_to_node,
+                       node_desc_name,
+                       other_template,
+                       existing_source_file,
+                       new_source_file)) {
+            // Folded into an existing torus variant (e.g. X_TORUS + Y_TORUS -> XY_TORUS).
         } else {
-            // Template missing in 'this' - try torus-compatible merge or throw error
-            bool merged = try_merge_torus_compatible_template(
-                this_node_desc_name_to_node, node_desc_name, other_template, existing_source_file, new_source_file);
-
-            if (!merged) {
-                throw std::runtime_error(fmt::format(
-                    "Node template '{}' exists in {} but not in {} - structural mismatch",
-                    node_desc_name,
-                    get_source_description(new_source_file),
-                    get_source_description(existing_source_file)));
+            auto other_arch = get_template_architecture(other_template);
+            if (other_arch.has_value()) {
+                for (const auto& [existing_name, existing_template] : this_node_desc_name_to_node) {
+                    auto existing_arch = get_template_architecture(existing_template);
+                    if (existing_arch.has_value() && *existing_arch != *other_arch) {
+                        throw std::runtime_error(fmt::format(
+                            "Node template '{}' from {} has architecture {} which conflicts with "
+                            "existing template '{}' from {} (architecture {}) - structural mismatch",
+                            node_desc_name,
+                            get_source_description(new_source_file),
+                            enchantum::to_string(*other_arch),
+                            existing_name,
+                            get_source_description(existing_source_file),
+                            enchantum::to_string(*existing_arch)));
+                    }
+                }
             }
-        }
-    }
-
-    // Backward pass: check for templates in 'this' that don't exist in 'other'
-    for (const auto& [node_desc_name, this_template] : this_node_desc_name_to_node) {
-        if (!other_node_desc_name_to_node.contains(node_desc_name)) {
-            // Check if this is a torus type that can be merged with another torus variant
-            bool found_compatible =
-                find_torus_compatible_template(other_node_desc_name_to_node, node_desc_name).has_value();
-
-            if (!found_compatible) {
-                throw std::runtime_error(fmt::format(
-                    "Node template '{}' exists in {} but not in {} - structural mismatch",
-                    node_desc_name,
-                    get_source_description(existing_source_file),
-                    get_source_description(new_source_file)));
-            }
+            this_node_desc_name_to_node[node_desc_name] = other_template;
         }
     }
 }
@@ -415,11 +424,13 @@ Node build_node(
     if (it != node_templates.end()) {
         Node node = it->second;  // Copy template
         node.host_id = host_id;
+        node.node_descriptor_name = node_descriptor_name;
         return node;
     }
 
     // Build new node template (with host_id=0)
     Node template_node;
+    template_node.node_descriptor_name = node_descriptor_name;
 
     auto node_descriptor = find_node_descriptor(node_descriptor_name, cluster_descriptor);
 
@@ -520,6 +531,7 @@ Node build_node(
     // Create instance with actual host_id
     Node node = template_node;
     node.host_id = host_id;
+    node.node_descriptor_name = node_descriptor_name;
     return node;
 }
 
@@ -675,6 +687,85 @@ std::unique_ptr<ResolvedGraphInstance> build_graph_instance(
     return build_graph_instance_impl(graph_instance, cluster_descriptor, nullptr, instance_name, node_templates);
 }
 
+// Collects (host_id -> hostname) for every leaf node by walking the graph recursively.
+// Child `name` matches the host's `host` field in the deployment descriptor by convention.
+void collect_host_id_to_hostname(
+    const tt::scaleout_tools::cabling_generator::proto::GraphInstance& graph_instance,
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    std::map<HostId, std::string>& out) {
+    auto template_it = cluster_descriptor.graph_templates().find(graph_instance.template_name());
+    if (template_it == cluster_descriptor.graph_templates().end()) {
+        return;  // Missing template will be flagged by build_graph_instance_impl later.
+    }
+    const auto& template_def = template_it->second;
+    for (const auto& child_def : template_def.children()) {
+        const std::string& child_name = child_def.name();
+        auto mapping_it = graph_instance.child_mappings().find(child_name);
+        if (mapping_it == graph_instance.child_mappings().end()) {
+            continue;
+        }
+        const auto& mapping = mapping_it->second;
+        if (child_def.has_node_ref()) {
+            if (mapping.mapping_case() ==
+                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kHostId) {
+                out[HostId(mapping.host_id())] = child_name;
+            }
+        } else if (child_def.has_graph_ref()) {
+            if (mapping.mapping_case() ==
+                tt::scaleout_tools::cabling_generator::proto::ChildMapping::kSubInstance) {
+                collect_host_id_to_hostname(mapping.sub_instance(), cluster_descriptor, out);
+            }
+        }
+    }
+}
+
+// Returns a deployment slice containing only the hosts referenced by `cluster_descriptor`,
+// ordered by host_id so positional (host_id -> hosts[i]) indexing in the per-file ctor lines up.
+tt::scaleout_tools::deployment::proto::DeploymentDescriptor filter_deployment_for_cabling(
+    const tt::scaleout_tools::cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& full_deployment,
+    const std::string& cabling_source) {
+    std::map<HostId, std::string> host_id_to_hostname;
+    collect_host_id_to_hostname(cluster_descriptor.root_instance(), cluster_descriptor, host_id_to_hostname);
+
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor filtered;
+    filtered.set_rack_capacity(full_deployment.rack_capacity());
+    if (host_id_to_hostname.empty()) {
+        return filtered;
+    }
+
+    // Per-file host_ids must be contiguous 0..N-1; positional indexing breaks otherwise.
+    HostId expected_id{0};
+    for (const auto& [hid, _] : host_id_to_hostname) {
+        if (*hid != *expected_id) {
+            throw std::runtime_error(fmt::format(
+                "Cabling file '{}' has non-contiguous host_ids (expected {} but found {}); "
+                "merge requires each file to use a 0..N-1 host_id space",
+                cabling_source,
+                *expected_id,
+                *hid));
+        }
+        expected_id = HostId(*expected_id + 1);
+    }
+
+    std::unordered_map<std::string, const tt::scaleout_tools::deployment::proto::Host*> hostname_to_host;
+    hostname_to_host.reserve(full_deployment.hosts().size());
+    for (const auto& host : full_deployment.hosts()) {
+        hostname_to_host[host.host()] = &host;
+    }
+
+    for (const auto& [hid, hostname] : host_id_to_hostname) {
+        auto it = hostname_to_host.find(hostname);
+        if (it == hostname_to_host.end()) {
+            throw std::runtime_error(
+                "Cabling file '" + cabling_source + "' references host '" + hostname +
+                "' which is not present in the deployment descriptor");
+        }
+        *filtered.add_hosts() = *(it->second);
+    }
+    return filtered;
+}
+
 void populate_deployment_hosts(
     const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
     const std::unordered_map<std::string, Node>& node_templates,
@@ -804,6 +895,99 @@ CablingGenerator build_from_directory(const std::string& dir_path, const Deploym
     return merged;
 }
 
+// Same as above, but optionally slices the pre-parsed deployment per cabling file so each
+// per-file ctor sees only the hosts it can validate against its own templates and host_id space.
+//
+// Slicing is gated on every leaf child name in every cabling file matching a deployment hostname
+// (the convention used by heterogeneous-merge inputs). When that doesn't hold - e.g. cabling files
+// use placeholder names like "node1" while the deployment lists real hostnames - we fall back to
+// the pre-PR behaviour of passing the full deployment to each per-file ctor. That path doesn't
+// support disjoint per-file templates against a single deployment, but it preserves the existing
+// positional convention used by single-file ctors in production.
+CablingGenerator build_from_directory(
+    const std::string& dir_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
+    auto descriptor_files = CablingGenerator::find_descriptor_files(dir_path);
+
+    log_info(
+        tt::LogDistributed, "Found {} cabling descriptor files in directory: {}", descriptor_files.size(), dir_path);
+    for (const auto& file : descriptor_files) {
+        log_info(tt::LogDistributed, "  - {}", file);
+    }
+
+    // Parse cabling files once so we can both probe for the naming convention and (when slicing)
+    // reuse the parsed cluster descriptors below.
+    std::vector<cabling_generator::proto::ClusterDescriptor> clusters;
+    clusters.reserve(descriptor_files.size());
+    for (const auto& file : descriptor_files) {
+        clusters.push_back(load_cluster_descriptor(file));
+    }
+
+    std::unordered_set<std::string> deployment_hostnames;
+    deployment_hostnames.reserve(deployment_descriptor.hosts().size());
+    for (const auto& host : deployment_descriptor.hosts()) {
+        deployment_hostnames.insert(host.host());
+    }
+
+    bool can_slice = true;
+    for (const auto& cluster : clusters) {
+        std::map<HostId, std::string> name_map;
+        collect_host_id_to_hostname(cluster.root_instance(), cluster, name_map);
+        for (const auto& [hid, hostname] : name_map) {
+            if (!deployment_hostnames.contains(hostname)) {
+                can_slice = false;
+                break;
+            }
+        }
+        if (!can_slice) {
+            break;
+        }
+    }
+
+    auto per_file_deployment = [&](size_t i) -> tt::scaleout_tools::deployment::proto::DeploymentDescriptor {
+        if (!can_slice) {
+            return deployment_descriptor;
+        }
+        return filter_deployment_for_cabling(clusters[i], deployment_descriptor, descriptor_files[i]);
+    };
+
+    CablingGenerator merged(descriptor_files[0], per_file_deployment(0));
+    std::string merged_source_description = descriptor_files[0];
+
+    for (size_t i = 1; i < descriptor_files.size(); ++i) {
+        merged.merge(descriptor_files[i], per_file_deployment(i), merged_source_description);
+        merged_source_description += ", " + descriptor_files[i];
+    }
+
+    // Orphan detection is only meaningful when we sliced: each cabling file declares a subset of
+    // hosts and a deployment-only host represents a typo or wrong-file mistake. In the
+    // full-deployment fallback every per-file ctor already sees the entire deployment, so this
+    // class of error can't arise here.
+    if (can_slice) {
+        std::unordered_set<std::string> claimed;
+        claimed.reserve(merged.deployment_hosts_.size());
+        for (const auto& host : merged.deployment_hosts_) {
+            claimed.insert(host.hostname);
+        }
+        std::vector<std::string> orphans;
+        for (const auto& host : deployment_descriptor.hosts()) {
+            if (!claimed.contains(host.host())) {
+                orphans.push_back(host.host());
+            }
+        }
+        if (!orphans.empty()) {
+            std::string msg = "Deployment descriptor contains hosts not referenced by any cabling file in '" +
+                              dir_path + "': " + orphans[0];
+            for (size_t i = 1; i < orphans.size(); ++i) {
+                msg += ", " + orphans[i];
+            }
+            throw std::runtime_error(msg);
+        }
+    }
+
+    return merged;
+}
+
 // Helper: Deep copy a ResolvedGraphInstance (including all nested subgraphs)
 static std::unique_ptr<ResolvedGraphInstance> clone_resolved_graph(const ResolvedGraphInstance& source) {
     auto cloned = std::make_unique<ResolvedGraphInstance>();
@@ -833,6 +1017,22 @@ void ResolvedGraphInstance::add_connection(PortType port_type, const PortConnect
     connection_pairs.insert(normalized);
 }
 
+// Single-file init shared by the (path, path) and (path, DeploymentDescriptor) ctors.
+void CablingGenerator::initialize_from_single_file(
+    const std::string& cluster_descriptor_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
+    auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
+    initialize_cluster(cluster_descriptor, deployment_descriptor);
+    populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
+    // Order deployment_hosts_ by DFS-assigned host_id; rebuild falls back to the current
+    // order internally when node names don't match hostnames (e.g. test fixtures).
+    std::unordered_map<std::string, Host> all_hosts;
+    for (const auto& host : deployment_hosts_) {
+        all_hosts[host.hostname] = host;
+    }
+    rebuild_deployment_hosts_in_dfs_order(all_hosts);
+}
+
 // Constructor with full deployment descriptor
 // cluster_descriptor_path can be a single file or a directory
 CablingGenerator::CablingGenerator(
@@ -841,26 +1041,35 @@ CablingGenerator::CablingGenerator(
         throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
     }
     if (std::filesystem::is_directory(cluster_descriptor_path)) {
-        auto merged = build_from_directory(cluster_descriptor_path, deployment_descriptor_path);
+        // Dispatch to the parsed-deployment overload, which slices the deployment per cabling file.
+        auto deployment_descriptor = load_deployment_descriptor(deployment_descriptor_path);
+        auto merged = build_from_directory(cluster_descriptor_path, deployment_descriptor);
         node_templates_ = std::move(merged.node_templates_);
         root_instance_ = std::move(merged.root_instance_);
         host_id_to_node_ = std::move(merged.host_id_to_node_);
         chip_connections_ = std::move(merged.chip_connections_);
         deployment_hosts_ = std::move(merged.deployment_hosts_);
     } else {
-        auto cluster_descriptor = load_cluster_descriptor(cluster_descriptor_path);
-        auto deployment_descriptor = load_deployment_descriptor(deployment_descriptor_path);
-        initialize_cluster(cluster_descriptor, deployment_descriptor);
-        populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
-        // Ensure deployment_hosts_ is ordered by DFS-assigned host_id, not deployment file order.
-        // (rebuild_deployment_hosts_in_dfs_order keeps the current order when node names don't
-        // match hostnames, e.g. test fixtures.)
-        std::unordered_map<std::string, Host> all_hosts;
-        for (const auto& host : deployment_hosts_) {
-            all_hosts[host.hostname] = host;
-        }
-        rebuild_deployment_hosts_in_dfs_order(all_hosts);
+        initialize_from_single_file(
+            cluster_descriptor_path, load_deployment_descriptor(deployment_descriptor_path));
     }
+}
+
+// Same as (path, path) single-file branch but takes a parsed deployment.
+// Used by build_from_directory after slicing.
+CablingGenerator::CablingGenerator(
+    const std::string& cluster_descriptor_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor) {
+    if (!std::filesystem::exists(cluster_descriptor_path)) {
+        throw std::runtime_error("Path does not exist: " + cluster_descriptor_path);
+    }
+    if (std::filesystem::is_directory(cluster_descriptor_path)) {
+        throw std::runtime_error(
+            "CablingGenerator(path, DeploymentDescriptor) does not support directory paths; "
+            "use build_from_directory directly: " +
+            cluster_descriptor_path);
+    }
+    initialize_from_single_file(cluster_descriptor_path, deployment_descriptor);
 }
 
 // Constructor with just hostnames (no physical location info)
@@ -915,11 +1124,17 @@ static std::optional<std::string> find_template_key_for_node(
 
 // Helper to recreate a node from its template, resetting port availability
 // After merging descriptors, nodes may have stale port usage info. This function
-// preserves host_id and merged inter_board_connections
+// preserves host_id, the source descriptor binding, and merged inter_board_connections
 static Node create_base_node_from_template(
     const Node& source_node, const std::unordered_map<std::string, Node>& node_templates) {
-    // Find the template by matching motherboard and board structure
-    auto template_key = find_template_key_for_node(source_node, node_templates);
+    // Prefer the descriptor name this child was bound to in its source file; fall back to
+    // the shape-based lookup only when the binding is missing (e.g. older callers).
+    std::optional<std::string> template_key;
+    if (!source_node.node_descriptor_name.empty() && node_templates.contains(source_node.node_descriptor_name)) {
+        template_key = source_node.node_descriptor_name;
+    } else {
+        template_key = find_template_key_for_node(source_node, node_templates);
+    }
 
     if (!template_key) {
         throw std::runtime_error(fmt::format(
@@ -934,6 +1149,10 @@ static Node create_base_node_from_template(
     // (template only has ports marked as used for inter-board connections from node descriptor)
     Node base_node = template_node;
     base_node.host_id = source_node.host_id;
+    // Preserve the per-child binding so output emits the original template name even if the
+    // templates table aliases two names to the same Node (e.g. after a torus merge).
+    base_node.node_descriptor_name =
+        source_node.node_descriptor_name.empty() ? *template_key : source_node.node_descriptor_name;
     // Copy inter_board_connections from source (they may have been merged from multiple files)
     base_node.inter_board_connections = source_node.inter_board_connections;
     // Re-mark ports as used for the merged inter-board connections
@@ -985,9 +1204,33 @@ static void merge_resolved_graph_instances(
                 // For torus-compatible nodes, we merge the connections
                 // For non-torus nodes, we only merge internal_connections, not inter_board_connections
 
-                // Check if this is a torus-compatible merge scenario
-                auto target_template_key = find_template_key_for_node(target.nodes[name], node_templates);
-                auto source_template_key = find_template_key_for_node(source_node, node_templates);
+                // Check if this is a torus-compatible merge scenario. Prefer the descriptor names
+                // each side was bound to in its source file; fall back to shape-based lookup when
+                // a binding is missing.
+                auto resolve_key = [&](const Node& n) -> std::optional<std::string> {
+                    if (!n.node_descriptor_name.empty() && node_templates.contains(n.node_descriptor_name)) {
+                        return n.node_descriptor_name;
+                    }
+                    return find_template_key_for_node(n, node_templates);
+                };
+                auto target_template_key = resolve_key(target.nodes[name]);
+                auto source_template_key = resolve_key(source_node);
+
+                // Same instance name, different node type across files (e.g. host declared as
+                // WH_GALAXY in one and BH_GALAXY in another) - real conflict; fail with a clear
+                // message instead of a downstream inter_board_connections mismatch.
+                if (target_template_key && source_template_key &&
+                    *target_template_key != *source_template_key &&
+                    !are_torus_compatible_for_merge(*target_template_key, *source_template_key)) {
+                    throw std::runtime_error(fmt::format(
+                        "Node '{}' has conflicting node types across cabling descriptors: "
+                        "'{}' from {} vs '{}' from {} - structural mismatch",
+                        name,
+                        *target_template_key,
+                        get_source_description(existing_source_file),
+                        *source_template_key,
+                        get_source_description(new_source_file)));
+                }
 
                 bool is_torus_merge =
                     (target_template_key && source_template_key &&
@@ -1112,12 +1355,9 @@ static void merge_resolved_graph_instances(
     }
 }
 
-template <typename DeploymentArg>
-void CablingGenerator::merge(
-    const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources) {
-    // Create CablingGenerator for the new file
-    CablingGenerator other(new_file_path, deployment_arg);
-
+// Post-construction merge logic shared by both merge() entry points.
+void CablingGenerator::merge_other(
+    CablingGenerator& other, const std::string& new_file_path, const std::string& existing_sources) {
     if (!root_instance_ || !other.root_instance_) {
         throw std::runtime_error("Cannot merge: both CablingGenerators must have root_instance_");
     }
@@ -1215,6 +1455,21 @@ void CablingGenerator::merge(
     rebuild_deployment_hosts_in_dfs_order(all_hosts);
 
     generate_logical_chip_connections();
+}
+
+template <typename DeploymentArg>
+void CablingGenerator::merge(
+    const std::string& new_file_path, const DeploymentArg& deployment_arg, const std::string& existing_sources) {
+    CablingGenerator other(new_file_path, deployment_arg);
+    merge_other(other, new_file_path, existing_sources);
+}
+
+void CablingGenerator::merge(
+    const std::string& new_file_path,
+    const tt::scaleout_tools::deployment::proto::DeploymentDescriptor& deployment_descriptor,
+    const std::string& existing_sources) {
+    CablingGenerator other(new_file_path, deployment_descriptor);
+    merge_other(other, new_file_path, existing_sources);
 }
 
 // Getters for all data
@@ -1336,7 +1591,13 @@ static void resolved_graph_to_protobuf(
         child->set_name(name);
         auto* node_ref = child->mutable_node_ref();
 
-        auto template_key = find_template_key_for_node(node, node_templates);
+        // Prefer the descriptor name the child was bound to in its source file.
+        std::optional<std::string> template_key;
+        if (!node.node_descriptor_name.empty() && node_templates.contains(node.node_descriptor_name)) {
+            template_key = node.node_descriptor_name;
+        } else {
+            template_key = find_template_key_for_node(node, node_templates);
+        }
         if (!template_key) {
             throw std::runtime_error(fmt::format(
                 "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",
@@ -1491,6 +1752,275 @@ void CablingGenerator::emit_cabling_descriptor(const std::string& output_path) c
         throw std::runtime_error("Failed to write cabling descriptor to: " + output_path);
     }
     output_file.close();
+}
+
+std::set<PhysicalPortConnection> CablingGenerator::find_cables_containing_channels(
+    const std::set<PhysicalChannelEndpoint>& dead_channels) const {
+    std::set<PhysicalPortConnection> result;
+
+    if (!root_instance_ || dead_channels.empty()) {
+        return result;
+    }
+
+    // Index deployment_hosts_ by HostId value (relies on deployment_hosts_ being in DFS host_id order,
+    // same invariant relied on by build_factory_system_descriptor).
+    auto host_for = [&](HostId hid) -> const Host& { return deployment_hosts_.at(*hid); };
+
+    auto make_port_endpoint = [&](HostId host_id, TrayId tray, PortId port_id, PortType port_type) {
+        const Host& h = host_for(host_id);
+        return PhysicalPortEndpoint{
+            .hostname = h.hostname,
+            .aisle = h.aisle,
+            .rack = h.rack,
+            .shelf_u = h.shelf_u,
+            .tray_id = tray,
+            .port_type = port_type,
+            .port_id = port_id,
+        };
+    };
+
+    // Returns true if the cable's expanded channels intersect the dead set.
+    auto cable_intersects_dead = [&](PortType port_type,
+                                     const Board& start_board,
+                                     const Board& end_board,
+                                     HostId start_host_id,
+                                     TrayId start_tray,
+                                     PortId start_port,
+                                     HostId end_host_id,
+                                     TrayId end_tray,
+                                     PortId end_port) -> bool {
+        const auto& start_channels = start_board.get_port_channels(port_type, start_port);
+        const auto& end_channels = end_board.get_port_channels(port_type, end_port);
+        auto pairs = tt::scaleout_tools::get_asic_channel_connections(port_type, start_channels, end_channels);
+        const std::string& start_host = host_for(start_host_id).hostname;
+        const std::string& end_host = host_for(end_host_id).hostname;
+        for (const auto& [start_chan, end_chan] : pairs) {
+            if (dead_channels.contains(PhysicalChannelEndpoint{start_host, start_tray, start_chan}) ||
+                dead_channels.contains(PhysicalChannelEndpoint{end_host, end_tray, end_chan})) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto record = [&](PortType port_type, HostId ha, TrayId ta, PortId pa, HostId hb, TrayId tb, PortId pb) {
+        auto endpoint_a = make_port_endpoint(ha, ta, pa, port_type);
+        auto endpoint_b = make_port_endpoint(hb, tb, pb, port_type);
+        if (endpoint_a < endpoint_b) {
+            result.insert({endpoint_a, endpoint_b});
+        } else {
+            result.insert({endpoint_b, endpoint_a});
+        }
+    };
+
+    // Walk the resolved graph, mirroring generate_connections_from_resolved_graph(). Three layers:
+    // intra-board, inter-board (within a node), and graph-level (between nodes), plus subgraph recursion.
+    std::function<void(const std::unique_ptr<ResolvedGraphInstance>&)> walk =
+        [&](const std::unique_ptr<ResolvedGraphInstance>& graph) {
+            if (!graph) {
+                return;
+            }
+
+            for (const auto& [node_name, node] : graph->nodes) {
+                HostId host_id = node.host_id;
+
+                for (const auto& [tray_id, board] : node.boards) {
+                    for (const auto& [port_type, conns] : board.get_internal_connections()) {
+                        for (const auto& [port_a, port_b] : conns) {
+                            if (cable_intersects_dead(
+                                    port_type, board, board, host_id, tray_id, port_a, host_id, tray_id, port_b)) {
+                                record(port_type, host_id, tray_id, port_a, host_id, tray_id, port_b);
+                            }
+                        }
+                    }
+                }
+
+                for (const auto& [port_type, conns] : node.inter_board_connections) {
+                    for (const auto& [be_a, be_b] : conns) {
+                        TrayId tray_a = be_a.first;
+                        PortId port_a = be_a.second;
+                        TrayId tray_b = be_b.first;
+                        PortId port_b = be_b.second;
+                        const Board& board_a = node.boards.at(tray_a);
+                        const Board& board_b = node.boards.at(tray_b);
+                        if (cable_intersects_dead(
+                                port_type, board_a, board_b, host_id, tray_a, port_a, host_id, tray_b, port_b)) {
+                            record(port_type, host_id, tray_a, port_a, host_id, tray_b, port_b);
+                        }
+                    }
+                }
+            }
+
+            for (const auto& [port_type, conns] : graph->internal_connections) {
+                for (const auto& [pe_a, pe_b] : conns) {
+                    auto [host_a, tray_a, port_a] = pe_a;
+                    auto [host_b, tray_b, port_b] = pe_b;
+                    if (!host_id_to_node_.contains(host_a) || !host_id_to_node_.contains(host_b)) {
+                        continue;
+                    }
+                    const Node* node_a = host_id_to_node_.at(host_a);
+                    const Node* node_b = host_id_to_node_.at(host_b);
+                    const Board& board_a = node_a->boards.at(tray_a);
+                    const Board& board_b = node_b->boards.at(tray_b);
+                    if (cable_intersects_dead(
+                            port_type, board_a, board_b, host_a, tray_a, port_a, host_b, tray_b, port_b)) {
+                        record(port_type, host_a, tray_a, port_a, host_b, tray_b, port_b);
+                    }
+                }
+            }
+
+            for (const auto& [_, sub] : graph->subgraphs) {
+                walk(sub);
+            }
+        };
+
+    walk(root_instance_);
+    return result;
+}
+
+std::set<PhysicalPortConnection> CablingGenerator::prune_dead_channels(
+    const std::set<PhysicalChannelEndpoint>& dead_channels) {
+    std::set<PhysicalPortConnection> pruned;
+
+    if (dead_channels.empty() || !root_instance_) {
+        return pruned;
+    }
+
+    auto host_for = [&](HostId hid) -> const Host& { return deployment_hosts_.at(*hid); };
+
+    auto make_port_endpoint = [&](HostId host_id, TrayId tray, PortId port_id, PortType port_type) {
+        const Host& h = host_for(host_id);
+        return PhysicalPortEndpoint{
+            .hostname = h.hostname,
+            .aisle = h.aisle,
+            .rack = h.rack,
+            .shelf_u = h.shelf_u,
+            .tray_id = tray,
+            .port_type = port_type,
+            .port_id = port_id,
+        };
+    };
+
+    std::vector<LogicalChannelConnection> rebuilt;
+
+    // Inspect a single cable. Expands its channels via the connector mapping, records the
+    // cable into `pruned` if any channel is in the dead set; otherwise appends the channels
+    // to `rebuilt` (the new chip_connections_). Returns true if the cable was dead, so callers
+    // operating on mutable containers can erase it.
+    auto inspect_cable = [&](PortType port_type,
+                             const Board& start_board,
+                             const Board& end_board,
+                             HostId start_host_id,
+                             TrayId start_tray,
+                             PortId start_port,
+                             HostId end_host_id,
+                             TrayId end_tray,
+                             PortId end_port) -> bool {
+        const auto& start_channels = start_board.get_port_channels(port_type, start_port);
+        const auto& end_channels = end_board.get_port_channels(port_type, end_port);
+        auto pairs = tt::scaleout_tools::get_asic_channel_connections(port_type, start_channels, end_channels);
+        const std::string& start_host = host_for(start_host_id).hostname;
+        const std::string& end_host = host_for(end_host_id).hostname;
+
+        bool is_dead = false;
+        for (const auto& [start_chan, end_chan] : pairs) {
+            if (dead_channels.contains(PhysicalChannelEndpoint{start_host, start_tray, start_chan}) ||
+                dead_channels.contains(PhysicalChannelEndpoint{end_host, end_tray, end_chan})) {
+                is_dead = true;
+                break;
+            }
+        }
+
+        if (is_dead) {
+            auto endpoint_a = make_port_endpoint(start_host_id, start_tray, start_port, port_type);
+            auto endpoint_b = make_port_endpoint(end_host_id, end_tray, end_port, port_type);
+            if (endpoint_a < endpoint_b) {
+                pruned.insert({endpoint_a, endpoint_b});
+            } else {
+                pruned.insert({endpoint_b, endpoint_a});
+            }
+            return true;
+        }
+
+        for (const auto& [start_chan, end_chan] : pairs) {
+            rebuilt.emplace_back(
+                LogicalChannelEndpoint{.host_id = start_host_id, .tray_id = start_tray, .asic_channel = start_chan},
+                LogicalChannelEndpoint{.host_id = end_host_id, .tray_id = end_tray, .asic_channel = end_chan});
+        }
+        return false;
+    };
+
+    // Single-pass walk that:
+    //   1. Rebuilds chip_connections_ (drives FSD emission).
+    //   2. Mutates graph->internal_connections in place to drop dead graph-level cables
+    //      (drives emit_cabling_descriptor — only graph-level connections appear in the
+    //      cabling textproto, see resolved_graph_to_protobuf at line ~1336).
+    //   3. Mutates node.inter_board_connections in place for in-memory consistency, even
+    //      though they are not part of the emitted cabling textproto.
+    //   4. Board::internal_connections (intra-board traces) are board-type properties; we
+    //      filter their channels out of chip_connections_ but cannot mutate the Board.
+    std::function<void(const std::unique_ptr<ResolvedGraphInstance>&)> walk =
+        [&](const std::unique_ptr<ResolvedGraphInstance>& graph) {
+            if (!graph) {
+                return;
+            }
+
+            for (auto& [node_name, node] : graph->nodes) {
+                HostId host_id = node.host_id;
+
+                // Intra-board: rebuild-only, no mutation of Board possible.
+                for (const auto& [tray_id, board] : node.boards) {
+                    for (const auto& [port_type, conns] : board.get_internal_connections()) {
+                        for (const auto& [port_a, port_b] : conns) {
+                            inspect_cable(port_type, board, board, host_id, tray_id, port_a, host_id, tray_id, port_b);
+                        }
+                    }
+                }
+
+                // Inter-board within node: erase dead cables from the node clone's container.
+                for (auto& [port_type, conns] : node.inter_board_connections) {
+                    auto new_end = std::remove_if(conns.begin(), conns.end(), [&](const auto& bc) {
+                        TrayId tray_a = bc.first.first;
+                        PortId port_a = bc.first.second;
+                        TrayId tray_b = bc.second.first;
+                        PortId port_b = bc.second.second;
+                        const Board& board_a = node.boards.at(tray_a);
+                        const Board& board_b = node.boards.at(tray_b);
+                        return inspect_cable(
+                            port_type, board_a, board_b, host_id, tray_a, port_a, host_id, tray_b, port_b);
+                    });
+                    conns.erase(new_end, conns.end());
+                }
+            }
+
+            // Graph-level (between nodes): erase dead cables so emit_cabling_descriptor reflects pruning.
+            for (auto& [port_type, conns] : graph->internal_connections) {
+                auto new_end = std::remove_if(conns.begin(), conns.end(), [&](const auto& pc) {
+                    auto [host_a, tray_a, port_a] = pc.first;
+                    auto [host_b, tray_b, port_b] = pc.second;
+                    if (!host_id_to_node_.contains(host_a) || !host_id_to_node_.contains(host_b)) {
+                        return false;
+                    }
+                    const Node* node_a = host_id_to_node_.at(host_a);
+                    const Node* node_b = host_id_to_node_.at(host_b);
+                    const Board& board_a = node_a->boards.at(tray_a);
+                    const Board& board_b = node_b->boards.at(tray_b);
+                    return inspect_cable(port_type, board_a, board_b, host_a, tray_a, port_a, host_b, tray_b, port_b);
+                });
+                conns.erase(new_end, conns.end());
+            }
+
+            for (const auto& [_, sub] : graph->subgraphs) {
+                walk(sub);
+            }
+        };
+
+    walk(root_instance_);
+
+    std::sort(rebuilt.begin(), rebuilt.end());
+    chip_connections_ = std::move(rebuilt);
+
+    return pruned;
 }
 
 // Helper: Compare two nodes for equality (checks motherboard, boards, host_id, inter_board_connections)
@@ -2124,21 +2654,21 @@ namespace std {
 template <>
 struct hash<tt::scaleout_tools::LogicalChannelEndpoint> {
     std::size_t operator()(const tt::scaleout_tools::LogicalChannelEndpoint& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(conn.host_id, conn.tray_id, conn.asic_channel);
+        return ttsl::hash::hash_objects_with_default_seed(conn.host_id, conn.tray_id, conn.asic_channel);
     }
 };
 
 template <>
 struct hash<tt::scaleout_tools::PhysicalChannelEndpoint> {
     std::size_t operator()(const tt::scaleout_tools::PhysicalChannelEndpoint& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(conn.hostname, conn.tray_id, conn.asic_channel);
+        return ttsl::hash::hash_objects_with_default_seed(conn.hostname, conn.tray_id, conn.asic_channel);
     }
 };
 
 template <>
 struct hash<tt::scaleout_tools::PhysicalPortEndpoint> {
     std::size_t operator()(const tt::scaleout_tools::PhysicalPortEndpoint& conn) const {
-        return tt::stl::hash::hash_objects_with_default_seed(
+        return ttsl::hash::hash_objects_with_default_seed(
             conn.hostname, conn.aisle, conn.rack, conn.shelf_u, *conn.tray_id, conn.port_type, *conn.port_id);
     }
 };

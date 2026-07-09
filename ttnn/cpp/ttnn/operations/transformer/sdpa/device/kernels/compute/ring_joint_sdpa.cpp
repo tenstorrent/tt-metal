@@ -8,6 +8,7 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
 #include "compute_streaming.hpp"
@@ -32,8 +33,8 @@ void kernel_main() {
     constexpr uint32_t q_local_padded_Nt [[maybe_unused]] = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
-    constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
+    constexpr uint32_t logical_n_compile = get_compile_time_arg_val(10);
+    constexpr uint32_t logical_nt_compile [[maybe_unused]] = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
     constexpr uint32_t num_local_q_chunks = get_compile_time_arg_val(14);
@@ -65,14 +66,19 @@ void kernel_main() {
     constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
     constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(41) == 1;
-    constexpr uint32_t kv_pad_q_pre_wrap_start_tile = get_compile_time_arg_val(42);
-    constexpr uint32_t kv_pad_q_pre_wrap_tile_count = get_compile_time_arg_val(43);
-    constexpr uint32_t kv_pad_q_post_wrap_start_tile = get_compile_time_arg_val(44);
-    constexpr uint32_t kv_pad_q_valid_tile_count = get_compile_time_arg_val(45);
-    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(46);
-    constexpr uint32_t last_active_ring_iter = get_compile_time_arg_val(47);
+    // Slots 42-47 are retained for compile-time arg index stability; live KV-pad Q mapping
+    // and active-ring masks are runtime args below.
+    constexpr uint32_t kv_pad_q_pre_wrap_start_tile_compile [[maybe_unused]] = get_compile_time_arg_val(42);
+    constexpr uint32_t kv_pad_q_pre_wrap_tile_count_compile [[maybe_unused]] = get_compile_time_arg_val(43);
+    constexpr uint32_t kv_pad_q_post_wrap_start_tile_compile [[maybe_unused]] = get_compile_time_arg_val(44);
+    constexpr uint32_t kv_pad_q_valid_tile_count_compile [[maybe_unused]] = get_compile_time_arg_val(45);
+    constexpr uint32_t active_ring_iter_mask_compile [[maybe_unused]] = get_compile_time_arg_val(46);
+    constexpr uint32_t last_active_ring_iter_compile [[maybe_unused]] = get_compile_time_arg_val(47);
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(48) == 1;
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
+    // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
+    // Shared with the program factory and reader via kt_inplace_v_enabled().
+    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
@@ -81,7 +87,7 @@ void kernel_main() {
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
         (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
@@ -96,14 +102,26 @@ void kernel_main() {
         1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     constexpr uint32_t q_start_idx_t =
-        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt - q_local_padded_Nt * ring_size : 0;
+        chunked_enabled && !kv_pad_rotation_enabled ? logical_nt_compile - q_local_padded_Nt * ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
-    RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
+    const uint32_t ring_size_runtime = get_arg_val<uint32_t>(argidx++);
+    const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
+    const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
+    const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
+    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    const uint32_t kv_pad_q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t kv_pad_q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
+    const uint32_t kv_pad_q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t kv_pad_q_valid_tile_count = get_arg_val<uint32_t>(argidx++);
+    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+
+    RingSDPAOpIndexer fused_op_indexer(
+        ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
@@ -139,15 +157,19 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
-    mm_init(cb_q_in, cb_k_in, cb_qk_im);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
+    matmul_init(cb_q_in, cb_k_in);
+
+    CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
+    CircularBuffer cb_mask_in_obj(cb_mask_in);
 
     // Wait once for identity scale; streaming v2 removes per-call waits inside reduce_c_row_group.
-    cb_wait_front(cb_identity_scale_in, 1);
+    cb_identity_scale_in_obj.wait_front(1);
 
     // Wait for all lightweight mask tiles once before the ring loop.
     // Writer generates them once and they stay permanently fronted.
     if constexpr (needs_lightweight_mask) {
-        cb_wait_front(cb_mask_in, total_mask_tiles);
+        cb_mask_in_obj.wait_front(total_mask_tiles);
     }
 
     // Precompute padded tile counts that are constant across ring iterations
@@ -211,28 +233,31 @@ void kernel_main() {
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
         // is_causal: diagonal only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
-        LightweightMaskContext lw_mask;
+        // The 9 compile-time-constant mask fields are template params (static constexpr, no stack
+        // storage); only the 3 per-iter runtime fields are set below.
+        RingStreamingMaskCtx<
+            neginf_tile_idx,
+            causal_diag_tile_idx,
+            local_n_padded_tiles,
+            joint_n_padded_tiles,
+            global_n_partial_col,
+            joint_l_partial_col,
+            global_n_partial_tile_idx,
+            joint_l_partial_tile_idx,
+            straddle_chunk_id>
+            lw_mask;
         lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
-        lw_mask.neginf_tile_idx = neginf_tile_idx;
-        lw_mask.causal_diag_tile_idx = causal_diag_tile_idx;
-        lw_mask.local_n_padded_tiles = local_n_padded_tiles;
-        lw_mask.joint_n_padded_tiles = joint_n_padded_tiles;
-        lw_mask.global_n_partial_col = global_n_partial_col;
-        lw_mask.joint_l_partial_col = joint_l_partial_col;
-        lw_mask.global_n_partial_tile_idx = global_n_partial_tile_idx;
-        lw_mask.joint_l_partial_tile_idx = joint_l_partial_tile_idx;
         // Straddle mask fires only on the rix>rid halved-range iters that would otherwise exclude
         // the straddle chunk. Must agree with the K-loop extension condition below.
         const bool ring_iter_needs_straddle_mask = has_straddle && is_causal && is_balanced && (ring_index > ring_id);
         lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
-        lw_mask.straddle_mask_chunk_id = straddle_chunk_id;
         if (ring_iter_needs_global_n_mask) {
             // Tile-aligned: valid_tiles == global_nt_within_ring_iter % Sk_chunk_t
             const uint32_t valid_tiles = global_nt_within_ring_iter % Sk_chunk_t;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
-        const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
+        const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
 
         // Per-ring-iter K-chunk count and Q-skip flag — shared by v1 (sdpa_ring) and v2
         // (sdpa_ring_v2) paths.
@@ -293,7 +318,8 @@ void kernel_main() {
                 has_straddle && is_causal && is_balanced,
                 kv_pad_rotation_enabled,
                 v_cb_physical_width_t,
-                v_shares_k_buffer>(
+                v_shares_k_buffer,
+                kt_inplace_v>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

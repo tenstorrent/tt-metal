@@ -232,9 +232,6 @@ class Tracer:
             # actually compute outputs.
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
-            for d in self._devices:
-                ttnn.synchronize_device(d)
-            ttnn.distributed_context_barrier()
 
     def _execute(
         self,
@@ -261,9 +258,6 @@ class Tracer:
 
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
-        for d in self._devices:
-            ttnn.synchronize_device(d)
-        ttnn.distributed_context_barrier()
 
     @property
     def trace_captured(self) -> bool:

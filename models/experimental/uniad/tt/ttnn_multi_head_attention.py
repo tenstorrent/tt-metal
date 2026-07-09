@@ -9,6 +9,8 @@ from torch import Tensor
 
 import ttnn
 
+from models.experimental.uniad.tt.matmul_helpers import linear_flatten_batch
+
 
 def _canonical_mask(
     mask: Optional[Tensor],
@@ -27,19 +29,32 @@ def _canonical_mask(
     return mask
 
 
-def _in_projection_packed(
-    q: Tensor, k: Tensor, v: Tensor, w: Tensor, b: Optional[Tensor] = None, embed_dims=256
-) -> list[Tensor]:
+def split_in_proj_weights(w: Tensor, b: Tensor):
+    """Split + transpose the packed [3*E, E] in_proj weight/bias into per-q/k/v
+    tensors ready for ``linear_flatten_batch``. These are pure functions of the
+    (static) attention weights, so callers precompute this once at init rather
+    than redoing chunk/permute/reshape on every forward (each is a separate
+    device program on dispatch-bound hardware)."""
     w_q, w_k, w_v = ttnn.chunk(w, 3, dim=0)
     b_q, b_k, b_v = ttnn.chunk(b, 3, dim=0)
 
     w_q, b_q = ttnn.permute(w_q, (1, 0)), ttnn.reshape(b_q, (1, -1))
     w_k, b_k = ttnn.permute(w_k, (1, 0)), ttnn.reshape(b_k, (1, -1))
     w_v, b_v = ttnn.permute(w_v, (1, 0)), ttnn.reshape(b_v, (1, -1))
+    return w_q, w_k, w_v, b_q, b_k, b_v
 
-    a = ttnn.linear(q, w_q, bias=b_q)
-    b = ttnn.linear(k, w_k, bias=b_k)
-    c = ttnn.linear(v, w_v, bias=b_v)
+
+def _in_projection_packed(
+    q: Tensor, k: Tensor, v: Tensor, w: Tensor, b: Optional[Tensor] = None, embed_dims=256, precomputed=None
+) -> list[Tensor]:
+    if precomputed is not None:
+        w_q, w_k, w_v, b_q, b_k, b_v = precomputed
+    else:
+        w_q, w_k, w_v, b_q, b_k, b_v = split_in_proj_weights(w, b)
+
+    a = linear_flatten_batch(q, w_q, bias=b_q)
+    b = linear_flatten_batch(k, w_k, bias=b_k)
+    c = linear_flatten_batch(v, w_v, bias=b_v)
     return a, b, c
 
 
@@ -69,6 +84,7 @@ def multi_head_attention_forward(
     average_attn_weights: bool = True,
     is_causal: bool = False,
     device=None,
+    precomputed_in_proj=None,
 ) -> tuple[Tensor, Optional[Tensor]]:
     tgt_len, bsz, embed_dim = query.shape
     src_len, _, _ = key.shape
@@ -100,7 +116,9 @@ def multi_head_attention_forward(
 
     if not use_separate_proj_weight:
         assert in_proj_weight is not None, "use_separate_proj_weight is False but in_proj_weight is None"
-        q, k, v = _in_projection_packed(query, key, value, in_proj_weight, in_proj_bias, embed_dims=embed_dim)
+        q, k, v = _in_projection_packed(
+            query, key, value, in_proj_weight, in_proj_bias, embed_dims=embed_dim, precomputed=precomputed_in_proj
+        )
     else:
         raise ValueError("This implementation won't work")
 
@@ -174,6 +192,10 @@ class TtMultiheadAttention:
         self.num_heads = num_heads
         self.in_proj_weight = ttnn.to_layout(parameters.in_proj_weight, ttnn.TILE_LAYOUT)
         self.in_proj_bias = ttnn.to_layout(parameters.in_proj_bias, ttnn.TILE_LAYOUT)
+        # The q/k/v weight split + transpose is a pure function of these static
+        # weights — precompute it once instead of redoing chunk/permute/reshape
+        # (3 extra device programs each) on every forward.
+        self._precomputed_in_proj = split_in_proj_weights(self.in_proj_weight, self.in_proj_bias)
         self.out_proj_weight = parameters.out_proj.weight
         self.out_proj_bias = parameters.out_proj.bias
 
@@ -207,6 +229,7 @@ class TtMultiheadAttention:
             need_weights=self.need_weights,
             attn_mask=self.attn_mask,
             use_separate_proj_weight=False,
+            precomputed_in_proj=self._precomputed_in_proj,
             q_proj_weight=None,
             k_proj_weight=None,
             v_proj_weight=None,

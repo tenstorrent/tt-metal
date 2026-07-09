@@ -35,14 +35,20 @@ void kernel_main() {
     constexpr auto cb_one = tt::CBIndex::c_6;
     CircularBuffer cb_one_obj(cb_one);
     constexpr auto cb_param_out = tt::CBIndex::c_16;
+    CircularBuffer cb_param_out_obj(cb_param_out);
     constexpr auto cb_exp_avg_out = tt::CBIndex::c_17;
+    CircularBuffer cb_exp_avg_out_obj(cb_exp_avg_out);
     constexpr auto cb_exp_avg_sq_out = tt::CBIndex::c_18;
+    CircularBuffer cb_exp_avg_sq_out_obj(cb_exp_avg_sq_out);
 #ifdef AMSGRAD
     constexpr auto cb_max_exp_avg_sq_out = tt::CBIndex::c_19;
+    CircularBuffer cb_max_exp_avg_sq_out_obj(cb_max_exp_avg_sq_out);
 #endif
 
     constexpr auto tmp_cb_param = tt::CBIndex::c_24;
+    CircularBuffer tmp_cb_param_obj(tmp_cb_param);
     constexpr auto tmp_cb_exp_avg = tt::CBIndex::c_25;
+    CircularBuffer tmp_cb_exp_avg_obj(tmp_cb_exp_avg);
     constexpr auto tmp_cb_exp_avg_sq = tt::CBIndex::c_26;
     CircularBuffer tmp_cb_exp_avg_sq_obj(tmp_cb_exp_avg_sq);
 #ifdef AMSGRAD
@@ -86,30 +92,32 @@ void kernel_main() {
 #endif
         // param = param - lr * weight_decay * param.
         // cb_tmp1 : weight_decay * cb_param_in
-        mul_tiles_to_cb(cb_scalar_args, cb_param_in, cb_tmp1, weight_decay_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+        mul_tiles_to_cb(
+            cb_scalar_args_obj, cb_param_in_obj, cb_tmp1_obj, weight_decay_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
 
         // cb_tmp1 : lr * cb_tmp1
-        mul_tiles_to_cb(cb_scalar_args, cb_tmp1, cb_tmp1, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        mul_tiles_to_cb(cb_scalar_args_obj, cb_tmp1_obj, cb_tmp1_obj, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
 
         // tmp_cb_param : cb_param_in - cb_tmp1
-        sub_tiles_to_cb(cb_param_in, cb_tmp1, tmp_cb_param, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        sub_tiles_to_cb(cb_param_in_obj, cb_tmp1_obj, tmp_cb_param_obj, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
         // cb_tmp1 = (1 - beta1)
-        sub_tiles_to_cb(cb_one, cb_scalar_args, cb_tmp1, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+        sub_tiles_to_cb(cb_one_obj, cb_scalar_args_obj, cb_tmp1_obj, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
 
         // cb_tmp1 = cb_grad_in * cb_tmp1
-        mul_tiles_to_cb(cb_grad_in, cb_tmp1, cb_tmp1, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        mul_tiles_to_cb(cb_grad_in_obj, cb_tmp1_obj, cb_tmp1_obj, first_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
 
         // tmp_cb_exp_avg = cb_exp_avg_in * beta1
-        mul_tiles_to_cb(cb_exp_avg_in, cb_scalar_args, tmp_cb_exp_avg, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
+        mul_tiles_to_cb(
+            cb_exp_avg_in_obj, cb_scalar_args_obj, tmp_cb_exp_avg_obj, first_tile, beta1_tile, /*pop0=*/0, /*pop1=*/0);
 
         // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1
-        add_tiles_to_cb(tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg, first_tile, first_tile);
+        add_tiles_to_cb(tmp_cb_exp_avg_obj, cb_tmp1_obj, tmp_cb_exp_avg_obj, first_tile, first_tile);
 
         // cb_exp_avg_out
-        copy_tile_to_cb(tmp_cb_exp_avg, cb_exp_avg_out, first_tile, /*pop=*/0);
+        copy_tile_to_cb(tmp_cb_exp_avg_obj, cb_exp_avg_out_obj, first_tile, /*pop=*/0);
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -117,30 +125,36 @@ void kernel_main() {
         // cb_tmp1 = (1 - beta2)
         tile_regs_acquire();
         cb_tmp1_obj.reserve_back(onetile);
-        sub_tiles_init_with_dt(cb_one, cb_scalar_args);
+        sub_tiles_init_with_dt(cb_one_obj, cb_scalar_args_obj);
         sub_tiles(cb_one, cb_scalar_args, first_tile, beta2_tile, dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1_obj);
         cb_tmp1_obj.push_back(onetile);
         tile_regs_release();
 
         // cb_tmp2 = grad * grad
-        mul_tiles_to_cb(cb_grad_in, cb_grad_in, cb_tmp2, first_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
+        mul_tiles_to_cb(cb_grad_in_obj, cb_grad_in_obj, cb_tmp2_obj, first_tile, first_tile, /*pop0=*/0, /*pop1=*/0);
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2
-        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+        mul_tiles_to_cb(cb_tmp1_obj, cb_tmp2_obj, cb_tmp1_obj, first_tile, first_tile);
 
         // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
         mul_tiles_to_cb(
-            cb_exp_avg_sq_in, cb_scalar_args, tmp_cb_exp_avg_sq, first_tile, beta2_tile, /*pop0=*/0, /*pop1=*/0);
+            cb_exp_avg_sq_in_obj,
+            cb_scalar_args_obj,
+            tmp_cb_exp_avg_sq_obj,
+            first_tile,
+            beta2_tile,
+            /*pop0=*/0,
+            /*pop1=*/0);
 
         // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1
-        add_tiles_to_cb(tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq, first_tile, first_tile);
+        add_tiles_to_cb(tmp_cb_exp_avg_sq_obj, cb_tmp1_obj, tmp_cb_exp_avg_sq_obj, first_tile, first_tile);
 
         // cb_exp_avg_sq_out
-        copy_tile_to_cb(tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, first_tile, /*pop=*/0);
+        copy_tile_to_cb(tmp_cb_exp_avg_sq_obj, cb_exp_avg_sq_out_obj, first_tile, /*pop=*/0);
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -152,14 +166,14 @@ void kernel_main() {
         // cb_tmp1 = 1 / (1 - cb_beta2_exponent);
         tile_regs_acquire();
         cb_tmp1_obj.reserve_back(onetile);
-        sub_tiles_init_with_dt(cb_one, cb_beta2_exponent);
+        sub_tiles_init_with_dt(cb_one_obj, cb_beta2_exponent_obj);
         sub_tiles(cb_one, cb_beta2_exponent, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1_obj);
         cb_tmp1_obj.push_back(onetile);
         tile_regs_release();
 
@@ -167,21 +181,21 @@ void kernel_main() {
         // tmp_cb_max_exp_avg_sq = max(cb_max_exp_avg_sq_in, tmp_cb_exp_avg_sq);
         tile_regs_acquire();
         tmp_cb_max_exp_avg_sq_obj.reserve_back(onetile);
-        copy_tile_init_with_dt(cb_max_exp_avg_sq_in);
+        copy_tile_init_with_dt(cb_max_exp_avg_sq_in_obj);
         copy_tile(cb_max_exp_avg_sq_in, first_tile, dst0);
-        copy_tile_init_with_dt(tmp_cb_exp_avg_sq);
+        copy_tile_init_with_dt(tmp_cb_exp_avg_sq_obj);
         copy_tile(tmp_cb_exp_avg_sq, first_tile, dst1);
         binary_max_tile_init();
         binary_max_tile(dst0, dst1, dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, tmp_cb_max_exp_avg_sq);
+        pack_tile_with_dt(dst0, tmp_cb_max_exp_avg_sq_obj);
         tmp_cb_max_exp_avg_sq_obj.push_back(onetile);
         tile_regs_release();
 
         // cb_max_exp_avg_sq_out
-        copy_tile_to_cb(tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/0);
+        copy_tile_to_cb(tmp_cb_max_exp_avg_sq_obj, cb_max_exp_avg_sq_out_obj, first_tile, /*pop=*/0);
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq / cb_tmp1);
@@ -189,10 +203,10 @@ void kernel_main() {
         cb_tmp1_obj.wait_front(onetile);
         cb_tmp1_obj.reserve_back(onetile);
 #ifdef AMSGRAD
-        mul_tiles_init_with_dt(tmp_cb_max_exp_avg_sq, cb_tmp1);
+        mul_tiles_init_with_dt(tmp_cb_max_exp_avg_sq_obj, cb_tmp1_obj);
         mul_tiles(tmp_cb_max_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #else
-        mul_tiles_init_with_dt(tmp_cb_exp_avg_sq, cb_tmp1);
+        mul_tiles_init_with_dt(tmp_cb_exp_avg_sq_obj, cb_tmp1_obj);
         mul_tiles(tmp_cb_exp_avg_sq, cb_tmp1, first_tile, first_tile, dst0);
 #endif
         sqrt_tile_init();
@@ -200,7 +214,7 @@ void kernel_main() {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1_obj);
         cb_tmp1_obj.pop_front(onetile);
         cb_tmp1_obj.push_back(onetile);
 #ifdef AMSGRAD
@@ -213,14 +227,14 @@ void kernel_main() {
         tile_regs_acquire();
         cb_tmp1_obj.wait_front(onetile);
         cb_tmp1_obj.reserve_back(onetile);
-        add_tiles_init_with_dt(cb_tmp1, cb_scalar_args);
+        add_tiles_init_with_dt(cb_tmp1_obj, cb_scalar_args_obj);
         add_tiles(cb_tmp1, cb_scalar_args, first_tile, eps_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
+        pack_tile_with_dt(dst0, cb_tmp1_obj);
         cb_tmp1_obj.pop_front(onetile);
         cb_tmp1_obj.push_back(onetile);
         tile_regs_release();
@@ -231,28 +245,28 @@ void kernel_main() {
         // cb_tmp2 = 1 / (1 - cb_beta1_exponent);
         tile_regs_acquire();
         cb_tmp2_obj.reserve_back(onetile);
-        sub_tiles_init_with_dt(cb_one, cb_beta1_exponent);
+        sub_tiles_init_with_dt(cb_one_obj, cb_beta1_exponent_obj);
         sub_tiles(cb_one, cb_beta1_exponent, first_tile, first_tile, dst0);
         recip_tile_init();
         recip_tile(dst0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
+        pack_tile_with_dt(dst0, cb_tmp2_obj);
         cb_tmp2_obj.push_back(onetile);
         tile_regs_release();
 
         // cb_tmp2 = lr * cb_tmp2;
-        mul_tiles_to_cb(cb_scalar_args, cb_tmp2, cb_tmp2, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
+        mul_tiles_to_cb(cb_scalar_args_obj, cb_tmp2_obj, cb_tmp2_obj, lr_tile, first_tile, /*pop0=*/0, /*pop1=*/1);
 
         // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg;
-        mul_tiles_to_cb(cb_tmp2, tmp_cb_exp_avg, cb_tmp2, first_tile, first_tile);
+        mul_tiles_to_cb(cb_tmp2_obj, tmp_cb_exp_avg_obj, cb_tmp2_obj, first_tile, first_tile);
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2;
-        mul_tiles_to_cb(cb_tmp1, cb_tmp2, cb_tmp1, first_tile, first_tile);
+        mul_tiles_to_cb(cb_tmp1_obj, cb_tmp2_obj, cb_tmp1_obj, first_tile, first_tile);
 
         // param = tmp_cb_param - cb_tmp1;
-        sub_tiles_to_cb(tmp_cb_param, cb_tmp1, cb_param_out, first_tile, first_tile);
+        sub_tiles_to_cb(tmp_cb_param_obj, cb_tmp1_obj, cb_param_out_obj, first_tile, first_tile);
 
         cb_param_in_obj.pop_front(onetile);
         cb_grad_in_obj.pop_front(onetile);

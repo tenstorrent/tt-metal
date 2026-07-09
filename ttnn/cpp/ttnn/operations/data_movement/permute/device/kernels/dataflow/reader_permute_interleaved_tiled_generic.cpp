@@ -88,7 +88,8 @@ void kernel_main() {
     uint32_t start_block = get_arg_val<uint32_t>(1);
     uint32_t end_block = get_arg_val<uint32_t>(2);
 
-    uint32_t input_shape[RANK], dims[RANK];
+    uint32_t input_shape[RANK];
+    [[maybe_unused]] uint32_t dims[RANK];
     for (uint32_t i = 0; i < RANK; i++) {
         input_shape[i] = get_arg_val<uint32_t>(i + 3);
         dims[i] = get_arg_val<uint32_t>(i + RANK + 3);
@@ -216,7 +217,7 @@ void kernel_main() {
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
                             tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
-                                l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+                                noc, l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
                         } else {
                             CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
                             noc.async_read(

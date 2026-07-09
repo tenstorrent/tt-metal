@@ -41,13 +41,9 @@ void kernel_main() {
         // Signal completion to dispatcher before the assert hangs the kernel so the
         // dispatcher (and Device::close) can still make progress.
         volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
-#if defined(COMPILE_FOR_DM)
-        // TODO: Remove the SD path once FD is enabled on Quasar.
         go_message_in->signal = RUN_MSG_DONE;
-#else
         uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
         notify_dispatch_core_done(dispatch_addr, noc_index);
-#endif
     }
 #else
 #if defined(COMPILE_FOR_TRISC)

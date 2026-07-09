@@ -130,6 +130,7 @@ void kernel_main() {
 
         tile_regs_acquire();
         cb_reserve_back(cb_recipsumexps, onetile);
+        reconfig_data_format(cb_bcast_scaler, cb_exps);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness

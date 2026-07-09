@@ -67,6 +67,7 @@ on:
           - data_movement.slice.slice_forge
           - data_movement.slice.slice_pytorch2_rm
           - data_movement.slice.slice_pytorch2_tiled
+          - data_movement.sort.sort
           - data_movement.split.split_pytorch2
           - data_movement.squeeze.squeeze_pytorch2
           - data_movement.stack.stack_pytorch2
@@ -618,8 +619,6 @@ on:
           - P150b
           - n300-llmbox
           - topology-6u
-          - BH-LLMBox
-          - BH-DeskBox
           - BH-LoudBox
         default: "N150"
       log-level:
@@ -688,6 +687,7 @@ jobs:
       runner-label: ${{ steps.resolve.outputs.runner-label }}
       log-level: ${{ steps.resolve.outputs.log-level }}
       mesh-shape: ${{ steps.resolve.outputs.mesh-shape }}
+      fail-on-test-failure: ${{ steps.resolve.outputs.fail-on-test-failure }}
       platform: ${{ steps.resolve.outputs.platform }}
       build-type: ${{ steps.resolve.outputs.build-type }}
       enable-lto: ${{ steps.resolve.outputs.enable-lto }}
@@ -741,6 +741,14 @@ jobs:
           echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
           echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
           echo "mesh-shape=${{ github.event.inputs.mesh_shape || '' }}" >> $GITHUB_OUTPUT
+
+          # Fail sweep jobs on test failures for Lead Models and Model Traced suites
+          if [[ "$SWEEP_NAME" == *"Lead Models"* ]] || [[ "$SWEEP_NAME" == *"Model Traced"* ]]; then
+            echo "fail-on-test-failure=true" >> $GITHUB_OUTPUT
+          else
+            echo "fail-on-test-failure=false" >> $GITHUB_OUTPUT
+          fi
+
           echo "platform=${{ github.event.inputs.platform || 'Ubuntu 22.04' }}" >> $GITHUB_OUTPUT
           echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
@@ -817,8 +825,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
       - name: Install dependencies
@@ -878,12 +887,13 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LLMBox' || needs.resolve-inputs.outputs.runner-label == 'BH-DeskBox' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
+        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', needs.resolve-inputs.outputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -942,6 +952,8 @@ jobs:
       n150-matrix: ${{ steps.set-matrix.outputs.n150-matrix }}
       n300-matrix: ${{ steps.set-matrix.outputs.n300-matrix }}
       p150b-matrix: ${{ steps.set-matrix.outputs.p150b-matrix }}
+      p100a-matrix: ${{ steps.set-matrix.outputs.p100a-matrix }}
+      p300a-matrix: ${{ steps.set-matrix.outputs.p300a-matrix }}
       t3k-matrix: ${{ steps.set-matrix.outputs.t3k-matrix }}
       galaxy-matrix: ${{ steps.set-matrix.outputs.galaxy-matrix }}
     steps:
@@ -955,6 +967,7 @@ jobs:
           name: sweeps-vectors
           path: /tmp/vectors
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           clean: false
       - id: set-matrix
@@ -978,6 +991,15 @@ jobs:
           echo "::group::Sweep module matrix"
           jq . /tmp/sweep_matrix.pretty.json
           echo "::endgroup::"
+
+      - name: Verify sweep budget
+        shell: bash
+        run: |
+          pip3 install PyYAML > /dev/null 2>&1
+          python3 .github/scripts/utils/verify_time_budget.py \
+            tests/pipeline_reorg/ttnn_sweep_tests.yaml \
+            .github/time_budget.yaml \
+            sweep
 
   ttnn-run-single-sweep:
     name: Run single sweep
@@ -1023,12 +1045,13 @@ jobs:
     timeout-minutes: 720
     runs-on: >-
       ${{
-        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-DeskBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -1144,6 +1167,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-n300:
@@ -1167,6 +1191,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-p150b:
@@ -1182,6 +1207,53 @@ jobs:
     secrets: inherit
     with:
       matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p150b-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p100a:
+    name: ttnn sweeps P100a
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p100a-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p100a-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p300a:
+    name: ttnn sweeps P300a
+    needs: [resolve-inputs, build-artifact, ttnn-compute-module-matrix]
+    if: |
+      always() &&
+      !cancelled() &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '' &&
+      needs.ttnn-compute-module-matrix.outputs.p300a-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.ttnn-compute-module-matrix.outputs.p300a-matrix }}
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1213,6 +1285,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-galaxy:
@@ -1234,6 +1307,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
@@ -1246,12 +1320,14 @@ jobs:
       - ttnn-sweeps-n150
       - ttnn-sweeps-n300
       - ttnn-sweeps-p150b
+      - ttnn-sweeps-p100a
+      - ttnn-sweeps-p300a
       - ttnn-sweeps-t3k
       - ttnn-sweeps-galaxy
     if: |
       always() &&
       !cancelled() &&
-      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'success')
+      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'failure' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'failure' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'failure' || needs.ttnn-sweeps-p100a.result == 'success' || needs.ttnn-sweeps-p100a.result == 'failure' || needs.ttnn-sweeps-p300a.result == 'success' || needs.ttnn-sweeps-p300a.result == 'failure' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'failure' || needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'failure')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -1270,6 +1346,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -1353,6 +1430,7 @@ jobs:
     steps:
       - name: Checkout repository (actions only)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github/actions

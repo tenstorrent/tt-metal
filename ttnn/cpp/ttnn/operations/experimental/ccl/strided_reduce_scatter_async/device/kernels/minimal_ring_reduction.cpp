@@ -123,20 +123,28 @@ void kernel_main() {
                                 // -------------------------------------------------------
                                 cb_wait_front(input_cb, tile_granularity);
                                 cb_wait_front(intermediate_cb, tile_granularity);
-                                cb_reserve_back(addcmul_temp_cb, tile_granularity);
 
                                 add_tiles_init(input_cb, intermediate_cb, false);
                                 reconfig_data_format(input_cb, intermediate_cb);
-                                pack_reconfig_data_format(addcmul_temp_cb);
 
-                                acquire_dst();
+                                tile_regs_acquire();
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
-                                    pack_tile(tile_id, addcmul_temp_cb);
                                 }
-                                release_dst();
+                                tile_regs_commit();
+
                                 cb_pop_front(input_cb, tile_granularity);
                                 cb_pop_front(intermediate_cb, tile_granularity);
+
+                                cb_reserve_back(addcmul_temp_cb, tile_granularity);
+
+                                tile_regs_wait();
+                                pack_reconfig_data_format(addcmul_temp_cb);
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    pack_tile(tile_id, addcmul_temp_cb);
+                                }
+                                tile_regs_release();
+
                                 cb_push_back(addcmul_temp_cb, tile_granularity);
 
                                 // -------------------------------------------------------
@@ -180,35 +188,52 @@ void kernel_main() {
                                 // -------------------------------------------------------
                                 cb_wait_front(addcmul_temp_cb, tile_granularity);
                                 cb_wait_front(addcmul_a_cb, tile_granularity);
-                                cb_reserve_back(output_cb, tile_granularity);
 
                                 add_tiles_init(addcmul_temp_cb, addcmul_a_cb, false);
                                 reconfig_data_format(addcmul_temp_cb, addcmul_a_cb);
-                                pack_reconfig_data_format(output_cb);
 
-                                acquire_dst();
+                                tile_regs_acquire();
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     add_tiles(addcmul_temp_cb, addcmul_a_cb, tile_id, tile_id, tile_id);
-                                    pack_tile(tile_id, output_cb);
                                 }
-                                release_dst();
+                                tile_regs_commit();
+
                                 cb_pop_front(addcmul_temp_cb, tile_granularity);
                                 cb_pop_front(addcmul_a_cb, tile_granularity);
+
+                                cb_reserve_back(output_cb, tile_granularity);
+
+                                tile_regs_wait();
+                                pack_reconfig_data_format(output_cb);
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    pack_tile(tile_id, output_cb);
+                                }
+                                tile_regs_release();
+
                                 cb_push_back(output_cb, tile_granularity);
                             } else {
 #endif
                                 // Normal ring accumulation step: acc = input + intermediate
                                 cb_wait_front(input_cb, tile_granularity);
                                 cb_wait_front(intermediate_cb, tile_granularity);
-                                cb_reserve_back(output_cb, tile_granularity);
-                                acquire_dst();
+
+                                tile_regs_acquire();
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     add_tiles(input_cb, intermediate_cb, tile_id, tile_id, tile_id);
-                                    pack_tile(tile_id, output_cb);
                                 }
-                                release_dst();
+                                tile_regs_commit();
+
                                 cb_pop_front(input_cb, tile_granularity);
                                 cb_pop_front(intermediate_cb, tile_granularity);
+
+                                cb_reserve_back(output_cb, tile_granularity);
+
+                                tile_regs_wait();
+                                for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
+                                    pack_tile(tile_id, output_cb);
+                                }
+                                tile_regs_release();
+
                                 cb_push_back(output_cb, tile_granularity);
 #ifdef FUSE_RS_ADDCMUL
                             }  // end else (non-final ring step)

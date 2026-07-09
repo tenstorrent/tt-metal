@@ -183,7 +183,11 @@ def float_to_bfp8_block(block):
         else:
             mantissa = mantissas_explicit[i]
         mantissa = mantissa & 0x7F
-        mantissa = (signs[i] << 7) | mantissa
+        # Flush negative-zero to +0: when the magnitude rounds/shifts to 0, drop
+        # the sign bit. The tt-metal host quantizer (convert_u32_to_bfp) does the
+        # same, and the hardware unpacker decodes a sign-only mantissa (0x80) to
+        # -inf, so no valid producer should ever emit it.
+        mantissa = ((signs[i] << 7) | mantissa) if mantissa != 0 else 0
         bfp8_mantissas.append(mantissa)
 
     return shared_exponent, bfp8_mantissas
@@ -232,10 +236,16 @@ def truncate_bfp8(bfp8_mantissas, magnitude_bits):
     """
     shift = 7 - magnitude_bits
     mag_mask = (1 << magnitude_bits) - 1
-    return [
-        (((bfp8 >> 7) & 0x1) << magnitude_bits) | ((bfp8 >> shift) & mag_mask)
-        for bfp8 in bfp8_mantissas
-    ]
+    out = []
+    for bfp8 in bfp8_mantissas:
+        magnitude = (bfp8 >> shift) & mag_mask
+        sign = (bfp8 >> 7) & 0x1
+        # Flush negative-zero to +0: truncation can drop a small BFP8 magnitude to
+        # 0 while leaving the sign bit set. Emit +0 so the hardware unpacker never
+        # sees a sign-only mantissa (which it decodes to -inf), matching the host
+        # quantizer's behavior.
+        out.append(((sign << magnitude_bits) | magnitude) if magnitude != 0 else 0)
+    return out
 
 
 def float_to_bfp4_block(block):
@@ -631,7 +641,14 @@ def pack_mxfp4(
     finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
 
-    max_abs_exp = np.where(max_abs_values == 0, 0, np.floor(np.log2(max_abs_values)))
+    # np.where evaluates both branches eagerly, so log2(0) is still computed
+    # for all-zero blocks even though the result is discarded by the mask.
+    # That raises a "divide by zero" RuntimeWarning — silence it since the
+    # mask handles the zero case correctly.
+    with np.errstate(divide="ignore"):
+        max_abs_exp = np.where(
+            max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
+        )
     shared_exp_adj = np.where(
         (max_abs_exp - elem_exp_max_unbiased) >= -127,
         max_abs_exp - elem_exp_max_unbiased,
@@ -751,3 +768,225 @@ def _quantize_fp4_storage_model(scaled_blocks: np.ndarray) -> np.ndarray:
             out[normal_mask] = elem_bits[normal_mask]
 
     return out
+
+
+def _mxint_block_scale_and_quantize(
+    tensor, num_faces, face_r_dim, *, elem_scale: int, elem_max: int, fmt_name: str
+):
+    """
+    Shared block-scale + symmetric quantization for MxInt formats.
+
+    Computes the E8M0 shared exponent per block, then quantizes each scaled
+    element to a signed int8 (the smaller-element formats clip to a narrower
+    range via `elem_max` and reuse the int8 storage as a sign-extended carrier
+    until the caller packs them at the actual bit width).
+
+    Args:
+      elem_scale: integer factor in `round(scaled * elem_scale)`. Reflects the
+                  format's implicit 2^-k scale (64 for MxInt8's 2^-6;
+                  4 for MxInt4's 2^-2; 1 for MxInt2's 2^0).
+      elem_max:   symmetric clamp magnitude (127 for MxInt8; 7 for MxInt4;
+                  1 for MxInt2).
+      fmt_name:   for error messages only.
+
+    Returns: (scales_e8m0 as list[int], int_values as np.int8 array, shape (num_blocks, 32)).
+    """
+    fp32_array = tensor.cpu().to(torch.float32).numpy().flatten()
+    elements_per_face = face_r_dim * FACE_C_DIM
+    elements_to_pack = elements_per_face * num_faces
+    assert len(fp32_array) >= elements_to_pack, (
+        f"Tensor has {len(fp32_array)} elements, "
+        f"need {elements_to_pack} for {num_faces} face(s)"
+    )
+    if elements_to_pack % MX_FORMAT_BLOCK_SIZE != 0:
+        raise ValueError(
+            f"{fmt_name} requires a block-aligned geometry: "
+            f"elements_to_pack={elements_to_pack} is not a multiple of "
+            f"MX_FORMAT_BLOCK_SIZE={MX_FORMAT_BLOCK_SIZE} "
+            f"(face_r_dim={face_r_dim}, num_faces={num_faces})"
+        )
+
+    fp32_array = fp32_array[:elements_to_pack]
+    num_blocks = len(fp32_array) // MX_FORMAT_BLOCK_SIZE
+    blocks_raw = fp32_array.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+
+    # Element-level NaN -> 0 (no NaN representation in MxInt).
+    blocks = np.where(np.isnan(blocks_raw), 0.0, blocks_raw)
+
+    # Block scale: shared_exp = floor(log2(amax)) over finite values. MxInt
+    # post-scaling values land in [1, 2), so elem_exp_max_unbiased = 0.
+    finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
+    max_abs_values = np.max(np.abs(finite_blocks), axis=1)
+    # np.where evaluates both branches eagerly; silence log2(0) warnings for all-zero blocks.
+    with np.errstate(divide="ignore"):
+        max_abs_exp = np.where(
+            max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
+        )
+    shared_exp_adj = np.where(max_abs_exp >= -127, max_abs_exp, -127)
+    scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
+
+    # Special-case block scales (mirror MxFp encoding).
+    all_nan_blocks = np.all(np.isnan(blocks_raw), axis=1)
+    inf_or_zero_or_nan = np.isinf(blocks_raw) | np.isnan(blocks_raw) | (blocks_raw == 0)
+    all_inf_or_zero = np.all(inf_or_zero_or_nan, axis=1)
+    has_inf = np.any(np.isinf(blocks_raw), axis=1)
+    scales_e8m0_array = np.where(all_nan_blocks, 255, scales_e8m0_array)
+    scales_e8m0_array = np.where(all_inf_or_zero & has_inf, 254, scales_e8m0_array)
+
+    scales_e8m0 = scales_e8m0_array.astype(np.uint8).tolist()
+
+    # Decode scale factors for applying to blocks (NaN scale -> NaN -> 0 below).
+    scale_factors = np.where(
+        scales_e8m0_array == 255,
+        np.nan,
+        np.exp2(scales_e8m0_array.astype(np.float32) - 127.0),
+    )
+
+    # Scale blocks; saturate Inf to ±2.0 and replace NaN with 0 so that int
+    # conversion below can't overflow.
+    scaled_blocks = blocks / scale_factors[:, np.newaxis]
+    scaled_blocks = np.nan_to_num(scaled_blocks, nan=0.0, posinf=2.0, neginf=-2.0)
+
+    # Quantize: int_val = round(scaled * elem_scale), symmetric clamp.
+    int_values = np.rint(scaled_blocks * float(elem_scale)).astype(np.int32)
+    int_values = np.clip(int_values, -elem_max, elem_max).astype(np.int8)
+    return scales_e8m0, int_values
+
+
+def pack_mxint8(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Pack tensor into MxInt8 format (signed S1.6 elements with E8M0 block scale).
+
+    MxInt8 uses 32-element blocks per OCP MX spec, each with:
+    - 1 shared E8M0 scale (8 bits)
+    - 32 signed-int8 elements (8 bits each), interpreted as 2's complement with
+      an implicit 2^-6 scale. Range: ±127/64 ≈ ±1.984 (symmetric — the −2
+      encoding 0x80 is left unused per OCP "preserve symmetry" guidance).
+
+    Per OCP MX spec Section 5.3.4 and Tensix hardware documentation:
+    - NaN element → 0 (MxInt has no NaN representation)
+    - Inf element → saturating clamp (symmetric mode, no edge-mask -0)
+    - Out-of-range after rounding → saturate to ±127
+
+    Block-scale special cases match MxFp encoding:
+    - All-NaN block → scale = 0xFF (unpacker yields zero block)
+    - Block with any Inf (else all-zero/Inf) → scale = 0xFE (max scale)
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint8")
+
+    scales_e8m0, int_values = _mxint_block_scale_and_quantize(
+        tensor,
+        num_faces,
+        face_r_dim,
+        elem_scale=64,
+        elem_max=127,
+        fmt_name="pack_mxint8",
+    )
+
+    # Layout: [scales padded to 16B][int8 elements padded to 16B].
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        list(int_values.tobytes())
+    )
+
+
+def pack_mxint4(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Pack tensor into MxInt4 format (signed S1.2 elements with E8M0 block scale).
+
+    MxInt4 uses 32-element blocks, each with:
+    - 1 shared E8M0 scale (8 bits)
+    - 32 signed-int4 elements (4 bits each, 2 packed per byte), 2's complement
+      with an implicit 2^-2 scale. Range: ±7/4 = ±1.75 (symmetric — the -8
+      encoding 0b1000 is left unused).
+
+    Element-pair layout per byte: low nibble = element at even index,
+    high nibble = element at odd index (matches MxFp4 convention).
+
+    Special-case handling (NaN→0 element, Inf→saturate, all-NaN/Inf block scale)
+    mirrors pack_mxint8.
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint4")
+
+    scales_e8m0, int_values = _mxint_block_scale_and_quantize(
+        tensor,
+        num_faces,
+        face_r_dim,
+        elem_scale=4,
+        elem_max=7,
+        fmt_name="pack_mxint4",
+    )
+
+    # Pack 2 nibbles per byte: low nibble = even index, high nibble = odd index.
+    # int_values is signed int8 in [-7, +7]; mask to 4-bit 2's complement.
+    nibbles = int_values.flatten().astype(np.uint8) & 0x0F
+    packed_bytes = ((nibbles[1::2] & 0x0F) << 4) | (nibbles[0::2] & 0x0F)
+
+    # Layout: [scales padded to 16B][packed nibbles padded to 16B].
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        packed_bytes.tolist()
+    )
+
+
+def pack_mxint2(
+    tensor,
+    num_faces=4,
+    face_r_dim=16,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Pack tensor into MxInt2 format (signed S1.0 elements with E8M0 block scale).
+
+    MxInt2 uses 32-element blocks, each with:
+    - 1 shared E8M0 scale (8 bits)
+    - 32 signed-int2 elements (2 bits each, 4 packed per byte), 2's complement
+      with an implicit 2^0 scale. Range: ±1 (symmetric — the -2 encoding 0b10
+      is left unused). Only three element values are representable: -1, 0, +1.
+
+    Element-quad layout per byte (low bits to high): bits[1:0] = element at
+    index i, bits[3:2] = i+1, bits[5:4] = i+2, bits[7:6] = i+3. This mirrors
+    MxInt4's even-index-in-low convention extended to four elements.
+
+    Special-case handling (NaN→0 element, Inf→saturate, all-NaN/Inf block scale)
+    mirrors pack_mxint8.
+    """
+    if use_srcs:
+        raise NotImplementedError("use_srcs=True not yet implemented for pack_mxint2")
+
+    scales_e8m0, int_values = _mxint_block_scale_and_quantize(
+        tensor,
+        num_faces,
+        face_r_dim,
+        elem_scale=1,
+        elem_max=1,
+        fmt_name="pack_mxint2",
+    )
+
+    # Pack 4 crumbs per byte: bits[1:0]=i, [3:2]=i+1, [5:4]=i+2, [7:6]=i+3.
+    # int_values is signed int8 in [-1, +1]; mask to 2-bit 2's complement.
+    crumbs = int_values.flatten().astype(np.uint8) & 0x03
+    packed_bytes = (
+        (crumbs[0::4] & 0x03)
+        | ((crumbs[1::4] & 0x03) << 2)
+        | ((crumbs[2::4] & 0x03) << 4)
+        | ((crumbs[3::4] & 0x03) << 6)
+    )
+
+    # Layout: [scales padded to 16B][packed crumbs padded to 16B].
+    return _pad_to_l1_alignment(scales_e8m0) + _pad_to_l1_alignment(
+        packed_bytes.tolist()
+    )

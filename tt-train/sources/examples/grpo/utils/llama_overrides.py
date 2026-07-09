@@ -108,77 +108,35 @@ class LlamaCompositeKV(Llama):
                 bias_linears=config.attention_bias,
             )
 
-    def export_to_hf_dict(self) -> dict[str, ttnn.Tensor]:
+    def weights_ref_hf_dict(self) -> dict[str, ttnn.Tensor]:
         """Export this ttml model's parameters as an HF-keyed dict of on-device
-        ``ttnn.Tensor`` handles.
+        ``ttnn.Tensor`` handles, shaped for tt-transformers'
+        ``Transformer.update_weights(hf_state_dict, hf_rope=False)`` (HF
+        safetensors dot-keys; HF shapes wrapped in two leading unit dims;
+        bf16, TILE, DRAM-interleaved, replicated).
 
-        Output is shaped for direct consumption by tt-transformers'
-        ``Transformer.update_weights(hf_state_dict, hf_rope=False)``:
+        Q/K row order: both ttml and TTT store Meta-permuted rows for
+        Llama-3.2-1B, so the consumer uses ``hf_rope=False`` (no permutation).
 
-        * keys   -- HF safetensors dot-keys
-                    (``model.embed_tokens.weight``, ``lm_head.weight``,
-                    ``model.norm.weight``,
-                    ``model.layers.{i}.input_layernorm.weight``,
-                    ``model.layers.{i}.post_attention_layernorm.weight``,
-                    ``model.layers.{i}.self_attn.{q,k,v,o}_proj.weight``,
-                    ``model.layers.{i}.mlp.{gate,up,down}_proj.weight``).
-        * shapes -- HF Linear ``(out, in)`` / embedding ``(V, H)`` / gamma
-                    ``(H,)`` wrapped in two leading unit dims, matching
-                    ttml's native 4D storage.
-        * dtype  -- ``ttnn.bfloat16``.
-        * layout -- ``ttnn.TILE_LAYOUT``.
-        * memcfg -- ``ttnn.DRAM_MEMORY_CONFIG`` (interleaved).
-        * mesh   -- replicated (single-device assumption; see below).
+        Tied embeddings: with ``weight_tying=Enabled``, ``embed_tokens`` and
+        ``lm_head`` point at the same handle; safe because the consumer
+        ``ttnn.copy``s into a separate destination and never aliases the source.
 
-        **Q/K row order.** ttml's ``GroupedQueryAttentionCompositeKV``
-        applies RoPE on Meta-style interleaved pairs (``ttml.ops.rope.rope``),
-        and ``safetensors_loader._unpermute_proj_rows`` already converted
-        HF -> Meta on load. tt-transformers' Llama-3.2-1B default also uses
-        Meta-style RoPE, so the consumer is called with ``hf_rope=False``
-        (no row permutation needed). If a future consumer uses HF-style
-        RoPE, the caller is responsible for permuting Q/K rows on host
-        before re-uploading (Attention.update raises NotImplementedError
-        on the row-permutation path today).
+        Most values are live handles into ttml's parameter store; do not mutate
+        ttml's parameters between this call and ``update_weights``. The K/V split
+        is the exception: ttml fuses K and V into one ``kv_linear/weight``
+        (K rows first, then V), so we expose them via two ``ttnn.slice`` calls
+        (newly allocated, ~64 MB total for Llama-3.2-1B-Instruct).
 
-        **Tied embeddings.** When ``weight_tying=Enabled`` (the only
-        supported case here, and the only case Llama-3.2-1B-Instruct
-        uses), ttml stores a single ``Llama/fc/weight``. Both
-        ``model.embed_tokens.weight`` and ``lm_head.weight`` in the
-        output point at the same ``ttnn.Tensor`` handle. This is safe
-        because the consumer's ``update_weights`` does a per-key
-        ``ttnn.copy`` into a separate destination buffer and never
-        aliases the source.
-
-        **No copy for most values.** Apart from the per-layer K/V split
-        (described below), every entry is a handle into ttml's live
-        parameter store. Do **not** mutate ttml's parameters between
-        calling this and calling ``update_weights``. After
-        ``update_weights`` has consumed the dict, the K/V slices can be
-        freed; the rest are owned by ttml and stay live.
-
-        **K/V split.** ttml fuses K and V into a single
-        ``kv_linear/weight`` of shape ``(1, 1, 2*n_kv*D, H)`` (K rows
-        first, then V rows -- see ``safetensors_loader.try_combine_kv``
-        which builds it as ``np.concatenate([k, v], axis=0)``). HF
-        stores K and V as two separate tensors, so we expose them via
-        two ``ttnn.slice`` calls. These slices are *newly allocated*
-        tensors (~``2 * n_kv * D * H * sizeof(bf16) * L`` bytes total
-        across all layers; ~64 MB for Llama-3.2-1B-Instruct).
-
-        **Single-device assumption.** This method assumes the underlying
-        parameter tensors are *replicated* across the mesh (no DDP/TP
-        shard mapper applied at upload time). The grpo single-device
-        config (``mesh_shape: [1, 1]``, ``enable_ddp: False``) satisfies
-        this. Extending to DDP/TP would
-        require a host-side ``ttnn.concat_mesh_to_tensor`` (or its ttml
-        equivalent) per parameter before exposing the handle; not done
-        here.
+        Single-device assumption: parameters must be replicated across the mesh
+        (no DDP/TP shard mapper). The grpo single-device config satisfies this;
+        DDP/TP would need a host-side per-parameter concat first.
         """
         from ttml.models import WeightTyingType
 
         cfg = self.config
         assert cfg.weight_tying == WeightTyingType.Enabled, (
-            "export_to_hf_dict requires weight_tying=Enabled (Llama-3.2-1B/-Instruct "
+            "weights_ref_hf_dict requires weight_tying=Enabled (Llama-3.2-1B/-Instruct "
             f"tie embed_tokens and lm_head). Got weight_tying={cfg.weight_tying!r}."
         )
 

@@ -3,6 +3,31 @@
 
 import pytest
 
+from .test_factory import skip_if_config_only_checkpoint
+
+_MARKERS_REQUIRING_REAL_CHECKPOINT = frozenset(
+    {
+        "gemma4_prefill_trace",
+        "gemma4_batched_prefill",
+        "gemma4_hf_direct_parity",
+    }
+)
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "gemma4_hf_direct_parity: Direct model prefill/decode PCC vs HuggingFace reference",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_batched_prefill: Batched multi-user prefill integration and perf",
+    )
+    config.addinivalue_line(
+        "markers",
+        "gemma4_prefill_trace: Prefill device trace parity, amortization, and Tracy CSV",
+    )
+
 
 def pytest_addoption(parser):
     """Add custom command line options for pytest"""
@@ -18,6 +43,12 @@ def pytest_addoption(parser):
 def test_modules(request):
     """Fixture to get the test_modules value from command line or use default 'all'"""
     return request.config.getoption("--test-modules")
+
+
+def pytest_runtest_setup(item):
+    """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
+    if _MARKERS_REQUIRING_REAL_CHECKPOINT.intersection(m.name for m in item.iter_markers()):
+        skip_if_config_only_checkpoint()
 
 
 @pytest.fixture(autouse=True)

@@ -23,6 +23,7 @@ def apply_activations(tensor, activations):
         ttnn.UnaryOpType.LOG: torch.log,
         ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
         ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.GELU_TANH: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
         ttnn.UnaryOpType.SQRT: torch.sqrt,
     }
 

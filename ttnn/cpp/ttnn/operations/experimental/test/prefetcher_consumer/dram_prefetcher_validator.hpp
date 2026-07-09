@@ -18,7 +18,7 @@
 
 namespace ttnn::operations::experimental::test {
 
-// Byte-for-byte validator companion to ttnn.dram_prefetcher / start_dram_core_prefetcher.
+// Byte-for-byte validator companion to ttnn.dram_prefetcher / start_tensor_prefetcher.
 // Loads a validator kernel on each receiver core of the supplied GCB; for each pushed
 // page it reads the receiver's expected tile range from `source_tensor` (via
 // TensorAccessor) and memcmps against the received bytes.
@@ -62,7 +62,7 @@ struct DramPrefetcherValidatorDeviceOperation {
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 // Public free function (kept for the nanobind binding `ttnn.experimental.test_dram_prefetcher_validator`).

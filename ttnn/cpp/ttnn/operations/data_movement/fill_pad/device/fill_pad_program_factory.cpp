@@ -28,7 +28,7 @@ tt::tt_metal::ProgramDescriptor FillPadProgramFactory::create_descriptor(
         "FillPadProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const float fill_value = operation_attributes.fill_value;
+    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
     tt::tt_metal::IDevice* device = input_tensor.device();
     ProgramDescriptor desc;
 
@@ -318,7 +318,7 @@ tt::tt_metal::ProgramDescriptor FillPadL1ShardedProgramFactory::create_descripto
         "FillPadL1ShardedProgramFactory: unsupported dtype {}",
         input_tensor.dtype());
 
-    const float fill_value = operation_attributes.fill_value;
+    const tt::tt_metal::PadValue& fill_value = operation_attributes.fill_value;
 
     ProgramDescriptor desc;
 

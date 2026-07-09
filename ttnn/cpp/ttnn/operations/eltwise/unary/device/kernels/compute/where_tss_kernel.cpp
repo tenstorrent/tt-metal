@@ -34,9 +34,13 @@ void kernel_main() {
         copy_tile(cb_input, 0, 0);
 
         fill_tile_init();
-#if defined(INP_INT32) || defined(INP_UINT32)
+#if defined(INP_INT32)
         fill_tile_int<DataFormat::Int32>(1, packed_scalar1);
         fill_tile_int<DataFormat::Int32>(2, packed_scalar2);
+#endif
+#if defined(INP_UINT32)
+        fill_tile_int<DataFormat::UInt32>(1, packed_scalar1);
+        fill_tile_int<DataFormat::UInt32>(2, packed_scalar2);
 #endif
 #if defined(INP_FLOAT) || defined(INP_FLOAT32)
         fill_tile(1, *true_value);

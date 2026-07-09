@@ -139,10 +139,12 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_scaler, scaler.u);
+    CircularBuffer cb_scaler(cb_id_scaler);
+    fill_cb_with_value(cb_scaler, scaler.u);
 
     if (do_mask_h) {
-        generate_mask_h(cb_id_mask_h, mask_h);
+        CircularBuffer cb_mask_h(cb_id_mask_h);
+        generate_mask_h(cb_mask_h, mask_h);
     }
 
     auto mean_rstd_Ht = (mean_rstd_height + TILE_HEIGHT - 1) / TILE_HEIGHT;

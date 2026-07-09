@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
@@ -113,13 +114,8 @@ void kernel_main() {
         // Read along the X dimension
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint64_t addr_offset = base_addr_offset + x * X_stride;
-            CoreLocalMem<uint32_t> dst(src_buffer_l1_addr + page_offset);
-            noc.async_read(
-                s0,
-                dst,
-                w_read_size_bytes,
-                {.page_id = (uint32_t)addr_offset, .offset_bytes = w_offset},
-                {.offset_bytes = 0});
+            tt::data_movement::common::noc_async_read_sharded(
+                noc, src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
 
             // Advance output pointer by one page size for next row
             page_offset += input_cb_page_size;

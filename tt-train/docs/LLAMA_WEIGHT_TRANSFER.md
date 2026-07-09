@@ -5,11 +5,11 @@ Reference for two related dict formats:
 1. The HuggingFace `transformers` Llama state-dict (the format on the
    HF Hub).
 2. The on-device dict that
-   [`LlamaCompositeKV.export_to_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+   [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
-   [`WeightBridge`](../sources/examples/grpo/utils/inference_bridge.py),
+   [`WeightBridge`](../sources/examples/grpo/utils/weight_bridge.py),
    which ships it from a ttml rank to a tt-transformers rank over MPI.
    It is what the GRPO BoolQ example
    ([`tt-train/sources/examples/grpo/boolq/`](../sources/examples/grpo/boolq/))
@@ -115,7 +115,7 @@ lm_head.weight                                   shape=(128256, 2048)
 
 ## 3. Transfer format: `ttml → tt-transformers`
 
-[`LlamaCompositeKV.export_to_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+[`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
 [`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
@@ -204,7 +204,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
 
 - **Aliasing & lifetime.** Apart from the per-layer K / V slices, every
   value in the dict is a *handle* into ttml's live parameter store. Do
-  not mutate ttml's parameters between the call to `export_to_hf_dict`
+  not mutate ttml's parameters between the call to `weights_ref_hf_dict`
   and the call to `update_weights`. After `update_weights` returns the
   K / V slices may be deallocated; the rest are owned by ttml and stay
   live as long as the ttml model lives.
@@ -215,7 +215,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
   `WeightBridge._validate_source_tensor` for the cross-rank path. This
   is independent of the *sender's* mesh shape: a DDP-only `[1, N]`
   mesh (e.g. `mesh_shape: [1, 2], enable_ddp: true` from
-  [`grpo_boolq_llama_2dev_ddp_gas_4.yaml`](../configs/training_configs/grpo_boolq_llama_2dev_ddp_gas_4.yaml))
+  [`grpo_boolq_llama_1b_ddp_2dev.yaml`](../configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml))
   produces replicated weights and is supported. TP / CP / sharded
   weights are **not**: callers would need to compose shards back to a
   replicated view on host before exporting (not yet implemented).
@@ -235,7 +235,7 @@ In-process (ttml model and tt-transformers model on the same Python
 process and the same mesh):
 
 ```python
-hf_dict = ttml_model.export_to_hf_dict()
+hf_dict = ttml_model.weights_ref_hf_dict()
 try:
     ttt_model.update_weights(hf_dict, hf_rope=False)
 finally:
@@ -247,10 +247,10 @@ meshes; the BoolQ GRPO example uses this path on every step):
 
 ```python
 # ttml rank
-client = TttInferenceClient(peer_rank=TTT_RANK, device=ttml_mesh)
-client.transfer_weights(ttml_model.export_to_hf_dict())
+client = MPIRolloutClient(peer_rank=TTT_RANK, device=ttml_mesh)
+client.send_weights(ttml_model.weights_ref_hf_dict())
 
-# ttt rank — inside TttInferenceServer.serve_forever, on_weights_received:
+# ttt rank — inside MPIRolloutServer.serve_forever, on_weights_received:
 ttt_model.update_weights(received_hf_dict, hf_rope=False)
 ```
 
@@ -269,4 +269,4 @@ End-to-end smoke tests:
 * tt-transformers dispatcher:
   [`Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
 * Cross-rank transport: `WeightBridge` in
-  [`grpo/utils/inference_bridge.py`](../sources/examples/grpo/utils/inference_bridge.py).
+  [`grpo/utils/weight_bridge.py`](../sources/examples/grpo/utils/weight_bridge.py).

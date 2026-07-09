@@ -88,15 +88,17 @@ class DeepSeek(AbstractModuleBase):
 
         Args:
             tokens: Token IDs [B, 1, 1, S]
-            mask: Causal attention mask [1, 1, S, S]
+            mask: Unused. DeepSeek attention is causal-only; the fused SDPA
+                generates the causal mask on chip. Kept for the shared
+                forward(input, mask) model interface.
 
         Returns:
             Logits [B, 1, S, vocab_size]
         """
 
-        if mask is None:
-            raise ValueError("Mask is required for DeepSeek model")
-
+        # `mask` is unused: MLA is causal-only and generates its causal mask on chip
+        # (see mla.py). It is still threaded to blocks to keep the shared
+        # block(input, mask) / memory_efficient_runner call form intact.
         x = self.tok_emb(tokens)
 
         for block in self.blocks:

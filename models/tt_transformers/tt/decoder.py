@@ -222,34 +222,16 @@ class TransformerBlock(LightweightModule):
         *,
         hf_rope: bool = False,
     ) -> None:
-        """Strict layer-local weight update from an HF-keyed dict of
-        on-device 4D ttnn tensors.
+        """Strict layer-local weight update from an HF-keyed dict of on-device
+        4D ttnn tensors. Keys are the suffix after ``model.layers.{i}.`` (e.g.
+        ``self_attn.q_proj.weight``); ``Transformer.update_weights`` strips the
+        layer prefix and routes each layer's slice here.
 
-        Keys in ``layer_hf_state_dict`` are the suffix after
-        ``model.layers.{i}.`` (e.g. ``self_attn.q_proj.weight``,
-        ``mlp.gate_proj.weight``, ``input_layernorm.weight``). The
-        top-level ``Transformer.update_weights`` is responsible for
-        stripping the layer prefix and routing each layer's slice here.
+        Strict: missing required keys raise ``KeyError``; any unconsumed key
+        (e.g. an extra bias, q/k-norm, or Gemma-style pre/post-FF norm not yet
+        wired into the leaf ``update()`` methods) raises ``ValueError``.
 
-        Required keys (Llama-3.2-1B-Instruct):
-
-            self_attn.q_proj.weight
-            self_attn.k_proj.weight
-            self_attn.v_proj.weight
-            self_attn.o_proj.weight
-            mlp.gate_proj.weight
-            mlp.up_proj.weight
-            mlp.down_proj.weight
-            input_layernorm.weight           -> attention_norm
-            post_attention_layernorm.weight  -> ff_norm
-
-        Strict: missing required keys raise ``KeyError``; any unconsumed
-        key remaining at the end (e.g. an extra bias, q/k-norm, or
-        Gemma-style pre/post-FF norm not yet wired into the leaf
-        ``update()`` methods) raises ``ValueError``.
-
-        ``hf_rope`` is forwarded to ``Attention.update``; see
-        ``Transformer.update_weights`` for semantics.
+        ``hf_rope`` is forwarded to ``Attention.update``.
         """
         unconsumed = set(layer_hf_state_dict.keys())
 

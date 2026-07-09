@@ -54,8 +54,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
+#include "llk_lib_math_wrappers.h"
 #include "llk_math_common.h"
-#include "llk_math_reduce.h"
 #include "params.h"
 #include "tensor_shape.h"
 
@@ -65,7 +65,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const bool is_int_fpu_en                = false;
-    const bool enforce_fp32_accumulation    = false;
     const ckernel::TensorShape tensor_shape = {
         static_cast<std::uint8_t>(params.in0_face_r_dim),
         static_cast<std::uint8_t>(params.in0_face_c_dim),
@@ -74,14 +73,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, false>();
+    _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY>(tensor_shape);
 
     if (params.IS_REDUCE_TO_ONE)
     {
         _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
         for (int i = 0; i < params.INPUT_TILE_CNT; ++i)
         {
-            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en, enforce_fp32_accumulation>(0, tensor_shape);
+            _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en>(0, tensor_shape);
         }
         _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     }
@@ -94,7 +93,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
             for (int i = 0; i < tiles_to_dest; ++i)
             {
-                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en, enforce_fp32_accumulation>(i, tensor_shape);
+                _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, is_int_fpu_en>(i, tensor_shape);
             }
             _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             remaining_tiles -= tiles_to_dest;
@@ -133,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_reduce_mask_config_<REDUCE_DIM>();
+    _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape.face_r_dim);
 
     _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 

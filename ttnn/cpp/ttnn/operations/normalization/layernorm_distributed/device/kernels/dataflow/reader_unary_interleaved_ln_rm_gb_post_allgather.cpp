@@ -82,7 +82,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<9>();
     constexpr auto stats_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
     constexpr auto gamma_args = TensorAccessorArgs<stats_args.next_compile_time_args_offset()>();
-    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    [[maybe_unused]] constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     const auto src_a = TensorAccessor(src_args, src_addr);
     const auto src_stats = TensorAccessor(stats_args, stats_addr);
@@ -99,10 +99,9 @@ void kernel_main() {
         cb_reduce,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor,
-        /*compute_uses_reduce_tile=*/true>();
+        reduce_factor>();
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(cb_eps, eps);
+    generate_bcast_col_scalar(CircularBuffer(cb_eps), eps);
 
     Noc noc;
     CircularBuffer cb_inp_buf(cb_inp);

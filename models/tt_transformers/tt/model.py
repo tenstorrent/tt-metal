@@ -170,52 +170,27 @@ class Transformer(LightweightModule):
         *,
         hf_rope: bool = False,
     ) -> None:
-        """In-place replace every weight from an HF-keyed dict of
-        on-device 4D ttnn tensors (replicated, DRAM-interleaved, TILE,
-        bfloat16).
+        """In-place replace every weight from an HF-keyed dict of on-device 4D
+        ttnn tensors (replicated, DRAM-interleaved, TILE, bf16). Keys follow HF
+        safetensors naming; shapes are HF Linear/gamma/embedding wrapped in two
+        leading unit dims.
 
-        Strict by construction: every required HF key must be present;
-        every provided HF key must be consumed by exactly one leaf
-        ``.update()``. Missing required keys raise ``KeyError``;
-        unrecognized extras raise ``ValueError``. There is no "loose"
-        mode -- silent partial updates are the kind of bug that costs
-        an afternoon.
+        Strict by construction: every required key must be present (missing ->
+        ``KeyError``) and every provided key consumed by exactly one leaf
+        ``.update()`` (extras -> ``ValueError``). No "loose" mode -- silent
+        partial updates are an expensive class of bug.
 
-        Keys follow HF safetensors naming. Shapes are HF Linear /
-        gamma / embedding shapes wrapped in two leading unit dims:
+        ``hf_rope=False`` (default): caller has already permuted Q/K rows into
+        this model's convention (right for the ttml -> TTT transfer, both store
+        Meta-permuted rows). ``hf_rope=True`` defers HF -> Meta permutation to
+        ``Attention.update`` (currently raises -- kernel not wired up).
 
-            Linear weight   -- (1, 1, out_features, in_features)
-            RMSNorm gamma   -- (1, 1, 1, dim)
-            Embedding table -- (1, 1, vocab_size, hidden_size)
+        Tied embeddings: the protocol still requires both
+        ``model.embed_tokens.weight`` and ``lm_head.weight`` (typically the same
+        source tensor), keeping dispatch one-to-one with device buffers.
 
-        Required top-level keys (Llama-3.2-1B-Instruct):
-
-            model.embed_tokens.weight
-            model.norm.weight
-            lm_head.weight
-            model.layers.{i}.<...>      for i in 0..n_layers-1
-
-        ``hf_rope=False`` (default): caller has already permuted Q/K
-        rows into this model's RoPE convention. Both ttml and TTT store
-        Meta-permuted rows for Llama-3.2-1B-Instruct, so this is right
-        for the ttml -> TTT transfer. ``hf_rope=True``: caller hands HF
-        split-half rotary order; ``Attention.update`` applies the
-        HF -> Meta row permutation internally (currently raises
-        ``NotImplementedError`` -- the on-device permutation kernel
-        isn't wired up yet).
-
-        Tied embeddings: Llama-3.2-1B-Instruct has
-        ``tie_word_embeddings=true``, but the protocol still requires
-        both ``model.embed_tokens.weight`` and ``lm_head.weight`` to be
-        present. Providing both (typically pointing at the same source
-        tensor) keeps the dispatch one-to-one with the underlying
-        device buffers; tying is a model-config concern, not a transfer
-        protocol concern.
-
-        Buffer-address preservation: every existing buffer's device
-        allocation is kept, so any captured trace -- and the DRAM
-        prefetcher's recorded buffer addresses -- remain valid across
-        the update.
+        Every existing buffer keeps its device allocation, so captured traces
+        and the prefetcher's recorded addresses stay valid.
         """
         unconsumed = set(hf_state_dict.keys())
 
@@ -863,8 +838,7 @@ class Transformer(LightweightModule):
         rot_mat_idxs=None,
         page_table=None,
         kv_cache=None,
-        sampling_on_device=False,
-        capture_sampling_trace=False,
+        on_device_logits=False,
         page_tables_per_layer=None,
     ):
         """
@@ -893,17 +867,13 @@ class Transformer(LightweightModule):
             page_tables_per_layer=page_tables_per_layer,
         )
 
-        if sampling_on_device and self.sampling is not None:
-            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
-            if capture_sampling_trace:
-                return tt_logits
-            tt_toks, tt_log_probs = self.sampling.sample(
-                tt_logits,
-                tt_out_tok=x,
-                enable_trace=False,
+        if on_device_logits:
+            assert self.sampling is not None, (
+                "ttnn_decode_forward got on_device_logits=True but no on-device sampling "
+                "module exists (self.sampling is None)."
             )
-
-            return tt_toks, tt_log_probs
+            self._increment_decode_positions_device(current_pos, rot_mat_idxs)
+            return tt_logits
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:

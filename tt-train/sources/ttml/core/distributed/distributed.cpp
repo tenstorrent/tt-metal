@@ -31,7 +31,7 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     }
     auto result = tensor;
     for (const auto& cluster_axis : cluster_axes) {
-        result = ttnn::all_reduce(result, cluster_axis);
+        result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
     }
 
     result = ttnn::multiply(result, 1.0F / static_cast<float>(scaler));
@@ -51,13 +51,9 @@ bool is_sharded_on_axis(const tt::tt_metal::Tensor& value, uint32_t axis) {
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
 }
 
-// Enforce all_reduce's contract that the reduced mesh axis is Replicate on
-// output. ttnn::all_reduce_async::compute_output_topologies silently drops
-// this relabel when placements.size() < mesh_shape.dims() (the collapsed 1-D
-// distribution produced by shard_/replicate_tensor_to_mesh_mapper on a
-// multi-D mesh). Handle the two distributions TTML actually produces:
-//   - collapsed 1-D (placements.size() == 1)        -> relabel placements[0]
-//   - full-rank    (placements.size() == mesh_rank) -> relabel placements[axis]
+// Enforce all_reduce's contract that the reduced mesh axis is Replicate on output.
+// ttnn::all_reduce_async::compute_output_topologies drops this relabel for the collapsed 1-D
+// distribution TTML produces on a multi-D mesh, so redo it here (idx 0 when collapsed, else axis).
 ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector<uint32_t>& reduced_mesh_axes) {
     const auto& topology = t.tensor_topology();
     auto placements = topology.placements();

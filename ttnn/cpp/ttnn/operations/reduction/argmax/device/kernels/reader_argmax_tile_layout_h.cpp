@@ -6,6 +6,7 @@
 #include "argmax_common.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include <stdint.h>
 
@@ -47,9 +48,11 @@ void kernel_main() {
     auto s_dst = TensorAccessor(s_dst_args, dst_base_addr);
     using dst_accessor_type = decltype(s_dst);
 
-    const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
+    CircularBuffer src_cb(src_cb_idx);
+    const uint32_t src_cb_addr = src_cb.get_write_ptr();
     constexpr DataFormat src_data_format = get_dataformat(src_cb_idx);
-    const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
+    CircularBuffer dst_cb(dst_cb_idx);
+    const uint32_t dst_cb_addr = dst_cb.get_write_ptr();
 
     auto default_val = get_default_value<src_data_format>();
     using src_element_type = decltype(default_val);
@@ -96,11 +99,10 @@ void kernel_main() {
             }
 
             for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
-                const int src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
+                const uint32_t src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
 
-                const uint64_t src_noc_addr = get_noc_addr(src_tile_id, s_src);
-                noc_async_read(src_noc_addr, src_cb_addr, src_page_size);
-                noc_async_read_barrier();
+                noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
+                noc.async_read_barrier();
 
                 process_loaded_tile_all_h_columns<src_element_type, src_data_format>(
                     input_ctx, w_tile, h_tile, max_vals, arg_maxs);

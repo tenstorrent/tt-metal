@@ -3,7 +3,7 @@ include(sources.cmake)
 add_library(ttnn_op_eltwise_binary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Binary::Backward ALIAS ttnn_op_eltwise_binary_backward)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_binary_backward TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_binary_backward TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_backward)
 
 target_sources(

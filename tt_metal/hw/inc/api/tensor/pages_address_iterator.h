@@ -159,15 +159,18 @@ private:
                 (page_coord[i] % accessor.dspec().shard_shape()[i]) * accessor.dspec().shard_strides()[i];
         }
 
-        // Calculate bank mapping
-        current_page_mapping.bank_id = flattened_shard_id % accessor.dspec().num_banks();
-        bank_shard_id = flattened_shard_id / accessor.dspec().num_banks();
+        // Calculate bank mapping (round-robin or shard-contiguous, per the distribution strategy)
+        {
+            const auto bank_shard = accessor.shard_to_bank(flattened_shard_id);
+            current_page_mapping.bank_id = bank_shard.bank_id;
+            bank_shard_id = bank_shard.shard_in_bank;
+        }
         current_page_mapping.bank_page_offset =
             bank_shard_id * accessor.dspec().shard_volume() + page_offset_within_shard;
 
         // Calculate NOC address and shard ID
         current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
-        current_shard_id = current_page_mapping.bank_id + bank_shard_id * accessor.dspec().num_banks();
+        current_shard_id = flattened_shard_id;
     }
 
     // Efficiently increment page coordinate and update derived state
@@ -243,14 +246,17 @@ private:
             page_offset_within_shard += (page_coord[i] % dspec.shard_shape()[i]) * dspec.shard_strides()[i];
         }
 
-        // Recalculate bank mapping
-        current_page_mapping.bank_id = flattened_shard_id % dspec.num_banks();
-        bank_shard_id = flattened_shard_id / dspec.num_banks();
+        // Recalculate bank mapping (round-robin or shard-contiguous, per the distribution strategy)
+        {
+            const auto bank_shard = accessor.shard_to_bank(flattened_shard_id);
+            current_page_mapping.bank_id = bank_shard.bank_id;
+            bank_shard_id = bank_shard.shard_in_bank;
+        }
         current_page_mapping.bank_page_offset = bank_shard_id * dspec.shard_volume() + page_offset_within_shard;
 
         // Recalculate NOC address and shard ID
         current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
-        current_shard_id = current_page_mapping.bank_id + bank_shard_id * dspec.num_banks();
+        current_shard_id = flattened_shard_id;
     }
 };
 

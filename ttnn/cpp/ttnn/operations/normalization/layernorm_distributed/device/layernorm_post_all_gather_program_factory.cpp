@@ -100,11 +100,9 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     log_debug(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
-    auto a_addr = a.buffer()->address();
-    auto stats_addr = stats.buffer()->address();
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
-    auto dst_addr = output.buffer()->address();
+    // Optional gamma/beta: bind the Buffer* when present, else nullptr (framework emits 0u).
+    Buffer* gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    Buffer* beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
 
     [[maybe_unused]] uint32_t num_gamma_tiles = gamma.has_value() ? gamma.value().physical_volume() / tile_hw : 0;
     [[maybe_unused]] uint32_t num_beta_tiles = beta.has_value() ? beta.value().physical_volume() / tile_hw : 0;
@@ -286,10 +284,11 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
 
     uint32_t eps_u = std::bit_cast<uint32_t>(operation_attributes.eps);  // epsilon
 
-    // Build runtime args per core
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
+    // Build runtime args per core.  Buffer base addresses are bound via
+    // emplace_runtime_args() so the framework patches them on cache hits.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+    KernelDescriptor compute_kernel_desc;
 
     if (use_2d_kernel) {
         for (uint32_t x = 0; x < cores_x; ++x) {
@@ -305,22 +304,21 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
                     core.x,
                     tile_offset,
                     tiles_per_core_y);
-                reader_runtime_args.emplace_back(
+                reader_kernel_desc.emplace_runtime_args(
                     core,
-                    std::vector<uint32_t>{
-                        a_addr,
-                        tiles_per_core_x,
-                        tiles_per_core_y,
-                        tile_offset,
-                        stats_offset,
-                        eps_u,
-                        gamma_dram_addr,
-                        beta_dram_addr,
-                        stats_addr,
-                        y * tiles_per_core_y});
-                compute_runtime_args.emplace_back(core, std::vector<uint32_t>{tiles_per_core_x});
-                writer_runtime_args.emplace_back(
-                    core, std::vector<uint32_t>{dst_addr, tiles_per_core_x * tiles_per_core_y, tile_offset});
+                    {a.buffer(),
+                     tiles_per_core_x,
+                     tiles_per_core_y,
+                     tile_offset,
+                     stats_offset,
+                     eps_u,
+                     gamma_buffer,
+                     beta_buffer,
+                     stats.buffer(),
+                     y * tiles_per_core_y});
+                compute_kernel_desc.emplace_runtime_args(core, {tiles_per_core_x});
+                writer_kernel_desc.emplace_runtime_args(
+                    core, {output.buffer(), tiles_per_core_x * tiles_per_core_y, tile_offset});
             }
         }
     } else {
@@ -341,22 +339,20 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
             uint32_t stats_offset = curr_row * stats_tiles_cols;
             uint32_t y_offset = 0;
 
-            reader_runtime_args.emplace_back(
+            reader_kernel_desc.emplace_runtime_args(
                 core,
-                std::vector<uint32_t>{
-                    a_addr,
-                    num_tile_rows_per_core,
-                    Wt,
-                    tile_offset,
-                    stats_offset,
-                    eps_u,
-                    gamma_dram_addr,
-                    beta_dram_addr,
-                    stats_addr,
-                    y_offset});
-            compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
-            writer_runtime_args.emplace_back(
-                core, std::vector<uint32_t>{dst_addr, num_tile_rows_per_core * Wt, tile_offset});
+                {a.buffer(),
+                 num_tile_rows_per_core,
+                 Wt,
+                 tile_offset,
+                 stats_offset,
+                 eps_u,
+                 gamma_buffer,
+                 beta_buffer,
+                 stats.buffer(),
+                 y_offset});
+            compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
+            writer_kernel_desc.emplace_runtime_args(core, {output.buffer(), num_tile_rows_per_core * Wt, tile_offset});
             curr_row += num_tile_rows_per_core;
         }
     }
@@ -367,7 +363,6 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     ProgramDescriptor program_descriptor;
 
     // Reader kernel
-    KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "reader_unary_interleaved_ln_rm_gb_post_allgather.cpp";
@@ -375,30 +370,25 @@ tt::tt_metal::ProgramDescriptor LayerNormPostAllGatherProgramFactory::create_des
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_kernel_desc.defines = KernelDescriptor::Defines(reader_defines.begin(), reader_defines.end());
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
     // Writer kernel
-    KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/normalization/layernorm_distributed/device/kernels/dataflow/"
         "writer_unary_interleaved_start_id_blocked.cpp";
     writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
     // Compute kernel
-    KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel_file;
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
     compute_kernel_desc.defines = KernelDescriptor::Defines(compute_defines.begin(), compute_defines.end());
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,

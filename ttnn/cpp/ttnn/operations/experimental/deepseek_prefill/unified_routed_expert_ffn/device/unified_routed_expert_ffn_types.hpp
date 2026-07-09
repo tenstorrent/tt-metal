@@ -8,11 +8,37 @@
 #include <optional>
 #include <tuple>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn {
+
+// Maximum number of global experts the op supports.
+//
+// The reader fetches the per-global-expert `counts` vector (and the
+// local->global `global_expert_idx_table`) into an L1 scratch CB with a
+// single noc_async_read_page, then indexes counts[global_expert_id] for
+// global_expert_id in [0, num_global_experts). The L1 scratch is sized to
+// hold this many UINT32 entries — 1024 entries = 4 KB ("4 tiles" of 1 KB) —
+// which covers DeepSeek V3 (256 experts), Kimi (384 experts) and any model up
+// to 1024 routed experts with headroom. A single ROW_MAJOR DRAM page already
+// holds the whole vector, so the read stays a single page fetch; bumping this
+// past TILE_HW would additionally require widening the device-op validation
+// below and re-checking the per-core L1 budget.
+inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
+
+// Per-expert FFN activation variant. Selected at the op boundary and baked into
+// the compute kernel via a compile-time define, so each variant caches as a
+// distinct program. For SwiGluOai the alpha/limit are baked to the M3/gpt-oss
+// values (1.702 / 7.0, SwiGLUConfigGPTOSS) in the kernel — no extra params.
+enum class RoutedExpertActivation : uint8_t {
+    Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
+    SwiGluOai =
+        1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+};
 
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
@@ -26,10 +52,15 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // Activation variant (see RoutedExpertActivation). Default Silu = DeepSeek
+    // path, kernel unchanged. SwiGluOai drives the SWIGLU_OAI compile-time define
+    // in the compute kernel.
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "activation");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, activation); }
 };
 
 // Tensors fed into the op.
@@ -54,6 +85,12 @@ struct UnifiedRoutedExpertFfnInputs {
     Tensor counts;
     Tensor global_expert_idx_table;
     std::optional<Tensor> optional_output;
+    // Direct-write mode: per-global-expert region start offsets (UINT32, the
+    // same `start` tensor ttnn::insert consumes). When present, the writer
+    // places this expert's output directly into `optional_output` (the shared
+    // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
+    // Requires optional_output to also be set.
+    std::optional<Tensor> expert_region_offsets;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

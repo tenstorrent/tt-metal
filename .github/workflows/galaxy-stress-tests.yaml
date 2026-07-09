@@ -36,9 +36,7 @@ on:
         default: "all"
         options:
           - all
-          - galaxy-llama-nd-hang-stress
           - galaxy-fabric-stability-stress
-          - galaxy-llama-long-stress
       extra-tag:
         required: false
         type: string

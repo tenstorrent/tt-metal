@@ -5,16 +5,26 @@
 #include "embeddings_fused_program_factory.hpp"
 #include "embedding_program_factory_common.hpp"
 
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+
 namespace ttnn::prim {
 
-EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::create(
+using namespace tt;
+using namespace tt::constants;
+using namespace tt::tt_metal;
+
+tt::tt_metal::ProgramDescriptor EmbeddingsFusedProgramFactory::create_descriptor(
     const EmbeddingParams& operation_attributes, const EmbeddingInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input_tensor_arg;
     const auto& weights = tensor_args.weight_arg;
     auto& output = tensor_return_value;
     const auto& embeddings_type = operation_attributes.embeddings_type;
     const auto& pad_token = operation_attributes.pad_token;
-    using namespace tt::constants;
+
+    ProgramDescriptor desc;
+
     ////////////////////////////////////////////////////////////////////////////
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -30,7 +40,6 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
 
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
@@ -49,9 +58,9 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     // Note: num_blocks is just blocks along height
     uint32_t num_blocks = num_output_rows / TILE_HEIGHT;
     uint32_t num_blocks_per_batch = num_output_rows_per_batch / TILE_HEIGHT;
-    uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2, num_tiles_per_block;
+    uint32_t num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0, num_tiles_per_block = 0;
     CoreRangeSet all_cores, core_group_1, core_group_2;
-    bool row_major;
+    bool row_major = false;
     if (output_sharded) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
@@ -71,7 +80,6 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
             num_blocks_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
         num_tiles_per_block = weights.padded_shape()[-1] / TILE_WIDTH;
-        row_major = false;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
@@ -124,17 +132,26 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t cb0_size = buffering * tiles_per_chunk * weights_single_tile_size;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(cb0_size, {{src0_cb_index, weights_cb_data_format}})
-            .set_page_size(src0_cb_index, weights_single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cb0_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = weights_cb_data_format,
+            .page_size = weights_single_tile_size,
+        }}},
+    });
 
     constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(
-            TILE_HEIGHT * input_element_size_bytes, {{src1_cb_index, input_cb_data_format}})
-            .set_page_size(src1_cb_index, TILE_HEIGHT * input_element_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = TILE_HEIGHT * input_element_size_bytes,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src1_cb_index,
+            .data_format = input_cb_data_format,
+            .page_size = TILE_HEIGHT * input_element_size_bytes,
+        }}},
+    });
 
     constexpr uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t output_cb_size;
@@ -143,27 +160,43 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     } else {
         output_cb_size = buffering * tiles_per_chunk * output_single_tile_size;
     }
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, output_cb_data_format}})
-            .set_page_size(output_cb_index, output_single_tile_size);
+    CBDescriptor output_cb_desc{
+        .total_size = output_cb_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = output_cb_data_format,
+            .page_size = output_single_tile_size,
+        }}},
+    };
     if (output_sharded) {
-        cb_output_config.set_globally_allocated_address(*out_buffer);
+        output_cb_desc.buffer = out_buffer;
     }
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    desc.cbs.push_back(std::move(output_cb_desc));
 
     constexpr uint32_t src2_cb_index = tt::CBIndex::c_3;
     if (embeddings_type == EmbeddingsType::PADDED) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cache_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src2_cb_index,
+                .data_format = weights_cb_data_format,
+                .page_size = cache_page_size,
+            }}},
+        });
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
-        tt::tt_metal::CircularBufferConfig cb_src2_config =
-            tt::tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
-                .set_page_size(src2_cb_index, cache_page_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = 2 * cache_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src2_cb_index,
+                .data_format = weights_cb_data_format,
+                .page_size = cache_page_size,
+            }}},
+        });
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -190,14 +223,25 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
-    std::map<std::string, std::string> embedding_defines = {
+    KernelDescriptor::Defines embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"}, {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
-    auto reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_tilize.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(embedding_compile_time_args);
+    reader_desc.defines = embedding_defines;
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    // Compute kernels: split across the two core groups, each with its own
+    // per_core_block_cnt compile-time arg. We must build them as separate
+    // KernelDescriptors because their compile_time_args / core_ranges differ.
+    std::optional<KernelDescriptor> compute_desc_1;
+    std::optional<KernelDescriptor> compute_desc_2;
+    const char* compute_kernel_path =
+        use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
+                               : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp";
 
     if (num_blocks_per_core_group_1 > 0) {
         std::vector<uint32_t> compute_args_1 = {
@@ -208,12 +252,13 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
             uint32_t(num_chunks),                   // num_chunks per block
             uint32_t(last_chunk_tiles)              // last_chunk_tiles
         };
-        tt::tt_metal::CreateKernel(
-            program,
-            use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
-                                   : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
-            core_group_1,
-            tt::tt_metal::ComputeConfig{.compile_args = compute_args_1});
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = compute_kernel_path;
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = core_group_1;
+        compute_desc.compile_time_args = std::move(compute_args_1);
+        compute_desc.config = ComputeConfigDescriptor{};
+        compute_desc_1 = std::move(compute_desc);
     }
 
     if (num_blocks_per_core_group_2 > 0) {
@@ -225,43 +270,42 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
             uint32_t(num_chunks),                   // num_chunks per block
             uint32_t(last_chunk_tiles)              // last_chunk_tiles
         };
-        tt::tt_metal::CreateKernel(
-            program,
-            use_chunked_processing ? "ttnn/cpp/ttnn/operations/embedding/device/kernels/compute/tilize_chunked.cpp"
-                                   : "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
-            core_group_2,
-            tt::tt_metal::ComputeConfig{.compile_args = compute_args_2});
+        KernelDescriptor compute_desc;
+        compute_desc.kernel_source = compute_kernel_path;
+        compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc.core_ranges = core_group_2;
+        compute_desc.compile_time_args = std::move(compute_args_2);
+        compute_desc.config = ComputeConfigDescriptor{};
+        compute_desc_2 = std::move(compute_desc);
     }
-    tt::tt_metal::KernelHandle writer_kernel_id = 0;
+
     // TODO: We can use the second risc to do more work in parallel
+    std::optional<KernelDescriptor> writer_desc;
     if (!output_sharded) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
         tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
         // Tilized writer
-        writer_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
-            all_cores,
-            tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        KernelDescriptor w;
+        w.kernel_source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        w.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        w.core_ranges = all_cores;
+        w.compile_time_args = std::move(writer_compile_time_args);
+        w.config = WriterConfigDescriptor{};
+        writer_desc = std::move(w);
     }
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    std::vector<uint32_t> reader_runtime_args = {
-        (std::uint32_t)a.buffer()->address(),
-        (std::uint32_t)weights.buffer()->address(),
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-        (std::uint32_t)0,
-    };
-    if (embeddings_type == EmbeddingsType::PADDED) {
-        reader_runtime_args.push_back(pad_token.value());
-    }
+    auto* a_buffer = a.buffer();
+    auto* weights_buffer = weights.buffer();
+    auto* output_buffer = output.buffer();
 
-    std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)0, (std::uint32_t)0};
+    reader_desc.runtime_args.reserve(cores.size());
+    if (writer_desc.has_value()) {
+        writer_desc->runtime_args.reserve(cores.size());
+    }
 
     uint32_t input_offset = 0;
     uint32_t weight_offset = 0;
@@ -273,19 +317,24 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
 
         // Reader
         {
-            reader_runtime_args[2] = input_offset / num_blocks_per_batch;
-            reader_runtime_args[3] = input_offset % num_blocks_per_batch * input_block_size_bytes;
-            reader_runtime_args[4] = weight_offset;
-            reader_runtime_args[5] = local_num_blocks;
-            tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
+            KernelDescriptor::RTArgList reader_args;
+            reader_args.push_back(a_buffer);
+            reader_args.push_back(weights_buffer);
+            reader_args.push_back(input_offset / num_blocks_per_batch);
+            reader_args.push_back(input_offset % num_blocks_per_batch * input_block_size_bytes);
+            reader_args.push_back(weight_offset);
+            reader_args.push_back(local_num_blocks);
+            if (embeddings_type == EmbeddingsType::PADDED) {
+                reader_args.push_back(pad_token.value());
+            }
+            reader_desc.emplace_runtime_args(core, reader_args);
         }
 
         // Writer
         if (!output_sharded) {
-            writer_runtime_args[1] = num_tiles_per_block * local_num_blocks;
-            writer_runtime_args[2] = tile_offset;
+            writer_desc->emplace_runtime_args(
+                core, {output_buffer, static_cast<uint32_t>(num_tiles_per_block * local_num_blocks), tile_offset});
             tile_offset += local_num_blocks * num_tiles_per_block;
-            tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
             input_offset += local_num_blocks;
         } else {
             weight_offset += weight_block_size;
@@ -296,50 +345,18 @@ EmbeddingsFusedProgramFactory::cached_program_t EmbeddingsFusedProgramFactory::c
         }
     }
 
-    return cached_program_t{
-        std::move(program),
-        {.reader_kernel_id = reader_kernel_id,
-         .writer_kernel_id = writer_kernel_id,
-         .cores = cores,
-         .cb_output = cb_output}};
-}
-
-void EmbeddingsFusedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const EmbeddingParams& /*operation_attributes*/,
-    const EmbeddingInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_variables = cached_program.shared_variables;
-    const auto& reader_kernel_id = shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = shared_variables.writer_kernel_id;
-    const auto& cores = shared_variables.cores;
-    const auto& cb_output = shared_variables.cb_output;
-
-    auto* output_buffer = tensor_return_value.buffer();
-    auto output_buffer_address = output_buffer->address();
-    auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
-    auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
-
-    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
-    const bool output_sharded = is_sharded(output_buffer->buffer_layout());
-    if (output_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_output, *output_buffer);
+    desc.kernels.push_back(std::move(reader_desc));
+    if (writer_desc.has_value()) {
+        desc.kernels.push_back(std::move(*writer_desc));
+    }
+    if (compute_desc_1.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_1));
+    }
+    if (compute_desc_2.has_value()) {
+        desc.kernels.push_back(std::move(*compute_desc_2));
     }
 
-    for (const auto& core : cores) {
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[0] = input_buffer_address;
-            runtime_args[1] = weights_buffer_address;
-        }
-
-        if (!output_sharded) {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[0] = output_buffer_address;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

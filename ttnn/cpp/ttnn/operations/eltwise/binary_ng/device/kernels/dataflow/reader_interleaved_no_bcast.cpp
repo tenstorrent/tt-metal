@@ -38,7 +38,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
     constexpr bool has_sharding = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
     const auto src = TensorAccessor(src_args, src_addr);
     const uint32_t HtWt = Ht * Wt;
 

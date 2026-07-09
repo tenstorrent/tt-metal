@@ -37,22 +37,41 @@ ProgramDescriptor RepeatProgramFactoryHigherDim::create_descriptor(
 
     ttnn::Shape input_log_shape = ttnn::Shape(input.logical_shape().view());
     ttnn::Shape output_log_shape = ttnn::Shape(output.logical_shape().view());
-    const uint32_t page_size_bytes = input_log_shape[3] * data_size;
-    TT_FATAL(
-        page_size_bytes == output_log_shape[3] * data_size,
-        "Data size of output does not match requirement for repeat last dim");
+
+    uint32_t page_size_bytes;
+    uint32_t number_of_higher_pages;
+    uint32_t number_of_lower_pages;
+    uint32_t number_of_rep_dim_pages;
+
+    if (operation_attributes.m_tile_page_size_bytes > 0) {
+        // Tile-native: host supplies tile-space page counts.
+        page_size_bytes = operation_attributes.m_tile_page_size_bytes;
+        number_of_higher_pages = operation_attributes.m_tile_higher_pages;
+        number_of_rep_dim_pages = operation_attributes.m_tile_rep_dim_pages;
+        number_of_lower_pages = operation_attributes.m_tile_lower_pages;
+    } else {
+        page_size_bytes = input_log_shape[3] * data_size;
+        TT_FATAL(
+            page_size_bytes == output_log_shape[3] * data_size,
+            "Data size of output does not match requirement for repeat higher dim");
+        // Per-core page count so read/write start on page boundaries.
+        number_of_higher_pages = input_log_shape[0];
+        number_of_rep_dim_pages = input_log_shape[1];
+        number_of_lower_pages = input_log_shape[2];
+    }
     uint32_t read_start_page = 0;
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
-    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
-    const uint32_t number_of_higher_pages = input_log_shape[0];
-    const uint32_t number_of_lower_pages = input_log_shape[2];
-    const uint32_t number_of_rep_dim_pages = input_log_shape[1];
     const uint32_t cb_size_bytes = (READ_ALIGNMENT * 2) + page_size_bytes;
     constexpr uint32_t src0_cb_index = 0;
     constexpr uint32_t src1_cb_index = 1;
+
+    // TILE/sharded -> tile; RM sharded -> rm_sharded; RM interleaved -> rm_interleaved.
+    const bool is_tile_native = operation_attributes.m_tile_page_size_bytes > 0;
+    const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
+    const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
+    const bool needs_alignment_cb = !is_tile_native && !src_sharded && !dst_sharded;
 
     ProgramDescriptor desc;
 
@@ -66,26 +85,53 @@ ProgramDescriptor RepeatProgramFactoryHigherDim::create_descriptor(
         }}},
     });
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_size_bytes,
-        .core_ranges = total_core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src1_cb_index,
-            .data_format = cb_data_format,
-            .page_size = cb_size_bytes,
-        }}},
-    });
+    // Second CB only for interleaved RM (alignment scratchpad).
+    if (needs_alignment_cb) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cb_size_bytes,
+            .core_ranges = total_core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src1_cb_index,
+                .data_format = cb_data_format,
+                .page_size = cb_size_bytes,
+            }}},
+        });
+    }
 
-    std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)page_size_bytes, src0_cb_index, src1_cb_index, number_of_lower_pages, number_of_rep_dim_pages};
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    const char* kernel_source = nullptr;
+    std::vector<uint32_t> compile_time_args;
+    if (is_tile_native) {
+        kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_tile.cpp";
+        compile_time_args = {
+            (std::uint32_t)page_size_bytes, src0_cb_index, number_of_lower_pages, number_of_rep_dim_pages};
+    } else if (src_sharded || dst_sharded) {
+        kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_sharded.cpp";
+        compile_time_args = {
+            (std::uint32_t)page_size_bytes, src0_cb_index, number_of_lower_pages, number_of_rep_dim_pages};
+    } else {
+        kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm_interleaved.cpp";
+        compile_time_args = {
+            (std::uint32_t)page_size_bytes,
+            src0_cb_index,
+            src1_cb_index,
+            number_of_lower_pages,
+            number_of_rep_dim_pages};
+    }
+
+    std::vector<uint32_t> common_runtime_args;
+    // RuntimeTensorShape: safe for interleaved; sharded moves shape to runtime args.
+    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(compile_time_args, common_runtime_args);
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(compile_time_args, common_runtime_args);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_higher_dim_rm.cpp";
+    reader_desc.kernel_source = kernel_source;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = total_core_ranges;
     reader_desc.compile_time_args = std::move(compile_time_args);
+    reader_desc.common_runtime_args = std::move(common_runtime_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
     uint32_t done = 0;
@@ -103,8 +149,7 @@ ProgramDescriptor RepeatProgramFactoryHigherDim::create_descriptor(
                 core_count++ < responsibility_mod ? responsibility_chunk + 1 : responsibility_chunk;
             const CoreCoord core = {core_x, core_y};
             if (done == 1) {
-                // Idle cores: zero pages, with the trailing flag set to terminate the kernel early.
-                // Pass scalar zeros instead of buffers so the kernel sees the same arg count.
+                // Idle core: zero args + early exit.
                 reader_desc.emplace_runtime_args(
                     core,
                     {uint32_t{0},
@@ -116,14 +161,11 @@ ProgramDescriptor RepeatProgramFactoryHigherDim::create_descriptor(
                      uint32_t{0},
                      uint32_t{1}});
             } else if (divide_on_higher) {
-                // set the runtime args
-                // set the compile time args
                 const uint32_t start_of_read = read_start_page;
                 uint32_t end_of_read = read_start_page + responsibility;
                 end_of_read = end_of_read < number_of_higher_pages ? end_of_read : number_of_higher_pages;
 
-                // Buffer* args trigger BufferBinding entries; the framework patches their
-                // addresses on cache hits without rebuilding the descriptor.
+                // Buffer* runtime args patch on program cache hit.
                 reader_desc.emplace_runtime_args(
                     core,
                     {src_buffer,
@@ -137,8 +179,6 @@ ProgramDescriptor RepeatProgramFactoryHigherDim::create_descriptor(
                 read_start_page = end_of_read;
                 done = (end_of_read == number_of_higher_pages) ? 1 : 0;
             } else {
-                // set the runtime args
-                // set the compile time args
                 const uint32_t start_of_read = read_start_page;
                 uint32_t end_of_read = read_start_page + responsibility;
                 end_of_read = end_of_read < number_of_lower_pages ? end_of_read : number_of_lower_pages;

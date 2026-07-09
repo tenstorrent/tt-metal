@@ -29,14 +29,15 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fmod_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_TWO_PARAM_KERNEL_FN(calculate_fmod, RC, APPROX, idst, param0, param1));
+    MATH(
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fmod, (APPROX), idst, VectorMode::RC, param0, param1));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void fmod_tile_init(uint32_t param0, uint32_t param1) {
-    MATH(SFPU_TWO_PARAM_KERNEL_INIT(fmod, sfpu::init_fmod, APPROX, param0, param1));
+    MATH(SFPU_UNARY_INIT_FN_ARGS(fmod, sfpu::init_fmod, (APPROX), param0, param1));
 }
 
 }  // namespace ckernel

@@ -60,21 +60,21 @@ void kernel_main() {
     cb0.reserve_back(src0_num_tiles);
     cb0.push_back(src0_num_tiles);
 #else
-    const uint32_t src0_tile_bytes = get_tile_size(cb_id_src0);
+    const uint32_t src0_tile_bytes = cb0.get_tile_size();
     const auto src0 = TensorAccessor(src0_args, src0_addr);
 #endif
 #if SRC_SHARDED_B
     cb1.reserve_back(src1_num_tiles);
     cb1.push_back(src1_num_tiles);
 #else
-    const uint32_t src1_tile_bytes = get_tile_size(cb_id_src1);
+    const uint32_t src1_tile_bytes = cb1.get_tile_size();
     const auto src1 = TensorAccessor(src1_args, src1_addr);
 #endif
 #if SRC_SHARDED_C
     cb2.reserve_back(src2_num_tiles);
     cb2.push_back(src2_num_tiles);
 #else
-    const uint32_t src2_tile_bytes = get_tile_size(cb_id_src2);
+    const uint32_t src2_tile_bytes = cb2.get_tile_size();
     const auto src2 = TensorAccessor(src2_args, src2_addr);
 #endif
 #if !SRC_SHARDED_A || !SRC_SHARDED_B || !SRC_SHARDED_C
@@ -120,6 +120,7 @@ void kernel_main() {
     uint32_t next_nd_shift_c = nD_stride_c - d_stride_c * D;
 
     uint32_t num_tiles_read = 0;
+    // Supports both nobcast and outer_bcast cases for TTT variant
     for (uint32_t nd = start_nd; nd < cND && num_tiles_read < dst_num_tiles; ++nd, start_d = 0) {
         for (uint32_t d = start_d; d < D && num_tiles_read < dst_num_tiles; ++d, start_n = 0) {
             for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {

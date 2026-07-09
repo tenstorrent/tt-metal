@@ -63,7 +63,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 5,14,23 * * *"
+    - cron: "0 5 * * *"
 
 jobs:
   check-harbor:

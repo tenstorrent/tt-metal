@@ -22,8 +22,7 @@ namespace sfpu
 //   lt(A,B) = LT(A,B)           gt(A,B) = LT(B,A)
 //   ge(A,B) = NOT LT(A,B)       le(A,B) = NOT LT(B,A)
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_binary_comp_int32(
-    const int iterations, const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     static_assert(
         RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge,
@@ -40,7 +39,7 @@ inline void calculate_binary_comp_int32(
     const std::uint32_t idx_x = swap_operands ? dst_index_in1 : dst_index_in0;
     const std::uint32_t idx_y = swap_operands ? dst_index_in0 : dst_index_in1;
 
-    for (int d = 0; d < iterations; d++)
+    for (int d = 0; d < ITERATIONS; d++)
     {
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, idx_x + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, idx_y + (d << 1));

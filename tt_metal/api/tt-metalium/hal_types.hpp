@@ -39,10 +39,16 @@ enum class HalL1MemAddrType : uint8_t {
     APP_ROUTING_INFO,
     RETRAIN_COUNT,
     RETRAIN_FORCE,
-    CRC_ERR,    // Link status - CRC error count
-    CORR_CW,    // Link status - Corrected Codewords count
-    UNCORR_CW,  // Link status - Uncorrected Codewords count
-    LINK_UP,    // Link status - Link up status
+    CRC_ERR,          // Link status - CRC error count
+    CORR_CW,          // Link status - Corrected Codewords count
+    UNCORR_CW,        // Link status - Uncorrected Codewords count
+    TXQ0_RESEND_CNT,  // Link status - TX queue 0 packet resend count (Blackhole only)
+    TXQ1_RESEND_CNT,  // Link status - TX queue 1 packet resend count (Blackhole only)
+    TXQ2_RESEND_CNT,  // Link status - TX queue 2 packet resend count (Blackhole only)
+    RXQ0_PKT_DROP,    // Link status - RX queue 0 packet drop count (Blackhole only)
+    RXQ1_PKT_DROP,    // Link status - RX queue 1 packet drop count (Blackhole only)
+    RXQ2_PKT_DROP,    // Link status - RX queue 2 packet drop count (Blackhole only)
+    LINK_UP,          // Link status - Link up status
     FABRIC_TELEMETRY,
     ROUTING_TABLE,
     ROUTER_STATE,

@@ -1,37 +1,30 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Shared helpers for the grpo_speedup update-method tests.
-
-These are intentionally regular functions (not pytest fixtures) so each
-test module can wrap them in a module-scoped fixture with whatever
-extras it needs (e.g. yielding a specific layer or sub-module).
-"""
+"""Shared helpers for the grpo_speedup update-method tests."""
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import gc
 import os
 from pathlib import Path
 from typing import Any
 
 MODEL_ID = "meta-llama/Llama-3.2-1B-Instruct"
-TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
+TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_1dev.yaml"
 MAX_SEQ_LEN = 2048
+
+# Nonzero trace region required for tt-transformers decode trace; 50 MB matches
+# the tt-transformers demo default.
+_TRACE_REGION_SIZE = 50_000_000
 
 REPO_ROOT = Path(__file__).resolve().parents[5]  # .../tt-metal
 
 
 def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
-    """Read the standard ttml training yaml and parse its device section.
-
-    Returns ``(device_config, raw)``: ``device_config`` is a
-    :class:`ttml.common.config.DeviceConfig` ready to be passed to
-    :func:`open_device`; ``raw`` is the parsed yaml dict, useful when a
-    caller also needs ``raw["training_config"]["model_config"]`` to
-    build a :class:`TransformerConfig` for the ttml completer.
-    """
+    """Parse the ttml training yaml; return ``(DeviceConfig, raw_dict)``."""
     from ttml.common.config import DeviceConfig, load_config
 
     raw = load_config(os.path.join(REPO_ROOT, device_config_rel))
@@ -39,15 +32,8 @@ def load_device_config(device_config_rel: str = TTML_DEVICE_CONFIG_REL):
 
 
 def open_device(device_config) -> Any:
-    """Open the ttml ``AutoContext`` device for the given config.
-
-    Enables fabric (when multi-device) and opens the AutoContext mesh.
-    Returns the ``ttnn.MeshDevice`` handle that can be passed to both
-    :class:`LlamaCompleterTtt` and :class:`LlamaCompleterTtml`.
-
-    Caller owns the lifetime: pair every ``open_device`` with a
-    matching :func:`close_device` in a ``try/finally``.
-    """
+    """Open the ttml ``AutoContext`` mesh (enabling fabric when multi-device);
+    return the ``ttnn.MeshDevice``. Pair with :func:`close_device`."""
     import ttml
 
     if device_config.total_devices() > 1:
@@ -64,6 +50,33 @@ def close_device() -> None:
     ttml.autograd.AutoContext.get_instance().close_device()
 
 
+class _TttCompleter:
+    """Adapter over :class:`TttGenerationWorker` that forwards its attributes
+    and adds a lazily-loaded ``.tokenizer`` so dummy-weight tests stay
+    HF-auth-free (only tests that touch ``.tokenizer`` pay for the download)."""
+
+    def __init__(self, worker: Any, model_source: str) -> None:
+        self._worker = worker
+        self._model_source = model_source
+
+    @functools.cached_property
+    def tokenizer(self) -> Any:
+        # Reuse the ModelArgs tokenizer if already loaded; else load on demand.
+        tok = getattr(self._worker.model_args, "tokenizer", None)
+        if tok is not None:
+            return tok
+        from transformers import AutoTokenizer
+
+        return AutoTokenizer.from_pretrained(self._model_source)
+
+    def __getattr__(self, name: str) -> Any:
+        # Forward unknown attrs to the worker; guard ``_worker`` against
+        # recursion before __init__ sets it.
+        if name == "_worker":
+            raise AttributeError(name)
+        return getattr(self._worker, name)
+
+
 def build_completer(
     mesh_device: Any,
     *,
@@ -73,22 +86,40 @@ def build_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Construct a fresh :class:`LlamaCompleterTtt` on ``mesh_device``.
+    """Build a :class:`TttGenerationWorker` wrapped in :class:`_TttCompleter`.
 
-    Heavy when ``dummy_weights=False``: loads real HF weights for
-    ``model_source`` (default Llama-3.2-1B-Instruct). Tests should call
-    this from a module-scoped fixture so the cost is paid once per file.
+    Heavy when ``dummy_weights=False`` (loads real HF weights); call from a
+    module-scoped fixture so the cost is paid once per file.
     """
-    from utils.llama_completer_ttt import LlamaCompleterTtt
+    from utils.llama_ttt_presets import (
+        bf16_attn_bfp8_mlp_optimizations,
+        llama_stop_and_pad,
+    )
+    from utils.ttt_generation_worker import TttGenerationWorker
 
-    return LlamaCompleterTtt(
+    if dummy_weights:
+        # Skip the gated HF tokenizer; stop/pad IDs are immaterial here.
+        stop_token_ids: Any = ()
+        pad_token_id = 0
+    else:
+        stop_token_ids, pad_token_id = llama_stop_and_pad(model_source)
+
+    worker = TttGenerationWorker(
         mesh_device=mesh_device,
         model_source=model_source,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         instruct=instruct,
+        optimizations=bf16_attn_bfp8_mlp_optimizations,
+        stop_token_ids=stop_token_ids,
+        pad_token_id=pad_token_id,
+        temperature=0.0,
+        top_k=0,
+        top_p=1.0,
+        seed=0,
         dummy_weights=dummy_weights,
     )
+    return _TttCompleter(worker, model_source)
 
 
 @contextlib.contextmanager
@@ -100,23 +131,22 @@ def open_completer(
     model_source: str = MODEL_ID,
     instruct: bool = True,
 ):
-    """Context manager that opens the device, builds a TTT completer,
-    and tears both down on exit.
+    """Open the device, build a TTT completer, and tear both down on exit.
 
-    Cleanup runs in dependency order: drop the completer (freeing its
-    on-device tensors), GC, then close the AutoContext mesh. Safe on
-    construction failure (a partially-built completer is still dropped
-    before close_device).
-
-    Usage::
-
-        @pytest.fixture(scope="module")
-        def attn():
-            with open_completer(dummy_weights=True) as c:
-                yield c.model.layers[0].attention
+    Cleanup order matters: drop the completer (freeing its on-device tensors),
+    GC, then close the mesh.
     """
+    import ttnn
+
     device_config, _ = load_device_config()
-    mesh_device = open_device(device_config)
+    # HARDWARE-SPECIFIC: open via ttnn (not ttml AutoContext) with ETH dispatch
+    # so tt-transformers keeps the full 8x8 tensix grid (WORKER dispatch leaves
+    # only 8x7 on a 2-harvested N300), plus the trace region the decode needs.
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*device_config.mesh_shape),
+        trace_region_size=_TRACE_REGION_SIZE,
+        dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.device.DispatchCoreType.ETH),
+    )
     completer = None
     try:
         completer = build_completer(
@@ -131,24 +161,13 @@ def open_completer(
     finally:
         completer = None
         gc.collect()
-        close_device()
+        ttnn.close_mesh_device(mesh_device)
 
 
 def as_update_input(t, mesh_device):
-    """Build the HF-format on-device input that every ``.update()`` method
-    accepts.
-
-    Caller passes the natural HF shape (matches HF safetensors):
-        * Linear weight   -- ``(out_features, in_features)``   (2D)
-        * Embedding table -- ``(vocab_size,   hidden_size)``   (2D)
-        * RMSNorm gamma   -- ``(dim,)``                        (1D)
-        * Linear bias     -- ``(out_features,)``               (1D)
-
-    Returns the canonical update() input: 4D ``(1, 1, ..., ...)``
-    ``ttnn.Tensor``, replicated across the mesh, DRAM-interleaved,
-    ``TILE_LAYOUT``, ``bfloat16``. Non-bf16 inputs are cast; non-contiguous
-    inputs (e.g. fresh from ``.transpose``) are made contiguous before the
-    upload.
+    """Upload a natural-HF-shape tensor as the canonical ``.update()`` input:
+    4D ``bfloat16`` ``ttnn.Tensor``, mesh-replicated, DRAM-interleaved,
+    ``TILE_LAYOUT``. Casts non-bf16 and makes non-contiguous inputs contiguous.
     """
     import torch
     import ttnn
@@ -168,11 +187,8 @@ def as_update_input(t, mesh_device):
 
 
 def to_torch_2d(t):
-    """``ttnn.to_torch`` + strip leading unit dims so callers get the
-    natural ``(rows, cols)`` shape back. Internal buffers in TTT are
-    stored as 4D ``(1, 1, rows, cols)``; squeezing those down keeps the
-    per-module snapshot inverses readable.
-    """
+    """``ttnn.to_torch`` + strip leading unit dims to the natural ``(rows,
+    cols)`` shape (TTT buffers are stored 4D as ``(1, 1, rows, cols)``)."""
     import ttnn
 
     out = ttnn.to_torch(t)

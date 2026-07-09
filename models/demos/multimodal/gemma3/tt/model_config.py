@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import inspect
 import os
 
 import torch
@@ -474,14 +475,41 @@ class ModelArgs(TTModelArgs):
 
         return state_dict
 
+    @staticmethod
+    def _gemma3_multi_modal_projector(model):
+        # transformers 5.x wraps the inner Gemma3Model as `model.model`, moving
+        # multi_modal_projector off the top-level Gemma3ForConditionalGeneration.
+        mmp = getattr(model, "multi_modal_projector", None)
+        if mmp is None:
+            mmp = model.model.multi_modal_projector
+        return mmp
+
+    @staticmethod
+    def _gemma3_vision_tower(model):
+        # transformers 5.x wraps the inner Gemma3Model as `model.model`, moving
+        # vision_tower off the top-level Gemma3ForConditionalGeneration (same as
+        # multi_modal_projector above).
+        vt = getattr(model, "vision_tower", None)
+        if vt is None:
+            vt = model.model.vision_tower
+        return vt
+
+    @classmethod
+    def _gemma3_vision_transformer(cls, model):
+        # transformers 5.x flattened SiglipVisionModel (dropped the `.vision_model` /
+        # SiglipVisionTransformer wrapper); embeddings/encoder/post_layernorm are now direct
+        # attributes. Return that transformer level on <5 (`.vision_model`) and >=5 (the tower itself).
+        vt = cls._gemma3_vision_tower(model)
+        return vt.vision_model if hasattr(vt, "vision_model") else vt
+
     def reference_vision_multi_modal(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector
+        layer = self._gemma3_multi_modal_projector(model)
         return layer
 
     def reference_vision_rms_norm(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.multi_modal_projector.mm_soft_emb_norm
+        layer = self._gemma3_multi_modal_projector(model).mm_soft_emb_norm
         return layer
 
     def reference_rms_norm(self, i=0):
@@ -499,12 +527,14 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
+        # AutoModelForVision2Seq was removed in transformers 5.x; its model mapping
+        # was folded into AutoModelForImageTextToText (available since 4.46).
+        for model_cls in (AutoModelForImageTextToText,):
             if type(self.hf_config) == dict:
                 return model_cls
 
@@ -524,6 +554,10 @@ class ModelArgs(TTModelArgs):
             model = self._gemma_dummy_hf_model()
         else:
             model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
+        # transformers 5.x from_pretrained honors the checkpoint dtype (bf16); force float32 so the
+        # golden reference matches float32 inputs (e.g. the multi_modal_projector matmul, which
+        # otherwise raises "expected m1 and m2 to have the same dtype, but got: float != BFloat16").
+        model = model.float()
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
             return wrapper
@@ -539,52 +573,52 @@ class ModelArgs(TTModelArgs):
 
     def reference_vision_model(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model
+        layer = self._gemma3_vision_transformer(model)
         return layer
 
     def reference_vision_mlp(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].mlp
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0].mlp
         return layer
 
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.patch_embedding
+        layer = self._gemma3_vision_transformer(model).embeddings.patch_embedding
         return layer
 
     def reference_vision_pos_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings.position_embedding
+        layer = self._gemma3_vision_transformer(model).embeddings.position_embedding
         return layer
 
     def reference_vision_embedding(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.embeddings
+        layer = self._gemma3_vision_transformer(model).embeddings
         return layer
 
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
         model = self.reference_vision_transformer(wrap=False)
         if layer_name == "layer_norm1":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm1
+            layer = self._gemma3_vision_transformer(model).encoder.layers[0].layer_norm1
         elif layer_name == "layer_norm2":
-            layer = model.vision_tower.vision_model.encoder.layers[0].layer_norm2
+            layer = self._gemma3_vision_transformer(model).encoder.layers[0].layer_norm2
         else:
-            layer = model.vision_tower.vision_model.post_layernorm
+            layer = self._gemma3_vision_transformer(model).post_layernorm
         return layer
 
     def reference_vision_attention(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0].self_attn  # Common naming
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0].self_attn  # Common naming
         return layer
 
     def reference_vision_encoder_block(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder.layers[0]
+        layer = self._gemma3_vision_transformer(model).encoder.layers[0]
         return layer
 
     def reference_vision_encoder(self):
         model = self.reference_vision_transformer(wrap=False)
-        layer = model.vision_tower.vision_model.encoder
+        layer = self._gemma3_vision_transformer(model).encoder
         return layer
 
     def reference_decoder(self, i=0):
@@ -614,14 +648,27 @@ class ModelArgs(TTModelArgs):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].self_attn
         use_position_embeddings = layer.__class__.__name__ in ("Gemma3Attention",)
+        rope_layer_type = None
         if "gemma-3" in self.model_name:
             if rope_embeddings == "local":
                 rotary_emb = model.model.rotary_emb_local
+                rope_layer_type = "sliding_attention"
             else:
                 rotary_emb = model.model.rotary_emb
+                rope_layer_type = "full_attention"
         else:
             rotary_emb = model.model.rotary_emb
-        wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
+        # transformers 5.x Gemma3 consolidated RoPE into one module that selects `{layer_type}_inv_freq`.
+        # Layer 0 is a sliding (local) layer, so the attention's own layer_type would force LOCAL rope,
+        # but this unit test compares against the explicitly requested rope module (global by default)
+        # and the TT RotarySetup uses the global rope_theta. Pin the layer_type to the chosen module so
+        # reference and TT use the same rope (matches the pre-5.x behavior).
+        wrapper = HfAttentionWrapper(
+            layer,
+            self.head_dim,
+            rotary_emb if use_position_embeddings else None,
+            rope_layer_type=rope_layer_type,
+        )
         return wrapper
 
 
@@ -639,21 +686,37 @@ class HfGemmaDecoderWrapper:
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         # TODO: Generalize for other HF models
 
-        position_embeddings_global = self.rotary_emb(x, position_ids)
-        position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        # transformers 5.x consolidated Gemma3 RoPE into a module that selects `{layer_type}_inv_freq`
+        # (layer_type=None -> AttributeError 'None_inv_freq'). Pass the matching layer_type when the
+        # rotary forward accepts it; <5 rotaries don't take the kwarg.
+        _takes_layer_type = "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+        if _takes_layer_type:
+            position_embeddings_global = self.rotary_emb(x, position_ids, layer_type="full_attention")
+            position_embeddings_local = self.rotary_emb_local(x, position_ids, layer_type="sliding_attention")
+        else:
+            position_embeddings_global = self.rotary_emb(x, position_ids)
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
+        # transformers 5.x renamed the decoder cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.decoder.forward).parameters
+            else "past_key_value"
+        )
         result = self.decoder.forward(
             x,
             position_embeddings_global=position_embeddings_global,
             position_embeddings_local=position_embeddings_local,
-            past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,
             attention_mask=mask,
+            **{cache_kw: self.past_key_values},
         )
-        output = result[0]
+        # transformers 5.x decoder layers return the hidden-states tensor directly instead of a
+        # tuple; only unwrap [0] when it's actually a tuple (otherwise result[0] drops a leading dim).
+        output = result[0] if isinstance(result, tuple) else result
         return output
 
     def __call__(self, *args, **kwargs):

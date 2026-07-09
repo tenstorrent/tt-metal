@@ -51,18 +51,18 @@ void kernel_main() {
 
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_input, cb_scaler, cb_accum_dst, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
+                    compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
             }
 
             // Optional masking of last H tile
             if constexpr (do_mask_h) {
                 tile_regs_acquire();
                 cb_input_obj.wait_front(onetile);
-                copy_tile_init_with_dt(cb_input);
+                copy_tile_init_with_dt(cb_input_obj);
                 copy_tile(cb_input, 0, reduce_dst_idx);
 
-                copy_tile_init_with_dt(cb_mask_h);
+                copy_tile_init_with_dt(cb_mask_h_obj);
                 copy_tile(cb_mask_h, 0, mask_dst_idx);
 
                 mask_tile_init();
@@ -71,17 +71,14 @@ void kernel_main() {
 
                 cb_masked_input_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_masked_input);
+                pack_tile_with_dt(reduce_dst_idx, cb_masked_input_obj);
                 tile_regs_release();
                 cb_masked_input_obj.push_back(onetile);
 
                 cb_input_obj.pop_front(onetile);
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_masked_input,
-                    cb_scaler,
-                    cb_out,
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
                     compute_kernel_lib::ReduceInputBlockShape::single(),
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                     compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
@@ -89,10 +86,7 @@ void kernel_main() {
                 // Phase 2 without masking: Reduce final tile with accumulation
                 // - If Ht == 1 (single tile): iteration=0, no accumulator reload
                 // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_input,
-                    cb_scaler,
-                    cb_out,
+                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_out>(
                     compute_kernel_lib::ReduceInputBlockShape::single(),
                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                     compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
