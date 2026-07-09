@@ -463,7 +463,6 @@ def run_sparse_mla_rotated_case(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        # sparse_sdpa reads the KVPE cache natively -> uncompressed bf16 ROW_MAJOR (mla.py asserts; #48888).
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )

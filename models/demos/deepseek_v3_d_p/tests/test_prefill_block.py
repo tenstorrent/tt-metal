@@ -894,7 +894,7 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 @pytest.mark.parametrize(
     "layer_type, layer_idx", [("dense", 0), ("moe", GLM51Config.NUM_DENSE_LAYERS)], ids=["dense", "moe"]
 )
-@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm", "glm52"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_block(
@@ -1000,8 +1000,6 @@ def test_glm_prefill_block(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        # sparse_sdpa reads the KVPE cache natively -> uncompressed bf16 ROW_MAJOR, not the bfloat8_b
-        # default (mla.py asserts; #48888). GLM is always sparse.
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )

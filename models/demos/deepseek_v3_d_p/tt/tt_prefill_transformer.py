@@ -364,6 +364,12 @@ class TtPrefillTransformer(LightweightModule):
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
         # exactly as before.
         reuse = self.indexer_types is not None
+        # reuse seeds from the first "full" layer within this forward; a stack starting on a "shared"
+        # layer has no prior indices (pipeline-parallel would need them threaded in from the prior rank).
+        if reuse:
+            assert (
+                self.indexer_types[self.first_layer_idx] == "full"
+            ), f"first layer {self.first_layer_idx} must be 'full' to seed indexer reuse, got '{self.indexer_types[self.first_layer_idx]}'"
         indexer_indices = None
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
