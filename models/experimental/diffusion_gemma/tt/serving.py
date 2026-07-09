@@ -128,6 +128,7 @@ class BlockDiffusionServingSession:
         page_tables_per_layer=None,
         prefix_cache: PrefixKVCache | None = None,
         adapter_kwargs: dict | None = None,
+        denoise_block_fn=None,
         logits_fn_builder_factory=make_generation_logits_fn_builder_from_checkpoint_state,
     ):
         if gumbel_mode not in GUMBEL_MODES:
@@ -140,6 +141,12 @@ class BlockDiffusionServingSession:
         self.page_tables_per_layer = page_tables_per_layer
         self.gumbel_mode = gumbel_mode
         self.gumbel_vocab_chunk_size = gumbel_vocab_chunk_size
+        # Explicit denoise-loop selection for the traced serving decode path. None ⇒ the
+        # env-gated dispatcher (``generate._resolve_default_denoise_block_fn`` — the current
+        # default, eager unless a DG_DENOISE_* flag is set). The vLLM adapter passes the traced
+        # fn here when it honors ``enable_trace``, so the persistent session's logits fn caches
+        # ONE traced controller (captured on block 0, ``execute_trace``-replayed every block).
+        self._denoise_block_fn = denoise_block_fn
         # Frozen prompt-prefix KV reuse (APC prototype, #47466). Off unless a
         # PrefixKVCache is attached AND DG_PREFIX_CACHE is set; the paged frozen
         # prefix read is #47488. Reuse only kicks in for a model-owned contiguous
@@ -329,6 +336,7 @@ class BlockDiffusionServingSession:
             noise_tokens_fn=noise_for_block,
             page_table=self.page_table,
             page_tables_per_layer=self.page_tables_per_layer,
+            denoise_block_fn=self._denoise_block_fn,
         )
         latency_s = time.perf_counter() - t0
 

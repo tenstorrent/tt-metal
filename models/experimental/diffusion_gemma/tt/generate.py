@@ -854,6 +854,40 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     return tt_denoise_block
 
 
+def select_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
+    """Public entry to the env-gated denoise-loop dispatcher.
+
+    Serving (``tt.serving.BlockDiffusionServingSession``) and the vLLM adapter reuse this so the
+    SAME ``DG_DENOISE_TRACED{,_MULTISTEP}`` / ``DG_DENOISE_EARLY_HALT`` selection the generator
+    uses drives the serving decode path — rather than hard-calling a specific loop. Returns the
+    eager :func:`~...tt.denoise_loop.denoise_block` when no traced flag is set (the default), so
+    serving behavior is unchanged unless a flag opts in.
+    """
+    return _resolve_default_denoise_block_fn()
+
+
+def denoise_flags_select_traced() -> bool:
+    """True when any DG_DENOISE_* traced/early-halt flag is set (⇒ the dispatcher picks a traced loop)."""
+    return traced_early_halt_enabled() or traced_denoise_multistep_enabled() or traced_denoise_enabled()
+
+
+def select_traced_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
+    """Return the traced denoise-loop fn for an explicitly trace-enabled serving path.
+
+    Honors the traced-variant precedence (early-halt > multistep > single-step traced), but —
+    unlike :func:`select_denoise_block_fn` — falls back to the single-step :func:`traced_denoise_block`
+    when NO specific traced flag is set, so a caller that has decided to trace (e.g. the vLLM adapter
+    honoring ``enable_trace`` with a sized ``DG_TRACE_REGION_SIZE``) gets a traced loop without also
+    having to set a per-variant env flag. Argmax (``gumbel_noise=None``) regime + contiguous cache
+    only, same prerequisites as the traced paths.
+    """
+    if traced_early_halt_enabled():
+        return traced_early_halt_block
+    if traced_denoise_multistep_enabled():
+        return traced_denoise_multistep_block
+    return traced_denoise_block
+
+
 def denoise_and_commit_block(
     tt_model,
     logits_fn,

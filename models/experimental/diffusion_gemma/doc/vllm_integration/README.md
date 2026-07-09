@@ -50,6 +50,16 @@ Raw metrics: `serving_smoke_reduced.json`, `serving_smoke_fulldepth.json`,
 `serving_smoke_fulldepth_visible.json`. Metrics are **per-block** — there is no per-token TPOT in
 block-diffusion, so `1000/mean_tpot_ms` is intentionally not reported.
 
+### Traced serving decode (2026-07-09, `traced_serving.md`)
+
+Metal TRACE capture/replay is now wired into the serving decode path (`serving.py` explicit
+`denoise_block_fn`; `generator_vllm.py` honors `enable_trace`). Full-depth 30L @48 on the serving
+session (the exact path the vLLM adapter delegates to), msl=4096: **eager 6.86 t/s → traced 17.93 t/s
+(2.61×), byte-identical commit** (`8f015a49e4e31a63`, = the generator's committed argmax). Realized
+early-halt over a 5-prompt set (`DG_DENOISE_EARLY_HALT`, seed 0, threshold 0.005): **avg 48.0 steps,
+0/5 halted** — a measured no-op under #48291. Default stays fixed-48 traced. See `traced_serving.md`
++ `bench_vllm_traced.py` + `vllmtraced_msl{4096,32768}.json`.
+
 ## How it works
 
 DiffusionGemma emits a **256-token block per decode step**. The whole denoise loop lives inside

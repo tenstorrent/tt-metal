@@ -67,6 +67,10 @@ from loguru import logger
 import ttnn
 from models.experimental.diffusion_gemma.checkpoint import build_tt_model_from_checkpoint_dir
 from models.experimental.diffusion_gemma.config import DiffusionConfig
+from models.experimental.diffusion_gemma.tt.generate import (
+    denoise_flags_select_traced,
+    select_traced_denoise_block_fn,
+)
 from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
@@ -128,6 +132,17 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # one active sequence today (see module docstring); the dict is keyed by
         # row so output formatting never assumes batch size 1.
         self._sessions: dict[int, BlockDiffusionServingSession] = {}
+        # Traced serving decode (Metal TRACE capture/replay in the decode path). The serving
+        # session reuses the generator's env-gated dispatcher; when trace is requested here we
+        # pass the traced loop explicitly so the PERSISTENT session's logits fn caches ONE
+        # controller (captured on block 0 in prefill_forward) and ``execute_trace``-replays it
+        # every decode_forward block — NOT re-captured per block. Gated to the argmax regime
+        # (the traced controllers support ``gumbel_noise=None`` only) and needs a sized
+        # ``DG_TRACE_REGION_SIZE`` at mesh open. Default follows the env dispatcher (eager unless
+        # a ``DG_DENOISE_*`` flag is set) so a plain launch is unchanged; ``DG_VLLM_TRACE=1``
+        # opts this path into trace without the internal flag and ``DG_VLLM_TRACE=0`` forces
+        # eager. See doc/vllm_integration/README.md (traced serving).
+        self._trace_enabled = self._resolve_trace_pref()
         # Frozen prompt-prefix KV reuse (APC prototype, #47466): a single registry
         # shared across sessions so a request whose aligned prompt is a prefix of the
         # resident contiguous-cache prompt can skip its prefill. Inert unless
@@ -298,6 +313,27 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         ids = tokens[row, :length].reshape(1, length).to(torch.long)
         return ids
 
+    def _resolve_trace_pref(self) -> bool:
+        """Decide whether the serving decode path traces (Metal capture/replay).
+
+        Resolved ONCE at construction because block 0 (captured inside ``prefill_forward``) fixes
+        the trace, so vLLM's per-decode ``enable_trace`` maps here. Explicit ``DG_VLLM_TRACE``
+        wins; otherwise follow the env dispatcher (``DG_DENOISE_*`` flags). Traced controllers
+        support the argmax (``gumbel_noise=None``) regime only, so any non-argmax mode forces eager.
+        """
+        raw = os.environ.get("DG_VLLM_TRACE")
+        want = raw.strip().lower() in ("1", "true", "yes", "on") if raw is not None else denoise_flags_select_traced()
+        if want and self._gumbel_mode != "argmax":
+            logger.warning(
+                f"[DiffusionGemma vLLM] traced serving supports the argmax regime only "
+                f"(gumbel_mode={self._gumbel_mode!r}); falling back to eager decode"
+            )
+            return False
+        if want:
+            logger.info("[DiffusionGemma vLLM] traced serving decode ENABLED (Metal capture/replay); "
+                        "ensure DG_TRACE_REGION_SIZE is set at mesh open")
+        return want
+
     def _make_session(self, seed: int = 0) -> BlockDiffusionServingSession:
         # Serving contract: vLLM owns the stop decision (EOS / stop strings /
         # max_tokens / ignore_eos), not the model. Disable the session's internal
@@ -308,6 +344,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # the whole 256-token committed canvas to vLLM, which trims at its own
         # stop point (block-diffusion #47488 scheduler-half contract). The
         # standalone ``serving_smoke`` driver keeps its own session-level stop.
+        denoise_block_fn = select_traced_denoise_block_fn() if self._trace_enabled else None
         return BlockDiffusionServingSession(
             self.model[0],
             self._dg_state_dict,
@@ -317,6 +354,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             seed=seed,
             stop_token_ids=[],
             prefix_cache=self._prefix_cache,
+            denoise_block_fn=denoise_block_fn,
         )
 
     def prefill_forward(
@@ -392,6 +430,12 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         async semantics are per-block; the committed block returns on host (only
         per-step [B,L] decision tensors are read back — the [B,L,vocab] logits stay
         on device).
+
+        ``enable_trace`` is honored at CONSTRUCTION (``self._trace_enabled``), not per call:
+        the denoise trace is captured on block 0 inside ``prefill_forward`` and
+        ``execute_trace``-replayed here, so the traced-vs-eager decision cannot change
+        mid-sequence. The session created in ``prefill_forward`` already carries the traced
+        (or eager) ``denoise_block_fn``; this call just drives one more block through it.
         """
         del tokens, start_pos, page_table, kv_cache, enable_trace, read_from_device
         del sampling_params, page_tables_per_layer, reset_batch, slot_remap

@@ -1,0 +1,151 @@
+{
+  "config": {
+    "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+    "mesh": "P150x4",
+    "num_layers": null,
+    "max_seq_len": 4096,
+    "canvas_length": 256,
+    "max_denoise_steps": 48,
+    "seed": 0,
+    "blocks": 2,
+    "primary_prompt": "Explain what a diffusion language model is in one sentence.",
+    "halt_prompts": null,
+    "configs": "eager,traced,early_halt",
+    "out": "/home/zni/dg-agent-runs/vllmtraced-msl4096-20260709-135418.json"
+  },
+  "dram": {
+    "used_gib": 13.461653709411621,
+    "free_gib": 8.405532836914062,
+    "total_gib": 21.867186546325684
+  },
+  "fixed_context": {
+    "eager": {
+      "prompt": "Explain what a diffusion language model is in one sentence.",
+      "prompt_len": 24,
+      "prompt_aligned_256": false,
+      "blocks": 2,
+      "ttft_s": 40.03646640572697,
+      "per_block_latency_s": [
+        38.40700205694884,
+        37.32199543900788
+      ],
+      "steady_block_latency_s": 37.32199543900788,
+      "tokens_per_block_per_s": 6.859225960154213,
+      "denoise_steps_per_block": [
+        48,
+        48
+      ],
+      "halted_per_block": [
+        false,
+        false
+      ],
+      "committed_sha": "8f015a49e4e31a63"
+    },
+    "traced": {
+      "prompt": "Explain what a diffusion language model is in one sentence.",
+      "prompt_len": 24,
+      "prompt_aligned_256": false,
+      "blocks": 2,
+      "ttft_s": 123.86979703232646,
+      "per_block_latency_s": [
+        122.90274188108742,
+        14.276529563590884
+      ],
+      "steady_block_latency_s": 14.276529563590884,
+      "tokens_per_block_per_s": 17.931528727602757,
+      "denoise_steps_per_block": [
+        48,
+        48
+      ],
+      "halted_per_block": [
+        false,
+        false
+      ],
+      "committed_sha": "8f015a49e4e31a63"
+    },
+    "early_halt": {
+      "prompt": "Explain what a diffusion language model is in one sentence.",
+      "prompt_len": 24,
+      "prompt_aligned_256": false,
+      "blocks": 2,
+      "ttft_s": 123.93650657963008,
+      "per_block_latency_s": [
+        122.97519104275852,
+        14.340099945664406
+      ],
+      "steady_block_latency_s": 14.340099945664406,
+      "tokens_per_block_per_s": 17.85203736166422,
+      "denoise_steps_per_block": [
+        48,
+        48
+      ],
+      "halted_per_block": [
+        false,
+        false
+      ],
+      "committed_sha": "8f015a49e4e31a63"
+    }
+  },
+  "early_halt_distribution": {
+    "per_prompt": [
+      {
+        "prompt": "Hello, how are you?",
+        "steps": [
+          48
+        ],
+        "halted": [
+          false
+        ]
+      },
+      {
+        "prompt": "What is the capital of France?",
+        "steps": [
+          48
+        ],
+        "halted": [
+          false
+        ]
+      },
+      {
+        "prompt": "Explain what a diffusion language model is in one sentence.",
+        "steps": [
+          48
+        ],
+        "halted": [
+          false
+        ]
+      },
+      {
+        "prompt": "Write a short poem about the ocean.",
+        "steps": [
+          48
+        ],
+        "halted": [
+          false
+        ]
+      },
+      {
+        "prompt": "List three uses of a hammer.",
+        "steps": [
+          48
+        ],
+        "halted": [
+          false
+        ]
+      }
+    ],
+    "all_block_steps": [
+      48,
+      48,
+      48,
+      48,
+      48
+    ],
+    "avg_steps": 48.0,
+    "min_steps": 48,
+    "max_steps": 48,
+    "median_steps": 48,
+    "n_blocks_halted_lt_budget": 0,
+    "n_blocks_total": 5
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "config": {
+    "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+    "mesh": "P150x4",
+    "num_layers": null,
+    "max_seq_len": 32768,
+    "canvas_length": 256,
+    "max_denoise_steps": 48,
+    "seed": 0,
+    "blocks": 1,
+    "primary_prompt": "Explain what a diffusion language model is in one sentence.",
+    "halt_prompts": null,
+    "configs": "eager",
+    "out": "/home/zni/dg-agent-runs/vllmctx-msl32768-20260709-141202.json"
+  },
+  "dram": {
+    "used_gib": 15.266371726989746,
+    "free_gib": 6.6008148193359375,
+    "total_gib": 21.867186546325684
+  },
+  "fixed_context": {
+    "eager": {
+      "prompt": "Explain what a diffusion language model is in one sentence.",
+      "prompt_len": 24,
+      "prompt_aligned_256": false,
+      "blocks": 1,
+      "ttft_s": 40.98813720792532,
+      "per_block_latency_s": [
+        39.34511842392385
+      ],
+      "steady_block_latency_s": 39.34511842392385,
+      "tokens_per_block_per_s": 6.506525085062112,
+      "denoise_steps_per_block": [
+        48
+      ],
+      "halted_per_block": [
+        false
+      ],
+      "committed_sha": "f1c085126d8da968"
+    }
+  },
+  "early_halt_distribution": {
+    "per_prompt": [],
+    "all_block_steps": [],
+    "avg_steps": null,
+    "min_steps": null,
+    "max_steps": null,
+    "median_steps": null,
+    "n_blocks_halted_lt_budget": 0,
+    "n_blocks_total": 0
+  }
+}

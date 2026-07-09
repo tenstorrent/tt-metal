@@ -413,3 +413,44 @@ currently-applied working tree (other agents rely on it).
 Human land steps (do NOT auto-run): `cd /home/zni/tt-vllm && git push -u origin
 zni/dg-47488-block-granular` then `gh pr create --repo tenstorrent/vllm --base dev --head
 zni/dg-47488-block-granular --title "..." --body-file .../PR_47488.md` (full commands in PR_47488.md).
+
+## 2026-07-09 — TRACED serving decode enabled + eager-vs-traced + early-halt distribution (dg-09 increment)
+
+Full detail: `doc/vllm_integration/traced_serving.md`. Goal: enable Metal TRACE capture/replay in the
+serving decode path (a perf feature, NOT Tracy — no profiler was run against a live server) and
+benchmark speed vs context + the realized early-halt steps.
+
+**Premise correction.** The serving path was NOT hard-wired to eager: `serving.decode_block` →
+`generate.denoise_and_commit_block` (no `denoise_block_fn`) already routes through the env-gated
+dispatcher `_resolve_default_denoise_block_fn`, and dg-08's `sweep_serving` already drove the traced
+controllers through this exact session. Only the DEFAULT (no flag) was eager, and the vLLM adapter's
+`enable_trace` was dead. **Wired** (DG-local; no `models/demos/gemma4/` edits):
+- `generate.py`: public `select_denoise_block_fn()` / `select_traced_denoise_block_fn()` / `denoise_flags_select_traced()`.
+- `serving.py`: `BlockDiffusionServingSession(denoise_block_fn=None)` threaded into `decode_block` (None ⇒ env dispatcher, default unchanged).
+- `generator_vllm.py`: honors `enable_trace` via `_resolve_trace_pref()` (`DG_VLLM_TRACE`, else the env dispatcher; argmax-only) → passes the traced loop to the session. The session is created ONCE in `prefill_forward`; its logits fn caches ONE traced controller (captured on block 0) and `execute_trace`-replays every `decode_forward` block — verified capture-once by construction.
+
+**Eager-vs-traced (msl=4096, diffusion prompt, @48, `bench_vllm_traced.py`):**
+
+| config | t/s | steady block (s) | TTFT (s) | steps | commit sha |
+|---|---:|---:|---:|---|---|
+| eager (serving default) | 6.86 | 37.32 | 40.0 | [48,48] | `8f015a49e4e31a63` |
+| **traced** | **17.93** | 14.28 | 123.9 (incl. 1-time capture) | [48,48] | `8f015a49e4e31a63` |
+| early_halt | 17.85 | 14.34 | 123.9 | [48,48] | `8f015a49e4e31a63` |
+
+**Trace win = 2.61× (6.86 → 17.93 t/s), byte-identical commit** — closes the ~7→~18 t/s gap
+`vllm_speed_by_context.md` flagged. All three loops + dg-08's 30L no-halt commit share sha
+`8f015a49e4e31a63` (correctness gate: traced serving == generator's committed argmax; eager unchanged).
+
+**Context / DRAM (measured):** KV ≈ 63 KiB/tok contiguous; DRAM used 13.27 (msl 1024) → 13.46 (4096) →
+15.27 (32768) GiB. Decode is context-flat (eager 6.86@4096 → 6.51@32768). Finding: traced serving
+reserves ~8 GiB trace region, so at msl=32768 (free 6.60 GiB) traced is trace-region-gated before the
+eager KV ceiling → traced serving fits a smaller context than eager on QB2; right-size `--max-model-len`
+/ trace budget per the context contract (target 262144).
+
+**Early-halt steps distribution (5 prompts, seed 0, threshold 0.005): avg 48.0, all 48, 0/5 halted.**
+Honest no-op under #48291 across the whole prompt set (broadens dg-08's single-prompt finding). The
+README's earlier "35-step" halt was a raw-prompt/different-seed live run and does not reproduce here.
+The mechanism is correct+ready (dg-08); it just does not fire on real output until #48291 lifts the
+entropy floor. Default serving stays fixed-48 traced (early-halt adds ~2% sync for no benefit today).
+
+Artifacts: `bench_vllm_traced.py`, `vllmtraced_msl4096.json`, `vllmtraced_msl32768.json`.
