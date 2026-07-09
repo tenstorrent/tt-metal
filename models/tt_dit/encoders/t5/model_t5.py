@@ -47,6 +47,11 @@ class T5Config:
             The number of relative attention buckets
         relative_attention_max_distance (`int`, *required*, defaults to 128)
             The maximum distance for relative attention
+        dtype (`ttnn.DataType`, *optional*, defaults to `ttnn.bfloat16`)
+            Stored for callers that want to select activation precision; every class in this
+            module currently ignores it and computes in the tensors' own dtype regardless of this
+            setting (no behavior change from adding this field). See longcat_video's
+            u_m_t5_encoder_model.py for the caller that sets this.
     """
 
     def __init__(
@@ -61,6 +66,7 @@ class T5Config:
         layer_norm_eps: float = 1e-06,
         relative_attention_num_buckets: int = 32,
         relative_attention_max_distance: int = 128,
+        dtype=None,
     ):
         self.vocab_size = vocab_size
         self.embed_dim = embed_dim
@@ -72,6 +78,7 @@ class T5Config:
         self.layer_norm_eps = layer_norm_eps
         self.relative_attention_num_buckets = relative_attention_num_buckets
         self.relative_attention_max_distance = relative_attention_max_distance
+        self.dtype = dtype if dtype is not None else ttnn.bfloat16
         self.use_relative_position_bias = [True] + [False] * (
             num_hidden_layers - 1
         )  # use bias only for the first layer for original T5
