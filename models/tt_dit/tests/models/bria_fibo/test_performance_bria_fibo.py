@@ -25,6 +25,7 @@ Run explicitly (not collected into CI perf):
 """
 
 import os
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
@@ -130,6 +131,13 @@ def _perf_breakdown(
         record = {}
         image = run_once(record)
         runs.append(record)
+
+    # Save the last produced image with a timestamped name (runs don't overwrite) so the output can be
+    # eyeballed for correctness. Saved BEFORE the asserts so even a degenerate frame lands on disk.
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    out_path = Path.cwd() / f"fibo_perf_{label}_{width}x{height}_{num_inference_steps}steps_gs{guidance_scale}_{ts}.png"
+    image[0].save(out_path)
+    logger.info(f"saved last image -> {out_path}")
 
     # Sanity: the last image is a valid, non-degenerate frame (proves the timed path really ran).
     arr = np.asarray(image[0])
