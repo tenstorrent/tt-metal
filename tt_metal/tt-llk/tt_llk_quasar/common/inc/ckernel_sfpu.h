@@ -48,7 +48,8 @@ inline void _sfpu_configure_addrmod_()
  */
 inline void _llk_math_sfpu_start_(const std::uint32_t tile_index)
 {
-    _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_index);
+    const std::uint32_t dst_index                                                = (tile_index << 6) + ckernel::trisc::_get_dest_buffer_base_();
+    cfg[DEST_TARGET_REG_CFG_MATH_SEC0_Offset_ADDR32 + csr_read<CSR::TRISC_ID>()] = dst_index;
     TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::MATH);
 }
 

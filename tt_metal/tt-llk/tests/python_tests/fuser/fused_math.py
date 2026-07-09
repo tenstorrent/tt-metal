@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.llk_params import GoldenType
 
 from .arch_common import fpu_common, pack_common, unpack_common
@@ -406,7 +407,12 @@ class ComputePipeline:
             for pack_node in self.pack_nodes:
                 if isinstance(pack_node, SfpuNode):
                     if prev_was_pack:
-                        body += "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
+                        if get_chip_architecture() == ChipArchitecture.QUASAR:
+                            body += "TTI_STALLWAIT(p_stall::STALL_SFPU, 0, 0, p_stall::PACK);\n"
+                        else:
+                            body += (
+                                "TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::PACK);\n"
+                            )
                     body += pack_node.sfpu_init(operation, config, block)
                     body += pack_node.sfpu_run(operation, config, block)
                     body += pack_node.sfpu_uninit(operation, config, block)

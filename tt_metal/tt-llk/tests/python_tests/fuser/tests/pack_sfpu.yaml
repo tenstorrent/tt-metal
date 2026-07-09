@@ -1,10 +1,8 @@
 # SFPU operations interleaved on the pack thread.
 # Datacopy loads data into dest, then the pack list alternates between
 # packing the current dest contents and applying SFPU transforms:
-#   pack(raw) -> exp -> pack(exp) -> neg -> pack(neg(exp))
+#   pack(raw) -> exp -> pack(exp) -> abs -> pack(abs(exp))
 # Each packed output captures a different snapshot of dest.
-
-supported_archs: ["wormhole", "blackhole"]
 
 operands:
   - name: "input_A"
@@ -19,7 +17,7 @@ operands:
   - name: "out_after_exp"
     dims: [256, 256]
     format: "Float16_b"
-  - name: "out_after_neg"
+  - name: "out_after_abs"
     dims: [256, 256]
     format: "Float16_b"
 
@@ -42,8 +40,8 @@ operations:
       - output: "out_after_exp"
         packer: "Packer"
       - type: "UnarySfpu"
-        operation: "Neg"
+        operation: "Abs"
         approximation_mode: false
         iterations: 32
-      - output: "out_after_neg"
+      - output: "out_after_abs"
         packer: "Packer"

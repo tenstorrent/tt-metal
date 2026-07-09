@@ -109,6 +109,7 @@ inline void _llk_pack_dest_dvalid_section_done_()
     if constexpr (DST == DstSync::SyncHalf)
     {
         ckernel::pack::_update_clear_dest_bank_id_();
+        ckernel::trisc::_update_dest_register_offset_<EN_32BIT_DEST>();
     }
 }
 
