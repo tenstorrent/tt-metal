@@ -396,9 +396,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
                                  NOC noc) {
         DataMovementHardwareConfig reader_hw;
         if (device->arch() == tt::ARCH::QUASAR) {
-            reader_hw = DataMovementGen2Config{};
+            reader_hw = DataMovement2xxConfig{};
         } else {
-            reader_hw = DataMovementGen1Config{.processor = processor, .noc = noc};
+            reader_hw = DataMovement1xxConfig{.processor = processor, .noc = noc};
         }
         KernelSpec reader{
             .unique_id = name,

@@ -114,11 +114,11 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
     if (mesh_device->arch() == ARCH::QUASAR) {
-        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        producer_cfg = DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
+        consumer_cfg = DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        producer_cfg = DataMovement1xxConfig{.processor = DataMovementProcessor::RISCV_0};
+        consumer_cfg = DataMovement1xxConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
     }
 
     DataflowBufferSpec dfb_a{
@@ -325,11 +325,11 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
     DataMovementHardwareConfig producer_cfg;
     DataMovementHardwareConfig consumer_cfg;
     if (mesh_device->arch() == ARCH::QUASAR) {
-        producer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
-        consumer_cfg = DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
+        producer_cfg = DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
+        consumer_cfg = DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        producer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0};
-        consumer_cfg = DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
+        producer_cfg = DataMovement1xxConfig{.processor = DataMovementProcessor::RISCV_0};
+        consumer_cfg = DataMovement1xxConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1};
     }
 
     // dfb_borrowed: backed by ring_tensor (L1)

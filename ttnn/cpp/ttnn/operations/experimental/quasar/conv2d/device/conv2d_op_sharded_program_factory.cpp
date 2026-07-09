@@ -1096,10 +1096,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     m2::DataMovementHardwareConfig reader_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        reader_hw = m2::DataMovementGen2Config{};
+        reader_hw = m2::DataMovement2xxConfig{};
     } else {
         reader_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
+            m2::DataMovement1xxConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
     }
     m2::KernelSpec reader_kernel_spec{
         .unique_id = KERNEL_READER,
@@ -1336,9 +1336,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- writer mcast SENDER ----
     m2::DataMovementHardwareConfig writer_sender_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        writer_sender_hw = m2::DataMovementGen2Config{};
+        writer_sender_hw = m2::DataMovement2xxConfig{};
     } else {
-        writer_sender_hw = m2::DataMovementGen1Config{
+        writer_sender_hw = m2::DataMovement1xxConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
     }
     m2::KernelSpec writer_sender_spec{
@@ -1392,9 +1392,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- writer mcast RECEIVER ----
     m2::DataMovementHardwareConfig writer_receiver_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        writer_receiver_hw = m2::DataMovementGen2Config{};
+        writer_receiver_hw = m2::DataMovement2xxConfig{};
     } else {
-        writer_receiver_hw = m2::DataMovementGen1Config{
+        writer_receiver_hw = m2::DataMovement1xxConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc};
     }
     m2::KernelSpec writer_receiver_spec{

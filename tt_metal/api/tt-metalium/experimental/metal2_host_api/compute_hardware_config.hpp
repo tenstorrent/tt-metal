@@ -49,7 +49,7 @@ namespace tt::tt_metal::experimental {
 // Per-DFB unpack-to-dest mode table. See gen-specific configs for details.
 using ComputeUnpackToDestModes = Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
 
-struct ComputeGen1Config {
+struct Compute1xxConfig {
     // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
@@ -95,7 +95,7 @@ struct ComputeGen1Config {
     ComputeUnpackToDestModes unpack_to_dest_mode;
 };
 
-struct ComputeGen2Config {
+struct Compute2xxConfig {
     // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
@@ -128,7 +128,7 @@ struct ComputeGen2Config {
     // running the unpack→math→pack semaphore handshake, independent of operand data format.
     bool unpack_to_dest_en = false;
 
-    // NOTE: On Gen2 this field does NOT carry the semantics documented on ComputeGen1Config,
+    // NOTE: On Gen2 this field does NOT carry the semantics documented on Compute1xxConfig,
     // and its final Gen2 behavior is still being settled.
     // Key difference: on Quasar the SrcA/B-vs-Dest routing is driven by unpack_to_dest_en,
     // applied regardless of data format — it is NOT inferred from this per-DFB mode the way
@@ -140,6 +140,6 @@ struct ComputeGen2Config {
 };
 
 // A compute kernel's hardware config holds exactly one generation's config.
-using ComputeHardwareConfig = std::variant<ComputeGen1Config, ComputeGen2Config>;
+using ComputeHardwareConfig = std::variant<Compute1xxConfig, Compute2xxConfig>;
 
 }  // namespace tt::tt_metal::experimental

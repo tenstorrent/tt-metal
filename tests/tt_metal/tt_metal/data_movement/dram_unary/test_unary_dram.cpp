@@ -94,9 +94,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     DataMovementHardwareConfig reader_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = DataMovementGen2Config{};
+        reader_hw_config = DataMovement2xxConfig{};
     } else {
-        reader_hw_config = DataMovementGen1Config{
+        reader_hw_config = DataMovement1xxConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
         };
@@ -117,9 +117,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramCo
 
     DataMovementHardwareConfig writer_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = DataMovementGen2Config{};
+        writer_hw_config = DataMovement2xxConfig{};
     } else {
-        writer_hw_config = DataMovementGen1Config{
+        writer_hw_config = DataMovement1xxConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
         };

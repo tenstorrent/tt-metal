@@ -618,9 +618,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
     // self-loops the borrowed ACT_SHARDED (input address source) and READER_INDICES.
     m2::DataMovementHardwareConfig act_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        act_hw = m2::DataMovementGen2Config{};
+        act_hw = m2::DataMovement2xxConfig{};
     } else {
-        act_hw = m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
+        act_hw = m2::DataMovement1xxConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = act_noc};
     }
     m2::KernelSpec act_kernel{
         .unique_id = KERNEL_ACT,
@@ -720,10 +720,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
 
     m2::DataMovementHardwareConfig weights_hw;
     if (device->arch() == tt::ARCH::QUASAR) {
-        weights_hw = m2::DataMovementGen2Config{};
+        weights_hw = m2::DataMovement2xxConfig{};
     } else {
         weights_hw =
-            m2::DataMovementGen1Config{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
+            m2::DataMovement1xxConfig{.processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc};
     }
     m2::KernelSpec weights_kernel{
         .unique_id = KERNEL_WEIGHTS,

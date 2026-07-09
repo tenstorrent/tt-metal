@@ -32,13 +32,13 @@ namespace tt::tt_metal::experimental {
 // NOC a kernel uses. This selection is performance-critical.
 //
 // The common case is handled for you by role-specific factory functions:
-//  - For a DM kernel that reads from DRAM: CreateReaderGen1DataMovementConfig()
-//  - For a DM kernel that writes to DRAM:  CreateWriterGen1DataMovementConfig()
+//  - For a DM kernel that reads from DRAM: CreateReader1xxDataMovementConfig()
+//  - For a DM kernel that writes to DRAM:  CreateWriter1xxDataMovementConfig()
 //
 // Power users can override these conventions by constructing a
-// DataMovementGen1Config directly.
+// DataMovement1xxConfig directly.
 //
-struct DataMovementGen1Config {
+struct DataMovement1xxConfig {
     // The RISC-V core that runs this DM kernel (RISCV_0 or RISCV_1)
     // Each DM kernel on a node must be assigned to a unique RISC-V core
     tt::tt_metal::DataMovementProcessor processor;
@@ -55,8 +55,8 @@ struct DataMovementGen1Config {
 
 // Factory helper:
 // Default config for a reader DM kernel (i.e. that reads from DRAM)
-inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
-    return DataMovementGen1Config{
+inline DataMovement1xxConfig CreateReader1xxDataMovementConfig() noexcept {
+    return DataMovement1xxConfig{
         // On Wormhole, RISCV_1 runs faster than RISCV_0 due to its dedicated
         // instruction memory. Since DM reader kernels are usually more complex than
         // DM writer kernels, prefer RISCV_1 for readers.
@@ -85,8 +85,8 @@ inline DataMovementGen1Config CreateReaderGen1DataMovementConfig() noexcept {
 
 // Factory helper:
 // Default config for a writer DM kernel (i.e. that writes to DRAM)
-inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
-    return DataMovementGen1Config{
+inline DataMovement1xxConfig CreateWriter1xxDataMovementConfig() noexcept {
+    return DataMovement1xxConfig{
         // DM kernels on the same node must be assigned to different RISC-V cores.
         // Since RISCV_1 is preferred for readers, place writers on RISCV_0.
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -102,10 +102,10 @@ inline DataMovementGen1Config CreateWriterGen1DataMovementConfig() noexcept {
 // ============================================================================
 
 // Gen2 architectures have a unified NOC and fully automated DM kernel core selection.
-// The DataMovementGen2Config controls whether the DFB implicit sync feature for DM
+// The DataMovement2xxConfig controls whether the DFB implicit sync feature for DM
 // kernels is enabled or disabled.
 //
-struct DataMovementGen2Config {
+struct DataMovement2xxConfig {
     // Opt-out of DFB implicit sync (on a per-DFB basis)
     //  - Implicit sync enables streamlined kernel-side syntax, but triggers ISR handling.
     //  - Use this control to revert to legacy explicit sync APIs (for specific bound DFBs).
@@ -119,6 +119,6 @@ struct DataMovementGen2Config {
 };
 
 // A DM kernel's hardware config holds exactly one generation's config.
-using DataMovementHardwareConfig = std::variant<DataMovementGen1Config, DataMovementGen2Config>;
+using DataMovementHardwareConfig = std::variant<DataMovement1xxConfig, DataMovement2xxConfig>;
 
 }  // namespace tt::tt_metal::experimental
