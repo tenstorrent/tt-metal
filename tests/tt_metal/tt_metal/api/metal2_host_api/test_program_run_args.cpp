@@ -49,7 +49,10 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindTensorParameterToKernel;
+using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalTensorParameter;
@@ -895,6 +898,139 @@ TEST_F(ProgramRunArgsTestQuasar, UndeclaredNamedRTAFails) {
             ::testing::HasSubstr("expects 1 named RTAs, but 2 were provided")));
 }
 
+TEST_F(ProgramRunArgsTestQuasar, NamedRTAUnknownNodeFails) {
+    // Supplied node must be in the kernel's logical-core set (domain check on the inner Table).
+    NodeCoord node{0, 0};
+    NodeCoord wrong_node{3, 3};
+    ProgramSpec spec = MakeSpecWithNamedArgs(node, {"input_ptr"}, {});
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"input_ptr", {{wrong_node, 0x1000}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is setting runtime_arg_values for node")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, MultiNodeNamedRTAsSucceed) {
+    // Every declared name must be set on every kernel node. Pins the post-swap shape
+    // name → {node → value} for a multi-node kernel, including on-device slot scatter.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "multi_node_named_rtas";
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    producer.runtime_arg_schema.runtime_arg_names = {"a", "b"};
+    auto dfb = MakeMinimalDFB("dfb");
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        // Supply out of declaration order; values must still land at schema slots.
+        .runtime_arg_values =
+            {{"b", {{node0, 20}, {node1, 21}}}, {"a", {{node0, 10}, {node1, 11}}}},
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
+
+    ASSERT_NO_THROW(SetProgramRunArgs(program, params));
+
+    const auto dm = program.impl().get_kernel_by_spec_name("producer");
+    {
+        const auto* rta = dm->runtime_args_data(node0).data();
+        ASSERT_GE(dm->runtime_args_data(node0).size(), 2u);
+        EXPECT_EQ(rta[0], 10u);
+        EXPECT_EQ(rta[1], 20u);
+    }
+    {
+        const auto* rta = dm->runtime_args_data(node1).data();
+        ASSERT_GE(dm->runtime_args_data(node1).size(), 2u);
+        EXPECT_EQ(rta[0], 11u);
+        EXPECT_EQ(rta[1], 21u);
+    }
+}
+
+TEST_F(ProgramRunArgsTestQuasar, MultiNodeNamedRTANonUniformNodeSetsFail) {
+    // Key-swap canary: one declared name covers all kernel nodes, another misses a node.
+    // Validation must reject — every name's node set must equal the kernel's node set.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "multi_node_named_rtas_nonuniform";
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    producer.runtime_arg_schema.runtime_arg_names = {"input_ptr", "output_ptr"};
+    auto dfb = MakeMinimalDFB("dfb");
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values =
+            {{"input_ptr", {{node0, 0x1000}, {node1, 0x1001}}},
+             {"output_ptr", {{node0, 0x2000}}}},  // node1 missing for output_ptr
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 named RTAs, but 1 were provided")));
+}
+
+TEST_F(ProgramRunArgsTestQuasar, MultiNodeNamedRTAMissingEntireNameFails) {
+    // Same multi-node setup, but one declared name is omitted entirely (empty outer key).
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "multi_node_named_rtas_missing_name";
+    auto producer = MakeMinimalDMKernel("producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+    producer.runtime_arg_schema.runtime_arg_names = {"input_ptr", "output_ptr"};
+    auto dfb = MakeMinimalDFB("dfb");
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values = {{"input_ptr", {{node0, 0x1000}, {node1, 0x1001}}}},  // output_ptr absent
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 named RTAs, but 1 were provided")));
+}
+
 TEST_F(ProgramRunArgsTestQuasar, NamedCRTACountMismatchFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithNamedArgs(node, {}, {"tile_count", "scale"});
@@ -1590,6 +1726,182 @@ TEST_F(ProgramRunArgsTestGen1, WrongRuntimeArgsCountFails) {
         [&] { SetProgramRunArgs(program, params); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("expects 3 vararg runtime args, but 2 were provided")));
+}
+
+// ============================================================================
+// Named per-node RTA validation (Gen1) — post name→node key swap
+// ============================================================================
+// Quasar mock MeshDevice SetUp currently fails (empty dispatch_cores for quasar_Q1), so the
+// equivalent Quasar cases above are not runnable here. Validation is arch-agnostic; Gen1 covers it.
+
+TEST_F(ProgramRunArgsTestGen1, MissingDeclaredNamedRTANameFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"input_ptr", "output_ptr"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"input_ptr", {{node, 0x1000}}}},  // output_ptr missing
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 named RTAs, but 1 were provided")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, UndeclaredNamedRTAFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"input_ptr"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"input_ptr", {{node, 0x1000}}}, {"not_in_schema", {{node, 0}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 1 named RTAs, but 2 were provided")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, NamedRTAUnknownNodeFails) {
+    NodeCoord node{0, 0};
+    NodeCoord wrong_node{3, 3};
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"input_ptr"};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"input_ptr", {{wrong_node, 0x1000}}}},
+    });
+    params.kernel_run_args.push_back(MakeKernelRunArgs(KernelSpecName{"compute_kernel"}, node, {}, {}));
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is setting runtime_arg_values for node")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, MultiNodeNamedRTAsSucceed) {
+    // Every declared name set on every kernel node; values scatter to declaration slots.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "gen1_multi_node_named_rtas";
+    auto producer = MakeMinimalGen1DMKernel("producer", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+    producer.runtime_arg_schema.runtime_arg_names = {"a", "b"};
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values =
+            {{"b", {{node0, 20}, {node1, 21}}}, {"a", {{node0, 10}, {node1, 11}}}},
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
+
+    ASSERT_NO_THROW(SetProgramRunArgs(program, params));
+
+    const auto dm = program.impl().get_kernel_by_spec_name("producer");
+    {
+        const auto* rta = dm->runtime_args_data(node0).data();
+        ASSERT_GE(dm->runtime_args_data(node0).size(), 2u);
+        EXPECT_EQ(rta[0], 10u);
+        EXPECT_EQ(rta[1], 20u);
+    }
+    {
+        const auto* rta = dm->runtime_args_data(node1).data();
+        ASSERT_GE(dm->runtime_args_data(node1).size(), 2u);
+        EXPECT_EQ(rta[0], 11u);
+        EXPECT_EQ(rta[1], 21u);
+    }
+}
+
+TEST_F(ProgramRunArgsTestGen1, MultiNodeNamedRTANonUniformNodeSetsFail) {
+    // Key-swap canary: one name covers all kernel nodes, another misses a node.
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "gen1_multi_node_named_rtas_nonuniform";
+    auto producer = MakeMinimalGen1DMKernel("producer", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+    producer.runtime_arg_schema.runtime_arg_names = {"input_ptr", "output_ptr"};
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values =
+            {{"input_ptr", {{node0, 0x1000}, {node1, 0x1001}}},
+             {"output_ptr", {{node0, 0x2000}}}},  // node1 missing
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 named RTAs, but 1 were provided")));
+}
+
+TEST_F(ProgramRunArgsTestGen1, MultiNodeNamedRTAMissingEntireNameFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.name = "gen1_multi_node_named_rtas_missing_name";
+    auto producer = MakeMinimalGen1DMKernel("producer", tt::tt_metal::DataMovementProcessor::RISCV_0);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+    producer.runtime_arg_schema.runtime_arg_names = {"input_ptr", "output_ptr"};
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", all_nodes, {"producer", "consumer"})};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    ProgramRunArgs params;
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"producer"},
+        .runtime_arg_values = {{"input_ptr", {{node0, 0x1000}, {node1, 0x1001}}}},  // output_ptr absent
+    });
+    params.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{.kernel = KernelSpecName{"consumer"}});
+
+    EXPECT_THAT(
+        [&] { SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("expects 2 named RTAs, but 1 were provided")));
 }
 
 // ============================================================================
@@ -2539,6 +2851,189 @@ TEST(MergeProgramRunArgs, AppendsDistinctKernel) {
     ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest);
     EXPECT_NE(FindKernel(merged, "dm_kernel"), nullptr);
     EXPECT_NE(FindKernel(merged, "compute_kernel"), nullptr);
+}
+
+// --- Per-node NAMED RTA merge cases (runtime_arg_values, keyed by (name, node)) ---
+
+TEST(MergeProgramRunArgs, UnionsDisjointPerNodeNamedRTAsSameNameDifferentNodes) {
+    // Same arg name on two different nodes, supplied by separate ProgramRunArgs, unions into the
+    // one name's per-node table (disjoint (name, node) pairs).
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{node0, 0x1000}}}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{node1, 0x2000}}}},
+    });
+
+    std::vector<ProgramRunArgs> rest{b};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest);
+
+    const auto* dm = FindKernel(merged, "dm_kernel");
+    ASSERT_NE(dm, nullptr);
+    auto ptr = dm->runtime_arg_values.get("ptr");
+    ASSERT_TRUE(ptr.has_value());
+    EXPECT_EQ(ptr->size(), 2u);
+    auto v0 = ptr->get(node0);
+    auto v1 = ptr->get(node1);
+    ASSERT_TRUE(v0.has_value());
+    ASSERT_TRUE(v1.has_value());
+    EXPECT_EQ(*v0, 0x1000u);
+    EXPECT_EQ(*v1, 0x2000u);
+}
+
+TEST(MergeProgramRunArgs, UnionsDisjointPerNodeNamedRTAsDifferentNamesSameNode) {
+    // Two different arg names on the SAME node, supplied by separate ProgramRunArgs, union into
+    // separate name entries (keyed by name first, so no conflict).
+    NodeCoord node{0, 0};
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"input_ptr", {{node, 0x1000}}}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"output_ptr", {{node, 0x2000}}}},
+    });
+
+    std::vector<ProgramRunArgs> rest{b};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest);
+
+    const auto* dm = FindKernel(merged, "dm_kernel");
+    ASSERT_NE(dm, nullptr);
+    EXPECT_EQ(dm->runtime_arg_values.size(), 2u);
+    auto in = dm->runtime_arg_values.get("input_ptr");
+    auto out = dm->runtime_arg_values.get("output_ptr");
+    ASSERT_TRUE(in.has_value());
+    ASSERT_TRUE(out.has_value());
+    auto in_v = in->get(node);
+    auto out_v = out->get(node);
+    ASSERT_TRUE(in_v.has_value());
+    ASSERT_TRUE(out_v.has_value());
+    EXPECT_EQ(*in_v, 0x1000u);
+    EXPECT_EQ(*out_v, 0x2000u);
+}
+
+TEST(MergeProgramRunArgs, ConflictingPerNodeNamedRTAFails) {
+    // The same (name, node) supplied by both inputs with differing values is a conflict.
+    NodeCoord node{0, 0};
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{node, 1}}}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{node, 2}}}},  // same (name, node) → conflict
+    });
+
+    std::vector<ProgramRunArgs> rest{b};
+    EXPECT_THAT(
+        [&] { MergeProgramRunArgs(std::move(a), rest); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("runtime arg 'ptr' is specified in more than one ProgramRunArgs")));
+}
+
+TEST(MergeProgramRunArgs, SameNamePerNodeRTAConflictsOnlyOnSharedNode) {
+    // The same name may span nodes across inputs; a conflict is triggered only by the node the two
+    // inputs share, not by the disjoint nodes.
+    NodeCoord shared{0, 0};
+    NodeCoord only_a{1, 0};
+    NodeCoord only_b{2, 0};
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{shared, 1}, {only_a, 10}}}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{shared, 2}, {only_b, 20}}}},  // 'shared' collides
+    });
+
+    std::vector<ProgramRunArgs> rest{b};
+    EXPECT_THAT(
+        [&] { MergeProgramRunArgs(std::move(a), rest); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("is specified in more than one ProgramRunArgs")));
+}
+
+TEST(MergeProgramRunArgs, UnionsPerNodeNamedRTAsAndCRTAsTogether) {
+    // A merge combining per-node named RTAs and named CRTAs for the same kernel unions both maps
+    // independently.
+    NodeCoord node{0, 0};
+    ProgramRunArgs invariant_piece;
+    invariant_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"keep_rta", {{node, 10}}}},
+        .common_runtime_arg_values = {{"keep_crta", 100}},
+    });
+    ProgramRunArgs volatile_piece;
+    volatile_piece.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"change_rta", {{node, 20}}}},
+        .common_runtime_arg_values = {{"change_crta", 200}},
+    });
+
+    std::vector<ProgramRunArgs> rest{volatile_piece};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(invariant_piece), rest);
+
+    const auto* dm = FindKernel(merged, "dm_kernel");
+    ASSERT_NE(dm, nullptr);
+    EXPECT_EQ(dm->runtime_arg_values.size(), 2u);
+    EXPECT_EQ(dm->common_runtime_arg_values.size(), 2u);
+    auto keep_rta = dm->runtime_arg_values.get("keep_rta");
+    auto change_rta = dm->runtime_arg_values.get("change_rta");
+    ASSERT_TRUE(keep_rta.has_value());
+    ASSERT_TRUE(change_rta.has_value());
+    auto keep_rta_v = keep_rta->get(node);
+    auto change_rta_v = change_rta->get(node);
+    ASSERT_TRUE(keep_rta_v.has_value());
+    ASSERT_TRUE(change_rta_v.has_value());
+    EXPECT_EQ(*keep_rta_v, 10u);
+    EXPECT_EQ(*change_rta_v, 20u);
+    auto keep_crta = dm->common_runtime_arg_values.get("keep_crta");
+    auto change_crta = dm->common_runtime_arg_values.get("change_crta");
+    ASSERT_TRUE(keep_crta.has_value());
+    ASSERT_TRUE(change_crta.has_value());
+    EXPECT_EQ(*keep_crta, 100u);
+    EXPECT_EQ(*change_crta, 200u);
+}
+
+TEST(MergeProgramRunArgs, ConflictingPerNodeNamedRTASkipValidationKeepsBase) {
+    // With skip_validation, a conflicting (name, node) does not throw. The guard is bypassed and
+    // the loop writes dst_per_node[node] = value unconditionally, so src's value wins over base's.
+    // (This differs from the tensor_args / positional-vararg skip_validation paths, which keep
+    // base's existing entry.) Verify the actual behavior against the impl.
+    NodeCoord node{0, 0};
+    ProgramRunArgs a;
+    a.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{node, 1}}}},
+    });
+    ProgramRunArgs b;
+    b.kernel_run_args.push_back(ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"dm_kernel"},
+        .runtime_arg_values = {{"ptr", {{node, 2}}}},
+    });
+
+    std::vector<ProgramRunArgs> rest{b};
+    ProgramRunArgs merged = MergeProgramRunArgs(std::move(a), rest, /*skip_validation=*/true);
+
+    const auto* dm = FindKernel(merged, "dm_kernel");
+    ASSERT_NE(dm, nullptr);
+    auto ptr = dm->runtime_arg_values.get("ptr");
+    ASSERT_TRUE(ptr.has_value());
+    auto v = ptr->get(node);
+    ASSERT_TRUE(v.has_value());
+    EXPECT_EQ(*v, 2u) << "skip_validation path overwrites dst with src's value for a shared (name, node)";
 }
 
 }  // namespace
