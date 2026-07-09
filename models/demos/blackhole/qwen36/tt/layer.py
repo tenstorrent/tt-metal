@@ -106,7 +106,17 @@ class Qwen36DecoderLayer:
 
         mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
         mlp_cache = (tensor_cache_path / f"layers.{layer_num}") if tensor_cache_path else None
-        self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
+        if args.is_moe_layer(layer_num):
+            # Sparse MoE MLP (Qwen3.5-MoE). Qwen36MoE.forward(x) keeps the same
+            # single-in/single-out signature + fractured-hidden output as Qwen36MLP,
+            # so the forward below and the model/trace-capture loops are unchanged.
+            from models.demos.blackhole.qwen36.tt.moe import MoEConfig, Qwen36MoE
+
+            self.feed_forward = Qwen36MoE(
+                mesh_device, MoEConfig.from_args(args), mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl
+            )
+        else:
+            self.feed_forward = Qwen36MLP(mesh_device, mlp_state, mlp_cache, args=args, tt_ccl=tt_ccl)
 
     def _make_norm(
         self,
