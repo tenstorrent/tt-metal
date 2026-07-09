@@ -42,12 +42,17 @@ LlkTargetK snap_to_llk_target_k(uint32_t k) {
     return LlkTargetK::K2048;
 }
 
-RuntimeShapeArgs get_runtime_shape_args(const Tensor& input, LlkTargetK llk_target_k) {
+RuntimeShapeArgs get_runtime_shape_args(
+    const Tensor& input, LlkTargetK llk_target_k, std::optional<uint32_t> valid_length) {
     const uint32_t llk_k = to_uint32(llk_target_k);
     const auto& shape = input.logical_shape();
     const uint32_t n = shape[shape.rank() - 1];
-    const uint32_t num_chunks = tt::div_up(n, llk_k);
-    const uint32_t tail_elements = n - ((num_chunks - 1) * llk_k);
+    // Number of columns to actually read and scan per row. Defaults to the full physical width n; a
+    // valid_length bounds it to the real prefix so the stale tail is never read or ranked. The row STRIDE
+    // (input_row_bytes) stays n so per-row addressing is unchanged — only how much we pull from each row shrinks.
+    const uint32_t search_len = valid_length.value_or(n);
+    const uint32_t num_chunks = tt::div_up(search_len, llk_k);
+    const uint32_t tail_elements = search_len - ((num_chunks - 1) * llk_k);
     return RuntimeShapeArgs{
         .num_rows = flattened_rows_excluding_last_dim(shape),
         .num_chunks = num_chunks,
@@ -81,8 +86,9 @@ void set_runtime_args(
     const TopkLargeIndicesSharedVariables& shared,
     const Tensor& input,
     const Tensor& indices,
-    LlkTargetK llk_target_k) {
-    const auto runtime_args = get_runtime_shape_args(input, llk_target_k);
+    LlkTargetK llk_target_k,
+    std::optional<uint32_t> valid_length) {
+    const auto runtime_args = get_runtime_shape_args(input, llk_target_k, valid_length);
     const auto work_split = tt::tt_metal::split_work_to_cores(
         input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
     const auto num_active_cores = std::get<0>(work_split);
@@ -224,7 +230,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .compute_kernel_id = compute_kernel,
         .writer_kernel_id = writer_kernel,
         .cores = cores};
-    set_runtime_args(program, shared, input, indices, llk_target_k);
+    set_runtime_args(program, shared, input, indices, llk_target_k, operation_attributes.valid_length);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -239,7 +245,8 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         cached_program.shared_variables,
         tensor_args.input_tensor,
         tensor_return_value,
-        snap_to_llk_target_k(operation_attributes.k));
+        snap_to_llk_target_k(operation_attributes.k),
+        operation_attributes.valid_length);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program
