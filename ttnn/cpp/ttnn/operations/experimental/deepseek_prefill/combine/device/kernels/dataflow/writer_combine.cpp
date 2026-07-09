@@ -16,6 +16,21 @@
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
+#if MOCK_COMBINE_INTERNALS
+// The writer-only fabric-push mock reuses the trid+header overlap pool, computes routes via
+// get_route/manhattan_distance (1D only), and needs a fabric destination. Fail loudly if the build
+// configuration can't support it rather than silently falling back to the real path.
+#if !OVERLAPING_TOKEN_WRITE
+#error "MOCK_COMBINE_INTERNALS requires OVERLAPING_TOKEN_WRITE=1 (it reuses the trid+header overlap pool)"
+#endif
+#ifdef FABRIC_2D
+#error "MOCK_COMBINE_INTERNALS is 1D-fabric only (uses get_route/manhattan_distance)"
+#endif
+#ifndef DEST_CHIP_ID
+#error "MOCK_COMBINE_INTERNALS requires a multi-chip build (DEST_CHIP_ID)"
+#endif
+#endif
+
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
 // under 2D it consumes route_info.dst_chip_id + dst_mesh_id. The 2D fabric_route (EDM index)
@@ -211,6 +226,37 @@ void kernel_main() {
         }
     };
 
+#if MOCK_COMBINE_INTERNALS
+    // [debug] Mock-only decomposition of per-token time into the two remaining stall sources:
+    //   mock_wait_buckets: time in the LAGGED wait_on_flush_for_trid (completion of the send issued
+    //                      OVERLAP_POOL_DEPTH tokens ago). Should collapse into the smallest bucket
+    //                      once the pipeline is primed — that means the overlap fully hides write
+    //                      completion.
+    //   mock_send_buckets: time in the send call itself, dominated by wait_for_empty_write_slot()
+    //                      (waiting for a fabric slot to drain). If this is where the time goes and
+    //                      mock_wait is ~0, we are truly only blocking on fabric slots.
+    // Same cycle thresholds @ 1.35 GHz as hist_record.
+    uint32_t mock_wait_buckets[7] = {0, 0, 0, 0, 0, 0, 0};
+    uint32_t mock_send_buckets[7] = {0, 0, 0, 0, 0, 0, 0};
+    auto mock_bin = [](uint32_t* b, uint64_t d) {
+        if (d < 135ULL) {
+            b[0]++;
+        } else if (d < 1350ULL) {
+            b[1]++;
+        } else if (d < 13500ULL) {
+            b[2]++;
+        } else if (d < 135000ULL) {
+            b[3]++;
+        } else if (d < 1350000ULL) {
+            b[4]++;
+        } else if (d < 13500000ULL) {
+            b[5]++;
+        } else {
+            b[6]++;
+        }
+    };
+#endif
+
 #if INIT_ZEROS
     // Wait for reader to complete output-zeroing
     volatile tt_l1_ptr uint32_t* output_init_complete_sem_ptr =
@@ -365,8 +411,75 @@ void kernel_main() {
     uint32_t overlap_slot = 0;
 #endif
 
+#if MOCK_COMBINE_INTERNALS
+    // ===== MOCK writer-only synthetic fabric send loop (CB-free) =====
+    // The entire producer chain is gutted (see MOCK_COMBINE_INTERNALS in overlap_config.hpp), so we
+    // fabricate tokens here and push them straight into fabric through the real trid+header overlap
+    // pool. No cb_wait_front / cb_pop_front: the only per-token stalls are the LAGGED
+    // wait_on_flush_for_trid and wait_for_empty_write_slot() inside the send. Everything around this
+    // loop (fabric open, init/exit sem handshakes, START/END markers, drain, close) is unchanged.
     {
-        // DeviceZoneScopedN("combine-ethernet-flow");
+        // Precompute (route direction, distance-in-hops) for every peer on the 1D combine line, out
+        // of the hot loop. route/distance are what reader_combine would have written into route_info.
+        uint8_t mock_route[total_mesh_devices];
+        uint16_t mock_distance[total_mesh_devices];
+        uint32_t mock_num_peers = 0;
+        for (uint32_t dst = 0; dst < total_mesh_devices; dst++) {
+            if (dst == linearized_mesh_coord) {
+                continue;  // never send to self
+            }
+            mock_route[mock_num_peers] =
+                static_cast<uint8_t>(get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst));
+            mock_distance[mock_num_peers] =
+                static_cast<uint16_t>(manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst));
+            mock_num_peers++;
+        }
+
+        // Static payload scratch: reuse the (now unused) cb_route_info L1 slot + alignment as a fixed
+        // 14 KB source. Its bytes are never refreshed — content is garbage (perf only), but that means
+        // there is no reader overwriting it, so the non-blocking overlapped reads are race-free.
+        const uint32_t mock_payload_addr = get_write_ptr(cb_route_info_id) + l1_alignment;
+        const uint32_t mock_total_tokens = mock_num_peers * MOCK_COMBINE_TOKENS_PER_DEST;
+
+        uint32_t peer = 0;
+        for (uint32_t i = 0; i < mock_total_tokens; i++) {
+            ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
+            pkt_route_info.distance_in_hops = mock_distance[peer];
+            auto& payload_sender = fabric_connections[mock_route[peer]];
+            const uint32_t output_page_idx = i % output_pages;  // spread dst pages, avoid same-addr serialize
+
+            auto* overlap_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                overlap_hdr_pool_base + overlap_slot * sizeof(PACKET_HEADER_TYPE));
+            const uint32_t overlap_trid = overlap_slot + 1;  // 1..OVERLAP_POOL_DEPTH (trid 0 reserved)
+
+            const uint64_t t0 = get_timestamp();
+            wait_on_flush_for_trid(overlap_trid);  // LAGGED: free this slot's DEPTH-ago use before reuse
+            const uint64_t t1 = get_timestamp();
+
+            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(overlap_hdr), pkt_route_info);
+            fabric_send_noc_unicast_with_trid<fabric_max_packet_size>(
+                output_addr_gen,
+                payload_sender,
+                overlap_hdr,
+                mock_payload_addr,
+                output_page_idx,
+                (int)aligned_output_page_size,
+                l1_alignment,
+                overlap_trid);
+            const uint64_t t2 = get_timestamp();
+
+            mock_bin(mock_wait_buckets, t1 - t0);  // lagged trid-completion wait (want ~0)
+            mock_bin(mock_send_buckets, t2 - t1);  // issue + wait_for_empty_write_slot (fabric slot)
+            hist_record(t2, i);                    // total per-token cadence (shared histogram)
+
+            bw_total_payload_bytes += aligned_output_page_size;
+            overlap_slot = (overlap_slot + 1 == OVERLAP_POOL_DEPTH) ? 0u : overlap_slot + 1u;
+            peer = (peer + 1 == mock_num_peers) ? 0u : peer + 1u;
+        }
+    }
+#else
+    {
+        DeviceZoneScopedN("combine-ethernet-flow");
         //  Sentinel-terminated fabric send loop
         while (true) {
             cb_wait_front(cb_route_info_id, 1);
@@ -472,6 +585,7 @@ void kernel_main() {
             cb_pop_front(cb_route_info_id, 1);
         }
     }
+#endif  // MOCK_COMBINE_INTERNALS
 
 #ifdef DEST_CHIP_ID
 #if OVERLAPING_TOKEN_WRITE
@@ -567,4 +681,30 @@ void kernel_main() {
     for (uint32_t i = 0; i < outlier_count; i++) {
         DPRINT("  outlier[{}] token_idx={}\n", i, outlier_token_indices[i]);
     }
+
+#if MOCK_COMBINE_INTERNALS
+    // [debug] Mock decomposition. If mock-wait is essentially all in <100ns/<1us while mock-send
+    // carries the mass, the OVERLAP_POOL_DEPTH pipeline is hiding write completion and the residual
+    // stall is purely wait_for_empty_write_slot() — i.e. we are only blocking on fabric slots.
+    DPRINT(
+        "[combine-mock] LAGGED trid-wait gap histogram (counts): "
+        "<100ns={} <1us={} <10us={} <100us={} <1ms={} <10ms={} >=10ms={}\n",
+        mock_wait_buckets[0],
+        mock_wait_buckets[1],
+        mock_wait_buckets[2],
+        mock_wait_buckets[3],
+        mock_wait_buckets[4],
+        mock_wait_buckets[5],
+        mock_wait_buckets[6]);
+    DPRINT(
+        "[combine-mock] SEND-call gap histogram (incl. wait_for_empty_write_slot) (counts): "
+        "<100ns={} <1us={} <10us={} <100us={} <1ms={} <10ms={} >=10ms={}\n",
+        mock_send_buckets[0],
+        mock_send_buckets[1],
+        mock_send_buckets[2],
+        mock_send_buckets[3],
+        mock_send_buckets[4],
+        mock_send_buckets[5],
+        mock_send_buckets[6]);
+#endif
 }

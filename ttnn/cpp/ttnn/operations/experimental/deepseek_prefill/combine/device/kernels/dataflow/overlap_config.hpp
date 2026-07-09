@@ -53,3 +53,6 @@
 // fails with an L1 out-of-memory error, reduce this (down to 2 is fine for correctness) or reduce
 // SLOTS_PER_UNTILIZER in the factory.
 #define OVERLAP_ROUTE_INFO_CB_SLOTS (2 * OVERLAP_POOL_DEPTH)
+
+#define MOCK_COMBINE_INTERNALS 1
+#define MOCK_COMBINE_TOKENS_PER_DEST 200

@@ -34,6 +34,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -43,6 +44,11 @@
 #endif
 
 void kernel_main() {
+#if MOCK_COMBINE_INTERNALS
+    // MOCK: the whole untilizer pipeline is bypassed (writer_combine synthesizes tokens itself).
+    // This kernel has no INIT_ZEROS handshake, so it can return immediately without deadlocking.
+    return;
+#endif
     // ===== Compile-time args =====
     //   0: cb_experts_tok_counter_id             - CB that receives the multicasted expert token counts
     //   1: experts_tok_counter_pages             - number of pages in the expert_token_counts tensor

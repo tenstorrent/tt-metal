@@ -9,6 +9,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -208,6 +209,14 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(output_init_barrier_address);
     noc_semaphore_wait(barrier_sem_ptr, num_cores);
     noc_semaphore_set(barrier_sem_ptr, 0);
+#endif
+
+#if MOCK_COMBINE_INTERNALS
+    // MOCK: writer_combine fabricates its own synthetic tokens and pushes them straight into
+    // fabric, so this producer does no token work. INIT_ZEROS handshake above is kept (the
+    // writer waits on it); everything below (counter read, multicast, untilizer polling,
+    // route_info prep) is skipped so nothing feeds the (unused) cb_route_info CB.
+    return;
 #endif
 
     // Read expert token counts

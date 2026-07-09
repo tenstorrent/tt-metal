@@ -13,6 +13,7 @@
 #include "api/debug/dprint.h"
 #include "internal/circular_buffer_interface.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -44,6 +45,11 @@
 //                                        ordering; its batches are global_pos, +G, +2G, … per expert
 //   5: total_untilizers                - G, total untilizer cores across all senders (global stride)
 void kernel_main() {
+#if MOCK_COMBINE_INTERNALS
+    // MOCK: untilize compute is bypassed (writer_combine synthesizes tokens itself). No INIT_ZEROS
+    // handshake here, so returning immediately is safe.
+    return;
+#endif
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
     CircularBuffer cb_untilize(cb_untilize_id);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(1);

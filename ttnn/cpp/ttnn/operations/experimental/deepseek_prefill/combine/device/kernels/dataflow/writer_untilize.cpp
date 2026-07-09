@@ -29,6 +29,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
 // Sentinel used by compute to tell this kernel to exit its send loop.
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -81,6 +82,13 @@ void kernel_main() {
     }
 
     noc.async_atomic_barrier();
+#endif
+
+#if MOCK_COMBINE_INTERNALS
+    // MOCK: writer_combine synthesizes its own tokens, so the untilized-data send path is bypassed.
+    // The INIT_ZEROS output-zeroing + sender signal above is KEPT so reader_combine's wait on the
+    // untilizer zero-done semaphore still completes (otherwise the init handshake deadlocks).
+    return;
 #endif
 
     // ===== Untilized-data send path (runs for both TILE_LAYOUT and ROW_MAJOR) =====
