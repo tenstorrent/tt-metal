@@ -30,6 +30,8 @@ inline constexpr sfpi::DataLayout shift_layout() {
 template <sfpi::DataLayout LAYOUT>
 using shift_vtype = std::conditional_t<LAYOUT == sfpi::DataLayout::U16, sfpi::vUInt, sfpi::vInt>;
 
+constexpr std::uint32_t dst_tile_size = 32;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
 inline void calculate_binary_left_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
@@ -40,10 +42,6 @@ inline void calculate_binary_left_shift(
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
     constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
     using vType = shift_vtype<layout>;
-
-    // Each Dest tile is 64 raw rows; sfpi dst_reg[] indexes in stride units (SFP_DESTREG_STRIDE == 2),
-    // so 64 raw rows == 32 sfpi stride units.
-    constexpr std::uint32_t dst_tile_size = 32;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -75,8 +73,6 @@ inline void calculate_binary_right_shift(
     constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
     using vType = shift_vtype<layout>;
 
-    constexpr std::uint32_t dst_tile_size = 32;
-
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vType a = sfpi::dst_reg[dst_index_in0 * dst_tile_size].mode<layout>();
@@ -84,13 +80,9 @@ inline void calculate_binary_right_shift(
         sfpi::vUInt value = sfpi::as<sfpi::vUInt>(a);
         sfpi::vInt shift = sfpi::as<sfpi::vInt>(s);
 
-        // Values whose shift amount is >= 32 are zeroed before shifting.
-        sfpi::vUInt magnitude = value;
-        v_if(shift >= 32) { magnitude = 0; }
-        v_endif;
-
-        // Right shift by `shift` (a negative shift amount shifts left).
-        sfpi::vUInt result = sfpi::shft(magnitude, 0 - shift, sfpi::ShiftMode::Logical);
+        // Right shift by `shift` (a negative shift amount shifts left). Out-of-range lanes are
+        // fixed up to 0 by the final guard below, so their intermediate result here is don't-care.
+        sfpi::vUInt result = sfpi::shft(value, 0 - shift, sfpi::ShiftMode::Logical);
 
         // Arithmetic shift: when the original value is negative (and the shift is non-zero) the
         // vacated high bits must be filled with 1's rather than 0's.
@@ -98,6 +90,11 @@ inline void calculate_binary_right_shift(
             sfpi::vUInt high_ones = sfpi::shft(~sfpi::vUInt(0), 32 - shift, sfpi::ShiftMode::Logical);
             result = result | high_ones;
         }
+        v_endif;
+
+        // Out-of-range shift amounts (shift < 0 or shift >= 32) produce 0, matching the sibling
+        // kernels and the original "shift_amount < 0 OR >= 32 -> 0" contract.
+        v_if(shift < 0 || shift >= 32) { result = 0; }
         v_endif;
 
         sfpi::dst_reg[dst_index_out * dst_tile_size].mode<layout>() = sfpi::as<vType>(result);
@@ -115,8 +112,6 @@ inline void calculate_logical_right_shift(
         SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32_2S_COMP : INSTRUCTION_MODE;
     constexpr sfpi::DataLayout layout = shift_layout<sfpload_instr_mod>();
     using vType = shift_vtype<layout>;
-
-    constexpr std::uint32_t dst_tile_size = 32;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
