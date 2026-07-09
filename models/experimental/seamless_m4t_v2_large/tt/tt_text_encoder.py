@@ -20,6 +20,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     dram_matmul_program_config,
     encoder_tp_block_sharded_matmul,
     encoder_tp_interleaved_matmul_program_config,
+    encoder_tp_matmul_in0_ln_config,
     ensure_interleaved_bsh,
     ensure_l1_width_sharded_activation,
     sdpa_program_config,
@@ -88,6 +89,7 @@ class TTSeamlessM4Tv2Encoder:
         # the reduction across grid_x cores -- typically 8 cores at seq=32 --
         # for a ~4-5x per-op speedup.
         self._ln_sharded_cache: dict = {}
+        self._tp_ln_fusion_cache: dict = {}
         self._sdpa_pc_cache: dict = {}
         self._dram_matmul_pc_cache: dict = {}
         self._width_shard_mem_cache: dict = {}
@@ -428,6 +430,18 @@ class TTSeamlessM4Tv2Encoder:
             out_concat = ttnn.slice(out_concat, [0, 0], [m_actual, logical_out_dim], [1, 1], memory_config=concat_mc)
         return ttnn.reshape(out_concat, (batch, seq, logical_out_dim))
 
+    @staticmethod
+    def _slice_tp_matmul_rows(x: ttnn.Tensor, start: int, end: int, k: int) -> ttnn.Tensor:
+        """Slice token rows from a block-sharded or interleaved activation."""
+        rank = len(x.shape)
+        if rank == 4:
+            return ttnn.slice(x, [0, 0, start, 0], [1, 1, end, k], [1, 1, 1, 1])
+        if rank == 3:
+            return ttnn.slice(x, [0, start, 0], [1, end, k], [1, 1, 1])
+        if rank == 2:
+            return ttnn.slice(x, [start, 0], [end, k], [1, 1])
+        raise ValueError(f"unsupported activation rank for TP matmul slice: {rank}")
+
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
         return build_ln_sharded_config(self.device, m_tiles, n_tiles, self._ln_sharded_cache)
 
@@ -441,11 +455,15 @@ class TTSeamlessM4Tv2Encoder:
         n_tiles: int,
         input_sharded: bool = False,
         output_sharded: bool = False,
+        matmul_fusion_m: Optional[int] = None,
+        matmul_fusion_k: Optional[int] = None,
     ) -> ttnn.Tensor:
         """Sharded multicore LN. Set ``output_sharded=True`` to feed a matmul without an S2I.
 
         Short-seq (``m_tiles == 1``) uses WIDTH_SHARDED LN; long-seq uses BLOCK_SHARDED LN when
         ``SEAMLESS_TP_BS_LN`` is on (default) and ``output_sharded`` feeds a block-sharded matmul.
+        When ``matmul_fusion_m`` / ``matmul_fusion_k`` are set, LN uses the same block-sharded
+        layout as ``encoder_tp_matmul_in0_memory_config`` so the downstream matmul skips S2I.
         Set ``SEAMLESS_TP_BS_LN=0`` to use interleaved ``ttnn.layer_norm`` instead.
         """
         if m_tiles > 1:
@@ -453,21 +471,26 @@ class TTSeamlessM4Tv2Encoder:
             # block-sharded matmul skips its interleaved->block reshard. Otherwise fall through to the
             # unsharded path below.
             if self._tp_bs_ln and output_sharded:
-                sharded_mem_config, base_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
+                fused_ln = None
+                if matmul_fusion_m is not None and matmul_fusion_k is not None:
+                    fused_ln = encoder_tp_matmul_in0_ln_config(
+                        self.device, matmul_fusion_m, matmul_fusion_k, self._tp_ln_fusion_cache
+                    )
+                if fused_ln is not None:
+                    sharded_mem_config, sharded_pc = fused_ln
+                else:
+                    sharded_mem_config, base_pc = self._build_ln_sharded_config(m_tiles, n_tiles)
+                    sharded_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                        compute_with_storage_grid_size=base_pc.compute_with_storage_grid_size,
+                        subblock_w=base_pc.subblock_w,
+                        block_h=base_pc.block_h,
+                        block_w=base_pc.block_w,
+                        inplace=True,
+                    )
                 if input_sharded and ttnn.is_sharded(x) and x.memory_config() == sharded_mem_config:
                     x_sharded = x
                 else:
                     x_sharded = ttnn.to_memory_config(x, sharded_mem_config)
-                # inplace: write the result into ``x_sharded``'s L1 region instead of allocating a
-                # fresh high-address block-sharded buffer, whose placement otherwise clashes with the
-                # downstream block-sharded matmul's static circular buffers.
-                sharded_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                    compute_with_storage_grid_size=base_pc.compute_with_storage_grid_size,
-                    subblock_w=base_pc.subblock_w,
-                    block_h=base_pc.block_h,
-                    block_w=base_pc.block_w,
-                    inplace=True,
-                )
                 normed = ttnn.layer_norm(
                     x_sharded,
                     weight=weight,
@@ -583,21 +606,27 @@ class TTSeamlessM4Tv2Encoder:
         num_chunks = (m + chunk_m - 1) // chunk_m
         compute_cfg = self._chunked_tp_linear_compute_cfg() if num_chunks > 1 else self._linear_ln_compute_cfg
 
-        if ttnn.is_sharded(x):
-            x_inter = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
-            owns_x_inter = True
-        else:
-            x_inter = x
-            owns_x_inter = False
-        if len(x_inter.shape) == 3:
-            x_inter = ttnn.reshape(x_inter, (m, k))
-        elif len(x_inter.shape) != 2:
-            x_inter = ttnn.reshape(x_inter, (m, k))
-        if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
-            prev = x_inter
-            x_inter = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
-            if prev is not x:
-                ttnn.deallocate(prev)
+        use_sharded_input = ttnn.is_sharded(x)
+        x_inter = x
+        owns_x_inter = False
+        if not use_sharded_input:
+            if len(x_inter.shape) == 3:
+                reshaped = ttnn.reshape(x_inter, (m, k))
+                if reshaped is not x_inter:
+                    x_inter = reshaped
+                    owns_x_inter = True
+            elif len(x_inter.shape) != 2:
+                reshaped = ttnn.reshape(x_inter, (m, k))
+                if reshaped is not x_inter:
+                    x_inter = reshaped
+                    owns_x_inter = True
+            if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
+                x_dram = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
+                if owns_x_inter:
+                    ttnn.deallocate(x_inter)
+                elif x_dram is not x:
+                    owns_x_inter = True
+                x_inter = x_dram
 
         chunks: list[ttnn.Tensor] = []
         for i in range(num_chunks):
@@ -605,15 +634,35 @@ class TTSeamlessM4Tv2Encoder:
             end = min(start + chunk_m, m)
             chunk_rows = end - start
 
-            chunk = ttnn.slice(x_inter, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-            if chunk_rows < chunk_m:
-                chunk = self._pad_token_rows(chunk, chunk_rows, chunk_m)
-            x2d = chunk if len(chunk.shape) == 2 else ttnn.reshape(chunk, (chunk_m, k))
-            x_bs = ttnn.to_memory_config(x2d, in0_mem)
-            if x2d is not chunk:
-                ttnn.deallocate(x2d)
-            if chunk is not x_inter:
-                ttnn.deallocate(chunk)
+            if use_sharded_input:
+                row_slice = self._slice_tp_matmul_rows(x, start, end, k)
+                owns_row_slice = row_slice is not x
+                if chunk_rows < chunk_m:
+                    row_inter = ttnn.sharded_to_interleaved(
+                        row_slice, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16
+                    )
+                    if owns_row_slice:
+                        ttnn.deallocate(row_slice)
+                    row_inter = self._pad_token_rows(row_inter, chunk_rows, chunk_m)
+                    x_bs = ttnn.to_memory_config(row_inter, in0_mem)
+                    ttnn.deallocate(row_inter)
+                elif row_slice.memory_config() == in0_mem:
+                    x_bs = row_slice
+                    owns_row_slice = False
+                else:
+                    x_bs = ttnn.to_memory_config(row_slice, in0_mem)
+                    if owns_row_slice:
+                        ttnn.deallocate(row_slice)
+            else:
+                chunk = ttnn.slice(x_inter, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+                if chunk_rows < chunk_m:
+                    chunk = self._pad_token_rows(chunk, chunk_rows, chunk_m)
+                x2d = chunk if len(chunk.shape) == 2 else ttnn.reshape(chunk, (chunk_m, k))
+                x_bs = ttnn.to_memory_config(x2d, in0_mem)
+                if x2d is not chunk:
+                    ttnn.deallocate(x2d)
+                if chunk is not x_inter:
+                    ttnn.deallocate(chunk)
 
             out_bs = ttnn.linear(
                 x_bs,
@@ -623,7 +672,8 @@ class TTSeamlessM4Tv2Encoder:
                 memory_config=out_mem,
                 compute_kernel_config=compute_cfg,
             )
-            ttnn.deallocate(x_bs)
+            if x_bs is not x:
+                ttnn.deallocate(x_bs)
             out_inter = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
             ttnn.deallocate(out_bs)
             if chunk_rows < chunk_m:
@@ -942,6 +992,8 @@ class TTSeamlessM4Tv2Encoder:
                 sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
             self._long_seq_mc = sharded_hidden_mem if long_seq else None
 
+        tp_fused_ln = self._tp_bs_ln and tp > 1 and m_tiles > 1
+
         for i in range(num_layers):
             layer = parameters.layers[i]
 
@@ -952,7 +1004,9 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=((not long_seq) and (tp == 1)) or (self._tp_bs_ln and tp > 1 and m_tiles > 1),
+                output_sharded=((not long_seq) and (tp == 1)) or tp_fused_ln,
+                matmul_fusion_m=token_rows if tp_fused_ln else None,
+                matmul_fusion_k=hidden_size if tp_fused_ln else None,
             )
             attn_out = self._attention(
                 normed,
@@ -977,7 +1031,9 @@ class TTSeamlessM4Tv2Encoder:
                 m_tiles=m_tiles,
                 n_tiles=n_tiles,
                 input_sharded=ttnn.is_sharded(hidden),
-                output_sharded=((not long_seq) and (tp == 1)) or (self._tp_bs_ln and tp > 1 and m_tiles > 1),
+                output_sharded=((not long_seq) and (tp == 1)) or tp_fused_ln,
+                matmul_fusion_m=token_rows if tp_fused_ln else None,
+                matmul_fusion_k=hidden_size if tp_fused_ln else None,
             )
             if tp > 1:
                 # TP FFN: column-parallel fc1 (output = ffn_dim//tp), row-parallel fc2 (output = H).

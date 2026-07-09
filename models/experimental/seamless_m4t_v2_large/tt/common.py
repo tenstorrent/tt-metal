@@ -277,6 +277,63 @@ _ENCODER_TP_BS_IBW = {
     (1024, 2048): 4,  # fc1      (k = hidden, n = ffn_dim/tp)
     (2048, 1024): 8,  # fc2      (k = ffn_dim/tp); per-core Kt/8 = 8
 }
+_ENCODER_TP_IN0_MEM_CACHE: dict[tuple[int, int], ttnn.MemoryConfig] = {}
+
+
+def encoder_tp_matmul_in0_memory_config(device: ttnn.Device, m: int, k: int) -> Optional[ttnn.MemoryConfig]:
+    """L1 block-sharded in0 layout shared by TP matmul and fused LN (``[1, 1, m, k]``)."""
+    key = (m, k)
+    cached = _ENCODER_TP_IN0_MEM_CACHE.get(key)
+    if cached is not None:
+        return cached
+    gx = gy = _ENCODER_TP_BS_GRID
+    cg = device.compute_with_storage_grid_size()
+    if gx > cg.x or gy > cg.y:
+        return None
+    if m % TILE or k % TILE:
+        return None
+    mt, kt = m // TILE, k // TILE
+    if mt % gy or kt % gx:
+        return None
+    cached = ttnn.create_sharded_memory_config(
+        (1, 1, m, k),
+        core_grid=ttnn.CoreGrid(y=gy, x=gx),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    _ENCODER_TP_IN0_MEM_CACHE[key] = cached
+    return cached
+
+
+def encoder_tp_matmul_in0_ln_config(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    cache: dict[tuple[int, int], Tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig]],
+) -> Optional[Tuple[ttnn.MemoryConfig, ttnn.LayerNormShardedMultiCoreProgramConfig]]:
+    """LN shard layout aligned with ``encoder_tp_matmul_in0_memory_config`` for direct matmul feed."""
+    key = (m, k)
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+    in0_mem = encoder_tp_matmul_in0_memory_config(device, m, k)
+    if in0_mem is None:
+        return None
+    gx = gy = _ENCODER_TP_BS_GRID
+    mt, kt = m // TILE, k // TILE
+    block_h = mt // gy
+    block_w = kt // gx
+    subblock_w = _largest_divisor_at_most(block_w, 4)
+    ln_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        subblock_w=subblock_w,
+        block_h=block_h,
+        block_w=block_w,
+        inplace=True,
+    )
+    cached = (in0_mem, ln_pc)
+    cache[key] = cached
+    return cached
 
 
 def encoder_tp_block_sharded_matmul(
@@ -330,12 +387,9 @@ def encoder_tp_block_sharded_matmul(
         fused_activation=fused_activation,
     )
     grid = ttnn.CoreGrid(y=gy, x=gx)
-    in0_mem = ttnn.create_sharded_memory_config(
-        (1, 1, m, k),
-        core_grid=grid,
-        strategy=ttnn.ShardStrategy.BLOCK,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+    in0_mem = encoder_tp_matmul_in0_memory_config(device, m, k)
+    if in0_mem is None:
+        return None
     out_mem = ttnn.create_sharded_memory_config(
         (1, 1, m, n),
         core_grid=grid,
