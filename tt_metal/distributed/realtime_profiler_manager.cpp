@@ -9,13 +9,17 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -59,9 +63,39 @@
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/dispatch/realtime_profiler_tracy_handler.hpp"
 
+#include <umd/device/warm_reset.hpp>
+#include <tt-metalium/experimental/realtime_profiler_packets.hpp>
+#include "hostdevcommon/profiler_common.h"
+#include "jit_build/build_env_manager.hpp"
+#include "tt_metal/impl/profiler/profiler.hpp"
+#include "tools/profiler/x280_driver.hpp"
+
 namespace tt::tt_metal::distributed {
 
 namespace {
+
+// Broadcast PROFILER_TERMINATE=1 to every worker core on a device (FULL logical grid, so DISPATCH
+// cores are covered too). Makes each producing RISC's ring_ensure_room stop blocking on a full SPSC
+// ring and drop markers instead. Needed when the X280 drainer fails to boot: with no drainer the
+// rings are never emptied, so without this a producing RISC blocks forever once its ring fills —
+// deadlocking the workload (the command-queue completion never arrives). Best-effort; logs and
+// continues on write failure.
+void broadcast_profiler_terminate(Cluster& cluster, ChipId chip_id, IDevice* device, uint64_t prof_l1) {
+    if (device == nullptr) {
+        return;
+    }
+    const uint64_t terminate_addr =
+        prof_l1 + static_cast<uint64_t>(kernel_profiler::PROFILER_TERMINATE) * sizeof(uint32_t);
+    const uint32_t one = 1;
+    const CoreCoord grid = device->logical_grid_size();
+    for (uint32_t ly = 0; ly < static_cast<uint32_t>(grid.y); ly++) {
+        for (uint32_t lx = 0; lx < static_cast<uint32_t>(grid.x); lx++) {
+            const CoreCoord v =
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, CoreCoord{lx, ly}, CoreType::WORKER);
+            cluster.write_core(&one, sizeof(one), tt_cxy_pair(chip_id, v), terminate_addr);
+        }
+    }
+}
 
 // Minimum wall time between full init calibrations (run_sync + constructor SYNC_CHECK) and
 // between finish-path sync checks, per physical chip. Matches the finish-path throttle.
@@ -490,8 +524,15 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
         std::min(kMaxConsumerBatchCap, kMaxConsumerBatchPerDevice * devices_.size());
     ring_.emplace(std::min(kMaxRingCapacity, max_consumer_batch_records * kRingHeadroomBatches));
 
+    // Announce activation; paired with NotifyProgramRealtimeProfilerDeactivated on shutdown.
+    // Additionally, for chips where the X280 drainer actually booted (x280_active), announce the
+    // "X280 won" signal so the standard DeviceProfiler stands down and doesn't read those chips'
+    // SPSC rings (two consumers corrupt the ring head).
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerActivated(dev_state.chip_id);
+        if (dev_state.x280_active) {
+            tt::NotifyProgramX280ProfilerActivated(dev_state.chip_id);
+        }
     }
 
     run_init_sync();
@@ -785,8 +826,276 @@ void RealtimeProfilerManager::initialize_devices(const std::shared_ptr<MeshDevic
                 config_buffer_addr);
         }
 
+        // Optionally boot the X280 (L2CPU) kernel-zone drainer. Best-effort: on any failure it
+        // leaves x280_active=false and the device runs with the standard program-record path only.
+        boot_x280_drainer(mesh_device, coord, dev_state);
+
         MetalContext::instance(context_id_).device_manager()->mark_rt_profiler_device_init_complete(device_id);
         devices_.push_back(std::move(dev_state));
+    }
+}
+
+void RealtimeProfilerManager::boot_x280_drainer(
+    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& coord, DeviceState& dev_state) {
+    const auto device_id = dev_state.chip_id;
+    const auto& hal = MetalContext::instance(context_id_).hal();
+
+    // --- Optional: boot the X280 (L2CPU) kernel-zone drainer on this device ---
+    // The X280 is the sole consumer of the per-RISC SPSC zone rings; without it a profiler
+    // run can deadlock once a ring fills. It drains those rings, PAIRS start/end markers per
+    // (core,risc) on-device, and pushes complete device-zone pages through its OWN D2H socket,
+    // which the receiver polls alongside the program-record socket. Best-effort: any failure
+    // leaves x280_active=false and the device runs without kernel-zone capture.
+    try {
+        auto& x280_cluster = MetalContext::instance(context_id_).get_cluster();
+        const auto& soc = x280_cluster.get_soc_desc(device_id);
+        std::string x280_fw = BuildEnvManager::get_instance(context_id_).get_x280_firmware_path(device_id);
+        if (x280_cluster.arch() == tt::ARCH::BLACKHOLE && !soc.get_cores(CoreType::L2CPU, CoordSystem::NOC0).empty() &&
+            !x280_fw.empty()) {
+            constexpr int kL2CpuIndex = 0;  // tile (8,3) — proven single-chip path
+            constexpr int kX280PllMhz = 1000;
+            constexpr uint32_t kX280ConfigAddr = 0x08019000u;  // X280 LIM: above STAGECTL, below STAGE_BASE
+            constexpr uint64_t kX280MboxParams = 0x08011000ull;
+            constexpr uint64_t kX280MboxResults = 0x08011040ull;
+            constexpr uint64_t kX280MboxCoords = 0x08011200ull;
+            constexpr uint32_t kX280Fifo = 4096;
+            constexpr uint32_t kX280PageSize = 64;
+
+            std::ifstream f(x280_fw, std::ios::binary);
+            std::vector<uint8_t> bin((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            while (bin.size() % 4 != 0) {
+                bin.push_back(0);
+            }
+            TT_FATAL(!bin.empty(), "X280 drainer firmware {} is empty", x280_fw);
+
+            const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+            CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+            const uint32_t gx = static_cast<uint32_t>(grid.x), gy = static_cast<uint32_t>(grid.y);
+            const uint64_t num_cores = static_cast<uint64_t>(gx) * gy;
+
+            // Virtual coords of every logical worker core (what the X280's NOC addresses), and
+            // pre-zero each core's SPSC control vector so head/tail start clean.
+            std::vector<uint8_t> coord_buf(num_cores * 8, 0);
+            std::vector<uint8_t> zero_ctrl(profiler::X280_PROF_CTRL_WORDS * 4, 0);
+            for (uint32_t ly = 0; ly < gy; ly++) {
+                for (uint32_t lx = 0; lx < gx; lx++) {
+                    uint32_t idx = ly * gx + lx;
+                    CoreCoord v = x280_cluster.get_virtual_coordinate_from_logical_coordinates(
+                        device_id, CoreCoord{lx, ly}, CoreType::WORKER);
+                    uint32_t vx = static_cast<uint32_t>(v.x), vy = static_cast<uint32_t>(v.y);
+                    std::memcpy(coord_buf.data() + idx * 8 + 0, &vx, 4);
+                    std::memcpy(coord_buf.data() + idx * 8 + 4, &vy, 4);
+                    x280_cluster.write_core(
+                        zero_ctrl.data(), (uint32_t)zero_ctrl.size(), tt_cxy_pair(device_id, v), prof_l1);
+                    // Map the virtual coord the X280 relays back to the NOC0 coord the standard
+                    // DeviceProfiler / Tracy use, so kernel-zone lanes line up 1:1 with the DRAM
+                    // push profiler's view.
+                    const CoreCoord noc0 = x280_cluster.get_physical_coordinate_from_logical_coordinates(
+                        device_id, CoreCoord{lx, ly}, CoreType::WORKER, /*no_warn=*/true);
+                    dev_state.x280_virt_to_noc0[(static_cast<uint64_t>(vx) << 32) | vy] = {
+                        static_cast<uint32_t>(noc0.x), static_cast<uint32_t>(noc0.y)};
+                    if (lx == 0 && ly == 0) {
+                        log_debug(
+                            tt::LogMetal,
+                            "[Real-time profiler] X280 coord map sample: logical(0,0) virtual=({},{}) "
+                            "noc0=({},{})",
+                            vx,
+                            vy,
+                            noc0.x,
+                            noc0.y);
+                    }
+                }
+            }
+
+            // PCIe tile (TRANSLATED) the X280 writes its socket pages through.
+            const auto pcie_cores = soc.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
+            TT_FATAL(!pcie_cores.empty(), "X280 drainer: no PCIe core on device {}", device_id);
+            const auto pc = pcie_cores.front();
+
+            dev_state.x280_driver =
+                std::make_unique<profiler::X280Driver>(x280_cluster, static_cast<int>(device_id), kL2CpuIndex);
+            auto& zx = *dev_state.x280_driver;
+            zx.assert_reset();
+            zx.load_lim(bin);
+            zx.write_block(coord_buf.data(), (uint32_t)coord_buf.size(), kX280MboxCoords);
+
+            // The socket's sender is the X280 L2CPU; its sender_socket_md lands in the X280 LIM.
+            const CoreCoord l2phys = profiler::x280_l2cpu_tile(kL2CpuIndex);
+            dev_state.x280_socket = std::make_unique<D2HSocket>(
+                mesh_device,
+                MeshCoreCoord{coord, l2phys},
+                kX280Fifo,
+                D2HSocket::ExternalConfigBuffer{.address = kX280ConfigAddr, .sender_is_l2cpu = true});
+            dev_state.x280_socket->set_page_size(kX280PageSize);
+
+            std::vector<uint8_t> params(64, 0), results(64, 0);
+            auto pk = [&](size_t off, uint64_t val) { std::memcpy(params.data() + off, &val, 8); };
+            pk(0x00, kX280ConfigAddr);
+            pk(0x08, static_cast<uint64_t>(pc.x));
+            pk(0x10, static_cast<uint64_t>(pc.y));
+            pk(0x18, prof_l1);
+            pk(0x20, num_cores);
+            pk(0x28, 0);  // P_STOP = 0: run continuously until shutdown
+            zx.write_block(params.data(), (uint32_t)params.size(), kX280MboxParams);
+            zx.write_block(results.data(), (uint32_t)results.size(), kX280MboxResults);
+            dev_state.x280_params_addr = kX280MboxParams;
+
+            zx.set_reset_vectors(profiler::X280_LIM_BASE);
+            zx.set_pll(kX280PllMhz);
+            zx.release_reset();
+
+            // Fast-fail liveness check: poll profzone's main()-entry heartbeat (RES @ params+0x70)
+            // for a few ms. If the core never writes it, the X280 isn't executing — on a fresh board
+            // this is almost always because the L3 LIM ECC was never primed, so profzone's stores
+            // fault silently.
+            constexpr uint64_t kX280HbMainMagic = 0xB007ULL;
+            uint64_t hb = 0;
+            for (int i = 0; i < 300 && hb != kX280HbMainMagic; i++) {
+                hb = zx.lim_rd_u64(dev_state.x280_params_addr + 0x70);
+                if (hb != kX280HbMainMagic) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(100));
+                }
+            }
+            // --- Auto-recover an unprimed X280 (ON by default) ---
+            // The usual reason for a dead X280 on a fresh/cold-booted board is that its L3 LIM ECC was
+            // never primed, so the drainer FW's stores fault. By default (opt out with
+            // TT_METAL_X280_NO_AUTOPRIME) we prime the ECC and warm-reset the chip to activate it
+            // (WayEnable is increase-only, so ONLY an ASIC/warm reset clears it). The warm reset
+            // re-enumerates the PCIe device, so metal cannot continue in-process; we prime, reset, and
+            // EXIT with an actionable message — the NEXT run boots cleanly. A /tmp marker guards
+            // against a reset loop. TT_METAL_X280_FORCE_PRIME forces the path once even on a healthy
+            // board, to exercise the prime+reset mechanics.
+            {
+                auto truthy = [](const char* s) {
+                    return s && (s[0] == '1' || s[0] == 't' || s[0] == 'T' || s[0] == 'y' || s[0] == 'Y');
+                };
+                const bool force = truthy(std::getenv("TT_METAL_X280_FORCE_PRIME"));
+                const bool autoprime = !truthy(std::getenv("TT_METAL_X280_NO_AUTOPRIME")) || force;
+                const std::string marker = "/tmp/tt_x280_autoprime_dev" + std::to_string(device_id);
+                const bool already_tried = std::ifstream(marker).good();
+                if ((hb != kX280HbMainMagic || force) && autoprime && !already_tried) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: X280 unprimed (heartbeat=0x{:x}){}; auto-priming L3 "
+                        "LIM ECC and warm-resetting the chip. This run will EXIT — rerun afterwards.",
+                        device_id,
+                        hb,
+                        force ? " [forced]" : "");
+                    bool primed_ok = false;
+                    std::string fail_reason;
+                    try {
+                        {
+                            std::ofstream(marker).put('1');
+                        }  // loop guard: record that we tried this cycle
+                        zx.assert_reset();
+                        zx.prime_lim_ecc();
+                        primed_ok = tt::umd::WarmReset::warm_reset_chip_id({static_cast<int>(device_id)});
+                        if (!primed_ok) {
+                            fail_reason = "warm_reset returned false";
+                        }
+                    } catch (const std::exception& e) {
+                        fail_reason = e.what();
+                    }
+                    // The warm reset re-enumerates the chip out from under metal, so we hard-exit here —
+                    // which skips buffered-log flushing. Print the outcome DIRECTLY to stderr so the
+                    // RERUN instruction is guaranteed visible regardless of the logger's buffering.
+                    std::fflush(stdout);
+                    if (primed_ok) {
+                        std::fprintf(
+                            stderr,
+                            "\n"
+                            "================================================================================\n"
+                            "  X280 (device %d): L3 LIM ECC was unprimed -> auto-primed + chip warm-reset.\n"
+                            "  This is a one-time-per-cold-power-cycle step. The chip has been reset, so\n"
+                            "  this run is stopping now.  >>> RERUN your program <<<  and the X280\n"
+                            "  kernel-zone profiler will start normally.\n"
+                            "================================================================================\n\n",
+                            static_cast<int>(device_id));
+                    } else {
+                        std::fprintf(
+                            stderr,
+                            "\n"
+                            "================================================================================\n"
+                            "  X280 (device %d): auto-prime/warm-reset FAILED (%s).\n"
+                            "  The chip may be in an undefined state -- run `tt-smi -r %d` manually, then\n"
+                            "  rerun. (Set TT_METAL_X280_NO_AUTOPRIME=1 to disable this auto-recovery.)\n"
+                            "================================================================================\n\n",
+                            static_cast<int>(device_id),
+                            fail_reason.c_str(),
+                            static_cast<int>(device_id));
+                    }
+                    std::fflush(stderr);
+                    std::_Exit(primed_ok ? 75 : 1);  // 75=EX_TEMPFAIL: "transient, rerun"; 1=hard failure
+                }
+            }
+            if (hb != kX280HbMainMagic) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: X280 drainer FW did not start (l2cpu {}, "
+                    "heartbeat=0x{:x}). The L2CPU's L3 LIM ECC is likely not primed — but auto-prime was "
+                    "either disabled (TT_METAL_X280_NO_AUTOPRIME) or already attempted this power cycle "
+                    "without success (the X280 may be faulty; a manual `tt-smi -r` is advised). Continuing "
+                    "without X280 kernel-zone capture (the DRAM-based device profiler covers kernel zones "
+                    "as a fallback while TT_METAL_DEVICE_PROFILER is set).",
+                    device_id,
+                    kL2CpuIndex,
+                    hb);
+                zx.assert_reset();
+                dev_state.x280_socket.reset();
+                dev_state.x280_driver.reset();
+                dev_state.x280_active = false;
+                // No drainer => the cores' SPSC profiler rings will never be emptied. Tell every
+                // worker to drop-not-block so a full ring can't deadlock the workload.
+                try {
+                    broadcast_profiler_terminate(x280_cluster, device_id, dev_state.device, prof_l1);
+                } catch (const std::exception& e) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE after X280 "
+                        "boot failure: {}",
+                        device_id,
+                        e.what());
+                }
+            } else {
+                dev_state.x280_active = true;
+                // Clear the auto-prime loop guard: a clean boot means the prime (if any) took.
+                std::remove(("/tmp/tt_x280_autoprime_dev" + std::to_string(device_id)).c_str());
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: booted X280 kernel-zone drainer (l2cpu {}, "
+                    "{} cores, prof_l1=0x{:x}, pcie=({},{}))",
+                    device_id,
+                    kL2CpuIndex,
+                    num_cores,
+                    prof_l1,
+                    pc.x,
+                    pc.y);
+            }
+        }
+    } catch (const std::exception& e) {
+        dev_state.x280_active = false;
+        dev_state.x280_socket.reset();
+        dev_state.x280_driver.reset();
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] Device {}: X280 kernel-zone drainer boot failed ({}); continuing without it.",
+            device_id,
+            e.what());
+        // No drainer => stop the cores blocking on full profiler rings (see boot-failure path above).
+        try {
+            const uint64_t prof_l1_t = MetalContext::instance(context_id_)
+                                           .hal()
+                                           .get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+            broadcast_profiler_terminate(
+                MetalContext::instance(context_id_).get_cluster(), device_id, dev_state.device, prof_l1_t);
+        } catch (const std::exception& e2) {
+            log_warning(
+                tt::LogMetal,
+                "[Real-time profiler] Device {}: failed to broadcast PROFILER_TERMINATE after X280 boot "
+                "exception: {}",
+                device_id,
+                e2.what());
+        }
     }
 }
 
@@ -865,6 +1174,17 @@ void RealtimeProfilerManager::run_init_sync() {
             dev_state.sync_host_start,
             static_cast<double>(dev_state.first_timestamp),
             dev_state.sync_frequency);
+        // Pre-create the per-core Tracy contexts NOW (init, rings empty) from the boot-time coord
+        // map, so the receiver thread never creates a context (~ms) lazily during draining — which
+        // would block the socket drain and back-pressure the X280 into stalling the compute cores.
+        if (dev_state.x280_active) {
+            std::vector<std::pair<uint32_t, uint32_t>> worker_noc0;
+            worker_noc0.reserve(dev_state.x280_virt_to_noc0.size());
+            for (const auto& [virt, noc0] : dev_state.x280_virt_to_noc0) {
+                worker_noc0.push_back(noc0);
+            }
+            tracy_handler_->PreCreateContexts(dev_state.chip_id, worker_noc0);
+        }
     }
 
     // Emit sync verification markers: take one independent device measurement per device
@@ -982,6 +1302,89 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
     return num_pages_to_read;
 }
 
+uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
+    if (!dev_state.x280_active || !dev_state.x280_socket) {
+        return 0;
+    }
+    namespace exp = tt::tt_metal::experimental;
+    static constexpr uint32_t kX280BatchPages = 256;
+    constexpr uint32_t page_words = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
+
+    const uint32_t avail = dev_state.x280_socket->pages_available();
+    if (avail == 0) {
+        return 0;
+    }
+    // BATCHED D2H drain: read up to kX280BatchPages in ONE read() and ack them ALL at once, so
+    // FIFO room is freed in bulk and the X280 stops reserve-stalling. The per-page enrich+publish
+    // below runs AFTER this bulk ack, so a slow Tracy push no longer gates the FIFO drain.
+    const uint32_t n = std::min(avail, kX280BatchPages);
+    std::vector<uint32_t> x280_page_buf(static_cast<size_t>(kX280BatchPages) * page_words);
+    dev_state.x280_socket->read(x280_page_buf.data(), n);
+
+    // 16-bit-hash -> zone name/file/line, resolved the same way the DRAM profiler names zones.
+    // Built lazily on the first packet (kernels have compiled + written the zone-source logs by
+    // the time any marker is drained), so device zones show real names instead of "Zone_<hash>".
+    // Function-local static: only the single receiver thread ever calls this, so no lock needed.
+    static std::unordered_map<uint16_t, tracy::MarkerDetails> x280_zone_names;
+    static bool x280_zone_names_ready = false;
+    if (!x280_zone_names_ready) {
+        try {
+            x280_zone_names = loadZoneSourceLocationsHashesReadOnly();
+        } catch (const std::exception& e) {
+            log_warning(tt::LogMetal, "[Real-time profiler] X280 zone-name resolution failed: {}", e.what());
+        }
+        x280_zone_names_ready = true;
+        log_debug(tt::LogMetal, "[Real-time profiler] X280 resolved {} zone-name hashes", x280_zone_names.size());
+    }
+
+    for (uint32_t pg = 0; pg < n; pg++) {
+        const uint32_t* page = x280_page_buf.data() + static_cast<size_t>(pg) * page_words;
+        const auto* header = reinterpret_cast<const exp::WirePacketHeader*>(page);
+        switch (static_cast<exp::ProfilerPacketType>(header->type)) {
+            case exp::ProfilerPacketType::WorkerZone: {
+                const auto* w = reinterpret_cast<const exp::WorkerZoneWire*>(page);
+                const uint32_t ptype = (w->timer_id >> 16) & 0x7;
+                if (ptype != kernel_profiler::ZONE_START && ptype != kernel_profiler::ZONE_END) {
+                    break;  // only zone start/end are handled today; other packet types are deferred
+                }
+                // Enrich: virtual -> NOC0 (map built at boot; fall back to virtual if unmapped).
+                uint32_t noc0_x = w->core_x, noc0_y = w->core_y;
+                if (auto it = dev_state.x280_virt_to_noc0.find((static_cast<uint64_t>(w->core_x) << 32) | w->core_y);
+                    it != dev_state.x280_virt_to_noc0.end()) {
+                    noc0_x = it->second.first;
+                    noc0_y = it->second.second;
+                }
+                const uint16_t hash = static_cast<uint16_t>(w->timer_id & 0xFFFF);
+                std::string_view name;
+                // 0x7FFF == kernel_profiler::PROFILER_STALL_ZONE_ID: the back-pressure stall zone that
+                // ring_ensure_room emits when a RISC blocks on a full ring waiting for the X280.
+                if (hash == 0x7FFF) {
+                    name = "X280-STALL";
+                } else if (auto it = x280_zone_names.find(hash); it != x280_zone_names.end()) {
+                    name = it->second.marker_name;
+                }
+
+                exp::WorkerZonePacket pkt{
+                    .chip_id = dev_state.chip_id,
+                    .core_virtual_x = w->core_x,
+                    .core_virtual_y = w->core_y,
+                    .core_noc0_x = noc0_x,
+                    .core_noc0_y = noc0_y,
+                    .risc = w->risc,
+                    .timer_id = hash,
+                    .name = name,
+                    .timestamp = (static_cast<uint64_t>(w->time_hi) << 32) | w->time_lo,
+                    .is_start = (ptype == kernel_profiler::ZONE_START),
+                };
+                exp::InvokeProfilerPacketCallbacks(exp::ProfilerPacketType::WorkerZone, &pkt);
+                break;
+            }
+            default: break;  // unknown/deferred packet type
+        }
+    }
+    return n;
+}
+
 uint64_t RealtimeProfilerManager::run_receiver_loop() {
     constexpr uint32_t kPageWords = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
     std::vector<uint32_t> page_buf(kMaxSocketPagesPerRead * kPageWords);
@@ -1015,6 +1418,10 @@ uint32_t RealtimeProfilerManager::drain_all_devices(
     for (auto& dev_state : devices_) {
         try {
             num_pages += drain_device_pages(dev_state, scan_sync_marker, page_buf, record_buf);
+            // X280 kernel-zone drainer runs as a PARALLEL path: it pushes markers straight to
+            // Tracy via the profiler-packet callbacks (not the broadcast ring), so its pages are
+            // counted here only to keep the receiver's backoff/wake heuristics responsive.
+            num_pages += drain_x280_device(dev_state);
         } catch (const std::exception& e) {
             log_warning(
                 tt::LogMetal, "[Real-time profiler] Exception draining device {}: {}", dev_state.chip_id, e.what());
@@ -1150,9 +1557,39 @@ void RealtimeProfilerManager::shutdown() {
     constexpr auto kShutdownKernelExitGrace = std::chrono::milliseconds(100);
     MetalContext::instance(context_id_).data_collector()->DetachRealtimeProfilerCallbackListener(this);
 
+    // The SPSC kernel-profiler backend has worker+dispatch cores BLOCK in ring_ensure_room when their
+    // zone ring is full. Once the X280 drainer stops advancing ring heads at teardown, a still-producing
+    // core (typically a dispatch core) would block forever and wait_for_dispatch_cores would never see it
+    // "done" -> the process hangs at close. Broadcast PROFILER_TERMINATE to the FULL logical grid first so
+    // ring_ensure_room drops-not-blocks (lossless during the run; only teardown-phase markers are dropped),
+    // BEFORE we P_STOP the drainer.
+    if (!devices_.empty()) {
+        const auto& hal = MetalContext::instance(context_id_).hal();
+        auto& cluster = MetalContext::instance(context_id_).get_cluster();
+        const uint64_t prof_l1 = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
+        for (auto& dev_state : devices_) {
+            if (dev_state.x280_active && dev_state.device) {
+                broadcast_profiler_terminate(cluster, dev_state.chip_id, dev_state.device, prof_l1);
+            }
+        }
+    }
+
     // Re-write ring_buffer->terminate as a safety net (dispatch_s already set it via the
     // profiler core's TERMINATE), then give the push kernel time to deliver the last PCIe page.
     for (auto& dev_state : devices_) {
+        // Tell the X280 drainer to finish its current drain pass and exit its loop, so the
+        // receiver's shutdown drain catches the last device-zone pages.
+        if (dev_state.x280_active && dev_state.x280_driver) {
+            try {
+                dev_state.x280_driver->lim_wr_u64(dev_state.x280_params_addr + 0x28, 1);  // P_STOP
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to stop X280 on device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
         if (dev_state.core_l1.ring_buffer != 0 && dev_state.device) {
             const uint32_t terminate_addr = dev_state.core_l1.ring_buffer + offsetof(RtProfilerRingBuffer, terminate);
             std::vector<uint32_t> terminate_flag = {1};
@@ -1181,6 +1618,39 @@ void RealtimeProfilerManager::shutdown() {
         stop_.store(true, std::memory_order_release);
         notify_finish_sync_waiters();
         receiver_thread_.join();
+    }
+
+    // Park each X280 in reset now that its socket has been drained by the receiver's shutdown pass.
+    for (auto& dev_state : devices_) {
+        if (dev_state.x280_active && dev_state.x280_driver) {
+            try {
+                // Telemetry: profzone's result mailbox (results base = params_addr + 0x40).
+                // total_markers@+0x00 = raw markers relayed; loops@+0x08 = drain-loop passes;
+                // stalls@+0x20 = reserve-spin iterations where the X280 was BLOCKED waiting for the
+                // host to free D2H FIFO room. High stalls => host drain is the bottleneck; ~0 => the
+                // X280's own drain rate is the limit.
+                uint64_t total_markers = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x40);
+                uint64_t loops = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x48);
+                uint64_t reserve_stalls = dev_state.x280_driver->lim_rd_u64(dev_state.x280_params_addr + 0x60);
+                log_info(
+                    tt::LogMetal,
+                    "[Real-time profiler] Device {}: X280 drainer relayed {} markers ({} drain passes, {} "
+                    "reserve-stall spins waiting on host D2H FIFO)",
+                    dev_state.chip_id,
+                    total_markers,
+                    loops,
+                    reserve_stalls);
+                dev_state.x280_driver->assert_reset();
+            } catch (const std::exception& e) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] Failed to reset X280 on device {}: {}",
+                    dev_state.chip_id,
+                    e.what());
+            }
+        }
+        dev_state.x280_socket.reset();
+        dev_state.x280_driver.reset();
     }
 
     for (const auto& dev_state : devices_) {
@@ -1228,6 +1698,7 @@ void RealtimeProfilerManager::shutdown() {
     // tt::IsProgramRealtimeProfilerActive() queries don't observe a chip mid-shutdown.
     for (const auto& dev_state : devices_) {
         tt::NotifyProgramRealtimeProfilerDeactivated(dev_state.chip_id);
+        tt::NotifyProgramX280ProfilerDeactivated(dev_state.chip_id);  // no-op if X280 never won here
     }
     devices_.clear();
 }

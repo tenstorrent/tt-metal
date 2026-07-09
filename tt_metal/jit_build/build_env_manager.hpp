@@ -98,6 +98,10 @@ public:
     std::string get_firmware_binary_path(
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
 
+    // Path to the X280 (L2CPU) profiler-drainer firmware (profzone.bin) built by build_firmware,
+    // or "" if gated off / not yet built. Used by RealtimeProfilerManager to boot the X280.
+    std::string get_x280_firmware_path(ChipId device_id);
+
     // Get the path to a kernel binary for loading/linking from the provided binary root.
     std::string get_kernel_binary_path(
         ChipId device_id,

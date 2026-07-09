@@ -15,6 +15,7 @@
 
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
+#include <tracy/Tracy.hpp>  // host CPU ZoneScoped* to pinpoint where the marker push spends time
 #endif
 
 namespace tt::tt_metal {
@@ -71,25 +72,37 @@ std::string FormatTopCounts(const std::unordered_map<Key, uint64_t>& counts) {
 }  // namespace
 
 RealtimeProfilerTracyHandler::RealtimeProfilerTracyHandler() {
-#if defined(TRACY_ENABLE)
+    // Program-record path: this branch's RT-profiler delivers records in BATCHES
+    // (ProgramRealtimeRecordBatch), so unpack the batch and route each record through
+    // HandleRecord (the per-record (chip,100,100) context logic below).
     callback_handle_ = tt::RegisterProgramRealtimeProfilerCallback([this](const tt::ProgramRealtimeRecordBatch& batch) {
+#if defined(TRACY_ENABLE)
         if (!tracy::GetProfiler().IsConnected()) {
             return;
         }
+#endif
         for (const auto& record : batch.records) {
             HandleRecord(record);
         }
     });
-#endif
+    // X280 kernel-zone path: subscribe to enriched WorkerZone packets emitted by the manager's
+    // X280 drainer and push them to per-core Tracy lanes.
+    packet_callback_handle_ = tt::tt_metal::experimental::RegisterProfilerPacketCallback(
+        [this](const tt::tt_metal::experimental::WorkerZonePacket& zone) { HandleWorkerZone(zone); });
 }
 
 RealtimeProfilerTracyHandler::~RealtimeProfilerTracyHandler() {
-#if defined(TRACY_ENABLE)
+    tt::tt_metal::experimental::UnregisterProfilerPacketCallback(packet_callback_handle_);
     tt::UnregisterProgramRealtimeProfilerCallback(callback_handle_);
 
     std::lock_guard<std::mutex> lock(mutex_);
     MaybeEmitSkippedZoneSummaryLocked();
 
+#if defined(TRACY_ENABLE)
+    log_debug(
+        tt::LogMetal,
+        "[Real-time profiler] destroying {} per-core Tracy contexts (1 program/sync + workers)",
+        tracy_contexts_.size());
     for (auto& entry : tracy_contexts_) {
         TracyTTDestroy(entry.second);
     }
@@ -104,36 +117,52 @@ void RealtimeProfilerTracyHandler::AddDevice(
     [[maybe_unused]] double frequency) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    if (tracy_contexts_.contains(chip_id)) {
-        log_warning(tt::LogMetal, "RealtimeProfilerTracyHandler: device {} already added, skipping", chip_id);
-        return;
-    }
-
-    TracyTTCtx ctx = TracyTTContext();
-    TracyTTContextPopulate(ctx, host_start, first_timestamp, frequency);
-    std::string name = fmt::format("Device {}:", chip_id);
-    TracyTTContextName(ctx, name.c_str(), name.size());
-
-    tracy_contexts_[chip_id] = ctx;
+    // Record the chip's anchor; the actual Tracy contexts are created lazily, one per core, on the
+    // first marker for that core (see GetOrCreateContext). A single per-chip context would collapse
+    // every core's RISCs into one device row.
+    chip_anchors_[chip_id] = ChipAnchor{host_start, first_timestamp, frequency};
 #endif
 }
 
 void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_id) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = tracy_contexts_.find(chip_id);
-    if (it == tracy_contexts_.end()) {
-        return;
+    for (auto it = tracy_contexts_.begin(); it != tracy_contexts_.end();) {
+        if ((it->first >> 40) == chip_id) {
+            TracyTTDestroy(it->second);
+            it = tracy_contexts_.erase(it);
+        } else {
+            ++it;
+        }
     }
-    TracyTTDestroy(it->second);
-    tracy_contexts_.erase(it);
+    chip_anchors_.erase(chip_id);
 #endif
 }
 
-TracyTTCtx RealtimeProfilerTracyHandler::GetContext(uint32_t chip_id) {
+TracyTTCtx RealtimeProfilerTracyHandler::GetOrCreateContext(
+    [[maybe_unused]] uint32_t chip_id,
+    [[maybe_unused]] uint32_t core_x,
+    [[maybe_unused]] uint32_t core_y,
+    [[maybe_unused]] const std::string& name) {
+#if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = tracy_contexts_.find(chip_id);
-    return it != tracy_contexts_.end() ? it->second : nullptr;
+    const uint64_t key = ContextKey(chip_id, core_x, core_y);
+    if (auto it = tracy_contexts_.find(key); it != tracy_contexts_.end()) {
+        return it->second;
+    }
+    auto ait = chip_anchors_.find(chip_id);
+    if (ait == chip_anchors_.end()) {
+        return nullptr;  // device was never AddDevice'd
+    }
+    const ChipAnchor& a = ait->second;
+    TracyTTCtx ctx = TracyTTContext();
+    TracyTTContextPopulate(ctx, a.host_start, a.first_timestamp, a.frequency);
+    TracyTTContextName(ctx, name.c_str(), name.size());
+    tracy_contexts_[key] = ctx;
+    return ctx;
+#else
+    return nullptr;
+#endif
 }
 
 void RealtimeProfilerTracyHandler::RecordSkippedZoneWithEndBeforeStart(
@@ -210,7 +239,11 @@ void RealtimeProfilerTracyHandler::HandleRecord(const tt::ProgramRealtimeRecord&
     }
 
 #if defined(TRACY_ENABLE)
-    TracyTTCtx ctx = GetContext(record.chip_id);
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    // Program/op + sync-check zones ride the program core (100,100) row, named "Device {chip}".
+    TracyTTCtx ctx = GetOrCreateContext(record.chip_id, 100, 100, fmt::format("Device {}", record.chip_id));
     if (!ctx) {
         return;
     }
@@ -240,7 +273,7 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
+    TracyTTCtx ctx = GetOrCreateContext(chip_id, 100, 100, fmt::format("Device {}", chip_id));
     if (!ctx) {
         return;
     }
@@ -274,6 +307,60 @@ void RealtimeProfilerTracyHandler::PushSyncCheckMarker(
 #endif
 }
 
+void RealtimeProfilerTracyHandler::HandleWorkerZone(
+    [[maybe_unused]] const tt::tt_metal::experimental::WorkerZonePacket& zone) {
+#if defined(TRACY_ENABLE)
+    if (!tracy::GetProfiler().IsConnected()) {
+        return;
+    }
+    // One Tracy context (row) per worker core, keyed by its NOC0 coord; the 5 RISCs are lanes within.
+    TracyTTCtx ctx;
+    {
+        ZoneScopedN("HWZ-GetCtx");  // context lookup/create (+ the per-marker fmt::format for the name)
+        ctx = GetOrCreateContext(
+            zone.chip_id,
+            zone.core_noc0_x,
+            zone.core_noc0_y,
+            fmt::format("Device: {} Physical ({},{})", zone.chip_id, zone.core_noc0_x, zone.core_noc0_y));
+    }
+    if (!ctx) {
+        return;
+    }
+
+    // The enriched packet is already fully resolved by the host (NOC0 coord, deciphered name,
+    // is_start). Zones arrive in ring order (== emission order == correct nest order per lane), so
+    // pushing START/END in arrival order lets Tracy nest them correctly. Markers share the device
+    // clock domain, so the per-chip context calibration applies directly.
+    static constexpr tracy::RiscType kRisc[5] = {
+        tracy::RiscType::BRISC,
+        tracy::RiscType::NCRISC,
+        tracy::RiscType::TRISC_0,
+        tracy::RiscType::TRISC_1,
+        tracy::RiscType::TRISC_2};
+
+    tracy::TTDeviceMarker marker;
+    marker.chip_id = zone.chip_id;
+    marker.core_x = zone.core_noc0_x;
+    marker.core_y = zone.core_noc0_y;
+    marker.risc = kRisc[zone.risc % 5];
+    marker.timestamp = zone.timestamp;
+    marker.runtime_host_id = zone.timer_id;
+    marker.marker_type = zone.is_start ? tracy::TTDeviceMarkerType::ZONE_START : tracy::TTDeviceMarkerType::ZONE_END;
+    marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
+    marker.file = "kernel_profiler";
+    marker.line = 0;
+
+    {
+        ZoneScopedN("HWZ-TracyPush");  // the actual enqueue into Tracy (blocks here if Tracy's queue is full)
+        if (zone.is_start) {
+            TracyTTPushStartMarker(ctx, marker);
+        } else {
+            TracyTTPushEndMarker(ctx, marker);
+        }
+    }
+#endif
+}
+
 void RealtimeProfilerTracyHandler::CalibrateDevice(
     [[maybe_unused]] uint32_t chip_id,
     [[maybe_unused]] int64_t host_time,
@@ -283,11 +370,35 @@ void RealtimeProfilerTracyHandler::CalibrateDevice(
     if (!tracy::GetProfiler().IsConnected()) {
         return;
     }
-    TracyTTCtx ctx = GetContext(chip_id);
-    if (!ctx) {
-        return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Refine the chip's anchor so contexts created AFTER this sync Populate with the current mapping
+    // (a single anchor per context — no dual-anchor birth).
+    if (auto ait = chip_anchors_.find(chip_id); ait != chip_anchors_.end()) {
+        ait->second = ChipAnchor{host_time, static_cast<double>(device_timestamp), frequency};
     }
-    TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
+    // Recalibrate every existing context for this chip uniformly.
+    for (auto& [key, ctx] : tracy_contexts_) {
+        if ((key >> 40) == chip_id) {
+            TracyTTContextCalibrate(ctx, host_time, static_cast<double>(device_timestamp), frequency);
+        }
+    }
+#endif
+}
+
+void RealtimeProfilerTracyHandler::PreCreateContexts(
+    [[maybe_unused]] uint32_t chip_id, [[maybe_unused]] const std::vector<std::pair<uint32_t, uint32_t>>& worker_noc0) {
+#if defined(TRACY_ENABLE)
+    // Program/sync zones ride the (100,100) row.
+    GetOrCreateContext(chip_id, 100, 100, fmt::format("Device {}", chip_id));
+    // One context per worker core, created NOW so the drain loop only ever does fast lookups.
+    for (const auto& [cx, cy] : worker_noc0) {
+        GetOrCreateContext(chip_id, cx, cy, fmt::format("Device: {} Physical ({},{})", chip_id, cx, cy));
+    }
+    log_info(
+        tt::LogMetal,
+        "[Real-time profiler] Device {}: pre-created {} per-core Tracy contexts (off the drain hot path)",
+        chip_id,
+        worker_noc0.size() + 1);
 #endif
 }
 

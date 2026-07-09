@@ -13,15 +13,19 @@
 #include <memory>
 #include <string>
 
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include "common/stable_hash.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/build.hpp"
+#include "jit_build/jit_build_utils.hpp"
 #include "jit_build/precompiled.hpp"
 #include "jit_build/jit_device_config.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 
@@ -337,6 +341,74 @@ BuildIndexAndTypeCount BuildEnvManager::get_build_index_and_state_count(
     return get_kernel_build_index_and_state_count(programmable_core, processor_class);
 }
 
+// Build the X280 (SiFive L2CPU, rv64gcv) profiler-drainer firmware in the JIT firmware
+// phase, into the same cache root. The X280 is NOT a Tensix HAL processor, so it can't go
+// through JitBuildState (Tensix/SFPI-bound); this is a sibling step reusing the JIT cache +
+// run_command. Gated on profiler-enabled + Blackhole + an L2CPU tile being present. The rv64
+// toolchain is a PRECONDITION (fetched into runtime/x280-toolchain by cmake's
+// TT_FETCH_X280_TOOLCHAIN, like SFPI), not a gate: if it's missing, or any compile/link/objcopy
+// step fails, this is fatal. Returns the .bin path ("" if gated off).
+static std::string maybe_build_x280_firmware(ChipId device_id, const std::string& fw_root) {
+    auto& mctx = MetalContext::instance();
+    if (!mctx.rtoptions().get_profiler_enabled()) {
+        return "";
+    }
+    auto& cluster = mctx.get_cluster();
+    if (cluster.arch() != tt::ARCH::BLACKHOLE) {
+        return "";
+    }
+    const auto& soc = cluster.get_soc_desc(device_id);
+    if (soc.get_cores(CoreType::L2CPU, CoordSystem::NOC0).empty()) {
+        return "";  // board has no X280 -> nothing to drain with
+    }
+
+    // Toolchain root: the pinned rv64 toolchain cmake (TT_FETCH_X280_TOOLCHAIN, default ON)
+    // fetched into runtime/x280-toolchain, the same way SFPI is provisioned. No env var.
+    const std::string tc_root = mctx.rtoptions().get_root_dir() + "runtime/x280-toolchain";  // ends in '/'
+    TT_FATAL(
+        std::filesystem::exists(tc_root + "/bin/riscv64-unknown-elf-gcc"),
+        "X280 profiler drainer enabled (profiler on, Blackhole, L2CPU present) but the rv64 toolchain was "
+        "not found at '{}'. It is fetched by cmake (TT_FETCH_X280_TOOLCHAIN, default ON) — reconfigure to "
+        "download it.",
+        tc_root);
+
+    const std::string x = mctx.rtoptions().get_root_dir() + "tools/x280_bm";  // get_root_dir() ends in '/'
+    const std::string cc = tc_root + "/bin/riscv64-unknown-elf-gcc";
+    const std::string objcopy = tc_root + "/bin/riscv64-unknown-elf-objcopy";
+    const std::string out = fw_root + "/x280";
+    std::filesystem::create_directories(out);
+    // profzone: drains the per-RISC SPSC zone rings, PAIRS start/end markers per (core,risc)
+    // on-device, and pushes complete device-zone pages through a D2H socket. This is the drainer
+    // RealtimeProfilerManager boots so kernel zones flow to Tracy (and producers never block).
+    const std::string bin = out + "/profzone.bin";
+
+    if (std::filesystem::exists(bin) && !mctx.rtoptions().get_force_jit_compile()) {
+        return bin;  // cached
+    }
+
+    const std::string arch = "-march=rv64gc -mabi=lp64d";
+    const std::string vec =
+        "-march=rv64gcv_zfh_zba_zbb -mabi=lp64d -nostdlib -nostartfiles -ffreestanding "
+        "-mcmodel=medany -O2 -g -Wall -I" +
+        x + "/include -fno-tree-loop-distribute-patterns";
+    const std::string entry_o = out + "/entry.o", prof_o = out + "/profzone.o", elf = out + "/profzone.elf";
+    const std::string log = out + "/build.log";
+    auto run = [&](const std::string& cmd) {
+        TT_FATAL(
+            tt::jit_build::utils::run_command(cmd, log, false),
+            "X280 firmware build step failed (see {}): {}",
+            log,
+            cmd);
+    };
+    run(cc + " " + arch + " -nostdlib -c -o " + entry_o + " " + x + "/boot/entry.S");
+    run(cc + " " + vec + " -c -o " + prof_o + " " + x + "/src/profzone.c");
+    run(cc + " -nostdlib -T " + x + "/ld/x280-lim.ld " + arch + " -o " + elf + " " + entry_o + " " + prof_o);
+    run(objcopy + " -O binary " + elf + " " + bin);
+    TT_FATAL(std::filesystem::exists(bin), "X280 firmware build produced no binary at {}", bin);
+    log_info(tt::LogBuildKernels, "Built X280 drainer firmware: {}", bin);
+    return bin;
+}
+
 void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) {
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
@@ -348,6 +420,16 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
         return;
     }
     jit_build_once(build_env.build_key(), [&build_env] { jit_build_subset(build_env.firmware_build_states, nullptr); });
+    (void)maybe_build_x280_firmware(device_id, build_env.build_env.get_firmware_binary_root());
+}
+
+std::string BuildEnvManager::get_x280_firmware_path(ChipId device_id) {
+    // Path the X280 drainer firmware (profzone.bin) was built to by build_firmware ->
+    // maybe_build_x280_firmware. Returns "" if it was gated off (not profiler/Blackhole/L2CPU)
+    // or has not been built yet. RealtimeProfilerManager uses this to load + boot the X280.
+    const auto& build_env = get_device_build_env(device_id);
+    std::string bin = build_env.build_env.get_firmware_binary_root() + "/x280/profzone.bin";
+    return std::filesystem::exists(bin) ? bin : std::string{};
 }
 
 std::string BuildEnvManager::get_firmware_binary_path(

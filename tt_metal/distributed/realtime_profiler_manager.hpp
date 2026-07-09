@@ -31,6 +31,10 @@ class Program;
 class DataCollector;
 class RealtimeProfilerTracyHandler;
 
+namespace profiler {
+class X280Driver;
+}
+
 namespace distributed {
 
 class D2HSocket;
@@ -98,6 +102,19 @@ private:
         MeshCoordinate mesh_coord = MeshCoordinate(0);
         CoreCoord realtime_profiler_core;
         std::unique_ptr<D2HSocket> socket;
+        // Optional X280 (L2CPU) kernel-zone drainer: a SECOND D2H socket whose sender is the X280.
+        // The X280 drains the per-RISC SPSC zone rings (HalL1MemAddrType::PROFILER) and relays each
+        // raw marker (in ring order) as a device-marker page. The receiver polls this alongside
+        // `socket` and pushes START/END to Tracy per lane. Null when no X280 / not eligible / fw
+        // not built.
+        std::unique_ptr<D2HSocket> x280_socket;
+        std::unique_ptr<profiler::X280Driver> x280_driver;
+        uint64_t x280_params_addr = 0;  // MBOX_PARAMS in the X280 LIM (for the P_STOP write at shutdown)
+        bool x280_active = false;
+        // The X280 relays worker cores in VIRTUAL coords (what its NoC addresses); Tracy device
+        // lanes must use the same NOC0 coords the standard DeviceProfiler uses, so we map here.
+        // Key = (uint64_t(virtual_x) << 32) | virtual_y, value = NOC0 (x, y).
+        std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> x280_virt_to_noc0;
         // Owns the BRISC+NCRISC realtime-profiler program so its kernels remain alive for
         // the lifetime of the manager. If this goes out of scope while the kernels are
         // still running, downstream tooling (e.g. tt-inspector) loses the kernel metadata.
@@ -135,6 +152,14 @@ private:
     void initialize_devices(const std::shared_ptr<MeshDevice>& mesh_device);
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
     void run_init_sync();
+
+    // Best-effort boot of the optional X280 (L2CPU) kernel-zone drainer on an eligible Blackhole
+    // device (populates dev_state.x280_* on success). No-op / leaves x280_active=false otherwise.
+    void boot_x280_drainer(
+        const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoordinate& coord, DeviceState& dev_state);
+    // Drain one device's X280 socket (batched), enrich each WorkerZone marker and invoke the
+    // profiler-packet callbacks. Returns the number of pages read.
+    uint32_t drain_x280_device(DeviceState& dev_state);
 
     using RecordRing = BroadcastRing<tt::ProgramRealtimeRecord>;
 
