@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import ClassVar
 
 import torch
@@ -12,6 +13,11 @@ import torch
 import ttnn
 
 from .module import Module, Parameter
+
+# Env-var switch to use the fused wan_fused_distributed_rmsnorm device op
+# instead of the composite (pre_allgather + AG + post_allgather) chain.
+# Set WAN_USE_FUSED_RMSNORM=1 to enable.
+_USE_FUSED_RMSNORM = os.getenv("WAN_USE_FUSED_RMSNORM") == "1"
 
 
 class RMSNorm(Module):
@@ -193,6 +199,58 @@ class DistributedRMSNorm(Module):
         if "weight" in state:
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
+    def _ensure_fused_stats_buffer(
+        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None
+    ):
+        """Lazy-allocate the persistent stats buffer for the fused device op.
+
+        The buffer's chunk/window geometry is computed by the SAME compute_sizing
+        the device op uses, so it MUST be fed the same inputs that affect chunking:
+        weight/RoPE (per-head-RoPE & streaming chunk clamp) and num_links (workers
+        are rounded to a multiple of num_links). The op here is invoked with the
+        default num_links (=1), so we leave create_stats_buffer at its default too;
+        but we MUST forward weight/RoPE or the buffer is sized for a different chunk
+        than the kernel writes, silently corrupting each chunk's last AG row.
+        """
+        has_rope = rope_cos is not None
+        key = (tuple(x.shape), num_heads_per_device, has_rope)
+        cache = getattr(self, "_fused_stats_buffer_cache", None)
+        if cache is None:
+            cache = {}
+            self._fused_stats_buffer_cache = cache
+        entry = cache.get(key)
+        if entry is None:
+            # Rotating POOL of buffers (not a single cached one). The device op resets
+            # its out_ready semaphore at end-of-op, so two same-shape norm ops that
+            # share ONE scratch buffer race on the AG, and a lagging device's atomic
+            # inc can land across the reset onto the wrong invocation (the dropped-sem
+            # / device-skew hazard). Handing each successive call a different buffer
+            # (paired with get_ag_ping_pong_semaphore's 2-set sem rotation) keeps a
+            # buffer free of in-flight AG traffic from the previous use. Pool size 2
+            # matches the sem ping-pong depth. (create_stats_buffer returns None for
+            # the non-MUX path, where there's no AG and no buffer is needed.)
+            bufs = [
+                ttnn.experimental.wan_fused_distributed_rmsnorm_create_stats_buffer(
+                    x,
+                    self.mesh_axis,
+                    self.mesh_device,
+                    num_heads_per_device=num_heads_per_device,
+                    weight=self.weight.data if self.weight is not None else None,
+                    transformation_mat=trans_mat,
+                    rope_cos=rope_cos,
+                    rope_sin=rope_sin,
+                )
+                for _ in range(2)
+            ]
+            entry = {"bufs": bufs, "idx": 0}
+            cache[key] = entry
+        bufs = entry["bufs"]
+        if bufs[0] is None:
+            return None
+        buf = bufs[entry["idx"]]
+        entry["idx"] = (entry["idx"] + 1) % len(bufs)
+        return buf
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -210,6 +268,28 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
+
+        if _USE_FUSED_RMSNORM:
+            persistent_output_buffer = self._ensure_fused_stats_buffer(
+                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+            )
+            return ttnn.experimental.wan_fused_distributed_rmsnorm(
+                x,
+                self.mesh_axis,
+                self.mesh_device,
+                self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
+                topology=self.ccl_manager.topology,
+                persistent_output_buffer=persistent_output_buffer,
+                epsilon=self.norm_eps,
+                num_heads_per_device=num_heads_per_device,
+                weight=self.weight.data if self.weight is not None else None,
+                compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+                transformation_mat=trans_mat,
+                rope_cos=rope_cos,
+                rope_sin=rope_sin,
+                dtype=dtype,
+                use_device_op=True,
+            )
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
