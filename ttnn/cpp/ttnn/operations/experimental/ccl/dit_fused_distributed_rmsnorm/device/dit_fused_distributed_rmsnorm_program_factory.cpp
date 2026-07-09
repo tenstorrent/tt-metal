@@ -513,7 +513,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
 
     // [worker_0..N-1, forwarder_0..F-1] on the device grid (row-major).
-    const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_major=*/true);
+    const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_wise=*/true);
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
     std::vector<CoreCoord> forwarder_cores;
     for (uint32_t f = 0; f < num_forwarders; f++) {

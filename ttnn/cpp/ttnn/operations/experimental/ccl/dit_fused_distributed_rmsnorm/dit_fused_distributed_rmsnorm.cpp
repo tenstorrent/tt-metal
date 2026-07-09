@@ -6,6 +6,7 @@
 
 #include <tt-metalium/constants.hpp>
 
+#include "ttnn/device.hpp"
 #include "device/dit_fused_distributed_rmsnorm_device_operation.hpp"
 
 using namespace tt::constants;
