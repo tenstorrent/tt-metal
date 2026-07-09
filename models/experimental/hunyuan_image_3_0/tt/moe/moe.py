@@ -42,8 +42,14 @@ class HunyuanTtMoE(LightweightModule):
         norm_topk_prob: bool = True,
         weight_dtype=ttnn.bfloat16,
         stream_experts: bool = True,
+        weight_cache_path=None,
     ):
         super().__init__()
+        # Accepted for a uniform constructor signature with
+        # HunyuanTtMoEParallel (transformer_layer.py passes it to both). The
+        # single-device path loads experts directly from state_dict, so there
+        # is no disk cache to key.
+        self.weight_cache_path = weight_cache_path
         self.device = device
         self.hidden_size = hidden_size
         self.num_experts = num_experts
