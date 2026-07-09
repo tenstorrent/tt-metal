@@ -442,6 +442,81 @@ def encoder_tp_interleaved_matmul_program_config(
     return matmul_multicast_1d_program_config(device, m=m, k=k, n=n, force_in0_block_w=ibw)
 
 
+# Text-decoder prefill (M=128 chunk, tp=4) block-sharded 2D matmul, tuned via
+# ``tests/pcc/test_text_decoder_matmul_sweep.py`` (BH device profiler).  Maps ``(k, n)`` ->
+# ``in0_block_w`` cap; the grid is auto-picked by ``_pick_encoder_tp_bs_grid`` (lands on 8x4=32
+# cores for all four).  Measured device-kernel wins vs the 1D width-sharded baseline (PCC=1.0):
+#   (1024,  768) self-attn QKV      12.49 -> 9.68 us  (1.29x)
+#   (1024,  256) cross-attn q_proj  11.78 -> 5.89 us  (2.00x)
+#   (1024,  512) cross-attn kv      12.42 -> 7.76 us  (1.60x)
+#   (2048, 1024) ffn fc2            22.51 -> 18.04 us (1.25x)
+# out_proj (256,1024) and ffn fc1 (1024,2048) are intentionally omitted: the sweep found their
+# 1D width-sharded configs already optimal (<=1.01x, and fc1 is HiFi2 FLOP-bound).
+_DECODER_PREFILL_BS_IBW = {
+    (1024, 768): 4,
+    (1024, 256): 4,
+    (1024, 512): 4,
+    (2048, 1024): 8,
+}
+
+
+def decoder_prefill_block_sharded_matmul(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    n: int,
+    *,
+    fused_activation=None,
+):
+    """Tuned block-sharded 2D matmul for a decoder prefill linear (see ``_DECODER_PREFILL_BS_IBW``).
+
+    Returns ``(program_config, in0_block_sharded_mem, out_block_sharded_mem)`` for a tuned
+    ``(k, n)``, or ``None`` when the shape isn't tuned or doesn't tile-fit the compute grid (the
+    caller then keeps its default 1D linear).  in0 and out are L1 ``BLOCK_SHARDED``; the matmul
+    height-shards M over grid rows and width-shards N over grid columns.  Mirrors
+    ``encoder_tp_block_sharded_matmul`` but keyed on the decoder-specific shape set.
+    """
+    ibw_cap = _DECODER_PREFILL_BS_IBW.get((k, n))
+    if ibw_cap is None:
+        return None
+    if m % TILE or k % TILE or n % TILE:
+        return None
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    picked = _pick_encoder_tp_bs_grid(device, mt=mt, kt=kt, nt=nt, ibw_cap=ibw_cap)
+    if picked is None:
+        return None
+    gx, gy, ibw = picked
+    per_core_m = mt // gy
+    per_core_n = nt // gx
+    out_subblock_w = _largest_divisor_at_most(per_core_n, 4)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+    )
+    grid = ttnn.CoreGrid(y=gy, x=gx)
+    in0_mem = ttnn.create_sharded_memory_config(
+        (1, 1, m, k),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    out_mem = ttnn.create_sharded_memory_config(
+        (1, 1, m, n),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    return program_config, in0_mem, out_mem
+
+
 # T2U tuned 2D matmul layouts from ``test_t2u_matmul_perf_report_sweep`` (BH 11×10, M=512 chunks).
 # ``in0`` / ``out``: ``l1`` (interleaved), ``dram``, or ``bs`` (L1 block-sharded).
 _T2U_TUNED_MATMUL = {

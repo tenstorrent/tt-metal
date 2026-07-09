@@ -25,6 +25,7 @@ from models.common.utility_functions import is_blackhole, nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     decoder_all_reduce_sum_replicate,
     build_ln_sharded_config,
+    decoder_prefill_block_sharded_matmul,
     matmul_multicast_1d_program_config,
     matmul_program_config,
     sdpa_program_config,
@@ -462,6 +463,8 @@ class TTSeamlessM4Tv2Decoder:
         self._sharded_decode_out = os.environ.get("SEAMLESS_DECODE_SHARDED_OUT", "1") != "0"
         self._ln_sharded_cache: dict = {}
         self._matmul_pc_cache: dict = {}
+        # Tuned block-sharded 2D matmul specs for prefill linears (see common.decoder_prefill_block_sharded_matmul).
+        self._prefill_bs_cache: dict = {}
         self._tile_padded_batch_rows = TILE * ((max_batch_size + TILE - 1) // TILE)
         # Same rationale for SDPA chunk schedules: ``forward`` / greedy decode revisit the same
         # ``(seq_q, seq_k, large_chunks)`` keys many times (24 layers × steps); reuse one object.
@@ -601,6 +604,18 @@ class TTSeamlessM4Tv2Decoder:
         is_decode: bool = False,
     ) -> ttnn.Tensor:
         ck = compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg
+        # Prefill (M=128) tuned block-sharded 2D path for the shapes where the sweep beat the 1D
+        # baseline (QKV / cross-q / cross-kv / ffn-fc2).  Overrides any caller-supplied 1D
+        # program_config for those shapes; other shapes and all decode fall through unchanged.
+        if not is_decode and self._sharded_decode_out:
+            bs_spec = self._prefill_bs_matmul(
+                self._matmul_token_rows(x, is_decode=False),
+                int(weight.shape[-2]),
+                int(weight.shape[-1]),
+                activation,
+            )
+            if bs_spec is not None:
+                return self._linear_block_sharded(x, weight, bias, ck, memory_config, bs_spec)
         if program_config is None:
             program_config = self._matmul_pc(
                 self._matmul_token_rows(x, is_decode=is_decode),
@@ -632,6 +647,65 @@ class TTSeamlessM4Tv2Decoder:
                 out = ttnn.reshape(out, (batch, seq, int(out.shape[-1])))
             elif len(out.shape) == 2 and int(out.shape[0]) == batch * seq:
                 out = ttnn.reshape(out, (batch, seq, int(out.shape[-1])))
+        return out
+
+    def _prefill_bs_matmul(self, token_rows: int, in_dim: int, out_dim: int, activation: Optional[str]):
+        """Cached tuned block-sharded 2D matmul spec for a prefill linear, or ``None`` (see common)."""
+        fused = ttnn.UnaryOpType.RELU if activation == "relu" else None
+        key = (token_rows, in_dim, out_dim, activation)
+        cached = self._prefill_bs_cache.get(key, False)
+        if cached is not False:
+            return cached
+        spec = decoder_prefill_block_sharded_matmul(self.device, token_rows, in_dim, out_dim, fused_activation=fused)
+        self._prefill_bs_cache[key] = spec
+        return spec
+
+    def _linear_block_sharded(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        compute_kernel_config,
+        memory_config: ttnn.MemoryConfig,
+        spec: tuple,
+    ) -> ttnn.Tensor:
+        """Run a tuned block-sharded 2D matmul: shard in0, matmul (fused act via PC), back to interleaved.
+
+        Mirrors the text encoder's ``_linear_tp_block_sharded``.  ``x`` is interleaved
+        ``[B, S, K]`` (LN / encoder output); output is interleaved ``[B, S, N]``.
+        """
+        program_config, in0_mem, out_mem = spec
+        m = self._linear_token_rows(x)
+        k = int(weight.shape[-2])
+        n = int(weight.shape[-1])
+        if ttnn.is_sharded(x) and x.memory_config() == in0_mem:
+            x_bs = x
+            owns_x_bs = False
+        elif ttnn.is_sharded(x):
+            x_bs = ttnn.to_memory_config(x, in0_mem)
+            owns_x_bs = True
+        else:
+            # ``ttnn.reshape`` on the tile-padded activation may return a VIEW aliasing x's
+            # buffer, so we must NOT deallocate it: the decoder reuses x across layers / profile
+            # iterations (e.g. ``encoder_hidden_states`` for the cross-attn KV projection).
+            # ``to_memory_config`` copies into a fresh block-sharded x_bs, which we do own.
+            x2d = x if len(x.shape) == 2 else ttnn.reshape(x, (m, k))
+            x_bs = ttnn.to_memory_config(x2d, in0_mem)
+            owns_x_bs = True
+        out_bs = ttnn.linear(
+            x_bs,
+            weight,
+            bias=bias,
+            program_config=program_config,
+            memory_config=out_mem,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if owns_x_bs:
+            ttnn.deallocate(x_bs)
+        out = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
+        ttnn.deallocate(out_bs)
+        if len(x.shape) >= 3:
+            out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
         return out
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
