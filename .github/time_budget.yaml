@@ -225,8 +225,10 @@ runtime:
     sim_blackhole_galaxy: 10
   unit:
     wh_n150_civ2: 226
-    wh_n300_civ2: 74
-    bh_p150b_civ2: 210
+    wh_n300_civ2: 99
+    wh_llmbox: 20
+    bh_p150b_civ2: 214
+    bh_p300: 69
     bh_p150b_civ2_viommu: 5
     bh_p100a_civ2_viommu: 74
     bh_loudbox: 20
@@ -235,6 +237,8 @@ runtime:
     wh_n150_civ2: 360
     bh_p150b_civ2: 360
     bh_loudbox: 25
+    wh_galaxy: 15
+    bh_galaxy: 15
   perf:
     wh_n300_civ2: 55
     bh_p150_perf: 40
