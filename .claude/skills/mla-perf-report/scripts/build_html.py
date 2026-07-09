@@ -897,6 +897,12 @@ function drawSummary(){
   const g=document.getElementById('statGrid'); g.innerHTML='';
   const cards=[];
   cards.push(['Total critical path', fmtMs(e.total_ns)+' ms', `${fmtInt(e.total_calls)} op calls · ${e.ops.length} op codes`]);
+  // vs baseline (this branch's before→after for M/S; dense ≈ flat control)
+  const be = data.baseline && data.baseline[M] ? data.baseline[M][S] : null;
+  if(be){const bdiff=(e.total_ns-be.total_ns)/be.total_ns*100; const bf=bdiff<0;
+    const bp=`<span class="delta ${bf?'pos':'neg'}">${bf?'▼':'▲'} ${Math.abs(bdiff).toFixed(1)}% ${bf?'faster':'slower'}</span> vs baseline`;
+    cards.push(['vs baseline', fmtMs(be.total_ns)+' ms', bp]);
+  } else if(data.baseline){ cards.push(['vs baseline', 'N/A', `<span class="miss">${M} ${S} baseline not measured</span>`]); }
   // vs other mode
   let d='';
   if(oe){const diff=(e.total_ns-oe.total_ns)/oe.total_ns*100;
