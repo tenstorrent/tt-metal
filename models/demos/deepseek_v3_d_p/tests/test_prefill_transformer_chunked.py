@@ -37,6 +37,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -451,6 +452,9 @@ def run_chunked_transformer(
 
     # ONE shared KV cache holding all layers' slots [num_layers, 1, seq_local, 576]; layer i uses
     # cache_layer_idx=i. The ring scratch buffer is shared across layers inside TtPrefillTransformer.
+    # Sparse (DSA) variants need an uncompressed KVPE cache that sparse_sdpa reads natively (bf16/ROW_MAJOR);
+    # dense stays bf8/TILE.
+    has_indexer = resolve_has_indexer(config)
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
@@ -459,7 +463,29 @@ def run_chunked_transformer(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
+        dtype=ttnn.bfloat16 if has_indexer else ttnn.bfloat8_b,
+        layout=ttnn.ROW_MAJOR_LAYOUT if has_indexer else ttnn.TILE_LAYOUT,
     )
+
+    # Sparse-DSA chunked: each layer's block-cyclic indexer owns its own single-layer key cache (the
+    # indexer can't share one tensor across layers — they'd clobber each other's keys between chunks),
+    # so allocate one per layer and thread the list through forward. Dense -> None (no indexer).
+    index_kv_caches = None
+    if has_indexer:
+        index_head_dim = getattr(config, "index_head_dim", 128)
+        index_kv_caches = [
+            init_kvpe_cache(
+                kvpe_cache_head_dim=index_head_dim,
+                mesh_device=mesh_device,
+                seq_len=SEQ_CACHE,
+                mesh_shape=mesh_shape,
+                sp_axis=sp_axis,
+                num_kvpe_cache_layers=1,
+                num_users=1,
+                dtype=ttnn.bfloat8_b,
+            )
+            for _ in range(num_layers)
+        ]
 
     mesh_device.enable_program_cache()
 
@@ -495,6 +521,7 @@ def run_chunked_transformer(
             actual_end=kv_actual + CHUNK,
             cache_user_id=0,
             return_intermediates=True,
+            index_kv_cache=index_kv_caches,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -758,10 +785,12 @@ def test_kimi_prefill_transformer_chunked_padded(
 
 # GLM-5.1 variants
 # ---------------------------------------------------------------------------
-# Same chunked-prefill validation as the DeepSeek/Kimi tests, with the glm_5_1 variant and the on-device
-# gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path) +
-# GLM51Config fabric payload. Golden = the vLLM GLM-5.1 55k structured trace (chunked_group_a_v1; set via
-# the variant's test_prefill_trace_default, override with PREFILL_TRACE_DIR).
+# Same chunked-prefill validation as the DeepSeek/Kimi tests, for the glm_5_1 / glm_5_2 variants and the
+# on-device gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path)
+# + GLM fabric payload (5.1 == 5.2 dims). glm_5_2 additionally exercises DSA indexer reuse per chunk: each
+# chunk is one forward, so full layers recompute that chunk's top-k and shared layers reuse it within the
+# chunk. Golden = each variant's vLLM 55k structured trace (chunked_group_a_v1; via test_prefill_trace_default,
+# override with PREFILL_TRACE_DIR).
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
@@ -786,8 +815,8 @@ def test_kimi_prefill_transformer_chunked_padded(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
-@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm", "glm52"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked(
     variant,
