@@ -233,7 +233,7 @@ void run_single_dfb_program(
     const experimental::DataMovementHardwareConfig dm_consumer_cfg{
         .gen1_config =
             experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1},
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
@@ -1689,7 +1689,10 @@ static void run_dfb_size_override_test(
     const experimental::DataMovementHardwareConfig dm_consumer_cfg{
         .gen1_config =
             experimental::DataMovementHardwareConfig::Gen1Config{
-                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1},
+                // NOC_1 keeps the consumer on a distinct NOC from the RISCV_0/NOC_0 producer: two
+                // dedicated-NOC DM kernels on a node must use different NOCs on Gen1 (else the device hangs).
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::NOC_1},
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
