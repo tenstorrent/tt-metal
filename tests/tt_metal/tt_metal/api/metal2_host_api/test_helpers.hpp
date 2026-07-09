@@ -89,9 +89,17 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
 }
 
 // Helper to create a minimal valid KernelSpec for data movement (Gen1/WH/BH)
+//
+// The NOC is derived from the processor (RISCV_0 -> NOC_0, RISCV_1 -> NOC_1) so that the common
+// pairing of an RISCV_0 kernel with an RISCV_1 kernel on the same node gets distinct NOCs. On Gen1,
+// two dedicated-NOC DM kernels sharing a NOC hang the device (validation rejects it), so a helper
+// that always defaulted to NOC_0 would produce a pair that fails validation.
 inline KernelSpec MakeMinimalGen1DMKernel(
     const std::string& name,
     tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
+    const tt::tt_metal::NOC noc = (processor == tt::tt_metal::DataMovementProcessor::RISCV_0)
+                                      ? tt::tt_metal::NOC::NOC_0
+                                      : tt::tt_metal::NOC::NOC_1;
     return KernelSpec{
         .unique_id = KernelSpecName{name},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
@@ -101,6 +109,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
                 .gen1_config =
                     DataMovementHardwareConfig::Gen1Config{
                         .processor = processor,
+                        .noc = noc,
                     },
             },
     };
