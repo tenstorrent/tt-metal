@@ -410,9 +410,11 @@ inline volatile uint32_t was_retrained = 0;
 
 // Number of post-retrain main-loop iterations to allow before the freeze gate stops the loop.
 // was_retrained is 1 on the retrain edge and ++ each iteration bottom, so it takes values 1..N across
-// the N allowed iterations; the gate freezes once it exceeds N (i.e. at N+1). Bump this to watch more
-// post-retrain iterations (does TX sustain?) at the cost of more state being overwritten before the snapshot.
-constexpr uint32_t WAS_RETRAINED_FREEZE_AFTER_N_ITERS = 5;
+// the N allowed iterations; the gate freezes once it exceeds N (i.e. at N+1).
+// 0xFFFFFFFF == effectively NEVER freeze -> free-run after retrain so we can watch (over a long run,
+// via tx_count / the ring buffer) whether the router ever resumes sending. Lower it (e.g. 1 or 5) to
+// re-enable the freeze snapshot of where the loop is right after retrain.
+constexpr uint32_t WAS_RETRAINED_FREEZE_AFTER_N_ITERS = 0xFFFFFFFF;
 
 // [TX-COUNT] Free-running 32-bit count of successful packets sent by ERISC0 over the eth link, stored
 // in word[1] of the debug slot (MEM_AERISC_RESUME_PHASE_BASE + 4). Poll it via brxy (read 2 words at
