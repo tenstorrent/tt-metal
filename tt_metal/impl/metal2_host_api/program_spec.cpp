@@ -824,8 +824,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (is_gen1_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovement1xxConfig>(data_movement_config),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig does not hold a "
-                    "DataMovement1xxConfig. Supply a Gen1 config (e.g. "
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its DataMovementHardwareConfig holds a "
+                    "DataMovement2xxConfig. Supply a Gen1 config (e.g. "
                     "CreateReader1xxDataMovementConfig()/CreateWriter1xxDataMovementConfig()).",
                     kernel.unique_id);
 
@@ -843,8 +843,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             } else if (is_gen2_arch()) {
                 TT_FATAL(
                     std::holds_alternative<DataMovement2xxConfig>(data_movement_config),
-                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig does not hold a "
-                    "DataMovement2xxConfig. Supply a Gen2 config (DataMovement2xxConfig{{}}).",
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its DataMovementHardwareConfig holds a "
+                    "DataMovement1xxConfig. Supply a Gen2 config (DataMovement2xxConfig{{}}).",
                     kernel.unique_id);
             }
         }
@@ -855,14 +855,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             if (is_gen1_arch()) {
                 TT_FATAL(
                     std::holds_alternative<Compute1xxConfig>(compute_config),
-                    "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig does not hold a "
-                    "Compute1xxConfig. Supply a Gen1 config (Compute1xxConfig).",
+                    "KernelSpec '{}' targets Gen1 (WH/BH) but its ComputeHardwareConfig holds a "
+                    "Compute2xxConfig. Supply a Gen1 config (Compute1xxConfig).",
                     kernel.unique_id);
             } else if (is_gen2_arch()) {
                 TT_FATAL(
                     std::holds_alternative<Compute2xxConfig>(compute_config),
-                    "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig does not hold a "
-                    "Compute2xxConfig. Supply a Gen2 config (Compute2xxConfig).",
+                    "KernelSpec '{}' targets Gen2 (Quasar) but its ComputeHardwareConfig holds a "
+                    "Compute1xxConfig. Supply a Gen2 config (Compute2xxConfig).",
                     kernel.unique_id);
             }
         }
