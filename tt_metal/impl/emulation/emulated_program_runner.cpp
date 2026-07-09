@@ -900,15 +900,23 @@ static void apply_x86_rewrites(std::string& src) {
         R"((using\s+RemoteNocCoords\s*=\s*RemoteNocCoord\s*\[)\s*N\s*(\]))");
     src = std::regex_replace(src, zero_len_noc_coords_re, "$1(N) == 0 ? 1 : (N)$2");
 
-    // L1 offset model gap (R2): C-style `(uint32_t)ptr` truncation casts
-    // (fabric/CCL, e.g. `(uint32_t)sem_header_ptr`) are still downgraded to a
-    // warning by -fms-extensions, but the truncation is NO LONGER value-
-    // preserving — the device address is now the 0-based offset (ptr - bridge_l1),
-    // not the low bits of the host pointer. A missed site feeds a wrong offset to
-    // a NOC/atomic op; __emule_l1_translate's debug assert (offset >= l1_size)
-    // catches it loudly. Add a name-constrained rewrite here when a real failing
-    // kernel surfaces — a blanket (uint32_t)EXPR rule would mistranslate
-    // non-pointer int casts.
+    // R2 (fabric header narrowing): a fabric/CCL kernel narrows a packet-header L1
+    // *pointer* (pool-allocated, translated) to a device address via C-style
+    // `(uint32_t)<header>` before handing it to the fabric client API. Under the offset
+    // model that must yield the 0-based offset (ptr - bridge_l1), NOT the truncated host
+    // pointer — the offset survives worker L1 mapped above 4 GB (the >4 GB galaxy), which
+    // truncation does not; the emule fabric stub widens it back with __emule_local_l1_to_ptr
+    // and keys the (chip-qualified) route table by it. Name-pattern-constrained to a
+    // packet-header-pointer identifier (`*hdr*` / `*packet_header*` / `*header_ptr*` /
+    // `*header_addr*`) — deliberately NOT bare `*header*`, which also matches
+    // `current_cmd_header` (a CclCommandHeader *value*, not an L1 pointer). A blanket
+    // `(uint32_t)EXPR` rule would hit ordinary int casts. An over-match of a non-pointer is loud, not silent
+    // — reinterpret_cast<uintptr_t>(non_pointer) is ill-formed and fails the JIT compile.
+    static const std::regex l1_fabric_hdr_narrow_re(
+        R"(\(\s*uint32_t\s*\)\s*([A-Za-z_]\w*(?:hdr|packet_header|header_ptr|header_addr)\w*))");
+    src = std::regex_replace(
+        src, l1_fabric_hdr_narrow_re,
+        "(uint32_t)(reinterpret_cast<uintptr_t>($1) - reinterpret_cast<uintptr_t>(__emule_self->bridge_l1))");
 }
 
 // Patch `src_path` into `out_path`, then recurse into the quoted project headers
@@ -924,7 +932,7 @@ static void preprocess_tu_recursive(
     const std::string& out_dir,
     const std::vector<std::string>& kernel_inc_roots,
     const std::vector<std::string>& emule_inc_roots,
-    std::set<std::string>& done) {
+    std::map<std::string, std::string>& done) {
     std::ifstream in(src_path);
     if (!in) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
@@ -983,9 +991,26 @@ static void preprocess_tu_recursive(
             candidate = resolved;
         }
         const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
-        if (canon.empty() || !done.insert(canon).second) {
-            continue;  // cycle / already patched
+        if (canon.empty()) {
+            continue;
         }
+        // Already patched under a "mirror name" (the out_dir-relative path its patched
+        // copy lives at)? Point this include at that mirror. A header included via two
+        // spellings (e.g. `cpp/ttnn/X` and `ttnn/X`) is patched once, under the first
+        // spelling; the other spelling would otherwise fall through to the pristine
+        // header, and #pragma once (path-keyed) cannot dedup patched-vs-pristine →
+        // redefinition. Rewriting the alternate spelling to the mirror makes every
+        // include resolve to the single patched copy (via -I out_dir).
+        {
+            auto prior = done.find(canon);
+            if (prior != done.end()) {
+                if (inc_name != prior->second) {
+                    inc_rewrites.emplace_back(inc_name, prior->second);
+                }
+                continue;  // cycle / already patched
+            }
+        }
+        std::string mirror_name = inc_name;  // out_dir-relative path the patched copy lives at
         std::filesystem::path out_inc = std::filesystem::weakly_canonical(
             std::filesystem::path(out_dir) / inc_name);
         std::string out_inc_str = out_inc.string();
@@ -1006,13 +1031,14 @@ static void preprocess_tu_recursive(
                 }
             }
             if (norm_name.empty()) {
-                done.erase(canon);
                 continue;  // unresolvable escape — leave it to -fms-extensions
             }
             inc_rewrites.emplace_back(inc_name, norm_name);
+            mirror_name = norm_name;
             out_inc = std::filesystem::weakly_canonical(std::filesystem::path(out_dir) / norm_name);
             out_inc_str = out_inc.string();
         }
+        done[canon] = mirror_name;
         std::filesystem::create_directories(out_inc.parent_path(), ec);
         preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, kernel_inc_roots, emule_inc_roots, done);
     }
@@ -1046,7 +1072,7 @@ static void preprocess_kernel_source_for_x86(
     const std::vector<std::string>& kernel_inc_roots,
     const std::vector<std::string>& emule_inc_roots) {
     const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
-    std::set<std::string> done;
+    std::map<std::string, std::string> done;
     preprocess_tu_recursive(src_path, out_path, out_dir, kernel_inc_roots, emule_inc_roots, done);
 }
 
@@ -2389,12 +2415,20 @@ struct EmuleRoute {
     uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;   // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
 };
 static std::mutex g_route_meta_mu;
-static std::unordered_map<uint32_t, EmuleRoute> g_route_meta;
+// Keyed by (chip_id, header L1 offset). Post-offset-migration a packet header's L1 offset
+// is identical on every chip (chip-agnostic), so the key must be chip-qualified — the old
+// truncated-host-pointer key was chip-unique only because each chip's L1 sat at a distinct
+// low-4GB address, a property the >4GB galaxy no longer has. Both set (via the shim's
+// offset) and read (teleport, offset = ptr - bridge_l1) run on the same fiber → same key.
+static std::unordered_map<uint64_t, EmuleRoute> g_route_meta;
+static inline uint64_t emule_route_key(uint32_t hdr_off) {
+    return (static_cast<uint64_t>(__emule_self->chip_id) << 32) | hdr_off;
+}
 
 extern "C" void __emule_fabric_set_route(
     uint32_t hdr, uint32_t kind, uint32_t a, uint32_t b, uint32_t c, uint32_t d, uint32_t e, uint32_t f) {
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto& r = g_route_meta[hdr];
+    auto& r = g_route_meta[emule_route_key(hdr)];
     r.kind = kind; r.a = a; r.b = b; r.c = c; r.d = d; r.e = e; r.f = f;  // dir_index set separately at send
 }
 
@@ -2403,7 +2437,7 @@ extern "C" void __emule_fabric_set_route(
 extern "C" void __emule_fabric_set_route_dir(
     uint32_t hdr, uint32_t conn_index, uint32_t mux_x, uint32_t mux_y) {
     std::lock_guard<std::mutex> lk(g_route_meta_mu);
-    auto& r = g_route_meta[hdr];
+    auto& r = g_route_meta[emule_route_key(hdr)];
     r.dir_index = conn_index;
     r.mux_x = mux_x;
     r.mux_y = mux_y;
@@ -2509,7 +2543,8 @@ static std::vector<uint32_t> __emule_fabric_resolve_targets(const uint8_t* h, ui
     EmuleRoute r;
     {
         std::lock_guard<std::mutex> lk(g_route_meta_mu);
-        auto it = g_route_meta.find(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(h)));
+        auto it = g_route_meta.find(emule_route_key(static_cast<uint32_t>(
+            reinterpret_cast<uintptr_t>(h) - reinterpret_cast<uintptr_t>(__emule_self->bridge_l1))));
         if (it == g_route_meta.end()) {
             return {__emule_fabric_neighbor(src_chip)};  // unstamped (e.g. 1D direct, not yet wired)
         }
