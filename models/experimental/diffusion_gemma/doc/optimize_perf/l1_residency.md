@@ -214,3 +214,48 @@ why it is a real +15.8% while the MoE-activation levers are a wash.
   multi-block watcher soak is deferred (acceptable for an opt-in lever; do it as part of the default-flip
   gate). Raw logs backing every number here live in the run scratchpad (not committed, per the
   artifact policy); the committed docs/JSON mirror them to the digit.
+
+## Follow-up — absolute decision fidelity vs the shared HF reference
+
+The relative flip gate above only established that chunked and full-canvas diverge from each other.
+This follow-up measures both bf16 TT paths against **one shared torch/HF trajectory** to distinguish
+knife-edge divergence between equally approximate paths from a real HF-fidelity regression.
+
+**Method.** Same gate configuration: prompt `"Explain what a diffusion language model is in one
+sentence."`, seed 0, one 256-token canvas, 30 layers, 16 denoise steps, early halt disabled, checkpoint
+revision `0f28bc42f588fbd8f71e08102b1c3960298a1358`, production sparse MoE, and everything pinned except
+`DG_NORM_FULLCANVAS`. The CPU-only HF trajectory uses `DiffusionGemmaForBlockDiffusion` through
+`demo/replay_hf_tt.py`; the fixed canvas and random-renoise stream use
+`reference/generate.py::{make_replay_canvas_init_fn,make_replay_noise_fn}`. One apples-to-apples detail
+is important: the landed flip gate is the **clean-argmax** regime (its per-step Gumbel hook returns
+`None`), so torch replays the equivalent injected all-zero Gumbel tensor (`sampled == argmax`) plus
+the gate's random-renoise stream (`seed + 1000`). The full 30L/16-step HF run was practical
+(49.9 s trajectory / 54.5 s process wall time; 41.7 GiB peak RSS), so no reduced fallback was used.
+
+The original TT `.pt` scratch artifacts were invalidated by the intervening host reboot. They were
+regenerated only after confirming the shared device was idle. The fresh chunked-vs-full-canvas row
+reproduced the committed gate artifact **exactly for every scalar and per-step array** (including
+`committed_match = 0.14453125`), validating that the absolute comparisons use the same trajectory
+configuration and noise. Raw `.pt` trajectories and the three comparison JSON files remain in the run
+scratchpad rather than the repository.
+
+Values below are final committed agreement, then per-step **mean (minimum)**:
+
+| comparison | committed clean-argmax | per-step argmax | accept IoU | entropy PCC | canvas agreement |
+|---|---:|---:|---:|---:|---:|
+| **chunked vs HF** | **0.168** (43/256) | 0.541 (0.168) | 0.100 (0.000) | 0.027 (-0.316) | 0.146 (0.000) |
+| **full-canvas vs HF** | **0.160** (41/256) | 0.555 (0.098) | 0.109 (0.000) | 0.042 (-0.198) | 0.148 (0.000) |
+| **chunked vs full-canvas** | **0.145** (37/256) | 0.544 (0.145) | 0.504 (0.000) | 0.659 (0.259) | 0.889 (0.770) |
+
+**Verdict: case (a), HF-fidelity neutral on this exact gate.** Full-canvas is not meaningfully below
+chunked vs HF: final committed agreement differs by only `-0.0078` (2/256 positions), while
+full-canvas is slightly *higher* on mean per-step argmax (`+0.0139`), accept IoU (`+0.0097`), entropy
+PCC (`+0.0150`), and canvas agreement (`+0.0020`); minima are mixed. Both paths sit at the same
+#48291 trajectory floor (mean per-step argmax ≈54–55%, with feedback reducing final committed
+agreement to ≈16–17%). Therefore the relative `0.145` is knife-edge argmax divergence between two
+equally #48291-degraded bf16 paths, **not evidence that full-canvas regresses fidelity vs HF**.
+
+For the +15.8% @48 lever this means full-canvas is a fair, decision-neutral performance win *relative
+to HF fidelity*. This is a single-prompt/seed characterization, not a population equivalence proof,
+and it does not override the landed output-identity gate: `DG_NORM_FULLCANVAS` remains opt-in and
+default-OFF because enabling it changes the default output.
