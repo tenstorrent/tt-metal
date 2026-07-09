@@ -267,6 +267,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
+        TTNN::Ops::Experimental::FusedRotate
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SliceWrite
@@ -523,6 +524,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_t
 add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
+add_subdirectory(cpp/ttnn/operations/experimental/fused_rotate)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
 add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
