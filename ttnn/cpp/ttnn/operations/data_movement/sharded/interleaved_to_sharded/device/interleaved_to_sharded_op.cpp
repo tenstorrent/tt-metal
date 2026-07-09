@@ -119,11 +119,14 @@ InterleavedToShardedDeviceOperation::spec_return_value_t InterleavedToShardedDev
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the sharded L1 bank relative to the CB
+    // sized from the input tile in the program factory.
     return TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout(
             operation_attributes.output_dtype,
-            tt::tt_metal::PageConfig(input_tensor.layout()),
+            input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config));
 }
 
