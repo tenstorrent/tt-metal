@@ -287,7 +287,7 @@ def enable_vae_spatial(module, ccl, *, h_mesh_axis, w_mesh_axis) -> None:
         module.h_mesh_axis = h_mesh_axis
         module.w_mesh_axis = w_mesh_axis
         module.spatial_sharded = True
-    if type(module).__name__ in ("ResnetBlockTTNN", "AttnBlockTTNN", "NormOutTTNN"):
+    if type(module).__name__ in ("ResnetBlockTTNN", "AttnBlockTTNN", "NormOutTTNN", "EncoderHeadTTNN"):
         module._sp_ccl = ccl
         module._sp_h = h_mesh_axis
         module._sp_w = w_mesh_axis
