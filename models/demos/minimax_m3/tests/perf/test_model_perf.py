@@ -24,7 +24,7 @@ single_bh_galaxy_4x8. If a run hangs, kill the whole tracy process tree (it hold
 Run (validate trace, fast random):
   PERF_LAYERS=4 PERF_EXPERTS=64 PERF_SEQ=512 pytest models/demos/minimax_m3/tests/perf/test_model_perf.py::test_model_fwd -s
 Run (real headline):
-  REAL=1 PERF_SEQ=2048 TRACE_REGION=1000000000 HF_MODEL=/data/vmelnykov/MiniMax-M2 pytest ...::test_model_fwd -s
+  REAL=1 PERF_SEQ=2048 TRACE_REGION=1000000000 HF_MODEL=/data/vmelnykov/MiniMax-M3 pytest ...::test_model_fwd -s
 """
 
 import json
@@ -120,8 +120,9 @@ def _build_real_model(mesh, seq):
 
 @pytest.mark.timeout(0)  # real-weights load (~45 min over NFS) exceeds the default 300s
 def test_model_fwd():
-    from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+
+    fabric_payload_size = 6144  # M3 hidden_size (max fabric packet payload)
 
     seq = int(os.getenv("PERF_SEQ", "512"))
     layers = int(os.getenv("PERF_LAYERS", "4"))
@@ -136,7 +137,7 @@ def test_model_fwd():
         ttnn.FabricTensixConfig.DISABLED,
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
-        create_fabric_router_config(max_payload_size=MiniMaxM27Config.FABRIC_PAYLOAD_SIZE),
+        create_fabric_router_config(max_payload_size=fabric_payload_size),
     )
     trace_region = int(os.getenv("TRACE_REGION", "300000000"))  # bump for 62-layer real run
     mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 8), trace_region_size=trace_region)

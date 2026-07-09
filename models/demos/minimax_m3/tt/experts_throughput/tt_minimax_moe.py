@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TtMiniMaxMoE — MiniMax-M2 expert-parallel MoE block.
+TtMiniMaxMoE — MiniMax-M3 expert-parallel routed-expert MoE block.
 
 Composes the (generic, already-validated) DeepSeek EP sub-modules:
     gate -> routing_setup -> dispatch -> routed_expert -> combine -> reduce
-but owns the orchestration so it fits MiniMax-M2:
-  - NO shared expert (DeepSeek's TtMoe builds a mandatory, dim-tuned one)
-  - NO expert groups (host gate; n_group=1 -> plain top-8)
-  - emb=3072, hidden=1536, 256 experts / top-8
+but owns the orchestration so it fits MiniMax-M3:
+  - NO shared expert here — M3's always-on shared expert is added by the caller
+    (tt/mlp.py); DeepSeek's TtMoe builds a mandatory one, which we drop.
+  - NO expert groups (host gate; n_group=1 -> plain top-4)
+  - emb=6144, hidden=3072, 128 experts / top-4 -> 4 experts/chip on 32 chips
 
-This is the EP (expert-parallel) counterpart to tt/experts/ (EP=1). On (4,8) it
-spreads 256 experts at 8/chip across 32 chips (~3.3 GB/chip bfp4). The EP machinery
-(deepseek_prefill.{dispatch,routed_expert_ffn,combine,...}) is reused verbatim;
-only the shared-expert step of DeepSeek's TtMoe.forward is dropped.
+The EP machinery (deepseek_prefill.{dispatch,routed_expert_ffn,combine,...}) is reused
+verbatim, with the fused unified_routed_expert_ffn kernel selected for M3's clamped
+swigluoai activation; only the shared-expert step of DeepSeek's TtMoe.forward is dropped.
 
 Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward).
 """

@@ -7,7 +7,7 @@ Tier-1 PCC test for MiniMax-M3 clamped "swigluoai" SwiGLU vs a hand-written torc
 M3 uses the gpt-oss SwiGLU variant (hidden_act="swigluoai", swiglu_alpha=1.702, swiglu_limit=7.0):
     gate = clamp(gate, max=limit); up = clamp(up, -limit, limit)
     out  = (up + 1) * (gate * sigmoid(alpha * gate))
-vs M2's plain SiLU SwiGLU (silu(gate) * up). Reference anchor: transformers
+vs a plain SiLU SwiGLU (silu(gate) * up). Reference anchor: transformers
 modeling_gpt_oss.py:119-122.
 
 Inputs are scaled past ±limit so the clamp path is actually exercised. Depends ONLY on torch

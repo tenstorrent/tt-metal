@@ -21,10 +21,10 @@ class AttentionConfig:
     sliding_window: int | None = None
     scaling: float | None = None  # Computed if None
 
-    # MiniMax-M2/M3 specifics
+    # MiniMax-M3 specifics
     rotary_dim: int | None = None  # partial rotary width; defaults to head_dim (full)
     rms_norm_eps: float = 1e-6  # used by QK-norm
-    use_qk_norm: bool = True  # M2 = full-width RMSNorm on Q/K; M3 = per-head (over head_dim)
+    use_qk_norm: bool = True  # M3 uses per-head RMSNorm on Q/K (over head_dim)
     use_gemma_norm: bool = False  # M3: QK-norm uses gemma (1+w) RMSNorm (folded into the gain)
     # SP=8 dense-attention path: when True (and prefill SP>1), prefill SDPA uses
     # ring_joint_scaled_dot_product_attention (seq sharded across the SP/rows axis) instead of the

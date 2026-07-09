@@ -57,7 +57,7 @@ class Attention:
         self.layer_idx = layer_idx
         self.transformation_mats = transformation_mats
 
-        # MiniMax-M2 uses full causal attention on every layer (no sliding window).
+        # MiniMax-M3 has no sliding-window attention (dense layers full causal; sparse layers block-sparse MSA).
         object.__setattr__(config, "sliding_window", None)
 
         # Load weights

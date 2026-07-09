@@ -5,7 +5,7 @@
 Tier-1 PCC test for MiniMax-M3 RMSNorm vs a hand-written torch reference.
 
 M3 uses Gemma-style RMSNorm: out = x_normed * (1 + weight) (config use_gemma_norm=true),
-vs plain M2 RMSNorm: out = x_normed * weight. The tt RMSNorm class folds the +1 into the
+vs a plain RMSNorm: out = x_normed * weight. The tt RMSNorm class folds the +1 into the
 weight at load time; this test verifies both modes against the torch reference.
 
 Depends ONLY on torch (no HuggingFace / AutoConfig / checkpoint), random weights — runs on a

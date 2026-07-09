@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Device-perf for the MiniMax-M2 EP MoE op (TtMiniMaxMoE), via the standard tt-metal
+Device-perf for the MiniMax-M3 EP MoE op (TtMiniMaxMoE), via the standard tt-metal
 device-profiler harness (mirrors deepseek_v3_d_p/tests/perf/test_moe_perf.py).
 
 Two pieces:
@@ -30,7 +30,14 @@ from tracy import signpost
 import ttnn
 
 _THIS = "models/demos/minimax_m3/tests/perf/test_ep_moe_perf.py"
-EMB, HID, E, K = 3072, 1536, 256, 8
+# Real M3 MoE dims: 128 experts / top-4, hidden 6144, moe_intermediate 3072.
+EMB, HID, E, K = 6144, 3072, 128, 4
+
+
+class _M3FabricCfg:
+    """Minimal fabric config for open_mesh_device (it reads only FABRIC_PAYLOAD_SIZE)."""
+
+    FABRIC_PAYLOAD_SIZE = EMB  # M3 hidden_size (max fabric packet payload)
 
 
 def _open_mesh_with_trace(shape, model_cfg, trace_region_size):
@@ -57,7 +64,7 @@ def test_ep_moe_fwd():
     TRACE=1 → capture the post-gate device path (forward with external routing from a
     one-shot gate call) into a ttnn trace and profile the REPLAY — removes host op-launch
     overhead so wall ≈ device floor. Else → eager forward (internal HOST_ALL gate)."""
-    from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+    from models.demos.common.prefill.runners.runner_utils import open_mesh_device
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         compute_constants,
         create_gate_weights,
@@ -65,7 +72,6 @@ def test_ep_moe_fwd():
         extract_mesh_config,
     )
     from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-    from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import open_mesh_device
     from models.demos.minimax_m3.tt.experts_throughput.tt_minimax_moe import TtMiniMaxMoE
 
     rows, cols = int(os.getenv("PERF_ROWS", "8")), int(os.getenv("PERF_COLS", "4"))
@@ -73,9 +79,9 @@ def test_ep_moe_fwd():
     use_trace = os.getenv("TRACE", "0") == "1"
     torch.manual_seed(0)
     mesh = (
-        _open_mesh_with_trace((rows, cols), MiniMaxM27Config, 200_000_000)
+        _open_mesh_with_trace((rows, cols), _M3FabricCfg, 200_000_000)
         if use_trace
-        else open_mesh_device((rows, cols), MiniMaxM27Config)
+        else open_mesh_device((rows, cols), _M3FabricCfg)
     )
     try:
         mc = extract_mesh_config(mesh)

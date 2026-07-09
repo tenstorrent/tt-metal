@@ -87,7 +87,7 @@ def create_rope_setup(
     shard_batch_to_mesh_dim=0,
 ):
     """
-    Create and return a RotarySetup instance for the MiniMax-M2 model.
+    Create and return a RotarySetup instance for the MiniMax-M3 model.
 
     This function extracts the rope setup logic from the Model class to allow
     for independent testing and comparison with HuggingFace reference implementations.
@@ -104,13 +104,13 @@ def create_rope_setup(
         RotarySetup: Configured rotary setup instance with cos/sin matrices
     """
     max_seq_len = getattr(hf_config, "max_position_embeddings", 131072)
-    # MiniMax-M2 has no rope_scaling; rope_scaling_model_factory requires a dict,
+    # MiniMax-M3 has no rope_scaling; rope_scaling_model_factory requires a dict,
     # so only build it when params are present, else pass None (plain RoPE).
     rope_scaling_params = getattr(hf_config, "rope_scaling", None)
     rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
     batch_size = max_local_batch_size * mesh_device.shape[0] if users_row_sharded else max_local_batch_size
 
-    # MiniMax-M2 uses PARTIAL rotary: only the first `rotary_dim` (64) of each
+    # MiniMax-M3 uses PARTIAL rotary: only the first `rotary_dim` (64) of each
     # 128-wide head is rotated. Build the cos/sin matrices at rotary_dim width;
     # the attention layer rotates [..., :rotary_dim] and passes [..., rotary_dim:]
     # through unchanged (see attention/operations.py:apply_rope).
@@ -132,9 +132,9 @@ def create_rope_setup(
 
 class Model:
     """
-    MiniMax-M2 TTNN Model Implementation
+    MiniMax-M3 TTNN Model Implementation
 
-    This class implements the MiniMax-M2 model using TTNN tensors and operations.
+    This class implements the MiniMax-M3 model using TTNN tensors and operations.
     It supports both prefill and decode modes.
 
     Key Features:
@@ -161,7 +161,7 @@ class Model:
         sequence_parallel=False,
     ):
         """
-        Initialize MiniMax-M2 model
+        Initialize MiniMax-M3 model
 
         Args:
             mesh_device: TTNN mesh device for computation
@@ -338,7 +338,7 @@ class Model:
         use_throughput_experts=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
-        # Create a dummy CCL manager for MiniMax-M2
+        # Create a dummy CCL manager for MiniMax-M3
         from models.demos.minimax_m3.tt.ccl import CCLManager
 
         ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
@@ -517,7 +517,7 @@ class Model:
         """
         Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
 
-        Unlike tt_transformers `Transformer`, MiniMax-M2 `ttnn_prefill_forward` already
+        Unlike tt_transformers `Transformer`, MiniMax-M3 `ttnn_prefill_forward` already
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32

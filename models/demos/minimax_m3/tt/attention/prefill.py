@@ -84,10 +84,9 @@ def prefill_forward(
     if not config.is_sparse:
         hidden_states.deallocate(True)  # Free input activations after projection
 
-    # NOTE (M3): QK-norm moved AFTER the head split — M3 uses per-head RMSNorm over
-    # head_dim (qk_norm_type="per_head"), not M2's full-width norm on the flat projection.
-    # See the post-split block below (matches transformers minimax_m3_vl: view-to-heads →
-    # q_norm/k_norm → RoPE).
+    # NOTE (M3): QK-norm runs AFTER the head split — M3 uses per-head RMSNorm over
+    # head_dim (qk_norm_type="per_head"). See the post-split block below (matches
+    # transformers minimax_m3_vl: view-to-heads → q_norm/k_norm → RoPE).
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
     if batch_size > 1:

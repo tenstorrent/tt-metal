@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Weight conversion helpers for MiniMax-M2.
+Weight conversion helpers for MiniMax-M3.
 
-MiniMax-M2 uses PARTIAL rotary (rotary_dim=64 of head_dim=128). The shared
+MiniMax-M3 uses PARTIAL rotary (rotary_dim=64 of head_dim=128). The shared
 tt_transformers ``convert_hf_qkv_to_meta_format`` reverse-permutes the *full*
 head_dim into Meta RoPE (interleaved) layout, which is wrong when
 rotary_dim < head_dim: only the rotary slice participates in RoPE and must be
@@ -38,7 +38,7 @@ def convert_hf_qkv_to_meta_format_partial(loaded_weights: dict, head_dim: int, r
     """Partial-rotary-aware version of convert_hf_qkv_to_meta_format.
 
     Permutes q/k projection weights AND the full-width q/k-norm gains so they
-    line up with the rotary-only Meta layout. MiniMax-M2 has no q/k/v/o biases,
+    line up with the rotary-only Meta layout. MiniMax-M3 has no q/k/v/o biases,
     so only the ``.weight`` keys are handled. v_proj / o_proj are left unchanged.
     """
     converted = {}

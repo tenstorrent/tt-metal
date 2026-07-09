@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""MiniMax-M2 attention program configurations."""
+"""MiniMax-M3 attention program configurations."""
 
 from dataclasses import dataclass
 
@@ -11,7 +11,7 @@ from models.demos.minimax_m3.tt.attention.config import ProgramConfig
 @dataclass
 class MiniMaxM3AttentionProgramConfig(ProgramConfig):
     """
-    MiniMax-M2 prefill attention configuration.
+    MiniMax-M3 prefill attention configuration.
 
     Uses TTNN auto-tuning for matmuls (cores=None).
     """

@@ -12,7 +12,7 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights):
     """
     Apply QKV projection.
 
-    MiniMax-M2 has no biases on q/k/v projections (bias=False in HF), so this is
+    MiniMax-M3 has no biases on q/k/v projections (bias=False in HF), so this is
     a plain matmul.
 
     Args:
@@ -51,7 +51,7 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_a
     """
     Apply rotary position embedding (RoPE), supporting PARTIAL rotary.
 
-    MiniMax-M2 rotates only the first ``rotary_dim`` (64) dims of each 128-wide
+    MiniMax-M3 rotates only the first ``rotary_dim`` (64) dims of each 128-wide
     head and passes the rest through unchanged. We detect the rotary width from
     the cos matrix (``rope_mats[0]`` is built at rotary_dim width in
     model.create_rope_setup). When rotary_dim == head_dim this is a plain full
@@ -108,93 +108,15 @@ def apply_rope(tensor, rope_mats, transformation_mat, is_decode_mode: bool, kv_a
     return out
 
 
-def distributed_rms_norm(x, weight, normalized_size: int, eps: float, mesh_config, ccl_manager):
-    """Full-width RMSNorm whose feature dim is sharded across the TP axis.
-
-    MiniMax-M2's q_norm/k_norm normalise over the *entire* Q (6144) / K (1024)
-    projection output, but that output is column-parallel sharded across TP, so
-    each device only holds ``normalized_size / tp`` features. We compute the
-    per-token sum-of-squares locally and share ONLY that ``[.., 1]`` partial
-    across the TP axis (cheap), then finish the norm locally. ``weight`` is the
-    matching column-parallel shard of the gain vector.
-
-    NOTE: the exact ttnn reduction / broadcast calls below (sum keepdim over the
-    last dim, [.,1]*[.,N] broadcast multiply, all-gather of a width-1 partial)
-    need validation on first hardware run — the math is standard distributed
-    RMSNorm; only the op-level API surface is unverified offline.
-    """
-    sq = ttnn.mul(x, x)
-    local_ss = ttnn.sum(sq, dim=-1, keepdim=True)  # [1, 1, M, 1] local partial sum of squares
-    sq.deallocate(True)
-
-    if mesh_config.tp > 1:
-        # Gather the per-device partials along TP and sum -> full sum over normalized_size.
-        gathered = mesh_config.allgather(local_ss, ccl_manager, axis=mesh_config.tp_axis, dim=3)  # [1,1,M,tp]
-        local_ss.deallocate(True)
-        total_ss = ttnn.sum(gathered, dim=-1, keepdim=True)  # [1, 1, M, 1]
-        gathered.deallocate(True)
-    else:
-        total_ss = local_ss
-
-    mean_sq = ttnn.multiply(total_ss, 1.0 / normalized_size)
-    total_ss.deallocate(True)
-    inv_rms = ttnn.rsqrt(ttnn.add(mean_sq, eps))  # [1, 1, M, 1]
-    mean_sq.deallocate(True)
-
-    x_norm = ttnn.multiply(x, inv_rms)  # broadcast [.., 1] over the feature dim
-    inv_rms.deallocate(True)
-    x_norm = ttnn.multiply(x_norm, weight)
-    return x_norm
-
-
-def apply_qk_norm(xqkv_fused, weights: AttentionWeights, config, mesh_config, ccl_manager):
-    """Apply MiniMax-M2 full-width QK-norm to the fused QKV tensor, in place of the
-    HF "norm the flat q/k projection before reshaping to heads" step.
-
-    Slices the per-device fused tensor into its local Q / K / V parts, runs the
-    distributed RMSNorm on Q and K (V is untouched), and re-concatenates so the
-    downstream head-split is unchanged.
-    """
-    head_dim = config.head_dim
-    q_local = mesh_config.shard_size(config.num_heads) * head_dim
-    k_local = mesh_config.shard_size(config.num_kv_heads) * head_dim
-    total = xqkv_fused.shape[-1]
-
-    q = ttnn.slice(xqkv_fused, [0, 0, 0, 0], [xqkv_fused.shape[0], xqkv_fused.shape[1], xqkv_fused.shape[2], q_local])
-    k = ttnn.slice(
-        xqkv_fused,
-        [0, 0, 0, q_local],
-        [xqkv_fused.shape[0], xqkv_fused.shape[1], xqkv_fused.shape[2], q_local + k_local],
-    )
-    v = ttnn.slice(
-        xqkv_fused, [0, 0, 0, q_local + k_local], [xqkv_fused.shape[0], xqkv_fused.shape[1], xqkv_fused.shape[2], total]
-    )
-
-    # normalized_size is the GLOBAL width (across all TP shards): num_heads*head_dim for Q.
-    q = distributed_rms_norm(
-        q, weights.q_norm, config.num_heads * head_dim, config.rms_norm_eps, mesh_config, ccl_manager
-    )
-    k = distributed_rms_norm(
-        k, weights.k_norm, config.num_kv_heads * head_dim, config.rms_norm_eps, mesh_config, ccl_manager
-    )
-
-    out = ttnn.concat([q, k, v], dim=-1)
-    q.deallocate(True)
-    k.deallocate(True)
-    v.deallocate(True)
-    return out
-
-
 def apply_qk_norm_per_head(tensor, norm_weight, eps: float):
     """Apply MiniMax-M3 per-head QK-norm: RMSNorm over the head_dim (last) dimension with a
     [head_dim] gain, broadcast across all heads.
 
     ``tensor`` is a head-split Q or K of shape [1, n_heads, S, head_dim] (so the norm runs
-    independently per (head, token) vector — this is the M3 ``qk_norm_type=per_head`` delta vs
-    M2's full-width norm). The gemma ``(1 + w)`` fold is baked into ``norm_weight`` at load
-    (weights.py), so this is a plain ttnn.rms_norm. head_dim is NOT TP-sharded, so the norm is
-    local to each device — no cross-TP reduction (unlike the full-width distributed_rms_norm).
-    Applied BEFORE RoPE, on Q and K only (matches transformers minimax_m3_vl).
+    independently per (head, token) vector — this is M3's ``qk_norm_type=per_head``). The gemma
+    ``(1 + w)`` fold is baked into ``norm_weight`` at load (weights.py), so this is a plain
+    ttnn.rms_norm. head_dim is NOT TP-sharded, so the norm is local to each device — no cross-TP
+    reduction. Applied BEFORE RoPE, on Q and K only (matches transformers minimax_m3_vl).
     """
     return ttnn.rms_norm(tensor, weight=norm_weight, epsilon=eps)
 
@@ -216,7 +138,7 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     """
     Apply output projection.
 
-    MiniMax-M2 has no bias on o_proj (bias=False in HF), so this is a plain matmul.
+    MiniMax-M3 has no bias on o_proj (bias=False in HF), so this is a plain matmul.
 
     Args:
         tensor: Attention output tensor
@@ -321,7 +243,7 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
         rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=ccl_manager.topology,
         cluster_axis=mesh_config.tp_axis,
-        bias=None,  # MiniMax-M2 has no o_proj bias
+        bias=None,  # MiniMax-M3 has no o_proj bias
         config=mm_config,
         barrier_semaphore=ccl_manager.get_barrier_semaphore(),
         chunk_width_in_mm_blocks=chunk_width,

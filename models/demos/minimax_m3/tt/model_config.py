@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MiniMax-M2 ModelArgs class that's compatible with tt_transformers interface
+MiniMax-M3 ModelArgs class that's compatible with tt_transformers interface
 """
 
 import json
@@ -26,7 +26,7 @@ from models.tt_transformers.tt.common import (
 
 
 class ModelArgs:
-    """MiniMax-M2 ModelArgs compatible with tt_transformers create_tt_model interface"""
+    """MiniMax-M3 ModelArgs compatible with tt_transformers create_tt_model interface"""
 
     def __init__(
         self,
@@ -49,14 +49,14 @@ class ModelArgs:
             self.max_local_batch_size = self.max_batch_size
         self.max_seq_len = max_seq_len
         if optimizations is not None:
-            logger.warning("MiniMax-M2 doesn't support any performance optimizations - ignoring optimizations argument")
+            logger.warning("MiniMax-M3 doesn't support any performance optimizations - ignoring optimizations argument")
         self.optimizations = None
         self.cache_hf = cache_hf
 
-        # MiniMax-M2 specific paths - use HF_MODEL environment variable (tt_transformers standard)
+        # MiniMax-M3 specific paths - use HF_MODEL environment variable (tt_transformers standard)
         # Default paths are internal CI paths for automated testing
         default_models = [
-            "/mnt/MLPerf/tt_dnn-models/MiniMaxAI/MiniMax-M2",  # Internal CI path
+            "/mnt/MLPerf/tt_dnn-models/MiniMaxAI/MiniMax-M3",  # Internal CI path
         ]
 
         # Use first available model as default, or HF_MODEL environment variable override
@@ -75,7 +75,7 @@ class ModelArgs:
         self.weights_path = dir
 
         logger.info(
-            f"Using MiniMax-M2 model from: {self.model_path}"
+            f"Using MiniMax-M3 model from: {self.model_path}"
             f"{' (dummy weights — no checkpoint load)' if self.dummy_weights else ''}"
         )
 
@@ -116,7 +116,7 @@ class ModelArgs:
         else:
             # Load tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
-            self.processor = None  # MiniMax-M2 doesn't use vision processor
+            self.processor = None  # MiniMax-M3 doesn't use vision processor
 
         self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
@@ -175,7 +175,7 @@ class ModelArgs:
         )
 
     def get_trace_prefill_supported_seq_lens(self):
-        # No supported sequence lengths for MiniMax-M2 yet, see issue below
+        # No supported sequence lengths for MiniMax-M3 yet, see issue below
         # TODO: https://github.com/tenstorrent/tt-metal/issues/32818
         default_supported_seq_lens = {}
 
@@ -207,7 +207,7 @@ class ModelArgs:
         Encode prompts using HuggingFace tokenizer with chat template
         Compatible with tt_transformers interface
         """
-        assert not instruct, "MiniMax-M2 does not support instruct mode"
+        assert not instruct, "MiniMax-M3 does not support instruct mode"
         chat = []
         if isinstance(prompt_text, str):
             if system_prompt_text:
@@ -236,7 +236,7 @@ class ModelArgs:
             # M3 ships NO modeling code (the checkpoint carries only config + multimodal
             # processors; no AutoModel in auto_map), so AutoModelForCausalLM.from_pretrained
             # CANNOT build it. Read the bf16 safetensors directly: keep only the text backbone
-            # (`language_model.*`) and strip that prefix -> the M2-style keys the model expects
+            # (`language_model.*`) and strip that prefix -> the plain keys the model expects
             # (`model.*` / `lm_head.*`); drop the multimodal tensors (vision_tower /
             # multi_modal_projector / patch_merge_mlp). The checkpoint has no mtp/nextn weights.
             state_dict = ModelArgs._load_text_backbone_safetensors(weights_path)

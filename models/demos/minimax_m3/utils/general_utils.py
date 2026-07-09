@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-General utilities for MiniMax-M2.
+General utilities for MiniMax-M3.
 """
 
 from models.common.utility_functions import is_blackhole

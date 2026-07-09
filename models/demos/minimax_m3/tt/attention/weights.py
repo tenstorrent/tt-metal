@@ -17,7 +17,7 @@ from .config import AttentionConfig
 class AttentionWeights:
     """Container for attention weight tensors - immutable after creation.
 
-    MiniMax-M2 has no q/k/v/o projection biases and no attention sinks, so only the
+    MiniMax-M3 has no q/k/v/o projection biases and no attention sinks, so only the
     two projection weights are stored, plus the QK-norm gains.
     """
 
@@ -129,7 +129,7 @@ def load_attention_weights(
         # Concatenate across devices: [hidden_size, total_qkv_dim]
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_size, total_qkv_dim]
 
-        # MiniMax-M2 has no q/k/v/o projection biases and no attention sinks.
+        # MiniMax-M3 has no q/k/v/o projection biases and no attention sinks.
 
         # Pad o_proj output dimension for tile alignment in CCL operations.
         # Without padding, local_hidden = hidden_size / TP may not be tile-aligned,

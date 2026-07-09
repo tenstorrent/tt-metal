@@ -16,14 +16,14 @@ from ..tt.ccl import CCLManager
 from ..tt.model_config import ModelArgs
 from ..utils.general_utils import get_default_num_links
 
-# Bundled MiniMax-M2 config.json (dims only — no model code is vendored). HF-reference
+# Bundled MiniMax-M3 config.json (dims only — no model code is vendored). HF-reference
 # tests that need the actual modeling classes load them from a real checkpoint via
 # HF_MODEL (see requires_hf_reference below).
 _CONFIG_JSON = os.path.join(os.path.dirname(__file__), "..", "configs", "MiniMax-M3", "config.json")
 
 
 def minimax_config_dims() -> dict:
-    """Load MiniMax-M2 dimension constants from the bundled config.json (no HF needed)."""
+    """Load MiniMax-M3 dimension constants from the bundled config.json (no HF needed)."""
     with open(_CONFIG_JSON) as f:
         return json.load(f)
 
@@ -31,10 +31,10 @@ def minimax_config_dims() -> dict:
 _HF_MODEL = os.getenv("HF_MODEL")
 # Tests that compare against the HuggingFace reference need the model's modeling code,
 # which ships WITH the checkpoint (loaded at runtime via trust_remote_code) — we do NOT
-# vendor it into the repo. Point HF_MODEL at a downloaded MiniMax-M2 checkpoint to run them.
+# vendor it into the repo. Point HF_MODEL at a downloaded MiniMax-M3 checkpoint to run them.
 requires_hf_reference = pytest.mark.skipif(
     not (_HF_MODEL and os.path.isdir(_HF_MODEL)),
-    reason="set HF_MODEL to a downloaded MiniMax-M2 checkpoint (carries modeling_minimax_m2.py) to run HF-reference tests",
+    reason="set HF_MODEL to a downloaded MiniMax-M3 checkpoint (carries modeling_minimax_m3.py) to run HF-reference tests",
 )
 
 
@@ -88,7 +88,7 @@ class TestFactory:
 
 
 def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
-    """Universal mesh + fabric parametrization for minimax_m2 tests.
+    """Universal mesh + fabric parametrization for minimax_m3 tests.
 
     Generates a paired ``(mesh_device, device_params)`` parametrize. Each
     case opens a mesh of the requested shape directly (no submesh carving
@@ -103,7 +103,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
     to override (useful for tests that only make sense at one TP factor).
 
     Fabric: ``(1,1)`` disables fabric (no inter-chip topology to ring
-    around). Multi-device shapes use ``FABRIC_1D_RING`` — minimax_m2's CCL
+    around). Multi-device shapes use ``FABRIC_1D_RING`` — minimax_m3's CCL
     operations (reduce_scatter, all_gather, all_reduce) all use the ring
     topology.
 
@@ -144,7 +144,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, linear_fabric=False):
                 (1, 1),
                 {"fabric_config": None, "trace_region_size": 100000000},
                 id="1x1",
-                marks=pytest.mark.skip(reason="No supported minimax_m2 mesh shape fits on this system"),
+                marks=pytest.mark.skip(reason="No supported minimax_m3 mesh shape fits on this system"),
             )
         ]
     else:

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MiniMax-M2 specific implementation of create_tt_model that's compatible with tt_transformers
+MiniMax-M3 specific implementation of create_tt_model that's compatible with tt_transformers
 """
 
 import ttnn
@@ -22,7 +22,7 @@ def create_tt_model(
     use_throughput_experts=False,
 ):
     """
-    MiniMax-M2 version of create_tt_model that matches tt_transformers interface
+    MiniMax-M3 version of create_tt_model that matches tt_transformers interface
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
     from models.demos.minimax_m3.config import MeshConfig
@@ -35,7 +35,7 @@ def create_tt_model(
 
         mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
 
-    # Create MiniMax-M2 ModelArgs
+    # Create MiniMax-M3 ModelArgs
     model_args = ModelArgs(
         mesh_device,
         max_batch_size=max_batch_size,
@@ -56,7 +56,7 @@ def create_tt_model(
             convert_to_meta_format=True,
         )
 
-    # Create MiniMax-M2 model using transformer-compatible constructor
+    # Create MiniMax-M3 model using transformer-compatible constructor
     model = Model.create_transformer_compatible(
         args=model_args,
         mesh_device=mesh_device,

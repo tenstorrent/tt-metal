@@ -8,7 +8,7 @@ M3 uses qk_norm_type="per_head": after the head split (Q -> [1, 64, S, 128], K -
 RMSNorm runs independently per (head, token) over head_dim with a single [head_dim] gain shared
 across heads, applied BEFORE RoPE on Q and K only. The gain uses the same gemma (1+w) RMSNorm as
 the layernorms (use_gemma_norm=true), folded into the weight at load (weights.py). Anchor:
-transformers minimax_m3_vl. (M2 used a full-width norm over num_heads*head_dim — see test_attention_ops.)
+transformers minimax_m3_vl.
 
 Builds the qk-norm gain exactly as weights.py does (gemma fold + (1,1,head_dim/32,32) ROW_MAJOR,
 replicated) and applies the production apply_qk_norm_per_head op. Torch-only, random weights — single card.

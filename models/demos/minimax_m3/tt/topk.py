@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-MiniMax-M2 MoE router (gate).
+MiniMax-M3 MoE router (gate).
 
 Routing:
   * sigmoid scoring over all experts (the gate Linear has no bias)
@@ -11,7 +11,7 @@ Routing:
   * the returned top-k weights are the UNBIASED sigmoid values gathered at the
     selected indices, then normalized to sum to 1
 
-HF reference (MiniMaxM2SparseMoeBlock.route_tokens_to_experts):
+HF reference (MiniMaxM3SparseMoeBlock.route_tokens_to_experts):
     routing_weights = sigmoid(router_logits.float())
     scores_for_choice = routing_weights + e_score_correction_bias
     _, top_k_index = topk(scores_for_choice, top_k)
@@ -26,7 +26,7 @@ from models.demos.minimax_m3.utils.general_utils import cache_file_exists, get_c
 def route_tokens_to_experts(
     router_logits, experts_per_token, num_experts, score_bias, use_throughput_experts, routed_scaling_factor=1.0
 ):
-    """Apply MiniMax-M2/M3 routing to gate logits [tokens, num_experts]."""
+    """Apply MiniMax-M3 routing to gate logits [tokens, num_experts]."""
     if router_logits.dtype != ttnn.bfloat16:
         router_logits = ttnn.typecast(router_logits, dtype=ttnn.bfloat16)
 
@@ -51,7 +51,7 @@ def route_tokens_to_experts(
     denom.deallocate(True)
 
     # M3: scale the routed weights by routed_scaling_factor (2.0), applied AFTER normalize
-    # (DeepSeek/M3 convention; shared expert is added later, unscaled). M2 uses 1.0 -> no-op.
+    # (DeepSeek/M3 convention; shared expert is added later, unscaled). A factor of 1.0 -> no-op.
     if routed_scaling_factor != 1.0:
         top_k_weights = ttnn.mul(top_k_weights, routed_scaling_factor)
 
@@ -71,11 +71,11 @@ class TopKRouter:
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
-        # M3: routed-expert output is scaled by routed_scaling_factor (2.0); M2 has no such field.
+        # M3: routed-expert output is scaled by routed_scaling_factor (2.0, from config; 1.0 if absent).
         self.routed_scaling_factor = getattr(hf_config, "routed_scaling_factor", 1.0)
         self.tensor_cache_path = tensor_cache_path
 
-        # MiniMax-M2 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
+        # MiniMax-M3 gate Linear has no bias; weight is [num_experts, hidden] -> [hidden, num_experts].
         torch_weight = state_dict["weight"].transpose(0, 1) if state_dict else None
         self.weight = ttnn.as_tensor(
             torch_weight,
@@ -126,7 +126,7 @@ class TopKRouter:
         mem_config = ttnn.L1_MEMORY_CONFIG if is_decode else ttnn.DRAM_MEMORY_CONFIG
         router_logits = ttnn.linear(
             hidden_states,
-            self.weight,  # no bias (MiniMax-M2)
+            self.weight,  # no bias (MiniMax-M3)
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,
         )

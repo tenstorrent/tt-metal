@@ -122,8 +122,8 @@ class DecoderLayer:
             mesh_config=mesh_config,
         )
         # Hybrid dense/MoE schedule (M3): layers with moe_layer_freq[idx]==0 are a plain dense
-        # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). M2 had no
-        # dense layers (all MoE), so moe_layer_freq absent -> default to MoE.
+        # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). If
+        # moe_layer_freq is absent, default to MoE.
         moe_layer_freq = getattr(hf_config, "moe_layer_freq", None)
         self.is_dense = (
             moe_layer_freq is not None and layer_idx < len(moe_layer_freq) and moe_layer_freq[layer_idx] == 0
@@ -152,7 +152,7 @@ class DecoderLayer:
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
             )
 
-        # MiniMax-M2 lists per-layer attention types in `attn_type_list` (all 1 =
+        # MiniMax-M3 lists per-layer attention types in `attn_type_list` (all 1 =
         # full attention) via attn_type_list. Fall back gracefully.
         attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
         self.attention_type = attn_types[layer_idx] if attn_types is not None else 1

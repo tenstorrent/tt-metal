@@ -5,7 +5,7 @@
 Functional MULTI-CARD whole-model test: MiniMax-M3 full Model on (8,4) = TP=4 + EP=32 + DP=8,
 vs a self-authored torch reference. Random weights, S<2048 (full-GQA placeholder).
 
-Layout (the M2-validated pattern, M3 dims): 8 prompts, one per mesh ROW (DP=8, users_row_sharded);
+Layout (validated pattern, M3 dims): 8 prompts, one per mesh ROW (DP=8, users_row_sharded);
 attention/dense run TP=4 on the 4 cols; the MoE runs expert-parallel across all 32 chips
 (num_experts % 32 == 0). Drives the real prefill I/O: prepare_inputs_prefill (token ids ->
 embedding -> per-row shard) -> ttnn_prefill_forward (use_ep_moe) -> per-row logits gather.
