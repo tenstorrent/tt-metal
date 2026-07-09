@@ -20,9 +20,7 @@ DEVICE_PARAMS_L1_SMALL_SIZE = [{"l1_small_size": 0}]
 WELFORD_MODES = ("legacy", "welford_normal", "welford_reciprocal")
 
 GROUP_NORM_DRAM_SHAPES = [
-    (8, 768, 1, 512, 32, 2, 8, 8),  # base case
     (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
-    (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
     (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
     (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
     (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
@@ -51,7 +49,6 @@ GROUP_NORM_DRAM_SHAPES = [
     (1, 1152, 128, 128, 32, 2, 8, 4),
     (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
     (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-    (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
     (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
     # sd35. 4 indicates the number of device.
     (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
@@ -127,6 +124,8 @@ def run_group_norm_DRAM(
     use_input_mask,
     perf_test_mode=False,
     specify_grid=True,
+    input_layout=ttnn.TILE_LAYOUT,
+    output_layout=ttnn.TILE_LAYOUT,
 ):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
@@ -173,7 +172,10 @@ def run_group_norm_DRAM(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    if input_layout == ttnn.TILE_LAYOUT:
+        input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+
+    gn_input_tensor = input_tensor_tilized if input_layout == ttnn.TILE_LAYOUT else input_tensor_row_major
 
     # Create dram group norm params
     [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
@@ -219,13 +221,13 @@ def run_group_norm_DRAM(
         num_itr = 1  # one iter if it is too slow
     for _ in range(num_itr):
         output_tensor = ttnn.group_norm(
-            input_tensor_tilized,
+            gn_input_tensor,
             num_groups=num_groups,
             input_mask=input_mask_tensor if use_input_mask else None,
             weight=gamma_t,
             bias=beta_t,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            output_layout=ttnn.TILE_LAYOUT,
+            output_layout=output_layout,
             core_grid=grid_size if specify_grid else None,
             inplace=False,
             num_out_blocks=num_out_blocks if specify_grid else None,

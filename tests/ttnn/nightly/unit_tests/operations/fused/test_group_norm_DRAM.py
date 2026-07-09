@@ -49,7 +49,7 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
 
 
 @pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True)
-def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
+def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device, expect_error):
     """Regression test for GH#40912: N=2 with grid (8,5) creates num_virtual_rows=5
     which is not divisible by num_batches=2, producing non-uniform mcast groups
     that deadlock due to exact-equality semaphore waits in the sender kernel."""
@@ -76,7 +76,7 @@ def test_group_norm_DRAM_rejects_non_uniform_mcast_groups(device):
         [torch_weight, torch_bias], C, num_groups, device, core_grid=bad_grid, return_mask=True
     )
 
-    with pytest.raises(RuntimeError, match="core_grid"):
+    with expect_error(RuntimeError, "core_grid"):
         ttnn.group_norm(
             input_tensor_tilized,
             num_groups=num_groups,
@@ -192,3 +192,68 @@ def test_group_norm_DRAM_oft_unit_shapes(
     device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid
 ):
     base.test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, eps, specify_grid)
+
+
+# ROW_MAJOR interleaved input/output is supported only on the legacy (non-Welford) DRAM path. For legacy
+# this runs and checks correctness (fast path + L1 fallback across all shapes/layouts); for Welford it
+# asserts the op rejects ROW_MAJOR with a clear error.
+@pytest.mark.parametrize("device_params", base.DEVICE_PARAMS_L1_SMALL_SIZE, indirect=True, ids=["l1small0"])
+@pytest.mark.parametrize("N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x", base.GROUP_NORM_DRAM_SHAPES)
+@pytest.mark.parametrize("welford_mode", base.WELFORD_MODES)
+@pytest.mark.parametrize(
+    "input_layout, output_layout",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.ROW_MAJOR_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+    ],
+    ids=["RM_IN_TILE_OUT", "TILE_IN_RM_OUT", "RM_IN_RM_OUT"],
+)
+def test_group_norm_DRAM_row_major_layouts(
+    device,
+    expect_error,
+    N,
+    C,
+    H,
+    W,
+    num_groups,
+    num_out_blocks,
+    cores_y,
+    cores_x,
+    welford_mode,
+    input_layout,
+    output_layout,
+):
+    if welford_mode == "legacy":
+        base.run_group_norm_DRAM(
+            device,
+            N,
+            C,
+            H,
+            W,
+            num_groups,
+            num_out_blocks,
+            cores_y,
+            cores_x,
+            welford_mode,
+            use_input_mask=True,
+            input_layout=input_layout,
+            output_layout=output_layout,
+        )
+    else:
+        with expect_error(RuntimeError, "not supported on the Welford path"):
+            base.run_group_norm_DRAM(
+                device,
+                N,
+                C,
+                H,
+                W,
+                num_groups,
+                num_out_blocks,
+                cores_y,
+                cores_x,
+                welford_mode,
+                use_input_mask=True,
+                input_layout=input_layout,
+                output_layout=output_layout,
+            )

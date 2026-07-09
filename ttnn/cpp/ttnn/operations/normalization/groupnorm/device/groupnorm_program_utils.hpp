@@ -25,4 +25,16 @@ void split_and_form_rectangle_grids(
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width = 32);
 
+// Tiles the legacy ROW_MAJOR (TILIZE_IN) fast path keeps resident in c_17 (cb_in_tilized) for one per-core
+// group: num_out_blocks_padded * out_block_h_normal * block_wt, mirroring the kernel/reader accounting.
+uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_blocks, uint32_t block_wt);
+
+// Percent of usable L1 the tilize-in-L1 fast path may occupy before the factory falls back to the
+// re-tilize path. Integer percent (integer fit check); the <100 margin covers the approximated small CBs.
+inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
+
+// Flat allowance (in tiles) for the small fixed-size scalar/reduction CBs the fast-path L1 estimate does not
+// sum individually. 32 tiles (~64 KB at bf16) comfortably covers them across the supported configurations.
+inline constexpr uint32_t kGroupnormSmallCbAllowanceTiles = 32;
+
 }  // namespace ttnn::prim
