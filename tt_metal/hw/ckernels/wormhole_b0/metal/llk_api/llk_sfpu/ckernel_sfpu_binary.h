@@ -154,12 +154,7 @@ inline void calculate_sfpu_binary_div(
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
-        // bf16 output carries ~8 mantissa bits, so a single Newton iteration on the
-        // reciprocal is sufficient (<=0.5 ulp, matching the standalone reciprocal op's
-        // bf16 path). fp32 keeps two iterations because the Markstein residual
-        // refinement below needs the accurate reciprocal.
-        constexpr int RECIP_ITERS = is_fp32_dest_acc_en ? 2 : 1;
-        sfpi::vFloat r = sfpu_reciprocal_iter<RECIP_ITERS>(in1);
+        sfpi::vFloat r = sfpu_reciprocal_iter<2>(in1);
         sfpi::vFloat result = in0 * r;
         if constexpr (is_fp32_dest_acc_en) {
             // Skip quotient refinement when in0*r is already non-finite (biased exponent == 255).
