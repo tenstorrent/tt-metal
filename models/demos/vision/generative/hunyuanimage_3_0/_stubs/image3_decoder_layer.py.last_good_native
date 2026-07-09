@@ -1,0 +1,230 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""Native TTNN port of `image3_decoder_layer` (HunyuanImage3DecoderLayer) of
+tencent/HunyuanImage-3.0.
+
+A full decoder block:
+
+    residual = x
+    x = input_layernorm(x)                    # RMSNorm
+    x = self_attn(x, custom_pos_emb)          # fused-QKV GQA + HF rope + qk-norm + SDPA + o_proj
+    x = residual + x
+    residual = x
+    x = post_attention_layernorm(x)           # RMSNorm
+    x = mlp(x)                                 # MoE: shared SwiGLU + top-8 gate + 64 expert SwiGLUs
+    x = residual + x
+
+Everything runs in TTNN ops on device; weights are extracted from the HF
+reference module at `build()` time. No torch reference is invoked at forward
+time.
+"""
+
+from __future__ import annotations
+
+import torch
+import ttnn
+
+
+HF_MODEL_ID = "tencent/HunyuanImage-3.0"
+
+
+def _to_ttnn(t: torch.Tensor, device, *, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+    return ttnn.from_torch(
+        t.to(torch.float32), dtype=dtype, layout=layout, device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+
+def _linear_weight(w: torch.Tensor, device, dtype=ttnn.bfloat16):
+    """nn.Linear stores weight as [out, in]; ttnn.linear(x, W) computes x @ W,
+    so upload the transpose [in, out]."""
+    return _to_ttnn(w.t().contiguous(), device, dtype=dtype)
+
+
+class _TtDecoderLayer:
+    def __init__(self, device, torch_module):
+        self.device = device
+        cfg = torch_module.self_attn
+
+        self.num_heads = int(cfg.num_heads)
+        self.num_kv_heads = int(cfg.num_key_value_heads)
+        self.head_dim = int(cfg.head_dim)
+        self.groups = self.num_heads // self.num_kv_heads
+        self.hidden_size = int(cfg.hidden_size)
+        self.use_qk_norm = bool(getattr(cfg, "use_qk_norm", False))
+        self.use_rope = bool(getattr(cfg, "use_rotary_pos_emb", False))
+        self.scale = 1.0 / (self.head_dim ** 0.5)
+
+        self.eps = float(torch_module.input_layernorm.variance_epsilon)
+
+        # --- norms ---
+        self.input_ln_w = _to_ttnn(
+            torch_module.input_layernorm.weight.reshape(1, 1, 1, -1), device
+        )
+        self.post_ln_w = _to_ttnn(
+            torch_module.post_attention_layernorm.weight.reshape(1, 1, 1, -1), device
+        )
+        if self.use_qk_norm:
+            self.q_norm_w = _to_ttnn(cfg.query_layernorm.weight.reshape(1, 1, 1, -1), device)
+            self.k_norm_w = _to_ttnn(cfg.key_layernorm.weight.reshape(1, 1, 1, -1), device)
+
+        # --- attention: permute fused-QKV rows so output is [q | k | v] contiguous ---
+        # HF layout: qkv[b,q,6144] -> reshape [b,q,kv=8,groups+2=6,hd=128], split [4,1,1].
+        # flat row for (kv, slot, d) = kv*768 + slot*128 + d.  q uses slots 0..3, k=4, v=5.
+        # q head index = kv*groups + group (matches HF reshape->transpose order).
+        nKV, g, hd = self.num_kv_heads, self.groups, self.head_dim
+        block = (g + 2) * hd
+        q_rows, k_rows, v_rows = [], [], []
+        for h in range(self.num_heads):
+            kv = h // g
+            grp = h % g
+            base = kv * block + grp * hd
+            q_rows.extend(range(base, base + hd))
+        for kv in range(nKV):
+            base = kv * block
+            k_rows.extend(range(base + g * hd, base + g * hd + hd))
+            v_rows.extend(range(base + (g + 1) * hd, base + (g + 1) * hd + hd))
+        perm = q_rows + k_rows + v_rows
+        qkv_w = cfg.qkv_proj.weight[perm, :].contiguous()  # [6144, 4096]
+        self.qkv_w = _linear_weight(qkv_w, device)
+        self.o_w = _linear_weight(cfg.o_proj.weight, device)
+
+        # --- MoE ---
+        moe = torch_module.mlp
+        self.use_shared = bool(getattr(moe.config, "use_mixed_mlp_moe", False))
+        self.moe_topk = int(moe.gate.moe_topk if isinstance(moe.gate.moe_topk, int) else moe.gate.moe_topk[moe.layer_idx or 0])
+        self.num_experts = int(moe.num_experts)
+        # gate router weight [num_experts, hidden]
+        self.wg = _linear_weight(moe.gate.wg.weight, device)
+
+        def _mlp_weights(mlp):
+            return (
+                _linear_weight(mlp.gate_and_up_proj.weight, device),
+                _linear_weight(mlp.down_proj.weight, device),
+                int(mlp.gate_and_up_proj.weight.shape[0] // 2),  # intermediate (post-split)
+            )
+
+        if self.use_shared:
+            self.shared_gu, self.shared_down, self.shared_inter = _mlp_weights(moe.shared_mlp)
+        self.experts = [_mlp_weights(e) for e in moe.experts]
+
+    # ------------------------------------------------------------------
+    def _swiglu(self, x, gu_w, down_w, inter):
+        gu = ttnn.linear(x, gu_w)                      # [1, S, 2*inter]
+        x1 = ttnn.slice(gu, [0, 0, 0], [gu.shape[0], gu.shape[1], inter])
+        x2 = ttnn.slice(gu, [0, 0, inter], [gu.shape[0], gu.shape[1], 2 * inter])
+        ttnn.deallocate(gu)
+        act = ttnn.multiply(x1, ttnn.silu(x2))
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        out = ttnn.linear(act, down_w)                 # [1, S, hidden]
+        ttnn.deallocate(act)
+        return out
+
+    def _attention(self, x, custom_pos_emb):
+        S = x.shape[1]
+        qkv = ttnn.linear(x, self.qkv_w)               # [1, S, 6144] = q|k|v
+        # nlp_create_qkv_heads expects a 4D [B, 1, S, dim] fused-qkv tensor.
+        qkv = ttnn.reshape(qkv, [1, 1, S, qkv.shape[-1]])
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
+        # q: [1, num_heads, S, hd]; k,v: [1, num_kv_heads, S, hd]
+
+        # HF rope (rotate_half) THEN qk-norm, matching the reference order.
+        if self.use_rope and custom_pos_emb is not None:
+            cos_t, sin_t = custom_pos_emb
+            cos = _to_ttnn(cos_t.reshape(1, 1, cos_t.shape[-2], cos_t.shape[-1]), self.device)
+            sin = _to_ttnn(sin_t.reshape(1, 1, sin_t.shape[-2], sin_t.shape[-1]), self.device)
+            q = ttnn.experimental.rotary_embedding_hf(q, cos, sin, is_decode_mode=False)
+            k = ttnn.experimental.rotary_embedding_hf(k, cos, sin, is_decode_mode=False)
+
+        if self.use_qk_norm:
+            q = ttnn.rms_norm(q, epsilon=self.eps, weight=self.q_norm_w)
+            k = ttnn.rms_norm(k, epsilon=self.eps, weight=self.k_norm_w)
+
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, scale=self.scale,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        # attn: [1, num_heads, S, hd] -> concat heads -> [1, 1, S, hidden]
+        attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn = ttnn.reshape(attn, [1, S, self.hidden_size])
+        out = ttnn.linear(attn, self.o_w)
+        ttnn.deallocate(attn)
+        return out
+
+    def _moe(self, x):
+        # --- routing (native top-k via kth-value threshold) ---
+        logits = ttnn.linear(x, self.wg)                       # [1, S, E]
+        gates = ttnn.softmax(logits, dim=-1)
+        ttnn.deallocate(logits)
+        topk_vals, _ = ttnn.topk(gates, self.moe_topk, dim=-1)  # [1, S, topk]
+        E = self.num_experts
+        kth = ttnn.slice(topk_vals, [0, 0, self.moe_topk - 1], [topk_vals.shape[0], topk_vals.shape[1], self.moe_topk])
+        ttnn.deallocate(topk_vals)
+        mask = ttnn.ge(gates, kth)                              # [1, S, E] broadcast
+        ttnn.deallocate(kth)
+        masked = ttnn.multiply(gates, mask)                    # zero out non-top-k
+        ttnn.deallocate(gates)
+        ttnn.deallocate(mask)
+        denom = ttnn.sum(masked, dim=-1, keepdim=True)         # [1, S, 1] = sum of top-k gates
+        router = ttnn.multiply(masked, ttnn.reciprocal(denom))  # normalized weights
+        ttnn.deallocate(masked)
+        ttnn.deallocate(denom)
+
+        # --- shared expert ---
+        combined = None
+        if self.use_shared:
+            combined = self._swiglu(x, self.shared_gu, self.shared_down, self.shared_inter)
+
+        # --- routed experts (dense; no token dropping in this config) ---
+        for e in range(E):
+            gu_w, down_w, inter = self.experts[e]
+            y = self._swiglu(x, gu_w, down_w, inter)           # [1, S, hidden]
+            w = ttnn.slice(router, [0, 0, e], [router.shape[0], router.shape[1], e + 1])  # [1, S, 1]
+            y = ttnn.multiply(y, w)                            # broadcast weight
+            ttnn.deallocate(w)
+            if combined is None:
+                combined = y
+            else:
+                combined = ttnn.add(combined, y)
+                ttnn.deallocate(y)
+        ttnn.deallocate(router)
+        return combined
+
+    def __call__(self, hidden_states, custom_pos_emb=None, **kwargs):
+        residual = hidden_states
+        x = ttnn.rms_norm(hidden_states, epsilon=self.eps, weight=self.input_ln_w)
+        attn = self._attention(x, custom_pos_emb)
+        ttnn.deallocate(x)
+        hidden = ttnn.add(residual, attn)
+        ttnn.deallocate(attn)
+
+        residual2 = hidden
+        x2 = ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.post_ln_w)
+        moe = self._moe(x2)
+        ttnn.deallocate(x2)
+        out = ttnn.add(residual2, moe)
+        ttnn.deallocate(moe)
+        return out
+
+
+def build(device, torch_module):
+    return _TtDecoderLayer(device, torch_module)
+
+
+def image3_decoder_layer(*args, **kwargs):  # pragma: no cover - build() is the entry point
+    raise RuntimeError(
+        "image3_decoder_layer must be constructed via build(device, torch_module); "
+        "the bare module-level callable is not supported for this native port."
+    )

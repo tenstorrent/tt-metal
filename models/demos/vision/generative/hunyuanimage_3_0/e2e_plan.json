@@ -1,0 +1,72 @@
+{
+  "model_id": "tencent/HunyuanImage-3.0",
+  "hf_architecture": "HunyuanImage3ForCausalMM",
+  "hf_auto_model": "AutoModelForCausalLM (hunyuan.HunyuanImage3ForCausalMM)",
+  "model_type": "hunyuan_image_3_moe",
+  "task_family": "generative / autoregressive multimodal (CausalMM) — text+image tokens",
+  "planner_notes": [
+    "HunyuanImage-3.0 is an 80B-class mixed-MLP MoE causal transformer (32 layers, hidden=4096, 32 q-heads / 8 kv-heads, head_dim=128, 64 experts + 1 shared, top-8 routing, 2D-RoPE, qk-norm, RMSNorm). The full model.generate() is a 50-step diffusion image-generation loop over the whole 80B stack — infeasible to reproduce or to fit on a single device, so it is NOT the e2e gate target.",
+    "The bring-up (Source B) graduated exactly the transformer decoder-block internals. The faithful, device-feasible e2e that EXERCISES all graduated work is the model's real transformer forward (HunyuanImage3Model.forward) — inputs_embeds -> decoder layer(s) -> last_hidden_state — which is the exact tensor that feeds the CausalMM / image heads. Input is built from the REAL HF tokenizer + wte embedding + the model's REAL 2D-RoPE (build_2d_rope). Output (last_hidden_state, and the MoE load-balance l_aux) is compared to the HF reference forward of the same submodule chain.",
+    "Device-memory reality: one decoder layer = 64 routed + 1 shared SwiGLU experts (~4.9 GB bf16) + GQA attention; fits comfortably on one Blackhole chip. The full 32-layer stack is the whole 80B model and does NOT fit on one chip, so the e2e runs the graduated layer(s) as the real transformer block(s); NUM_LAYERS is configurable (default 1 = layer 0, the exact submodule that graduated)."
+  ],
+
+  "graduated_modules_verification": {
+    "rule": "GRADUATED = has _stubs/<name>.py.last_good_native OR .last_good_sharded snapshot; REUSE (no stub) are NOT graduated.",
+    "graduated": [
+      {"name": "image3_decoder_layer", "kind": "HunyuanImage3DecoderLayer", "status": "NEW", "snapshot": "_stubs/image3_decoder_layer.py.last_good_native", "per_component_pcc": 0.9999974780450809},
+      {"name": "mo_e", "kind": "HunyuanMoE", "status": "ADAPT", "snapshot": "_stubs/mo_e.py.last_good_native", "per_component_pcc": 0.9996237329502411},
+      {"name": "top_k_gate", "kind": "HunyuanTopKGate", "status": "NEW", "snapshot": "_stubs/top_k_gate.py.last_good_native", "per_component_pcc": 1.0}
+    ],
+    "not_graduated_reuse": ["self_attention", "mlp", "m_l_p", "r_m_s_norm", "image3_s_d_p_a_attention"],
+    "count_check": "3 graduated stubs present; ALL 3 must be invoked in the pipeline (Gate 2).",
+    "nesting": "These three nest: HunyuanImage3DecoderLayer.mlp = HunyuanMoE; HunyuanMoE.gate = HunyuanTopKGate. The pipeline composes them along this exact hierarchy so every graduated stub is on the one real forward path (no coverage sweep)."
+  },
+
+  "task_heads": [
+    {
+      "call_id": "Call-1",
+      "name": "hunyuan_image3_transformer_prefill",
+      "description": "Real HunyuanImage3 transformer forward (prefill): input_ids (from HF tokenizer on a real prompt) -> wte embedding -> N graduated decoder layers -> last_hidden_state, plus the summed MoE load-balance l_aux. This is the exact tensor path that HunyuanImage3Model.forward produces to feed the downstream CausalMM/image heads.",
+      "shares_graduated_modules": ["image3_decoder_layer", "mo_e", "top_k_gate"],
+      "agents": "ONE agent — all three graduated stubs are nested in this single decoder-block chain, so per the orchestration rule they are built together, not split.",
+      "wiring": [
+        "stage embed:  ttnn.embedding(input_ids, wte.weight)  -> inputs_embeds  [1, S, 4096]  (on device)",
+        "stage layer_i (x N): image3_decoder_layer(x, custom_pos_emb) -> internally: input_layernorm(RMSNorm) -> GQA self-attn (fused-qkv, HF-rope via real build_2d_rope cos/sin, qk-norm, SDPA, o_proj) -> residual -> post_attention_layernorm -> mo_e(x2) -> residual",
+        "stage mo_e (inside layer): shared SwiGLU + routed experts combined by the router weights returned from top_k_gate; returns (moe_out, l_aux)",
+        "stage top_k_gate (inside mo_e): softmax over experts + top-8 -> normalized router weights (FEED the expert combine = main path) AND l_aux (load-balance aux, a real forward co-output)",
+        "output: last_hidden_state = layer_{N-1} output; aux = sum of per-layer l_aux"
+      ],
+      "input_source": "Source A HF tokenizer (tencent/HunyuanImage-3.0) on a fixed real prompt; wte embedding + build_2d_rope(seq_len, head_dim=128) taken from the loaded HF reference (setup only). Identical custom_pos_emb fed to BOTH TT and HF golden.",
+      "output_definition": "last_hidden_state [1, S, 4096] (primary) + total l_aux scalar (auxiliary). Both are quantities HunyuanImage3Model.forward / HunyuanMoE genuinely compute.",
+      "golden": "_hf_reference() runs the SAME first-N HunyuanImage3DecoderLayer modules on the SAME inputs_embeds + custom_pos_emb -> last_hidden_state; and the reference HunyuanTopKGate/topkgating l_aux. No diffusion, no generate()."
+    }
+  ],
+
+  "pass_criteria": {
+    "gate1_native": "Every routed graduated stub runs real ttnn ops on device (no torch fallback in the hot path). Verified by an import-time / runtime scan (no torch.* compute in run_prefill/__call__/_attention/_moe/_swiglu) and by host_op_selftest firing ZERO host aten ops in the observed forward.",
+    "gate2_invoked": "All 3 graduated stubs (image3_decoder_layer, mo_e, top_k_gate) are invoked on the real forward path with outputs feeding downstream: top_k_gate.router -> mo_e expert-combine -> decoder-layer residual -> last_hidden_state. Asserted via a real per-instance call registry (NOT a coverage sweep).",
+    "gate3_pcc": "final e2e PCC(last_hidden_state_TT, last_hidden_state_HF) >= 0.95. Printed as `e2e PCC=<v>` on its own line before the assert on every run. l_aux PCC reported alongside."
+  },
+
+  "validation_metric": "comp_pcc (models.common.utility_functions) on last_hidden_state vs HF golden; target 0.95 (per-component graduated at >=0.9996, so >=0.95 e2e expected).",
+
+  "behavioral_proof": "The demo entrypoint (demo/demo_image3_prefill.py) tokenizes a real prompt with the HF tokenizer, runs the shared TTNN pipeline, and prints the last_hidden_state stats + a small slice, demonstrating the transformer produced real activations from real text — not a smoke test. The e2e test drives the identical shared pipeline and asserts the gates.",
+
+  "self_validation_plan": [
+    "1. Per-component PCC (already green from bring-up): tests/pcc/test_{image3_decoder_layer,mo_e,top_k_gate}.py.",
+    "2. Gate 2 registry: pipeline records each graduated stub instance actually called during run_prefill; test asserts the set == {image3_decoder_layer, mo_e, top_k_gate}.",
+    "3. Gate 3: e2e PCC(last_hidden_state) >= 0.95 vs HF reference decoder-stack forward; l_aux PCC reported.",
+    "4. Gate 1: host_op_selftest() runs the forward under host_op_observer.observe_host_ops with tokenize+wte+rope OUTSIDE the observed region and asserts ZERO host aten ops.",
+    "5. Command 3: trace_capture_selftest() captures each PIPELINE_STAGE (prefill, decode) host-free and PCC-checks the trace output; build_pipeline(device, model) returns the resident pipeline object exposing the per-stage trace_setup/trace_step/write_inputs hooks."
+  ],
+
+  "pipeline_stages": ["prefill", "decode"],
+  "shared_pipeline_module": "models/demos/vision/generative/hunyuanimage_3_0/tt/pipeline.py",
+  "package_layout": {
+    "tt/pipeline.py": "the ONE shared chained forward (build_pipeline factory + run_prefill + stubs wiring + trace/host-op selftests) imported by BOTH demo and test",
+    "tt/stubs/": "the three graduated stubs (image3_decoder_layer, mo_e, top_k_gate), composed along the HF nesting",
+    "demo/demo_image3_prefill.py": "runnable `python -m ...demo.demo_image3_prefill` — real prompt -> TT prefill -> real last_hidden_state",
+    "tests/e2e/test_e2e_prefill.py": "Gate 1/2/3 on the shared pipeline",
+    "tests/pcc/": "per-component PCC (from bring-up)"
+  }
+}
