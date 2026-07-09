@@ -224,4 +224,3 @@ HIGGS_BATCH=4 pytest -s models/demos/audio/higgs_audio_v2/tests/test_perf_batch_
 # accuracy gate: 0.967
 pytest -s models/demos/audio/higgs_audio_v2/tests/test_accuracy_native.py
 ```
-

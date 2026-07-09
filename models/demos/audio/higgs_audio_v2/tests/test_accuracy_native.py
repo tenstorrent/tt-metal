@@ -30,13 +30,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.audio.higgs_audio_v2.demo.generator import resolve_model_dir
 from models.demos.audio.higgs_audio_v2.tt.audio_decode import (
     apply_delay_pattern_to_greedy_audio_tokens,
     initialize_delay_pattern_state,
 )
 from models.demos.audio.higgs_audio_v2.tt.model import HiggsAudioTTModel
 from models.demos.audio.higgs_audio_v2.tt.model_args import HiggsModelArgs
-from models.demos.audio.higgs_audio_v2.demo.generator import resolve_model_dir
 from models.demos.audio.higgs_audio_v2.tt.reference import HiggsAudioV2Config, load_higgs_v2_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup

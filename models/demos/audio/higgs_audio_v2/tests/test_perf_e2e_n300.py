@@ -18,11 +18,11 @@ import os
 import time
 
 import pytest
-import ttnn
 from loguru import logger
 
-from models.demos.audio.higgs_audio_v2.demo.generator import HiggsAudioTTSGenerator
+import ttnn
 from models.demos.audio.higgs_audio_v2.demo.demo import _tts_conversation
+from models.demos.audio.higgs_audio_v2.demo.generator import HiggsAudioTTSGenerator
 
 CODEC_FRAME_RATE_HZ = 25.0
 SAMPLING_RATE = 24000
@@ -53,13 +53,27 @@ def test_e2e_generated_audio_rtf(mesh_device):
     # generate() default, but its blocking readback makes wall-clock RTF host-load-sensitive,
     # so the hybrid path is used here for a stable, tight gate.
     warm_seq = gen.generate(
-        conv, max_new_tokens=MAX_NEW, temperature=0.7, top_k=50, top_p=0.95, seed=1, use_trace=True, ondevice_sample=False
+        conv,
+        max_new_tokens=MAX_NEW,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.95,
+        seed=1,
+        use_trace=True,
+        ondevice_sample=False,
     )
     _ = gen.to_waveforms(warm_seq, trim=False)
 
     # ---- timed real run: real tokens through the traced generator ----
     seq = gen.generate(
-        conv, max_new_tokens=MAX_NEW, temperature=0.7, top_k=50, top_p=0.95, seed=2, use_trace=True, ondevice_sample=False
+        conv,
+        max_new_tokens=MAX_NEW,
+        temperature=0.7,
+        top_k=50,
+        top_p=0.95,
+        seed=2,
+        use_trace=True,
+        ondevice_sample=False,
     )
     t = gen._last_timing
     rows = int(seq.shape[1] - 1)

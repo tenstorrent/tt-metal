@@ -212,15 +212,23 @@ class HiggsAudioTTSGenerator:
         cluster_shape = self.args.cluster_shape
 
         cur_tokens = ttnn.from_torch(
-            torch.zeros(1, K, dtype=torch.int32), device=dev, dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            torch.zeros(1, K, dtype=torch.int32),
+            device=dev,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
         )
         offsets_dev = ttnn.from_torch(
-            (torch.arange(K, dtype=torch.int32) * cb).view(1, K), device=dev, dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            (torch.arange(K, dtype=torch.int32) * cb).view(1, K),
+            device=dev,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
         )
         cp_dev = ttnn.from_torch(
-            torch.tensor([start_pos], dtype=torch.int32), device=dev, dtype=ttnn.int32,
+            torch.tensor([start_pos], dtype=torch.int32),
+            device=dev,
+            dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(None, None), mesh_shape=cluster_shape),
         )
         rope_idxs = self.rope_setup.get_rot_idxs(torch.tensor([start_pos], dtype=torch.int32), on_host=False)
@@ -242,7 +250,8 @@ class HiggsAudioTTSGenerator:
 
         def advance_pos(pos):
             cp_host = ttnn.from_torch(
-                torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32,
+                torch.tensor([pos], dtype=torch.int32),
+                dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(None, None), mesh_shape=cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(cp_host, cp_dev)
@@ -251,8 +260,10 @@ class HiggsAudioTTSGenerator:
 
         def feed_tokens(next_ids):
             nxt_host = ttnn.from_torch(
-                next_ids.view(1, K).to(torch.int32), dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+                next_ids.view(1, K).to(torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
             )
             ttnn.copy_host_to_device_tensor(nxt_host, cur_tokens)
 
@@ -265,8 +276,10 @@ class HiggsAudioTTSGenerator:
         ttnn.end_trace_capture(dev, trace_id, cq_id=0)
         ttnn.synchronize_device(dev)
         return {
-            "trace_id": trace_id, "logits_out": logits_out,
-            "advance_pos": advance_pos, "feed_tokens": feed_tokens,
+            "trace_id": trace_id,
+            "logits_out": logits_out,
+            "advance_pos": advance_pos,
+            "feed_tokens": feed_tokens,
         }
 
     def _read_logits(self, logits_out):
@@ -312,7 +325,9 @@ class HiggsAudioTTSGenerator:
         keep_mask = _u32(torch.ones(1, K))
         stuff_mask = _u32(torch.zeros(1, K))
         cp_dev = ttnn.from_torch(
-            torch.tensor([start_pos], dtype=torch.int32), device=dev, dtype=ttnn.int32,
+            torch.tensor([start_pos], dtype=torch.int32),
+            device=dev,
+            dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(None, None), mesh_shape=cluster_shape),
         )
         rope_idxs = self.rope_setup.get_rot_idxs(torch.tensor([start_pos], dtype=torch.int32), on_host=False)
@@ -358,7 +373,8 @@ class HiggsAudioTTSGenerator:
 
         def advance_pos(pos):
             cp_host = ttnn.from_torch(
-                torch.tensor([pos], dtype=torch.int32), dtype=ttnn.int32,
+                torch.tensor([pos], dtype=torch.int32),
+                dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(None, None), mesh_shape=cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(cp_host, cp_dev, cq_id=0)
@@ -378,8 +394,11 @@ class HiggsAudioTTSGenerator:
             ttnn.copy_host_to_device_tensor(_u32h(torch.tensor(sv).view(1, K)), stuff_mask, cq_id=0)
             gi = min(i, max_new_tokens - 1)
             ttnn.copy_host_to_device_tensor(
-                ttnn.from_torch(gumbel[gi].view(1, 1, K, cb), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep),
-                noise_cur, cq_id=0,
+                ttnn.from_torch(
+                    gumbel[gi].view(1, 1, K, cb), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+                ),
+                noise_cur,
+                cq_id=0,
             )
 
         def feed_tokens(next_ids):
@@ -394,8 +413,12 @@ class HiggsAudioTTSGenerator:
         ttnn.end_trace_capture(dev, trace_id, cq_id=0)
         ttnn.synchronize_device(dev)
         return {
-            "trace_id": trace_id, "cur_tokens": cur_tokens, "tok_out": tok_out,
-            "advance_pos": advance_pos, "set_step": set_step, "feed_tokens": feed_tokens,
+            "trace_id": trace_id,
+            "cur_tokens": cur_tokens,
+            "tok_out": tok_out,
+            "advance_pos": advance_pos,
+            "set_step": set_step,
+            "feed_tokens": feed_tokens,
         }
 
     def _decode_ondevice(self, tr, start_pos, max_new_tokens):
@@ -434,7 +457,11 @@ class HiggsAudioTTSGenerator:
             ttnn.execute_trace(dev, tr["trace_id"], cq_id=0, blocking=blocking)
             if blocking:
                 ttnn.synchronize_device(dev)
-            r = ttnn.to_torch(tr["cur_tokens"], mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0)).reshape(-1)[:K].long()
+            r = (
+                ttnn.to_torch(tr["cur_tokens"], mesh_composer=ttnn.ConcatMeshToTensor(dev, dim=0))
+                .reshape(-1)[:K]
+                .long()
+            )
             # Authoritative EOS via the delay-pattern state machine (also applies the EOS
             # shutdown ramp). The raw all-EOS heuristic is unreliable under sampling — EOS
             # staggers across codebooks and never cleanly fires — so without this the loop
@@ -518,8 +545,11 @@ class HiggsAudioTTSGenerator:
                 ttnn.release_trace(self.mesh_device, tr["trace_id"])
             decode_s = time.perf_counter() - _t_dec
             self._last_timing = {
-                "prefill_s": prefill_s, "trace_build_s": trace_build_s, "decode_s": decode_s,
-                "rows": len(rows), "decode_tok_per_s": (len(rows) / decode_s) if decode_s > 0 else 0.0,
+                "prefill_s": prefill_s,
+                "trace_build_s": trace_build_s,
+                "decode_s": decode_s,
+                "rows": len(rows),
+                "decode_tok_per_s": (len(rows) / decode_s) if decode_s > 0 else 0.0,
             }
             logger.info(
                 f"timing: prefill {prefill_s*1e3:.0f}ms  trace-build {trace_build_s*1e3:.0f}ms  "
@@ -664,11 +694,16 @@ class HiggsAudioTTSGenerator:
         # attention output's batch; only the first B rows are real (see _embed_rows).
         h_dev = ttnn.from_torch(
             torch.zeros(1, 1, ttnn.TILE_SIZE, self.args.dim, dtype=torch.bfloat16),
-            device=dev, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
+            device=dev,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(dev),
         )
         cp_dev = ttnn.from_torch(
-            torch.tensor(start_positions, dtype=torch.int32), device=dev, dtype=ttnn.int32,
+            torch.tensor(start_positions, dtype=torch.int32),
+            device=dev,
+            dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(None, None), mesh_shape=cluster_shape),
         )
         rope_idxs = self.rope_setup.get_rot_idxs(torch.tensor(start_positions, dtype=torch.int32), on_host=False)
@@ -684,7 +719,8 @@ class HiggsAudioTTSGenerator:
 
         def advance_pos(positions):
             cp_host = ttnn.from_torch(
-                torch.tensor(positions, dtype=torch.int32), dtype=ttnn.int32,
+                torch.tensor(positions, dtype=torch.int32),
+                dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(dev, dims=(None, None), mesh_shape=cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(cp_host, cp_dev)
@@ -705,8 +741,11 @@ class HiggsAudioTTSGenerator:
         ttnn.end_trace_capture(dev, trace_id, cq_id=0)
         ttnn.synchronize_device(dev)
         return {
-            "trace_id": trace_id, "logits_out": logits_out, "B": B,
-            "advance_pos": advance_pos, "feed_hidden": feed_hidden,
+            "trace_id": trace_id,
+            "logits_out": logits_out,
+            "B": B,
+            "advance_pos": advance_pos,
+            "feed_hidden": feed_hidden,
         }
 
     def _read_logits_batch(self, logits_out, B):

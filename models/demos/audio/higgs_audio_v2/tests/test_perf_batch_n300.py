@@ -25,9 +25,9 @@ metric, NOT a single-utterance latency win.
 import os
 
 import pytest
-import ttnn
 from loguru import logger
 
+import ttnn
 from models.demos.audio.higgs_audio_v2.demo.demo import _tts_conversation
 from models.demos.audio.higgs_audio_v2.demo.generator import HiggsAudioTTSGenerator
 
@@ -105,4 +105,6 @@ def test_batched_multistream_throughput(mesh_device):
     for b, r in enumerate(rms_vals):
         assert r > min_rms, f"stream {b} is silent (rms {r:.4f} <= {min_rms})"
     assert all(n > 8 for n in t["rows_per_user"]), f"a stream generated too few rows: {t['rows_per_user']}"
-    assert scaling >= min_scaling, f"batch-{B} aggregate scaling {scaling:.2f}x < {min_scaling}x (batching not amortizing)"
+    assert (
+        scaling >= min_scaling
+    ), f"batch-{B} aggregate scaling {scaling:.2f}x < {min_scaling}x (batching not amortizing)"
