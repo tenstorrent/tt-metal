@@ -385,6 +385,7 @@ def _generic_runner_labels() -> frozenset[str]:
             labels.update(sku_entry.get("runs_on") or [])
     return frozenset(labels)
 
+
 # Longest-first suffixes stripped when promoting a variant SKU to its root name.
 _CARD_TYPE_ROOT_SUFFIXES: tuple[str, ...] = (
     "_civ2_viommu_prio",
