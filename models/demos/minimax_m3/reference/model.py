@@ -512,7 +512,7 @@ class MiniMaxM3TextModel:
     ):
         """Transformer-stack forward from post-embedding hidden states ``x`` ``[B, S, H]``.
 
-        Same contract as the TT ``ttnn_prefill_forward`` (embedding applied upstream).
+        Same contract as the TT ``prefill_forward`` (embedding applied upstream).
         """
         cfg = self.cfg
         B, S, _ = x.shape

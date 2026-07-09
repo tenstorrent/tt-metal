@@ -5,7 +5,7 @@
 Full-model prefill perf (DP-attention + EP=32), traced + device-bound.
 
 The full forward is traceable (on-device EP bridge + MiniMax device router — no host ops
-mid-forward), so we capture a ttnn trace of `ttnn_prefill_forward` and measure the replay.
+mid-forward), so we capture a ttnn trace of `prefill_forward` and measure the replay.
 
 `test_model_fwd` (THE headline path — run this directly): build model on (4,8) (DP-attn +
 EP=32), prepare a batched-prefill input, warmup, capture trace, then measure the BLOCKING
@@ -154,7 +154,7 @@ def test_model_fwd():
         # forward on a fresh clone — the original survives capture and stays at a stable address
         # for execute_trace's replay.
         x_persist = host_out[0]
-        fwd = lambda: model.ttnn_prefill_forward(
+        fwd = lambda: model.prefill_forward(
             ttnn.clone(x_persist),
             rot_mats_global=host_out[1],
             rot_mats_local=host_out[2],

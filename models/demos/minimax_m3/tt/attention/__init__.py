@@ -7,7 +7,7 @@ from models.demos.minimax_m3.config import MeshConfig
 
 from .config import AttentionConfig, ProgramConfig
 from .kv_cache import MiniMaxKVCache, allocate_kv_caches
-from .prefill import prefill_forward
+from .prefill import attention_forward
 from .weights import load_attention_weights
 
 __all__ = ["Attention", "AttentionConfig", "ProgramConfig", "MiniMaxKVCache", "allocate_kv_caches"]
@@ -103,7 +103,7 @@ class Attention:
         """
         transformation_mat = self.transformation_mats["prefill"] if self.transformation_mats else None
 
-        return prefill_forward(
+        return attention_forward(
             hidden_states=hidden_states,
             rope_mats=rope_mats,
             user_id=user_id,

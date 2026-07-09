@@ -24,7 +24,7 @@ from .operations import (
 from .weights import AttentionWeights
 
 
-def prefill_forward(
+def attention_forward(
     hidden_states,
     rope_mats,
     weights: AttentionWeights,

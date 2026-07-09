@@ -165,7 +165,7 @@ def main():
         gen = []
         for g in range(NUM_GEN):
             host_out = model.prepare_inputs_prefill(toks)  # SP path (self.sequence_parallel)
-            logits = model.ttnn_prefill_forward(
+            logits = model.prefill_forward(
                 host_out[0],
                 rot_mats_global=host_out[1],
                 rot_mats_local=host_out[2],

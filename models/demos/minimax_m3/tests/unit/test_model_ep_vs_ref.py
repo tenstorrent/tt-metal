@@ -8,7 +8,7 @@ vs a self-authored torch reference. Random weights, S<2048 (full-GQA placeholder
 Layout (validated pattern, M3 dims): 8 prompts, one per mesh ROW (DP=8, users_row_sharded);
 attention/dense run TP=4 on the 4 cols; the MoE runs expert-parallel across all 32 chips
 (num_experts % 32 == 0). Drives the real prefill I/O: prepare_inputs_prefill (token ids ->
-embedding -> per-row shard) -> ttnn_prefill_forward (use_ep_moe) -> per-row logits gather.
+embedding -> per-row shard) -> prefill_forward (use_ep_moe) -> per-row logits gather.
 
 TP=4 / EP=32 only DISTRIBUTE the computation, so the golden is the same single-device math as the
 #9 test, just per prompt and with the embedding lookup. PCC vs that torch ref per prompt.
@@ -220,7 +220,7 @@ def test_model_ep_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     )
 
     host_out = model.prepare_inputs_prefill(toks, batched_prefill=True)
-    logits = model.ttnn_prefill_forward(
+    logits = model.prefill_forward(
         host_out[0],
         rot_mats_global=host_out[1],
         rot_mats_local=host_out[2],

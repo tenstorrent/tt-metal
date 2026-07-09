@@ -462,7 +462,7 @@ class Model:
 
         return logits
 
-    def ttnn_prefill_forward(
+    def prefill_forward(
         self,
         x,
         rot_mats_global=None,
@@ -509,7 +509,7 @@ class Model:
         """
         Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
 
-        Unlike tt_transformers `Transformer`, MiniMax-M3 `ttnn_prefill_forward` already
+        Unlike tt_transformers `Transformer`, MiniMax-M3 `prefill_forward` already
         applies final norm + lm_head, so this method only slices logits.
         """
         get_last_token = (last_token_idx // 32) * 32

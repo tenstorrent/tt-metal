@@ -34,12 +34,3 @@ def get_default_num_links(mesh_device):
     if mesh_device.shape[0] == 1:
         return 1
     return 2 if is_blackhole() else 4
-
-
-def throughput_experts_supported_on_arch():
-    """Whether the throughput-optimized experts path (all_to_all dispatch/combine, moe_gpt,
-    selective_reduce_combine) is supported on the current arch.
-
-    Currently disabled on Blackhole; only the batch=1 low-latency expert path runs there.
-    """
-    return not is_blackhole()

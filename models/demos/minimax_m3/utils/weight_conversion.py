@@ -8,8 +8,7 @@ MiniMax-M3 uses PARTIAL rotary (rotary_dim=64 of head_dim=128). The shared
 tt_transformers ``convert_hf_qkv_to_meta_format`` reverse-permutes the *full*
 head_dim into Meta RoPE (interleaved) layout, which is wrong when
 rotary_dim < head_dim: only the rotary slice participates in RoPE and must be
-interleaved; the pass-through tail must keep its natural order. Using the
-full-head permute drops the attention-block PCC vs HF from ~0.999 to ~0.926.
+interleaved; the pass-through tail must keep its natural order.
 """
 
 import torch

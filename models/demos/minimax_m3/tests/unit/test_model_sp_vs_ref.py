@@ -232,7 +232,7 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
 
     rope_sp = [reshard_rope(model.rope_setup.cos_matrix_prefill), reshard_rope(model.rope_setup.sin_matrix_prefill)]
 
-    logits = model.ttnn_prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
+    logits = model.prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
 
     # gather: rows -> seq (dim -2), cols -> vocab (dim -1)
     out = ttnn.to_torch(
@@ -380,7 +380,7 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         )
 
     rope_sp = [reshard_rope(model.rope_setup.cos_matrix_prefill), reshard_rope(model.rope_setup.sin_matrix_prefill)]
-    logits = model.ttnn_prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
+    logits = model.prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
     out = ttnn.to_torch(
         logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
     ).float()
@@ -406,7 +406,7 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
 @pytest.mark.parametrize("seq_len", [1024], ids=["s1024"])  # 128/row at SP=8
 def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     """End-to-end SP via the REAL I/O path: token ids -> prepare_inputs_prefill (SP shard + per-row
-    RoPE) -> ttnn_prefill_forward (dense + MoE/EP=32) -> gathered logits vs torch ref. This exercises
+    RoPE) -> prefill_forward (dense + MoE/EP=32) -> gathered logits vs torch ref. This exercises
     exactly the input plumbing the real-weights run uses (the manual-shard tests above bypass it)."""
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
@@ -500,7 +500,7 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
 
     # REAL I/O path: token ids -> SP shard + per-row RoPE inside prepare_inputs_prefill
     host_out = model.prepare_inputs_prefill(toks)
-    logits = model.ttnn_prefill_forward(
+    logits = model.prefill_forward(
         host_out[0],
         rot_mats_global=host_out[1],
         rot_mats_local=host_out[2],
@@ -666,7 +666,7 @@ def test_model_sp_msa_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         )
 
     rope_sp = [reshard_rope(model.rope_setup.cos_matrix_prefill), reshard_rope(model.rope_setup.sin_matrix_prefill)]
-    logits = model.ttnn_prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
+    logits = model.prefill_forward(x_tt, rot_mats_global=rope_sp, get_last_token=-1)
     out = (
         ttnn.to_torch(
             logits, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))

@@ -204,7 +204,7 @@ class TtPrefillRuntime:
         # Whole-cache indexed rope built once (self.rope_indexed); the indexed op picks this chunk's rows
         # on-device from kv_actual_global (= actual_start, threaded via cached_len + indexed_rope=True). No
         # per-chunk host reshard, and the tensors are persistent (do NOT deallocate them here).
-        out = self.model.ttnn_prefill_forward(
+        out = self.model.prefill_forward(
             input_tensor,
             rot_mats_global=self.rope_indexed,
             kv_cache=self.kv_cache,
