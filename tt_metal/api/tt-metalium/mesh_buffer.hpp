@@ -94,6 +94,26 @@ namespace tt::tt_metal::distributed {
 // replication, or 2D sharding. The allocation is done in lock-step across all devices in the mesh.
 class MeshBuffer {
 public:
+    class PendingEventRegistration {
+    public:
+        PendingEventRegistration(const PendingEventRegistration&) = delete;
+        PendingEventRegistration& operator=(const PendingEventRegistration&) = delete;
+        PendingEventRegistration(PendingEventRegistration&& other) noexcept;
+        PendingEventRegistration& operator=(PendingEventRegistration&& other) noexcept;
+        ~PendingEventRegistration();
+
+        // Publishes the completion event and releases this registration. The event
+        // must be ordered after all work that references the buffer.
+        void publish(const MeshEvent& event);
+
+    private:
+        explicit PendingEventRegistration(const MeshBuffer* buffer) : buffer_(buffer) {}
+        void release();
+
+        const MeshBuffer* buffer_ = nullptr;
+        friend class MeshBuffer;
+    };
+
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
         const DeviceLocalBufferConfig& device_local_config,
@@ -156,10 +176,10 @@ public:
     // Deallocation rejects unsupported CQ IDs rather than silently skipping their events.
     // The buffer's address cannot be safely reused until all pending events complete.
 
-    // Registers a full-mesh host-visible completion event for work that references this buffer.
-    // Deallocation will wait for the latest pending event on each CQ before releasing
-    // the address back to the allocator.
-    void add_pending_event(const MeshEvent& event);
+    // Acquires an in-flight publisher before work using this buffer is dispatched.
+    // Deallocation blocks until every acquired registration publishes an event or
+    // is released. Returns nullopt once deallocation has started.
+    [[nodiscard]] std::optional<PendingEventRegistration> try_acquire_pending_event_registration() const;
 
     // Waits for all pending events to complete. Called during deallocation to ensure
     // no operations are still in-flight before releasing the buffer address.
@@ -246,12 +266,18 @@ private:
     static uint32_t unpack_epoch(uint64_t packed) { return static_cast<uint32_t>(packed >> 32); }
     static uint32_t unpack_event_id(uint64_t packed) { return static_cast<uint32_t>(packed); }
 
-    // Deallocation-race sentinel (seq_cst closes the add/drain window).
-    // Set to true by deallocate() BEFORE draining pending_event_ids_.
-    // add_pending_event() checks this AFTER its CAS; if true, it self-synchronizes
-    // immediately to cover the case where the drain already ran and missed the event.
-    // See detailed proof in mesh_buffer.cpp.
-    std::atomic<bool> deallocation_in_progress_{false};
+    // Adds an event while a PendingEventRegistration is active. Publishing the
+    // event before releasing the registration makes it visible to deallocation
+    // before the pending-event drain can run.
+    void add_pending_event(const MeshEvent& event) const;
+    void release_pending_event_registration() const;
+    void wait_for_pending_event_registrations() const;
+
+    // Terminal close gate for device-memory lifetime. A publisher increments the
+    // count before dispatch and rechecks the gate. Deallocation closes the gate,
+    // waits for the count to reach zero, drains events, then releases the address.
+    std::atomic_flag deallocation_started_ = ATOMIC_FLAG_INIT;
+    mutable std::atomic<uint32_t> active_event_publishers_{0};
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,

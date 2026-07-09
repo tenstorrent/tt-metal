@@ -48,6 +48,7 @@ public:
     ~SDMeshCommandQueue() override = default;
 
     std::optional<MeshTraceId> trace_id() const override;
+    bool in_use() const override;
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
@@ -88,7 +89,7 @@ private:
 
     std::shared_ptr<ThreadPool> launch_thread_pool_;
     void dispatch_program(const MeshCoordinateRange& coord_range, Program& program, bool blocking);
-    std::mutex logical_cores_mutex_;
+    mutable std::mutex logical_cores_mutex_;
 };
 
 }  // namespace tt::tt_metal::distributed

@@ -133,8 +133,11 @@ public:
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) override;
 
-    // Returns true if the CQ is in use (has had commands enqueued).
-    virtual bool in_use() { return false; }
+    // Concrete queues must report their real activity state. A false result lets
+    // MeshBuffer teardown skip synchronization, so no active queue may inherit a
+    // permissive default.
+    bool in_use() const override = 0;
+    uint32_t quiesce_epoch() const override { return 0; }
 
     virtual void reset_worker_state(
         bool reset_launch_msg_state,

@@ -540,7 +540,9 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
         return;
     }
 
-    in_use_ = true;
+    // The caller already holds the API mutex. mark_in_use() does not lock; it
+    // publishes the idle-to-active transition and clears the quiesced sentinel.
+    mark_in_use();
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -699,7 +701,6 @@ bool FDMeshCommandQueue::write_shard_to_device(
     }
 #endif
 
-    in_use_ = true;
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     return buffer_dispatch::write_to_device_buffer(
         src,
@@ -786,13 +787,9 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
-    bool blocking,
-    std::vector<MemoryPin> memory_pins) {
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
     completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>,
-        std::move(num_txns_per_device),
-        std::move(memory_pins)));
+        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
@@ -1630,8 +1627,8 @@ void FDMeshCommandQueue::finish_and_reset_in_use() {
             }
             in_use_ = false;
             // Advance quiesce epoch so MeshBuffer can detect stale pending events
-            // from this (now-completed) cycle.  Release pairs with acquire in
-            // quiesce_epoch() and the seq_cst operations in add_pending_event.
+            // from this (now-completed) cycle. Release pairs with acquire loads
+            // in quiesce_epoch() and event synchronization.
             quiesce_epoch_.fetch_add(1, std::memory_order_release);
         }
     }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 //
@@ -17,9 +17,12 @@
 //   event counters were reset to 0 by quiesce, causing a hang.
 
 #include <gtest/gtest.h>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <thread>
 #include <unistd.h>  // alarm()
 #include <vector>
 
@@ -91,6 +94,8 @@ TEST_F(MultiCQDeallocRaceFixture, TestMultiCQDeallocRace) {
     // Step 2: CQ0 — write data and record a completion event.
     {
         auto& cq0 = mesh_device_->mesh_command_queue(0);
+        auto registration = mesh_buf->try_acquire_pending_event_registration();
+        ASSERT_TRUE(registration.has_value());
         std::vector<uint32_t> src(num_pages * page_size / sizeof(uint32_t));
         std::iota(src.begin(), src.end(), 0xBEEF0000u);
 
@@ -99,7 +104,7 @@ TEST_F(MultiCQDeallocRaceFixture, TestMultiCQDeallocRace) {
         // Record an event on CQ0 and attach it to the buffer as a pending event.
         // This is the event that wait_for_pending_events() will need to synchronize.
         auto event = cq0.enqueue_record_event_to_host();
-        mesh_buf->add_pending_event(event);
+        registration->publish(event);
         log_info(tt::LogTest, "[MultiCQDeallocRace] CQ0: write + event recorded (event_id={})", event.id());
     }
 
@@ -107,10 +112,12 @@ TEST_F(MultiCQDeallocRaceFixture, TestMultiCQDeallocRace) {
     // leaves wait_for_pending_events() with a non-empty stale CQ1 slot.
     {
         auto& cq1 = mesh_device_->mesh_command_queue(1);
+        auto registration = mesh_buf->try_acquire_pending_event_registration();
+        ASSERT_TRUE(registration.has_value());
         std::vector<uint32_t> dummy(num_pages * page_size / sizeof(uint32_t), 0xDEAD);
         EnqueueWriteMeshBuffer(cq1, mesh_buf, dummy, /*blocking=*/false);
         auto event = cq1.enqueue_record_event_to_host();
-        mesh_buf->add_pending_event(event);
+        registration->publish(event);
         log_info(tt::LogTest, "[MultiCQDeallocRace] CQ1: write + event recorded (event_id={})", event.id());
 
         // Quiesce CQ1: drain outstanding work and reset event counters.
@@ -194,6 +201,127 @@ TEST_F(MultiCQDeallocRaceFixture, TestEventQueryQuiesced) {
     bool completed = EventQuery(event);
     EXPECT_TRUE(completed) << "EventQuery should return true via quiesced short-circuit, not counter check";
     log_info(tt::LogTest, "[EventQueryQuiesced] EventQuery returned {} — expected true (via quiesced path)", completed);
+}
+
+// ---------------------------------------------------------------------------
+// TestEventSynchronizeEpochShortCircuit
+//
+// Verify that EventSynchronize does NOT hang for a stale (pre-quiesce) event
+// AFTER the CQ has been reactivated via mark_in_use() — i.e. once is_quiesced
+// has been cleared and the only thing protecting the waiter is the
+// quiesce_epoch comparison.
+//
+// Sequence:
+//   1. Record event E on CQ0 (quiesce_epoch captured = 0).
+//   2. Wait for E, then quiesce CQ0 (epoch -> 1, is_quiesced=true, counters reset).
+//   3. Reactivate CQ0 by submitting new work (mark_in_use clears is_quiesced,
+//      but quiesce_epoch stays 1 — only finish_and_reset_in_use advances it).
+//   4. Reset last_completed_event to 0 so the counter check alone would spin
+//      forever on E's stale event_id.
+//   5. EventSynchronize(E) must return promptly: the epoch short-circuit
+//      (E.quiesce_epoch()=0 < cq.quiesce_epoch()=1) is the ONLY thing that
+//      prevents an infinite spin here. Without the epoch check, the reactivated
+//      CQ (is_quiesced=false) with last_completed=0 < event_id spins forever.
+//
+// Pass = completes in <30s. Fail = hang (watchdog aborts at 30s).
+// ---------------------------------------------------------------------------
+TEST_F(MultiCQDeallocRaceFixture, TestEventSynchronizeEpochShortCircuit) {
+    const uint32_t page_size = 1024;
+    const uint32_t num_pages = 16;
+
+    DeviceLocalBufferConfig per_device_config{
+        .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    ReplicatedBufferConfig global_config = {
+        .size = num_pages * page_size,
+    };
+
+    auto mesh_buf = MeshBuffer::create(global_config, per_device_config, mesh_device_.get());
+    auto& cq0 = mesh_device_->mesh_command_queue(0);
+
+    // Step 1: record event E (epoch 0).
+    std::vector<uint32_t> src(num_pages * page_size / sizeof(uint32_t), 0xF00D);
+    EnqueueWriteMeshBuffer(cq0, mesh_buf, src, /*blocking=*/false);
+    auto event = cq0.enqueue_record_event_to_host();
+    log_info(tt::LogTest, "[EpochShortCircuit] E recorded (id={}, epoch={})", event.id(), event.quiesce_epoch());
+    ASSERT_GT(event.id(), 0u) << "Event ID must be > 0 for the counter path to spin";
+
+    // Step 2: complete + quiesce CQ0.
+    EventSynchronize(event);
+    cq0.wait_for_completion(/*reset_launch_msg_state=*/false);
+    cq0.finish_and_reset_in_use();
+    log_info(tt::LogTest, "[EpochShortCircuit] CQ0 quiesced (epoch now {})", cq0.quiesce_epoch());
+
+    // Step 3: reactivate CQ0 by submitting new work — mark_in_use() clears
+    // is_quiesced but does NOT advance quiesce_epoch.
+    std::vector<uint32_t> next(num_pages * page_size / sizeof(uint32_t), 0xBAAD);
+    EnqueueWriteMeshBuffer(cq0, mesh_buf, next, /*blocking=*/false);
+    auto reactivating_event = cq0.enqueue_record_event_to_host();
+    EventSynchronize(reactivating_event);
+    cq0.wait_for_completion(/*reset_launch_msg_state=*/false);
+    log_info(
+        tt::LogTest, "[EpochShortCircuit] CQ0 reactivated (is_quiesced cleared, epoch still {})", cq0.quiesce_epoch());
+
+    // Step 4: reset last_completed to 0 so the counter path cannot satisfy E.
+    const uint8_t cq_id = 0;
+    for (auto* device : mesh_device_->get_view().get_devices()) {
+        device->sysmem_manager().set_current_and_last_completed_event(cq_id, /*current=*/0, /*last_completed=*/0);
+    }
+
+    // Step 5: EventSynchronize(E) must return via the epoch short-circuit.
+    // is_quiesced is false (reactivated), last_completed is 0 (< event_id), so
+    // ONLY event.quiesce_epoch()(0) < cq.quiesce_epoch()(1) saves us from a hang.
+    EventSynchronize(event);
+    EXPECT_TRUE(EventQuery(event)) << "Epoch short-circuit should report stale pre-quiesce event complete";
+    log_info(tt::LogTest, "[EpochShortCircuit] EventSynchronize/Query on stale E completed via epoch path");
+}
+
+// A publisher acquired before dispatch must keep explicit deallocation blocked
+// until its completion event is published. This deterministically covers both
+// workload-enqueue→event-record and event-record→publication windows.
+TEST_F(MultiCQDeallocRaceFixture, TestDeallocationWaitsForEventPublisher) {
+    constexpr uint32_t page_size = 1024;
+    constexpr uint32_t num_pages = 16;
+    DeviceLocalBufferConfig per_device_config{
+        .page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    ReplicatedBufferConfig global_config = {
+        .size = num_pages * page_size,
+    };
+
+    auto mesh_buf = MeshBuffer::create(global_config, per_device_config, mesh_device_.get());
+    auto registration = mesh_buf->try_acquire_pending_event_registration();
+    ASSERT_TRUE(registration.has_value());
+
+    auto& cq0 = mesh_device_->mesh_command_queue(0);
+    std::vector<uint32_t> src(num_pages * page_size / sizeof(uint32_t), 0xACED);
+    EnqueueWriteMeshBuffer(cq0, mesh_buf, src, /*blocking=*/false);
+
+    std::atomic<bool> deallocation_finished = false;
+    std::thread deallocator([&] {
+        mesh_buf->deallocate();
+        deallocation_finished.store(true, std::memory_order_release);
+    });
+
+    bool observed_closed_gate = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto probe = mesh_buf->try_acquire_pending_event_registration();
+        if (!probe.has_value()) {
+            observed_closed_gate = true;
+            break;
+        }
+        std::this_thread::yield();
+    }
+
+    EXPECT_TRUE(observed_closed_gate) << "Deallocation did not close the event-registration gate";
+    EXPECT_FALSE(deallocation_finished.load(std::memory_order_acquire))
+        << "Deallocation released the buffer while an event publisher was active";
+
+    auto event = cq0.enqueue_record_event_to_host();
+    registration->publish(event);
+    deallocator.join();
+
+    EXPECT_TRUE(deallocation_finished.load(std::memory_order_acquire));
+    EXPECT_FALSE(mesh_buf->is_allocated());
 }
 
 }  // namespace
