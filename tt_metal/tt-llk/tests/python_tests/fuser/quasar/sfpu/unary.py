@@ -85,9 +85,9 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
 
         return (
-            f"    // Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
-            f"    _llk_math_eltwise_sfpu_init_();\n"
-            f"    test_utils::init_unary_sfpu_operation_quasar<{op}>();\n"
+            f"// Operation {stage}: Unary {self.operation.cpp_enum_value} SFPU\n"
+            f"_llk_math_eltwise_sfpu_init_();\n"
+            f"test_utils::init_unary_sfpu_operation_quasar<{op}>();\n"
         )
 
     def calculate(
@@ -100,9 +100,11 @@ class UnarySfpu(Sfpu):
         op = f"SfpuType::{self.operation.cpp_enum_value}"
         en_32bit_dest = config.dest_acc.cpp_enum_value
         sfpu_format = config.sentinel._math_format.cpp_enum_value
+        quasar_iterations = self.iterations // 4
+
         return (
-            f"    test_utils::call_unary_sfpu_operation_quasar<"
-            f"{op}, {en_32bit_dest}"
+            f"test_utils::call_unary_sfpu_operation_quasar<"
+            f"{op}, {en_32bit_dest}, {quasar_iterations}"
             f">({self.dest_idx}, {sfpu_format});\n"
         )
 
