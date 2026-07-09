@@ -40,7 +40,7 @@ class TtJanusProVisionAligner(LightweightModule):
 
         def load_linear(name):
             w = torch.transpose(state_dict[f"{state_dict_prefix}{name}.weight"], -2, -1)
-            cache = None if args.dummy_weights else weight_cache_path / f"{state_dict_prefix}{name}.weight"
+            cache = None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}{name}.weight"
             weight = ttnn.as_tensor(
                 w,
                 dtype=dtype,
@@ -53,7 +53,9 @@ class TtJanusProVisionAligner(LightweightModule):
             bias = None
             if f"{state_dict_prefix}{name}.bias" in state_dict:
                 b = state_dict[f"{state_dict_prefix}{name}.bias"]
-                bias_cache = None if args.dummy_weights else weight_cache_path / f"{state_dict_prefix}{name}.bias"
+                bias_cache = (
+                    None if weight_cache_path is None else weight_cache_path / f"{state_dict_prefix}{name}.bias"
+                )
                 bias = ttnn.as_tensor(
                     b,
                     dtype=dtype,

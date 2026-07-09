@@ -36,7 +36,7 @@ class TtJanusProImageFeedForward(LightweightModule):
         )
         torch_bias = lambda name, suffix: self.state_dict[f"{state_dict_prefix}{name}.{suffix}"]
 
-        if args.dummy_weights:
+        if weight_cache_path is None:
             cache_name = lambda *_: None
         else:
             cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f"{name}.{suffix}")

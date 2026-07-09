@@ -44,6 +44,33 @@ class ModelArgs(TTModelArgs):
             optimizations=optimizations,
             cache_hf=cache_hf,
         )
+        self._use_dummy_weight_cache = False
+
+    def prepare_for_tt_weight_upload(self):
+        """Enable on-disk tilized-weight cache for TT module construction.
+
+        Dummy runs keep HF/random weights in state_dict but must not leave
+        ``dummy_weights=True`` while building tt_transformers modules: they skip
+        cache whenever that flag is set, forcing a live tilize of the 7B QKV
+        tensor that overflows N150 L1.  Call this after the reference model and
+        state_dict are captured; ``weight_cache_path`` keeps routing to the
+        dummy cache namespace so real-weight tilized files are never loaded.
+        """
+        if self.dummy_weights:
+            self._use_dummy_weight_cache = True
+            self.dummy_weights = False
+
+    def weight_cache_path(self, dtype):
+        # Separate on-disk namespace for dummy tilized weights (see prepare_for_tt_weight_upload).
+        if self.dummy_weights or self._use_dummy_weight_cache:
+            return (
+                self.model_cache_path
+                / {
+                    ttnn.bfloat16: "tensor_cache_dummy_bf16",
+                    ttnn.bfloat8_b: "tensor_cache_dummy_bfp8",
+                }[dtype]
+            )
+        return super().weight_cache_path(dtype)
 
     def get_attn_qkv_program_config(self, mode, seq_len=1, prefetcher=None):
         # The base config hardcodes per_core_M=7 on P150 regardless of seq_len. For
@@ -138,15 +165,6 @@ class ModelArgs(TTModelArgs):
             super()._set_hf_params(checkpoint_dir)
         finally:
             self.dummy_weights = saved_dummy_weights
-
-    def weight_cache_path(self, dtype):
-        # Never reuse the on-disk weight cache for dummy weights. Otherwise modules
-        # such as TtLayerNorm (which key their cache only by weight_cache_path +
-        # state_dict_prefix) would load stale real-weight tensors instead of the
-        # random dummy state_dict, breaking PCC against the dummy reference model.
-        if self.dummy_weights:
-            return None
-        return super().weight_cache_path(dtype)
 
     def _set_model_specific_params(self):
         # LLaMA-style text decoder: RMSNorm without a unit offset.
