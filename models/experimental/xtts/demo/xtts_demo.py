@@ -68,7 +68,10 @@ def _load_audio_22k(ref_audio, max_seconds):
 
 def main():
     ap = argparse.ArgumentParser(description="XTTS-v2 on-device text-to-speech demo")
-    ap.add_argument("--text", default="Hello, this is a Tenstorrent text to speech demo.")
+    ap.add_argument(
+        "--text",
+        default="voice synthesis has come a long way in recent years. modern systems can now generate natural sounding speech from text with remarkable accuracy. the key challenge is capturing the unique characteristics of a speaker's voice, including their tone, rhythm, pitch, and emotional expression.",
+    )
     ap.add_argument("--lang", default="en")
     ap.add_argument("--ref-audio", default="en_sample.wav", help="local WAV path or HF sample name")
     ap.add_argument("--ref-seconds", type=int, default=6, help="reference audio length used for conditioning")
@@ -103,7 +106,9 @@ def main():
 
     reference = XttsReference(sd)  # supplies decoder/speaker/mel weights (and optional A/B wav)
 
-    device = ttnn.open_device(device_id=0, l1_small_size=32768)
+    # 64 KB L1_SMALL: the HiFi-GAN conv1d scratch grows with sequence length, and long
+    # utterances (hundreds of codes) overflow the 32 KB used by the short-sequence tests.
+    device = ttnn.open_device(device_id=0, l1_small_size=65536)
     try:
         tt = TtXtts(device, sd, reference.decoder_full)
         spk_wav_tt = ttnn.from_torch(
