@@ -54,7 +54,7 @@ class LMHead(LightweightModule):
         self.split_sizes_ring_mm = [min(size_per_device, max_columns_per_device_ring_mm)] * (num_splits_ring_mm - 1)
         self.split_sizes_ring_mm.append(size_per_device - sum(self.split_sizes_ring_mm))  # remaining columns
 
-        # Read the raw (vocab_size, dim) weight from the state dict.
+        # Raw (vocab_size, dim) weight.
         torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"]
 
         def _dram_sharded_cache_fn(i: int, n_cols: int):
@@ -70,9 +70,8 @@ class LMHead(LightweightModule):
             cache_file_name_fn=_dram_sharded_cache_fn,
         )
 
-        # ring_mm mirror: only built when the prefetcher is enabled. Kept
-        # inline because LMHead.update() does not currently support this
-        # path (see _update_output_weights_ring_mm).
+        # ring_mm mirror: built only with the prefetcher; kept inline because
+        # LMHead.update() does not support this path (see _update_output_weights_ring_mm).
         self.output_weights_ring_mm = []
         if self.prefetcher is not None:
             permuted_padded = self._permute_and_pad_output_weights(torch_output_weights)
@@ -121,11 +120,9 @@ class LMHead(LightweightModule):
         )
 
     def _permute_and_pad_output_weights(self, torch_output_weights):
-        """``state_dict``-shape (vocab_size, dim) -> column-wise (dim, padded_vocab_size).
-
-        Mirrors the original constructor preamble: transpose to put the
-        vocab axis last, then right-pad the vocab dim with zeros so it
-        evenly divides across devices.
+        """(vocab_size, dim) -> (dim, padded_vocab_size): transpose so the vocab
+        axis is last, then right-pad the vocab dim with zeros so it divides
+        evenly across devices.
         """
         weights = torch_output_weights.permute(1, 0)
         if self.vocab_size < self.padded_vocab_size:
@@ -141,25 +138,11 @@ class LMHead(LightweightModule):
 
     def _build_dram_sharded_output_weights(self, torch_output_weights, cache_file_name_fn=None):
         """Convert raw ``(vocab_size, dim)`` weight into the per-chunk
-        DRAM-sharded ``ttnn.Tensor`` list that mirrors
-        ``self.output_weights_dram_sharded``.
-
-        Used by both ``__init__`` (to populate the buffers initially) and
-        ``LMHead.update`` (to build replacement tensors which are then
-        ``ttnn.copy``-d into the existing buffers).
-
-        Args:
-            torch_output_weights: torch tensor with shape
-                ``(vocab_size, dim)``, i.e. exactly the layout of
-                ``state_dict[f"{prefix}output.weight"]``.
-            cache_file_name_fn: optional ``(chunk_idx, n_cols_after_concat)
-                -> Path | None``. When called during ``update()`` this is
-                ``None`` so no caching happens.
-
-        Returns:
-            list[ttnn.Tensor] of length ``len(self.split_sizes_dram_sharded)``,
-            each shaped ``(dim, n_cols)`` and sharded along ``dim=-1`` via
-            ``ShardTensorToMesh``.
+        DRAM-sharded ``ttnn.Tensor`` list mirroring
+        ``self.output_weights_dram_sharded``. Used by ``__init__`` (initial
+        populate) and ``LMHead.update`` (replacement tensors, then ``ttnn.copy``
+        into the existing buffers). ``cache_file_name_fn`` is ``None`` during
+        ``update()`` so no caching happens.
         """
         permuted_padded = self._permute_and_pad_output_weights(torch_output_weights)
         size_per_device = self.padded_vocab_size // self.num_devices
@@ -218,36 +201,18 @@ class LMHead(LightweightModule):
         ttnn.copy(input_a=converted, input_b=dst)
 
     def _update_output_weights_dram_sharded(self, weight: ttnn.Tensor) -> None:
-        """In-place replace every chunk of ``self.output_weights_dram_sharded``.
+        """In-place replace every chunk of ``self.output_weights_dram_sharded``
+        on device (``weight`` is HF ``(1, 1, V, H)``, replicated, TILE, bf16,
+        DRAM-interleaved). Mirrors the constructor's host-side pad+transpose+split
+        but on device: optional ``ttnn.pad`` to ``padded_vocab_size``,
+        ``ttnn.transpose``, contiguous per-chunk ``ttnn.slice``, then
+        ``_inplace_copy`` reshards into the DRAM-sharded dest (preserving
+        addresses). Single-device only; multi-device per-device gather not
+        implemented.
 
-        ``weight`` is the HF-format on-device input ``(1, 1, V, H)``,
-        replicated, ``TILE_LAYOUT``, ``bfloat16``, DRAM-interleaved.
-
-        Steps mirror the constructor's host-side
-        ``_permute_and_pad_output_weights`` + ``_build_dram_sharded_output_weights``,
-        but on device:
-
-        1. (Optional) ``ttnn.pad`` along axis -2 to extend ``V`` to
-           ``padded_vocab_size``.
-        2. ``ttnn.transpose`` swaps the last two dims, mirroring the
-           constructor's ``.permute(1, 0)``.
-        3. For each chunk ``i``, take a contiguous slice along axis -1.
-           Single-device-only: ``self.split_sizes_dram_sharded[i]``
-           defines the per-device split, so on a 1-device mesh chunk
-           ``i`` is the contiguous range
-           ``[sum(splits[:i]) : sum(splits[:i + 1])]``. For multi-device
-           the constructor gathers per-device offsets and concatenates
-           along axis -1; that variant is not yet implemented here.
-        4. ``_inplace_copy`` reshards the contiguous DRAM-interleaved
-           slice into the destination's DRAM-sharded mem config and
-           ``ttnn.copy``-s it into the existing buffer (preserves
-           addresses).
-
-        Tile alignment caveat: ``ttnn.slice`` on ``TILE_LAYOUT`` requires
-        start/end offsets aligned to ``TILE_SIZE`` (32). With the
-        default Llama configs ``max_columns_per_device`` produces
-        tile-aligned ``split_sizes_dram_sharded``, but assert this here
-        rather than silently producing miscompiled slices.
+        Tile-alignment caveat: ``ttnn.slice`` on TILE requires offsets aligned
+        to TILE_SIZE (32); the default Llama configs satisfy this, but assert it
+        rather than silently miscompile slices.
         """
         assert self.num_devices == 1, (
             "LMHead.update for num_devices > 1 is not yet implemented; "
@@ -277,38 +242,24 @@ class LMHead(LightweightModule):
             start = end
 
     def _update_output_weights_ring_mm(self, weight: ttnn.Tensor) -> None:
-        """In-place replace every chunk of ``self.output_weights_ring_mm``.
-
-        The ring-mm path uses a different per-chunk split, a power-of-two
-        padding on the column count, and a prefetcher-derived DRAM grid,
-        so it is structurally distinct from the dram_sharded mirror and
-        requires its own builder. Not yet implemented.
+        """In-place replace every chunk of ``self.output_weights_ring_mm``. Not
+        yet implemented: the ring-mm path (distinct per-chunk split, power-of-two
+        column padding, prefetcher-derived DRAM grid) needs its own builder.
         """
         raise NotImplementedError("LMHead.update for output_weights_ring_mm (prefetcher path) is not yet implemented")
 
     def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the on-device LM-head weights via ``ttnn.copy``.
 
-        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``):
-
-        * key       -- HF ``lm_head.weight`` (passed as kwarg ``weight``).
-        * shape     -- ``(1, 1, vocab_size, hidden_size)`` (HF shape
-                       ``(V, H)`` wrapped in two leading unit dims).
-        * dtype     -- ``ttnn.bfloat16``.
-        * layout    -- ``ttnn.TILE_LAYOUT``.
-        * memcfg    -- ``ttnn.DRAM_MEMORY_CONFIG`` (interleaved).
-        * mesh      -- replicated (``ttnn.ReplicateTensorToMesh``).
+        HF-format input (see ``LLAMA_WEIGHT_TRANSFER.md``): ``weight`` is
+        ``lm_head.weight``, shape ``(1, 1, vocab_size, hidden_size)``, bf16, TILE,
+        DRAM-interleaved, replicated.
 
         Updates ``self.output_weights_dram_sharded`` on device (no host
-        roundtrip; see ``_update_output_weights_dram_sharded``). When the
-        prefetcher is enabled the ring-mm mirror also has to be kept in
-        sync; that path is not yet implemented (see
-        ``_update_output_weights_ring_mm``).
-
-        Buffer-address preservation: every chunk in
-        ``self.output_weights_dram_sharded`` keeps its device allocation,
-        so any captured trace -- and the DRAM prefetcher's recorded
-        buffer addresses -- remain valid across an update.
+        roundtrip). When the prefetcher is enabled the ring-mm mirror must also
+        be synced; that path is not implemented. Every chunk keeps its device
+        allocation, so captured traces and the prefetcher's recorded addresses
+        stay valid.
         """
         self._update_output_weights_dram_sharded(weight)
         if len(self.output_weights_ring_mm) > 0:

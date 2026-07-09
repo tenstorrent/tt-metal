@@ -52,15 +52,9 @@ class DistributedNorm(LightweightModule):
         self.TG = TG
 
     def update(self, *, weight: ttnn.Tensor) -> None:
-        """Pass-through to the wrapped ``RMSNorm.update``.
-
-        ``DistributedNorm`` owns no weights of its own; it just adds the
-        all-gather and (optionally) the sharded distributed-norm program
-        config around the underlying ``RMSNorm.forward``. Updating the
-        gamma therefore delegates to the wrapped norm with the same
-        HF-format contract: ``weight`` must be ``(1, 1, 1, dim)``,
-        ``ttnn.TILE_LAYOUT``, ``ttnn.bfloat16``,
-        ``ttnn.DRAM_MEMORY_CONFIG``, replicated.
+        """Pass-through to the wrapped ``RMSNorm.update`` (``DistributedNorm``
+        owns no weights of its own). Same HF-format contract: ``(1, 1, 1, dim)``,
+        TILE, bf16, DRAM-interleaved, replicated.
         """
         self.norm.update(weight=weight)
 
