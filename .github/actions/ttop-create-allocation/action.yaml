@@ -53,6 +53,60 @@ runs:
 
     - name: Wait for allocation
       shell: bash
+      env:
+        NAMESPACE: ${{ inputs.namespace }}
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        echo "Waiting for allocation to be ready..."
-        kubectl --token ${{ steps.token.outputs.idToken }} -n ${{ inputs.namespace }} wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
+        echo "[info] Waiting for allocation to be ready..."
+
+        # GitHub OIDC tokens are short-lived (~10-15 min). A single token cannot
+        # cover a long placement wait: once it expires mid-`kubectl wait`, the
+        # client-go watch loops "Unauthorized" forever and never observes the
+        # phase flip. Instead, poll every few seconds and reissue the token
+        # whenever the API server rejects it as unauthenticated.
+        POLL_INTERVAL=5          # seconds between polls
+        OVERALL_TIMEOUT=59940    # seconds (== 999m); matches the previous 999m cap
+        MAX_AUTH_FAILURES=3      # consecutive auth failures (despite reissue) before giving up
+
+        mint_token() {
+          curl -s -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL" \
+            -H "Accept: application/json; api-version=2.0" \
+            -H "Content-Type: application/json" -d "{}" | jq -r '.value'
+        }
+
+        IDTOKEN=$(mint_token) || true
+        echo "::add-mask::${IDTOKEN}"
+
+        auth_failures=0
+        start=$SECONDS
+        while true; do
+          if (( SECONDS - start >= OVERALL_TIMEOUT )); then
+            echo "::error::Timed out after $((OVERALL_TIMEOUT / 60))m waiting for allocation to reach Allocated."
+            exit 1
+          fi
+
+          output=$(kubectl --token "$IDTOKEN" -n "$NAMESPACE" get "allocation/${ALLOCATION_NAME}" -o jsonpath='{.status.phase}' 2>&1) && rc=0 || rc=$?
+
+          if (( rc == 0 )); then
+            auth_failures=0
+            if [[ "$output" == "Allocated" ]]; then
+              echo "::notice::Allocation ${ALLOCATION_NAME} is Allocated."
+              exit 0
+            fi
+            echo "[info] Allocation phase: '${output:-<empty>}' — waiting..."
+          elif echo "$output" | grep -qiE 'unauthorized|must be logged in|401'; then
+            auth_failures=$((auth_failures + 1))
+            echo "::warning::Auth failure (${auth_failures}/${MAX_AUTH_FAILURES}) while polling allocation; reissuing token."
+            if (( auth_failures >= MAX_AUTH_FAILURES )); then
+              echo "::error::Repeated auth failures despite token reissue; failing."
+              exit 1
+            fi
+            IDTOKEN=$(mint_token) || true
+            echo "::add-mask::${IDTOKEN}"
+          else
+            echo "::warning::Transient error polling allocation (rc=${rc}): ${output}"
+          fi
+
+          sleep "$POLL_INTERVAL"
+        done
