@@ -102,7 +102,7 @@ def _release_controller(session) -> None:
     # Both the single-step (DG_DENOISE_TRACED) and multi-step (DG_DENOISE_TRACED_MULTISTEP)
     # controllers cache their captured traces on the logits fn under distinct attributes; free
     # whichever is present so only one budget's traces occupy the trace region at a time.
-    for attr in ("_traced_denoise_controller", "_traced_denoise_multistep_controller"):
+    for attr in ("_traced_denoise_controller", "_traced_denoise_multistep_controller", "_traced_early_halt_controller"):
         controller = getattr(fn, attr, None)
         if controller is not None:
             try:

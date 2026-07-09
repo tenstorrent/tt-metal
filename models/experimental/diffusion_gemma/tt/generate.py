@@ -32,6 +32,8 @@ from models.experimental.diffusion_gemma.tt.traced_denoise import (
     traced_denoise_enabled,
     traced_denoise_multistep_block,
     traced_denoise_multistep_enabled,
+    traced_early_halt_block,
+    traced_early_halt_enabled,
 )
 from models.experimental.diffusion_gemma.tt import sampling as TS
 
@@ -826,9 +828,23 @@ def _resolve_default_denoise_block_fn() -> Callable[..., DenoiseTrajectory]:
     identical to the eager loop whenever early-halt does not fire (RUN-first under #48291), but
     it discards the per-step trajectory records and cannot early-halt.
 
+    ``DG_DENOISE_EARLY_HALT`` selects :func:`traced_early_halt_block` — the traced loop with
+    data-dependent early-halt (dg-08 lever 8). It captures a fixed K-step window
+    (``DG_DENOISE_EARLY_HALT_WINDOW=K``; 1 = scheme A per-step, K>1 = scheme B chunked-halt),
+    replays one window at a time, and after each replay reads ONE tiny on-device halt scalar
+    (mean entropy + argmax-stability mismatch) and branches continue/stop on the host — keeping
+    the traced dispatch savings while recovering the eager StableAndConfident early-halt. When
+    halt does NOT fire it runs the full budget and commits the byte-identical argmax of the
+    fixed-48 traced path (Guard 1). Argmax-regime + contiguous-cache only, same as the traced
+    paths; takes precedence over the fixed-budget traced flags. Default off: under #48291 the
+    entropy gate never clears the 0.005 threshold so early-halt is a no-op (runs ~48), and the
+    per-window host sync adds orchestration overhead — see ``doc/optimize_perf/early_halt.md``.
+
     All non-eager loops stay opt-in until early-halt is either recovered in a trace-safe shape
     or confirmed unneeded for the serving contract.
     """
+    if traced_early_halt_enabled():
+        return traced_early_halt_block
     if traced_denoise_multistep_enabled():
         return traced_denoise_multistep_block
     if traced_denoise_enabled():

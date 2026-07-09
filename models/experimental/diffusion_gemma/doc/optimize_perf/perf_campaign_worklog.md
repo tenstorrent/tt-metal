@@ -175,3 +175,46 @@ launch/overhead-limited). 100 t/s crossover ~4.1 steps (bfp8) vs ~3.8 (bf16): ne
 model-faithful **@48 ≈ 17.8–18.2 t/s ceiling stands**. The ~8% bfp8 speed win is not worth ~77% commit
 divergence given #48291 leaves no fidelity headroom. Knob landed OFF-by-default for reuse if #48291 is
 resolved.
+
+## 2026-07-08 — data-dependent early-halt (dg-08 lever 8): mechanism landed, no-op under #48291
+
+Full detail + design: `doc/optimize_perf/early_halt.md`. DG-local flag `DG_DENOISE_EARLY_HALT=1`
+(`DG_DENOISE_EARLY_HALT_WINDOW=K`; 1 = scheme A per-step, K>1 = scheme B chunked-halt) recovers the
+eager StableAndConfident early-halt inside the traced loop **without tracing the whole variable-length
+loop**: capture a fixed K-step window, replay one window at a time, read ONE tiny on-device halt scalar
+(mean entropy + argmax-stability mismatch — `tt/denoise_loop.py::write_halt_scalars`) and branch
+continue/stop on host. NOT the retired 5-tensor/step readback (`bench_loop_readback.py` = 27.76 ms/step).
+No `models/demos/gemma4/` edits. **Default OFF** (fixed-48 traced unchanged).
+
+**Eager halt oracle (30L, `probe_halt_gap.py`, 3 blocks):** every block runs the full 48 steps,
+`halted=False`. The **stability gate fires** (blocks 1–2 have 14–18 argmax-stable steps) but the
+**confidence gate never does**: mean entropy floors at ~0.14–0.51 nats, ~30–100× the 0.005 threshold.
+Early-halt is a measured no-op — a #48291 logit-distribution consequence, not a mechanism gap.
+
+**Correctness (`probe_early_halt.py`, 6L + 30L):**
+- Guard 1 (no-halt ≡ fixed-48): scheme-A commits BYTE-IDENTICAL to fixed-48 traced at 6L (`3d744378…`)
+  and **30L (`a9f0d18709b07d1e`, = the established `traced_tuned_s48` sha)**.
+- Guard 2 (forced-halt ≡ eager), **demonstrated firing at 30L** (elevated threshold so the confidence
+  gate no longer blocks): eager and scheme A both halt block 1 at step 2 (`[48,2]`, `halted=[F,T]`) with
+  byte-identical commit; scheme B(K=4) halts block 1 at the step-4 window boundary (`[48,4]`), same
+  committed tokens (argmax stable across steps 1–4). Per-step device `(mean_entropy, mismatch)` vs eager
+  records agree to **1.2e-5** (entropy) / **exact 0** (mismatch, integer token-id compare in fp32) over
+  all 48 steps; unstable block 0 runs the full budget and stays byte-identical to fixed-48.
+
+**Overhead + break-even (30L, N=48, traced steady block):**
+
+| config | block s | t/s | overhead | break-even step |
+|---|---:|---:|---|---:|
+| fixed-48 traced (baseline) | 14.069 | **18.20** | — (step_dev 0.260 s, commit 1.57 s) | — |
+| scheme A no-halt / real | 14.351 / 14.349 | 17.84 | **5.87 ms/step** (48 syncs) | 46.9 |
+| scheme B K=4 no-halt | 14.406 | 17.77 | 28.1 ms/window (12 syncs) | 46.7 |
+| scheme B K=8 no-halt | 14.277 | 17.93 | 34.7 ms/window (6 syncs) | 47.2 |
+
+Overhead is ~2% of the block because the denoise steps are already device-serialized (canvas
+data-dependency), so a per-step sync adds only a host round-trip, not a pipeline stall. **Break-even
+≈47/48 ⇒ any early halt wins**; the whole cost is the ~2% no-halt overhead on blocks that run the budget.
+
+**Verdict:** mechanism correct + ready (flag OFF by default). Under #48291 it never fires, so enabling
+it is a ~2% net loss today. Flip when #48291 lifts the entropy floor below 0.005 (early-halt then fires
+and beats fixed-48 for any converged block) or a schedule cut lowers the step budget. This is the
+in-repo mechanism half of `path_to_100tps.md` lever 8; the quality half stays gated on #48291.

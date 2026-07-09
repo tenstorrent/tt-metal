@@ -287,6 +287,166 @@ def denoise_step_next_canvas(
     return res.canvas, res.argmax
 
 
+# --- Data-dependent early-halt: on-device halt-scalar reduction (dg-08 lever 8) ------
+#
+# Early-halt must NOT trace the whole variable-length loop (a static Metal trace fixes
+# the step count). Instead the trace-safe single denoise step (or a fixed K-step window)
+# computes ONE tiny halt scalar per step ON DEVICE, and the HOST reads that scalar after
+# each replay and branches continue/stop. This is the anti-pattern-avoiding replacement
+# for the retired 5-tensor/step host readback (``bench_loop_readback.py`` = 27.76 ms/step).
+#
+# The halt condition mirrors the eager reference (:func:`denoise_block` /
+# ``reference/denoise_loop.denoise_block``, ``StableAndConfidentStoppingCriteria``):
+#   * stable    — the clean-argmax canvas is unchanged vs the previous step
+#                 (``stable_steps_to_halt == 1``, the released config value), and
+#   * confident — the mean per-position entropy of the temperature-scaled logits is
+#                 below ``entropy_stop_threshold``.
+# Both reduce to a per-step scalar: ``mismatch`` = #positions whose argmax changed
+# (0 ⟺ stable, integer-exact ⟺ ``torch.equal``), and ``mean_entropy`` = mean over the
+# canvas of the per-position entropy (matches ``entropy.mean()``). The host applies the
+# exact eager rule (``eval_halt``), so no fp threshold decision is baked into the device.
+
+
+class HaltBuffers(NamedTuple):
+    """Persistent device buffers for the trace-safe early-halt scalar (allocated once).
+
+    ``prev_argmax`` holds the previous step's clean argmax as TILE fp32 (token ids
+    ≤262144 < 2^24 are exact in fp32) for the stability compare. ``mean_entropy`` and
+    ``mismatch`` are the two tiny ``[1,1,1,1]`` fp32 scalars the host reads each
+    step/window. All three are trace-write targets, so — like ``canvas_buf`` /
+    ``committed_buf`` — they MUST be allocated before ``begin_trace_capture`` and their
+    in-trace ``ttnn.copy`` writes warmed once eagerly.
+    """
+
+    prev_argmax: ttnn.Tensor
+    mean_entropy: ttnn.Tensor
+    mismatch: ttnn.Tensor
+
+
+def _argmax_to_tile_f32(argmax):
+    """``argmax`` (UINT32 ROW_MAJOR from :func:`~...tt.sampling.argmax_last_dim`) → TILE fp32.
+
+    The clean argmax is emitted ROW_MAJOR uint32; the halt reductions (``ne`` / ``sum``)
+    want TILE fp32. Token ids ≤262144 (< 2^24) are represented exactly in fp32.
+    """
+    tiled = ttnn.to_layout(argmax, ttnn.TILE_LAYOUT)
+    af = ttnn.typecast(tiled, ttnn.float32)
+    if tiled is not argmax:
+        tiled.deallocate(True)
+    return af
+
+
+def compute_halt_scalars(argmax, entropy, prev_argmax_f32, *, canvas_len: int):
+    """Reduce one step's decision tensors to ``(mean_entropy, mismatch, cur_argmax_f32)``.
+
+    * ``mean_entropy`` ``[1,1,1,1]`` — ``sum(entropy)/canvas_len`` over the canvas, matching
+      the eager ``entropy.mean()`` (entropy upcast to fp32 first, as the host path does).
+    * ``mismatch`` ``[1,1,1,1]`` — count of canvas positions whose argmax differs from the
+      previous step (``ne`` then ``sum``); ``0`` ⟺ ``torch.equal(argmax, prev)`` (the eager
+      stability gate at ``stable_steps_to_halt == 1``).
+    * ``cur_argmax_f32`` ``[1,1,C,1]`` — this step's argmax as TILE fp32; the caller copies it
+      into ``prev_argmax`` for the next step's compare.
+
+    Trace-safe: only device ops (typecast / to_layout / sum / ne / scalar-multiply), no host
+    writes and no data-dependent control flow. The caller owns copying the three results into
+    the persistent :class:`HaltBuffers`.
+    """
+    ent_f32 = ttnn.typecast(entropy, ttnn.float32)
+    ent_sum = ttnn.sum(ent_f32, dim=2, keepdim=True)
+    mean_entropy = ttnn.multiply(ent_sum, 1.0 / float(canvas_len))
+    ent_f32.deallocate(True)
+    ent_sum.deallocate(True)
+    cur_argmax_f32 = _argmax_to_tile_f32(argmax)
+    diff = ttnn.ne(cur_argmax_f32, prev_argmax_f32)
+    mismatch = ttnn.sum(diff, dim=2, keepdim=True)
+    diff.deallocate(True)
+    return mean_entropy, mismatch, cur_argmax_f32
+
+
+def write_halt_scalars(argmax, entropy, halt_bufs: "HaltBuffers", *, canvas_len: int) -> None:
+    """Compute the halt scalars for one step and copy them into the persistent buffers.
+
+    Overwrites ``halt_bufs.mean_entropy`` / ``.mismatch`` with THIS step's scalars and
+    updates ``halt_bufs.prev_argmax`` to THIS step's argmax (read by the next step). The
+    ``ne`` reads ``prev_argmax`` (the previous step) before the update copy overwrites it,
+    and the intermediate ``cur_argmax_f32`` is a distinct tensor, so there is no aliasing
+    hazard. Trace-safe (all targets preallocated; device copies only).
+    """
+    mean_entropy, mismatch, cur_argmax_f32 = compute_halt_scalars(
+        argmax, entropy, halt_bufs.prev_argmax, canvas_len=canvas_len
+    )
+    ttnn.copy(mean_entropy, halt_bufs.mean_entropy)
+    ttnn.copy(mismatch, halt_bufs.mismatch)
+    ttnn.copy(cur_argmax_f32, halt_bufs.prev_argmax)
+    mean_entropy.deallocate(True)
+    mismatch.deallocate(True)
+    cur_argmax_f32.deallocate(True)
+
+
+def denoise_step_next_canvas_and_halt(
+    logits,
+    *,
+    temperature: float,
+    entropy_budget: float,
+    gumbel_noise,
+    noise_tokens,
+    halt_bufs: "HaltBuffers",
+    canvas_len: int,
+    constants: "Optional[DenoiseConstants]" = None,
+    dedup_argmax: "Optional[bool]" = None,
+):
+    """:func:`denoise_step_next_canvas` + write the on-device halt scalars for this step.
+
+    Returns ``(next_canvas, argmax)`` exactly like :func:`denoise_step_next_canvas` — the
+    canvas thread and committed argmax are byte-identical (the halt scalars are a read-only
+    side computation over ``argmax`` / ``entropy`` and never touch the canvas). The entropy
+    (freed by :func:`denoise_step_next_canvas`) is consumed here for the mean-entropy scalar.
+    """
+    res = denoise_step(
+        logits,
+        temperature=temperature,
+        entropy_budget=entropy_budget,
+        gumbel_noise=gumbel_noise,
+        noise_tokens=noise_tokens,
+        constants=constants,
+        dedup_argmax=dedup_argmax,
+    )
+    write_halt_scalars(res.argmax, res.entropy, halt_bufs, canvas_len=canvas_len)
+    res.accept_mask.deallocate(True)
+    res.entropy.deallocate(True)
+    res.sampled.deallocate(True)
+    return res.canvas, res.argmax
+
+
+def read_halt_scalars(halt_bufs: "HaltBuffers") -> "tuple[float, float]":
+    """Read the two tiny halt scalars to host: ``(mean_entropy, mismatch_count)``.
+
+    This is the ONLY host interaction per step/window — an 8-byte-logical readback, not the
+    retired 5×256-wide (argmax/entropy/sampled/accept/canvas) per-step readback.
+    """
+    mean_entropy = float(_to_host_torch(halt_bufs.mean_entropy).reshape(-1)[0].item())
+    mismatch = float(_to_host_torch(halt_bufs.mismatch).reshape(-1)[0].item())
+    return mean_entropy, mismatch
+
+
+def eval_halt(mean_entropy: float, mismatch: float, step: int, *, threshold: float, n_stable: int = 1) -> bool:
+    """The eager ``StableAndConfidentStoppingCriteria`` rule on the per-step scalars.
+
+    Halts at ``step`` (0-indexed) when the argmax has been stable vs the previous step
+    (``mismatch == 0``, ``n_stable == 1``) AND the mean entropy is below ``threshold``. A
+    prior step is required (``step >= n_stable``), matching the eager ``len(history) >=
+    n_stable`` guard. Only ``n_stable == 1`` (the released ``stable_steps_to_halt``) is
+    supported here; the caller must guard other values.
+    """
+    if n_stable != 1:
+        raise NotImplementedError(
+            f"traced early-halt supports stable_steps_to_halt == 1 (released config); got {n_stable}"
+        )
+    if step < n_stable:
+        return False
+    return bool(mismatch == 0.0 and mean_entropy < threshold)
+
+
 def run_fixed_denoise_steps(
     logits_fn: TtLogitsFn,
     init_canvas: ttnn.Tensor,

@@ -62,11 +62,19 @@ import ttnn
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
 from models.experimental.diffusion_gemma.tt.denoise_loop import (
+    HaltBuffers,
+    _argmax_to_tile_f32,
     _deallocate_logits_if_unowned,
     _ids_to_torch,
+    compute_halt_scalars,
+    denoise_step,
     denoise_step_next_canvas,
+    denoise_step_next_canvas_and_halt,
+    eval_halt,
     make_denoise_constants,
+    read_halt_scalars,
     temperature_at_step,
+    write_halt_scalars,
 )
 
 
@@ -436,6 +444,261 @@ def traced_denoise_multistep_block(
         mesh_device = logits_fn.tt_model.mesh_device
         controller = MultiStepTracedDenoiseController(mesh_device, config)
         logits_fn._traced_denoise_multistep_controller = controller
+    return controller.denoise_block(
+        logits_fn, init_canvas, config, gumbel_noise_fn=gumbel_noise_fn, noise_tokens_fn=noise_tokens_fn
+    )
+
+
+# --- Data-dependent EARLY-HALT (path to 100 t/s, lever 8) --------------------------
+#
+# The traced loops above run a FIXED step budget: a static Metal trace fixes the step
+# count, and early-halt is data-dependent, so the trace-safe fixed-budget shape lost the
+# eager path's observed early halt. This controller RECOVERS early-halt while KEEPING the
+# traced dispatch savings by NOT tracing the whole variable-length loop. It captures a
+# fixed K-step WINDOW (K==1 ⇒ scheme A per-step; K>1 ⇒ scheme B chunked-halt), replays one
+# window at a time, and after each replay reads ONE tiny on-device halt scalar
+# (mean_entropy + argmax-stability mismatch — :func:`~...tt.denoise_loop.write_halt_scalars`)
+# and branches continue/stop on the HOST. The only host interaction per window is the
+# 2-scalar (8-byte-logical) read + the branch — NOT the retired 5-tensor/step readback that
+# ``bench_loop_readback.py`` measured at 27.76 ms/step.
+#
+# Scheme A (K=1) halts at the EXACT eager step and commits the bit-identical argmax (the
+# halt scalar is a read-only side computation over the same per-step argmax/entropy the
+# fixed-48 path commits). Scheme B (K>1) halts at the first window boundary at-or-after the
+# eager step; its commit equals the eager commit under argmax-convergence-stability (the same
+# property the fixed-48 traced path already relies on to match eager). Both are byte-identical
+# to the fixed-48 traced path when early-halt does NOT fire (Guard 1) — the ONLY difference
+# from the multi-step traced loop is the per-window host sync+read+branch.
+
+
+def traced_early_halt_enabled() -> bool:
+    """True when the traced early-halt loop is opted in (``DG_DENOISE_EARLY_HALT``)."""
+    return os.environ.get("DG_DENOISE_EARLY_HALT", "0").lower() in ("1", "true", "yes", "on")
+
+
+def early_halt_window(default: int = 1) -> int:
+    """Halt-check window K (``DG_DENOISE_EARLY_HALT_WINDOW``): 1 ⇒ scheme A, K>1 ⇒ scheme B.
+
+    Scheme A checks the halt scalar every step (finest granularity, one host sync/step);
+    scheme B checks once per K-step window (coarser halt, K× fewer host syncs). Unset /
+    non-positive / non-integer ⇒ ``default`` (scheme A). The value is later clamped to
+    ``[1, max_denoise_steps]`` by the window capture.
+    """
+    raw = os.environ.get("DG_DENOISE_EARLY_HALT_WINDOW", "").strip()
+    if not raw:
+        return default
+    try:
+        k = int(raw)
+    except ValueError:
+        return default
+    return k if k > 0 else default
+
+
+class EarlyHaltTracedDenoiseController(MultiStepTracedDenoiseController):
+    """Traced denoise loop with data-dependent early-halt (scheme A K=1 / scheme B K>1).
+
+    Extends :class:`MultiStepTracedDenoiseController`: same persistent-buffer +
+    per-block-refresh architecture and the same K-step window capture, plus (a) a persistent
+    :class:`~...tt.denoise_loop.HaltBuffers` written by EVERY step inside the trace (so at a
+    window boundary they hold the window's last step's scalars) and (b) a
+    :meth:`denoise_block` that syncs + reads the halt scalar + branches after EACH window
+    replay instead of replaying the whole fixed budget unconditionally.
+
+    ``group_size`` is the halt-check window K (1 = scheme A). The in-trace per-step halt-scalar
+    ops are identical for A and B and are ~sub-ms (256-wide reductions), so A and B run the
+    same per-step device compute as the fixed budget; they differ only in host sync cadence.
+    Only ``stable_steps_to_halt == 1`` (the released config) is supported.
+    """
+
+    def __init__(self, mesh_device, config: DiffusionConfig, consts=None, group_size: int | None = None):
+        super().__init__(mesh_device, config, consts=consts, group_size=group_size)
+        self.halt_bufs: HaltBuffers | None = None
+        # Per-window (w_end_step_count, mean_entropy, mismatch) for the LAST block replayed —
+        # diagnostics for the verify harness and the realized halt-step distribution.
+        self.last_halt_trace: list = []
+        if config.stable_steps_to_halt != 1:
+            raise NotImplementedError(
+                "traced early-halt supports stable_steps_to_halt == 1 (released config); "
+                f"got {config.stable_steps_to_halt}"
+            )
+
+    def _release_halt_bufs(self) -> None:
+        if self.halt_bufs is not None:
+            for buf in self.halt_bufs:
+                if buf is not None and hasattr(buf, "deallocate"):
+                    buf.deallocate(True)
+            self.halt_bufs = None
+
+    def release(self) -> None:
+        self._release_halt_bufs()
+        super().release()
+
+    def _capture(self, adapter, init_canvas, noise_tokens_fn, start_pos: int) -> None:
+        cfg = self.config
+        canvas_len = cfg.canvas_length
+        n_steps = cfg.max_denoise_steps
+        g = max(1, min(self.group_size, n_steps))
+        self.group_size = g
+        # All persistent cross-replay state allocated BEFORE begin_trace_capture (session-8 rule):
+        # self-cond signal + canvas RoPE buffers + per-step noise + the halt buffers.
+        adapter.prepare_trace_safe_self_conditioning(canvas_len=canvas_len)
+        adapter.prepare_canvas_rope_buffers(canvas_len=canvas_len)
+        adapter.update_canvas_rope_buffers(start_pos)
+        adapter.use_canvas_rope = True
+        if self.consts is None:
+            self.consts = make_denoise_constants(self.mesh, batch=1, canvas_len=canvas_len, budget=cfg.entropy_budget)
+        self._fill_noise_buffers_from(noise_tokens_fn)
+
+        # WARM the program cache + persistent write-target buffers (canvas carry, committed
+        # readback, AND the three halt buffers) by running one REAL eager step and its in-trace
+        # copies once — else the cold copy compiled inside begin_trace_capture enqueues a host
+        # write ("Writes not supported during trace capture").
+        adapter.reset_signal_buffer()
+        warm_canvas = ttnn.clone(init_canvas)
+        t0 = temperature_at_step(0, n_steps, cfg.temperature_start, cfg.temperature_end)
+        logits0 = adapter(warm_canvas, 0)
+        res0 = denoise_step(
+            logits0,
+            temperature=t0,
+            entropy_budget=cfg.entropy_budget,
+            gumbel_noise=None,
+            noise_tokens=self.noise_bufs[0],
+            constants=self.consts,
+        )
+        _deallocate_logits_if_unowned(adapter, logits0)
+        self.canvas_buf = ttnn.clone(res0.canvas)
+        self.committed_buf = ttnn.clone(res0.argmax)
+        # Halt buffers cloned from the real first-step scalars (exact spec match). prev_argmax
+        # is this step's argmax as TILE fp32; mean_entropy/mismatch are [1,1,1,1] fp32 scalars.
+        cur_af0 = _argmax_to_tile_f32(res0.argmax)
+        prev_argmax_buf = ttnn.clone(cur_af0)
+        mean0, mm0, af0 = compute_halt_scalars(res0.argmax, res0.entropy, prev_argmax_buf, canvas_len=canvas_len)
+        self.halt_bufs = HaltBuffers(
+            prev_argmax=prev_argmax_buf,
+            mean_entropy=ttnn.clone(mean0),
+            mismatch=ttnn.clone(mm0),
+        )
+        # Warm the in-trace copies once eagerly.
+        ttnn.copy(res0.canvas, self.canvas_buf)
+        ttnn.copy(res0.argmax, self.committed_buf)
+        write_halt_scalars(res0.argmax, res0.entropy, self.halt_bufs, canvas_len=canvas_len)
+        for tmp in (cur_af0, mean0, mm0, af0, res0.canvas, res0.argmax, res0.accept_mask, res0.entropy, res0.sampled):
+            if tmp is not None and hasattr(tmp, "deallocate"):
+                tmp.deallocate(True)
+        warm_canvas.deallocate(True)
+        ttnn.synchronize_device(self.mesh)
+
+        # Capture one trace per G-step window. Each step writes the halt buffers (overwriting),
+        # so after a window trace they hold the window's LAST step's scalars (mean_entropy of
+        # the last step + argmax mismatch of the last step vs its predecessor). The canvas +
+        # committed argmax thread exactly as the multi-step base (window-end carry).
+        adapter.reset_signal_buffer()
+        self.traces = []
+        for w_start in range(0, n_steps, g):
+            w_end = min(w_start + g, n_steps)
+            tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+            canvas = self.canvas_buf
+            committed = None
+            for step in range(w_start, w_end):
+                temperature = temperature_at_step(step, n_steps, cfg.temperature_start, cfg.temperature_end)
+                logits = adapter(canvas, step)
+                next_canvas, argmax = denoise_step_next_canvas_and_halt(
+                    logits,
+                    temperature=temperature,
+                    entropy_budget=cfg.entropy_budget,
+                    gumbel_noise=None,
+                    noise_tokens=self.noise_bufs[step],
+                    halt_bufs=self.halt_bufs,
+                    canvas_len=canvas_len,
+                    constants=self.consts,
+                )
+                _deallocate_logits_if_unowned(adapter, logits)
+                if committed is not None:
+                    committed.deallocate(True)
+                committed = argmax
+                if canvas is not self.canvas_buf:
+                    canvas.deallocate(True)
+                canvas = next_canvas
+            ttnn.copy(canvas, self.canvas_buf)
+            ttnn.copy(committed, self.committed_buf)
+            if canvas is not self.canvas_buf:
+                canvas.deallocate(True)
+            committed.deallocate(True)
+            ttnn.end_trace_capture(self.mesh, tid, cq_id=0)
+            self.traces.append(tid)
+        ttnn.synchronize_device(self.mesh)
+        self.captured = True
+
+    def denoise_block(
+        self, adapter, init_canvas, config: DiffusionConfig, *, gumbel_noise_fn=None, noise_tokens_fn=None
+    ) -> DenoiseTrajectory:
+        # Argmax regime only (same prerequisite as the traced base): the argmax gumbel hook
+        # yields per-step None. A real gumbel tensor would need per-step gumbel buffers threaded
+        # like the noise, which is not built.
+        if gumbel_noise_fn is not None:
+            probe = gumbel_noise_fn(0)
+            if probe is not None:
+                if hasattr(probe, "deallocate"):
+                    probe.deallocate(True)
+                raise NotImplementedError(
+                    "traced early-halt supports the argmax (gumbel_noise=None) regime only; "
+                    "unset DG_DENOISE_EARLY_HALT for the gumbel regime"
+                )
+        if noise_tokens_fn is None:
+            raise ValueError("traced early-halt requires a per-step noise_tokens_fn")
+        cfg = self.config
+        n_stable = cfg.stable_steps_to_halt
+        threshold = cfg.entropy_stop_threshold
+        n_steps = cfg.max_denoise_steps
+        start_pos = getattr(adapter, "q_rope_offset", None)
+
+        if not self.captured:
+            self._capture(adapter, init_canvas, noise_tokens_fn, start_pos)
+        else:
+            self._refresh_noise_buffers_from(noise_tokens_fn)
+            adapter.update_canvas_rope_buffers(start_pos)
+
+        # Reset threaded state from this block's fresh canvas init + zeroed self-cond signal.
+        ttnn.copy(init_canvas, self.canvas_buf)
+        if hasattr(init_canvas, "deallocate"):
+            init_canvas.deallocate(True)
+        adapter.reset_signal_buffer()
+        ttnn.synchronize_device(self.mesh)
+
+        # Replay one window at a time; after each, read the tiny halt scalar and branch. The
+        # window's LAST step index (0-indexed) is w_end - 1; halting there means w_end steps ran.
+        g = self.group_size
+        self.last_halt_trace = []
+        halted = False
+        steps_run = 0
+        for w, tid in enumerate(self.traces):
+            w_end = min((w + 1) * g, n_steps)
+            ttnn.execute_trace(self.mesh, tid, blocking=False)
+            ttnn.synchronize_device(self.mesh)
+            steps_run = w_end
+            mean_entropy, mismatch = read_halt_scalars(self.halt_bufs)
+            self.last_halt_trace.append((w_end, mean_entropy, mismatch))
+            if eval_halt(mean_entropy, mismatch, w_end - 1, threshold=threshold, n_stable=n_stable):
+                halted = True
+                break
+
+        committed_host = _ids_to_torch(self.committed_buf)
+        return DenoiseTrajectory(committed_host, steps_run, halted, [])
+
+
+def traced_early_halt_block(
+    logits_fn, init_canvas, config: DiffusionConfig, *, gumbel_noise_fn=None, noise_tokens_fn=None
+) -> DenoiseTrajectory:
+    """``denoise_block``-compatible entry that lazily binds an :class:`EarlyHaltTracedDenoiseController`.
+
+    Cached on the ``logits_fn`` adapter under a distinct attribute from the fixed-budget traced
+    controllers (its per-window host branch makes it a different captured/replay shape). The
+    halt-check window K is read from ``DG_DENOISE_EARLY_HALT_WINDOW`` (1 = scheme A)."""
+    controller = getattr(logits_fn, "_traced_early_halt_controller", None)
+    if controller is None:
+        mesh_device = logits_fn.tt_model.mesh_device
+        controller = EarlyHaltTracedDenoiseController(mesh_device, config, group_size=early_halt_window())
+        logits_fn._traced_early_halt_controller = controller
     return controller.denoise_block(
         logits_fn, init_canvas, config, gumbel_noise_fn=gumbel_noise_fn, noise_tokens_fn=noise_tokens_fn
     )
