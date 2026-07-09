@@ -7,13 +7,13 @@ description: Optimize per-device performance of runnable TTNN code, preserving c
 
 This skill assumes you have runnable TTNN code with passing correctness tests. If not, first use the appropriate bringup or debugging skill. This guide is written for autoregressive LLMs with prefill and decode phases. If the target model differs, map each requirement to the nearest equivalent path and record that mapping; do not drop correctness or performance evidence.
 
-## Main levers (start here)
+## Where to start
 
 Roughly in priority order. Treat them as inspiration, not mandates: aim for each, do the best you can, and keep what measures better.
 
 1. Fix topology before tuning knobs: run `$graph-rewrite`, then the operation-topology audit.
 2. Check the modules in "Code Paths Worth Reading": if one is close or expected to be similar, reuse it, or copy its decisions into your hand-rolled path.
-3. [if forge recs exist] Seed initial layout/precision from `forge_sharding_recommendations.json` onto the rewritten graph as a first candidate, then re-tune with the levers below ("Optimization Recommendations").
+3. [if forge recs exist] Seed initial layout/precision from `forge_sharding_recommendations.json` onto the rewritten graph as a first candidate, then re-tune per "Optimization Recommendations" below.
 4. DRAM-shard dominant decode matmuls (OPT-004; "Matmul Choices").
 5. Chain ops L1-resident on a consistent shard spec so they avoid reshards and DRAM round-trips (OPT-003).
 6. Sweep precision and fidelity per tensor group, and verify the chosen policy in the measured `tt-perf-report` rows (OPT-007, OPT-013, OPT-014; "Precision And Fidelity").
