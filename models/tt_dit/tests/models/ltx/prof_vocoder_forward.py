@@ -740,9 +740,9 @@ def _round32(c):
     indirect=["mesh_device"],
 )
 def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
-    """Gate + size the mel-VAE (AudioDecoder) trace: eager vs forward_traced, bit-identical.
+    """Gate + size the mel-VAE (MelDecoder) trace: eager vs forward_traced, bit-identical.
     Validates the Conv2dViaConv3d _persistent_zeros fix makes the device graph capturable."""
-    from models.tt_dit.models.audio_vae.audio_decoder_ltx import AudioDecoder
+    from models.tt_dit.models.audio_vae.mel_decoder_ltx import MelDecoder
     from models.tt_dit.tests.models.ltx.test_audio_ltx import (
         _AUDIO_DECODER_CFG,
         _audio_decoder_state_from_diffusers,
@@ -772,7 +772,7 @@ def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
     ).eval()
 
     z_times_f = _AUDIO_DECODER_CFG["z_channels"] * _AUDIO_DECODER_CFG["mel_bins"]
-    tt_decoder = AudioDecoder(mesh_device=mesh, **_AUDIO_DECODER_CFG)
+    tt_decoder = MelDecoder(mesh_device=mesh, **_AUDIO_DECODER_CFG)
     tt_decoder.load_torch_state_dict(
         _audio_decoder_state_from_diffusers(ref_vae, stats_std=torch.ones(z_times_f), stats_mean=torch.zeros(z_times_f))
     )
@@ -798,4 +798,4 @@ def test_audio_decoder_traced_wall(mesh_device, mesh_shape, device_params):
         f"speedup={ms_eager / ms_traced:.2f}x | max|Δ|={max_abs:.3e}",
         flush=True,
     )
-    assert max_abs < 5e-3, f"AudioDecoder traced diverged: {max_abs:.3e}"
+    assert max_abs < 5e-3, f"MelDecoder traced diverged: {max_abs:.3e}"
