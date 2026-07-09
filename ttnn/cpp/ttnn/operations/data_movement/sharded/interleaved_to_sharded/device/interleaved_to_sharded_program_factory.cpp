@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "ttnn/operations/math.hpp"
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
@@ -95,20 +96,23 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
 
     if (input.layout() == Layout::TILE) {
-        input_unit_size = tt::tile_size(input_cb_data_format);
-        output_unit_size = tt::tile_size(output_cb_data_format);
+        const auto& tile = input.tensor_spec().tile();
+        const uint32_t tile_height = input.tensor_spec().tile().get_height();
+        const uint32_t tile_width = input.tensor_spec().tile().get_width();
+        input_unit_size = tile.get_tile_size(input_cb_data_format);
+        output_unit_size = tile.get_tile_size(output_cb_data_format);
         TT_FATAL(
-            shard_spec.shape[0] % TILE_HEIGHT == 0 && shard_spec.shape[1] % TILE_WIDTH == 0,
+            shard_spec.shape[0] % tile_height == 0 && shard_spec.shape[1] % tile_width == 0,
             "Shard shape {} must be tile {}x{} sized!",
             shard_spec.shape,
-            TILE_HEIGHT,
-            TILE_WIDTH);
-        num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
-        num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
+            tile_height,
+            tile_width);
+        num_units_per_shard_height = shard_spec.shape[0] / tile_height;
+        num_units_per_shard_width = shard_spec.shape[1] / tile_width;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.padded_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = input.padded_shape()[-1] / tile_width;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = (input.physical_volume() / input.padded_shape()[-1]) / TILE_HEIGHT;
+        uint32_t num_units_height = (input.physical_volume() / input.padded_shape()[-1]) / tile_height;
         num_units_per_shard_height_last =
             num_units_per_shard_height -
             (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
@@ -116,6 +120,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             num_units_per_shard_width -
             (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
+        log_info(tt::LogOp, "input_unit_size: {}, output_unit_size: {}, num_units_per_shard_height: {}, num_units_per_shard_width: {}, num_units_per_shard: {}, num_units_per_row: {}, num_units_offset: {}, num_units_height: {}, num_units_per_shard_height_last: {}, num_units_per_shard_width_last: {}, padded_offset_bytes: {}", input_unit_size, output_unit_size, num_units_per_shard_height, num_units_per_shard_width, num_units_per_shard, num_units_per_row, num_units_offset, num_units_height, num_units_per_shard_height_last, num_units_per_shard_width_last, padded_offset_bytes);
     } else {
         input_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * input.element_size());
         output_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * output.element_size());
