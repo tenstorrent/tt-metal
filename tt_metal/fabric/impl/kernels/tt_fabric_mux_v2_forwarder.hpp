@@ -58,8 +58,8 @@ inline void wait_until_downstream_slot_available(
 
 inline void wait_for_trid_slot_available(ForwarderSharedTridRingPublisher& shared_trid_ring) {
     while (!shared_trid_ring.has_free_slot()) {
-        invalidate_l1_cache();
         shared_trid_ring.refresh_read_count();
+        asm volatile("nop; nop");
     }
 }
 
