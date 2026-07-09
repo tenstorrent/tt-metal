@@ -5,7 +5,7 @@ on:
     inputs:
       test-type:
         # Authoritative list of valid tokens lives in the test matrix
-        # (tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml) and is enforced
+        # (tests/pipeline_reorg/blaze_models_prefill_tests.yaml) and is enforced
         # by the validate-test-type job below. This text is just UX help.
         description: >-
           Comma-separated stages to run, e.g. "mla,prefill_block,kimi_moe".
@@ -53,7 +53,7 @@ jobs:
     outputs:
       test-type: ${{ steps.validate.outputs.selection }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/blaze_models_prefill_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
