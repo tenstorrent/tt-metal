@@ -76,10 +76,17 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(local_tensor.dtype());
 
     uint32_t num_units = local_tensor.buffer()->num_pages();
+    std::optional<Tile> tile = std::nullopt;
     if (local_tensor.layout() == Layout::TILE) {
-        unit_size = tt::tile_size(data_format);
-        local_units_per_shard = local_shard_spec.numel() / TILE_HW;
-        remote_units_per_shard = remote_shard_spec.numel() / TILE_HW;
+        tile = local_tensor.tensor_spec().tile();
+        unit_size = tile.value().get_tile_size(data_format);
+        const uint32_t tile_hw = tile.value().get_tile_hw();
+        TT_FATAL(
+            local_shard_spec.numel() % tile_hw == 0 && remote_shard_spec.numel() % tile_hw == 0,
+            "Shard numel must be divisible by tile hw {}",
+            tile_hw);
+        local_units_per_shard = local_shard_spec.numel() / tile_hw;
+        remote_units_per_shard = remote_shard_spec.numel() / tile_hw;
     } else {
         unit_size = static_cast<uint32_t>(local_shard_spec.shape[1] * local_tensor.element_size());
         local_units_per_shard = local_shard_spec.shape[0];

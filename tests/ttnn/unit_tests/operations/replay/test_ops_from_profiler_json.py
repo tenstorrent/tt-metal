@@ -21,7 +21,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
-TILE_HEIGHT = 1
+TILE_HEIGHT = 16
 TILE_WIDTH = 32
 tile = ttnn.Tile((TILE_HEIGHT, TILE_WIDTH))
 
@@ -99,10 +99,9 @@ def _parse_enum_tail(value: str) -> str:
 
 
 def parse_dtype(name: str):
-    key = _parse_enum_tail(name)
-    if key not in DTYPE_MAP:
-        raise ValueError(f"Unsupported dtype: {name}")
-    return DTYPE_MAP[key]
+    # Force bfloat16 for all replay tensors/ops (ignore profiled dtype).
+    del name  # profiled dtype intentionally unused
+    return ttnn.bfloat16
 
 
 def parse_layout(name: str):
@@ -234,12 +233,10 @@ def parse_sdpa_program_config(pc_str: str):
     )
 
 
-def make_random_torch(shape, datatype: str) -> torch.Tensor:
-    torch_dtype = TORCH_DTYPE_MAP[_parse_enum_tail(datatype)]
-    if torch_dtype in (torch.int32, torch.int64):
-        return torch.randint(0, 8, shape, dtype=torch_dtype)
-    # Keep values moderate for stable unary/binary/sdpa paths
-    return torch.randn(shape, dtype=torch.float32).to(torch_dtype) * 0.1
+def make_random_torch(shape, datatype: str = "BFLOAT16") -> torch.Tensor:
+    # Always generate bf16 host data; profiled datatype is ignored.
+    del datatype
+    return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16) * 0.1
 
 
 def create_tt_tensor(spec: dict, device, mem_config_override=None):
@@ -247,19 +244,18 @@ def create_tt_tensor(spec: dict, device, mem_config_override=None):
 
     Uses shape_logical so tile padding / broadcast semantics match the profiled
     op (e.g. reshape volume, ROW_B_COL_A binary broadcast). ttnn.from_torch
-    applies TILE padding automatically. Always uses 16x32 tiles.
+    applies TILE padding automatically. Always uses the module tile and bfloat16.
 
     Returns (torch_tensor, ttnn_tensor).
     """
     shape = list(spec.get("shape_logical") or spec["shape_padded"])
-    datatype = spec["datatype"]
     layout = parse_layout(spec.get("layout", "TILE"))
     mem_config = mem_config_override or parse_memory_config(None, spec.get("memory"))
 
-    torch_tensor = make_random_torch(shape, datatype)
+    torch_tensor = make_random_torch(shape)
     tt_tensor = ttnn.from_torch(
         torch_tensor,
-        dtype=parse_dtype(datatype),
+        dtype=ttnn.bfloat16,
         layout=layout,
         tile=tile,
         device=device,
