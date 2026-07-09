@@ -253,6 +253,13 @@ class TtSDXLPipeline(LightweightModule):
         self.tt_text_encoder_2.load_torch_state_dict(self.torch_pipeline.text_encoder_2.state_dict())
 
     def _fuse_text_encoder_lora(self, lora_scale):
+        # Idempotency guard, mirroring the UNet path (TtLoRAWeightsManager.fuse_lora
+        # early-returns on self._is_fused). Without this, a second fuse_lora() call
+        # before an unload would merge the TE delta on top of already-merged torch
+        # weights, double-applying the adapter.
+        if self._te_lora_fused:
+            logger.info("Text-encoder LoRA already fused; skipping re-fuse (idempotent).")
+            return
         components = self._lora_weights_manager.text_encoder_components()
         if not components:
             return
