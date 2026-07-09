@@ -1463,8 +1463,14 @@ void issue_read_buffer_dispatch_command_sequence(
     } else {
         calculator.add_dispatch_write_linear_host();
     }
-    // Prefetch relay cmd has fixed header size in calculator regardless of type
-    calculator.add_prefetch_relay_paged();
+    // Size the prefetch relay cmd to match the type emitted below: sharded reads emit
+    // CQ_PREFETCH_CMD_RELAY_LINEAR (CQPrefetchCmdLarge, 32B), interleaved reads emit
+    // CQ_PREFETCH_CMD_RELAY_PAGED (CQPrefetchCmd, 16B).
+    if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {
+        calculator.add_prefetch_relay_linear();
+    } else {
+        calculator.add_prefetch_relay_paged();
+    }
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
 
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);

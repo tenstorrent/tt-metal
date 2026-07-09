@@ -125,6 +125,8 @@ public:
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
 
+    void add_dispatch_rt_profiler_flush(uint32_t wait_count, uint32_t wait_stream);
+
     template <bool inline_data = false>
     void add_dispatch_write_paged(
         bool flush_prefetch,

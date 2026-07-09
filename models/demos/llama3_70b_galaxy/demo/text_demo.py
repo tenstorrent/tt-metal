@@ -767,6 +767,7 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
+            False,  # token_accuracy
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs

@@ -147,6 +147,8 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     __emule_self = f->owned_ctx.get();       // the single thread_local repoint
     my_x[0] = my_x[1] = f->id.phys_x;        // restore the silicon-named coords
     my_y[0] = my_y[1] = f->id.phys_y;
+    // Per-fiber ASAN state (e.g. the Object-Intent resolved-range log) lives in the ctx
+    // above, so it swaps in with __emule_self — nothing else to restore here. See tt-emule #241.
 }
 
 void FiberSchedulerImpl::worker_main(unsigned w) {

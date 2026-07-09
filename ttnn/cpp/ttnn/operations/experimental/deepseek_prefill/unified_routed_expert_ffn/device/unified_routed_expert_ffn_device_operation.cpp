@@ -231,13 +231,15 @@ ttnn::Tensor unified_routed_expert_ffn(
     uint32_t chunk_M_tiles,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
-    const std::optional<ttnn::Tensor>& expert_region_offsets) {
+    const std::optional<ttnn::Tensor>& expert_region_offsets,
+    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .chunk_M_tiles = chunk_M_tiles,
             .local_expert_id = local_expert_id,
+            .activation = activation,
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,

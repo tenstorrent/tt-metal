@@ -10,6 +10,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/d2d_stream_service.hpp"
+#include "ttnn/services/d2h_socket_service.hpp"
 
 using namespace tt::tt_metal;
 
@@ -38,6 +39,9 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
         "outbound_socket_service_sync: per-coord sender-service state is missing or inconsistent (was the service "
         "built with "
         "sender_worker_cores?)");
+    if (args.metadata_only) {
+        TT_FATAL(args.metadata_size_bytes > 0, "outbound_socket_service_sync: metadata_only requires metadata");
+    }
     if (args.metadata_size_bytes > 0) {
         TT_FATAL(
             args.metadata_size_bytes % 4 == 0,
@@ -80,6 +84,7 @@ ttsl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
         args.num_pages,
         args.scratch_cb_index,
         args.metadata_size_bytes,
+        args.metadata_only,
         args.worker_cores,
         args.mesh_num_cols,
         args.data_ready_addrs,
@@ -93,28 +98,39 @@ ttsl::hash::hash_t OutboundSocketServiceSyncOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-ttnn::Tensor outbound_socket_service_sync(
-    const tt::tt_metal::D2DStreamServiceSender& service,
-    const ttnn::Tensor& input,
-    const std::optional<ttnn::Tensor>& metadata) {
+// Shared launch body, templated on the service type (mirrors inbound_socket_service_sync).
+// D2DStreamServiceSender and D2HStreamService expose the same sender-side getters, so one
+// path drives both. Modes:
+//   * input + metadata : copy input into the service backing tensor and forward metadata.
+//   * input only       : copy input into the backing tensor (no metadata).
+//   * metadata only    : no backing/DRAM payload (D2H global_spec=None); forward the record.
+template <typename ServiceT>
+ttnn::Tensor outbound_socket_service_sync_impl(
+    const ServiceT& service, const std::optional<ttnn::Tensor>& input, const std::optional<ttnn::Tensor>& metadata) {
     using OperationType = ttnn::experimental::prim::OutboundSocketServiceSyncOperation;
-
-    const auto& backing = service.get_backing_tensor();
+    TT_FATAL(
+        input.has_value() || metadata.has_value(),
+        "outbound_socket_service_sync: pass an input (backing) tensor, metadata, or both");
+    const bool metadata_only = !input.has_value();
+    // Tensor mode copies input -> the service backing tensor (page geometry from the
+    // backing). Metadata-only has no backing, so the record supplies geometry and stands in
+    // for the (kernel-unused) input/backing slots.
+    const ttnn::Tensor& backing = metadata_only ? *metadata : service.get_backing_tensor();
+    const ttnn::Tensor& input_t = metadata_only ? *metadata : *input;
     auto* mesh_device = backing.device();
     const auto& mesh_shape = mesh_device->shape();
     TT_FATAL(mesh_shape.dims() == 2, "outbound_socket_service_sync: expects a 2D mesh, got {} dims", mesh_shape.dims());
     const uint32_t num_rows = mesh_shape[0];
     const uint32_t num_cols = mesh_shape[1];
-
     OperationType::operation_attributes_t attrs;
     attrs.page_size = static_cast<uint32_t>(backing.buffer()->page_size());
     attrs.num_pages = static_cast<uint32_t>(backing.buffer()->num_pages());
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes =
         metadata.has_value() ? static_cast<uint32_t>(metadata->logical_shape()[-1] * sizeof(uint32_t)) : 0;
+    attrs.metadata_only = metadata_only;
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
-
     const bool has_metadata = attrs.metadata_size_bytes > 0;
     attrs.data_ready_addrs.reserve(num_rows * num_cols);
     attrs.service_core_x.reserve(num_rows * num_cols);
@@ -134,8 +150,21 @@ ttnn::Tensor outbound_socket_service_sync(
             }
         }
     }
+    return ttnn::device_operation::launch<OperationType>(
+        attrs, OperationType::tensor_args_t{input_t, backing, metadata});
+}
 
-    return ttnn::device_operation::launch<OperationType>(attrs, OperationType::tensor_args_t{input, backing, metadata});
+ttnn::Tensor outbound_socket_service_sync(
+    const tt::tt_metal::D2DStreamServiceSender& service,
+    const ttnn::Tensor& input,
+    const std::optional<ttnn::Tensor>& metadata) {
+    return outbound_socket_service_sync_impl(service, input, metadata);
+}
+ttnn::Tensor outbound_socket_service_sync(
+    const tt::tt_metal::D2HStreamService& service,
+    const std::optional<ttnn::Tensor>& input,
+    const std::optional<ttnn::Tensor>& metadata) {
+    return outbound_socket_service_sync_impl(service, input, metadata);
 }
 
 }  // namespace ttnn::prim
