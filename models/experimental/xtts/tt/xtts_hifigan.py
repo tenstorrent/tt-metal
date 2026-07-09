@@ -59,12 +59,22 @@ class TtResBlock1(LightweightModule):
         ]
 
     def forward(self, x):
-        for c1, c2 in zip(self.convs1, self.convs2):
-            xt = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
-            xt = c1(xt)
-            xt = ttnn.leaky_relu(xt, negative_slope=LRELU_SLOPE)
-            xt = c2(xt)
-            x = ttnn.add(xt, x)
+        # Free each conv/activation temporary as soon as it is consumed. The block's
+        # input ``x`` is preserved on the first iteration (the caller reuses it for the
+        # other MRF resblocks); later residuals are internal and freed.
+        for idx, (c1, c2) in enumerate(zip(self.convs1, self.convs2)):
+            a = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
+            b = c1(a)
+            ttnn.deallocate(a)
+            c = ttnn.leaky_relu(b, negative_slope=LRELU_SLOPE)
+            ttnn.deallocate(b)
+            d = c2(c)
+            ttnn.deallocate(c)
+            nxt = ttnn.add(d, x)
+            ttnn.deallocate(d)
+            if idx > 0:
+                ttnn.deallocate(x)
+            x = nxt
         return x
 
 
@@ -108,20 +118,44 @@ class TtHifiganGenerator(LightweightModule):
         self.conv_post = TtConv1d(device, state_dict["conv_post.weight"], None, padding=3)
 
     def forward(self, x, g):
+        # Deep conv chain — the vocoder's memory-dominant path, whose activation
+        # footprint grows with output length. Each temporary is freed the moment the
+        # next op consumes it; ``g`` is never freed (reused by every cond layer).
         cond_global = self.cond_layer(g)  # [N, 1, 512], broadcasts over T
-        o = ttnn.add(self.conv_pre(x), cond_global)
+        pre = self.conv_pre(x)
+        ttnn.deallocate(x)  # upsampler output, not reused after conv_pre
+        o = ttnn.add(pre, cond_global)
+        ttnn.deallocate(pre)
+        ttnn.deallocate(cond_global)
 
         for i in range(self.num_upsamples):
-            o = ttnn.leaky_relu(o, negative_slope=LRELU_SLOPE)
-            o = self.ups[i](o)
-            o = ttnn.add(o, self.conds[i](g))
+            a = ttnn.leaky_relu(o, negative_slope=LRELU_SLOPE)
+            ttnn.deallocate(o)
+            u = self.ups[i](a)
+            ttnn.deallocate(a)
+            cg = self.conds[i](g)
+            o = ttnn.add(u, cg)
+            ttnn.deallocate(u)
+            ttnn.deallocate(cg)
             z_sum = None
             for j in range(self.num_kernels):
-                res = self.resblocks[i * self.num_kernels + j](o)
-                z_sum = res if z_sum is None else ttnn.add(z_sum, res)
-            o = ttnn.mul(z_sum, self.inv_num_kernels)
+                res = self.resblocks[i * self.num_kernels + j](o)  # does not free o
+                if z_sum is None:
+                    z_sum = res
+                else:
+                    z_new = ttnn.add(z_sum, res)
+                    ttnn.deallocate(z_sum)
+                    ttnn.deallocate(res)
+                    z_sum = z_new
+            o_new = ttnn.mul(z_sum, self.inv_num_kernels)
+            ttnn.deallocate(z_sum)
+            ttnn.deallocate(o)  # free the resblock input once the MRF sum is done
+            o = o_new
 
-        o = ttnn.leaky_relu(o, negative_slope=FINAL_LRELU_SLOPE)
-        o = self.conv_post(o)
-        o = ttnn.tanh(o)
-        return o
+        a = ttnn.leaky_relu(o, negative_slope=FINAL_LRELU_SLOPE)
+        ttnn.deallocate(o)
+        p = self.conv_post(a)
+        ttnn.deallocate(a)
+        out = ttnn.tanh(p)
+        ttnn.deallocate(p)
+        return out
