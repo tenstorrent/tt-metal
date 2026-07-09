@@ -75,6 +75,12 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #
+          # KNOWN ERROR — [WH-T3K] Gemma4-31B (kept enabled below to track):
+          # device hang (fast-dispatch timeout) during decode on WH-T3K only;
+          # the same serving config passes on [BH-QB-2] Gemma4-31B. Not a
+          # serving/KV-config issue — a tt-metal dispatch-layer hang.
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49494
+          #
           # Disabled due to Metal timeout in reduce-scatter async tests
           # https://github.com/tenstorrent/vllm/issues/416
           # Originally disabled in:
