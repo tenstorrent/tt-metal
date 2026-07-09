@@ -89,7 +89,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  Galaxy-DeepSeek-Prefill-tests:
+  Galaxy-Blaze-models-prefill:
     needs: [validate-test-type, check-harbor, build-artifact]
     # Skip when only the perf checks were requested (they run in the focused job below).
     if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
@@ -104,7 +104,7 @@ jobs:
       # Keep the perf checks in a focused job so the long functional run remains unchanged.
       exclude-test-group: sdpa_perf
 
-  Galaxy-DeepSeek-Prefill-SDPA-Perf-tests:
+  Galaxy-Blaze-models-prefill-SDPA-Perf-tests:
     needs: [validate-test-type, check-harbor, build-artifact]
     # Runs for the default "all" and when the sdpa_perf group is selected (alone or with others).
     if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
