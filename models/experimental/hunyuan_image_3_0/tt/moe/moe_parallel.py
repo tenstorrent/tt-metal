@@ -127,6 +127,17 @@ class HunyuanTtMoEParallel(LightweightModule):
         if verbose:
             print(f"[backbone]   expert upload done ({time.time() - t_upload:.1f}s)", flush=True)
 
+        # Pre-slice the stacked expert weights into per-expert [A, B] tensors ONCE.
+        # The forward path used to re-slice the full DRAM weight stack on the expert
+        # dim for every expert, every layer, every decode step — a ~25MB DRAM copy per
+        # slice that dominated the AR decode step. The weights are static, so we take
+        # those slices here and keep them resident; the hot loop just indexes a list.
+        # Same total bytes (the stack is freed right after), no per-token copy.
+        self.w_gate_up_experts = [self._slice_expert(self.w_gate_up, el) for el in range(self.experts_per_dev)]
+        self.w_down_experts = [self._slice_expert(self.w_down, el) for el in range(self.experts_per_dev)]
+        ttnn.deallocate(self.w_gate_up)
+        ttnn.deallocate(self.w_down)
+
         # Per-device GLOBAL expert ids: arange(E) sharded along the mesh axis.
         # bf16 so it compares against the (bf16-cast) topk indices; ids <= 63 exact.
         ids = torch.arange(num_experts, dtype=torch.float32).reshape(num_experts, 1)
@@ -181,8 +192,8 @@ class HunyuanTtMoEParallel(LightweightModule):
 
     def _expert(self, x, el):
         """Run local expert `el` (its weight slice differs per device)."""
-        wgu = self._slice_expert(self.w_gate_up, el)  # [H, 2I] (different global expert per device)
-        wdn = self._slice_expert(self.w_down, el)  # [I, H]
+        wgu = self.w_gate_up_experts[el]  # [H, 2I] (different global expert per device)
+        wdn = self.w_down_experts[el]  # [I, H]
         gu = ttnn.linear(
             x, wgu, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -197,8 +208,6 @@ class HunyuanTtMoEParallel(LightweightModule):
             h, wdn, compute_kernel_config=self.compute_kernel_config, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(h)
-        ttnn.deallocate(wgu)
-        ttnn.deallocate(wdn)
         return out
 
     def _ep_all_reduce(self, partial: ttnn.Tensor) -> ttnn.Tensor:
