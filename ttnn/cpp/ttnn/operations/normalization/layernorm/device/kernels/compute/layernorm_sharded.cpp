@@ -183,16 +183,11 @@ void kernel_main() {
         index_h_offset += block_w;
     }
     cb_in.push_back(num_tiles_per_block);
-#ifndef RMSNORM
-    reconfig_data_format(cb_in0, cb_in_id, cb_in1, cb_scaler_id);
-#else
+#ifdef RMSNORM
     reconfig_data_format(cb_in0, cb_in_id, cb_in1, cb_in_id);
 #endif
     cb_in.wait_front(num_tiles_per_block);
 #else
-#ifndef RMSNORM
-    reconfig_data_format_srcb(cb_in0, cb_scaler_id);
-#endif  // RMSNORM
 #endif  // FUSE_PRE_ADD
 
 #ifndef RMSNORM
@@ -266,16 +261,16 @@ void kernel_main() {
         }
         reduce_uninit();
         cb_ex.push_back(num_tiles_per_allgather_worker);
-        reconfig_data_format(cb_ex_external_id, cb_scaler_global_id);
         cb_ex.wait_front(num_tiles_per_allgather_worker);
     }
 
     // x - E[x]
     if constexpr (FLOAT32_DTYPE) {
         reconfig_data_format(cb_in_id, cb_ex_global_id);
+    } else {
+        reconfig_data_format_srca(cb_in_id);
     }
     index_h_offset = 0;
-    reconfig_data_format_srca(cb_ex_external_id, cb_in_id);
     sub_bcast_cols_init_short(cb_in_id, cb_ex_global_id);
     cb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -409,7 +404,6 @@ void kernel_main() {
         }
         reduce_uninit();
         cb_ex2.push_back(num_tiles_per_allgather_worker);
-        reconfig_data_format(cb_xmm2_id, cb_scaler_id);
 
         if (enable_sqrt) {
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
