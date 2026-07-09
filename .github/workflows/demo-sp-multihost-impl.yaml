@@ -244,26 +244,16 @@ jobs:
               --output-path "$output_path"
           }
 
-          verify_chip_enumeration() {
-            mpirun --pernode --tag-output bash -lc '
-              snapshot=$(tt-smi --snapshot_no_tty --snapshot)
-              count=$(jq ".device_info | length" <<< "$snapshot")
-              echo "$(hostname): tt_devices=${count}"
-              test "${count}" -ge 32
-            '
-          }
-
-          # ARC can enumerate in tt-smi before firmware is ready for MetalContext init.
-          warm_up_devices() {
+          wait_for_devices_ready() {
             mpirun --pernode --tag-output bash -lc '
               for i in 1 2 3 4 5 6; do
                 snapshot=$(tt-smi --snapshot_no_tty --snapshot 2>/dev/null) || snapshot=""
                 count=$(jq ".device_info | length" <<< "${snapshot:-{}}" 2>/dev/null || echo 0)
                 if [ "${count}" -ge 32 ] && jq -e ".device_info[0].board_info" <<< "${snapshot}" >/dev/null 2>&1; then
-                  echo "$(hostname): device warm-up OK on attempt ${i}"
+                  echo "$(hostname): devices ready (${count} chips) on attempt ${i}"
                   exit 0
                 fi
-                echo "$(hostname): device warm-up attempt ${i}/6 not ready (tt_devices=${count})"
+                echo "$(hostname): devices not ready on attempt ${i}/6 (tt_devices=${count})"
                 sleep 10
               done
               exit 1
@@ -317,17 +307,9 @@ jobs:
               echo "--- Sleeping 60s after reset for ARC/firmware to settle ---"
               sleep 60
 
-              echo "--- Verifying chip enumeration before cluster validation ---"
-              if ! verify_chip_enumeration; then
-                echo "WARNING: Chip enumeration check failed on attempt $attempt"
-                reset_success=false
-              fi
-            fi
-
-            if [ "$reset_success" = true ]; then
-              echo "--- Warming up devices before cluster validation ---"
-              if ! warm_up_devices; then
-                echo "WARNING: Device warm-up failed on attempt $attempt"
+              echo "--- Waiting for devices to be ready before cluster validation ---"
+              if ! wait_for_devices_ready; then
+                echo "WARNING: Devices not ready on attempt $attempt"
                 reset_success=false
               fi
             fi
@@ -340,7 +322,7 @@ jobs:
                 echo "WARNING: Validation failed on attempt $attempt"
               fi
             else
-              echo "WARNING: Skipping validation because reset/enumeration/warm-up failed on attempt $attempt"
+              echo "WARNING: Skipping validation because reset/device readiness failed on attempt $attempt"
             fi
 
             if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
