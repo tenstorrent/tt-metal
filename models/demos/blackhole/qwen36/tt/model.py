@@ -309,11 +309,26 @@ class Qwen36Model:
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(-1)[: self.vocab_size]
 
+    def _decode_forward_batched(self, tokens_tt, cur_pos_tt, cos, sin, B):
+        """Core batched decode forward (B lanes) on device. Consumes device tensors:
+        tokens_tt (B tokens, either [1,B] or [B,1]), cur_pos_tt [B] int32, cos/sin
+        rope_tp-format [1,B,1,rd]. Returns logits device tensor [1,1,B,vocab] (replicated).
+        Shared by the eager (decode_tp_batched) and traced (generate_tp_batched use_trace)
+        paths so the captured trace is bit-identical to the eager step. Lane order is
+        preserved: flattening either token layout puts lane b at dim-2 index b."""
+        x = self.embd(tokens_tt)  # [.,.,dim_frac], B*dim_frac elements
+        x = ttnn.reshape(x, (1, 1, B, x.shape[-1]))  # [1,1,B,dim_frac]
+        for layer in self.layers:
+            x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
+        x = self.norm(x, mode=Mode.DECODE)
+        return ttnn.linear(x, self.lm_head_weight)  # [1,1,B,vocab] replicated
+
     def decode_tp_batched(self, token_ids, positions):
-        """Single-step TP decode for B sequences at once (B = args.max_batch_size).
+        """Single-step eager TP decode for B sequences at once (B = args.max_batch_size).
 
         token_ids: list[int] length B (one current token per sequence).
-        positions: list[int] length B (each sequence's absolute decode position).
+        positions: list[int] length B (each sequence's absolute decode position; may
+        differ across lanes — per-user rope via rot_mats_decode).
         Returns torch logits [B, vocab_size]. Continues from the batched KV + GDN
         state left by prefill_seed_tp / finalize_seed / prior batched decode steps.
         """
@@ -326,8 +341,6 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        x = self.embd(tok)  # [1, B, dim_frac]
-        x = ttnn.reshape(x, (1, 1, B, x.shape[-1]))  # [1,1,B,dim_frac]
         cos, sin = rot_mats_decode(
             self.device,
             self.args.rope_head_dim,
@@ -341,14 +354,11 @@ class Qwen36Model:
             device=self.device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
         )
-        for layer in self.layers:
-            x = layer.forward(x, cos=cos, sin=sin, mode="decode", position_tensor=cur_pos_tt)
-        x = self.norm(x, mode=Mode.DECODE)
-        logits = ttnn.linear(x, self.lm_head_weight)  # [1,1,B,vocab] replicated
+        logits = self._decode_forward_batched(tok, cur_pos_tt, cos, sin, B)
         lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
         return lt[0].reshape(B, -1)[:, : self.vocab_size]
 
-    def generate_tp_batched(self, prompts, max_new_tokens=20, eos_id=None):
+    def generate_tp_batched(self, prompts, max_new_tokens=20, eos_id=None, use_trace=False):
         """Stateful batched TP generation for B = len(prompts) sequences (num_devices>1).
 
         Each prompt is prefilled independently into its own batch lane (prefill_seed_tp),
@@ -356,6 +366,12 @@ class Qwen36Model:
         lockstep — one batched forward per step. Returns list[list[int]] of new ids.
 
         B must equal args.max_batch_size (the module buffers are sized to it).
+
+        use_trace: capture the batched decode step ONCE as a ttnn trace and replay it
+        (DMA-updating the fixed input buffers each step) — ~large decode speedup. Requires
+        EQUAL-length prompts: the traced path packs a single shared decode position for all
+        lanes (ragged per-user positions would need per-step re-capture). The eager path
+        (default) has no such restriction.
         """
         import math as _math
 
@@ -380,6 +396,9 @@ class Qwen36Model:
             if not layer.is_full_attention:
                 layer.attention.finalize_seed(B)
 
+        if use_trace:
+            return self._generate_tp_batched_traced(cur, positions, max_new_tokens, eos_id, B)
+
         out = [[c] for c in cur]
         done = [False] * B
         for _ in range(max_new_tokens - 1):
@@ -394,6 +413,113 @@ class Qwen36Model:
                 cur[b] = nxt[b]
             if all(done):
                 break
+        return out
+
+    def _generate_tp_batched_traced(self, cur, positions, max_new_tokens, eos_id, B):
+        """Captured-trace batched decode replay (B lanes, supports per-user positions).
+
+        Mirrors the demo's single-sequence traced decode (text_demo._run_tp_generation) but
+        for B lanes: fixed input buffers (token / cur_pos / cos / sin) built once via the SAME
+        rot_mats_decode the eager decode_tp_batched uses, so the captured forward is bit-identical
+        to the eager step (execute_trace replay == eager re-issue). Each step DMA-updates the fixed
+        buffers in place (ttnn.copy) and replays the trace. The throwaway capture run advances the
+        GDN recurrent/conv state non-idempotently, so we snapshot it before and restore after
+        (preserving the buffer addresses the trace baked in). GDN state is switched to in-place
+        (_stable_state) so the decode's recurrent write lands in the captured fixed buffer.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import rot_mats_decode
+
+        mesh = self.mesh_device
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        for dn in gdn:
+            dn._stable_state = True  # in-place recurrent write → trace-safe fixed address
+
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+
+        def _rope(pos_list):
+            return rot_mats_decode(
+                self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta,
+                torch.tensor(pos_list, dtype=torch.int32),
+            )
+
+        # Fixed input buffers (persist across replays; updated in place by _update).
+        tok_buf = ttnn.from_torch(
+            torch.tensor([cur], dtype=torch.int32), dtype=ttnn.uint32, device=self.device, mesh_mapper=rep
+        )
+        cur_pos_buf = ttnn.from_torch(
+            torch.tensor(positions, dtype=torch.int32), dtype=ttnn.int32, device=self.device, mesh_mapper=rep
+        )
+        cos_buf, sin_buf = _rope(positions)
+
+        def _update(cur_tokens, pos_list):
+            t = ttnn.from_torch(
+                torch.tensor([cur_tokens], dtype=torch.int32), dtype=ttnn.uint32, device=self.device, mesh_mapper=rep
+            )
+            ttnn.copy(t, tok_buf)
+            ttnn.deallocate(t)
+            p = ttnn.from_torch(
+                torch.tensor(pos_list, dtype=torch.int32), dtype=ttnn.int32, device=self.device, mesh_mapper=rep
+            )
+            ttnn.copy(p, cur_pos_buf)
+            ttnn.deallocate(p)
+            c, s = _rope(pos_list)
+            ttnn.copy(c, cos_buf)
+            ttnn.copy(s, sin_buf)
+            ttnn.deallocate(c)
+            ttnn.deallocate(s)
+
+        def _forward():
+            return self._decode_forward_batched(tok_buf, cur_pos_buf, cos_buf, sin_buf, B)
+
+        def _read(out_tt):
+            lt = ttnn.to_torch(out_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            return lt[0].reshape(B, -1)[:, : self.vocab_size]
+
+        # Per-device GDN state snapshot/restore around the throwaway capture.
+        def _snapshot():
+            comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+            return [
+                (ttnn.to_torch(dn.rec_state, mesh_composer=comp), [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states])
+                for dn in gdn
+            ]
+
+        def _restore(snap):
+            mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
+            for dn, (rec, convs) in zip(gdn, snap):
+                r = ttnn.from_torch(rec, dtype=dn.rec_state.dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
+                ttnn.copy(r, dn.rec_state)
+                ttnn.deallocate(r)
+                for j, c in enumerate(convs):
+                    cc = ttnn.from_torch(c, dtype=dn.conv_states[j].dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
+                    ttnn.copy(cc, dn.conv_states[j])
+                    ttnn.deallocate(cc)
+
+        snap = _snapshot()
+        _forward()  # eager compile of the decode programs (advances GDN state)
+        trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+        tt_logits = _forward()
+        ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+        _restore(snap)  # rewind GDN state to exact post-prefill values
+
+        out = [[c] for c in cur]
+        done = [False] * B
+        pos = list(positions)
+        for _ in range(max_new_tokens - 1):
+            _update(cur, pos)  # feed the current tokens at their per-user positions
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh)
+            logits = _read(tt_logits)  # [B, vocab]
+            nxt = [int(torch.argmax(logits[b]).item()) for b in range(B)]
+            for b in range(B):
+                if not done[b]:
+                    out[b].append(nxt[b])
+                    if eos_id is not None and nxt[b] == eos_id:
+                        done[b] = True
+                cur[b] = nxt[b]
+                pos[b] += 1
+            if all(done):
+                break
+        ttnn.release_trace(mesh, trace_id)
         return out
 
     def prefill(self, token_ids):
