@@ -13,7 +13,7 @@ Roughly in priority order. Treat them as inspiration, not mandates: aim for each
 
 1. Fix topology before tuning knobs: run `$graph-rewrite`, then the operation-topology audit.
 2. Check the modules in "Code Paths Worth Reading": if one is close or expected to be similar, reuse it, or copy its decisions into your hand-rolled path.
-3. [if forge recs exist] Seed initial layout/precision from `forge_sharding_recommendations.json` onto the rewritten graph as a first candidate, then re-tune with the levers below ("Core Optimization Rules").
+3. [if forge recs exist] Seed initial layout/precision from `forge_sharding_recommendations.json` onto the rewritten graph as a first candidate, then re-tune with the levers below ("Optimization Recommendations").
 4. DRAM-shard dominant decode matmuls (OPT-004; "Matmul Choices").
 5. Chain ops L1-resident on a consistent shard spec so they avoid reshards and DRAM round-trips (OPT-003).
 6. Sweep precision and fidelity per tensor group, and verify the chosen policy in the measured `tt-perf-report` rows (OPT-007, OPT-013, OPT-014; "Precision And Fidelity").
@@ -79,141 +79,7 @@ Before finishing non-vLLM optimization, review a current `tt-perf-report` output
 
 Sometimes you will encounter a ttnn limitation or a bug. If, for example, you try an optimization and find that L1 buffers overlap (insufficient L1 space) do not take this as an excuse to give up on that optimization entirely. Instead, dive in to the code of the op and its shapes and configs and understand how you can reduce the L1 requirements in this part of the model. Or perhaps your specific shapes is not supported by the op and you need another one. Or the op does not support padding -> change the model contract so the tensors are manually padded in torch before conversion - all these things are in scope. If the failure crosses several ops, kernels, layouts, or planner/runtime boundaries and you are not making progress, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Solve problems. Be curious. Be tenacious. Be creative. Be brilliant!
 
-## Performance Accounting
-
-Every optimized non-vLLM decode result must reconcile three numbers from the same run:
-
-1. Theoretical roofline: the bytes the measured path must move per token (weights at their stored dtypes plus KV-cache reads) divided by the aggregate DRAM bandwidth of the chips used.
-2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
-3. End-to-end decode: warmed measured ms/token from the host.
-
-Report all three and use the gaps to drive implementation work: end-to-end = device time + dispatch gap + host work. Remove avoidable non-device terms before accepting the result. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead. Only name a ttnn/runtime/API limitation after you have tried the targeted fix and have evidence that the limitation blocks the optimized path.
-
-The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
-
-When optimizing a complete model or serving path, also write `doc/<stage>/perf_summary.json` with this shape. For vLLM serving stages, set device-time fields to `null` and name the reason, for example `vllm_serving_profiler_disabled_to_protect_hardware`.
-
-```json
-{
-  "workload": {"profile": "single_user_decode", "prompt_len": 128, "gen_len": 128, "batch": 1},
-  "ttft_ms": 0.0,
-  "decode_ms_per_token_e2e": 0.0,
-  "decode_ms_per_token_device": 0.0,
-  "roofline_ms_per_token_estimate": 0.0,
-  "named_limitations": ["..."]
-}
-```
-
-## Full-Model Decode Closure
-
-For optimized full-model work, first compute a target budget from the best decoder-layer evidence:
-
-- `layer_stack_ms = sum(layer_count[kind] * optimized_multichip_decode_ms[kind])`;
-- `layer_stack_tps = 1000 / layer_stack_ms` for batch-1 single-user decode;
-- `full_model_overhead_ms = measured_full_model_ms_per_token - layer_stack_ms`.
-
-If the layer-stack estimate is already slower than the target, return to decoder optimization before spending time on generator orchestration. If the layer-stack estimate can meet the target but the full model cannot, optimize the overhead explicitly before changing the mathematical core: final norm, LM head, logits movement, sampling trace, token/current-position/RoPE/page-table refresh, trace replay blocking, synchronizations, host readbacks, cache management, and CCL buffer lifetime. For token/current-position/RoPE/page-table refresh specifically, the optimized steady-state loop should use persistent device tensors, `tt_out_tok` feedback, device-side position advance for fixed-step decode, and page-table copies only when the page table changes.
-
-### LM Head And Sampling
-
-For models with an LM head and token sampling, treat the terminal path as part of optimized decode. A fast decoder layer stack is not enough if final norm, LM head, logits movement, sampling, or token feedback add avoidable per-token work.
-
-Before accepting full-model token-out decode performance:
-
-- Profile a reduced full-model token-out trace that includes final norm, LM head, logits movement, sampling, and token feedback. Measure these terms separately from the decoder-layer stack.
-- Treat the LM head as a real decode matmul, not as small postprocessing. It is a hidden-size by vocab-size projection and is usually DRAM-bound.
-- Keep the hidden stream in the optimized sharded layout through final norm and into the LM head when possible. Do not gather a full hidden vector or full logits tensor merely because it simplifies the wrapper.
-- Split the LM head over the mesh and vocab dimension when running on more than one device. Each device should compute a shard of the vocabulary rather than every device computing replicated full-vocab logits.
-- Use `models.common.modules.lm_head.LMHead1D` if you can. It is already well optimized for 1D mesh LM heads. If, after debugging shapes, sharding, and weight loading, you cannot make it support the target model, use it as the template for how to optimize your implementation.
-- Use the intended LM-head weight dtype, DRAM-sharded or ring matmul program configs, and output memory config for decode. Avoid a single replicated full-vocab BF16 matmul as the default terminal implementation.
-- Pad LM-head weights when needed to make the vocab-sharded decode matmul legal and fast, including DRAM-sharded matmul shapes. Keep the real tokenizer vocab size as separate metadata for sampling; the padded LM-head width is the tensor shape, not the valid token range.
-- Put logits into the layout the sampler expects. Design the LM-head and sampling boundary so full-vocab all-gather is not in the hot path.
-- Mask padded vocab IDs inside each local logits shard before force-argmax or local TopK. Use very negative values for token IDs `>= vocab_size`. Zero-padding LM-head weights is not a sampling mask, because those padded columns produce zero logits that can beat negative real logits.
-- Make the sampler's local TopK input width friendly to the fast TopK path. On current TTNN paths, a non-power-of-two local vocab shard can fall back to a slow single-core `TopKDeviceOperation`. After invalid vocab IDs are masked, pad each local logits shard to a power-of-two width before TopK when needed, using very negative values and invalid indices for the extra power-of-two tail. Do not accept a multi-ms, one-core TopK as a final decode path.
-- Use a common sampling implementation for token-out decode. Compare `models/common/sampling/` and `models/common/modules/sampling/sampling_1d.py`, choose the one that fits this model's state, seed, topology, trace, and logprob requirements, and record the choice. Trace the chosen sampling path or a correct generator-owned wrapper around it. Pass `tt_out_tok=<persistent decode token input tensor>` so the sampled token becomes the next token input on device.
-- Keep sampling trace keys distinct for greedy, penalties, and log-prob modes. Warm and capture the active mode before measuring.
-- For vocab-sharded greedy decode, keep the split-sampling tensors tile-shaped. A good default is local `topk(..., k=max_top_k)`, usually `max_top_k=32`, on each vocab shard; all-gather those candidates; then pass sampling params that are semantically greedy (`k=1`, `p=0`, `temp=1`). Do not build a physical `top_k=1` per-shard path if it creates a gathered width smaller than a tile or forces a fallback. This keeps greedy behavior while avoiding full-vocab all-gather plus global argmax.
-- For greedy decode, use the vocab-sharded split-sampling path above. Do not replace it with full-vocab all-gather plus global argmax because an unpadded split path is slow; fix the split path first.
-- The split-sampling greedy benchmark must be semantically greedy. Do not use a generic sampled `top_k=32` or top-p-capable path as the only comparison against force-argmax. If `top_k=1` or equivalent greedy split sampling fails because of sampler shape, layout, or tiling requirements, fix that contract or keep a minimal repro and leave the stage incomplete.
-- If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or sampling trace replay dominates token-out decode, fix the LM-head/sampling contract before retuning decoder dtypes or CCLs. Do not mark the optimization complete with this bottleneck still in the measured path.
-- Make vLLM reuse the same optimized terminal path. Do not add adapter-side host argmax, full-logits readback, or a separate fallback sampler for serving.
-
-For vLLM serving performance, do not profile the live server or serving adapter to split these terminal costs. Reuse the full-model or reduced non-serving terminal evidence above, then prove the serving adapter uses that path with same-harness benchmark JSON and contract checks.
-
-The same measured path must be used for before/after comparisons. A teacher-forcing or device-logit replay number is useful, but it does not prove a token-out generator or vLLM path is fast unless it includes the same sampling and token-feedback work. Record both when they differ.
-
-If a decoder optimization was disabled in the full model because the stacked model hit L1, semaphore, trace, or CCL limits, do not accept the fallback as final until you have tried to reduce or pool that resource. Examples include persistent CCL buffers, output buffers, ring buffers, semaphores, trace input tensors, and page-table buffers. If it still cannot fit, record the exact allocation or runtime failure and the measured cost of the fallback.
-
-Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try fused collective/matmul or sharded-output patterns first and find a way to make the performant solution work. $autofix can help you if you are running into bugs here.
-
-## Evidence To Leave
-
-Final optimized evidence checklist - these items MUST be completed:
-
-- Functional checks still pass against the optimized path.
-- Prefill and decode PCC remain at the functional acceptance bar, with any material delta explained.
-- Paged KV-cache and warmed trace replay still behave correctly.
-- Runtime fallback audit remains clean.
-- Stress or repeated-run coverage appropriate to the risk of the changes.
-- Warmed prefill and decode latency before/after optimization.
-- `tt-perf-report` output with advice enabled and the main performance conclusions, collected from representative decoder/module tests or a reduced full-model profiling variant, not a full all-layer model trace. This requirement does not apply to vLLM serving stages.
-- Watcher still clean. Watcher should be run by setting `TT_METAL_WATCHER=10`, don't skip asserts or anything. Keep watcher runs separate from device-profiler runs. If watcher/profiler collection produces remote Ethernet, ARC, or ERISC errors and `tt-smi` starts hanging, do not retry more profiler collection; preserve compact evidence, run T3K reset recovery, and resume the same stage if the node returns healthy.
-- For vLLM decode-serving optimization: same-harness primary single-user and CI serving-burst vLLM before/after metrics, and proof the measured path used on-device sampling without host greedy argmax or full-logits readback.
-- For vLLM decode-serving optimization: no Tracy, `tt-perf-report`, live-server device profiler, or serving-adapter profiler collection was attempted; if profiler evidence is absent, record that this is intentional.
-- For optimized-full-model and vLLM-serving optimization: `$qualitative-check` evidence for the shared qualitative prompt suite after the selected optimization, with HF or previous-stage controls.
-- Optimization checklist:
--[ ] Decoder path fully traced with no host fallbacks
--[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
--[ ] Prefill activations generally DRAM interleaved; use 2D matmul program configs for large prefill matmuls.
--[ ] Operation-topology audit completed: current op sequence, repeated same-input matmuls, collectives, reshard/layout conversions, candidate fused/lower-movement replacements, dtype/fidelity constraints, and action taken are recorded.
--[ ] `$graph-rewrite` applied before knob tuning: primitive op sequences replaced with dedicated ops (tt-metal repo explored for existing ops), structural ops merged/simplified, and adjacent ops folded into existing ops; each kept rewrite is PCC-verified.
--[ ] If `doc/functional_decoder/forge_sharding_recommendations.json` exists, each recommended op layout/precision was seeded as the first candidate (legalized to the target grid) before the local search, and any emitted layout left at a DRAM/interleaved default has a recorded before/after and rejection reason. Absence of the file is noted instead.
--[ ] Multi-device topology candidates were measured as coherent families when applicable: residual layout, collective placement, fused CCL+matmul use, projection packing or separation, activation/CCL dtype, and persistent-buffer use. A rejection measured only under an incompatible residual/layout contract does not complete this item.
--[ ] Lower-movement residual candidates were measured without an immediate old-contract restore when applicable. If a reduce-scatter or fused CCL+matmul path only lost after an immediate all-gather or full replication, a stack-compatible sharded/fractured residual path was also measured or a minimal repro proves the next op cannot consume that layout.
--[ ] Best-candidate comparison completed: the final path is compared against the strongest available correct baseline, earlier optimized artifact when present, and material candidates from this stage. The final choice wins traced warmed decode or has an explicit target-specific reason for prioritizing another workload. A synthetic-only precision veto does not count as a correctness reason when real-weight evidence passes. A geometry sweep measured only under a different dtype/fidelity does not reject the final dtype/fidelity policy.
--[ ] Final default performance reproduced the selected best candidate under the final code path. If the final default is slower, the report uses the final number and explains why the candidate was not preserved.
--[ ] Final dtype/fidelity policy is verified in the measured runtime rows, not only in policy JSON or constructor defaults. For each dominant matmul, the `tt-perf-report` row or an equivalent profiler artifact must show the expected input/weight dtype and math fidelity. If the row shows BF16 or BFP8 where the selected policy claims BFP4, the policy did not reach the measured op and the stage is incomplete.
--[ ] Used SDPA and other optimized composite ttnn ops instead of hand-built attention primitives where the target model fits their contracts.
--[ ] Fused or packed repeated same-input projections where legal and beneficial, such as Q/K/V-style projections, paired gate/up projections in 3-matmul MLPs, or other model-specific projection groups. If kept separate, there is measured evidence or a specific unresolved TTNN/runtime blocker after adapting layout, rank, padding, weight packing, and output splitting. If kept packed, it wins against a well-tuned legal separate candidate after counting split, activation, binary elementwise, and layout overhead, or the evidence explains why the separate candidate is invalid.
--[ ] Explicitly configured `memory_config`, `program_config`, and `compute_kernel_config` for important ops.
--[ ] For any matmul or repeated matmul group that is one of the largest decode-time consumers: swept legal program configs separately for each dominant role, including core grid, larger legal `in0_block_w` values, output subblocks, output blocks, memory configs, and compute kernel config where applicable. The stage is incomplete without a before/after evidence table or an exact TTNN/runtime blocker.
--[ ] Decode compute fidelity was swept as a real performance knob for each dominant projection group. Do not assume BFP8 implies HiFi2 is fastest; try legal LoFi and HiFi2 candidates with the same dtype and real traced decode evidence, then keep the fastest policy that passes correctness.
--[ ] Attention projection weight dtype/fidelity was swept separately from MLP weight dtype/fidelity when QKV, Q/K/V, output projection, or fused attention matmul rows are material. If attention projections remain BFP8 or BF16, the report names the BFP4 attention candidate tried on real weights or recorded real activations, plus the precise correctness, latency, or op-contract blocker.
--[ ] If dense MLP or expert matmuls are among the largest decode-time consumers: BFP4/LoFi trials for FF1/FF3 or equivalent gate/up projections were run before lower-priority prefill-only advice was pursued to completion. FF2/down BFP4 was also tried or rejected with PCC/runtime evidence.
--[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
--[ ] DRAM-sharded decode matmuls.
--[ ] Collective topology minimized. Avoidable gather, reshard, all-reduce, reduce-scatter, and all-gather operations have been removed, moved to cheaper boundaries, or justified with before/after evidence.
--[ ] Fused matmul-CCL ops used where possible, including fused all-gather-matmul or matmul-reduce-scatter patterns when a collective and matmul are adjacent or can be made adjacent. If rejected, the rejection includes an adapted attempt, not only the first API error.
--[ ] Repeated decode CCLs use persistent or preallocated intermediate/output buffers where the API supports it. If unavailable or slower, the reason and measurement are recorded.
--[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, correct `nnz` handling, separate gate/up and down tuning, correct sparse-input handling where applicable, routing-score weighting, expert reduction, no dense all-expert runtime path, and no avoidable DRAM round trips through decode intermediates.
--[ ] For models with an LM head and sampling: final norm, LM head, logits movement, sampling, and token feedback are included in the optimized token-out path; terminal costs are profiled separately in full-model or reduced non-serving evidence, not in vLLM serving stages; LM-head weights are padded when needed for legal/fast DRAM-sharded or vocab-sharded matmuls; padded vocab IDs are masked in local logits shards before force-argmax or TopK; split-sampling TopK input widths are padded to avoid the slow single-core TopK fallback where possible; avoidable `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, host argmax, and full-logits readback have been removed. If a TTNN/runtime limitation blocks removal, the stage remains incomplete until there is a minimal repro or a lower-level fix.
--[ ] LM Head is optimized for DRAM-sharded matmuls if present.
--[ ] Reduced precision/fidelity experiments appropriate to this module-level optimization stage have been carried out and documented using real weights and input activations. For complete full-model top-k tuning, final datatype frontier selection is deferred to `$datatype-sweep`.
--[ ] Performance accounting reconciled: roofline estimate, device-time decode, and end-to-end decode reported from the same run; avoidable gaps optimized away, and any remaining gap named as a ttnn/runtime/API limitation only after a targeted fix attempt; `perf_summary.json` written when optimizing a complete model or serving path. For vLLM serving stages, use same-harness primary single-user and CI serving-burst serving metrics and set device-time/profile fields to `null` with the no-profiler reason.
--[ ] Batch capability preserved: batch-1 is the primary optimized latency target, and larger-batch or concurrent-serving correctness was tested up to 32 where hardware and memory allow it.
-
-If this checklist is not completed, go back and perform those optimization steps. For decoder/module-level work the main focus is on-device performance. For complete model and serving work, host orchestration, synchronizations, readbacks, and input-refresh overhead are also in scope and must be driven out of the measured path where the runtime contract allows it.
-
-# Useful Optimization Knowledge
-
-Use this reference while optimizing functional TTNN code. It captures repo-local optimization patterns and the strongest current LLM guidance. If you are not optimizing an LLM, use your best judgement about what applies in your case.
-
-Prefer the reusable modules below when the model fits their contract. When it does not, do not drop to op defaults: read the closest module and replicate its sharding, layout, program configs, and precision in your hand-rolled path, staying as close to it as the target allows, and record the exact contract that blocked direct reuse. A hand-rolled path is a reason to copy the module's decisions, not to abandon them.
-
-## Code Paths Worth Reading
-
-- `tech_reports/LLMs/llms.md`: LLM memory configs, matmul variants, DRAM-sharded matmul guidance, and perf-report interpretation.
-- `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
-- `models/common/modules/mlp/mlp_1d.py`: decode/prefill MLP split, DRAM-sharded decode matmuls, sharded outputs, and precision knobs.
-- `models/common/modules/rmsnorm/rmsnorm_1d.py`: reusable RMSNorm with a sharded decode path (`to_sharded` input, `LayerNormShardedMultiCoreProgramConfig`, sharded output) and an interleaved fallback; use it, or its `_create_sharded_norm_program_config` math, when hand-rolling `ttnn.rms_norm` so a material norm does not run on 1 core.
-- `models/common/modules/lm_head/lm_head_1d.py`: reusable LM-head output projection with vocab splitting, LM-head dtype, DRAM-sharded weight memory config, input/output memory configs, and decode program config.
-- `models/common/tests/modules/lm_head/test_lm_head_1d.py`: expected LM-head construction, weight splitting, memory config, and PCC checks.
-- `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
-- `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before optimizing token-out sampling.
-- `models/demos/gpt_oss/tt/experts/README.md`, `models/demos/gpt_oss/tt/experts/decode.py`, `models/demos/gpt_oss/tt/experts/prefill.py`, `models/demos/gpt_oss/tt/experts/weights.py`, `models/demos/gpt_oss/tt/experts/config.py`, and `models/demos/gpt_oss/tt/topk.py`: default routed MoE active-expert path using `ttnn.sparse_matmul`.
-- `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
-
-## Core Optimization Rules
+## Optimization Recommendations
 
 - Your initial functional test suite remains the correctness floor. Rerun the same functional prefill, decode, PCC, paged KV-cache, determinism, stress, trace, and watcher checks against the optimized path before accepting performance wins.
 - Avoid data movement before tuning math. A slightly smaller core grid can beat a faster individual op if it avoids resharding between ops.
@@ -497,6 +363,140 @@ The `*_perf_report.txt` file is for the human-readable table. Do not redirect th
 Check time units before computing latency. Filtered `tt-perf-report` CSVs may expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`.
 
 Sanity-check profiler durations against the benchmark wall time before computing roofline percentages. If a filtered `tt-perf-report` table claims multi-second device ops inside a sub-millisecond traced decode window, the duration data is invalid. Preserve the raw CSV and report the profiler failure explicitly. When the raw ops CSV has sane performance-model bandwidth columns, you may compute a labeled modeled roofline fallback from `sum(PM BANDWIDTH [ns] for decode matmuls) / measured traced decode window`; otherwise leave DRAM utilization unreported rather than publishing a bogus percentage.
+
+## Performance Accounting
+
+Every optimized non-vLLM decode result must reconcile three numbers from the same run:
+
+1. Theoretical roofline: the bytes the measured path must move per token (weights at their stored dtypes plus KV-cache reads) divided by the aggregate DRAM bandwidth of the chips used.
+2. Device-time decode: per-token device time from your own signposted `tt-perf-report` window.
+3. End-to-end decode: warmed measured ms/token from the host.
+
+Report all three and use the gaps to drive implementation work: end-to-end = device time + dispatch gap + host work. Remove avoidable non-device terms before accepting the result. "The device math is fast but the loop is slow" is an unfinished optimization, not a result; a large unexplained gap between device time and end-to-end usually means an untraced path, per-step synchronization, host readback, or input-refresh overhead. Only name a ttnn/runtime/API limitation after you have tried the targeted fix and have evidence that the limitation blocks the optimized path.
+
+The roofline fraction achieved varies legitimately by architecture - modules built from many small ops sit lower - so the explanation, not a fixed percentage, is the requirement. Name the limitations precisely; they feed the ttnn improvement backlog.
+
+When optimizing a complete model or serving path, also write `doc/<stage>/perf_summary.json` with this shape. For vLLM serving stages, set device-time fields to `null` and name the reason, for example `vllm_serving_profiler_disabled_to_protect_hardware`.
+
+```json
+{
+  "workload": {"profile": "single_user_decode", "prompt_len": 128, "gen_len": 128, "batch": 1},
+  "ttft_ms": 0.0,
+  "decode_ms_per_token_e2e": 0.0,
+  "decode_ms_per_token_device": 0.0,
+  "roofline_ms_per_token_estimate": 0.0,
+  "named_limitations": ["..."]
+}
+```
+
+## Full-Model Decode Closure
+
+For optimized full-model work, first compute a target budget from the best decoder-layer evidence:
+
+- `layer_stack_ms = sum(layer_count[kind] * optimized_multichip_decode_ms[kind])`;
+- `layer_stack_tps = 1000 / layer_stack_ms` for batch-1 single-user decode;
+- `full_model_overhead_ms = measured_full_model_ms_per_token - layer_stack_ms`.
+
+If the layer-stack estimate is already slower than the target, return to decoder optimization before spending time on generator orchestration. If the layer-stack estimate can meet the target but the full model cannot, optimize the overhead explicitly before changing the mathematical core: final norm, LM head, logits movement, sampling trace, token/current-position/RoPE/page-table refresh, trace replay blocking, synchronizations, host readbacks, cache management, and CCL buffer lifetime. For token/current-position/RoPE/page-table refresh specifically, the optimized steady-state loop should use persistent device tensors, `tt_out_tok` feedback, device-side position advance for fixed-step decode, and page-table copies only when the page table changes.
+
+### LM Head And Sampling
+
+For models with an LM head and token sampling, treat the terminal path as part of optimized decode. A fast decoder layer stack is not enough if final norm, LM head, logits movement, sampling, or token feedback add avoidable per-token work.
+
+Before accepting full-model token-out decode performance:
+
+- Profile a reduced full-model token-out trace that includes final norm, LM head, logits movement, sampling, and token feedback. Measure these terms separately from the decoder-layer stack.
+- Treat the LM head as a real decode matmul, not as small postprocessing. It is a hidden-size by vocab-size projection and is usually DRAM-bound.
+- Keep the hidden stream in the optimized sharded layout through final norm and into the LM head when possible. Do not gather a full hidden vector or full logits tensor merely because it simplifies the wrapper.
+- Split the LM head over the mesh and vocab dimension when running on more than one device. Each device should compute a shard of the vocabulary rather than every device computing replicated full-vocab logits.
+- Use `models.common.modules.lm_head.LMHead1D` if you can. It is already well optimized for 1D mesh LM heads. If, after debugging shapes, sharding, and weight loading, you cannot make it support the target model, use it as the template for how to optimize your implementation.
+- Use the intended LM-head weight dtype, DRAM-sharded or ring matmul program configs, and output memory config for decode. Avoid a single replicated full-vocab BF16 matmul as the default terminal implementation.
+- Pad LM-head weights when needed to make the vocab-sharded decode matmul legal and fast, including DRAM-sharded matmul shapes. Keep the real tokenizer vocab size as separate metadata for sampling; the padded LM-head width is the tensor shape, not the valid token range.
+- Put logits into the layout the sampler expects. Design the LM-head and sampling boundary so full-vocab all-gather is not in the hot path.
+- Mask padded vocab IDs inside each local logits shard before force-argmax or local TopK. Use very negative values for token IDs `>= vocab_size`. Zero-padding LM-head weights is not a sampling mask, because those padded columns produce zero logits that can beat negative real logits.
+- Make the sampler's local TopK input width friendly to the fast TopK path. On current TTNN paths, a non-power-of-two local vocab shard can fall back to a slow single-core `TopKDeviceOperation`. After invalid vocab IDs are masked, pad each local logits shard to a power-of-two width before TopK when needed, using very negative values and invalid indices for the extra power-of-two tail. Do not accept a multi-ms, one-core TopK as a final decode path.
+- Use a common sampling implementation for token-out decode. Compare `models/common/sampling/` and `models/common/modules/sampling/sampling_1d.py`, choose the one that fits this model's state, seed, topology, trace, and logprob requirements, and record the choice. Trace the chosen sampling path or a correct generator-owned wrapper around it. Pass `tt_out_tok=<persistent decode token input tensor>` so the sampled token becomes the next token input on device.
+- Keep sampling trace keys distinct for greedy, penalties, and log-prob modes. Warm and capture the active mode before measuring.
+- For vocab-sharded greedy decode, keep the split-sampling tensors tile-shaped. A good default is local `topk(..., k=max_top_k)`, usually `max_top_k=32`, on each vocab shard; all-gather those candidates; then pass sampling params that are semantically greedy (`k=1`, `p=0`, `temp=1`). Do not build a physical `top_k=1` per-shard path if it creates a gathered width smaller than a tile or forces a fallback. This keeps greedy behavior while avoiding full-vocab all-gather plus global argmax.
+- For greedy decode, use the vocab-sharded split-sampling path above. Do not replace it with full-vocab all-gather plus global argmax because an unpadded split path is slow; fix the split path first.
+- The split-sampling greedy benchmark must be semantically greedy. Do not use a generic sampled `top_k=32` or top-p-capable path as the only comparison against force-argmax. If `top_k=1` or equivalent greedy split sampling fails because of sampler shape, layout, or tiling requirements, fix that contract or keep a minimal repro and leave the stage incomplete.
+- If `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, or sampling trace replay dominates token-out decode, fix the LM-head/sampling contract before retuning decoder dtypes or CCLs. Do not mark the optimization complete with this bottleneck still in the measured path.
+- Make vLLM reuse the same optimized terminal path. Do not add adapter-side host argmax, full-logits readback, or a separate fallback sampler for serving.
+
+For vLLM serving performance, do not profile the live server or serving adapter to split these terminal costs. Reuse the full-model or reduced non-serving terminal evidence above, then prove the serving adapter uses that path with same-harness benchmark JSON and contract checks.
+
+The same measured path must be used for before/after comparisons. A teacher-forcing or device-logit replay number is useful, but it does not prove a token-out generator or vLLM path is fast unless it includes the same sampling and token-feedback work. Record both when they differ.
+
+If a decoder optimization was disabled in the full model because the stacked model hit L1, semaphore, trace, or CCL limits, do not accept the fallback as final until you have tried to reduce or pool that resource. Examples include persistent CCL buffers, output buffers, ring buffers, semaphores, trace input tensors, and page-table buffers. If it still cannot fit, record the exact allocation or runtime failure and the measured cost of the fallback.
+
+Preserve the multichip decoder's data-layout contract across the stack. If the decoder was optimized around a sharded/fractured residual stream, do not insert a layer-to-layer all-gather merely to simplify the full-model wrapper. Try fused collective/matmul or sharded-output patterns first and find a way to make the performant solution work. $autofix can help you if you are running into bugs here.
+
+## Evidence To Leave
+
+Final optimized evidence checklist - these items MUST be completed:
+
+- Functional checks still pass against the optimized path.
+- Prefill and decode PCC remain at the functional acceptance bar, with any material delta explained.
+- Paged KV-cache and warmed trace replay still behave correctly.
+- Runtime fallback audit remains clean.
+- Stress or repeated-run coverage appropriate to the risk of the changes.
+- Warmed prefill and decode latency before/after optimization.
+- `tt-perf-report` output with advice enabled and the main performance conclusions, collected from representative decoder/module tests or a reduced full-model profiling variant, not a full all-layer model trace. This requirement does not apply to vLLM serving stages.
+- Watcher still clean. Watcher should be run by setting `TT_METAL_WATCHER=10`, don't skip asserts or anything. Keep watcher runs separate from device-profiler runs. If watcher/profiler collection produces remote Ethernet, ARC, or ERISC errors and `tt-smi` starts hanging, do not retry more profiler collection; preserve compact evidence, run T3K reset recovery, and resume the same stage if the node returns healthy.
+- For vLLM decode-serving optimization: same-harness primary single-user and CI serving-burst vLLM before/after metrics, and proof the measured path used on-device sampling without host greedy argmax or full-logits readback.
+- For vLLM decode-serving optimization: no Tracy, `tt-perf-report`, live-server device profiler, or serving-adapter profiler collection was attempted; if profiler evidence is absent, record that this is intentional.
+- For optimized-full-model and vLLM-serving optimization: `$qualitative-check` evidence for the shared qualitative prompt suite after the selected optimization, with HF or previous-stage controls.
+- Optimization checklist:
+-[ ] Decoder path fully traced with no host fallbacks
+-[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
+-[ ] Prefill activations generally DRAM interleaved; use 2D matmul program configs for large prefill matmuls.
+-[ ] Operation-topology audit completed: current op sequence, repeated same-input matmuls, collectives, reshard/layout conversions, candidate fused/lower-movement replacements, dtype/fidelity constraints, and action taken are recorded.
+-[ ] `$graph-rewrite` applied before knob tuning: primitive op sequences replaced with dedicated ops (tt-metal repo explored for existing ops), structural ops merged/simplified, and adjacent ops folded into existing ops; each kept rewrite is PCC-verified.
+-[ ] If `doc/functional_decoder/forge_sharding_recommendations.json` exists, each recommended op layout/precision was seeded as the first candidate (legalized to the target grid) before the local search, and any emitted layout left at a DRAM/interleaved default has a recorded before/after and rejection reason. Absence of the file is noted instead.
+-[ ] Multi-device topology candidates were measured as coherent families when applicable: residual layout, collective placement, fused CCL+matmul use, projection packing or separation, activation/CCL dtype, and persistent-buffer use. A rejection measured only under an incompatible residual/layout contract does not complete this item.
+-[ ] Lower-movement residual candidates were measured without an immediate old-contract restore when applicable. If a reduce-scatter or fused CCL+matmul path only lost after an immediate all-gather or full replication, a stack-compatible sharded/fractured residual path was also measured or a minimal repro proves the next op cannot consume that layout.
+-[ ] Best-candidate comparison completed: the final path is compared against the strongest available correct baseline, earlier optimized artifact when present, and material candidates from this stage. The final choice wins traced warmed decode or has an explicit target-specific reason for prioritizing another workload. A synthetic-only precision veto does not count as a correctness reason when real-weight evidence passes. A geometry sweep measured only under a different dtype/fidelity does not reject the final dtype/fidelity policy.
+-[ ] Final default performance reproduced the selected best candidate under the final code path. If the final default is slower, the report uses the final number and explains why the candidate was not preserved.
+-[ ] Final dtype/fidelity policy is verified in the measured runtime rows, not only in policy JSON or constructor defaults. For each dominant matmul, the `tt-perf-report` row or an equivalent profiler artifact must show the expected input/weight dtype and math fidelity. If the row shows BF16 or BFP8 where the selected policy claims BFP4, the policy did not reach the measured op and the stage is incomplete.
+-[ ] Used SDPA and other optimized composite ttnn ops instead of hand-built attention primitives where the target model fits their contracts.
+-[ ] Fused or packed repeated same-input projections where legal and beneficial, such as Q/K/V-style projections, paired gate/up projections in 3-matmul MLPs, or other model-specific projection groups. If kept separate, there is measured evidence or a specific unresolved TTNN/runtime blocker after adapting layout, rank, padding, weight packing, and output splitting. If kept packed, it wins against a well-tuned legal separate candidate after counting split, activation, binary elementwise, and layout overhead, or the evidence explains why the separate candidate is invalid.
+-[ ] Explicitly configured `memory_config`, `program_config`, and `compute_kernel_config` for important ops.
+-[ ] For any matmul or repeated matmul group that is one of the largest decode-time consumers: swept legal program configs separately for each dominant role, including core grid, larger legal `in0_block_w` values, output subblocks, output blocks, memory configs, and compute kernel config where applicable. The stage is incomplete without a before/after evidence table or an exact TTNN/runtime blocker.
+-[ ] Decode compute fidelity was swept as a real performance knob for each dominant projection group. Do not assume BFP8 implies HiFi2 is fastest; try legal LoFi and HiFi2 candidates with the same dtype and real traced decode evidence, then keep the fastest policy that passes correctness.
+-[ ] Attention projection weight dtype/fidelity was swept separately from MLP weight dtype/fidelity when QKV, Q/K/V, output projection, or fused attention matmul rows are material. If attention projections remain BFP8 or BF16, the report names the BFP4 attention candidate tried on real weights or recorded real activations, plus the precise correctness, latency, or op-contract blocker.
+-[ ] If dense MLP or expert matmuls are among the largest decode-time consumers: BFP4/LoFi trials for FF1/FF3 or equivalent gate/up projections were run before lower-priority prefill-only advice was pursued to completion. FF2/down BFP4 was also tried or rejected with PCC/runtime evidence.
+-[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
+-[ ] DRAM-sharded decode matmuls.
+-[ ] Collective topology minimized. Avoidable gather, reshard, all-reduce, reduce-scatter, and all-gather operations have been removed, moved to cheaper boundaries, or justified with before/after evidence.
+-[ ] Fused matmul-CCL ops used where possible, including fused all-gather-matmul or matmul-reduce-scatter patterns when a collective and matmul are adjacent or can be made adjacent. If rejected, the rejection includes an adapted attempt, not only the first API error.
+-[ ] Repeated decode CCLs use persistent or preallocated intermediate/output buffers where the API supports it. If unavailable or slower, the reason and measurement are recorded.
+-[ ] For MoE models: optimized the routed active-expert path with `ttnn.sparse_matmul` where the model/hardware fits, correct `nnz` handling, separate gate/up and down tuning, correct sparse-input handling where applicable, routing-score weighting, expert reduction, no dense all-expert runtime path, and no avoidable DRAM round trips through decode intermediates.
+-[ ] For models with an LM head and sampling: final norm, LM head, logits movement, sampling, and token feedback are included in the optimized token-out path; terminal costs are profiled separately in full-model or reduced non-serving evidence, not in vLLM serving stages; LM-head weights are padded when needed for legal/fast DRAM-sharded or vocab-sharded matmuls; padded vocab IDs are masked in local logits shards before force-argmax or TopK; split-sampling TopK input widths are padded to avoid the slow single-core TopK fallback where possible; avoidable `ArgMaxDeviceOperation`, full-vocab all-gather, generic `TopKDeviceOperation`, host argmax, and full-logits readback have been removed. If a TTNN/runtime limitation blocks removal, the stage remains incomplete until there is a minimal repro or a lower-level fix.
+-[ ] LM Head is optimized for DRAM-sharded matmuls if present.
+-[ ] Reduced precision/fidelity experiments appropriate to this module-level optimization stage have been carried out and documented using real weights and input activations. For complete full-model top-k tuning, final datatype frontier selection is deferred to `$datatype-sweep`.
+-[ ] Performance accounting reconciled: roofline estimate, device-time decode, and end-to-end decode reported from the same run; avoidable gaps optimized away, and any remaining gap named as a ttnn/runtime/API limitation only after a targeted fix attempt; `perf_summary.json` written when optimizing a complete model or serving path. For vLLM serving stages, use same-harness primary single-user and CI serving-burst serving metrics and set device-time/profile fields to `null` with the no-profiler reason.
+-[ ] Batch capability preserved: batch-1 is the primary optimized latency target, and larger-batch or concurrent-serving correctness was tested up to 32 where hardware and memory allow it.
+
+If this checklist is not completed, go back and perform those optimization steps. For decoder/module-level work the main focus is on-device performance. For complete model and serving work, host orchestration, synchronizations, readbacks, and input-refresh overhead are also in scope and must be driven out of the measured path where the runtime contract allows it.
+
+# Useful Optimization Knowledge
+
+Use this reference while optimizing functional TTNN code. It captures repo-local optimization patterns and the strongest current LLM guidance. If you are not optimizing an LLM, use your best judgement about what applies in your case.
+
+Prefer the reusable modules below when the model fits their contract. When it does not, do not drop to op defaults: read the closest module and replicate its sharding, layout, program configs, and precision in your hand-rolled path, staying as close to it as the target allows, and record the exact contract that blocked direct reuse. A hand-rolled path is a reason to copy the module's decisions, not to abandon them.
+
+## Code Paths Worth Reading
+
+- `tech_reports/LLMs/llms.md`: LLM memory configs, matmul variants, DRAM-sharded matmul guidance, and perf-report interpretation.
+- `models/common/modules/attention/attention_1d.py`: reusable attention configs with BFP8 attention weights, BFP8 KV cache, DRAM-sharded decode matmuls, SDPA configs, and L1-sharded decode residual paths.
+- `models/common/modules/mlp/mlp_1d.py`: decode/prefill MLP split, DRAM-sharded decode matmuls, sharded outputs, and precision knobs.
+- `models/common/modules/rmsnorm/rmsnorm_1d.py`: reusable RMSNorm with a sharded decode path (`to_sharded` input, `LayerNormShardedMultiCoreProgramConfig`, sharded output) and an interleaved fallback; use it, or its `_create_sharded_norm_program_config` math, when hand-rolling `ttnn.rms_norm` so a material norm does not run on 1 core.
+- `models/common/modules/lm_head/lm_head_1d.py`: reusable LM-head output projection with vocab splitting, LM-head dtype, DRAM-sharded weight memory config, input/output memory configs, and decode program config.
+- `models/common/tests/modules/lm_head/test_lm_head_1d.py`: expected LM-head construction, weight splitting, memory config, and PCC checks.
+- `models/common/tensor_utils.py`: helpers to serialize program and compute-kernel configs for artifact reporting.
+- `models/common/sampling/generator.py` and `models/common/modules/sampling/sampling_1d.py`: common on-device sampling implementations to compare before optimizing token-out sampling.
+- `models/demos/gpt_oss/tt/experts/README.md`, `models/demos/gpt_oss/tt/experts/decode.py`, `models/demos/gpt_oss/tt/experts/prefill.py`, `models/demos/gpt_oss/tt/experts/weights.py`, `models/demos/gpt_oss/tt/experts/config.py`, and `models/demos/gpt_oss/tt/topk.py`: default routed MoE active-expert path using `ttnn.sparse_matmul`.
+- `models/demos/gpt_oss/tt/`, `models/demos/gemma4/tt/`, and `models/demos/deepseek_v3/tt/`: model-specific examples where common modules do not fully fit.
 
 ## T3K Reset Recovery
 
