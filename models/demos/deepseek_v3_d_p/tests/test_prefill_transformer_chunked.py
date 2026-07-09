@@ -40,6 +40,7 @@ from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions, rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -474,6 +475,10 @@ def run_chunked_transformer(
 
     # ONE shared KV cache holding all layers' slots [num_layers, 1, seq_local, 576]; layer i uses
     # cache_layer_idx=i. The ring scratch buffer is shared across layers inside TtPrefillTransformer.
+    # Sparse (DSA) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache (sparse_sdpa reads it
+    # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
+    # ring_mla wants. Match the cache format to the path.
+    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if resolve_has_indexer(config) else {}
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
@@ -482,7 +487,29 @@ def run_chunked_transformer(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
+        **kvpe_dtype_layout,
     )
+
+    # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
+    # forward, exactly like the KVPE cache. It is user-major layer-stacked
+    # [num_users*num_layers, 1, T, D_idx], so the indexer addresses slot user*num_layers + cache_layer_idx —
+    # allocate it with the SAME num_kvpe_cache_layers=num_layers as the KVPE cache. bf8 (half the memory,
+    # top-k within bf16 noise). Dense (non-sparse) variants get None (natural-path / dense MLA use no cache).
+    tt_index_kv_cache = None
+    if resolve_has_indexer(config):
+        # A sparse config must carry index_head_dim; assert rather than silently defaulting so a
+        # misconfigured (missing-field) sparse setup fails loudly with a clear message.
+        assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
+        tt_index_kv_cache = init_kvpe_cache(
+            kvpe_cache_head_dim=config.index_head_dim,
+            mesh_device=mesh_device,
+            seq_len=SEQ_CACHE,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_kvpe_cache_layers=num_layers,
+            num_users=1,
+            dtype=ttnn.bfloat8_b,
+        )
 
     mesh_device.enable_program_cache()
 
@@ -518,6 +545,7 @@ def run_chunked_transformer(
             actual_end=kv_actual + CHUNK,
             cache_user_id=0,
             return_intermediates=True,
+            index_kv_cache=tt_index_kv_cache,
         )
         ttnn.synchronize_device(mesh_device)
 
