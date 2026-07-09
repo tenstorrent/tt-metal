@@ -1020,7 +1020,9 @@ def test_layernorm_adaln_batch_corr(mesh_device, tp, topology, tp_axis, full_mes
     det = all(torch.equal(gathered[0], g) for g in gathered[1:])
     out0 = gathered[0].reshape(batch * rows, dim)
     pcc = _pcc(out0, ref)
-    logger.info(f"LNADALN tp{tp}_{topology.name} batch={batch} dim={dim} per-batch adaLN pcc={pcc * 100:.4f}% det={det}")
+    logger.info(
+        f"LNADALN tp{tp}_{topology.name} batch={batch} dim={dim} per-batch adaLN pcc={pcc * 100:.4f}% det={det}"
+    )
     assert det, "per-batch adaLN LayerNorm not deterministic across launches"
     assert pcc >= 0.999, f"per-batch adaLN LayerNorm pcc too low: {pcc}"
 
@@ -1115,7 +1117,9 @@ def test_layernorm_per_token_wide_corr(mesh_device, tp, topology, tp_axis, full_
     det = all(torch.equal(gathered[0], g) for g in gathered[1:])
     out0 = gathered[0].reshape(rows, dim)
     pcc = _pcc(out0, ref)
-    logger.info(f"LNPERTOKW tp{tp}_{topology.name} dim={dim} (56 tile-cols, block-major) pcc={pcc * 100:.4f}% det={det}")
+    logger.info(
+        f"LNPERTOKW tp{tp}_{topology.name} dim={dim} (56 tile-cols, block-major) pcc={pcc * 100:.4f}% det={det}"
+    )
     assert det, "wide per-token affine LayerNorm not deterministic across launches"
     assert pcc >= 0.999, f"wide per-token affine LayerNorm pcc too low: {pcc}"
 
@@ -1161,17 +1165,32 @@ def test_rmsnorm_batched_rope_corr(mesh_device, tp, topology, tp_axis, full_mesh
         ccl = CCLManager(mesh_device=submesh, num_links=links, topology=topology)
         sems = [ccl.get_ag_ping_pong_semaphore(tp_axis) for _ in range(_PINGPONG)]
         mk_pob = lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(  # noqa: E731
-            x, tp_axis, submesh, num_heads_per_device=nh_dev, num_links=links,
-            transformation_mat=trans, rope_cos=cos, rope_sin=sin,
+            x,
+            tp_axis,
+            submesh,
+            num_heads_per_device=nh_dev,
+            num_links=links,
+            transformation_mat=trans,
+            rope_cos=cos,
+            rope_sin=sin,
         )
         pobs = [mk_pob() for _ in range(_PINGPONG)]
         ttnn.synchronize_device(submesh)
         outs = []
         for k in range(3):  # ping-pong; 3 launches also checks determinism
             o = ttnn.experimental.dit_fused_distributed_rmsnorm(
-                x, tp_axis, submesh, sems[k % _PINGPONG], topology=topology, epsilon=NORM_EPS,
-                num_heads_per_device=nh_dev, transformation_mat=trans, rope_cos=cos, rope_sin=sin,
-                persistent_output_buffer=pobs[k % _PINGPONG], num_preferred_links=links,
+                x,
+                tp_axis,
+                submesh,
+                sems[k % _PINGPONG],
+                topology=topology,
+                epsilon=NORM_EPS,
+                num_heads_per_device=nh_dev,
+                transformation_mat=trans,
+                rope_cos=cos,
+                rope_sin=sin,
+                persistent_output_buffer=pobs[k % _PINGPONG],
+                num_preferred_links=links,
             )
             outs.append(_gather(o, tp_axis))  # head-split -> [seq, dim]
         det = all(torch.equal(outs[0], g) for g in outs[1:])
@@ -1445,7 +1464,19 @@ def _sweep_points(tp: int) -> list[dict]:
     (1..8), and bf16/fp32 dtypes. Invalid combos are validity-filtered (skipped)."""
     if tp == 1:
         # per-device tile-cols = dim/32
-        widths = [512, 768, 1024, 1536, 2048, 2560, 3072, 3584, 4096, 4608, 5120]  # 16,24,32,48,64,80,96,112,128,144,160
+        widths = [
+            512,
+            768,
+            1024,
+            1536,
+            2048,
+            2560,
+            3072,
+            3584,
+            4096,
+            4608,
+            5120,
+        ]  # 16,24,32,48,64,80,96,112,128,144,160
         widths_nondiv = [480, 608, 1216, 1600]  # cols 15,19,38,50 (not a multiple of block_size)
         rope_dims = [1024, 2048, 4096]  # heads(hd=128) = 8,16,32
         mid = 2048
@@ -1461,9 +1492,19 @@ def _sweep_points(tp: int) -> list[dict]:
 
     def pt(**kw):
         base = dict(
-            fam="?", norm="rms", dim=mid, rows=128, batch=1, head_dim=None, rope=False,
-            bcast_rope=False, per_head_norm=False, affine="none", in_dtype="bf16",
-            out_dtype="bf16", rope_perbatch=False,
+            fam="?",
+            norm="rms",
+            dim=mid,
+            rows=128,
+            batch=1,
+            head_dim=None,
+            rope=False,
+            bcast_rope=False,
+            per_head_norm=False,
+            affine="none",
+            in_dtype="bf16",
+            out_dtype="bf16",
+            rope_perbatch=False,
         )
         base.update(kw)
         return base
@@ -1496,11 +1537,15 @@ def _sweep_points(tp: int) -> list[dict]:
                 continue
             for bcast in (True, False):
                 for affine in ("none", "w"):
-                    pts.append(pt(fam="rope", norm="rms", dim=dim, head_dim=hd, rope=True, bcast_rope=bcast, affine=affine))
+                    pts.append(
+                        pt(fam="rope", norm="rms", dim=dim, head_dim=hd, rope=True, bcast_rope=bcast, affine=affine)
+                    )
     # E. RoPE x seqlen.
     for rows in (32, 256, 1024):
         for bcast in (True, False):
-            pts.append(pt(fam="ropeseq", norm="rms", dim=rope_dims[0], rows=rows, head_dim=128, rope=True, bcast_rope=bcast))
+            pts.append(
+                pt(fam="ropeseq", norm="rms", dim=rope_dims[0], rows=rows, head_dim=128, rope=True, bcast_rope=bcast)
+            )
     # F. per-head norm (RMS, no AG): head_dim {64,128} x affine {none,w}.
     # per_head_norm has a RESIDENT-ONLY POST (it never auto-streams — the head-block reduce path
     # only handles whole-row-resident), so it caps out around ~64 tile-cols/device before the
@@ -1529,7 +1574,18 @@ def _sweep_points(tp: int) -> list[dict]:
             pts.append(pt(fam="dtype", norm="rms", dim=dim, affine=aff, in_dtype="fp32", out_dtype="bf16"))
             pts.append(pt(fam="dtype", norm="layernorm", dim=dim, affine=aff, in_dtype="bf16", out_dtype="fp32"))
     if rope_ok(rope_dims[0], 128):
-        pts.append(pt(fam="dtype", norm="rms", dim=rope_dims[0], head_dim=128, rope=True, bcast_rope=True, in_dtype="fp32", out_dtype="fp32"))
+        pts.append(
+            pt(
+                fam="dtype",
+                norm="rms",
+                dim=rope_dims[0],
+                head_dim=128,
+                rope=True,
+                bcast_rope=True,
+                in_dtype="fp32",
+                out_dtype="fp32",
+            )
+        )
     # I. per-token affine (LN, batch=1).
     for dim in (widths[0], mid, all_widths[-1]):
         pts.append(pt(fam="pertoken", norm="layernorm", dim=dim, affine="pertoken"))
@@ -1547,8 +1603,20 @@ def _sweep_points(tp: int) -> list[dict]:
         if rope_ok(rope_dims[0], 128):
             for bcast in (True, False):
                 for pb in (False, True):
-                    pts.append(pt(fam="batchRope", norm="rms", dim=rope_dims[0], rows=64, batch=batch,
-                                  head_dim=128, rope=True, bcast_rope=bcast, affine="none", rope_perbatch=pb))
+                    pts.append(
+                        pt(
+                            fam="batchRope",
+                            norm="rms",
+                            dim=rope_dims[0],
+                            rows=64,
+                            batch=batch,
+                            head_dim=128,
+                            rope=True,
+                            bcast_rope=bcast,
+                            affine="none",
+                            rope_perbatch=pb,
+                        )
+                    )
     return pts
 
 
@@ -1642,13 +1710,27 @@ def _sweep_build(submesh, tp_axis, tp, p):
 
     # ---- Welford recip LUT (LayerNorm) ----
     if norm == "layernorm":
-        recip = torch.tensor([1.0 / (i + 1) for i in range(feat_local)], dtype=torch.float32).reshape(1, 1, 1, feat_local)
+        recip = torch.tensor([1.0 / (i + 1) for i in range(feat_local)], dtype=torch.float32).reshape(
+            1, 1, 1, feat_local
+        )
         inp["recip"] = from_torch(recip, device=submesh, layout=ttnn.Layout.ROW_MAJOR, dtype=ttnn.float32)
 
     cfg = Cfg(
-        cid="sweep", model="SWEEP", tp=tp, rows=rows, dim=dim, head_dim=head_dim, rope=rope,
-        full_heads=heads_total, broadcast_rope=bcast_rope, per_head_norm=per_head_norm,
-        in_dtype=in_dtype, out_dtype=out_dtype, weight_mode="auto", bias_mode="auto", norm=norm,
+        cid="sweep",
+        model="SWEEP",
+        tp=tp,
+        rows=rows,
+        dim=dim,
+        head_dim=head_dim,
+        rope=rope,
+        full_heads=heads_total,
+        broadcast_rope=bcast_rope,
+        per_head_norm=per_head_norm,
+        in_dtype=in_dtype,
+        out_dtype=out_dtype,
+        weight_mode="auto",
+        bias_mode="auto",
+        norm=norm,
     )
     return inp, cfg, y
 
