@@ -1134,3 +1134,129 @@ def test_pipeline_distilled_i2v_middle_keyframe(
     assert pcc > 0.5, f"middle keyframe does not track its image (PCC={pcc:.4f}) — conditioning broken"
     thr = float(os.environ.get("MID_ROUGH_RATIO_MAX", "999"))
     assert ratio < thr, f"middle-keyframe neighbor scramble: roughness ratio {ratio:.2f} >= {thr}"
+
+
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kf_fringe_repro(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+):
+    """Repro harness for the keyframe-neighbor CHROMATIC FRINGING (green tint on the edges of frames
+    around a pin, worst just after the middle pin). Pins 3 images at [0, mid, last] and prints a
+    per-frame chromatic-fringe profile (mean |per-channel laplacian - luma laplacian|) so a fix's
+    effect on the post-pin fringe peak is measurable. LTX_KF_INTERIOR_S1 softens the interior pins'
+    coarse hold. Saves to OUTPUT_PATH for eyeballing. Not a gate."""
+    import glob
+    import subprocess
+
+    from PIL import Image
+
+    base = os.environ.get("LTX_KF_DIR", "")
+    kf0 = os.environ.get("LTX_KF0") or os.path.join(base, "kf0.png")
+    kfmid = os.environ.get("LTX_KF72") or os.path.join(base, "kf72.png")
+    kflast = os.environ.get("LTX_KFLAST") or os.path.join(base, "kf144.png")
+    for p in (kf0, kfmid, kflast):
+        if not os.path.exists(p):
+            pytest.skip(f"conditioning image not found: {p} (set LTX_KF_DIR or LTX_KF0/72/LAST)")
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    seed = int(os.environ.get("SEED", "10"))
+    pf = os.environ.get("PROMPT_FILE")
+    prompt = open(pf).read().strip() if pf and os.path.exists(pf) else os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    s_int = float(os.environ.get("LTX_KF_INTERIOR_S1", "1.0"))  # interior-pin coarse hold (fix knob)
+
+    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+    mid_pixel = (latent_frames // 2) * TEMPORAL_COMPRESSION
+    last_pixel = num_frames - 1
+    print(
+        f"\nKF_FRINGE config: {num_frames}f {height}x{width} pins=[0,{mid_pixel},{last_pixel}] "
+        f"interior_s1={s_int} seed={seed}",
+        flush=True,
+    )
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=traced,
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    out = tmp_path / "fringe.mp4"
+    pipeline.generate(
+        prompt,
+        output_path=str(out),
+        images=[(kf0, 0, 1.0, 1.0), (kfmid, mid_pixel, s_int, 1.0), (kflast, last_pixel, s_int, 1.0)],
+        num_frames=num_frames,
+        height=height,
+        width=width,
+        seed=seed,
+    )
+    if traced:
+        pipeline.release_traces()
+
+    keep = os.environ.get("OUTPUT_PATH")
+    if keep:
+        subprocess.run([_ffmpeg(), "-v", "error", "-i", str(out), "-y", keep], check=True)
+
+    fdir = tmp_path / "frames"
+    fdir.mkdir()
+    subprocess.run([_ffmpeg(), "-v", "error", "-i", str(out), "-vsync", "0", str(fdir / "f_%04d.png")], check=True)
+    paths = sorted(glob.glob(str(fdir / "f_*.png")))
+    assert paths, "no frames decoded"
+
+    def _fringe(p):
+        im = np.asarray(Image.open(p).convert("RGB")).astype("float32")
+        lum = im.mean(axis=2)
+
+        def lap(f):
+            return 4.0 * f[1:-1, 1:-1] - f[:-2, 1:-1] - f[2:, 1:-1] - f[1:-1, :-2] - f[1:-1, 2:]
+
+        lL = lap(lum)
+        return float(
+            (np.abs(lap(im[..., 0]) - lL) + np.abs(lap(im[..., 1]) - lL) + np.abs(lap(im[..., 2]) - lL)).mean()
+        )
+
+    fr = np.array([_fringe(p) for p in paths])
+    med = float(np.median(fr))
+    nfr = len(fr)
+    mid_idx = min(mid_pixel + 4, nfr - 1)  # fringe peaks ~4 frames after the pin
+    peak_mid = float(fr[max(0, mid_pixel - 2) : min(nfr, mid_pixel + 10)].max()) / med
+    peak_last = float(fr[max(0, last_pixel - 8) : nfr].max()) / med
+    print(
+        f"KF_FRINGE prof: median={med:.2f} peak@mid={peak_mid:.2f}x peak@last={peak_last:.2f}x "
+        f"global={fr.max() / med:.2f}x@f{int(fr.argmax())}",
+        flush=True,
+    )
+    print(
+        "KF_FRINGE mid[pin..+12]=" + ",".join(f"{fr[i] / med:.2f}" for i in range(mid_pixel, min(nfr, mid_pixel + 13))),
+        flush=True,
+    )
