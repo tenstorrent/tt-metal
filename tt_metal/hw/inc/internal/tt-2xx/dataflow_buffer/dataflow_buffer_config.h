@@ -231,10 +231,11 @@ struct dfb_txn_id_descriptor_t {
 } __attribute__((packed));
 
 // No __attribute__((packed)): every field is naturally aligned at its current offset —
-// entry_size/stride_in_entries (u32) at 0/4, capacity (u16) at 8, risc_mask_bits (u16 bitfield) at 10,
-// producer/consumer txn descriptors (packed, alignment 1) at 12/20, trailing u8 fields at 28-31.
+// entry_size/stride_in_entries (u32) at 0/4, capacity/num_entries (u16) at 8/10,
+// risc_mask_bits (u16 bitfield) at 12, producer/consumer txn descriptors (packed, alignment 1) at 14/22,
+// trailing u8 fields at 30-33 (struct size 36 with tail padding).
 // Without packed the compiler emits lw for entry_size and stride_in_entries (1 instr vs. 10 lbu+shift+or),
-// and lhu for capacity (1 instr vs. 2 lbu). Layout and sizeof are identical — static_assert guards.
+// and lhu for capacity/num_entries (1 instr vs. 2 lbu). static_assert guards sizeof.
 struct dfb_initializer_t {
     uint32_t entry_size;
     uint32_t stride_in_entries;
@@ -253,7 +254,7 @@ struct dfb_initializer_t {
     uint8_t num_producers;
     uint8_t _pad[3];                  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
 };
-static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size changed — check field alignment");
+static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size changed — check field alignment");
 
 // AoS layout: base_addr and limit for the same TC slot are adjacent in memory,
 // improving spatial locality in the TC-init loop that accesses both per iteration.
@@ -379,7 +380,7 @@ inline uint32_t dm0_isr_txn_desc_pool_byte_size(uint32_t producer_txn_id_mask, u
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");
-static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 64, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
 static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");

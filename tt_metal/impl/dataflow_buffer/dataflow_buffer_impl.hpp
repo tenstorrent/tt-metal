@@ -106,6 +106,7 @@ struct DataflowBufferImpl {
     }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
+    uint32_t serialized_size() const;
     uint16_t dm1_remapper_slot_count() const;  // slots this DFB contributes to the core-wide DM1 blob
     void append_dm1_remapper_slots_for_core(const CoreCoord& core, std::vector<uint8_t>& out) const;
 
