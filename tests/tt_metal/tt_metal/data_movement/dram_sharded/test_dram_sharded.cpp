@@ -141,7 +141,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     ProgramRunArgs::KernelRunArgs reader_run_params{.kernel = reader_spec.unique_id};
     for (auto& core : corerange_to_cores(test_config.cores)) {
         std::unordered_map<std::string, uint32_t> rtas = {{"src_addr", input_buffer_address}, {"l1_addr", l1_addr}};
-        ProgramRunArgs::KernelRunArgs::RuntimeArgValues args_table(rtas);
+        ProgramRunArgs::KernelRunArgs::CommonRuntimeArgValues args_table(rtas);
         for (const auto& [name, value] : args_table) {
             reader_run_params.runtime_arg_values[name][core] = value;
         }

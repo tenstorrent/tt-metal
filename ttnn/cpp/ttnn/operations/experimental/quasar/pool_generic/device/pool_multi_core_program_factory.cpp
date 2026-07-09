@@ -1249,8 +1249,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             total_out_nhw_processed < total_out_nhw ? total_out_nhw - total_out_nhw_processed : 0;
         uint32_t out_nhw_this_core = std::min(max_out_nhw_per_core, remaining_out_nhw);
 
-        KernelRunArgs::RuntimeArgValues reader_vals = {{"core_nhw_index", core_nhw_index}};
-        KernelRunArgs::RuntimeArgValues compute_vals = {{"out_nhw_this_core", out_nhw_this_core}};
+        KernelRunArgs::CommonRuntimeArgValues reader_vals = {{"core_nhw_index", core_nhw_index}};
+        KernelRunArgs::CommonRuntimeArgValues compute_vals = {{"out_nhw_this_core", out_nhw_this_core}};
         if (return_indices) {
             const uint32_t start_index = core_starting_indices[core_i];
             const uint32_t start_mod_batch = start_index % (in_w_padded * in_h_padded);

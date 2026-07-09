@@ -4394,7 +4394,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         if (in0_block_sharded) {
             m2::AdvancedKernelRunArgs::Varargs v;
             uint32_t in0_mcast_receiver_grid_same_coord;
-            m2::KernelRunArgs::RuntimeArgValues leading;
+            m2::KernelRunArgs::CommonRuntimeArgValues leading;
             if (transpose_mcast) {
                 in0_mcast_receiver_grid_same_coord = device->worker_core_from_logical_core(core).x;
                 leading = {
@@ -4472,7 +4472,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             }
         } else if (in1_idx == 0) {
             // in0 interleaved sender (left column).
-            m2::KernelRunArgs::RuntimeArgValues args = {
+            m2::KernelRunArgs::CommonRuntimeArgValues args = {
                 {"in0_tensor_start_tile_id", (uint32_t)in0_tensor_start_tile_id_stride * in0_idx},
                 {"in0_mcast_dest_noc_start_x", (uint32_t)in0_mcast_start.x},
                 {"in0_mcast_dest_noc_start_y", (uint32_t)in0_mcast_start.y},
@@ -4486,7 +4486,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             }
         } else {
             // in0 interleaved receiver.
-            m2::KernelRunArgs::RuntimeArgValues args = {
+            m2::KernelRunArgs::CommonRuntimeArgValues args = {
                 {"in0_mcast_sender_noc_x", (uint32_t)in0_mcast_sender.x},
                 {"in0_mcast_sender_noc_y", (uint32_t)in0_mcast_sender.y},
             };
@@ -4504,7 +4504,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         if (in0_idx < num_blocks_y and in1_idx < num_blocks_x) {
             // in1 sender (top row).
             if (in0_idx == 0) {
-                m2::KernelRunArgs::RuntimeArgValues args = {
+                m2::KernelRunArgs::CommonRuntimeArgValues args = {
                     {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * in1_idx},
                     {"in1_mcast_dest_noc_start_x", (uint32_t)in1_mcast_start.x},
                     {"in1_mcast_dest_noc_start_y", (uint32_t)in1_mcast_start.y},
@@ -4546,7 +4546,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 }
             } else {
                 // in1 receiver.
-                m2::KernelRunArgs::RuntimeArgValues args = {
+                m2::KernelRunArgs::CommonRuntimeArgValues args = {
                     {"in1_mcast_sender_noc_x", (uint32_t)in1_mcast_sender.x},
                     {"in1_mcast_sender_noc_y", (uint32_t)in1_mcast_sender.y},
                     {"out_tensor_start_tile_id", ((uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},

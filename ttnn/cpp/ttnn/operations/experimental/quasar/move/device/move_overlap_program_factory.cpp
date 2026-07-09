@@ -277,7 +277,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
         const bool is_controller = (i == 0);
 
-        m2::KernelRunArgs::RuntimeArgValues vals = {
+        m2::KernelRunArgs::CommonRuntimeArgValues vals = {
             {"start_id", pages_handled_per_core},
             {"num_pages", num_pages_per_core},
             {"control_value", num_cores - 1},
@@ -309,7 +309,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             reader_run_args.runtime_arg_values[name][core] = value;
         }
 
-        m2::KernelRunArgs::RuntimeArgValues writer_vals = {
+        m2::KernelRunArgs::CommonRuntimeArgValues writer_vals = {
             {"start_id", pages_handled_per_core},
             {"num_pages", num_pages_per_core},
         };

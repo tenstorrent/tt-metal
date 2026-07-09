@@ -237,9 +237,8 @@ void run_alias_dfb_program(
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&](uint32_t epc_a, uint32_t epc_b) {
-        return RuntimeArgValues{
+        return KernelRunArgs::RuntimeArgs{
             {"chunk_offset_a", {{node, 0u}}},
             {"chunk_offset_b", {{node, 0u}}},
             {"entries_per_core_a", {{node, epc_a}}},
@@ -613,9 +612,8 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryAddressEquality) {
     program.impl().finalize_dataflow_buffer_configs();
     program.impl().allocate_dataflow_buffers(device);
 
-    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
-        return RuntimeArgValues{
+        return KernelRunArgs::RuntimeArgs{
             {"chunk_offset_a", {{node, 0u}}},
             {"chunk_offset_b", {{node, 0u}}},
             {"entries_per_core_a", {{node, kNumEntries}}},
@@ -670,9 +668,8 @@ TEST_F(MeshDeviceFixture, AliasDFBBorrowedMemoryDataFlow1Sx1S) {
 
     Program program = MakeProgramFromSpec(*devices_.at(0), spec);
 
-    using RuntimeArgValues = decltype(ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto rtas = [&]() {
-        return RuntimeArgValues{
+        return KernelRunArgs::RuntimeArgs{
             {"chunk_offset_a", {{node, 0u}}},
             {"chunk_offset_b", {{node, 0u}}},
             {"entries_per_core_a", {{node, kNumEntries}}},

@@ -1816,7 +1816,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     top_left_core_physical.y,
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
-                m2::KernelRunArgs::RuntimeArgValues args;
+                m2::KernelRunArgs::CommonRuntimeArgValues args;
                 args["out_start_tile_id_w"] = out_start_tile_id_w;
                 if (has_bias) {
                     args["bias_tile_offset"] = bias_tile_offset;
@@ -1861,7 +1861,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     writer_receiver_run_args.runtime_arg_values["is_sender_core"][core] = (uint32_t)is_sender_core;
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
-                    m2::KernelRunArgs::RuntimeArgValues args;
+                    m2::KernelRunArgs::CommonRuntimeArgValues args;
                     args["noop"] = (uint32_t)is_no_op_core;
                     args["weights_mcast_sender_noc_x"] = top_left_core_physical.x;
                     args["weights_mcast_sender_noc_y"] = top_left_core_physical.y;

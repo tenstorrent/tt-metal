@@ -6234,7 +6234,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             for (auto y : in0_mcast_noc_y) {
                 v.push_back(y);
             }
-            m2::KernelRunArgs::RuntimeArgValues leading = {
+            m2::KernelRunArgs::CommonRuntimeArgValues leading = {
                 {"sender_id", i},
                 {"in0_mcast_dest_noc_start_x", (uint32_t)start_core_noc.x},
                 {"in0_mcast_dest_noc_start_y", (uint32_t)start_core_noc.y},
@@ -6274,7 +6274,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         }
 
         if (i < num_cores_with_work) {
-            m2::KernelRunArgs::RuntimeArgValues args = {
+            m2::KernelRunArgs::CommonRuntimeArgValues args = {
                 {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * output_idx_x},
                 {"in1_mcast_dest_noc_start_x", 0u},
                 {"in1_mcast_dest_noc_start_y", 0u},
@@ -7142,7 +7142,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         uint32_t output_idx_y = i % num_blocks_y;
 
         if (core == start_core) {
-            m2::KernelRunArgs::RuntimeArgValues args = {
+            m2::KernelRunArgs::CommonRuntimeArgValues args = {
                 {"in1_tensor_start_tile_id", (uint32_t)in1_tensor_start_tile_id_stride * output_idx_x},
                 {"in1_mcast_dest_noc_start_x", (uint32_t)start_core_noc.x},
                 {"in1_mcast_dest_noc_start_y", (uint32_t)start_core_noc.y},
@@ -7170,7 +7170,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 in1_sender_writer_run_args.runtime_arg_values[name][core] = value;
             }
         } else if (has_in1_receiver) {
-            m2::KernelRunArgs::RuntimeArgValues args = {
+            m2::KernelRunArgs::CommonRuntimeArgValues args = {
                 {"in1_mcast_sender_noc_x", (uint32_t)top_left_core_physical.x},
                 {"in1_mcast_sender_noc_y", (uint32_t)top_left_core_physical.y},
                 {"out_tensor_start_tile_id", ((uint32_t)output_idx_x * per_core_N) + (output_idx_y * per_core_M * N)},
