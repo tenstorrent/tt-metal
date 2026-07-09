@@ -24,7 +24,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillModelAdapter, get_adapter
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
-from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 
 # The per-model registry now lives in models/demos/common/prefill/adapter.py and is shared by the
 # runner and the tests. These aliases keep the existing fixture/test references (TestVariant /
@@ -33,6 +33,7 @@ TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
@@ -76,6 +77,43 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-mesh-8x4",
     ),
+    # FABRIC_2D_TORUS_Y: single-galaxy 8x4 with the SP axis (mesh dim 0, 8-long) closed into a
+    # ring; the TP axis (dim 1, 4-wide) stays a line. Per-axis topology (SP, TP) = (Ring, Linear):
+    # Ring drives the SP-axis MoE dispatch/combine, Linear the TP-axis collectives (RMS-norm, MLA,
+    # shared-expert, gate). A scalar Ring here would deadlock the TP-axis all-gathers on a column
+    # wrap link that has no physical fabric edge. 2-link mirrors the fabric2d-mesh-8x4 sibling.
+    pytest.param(
+        (8, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Linear),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        # Id omits `fabric2d-`/`mesh-` so it stays out of the count-guarded `-k "8x4 and fabric2d"`
+        # (EXPECT_NUM_TESTS=1) CI selectors that target the fabric2d-mesh siblings; select via `-k torus-y`.
+        id="torus-y-8x4",
+    ),
+    # FABRIC_2D_TORUS_Y on a 4x4 sub-torus (16 of the galaxy's 32 chips). Same [RING, LINE]
+    # shape as the 8x4 torus but with a Ring-4 on the SP axis (dim 0). Requires carving the
+    # sub-torus at runtime via TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH pointing at
+    # models/demos/deepseek_v3_d_p/experimental_descriptors/single_bh_galaxy_subtorus_y4_graph_descriptor.textproto
+    # (channels count: 2 -> 2 links).
+    # Per-axis topology (SP, TP) = (Ring, Linear), as for the 8x4 torus.
+    pytest.param(
+        (4, 4),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+            "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        },
+        2,
+        (ttnn.Topology.Ring, ttnn.Topology.Linear),
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="torus-y-4x4",
+    ),
 ]
 
 
@@ -96,9 +134,60 @@ def pytest_collection_modifyitems(config, items):
     Hardware constraints:
     - Blackhole: Only supports 4-device configs (linear-4, ring-4)
     - Wormhole: Ring topology only works with 8 devices (ring-8)
+
+    Galaxy ring/subtorus guard (CI): ring and torus fabrics need physical wrap cabling. On a
+    GALAXY board that wrap is subtorus wiring that CI galaxy runners do not have — the native
+    galaxy mesh is 32x4 across 4 hosts, so an 8-ring or 4-ring on a single galaxy is a sub-torus
+    (and the 4-ring exists ONLY on a subtorus-wired galaxy, not on a LoudBox). Opening such a
+    fabric on a CI galaxy just hangs. So on CI + galaxy we skip EVERY torus
+    (FABRIC_2D_TORUS_{X,Y,XY}) and FABRIC_1D_RING config. LoudBox is untouched: its ring is
+    native there, and galaxy-only torus configs can't be collected on it anyway (device count).
+    None of this fires off CI, so a subtorus-wired host (CI unset) still runs everything.
     """
+    on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
+    ring_or_torus_fabrics = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ttnn.FabricConfig.FABRIC_1D_RING,
+    }
+
+    def _is_ring_or_torus(item):
+        params = getattr(getattr(item, "callspec", None), "params", {})
+        dp = params.get("device_params")
+        return isinstance(dp, dict) and dp.get("fabric_config") in ring_or_torus_fabrics
+
+    # Only skip ring/torus on a galaxy; LoudBox rings are native. Galaxy detection via
+    # get_cluster_type() OPENS the chip cluster as a side effect, so only call it when this session
+    # actually collects a ring/torus config to decide on. Otherwise a device-free session — notably the
+    # tracy-based perf tests, which spawn a child pytest — would open the device here in the PARENT and
+    # hold CHIP_IN_USE, deadlocking the child (get_num_devices() below is likewise gated by a marker).
+    # On detection failure default to skipping (a missed skip on a galaxy hangs, worse than over-skip on LB).
+    skip_rings = False
+    if on_ci and any(_is_ring_or_torus(item) for item in items):
+        try:
+            skip_rings = ttnn.cluster.get_cluster_type() in (
+                ttnn.cluster.ClusterType.GALAXY,
+                ttnn.cluster.ClusterType.TG,
+                ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+            )
+        except Exception:
+            skip_rings = True
 
     for item in items:
+        # Galaxy ring/subtorus guard — runs before the marker check so it catches configs whether or
+        # not they carry a requires_mesh_topology mark.
+        if skip_rings:
+            if _is_ring_or_torus(item):
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="ring/subtorus config on a CI galaxy runner: an 8-/4-ring on one galaxy "
+                        "needs subtorus wrap cabling that CI galaxies lack -> would hang. Runs only on a "
+                        "subtorus-wired galaxy (CI unset), or — for a native ring — a LoudBox."
+                    )
+                )
+                continue
+
         marker = item.get_closest_marker("requires_mesh_topology")
         if not marker:
             continue
@@ -215,6 +304,7 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
             / "ttnn_flat_config"
             / variant.hf_repo_id.replace("/", "__").replace(".", "_").replace("-", "_").replace("_", "-")
         )
+
         shutil.copytree(
             model_dir,
             flat_dir,
@@ -430,17 +520,11 @@ def _unwrap_multimodal_config(cfg):
     """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
 
     The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
-    under `text_config`. Also stubs `quantization_config.weight_block_size` when missing
-    so that DSv3's dequant helper's eager read doesn't fail on pre-dequantized Kimi
-    checkpoints (which carry only plain `.weight` keys, no `_scale_inv`).
+    under `text_config`.
     """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
         cfg = cfg.text_config
-    qc = getattr(cfg, "quantization_config", None)
-    if isinstance(qc, dict) and not qc.get("weight_block_size"):
-        qc["weight_block_size"] = [128, 128]
-        logger.info("Stubbed quantization_config.weight_block_size for pre-dequantized checkpoint")
     return cfg
 
 
@@ -728,20 +812,25 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
         pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
 
     num_layers = request.node.callspec.params.get("num_layers", 1)
-    first_k_dense = hf_config.first_k_dense_replace  # 3
-    n_routed = hf_config.n_routed_experts  # 256
+    first_k_dense = hf_config.first_k_dense_replace
+    n_routed = hf_config.n_routed_experts
+
+    # Kimi's raw multimodal checkpoint nests the LM under a `language_model.` prefix; the
+    # dequantized/stripped checkpoint and DeepSeek use bare `model.` keys. Detect it from the
+    # actual keys so the same variant works for either, then `sub_state_dict` strips it.
+    prefix = detect_language_model_prefix(state_dict)
 
     logger.info(f"Loading pretrained transformer weights for {num_layers} layers from: {model_path}")
 
     # Embed tokens
-    embed_sd = sub_state_dict(state_dict, "model.embed_tokens.")
+    embed_sd = sub_state_dict(state_dict, f"{prefix}model.embed_tokens.")
     embed_dequant = dequantize_state_dict(embed_sd, hf_config)
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
 
     # Final norm
-    norm_sd = sub_state_dict(state_dict, "model.norm.")
+    norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
     norm_dequant = dequantize_state_dict(norm_sd, hf_config)
     result["norm_weight"] = norm_dequant["weight"]
 
@@ -749,7 +838,7 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     result["layers"] = []
     for i in range(num_layers):
         logger.info(f"Loading layer {i} weights...")
-        layer_sd = sub_state_dict(state_dict, f"model.layers.{i}.")
+        layer_sd = sub_state_dict(state_dict, f"{prefix}model.layers.{i}.")
         layer_dequant = dequantize_state_dict(layer_sd, hf_config)
 
         layer_dict = {

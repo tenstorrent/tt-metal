@@ -84,6 +84,31 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #
+          # The WH-T3K Gemma4-26B-A4B entry below is temporarily disabled —
+          # DRAM OOM during KV cache allocation (layer 25/30) causes EngineCore
+          # init failure on WH-T3K. Full unquantized KV cache no longer fits.
+          # Re-enable once hybrid KV cache is enabled (which will size the
+          # sliding-window layers' KV cache to the window instead of the full
+          # sequence length, freeing the DRAM needed to fit the full model).
+          # Tracked in https://github.com/tenstorrent/tt-metal/issues/49257
+          #
+          # Disabled entry preserved verbatim for the re-enable:
+          #
+          #   {
+          #     "name": "[WH-T3K] Gemma4-26B-A4B",
+          #     "model": "google/gemma-4-26B-A4B-it",
+          #     "coherence-test": true,
+          #     "server-timeout": 30,
+          #     "benchmark-timeout": 10,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "T3K",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
+          #     "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #
           # Disabled due to Metal timeout in reduce-scatter async tests
           # https://github.com/tenstorrent/vllm/issues/416
           # Originally disabled in:
@@ -157,20 +182,6 @@ jobs:
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
-              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
-              "multimodal": false,
-              "owner_id": "U08TJ70UFRT"
-            },
-            {
-              "name": "[WH-T3K] Gemma4-26B-A4B",
-              "model": "google/gemma-4-26B-A4B-it",
-              "coherence-test": true,
-              "server-timeout": 30,
-              "benchmark-timeout": 10,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"

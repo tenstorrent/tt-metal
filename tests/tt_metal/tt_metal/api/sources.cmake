@@ -21,6 +21,7 @@ set(UNIT_TESTS_API_SOURCES
     core_coord/test_CoreRangeSet_merge.cpp
     dataflow_buffer/test_alias_dataflow_buffer.cpp
     dataflow_buffer/test_dataflow_buffer.cpp
+    dataflow_buffer/test_dataflow_buffer_2_0.cpp
     dataflow_buffer/test_dataflow_buffer_configs.cpp
     dataflow_buffer/test_borrowed_memory_dataflow_buffer.cpp
     distribution_spec/test_buffer_distribution_spec.cpp

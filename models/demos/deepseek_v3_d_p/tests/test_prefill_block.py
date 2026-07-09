@@ -59,25 +59,6 @@ from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filter
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 
-@pytest.fixture
-def model_path(variant):
-    """Block-test-scoped override of the shared ``model_path`` fixture.
-    Uses a local pretrained checkpoint if one is already present (env var / default / shared
-    location), but never triggers a multi-GB HuggingFace download. When no local checkpoint is
-    found it returns a path without weights, so ``weight_cache_path`` resolves to None and
-    ``run_model`` falls back to random weights (see the ``use_pretrained`` gate).
-    """
-    env_path = os.getenv(variant.env_var)
-    if env_path and (Path(env_path) / "model.safetensors.index.json").exists():
-        # Keep the env path un-resolved: resolve() would follow a dot-free symlink back to a
-        # dotted real dir, which trust_remote_code cannot import. Matches get_or_download_model.
-        return Path(env_path).absolute()
-    for candidate in (variant.default_local_path, variant.shared_path):
-        if candidate is not None and (candidate / "model.safetensors.index.json").exists():
-            return candidate.resolve()
-    return (variant.default_local_path or Path(f"/nonexistent/{variant.name}")).absolute()
-
-
 @dataclass(frozen=True)
 class PrefillBlockThresholds:
     dense: float = 0.996
@@ -109,13 +90,13 @@ def run_model(
     pcc_validation,
     input_source,
     tokenizer,
-    model_path,
-    weight_cache_path,
+    request,
     is_ci_env,
     is_ci_v2_env,
     thresholds: PrefillBlockThresholds,
     determinism_check: bool = False,
     num_iterations: int = 1,
+    use_pretrained: bool = False,
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False and not determinism_check:
         pytest.skip("Skip non-PCC test in CI to save time")
@@ -124,6 +105,12 @@ def run_model(
     # Remove this exception once there's need to test both balanced and non_balanced for Kimi.
     if (is_ci_env or is_ci_v2_env) and not is_balanced and variant.name != "kimi_k2_6":
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
+
+    # host_gate_all is a local testing aid for sub-256-expert configs (e.g. the 4x4 sub-torus,
+    # where the device grouped-gate's hard 256-expert requirement forces the host gate). It is not CI
+    # coverage; the real device gate already covers the 256-expert meshes that run in CI.
+    if (is_ci_env or is_ci_v2_env) and gate_fallback_mode == GateComputeMode.HOST_ALL:
+        pytest.skip("host_gate_all is a local-only testing aid (sub-256-expert); not run in CI")
 
     # The 25k-ISL cases only fit L1 on the full 8x4 mesh. There sp_factor=8 keeps the per-chip
     # sequence at 3200 tokens, so the shared-expert down-projection matmul runs with per_core_M=2.
@@ -154,13 +141,16 @@ def run_model(
         f"input_source={input_source}"
     )
 
-    # Prefer real pretrained weights when a checkpoint is available (mirrors test_prefill_transformer):
+    # When use_pretrained is requested, load real pretrained weights (mirrors test_prefill_transformer):
     # load_and_compute_layer_by_layer loads the real layers 0..layer_idx, builds the shared TTNN weight
-    # cache, and returns per-layer snapshots used as the block's input/output reference. Falls back to
-    # HEAD's random-weight path below when no checkpoint is present.
-    use_pretrained = variant.supports_pretrained and weight_cache_path is not None
+    # cache, and returns per-layer snapshots used as the block's input/output reference. Otherwise the
+    # random-weight path below runs, and model_path is never resolved -> no HuggingFace download.
+    if use_pretrained and not variant.supports_pretrained:
+        pytest.skip(f"{variant.name}: pretrained weights not wired")
 
     if use_pretrained:
+        model_path = request.getfixturevalue("model_path")
+        weight_cache_path = request.getfixturevalue("weight_cache_path")
         is_dense = layer_idx < config.first_k_dense_replace
         num_layers = layer_idx + 1
         torch_output = None
@@ -509,8 +499,11 @@ def run_model(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE)],
-    ids=["dense", "moe-gate_device"],
+    [("dense", None), ("moe", GateComputeMode.DEVICE), ("moe", GateComputeMode.HOST_ALL)],
+    # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
+    # `-k "... and moe and ..."` (EXPECT_NUM_TESTS=1), so a host id carrying `moe` would be collected too
+    # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
+    ids=["dense", "moe-gate_device", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
@@ -570,6 +563,60 @@ def run_model(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-mesh-8x4",
         ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            1,
+            # Per-axis topology (SP-axis-0, TP-axis-1). FABRIC_2D_TORUS_Y wraps ONLY the SP axis
+            # into a ring → Ring for SP-axis MoE dispatch/combine; the 4-wide TP axis stays a line
+            # → Linear for TP-axis collectives (RMS-norm, MLA, shared-expert, gate). A scalar Ring
+            # here deadlocks the TP-axis all-gathers on a non-existent column wrap link.
+            (ttnn.Topology.Ring, ttnn.Topology.Linear),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            # Id omits the `fabric2d-`/`mesh-` tokens on purpose: CI runs the fabric2d-mesh siblings
+            # via count-guarded `-k "8x4 and fabric2d"` (EXPECT_NUM_TESTS=1) selectors, so a torus id
+            # carrying `fabric2d` would be collected too and break the count. Select it with `-k torus-y`.
+            id="torus-y-8x4",
+        ),
+        pytest.param(
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            # 4x4 sub-torus: Ring-4 on the SP axis (dim 0), Linear on the 4-wide TP axis (dim 1).
+            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_y4...
+            (ttnn.Topology.Ring, ttnn.Topology.Linear),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-y-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            # 4x4 full 2D sub-torus: Ring-4 on BOTH axes (dim 0 = SP/Y, dim 1 = TP/X). Both axes have
+            # a physical wrap, so TP-axis collectives (RMS-norm, MLA, shared-expert) can ring too.
+            # Run with TT_VISIBLE_DEVICES (16 chips) + TT_MESH_GRAPH_DESC_PATH=...subtorus_xy4...
+            (ttnn.Topology.Ring, ttnn.Topology.Ring),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -577,6 +624,7 @@ def run_model(
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_ds_prefill_block(
     variant,
     config_only,
@@ -592,12 +640,11 @@ def test_ds_prefill_block(
     pcc_validation,
     input_source,
     tokenizer,
-    model_path,
-    weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
     determinism_check,
     num_iterations,
+    use_pretrained,
     request,
 ):
     # FABRIC_2D on the 2x4 mesh regresses the MoE/device-gate PCC ~3 points below the 0.992 gate.
@@ -631,13 +678,13 @@ def test_ds_prefill_block(
         pcc_validation,
         input_source,
         tokenizer,
-        model_path,
-        weight_cache_path,
+        request,
         is_ci_env,
         is_ci_v2_env,
         determinism_check=determinism_check,
         num_iterations=num_iterations,
         thresholds=DSV3_THRESHOLDS,
+        use_pretrained=use_pretrained,
     )
 
 
@@ -681,6 +728,7 @@ def test_ds_prefill_block(
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(900)
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 def test_kimi_prefill_block(
     variant,
     config_only,
@@ -696,12 +744,12 @@ def test_kimi_prefill_block(
     pcc_validation,
     input_source,
     tokenizer,
-    model_path,
-    weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
     determinism_check,
     num_iterations,
+    use_pretrained,
+    request,
 ):
     run_model(
         variant,
@@ -718,13 +766,13 @@ def test_kimi_prefill_block(
         pcc_validation,
         input_source,
         tokenizer,
-        model_path,
-        weight_cache_path,
+        request,
         is_ci_env,
         is_ci_v2_env,
         determinism_check=determinism_check,
         num_iterations=num_iterations,
         thresholds=KIMI_THRESHOLDS,
+        use_pretrained=use_pretrained,
     )
 
 
