@@ -162,6 +162,9 @@ class Model:
         else:
             embedding_weight = None
 
+        # TODO: the token embedding is currently REPLICATED on every device (DRAM). Shard it
+        # across the mesh (reuse deepseek_v3_d_p's TtParallelEmbedding) to save ~1.85 GB/device.
+        # Deferred to a follow-up PR.
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
