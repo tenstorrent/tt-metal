@@ -45,6 +45,7 @@
 #include "llk_sfpu/ckernel_sfpu_selu.h"
 #include "llk_sfpu/ckernel_sfpu_shift.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid.h"
+#include "llk_sfpu/ckernel_sfpu_signbit.h"
 #include "llk_sfpu/ckernel_sfpu_snake_beta.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
@@ -654,6 +655,17 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::square)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == SfpuType::signbit)
+    {
+        if (math_format == ckernel::to_underlying(DataFormat::Int32))
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {

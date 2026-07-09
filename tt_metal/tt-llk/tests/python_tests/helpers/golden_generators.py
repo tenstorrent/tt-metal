@@ -2139,6 +2139,7 @@ class UnarySFPUGolden:
             MathOperation.Relu: self._relu,
             MathOperation.Rsqrt: self._rsqrt,
             MathOperation.Sin: self._sin,
+            MathOperation.Signbit: self._signbit,
             MathOperation.Sqrt: self._sqrt,
             MathOperation.Square: self._square,
             MathOperation.Tanh: self._tanh,
@@ -2378,6 +2379,11 @@ class UnarySFPUGolden:
 
     def _not_equal_zero(self, x):
         return 1.0 if x != 0.0 else 0.0
+
+    def _signbit(self, x):
+        # Mirrors the kernel: logical-shift the fp32 bit pattern right by 31,
+        # i.e. return 1.0 iff the sign bit is set (negative, incl. -0.0).
+        return 1.0 if math.copysign(1.0, x) < 0.0 else 0.0
 
     def _less_than_zero(self, x):
         return 1.0 if x < 0.0 else 0.0
