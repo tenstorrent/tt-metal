@@ -35,7 +35,7 @@ skus:
       - arch-wormhole_b0
       - pipeline-functional
       - topology-6u
-      - in-service
+      - in-release
 
   wh_galaxy_merge_gate:
     runs_on:
@@ -49,7 +49,7 @@ skus:
       - arch-wormhole_b0
       - pipeline-perf
       - topology-6u
-      - in-service
+      - in-release
 
   bh_galaxy:
     runs_on:
