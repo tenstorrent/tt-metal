@@ -39,6 +39,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from helpers.tile_constants import FACE_C_DIM
+
 HELPERS_DIR = Path(__file__).resolve().parent
 PYTHON_TESTS_DIR = HELPERS_DIR.parent
 LLK_ROOT = PYTHON_TESTS_DIR.parent.parent
@@ -62,7 +64,7 @@ PREDICATE_BODY_RE = re.compile(
 )
 
 # (fr, nfr, nfc) -> constexpr name for shapes defined in tensor_shape_coverage.h.
-# face_c_dim is always 16 by HW. Keep in sync with the named constants there.
+# face_c_dim is always FACE_C_DIM by HW. Keep in sync with the named constants there.
 SHAPE_NAMES = {
     (1, 1, 1): "TENSOR_SHAPE_FR1_NF1x1",
     (1, 1, 2): "TENSOR_SHAPE_FR1_NF1x2",
@@ -132,7 +134,7 @@ def _log_paths(log_dir: Path) -> list[Path]:
 
 
 def _shape_name(fr: int, fc: int, nfr: int, nfc: int) -> str | None:
-    if fc != 16:
+    if fc != FACE_C_DIM:
         return None
     return SHAPE_NAMES.get((fr, nfr, nfc))
 
@@ -220,7 +222,7 @@ def _shapes_from_predicate_body(body: str) -> list[tuple[int, int, int, int]]:
         fr = int(match.group("fr"))
         nfr = int(match.group("nfr"))
         nfc = int(match.group("nfc"))
-        shapes.add((fr, 16, nfr, nfc))
+        shapes.add((fr, FACE_C_DIM, nfr, nfc))
     return sorted(shapes)
 
 

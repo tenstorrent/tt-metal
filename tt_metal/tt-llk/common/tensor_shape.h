@@ -43,7 +43,7 @@ constexpr std::uint8_t MAX_TILES_IN_HALF_DEST = 8;
  */
 struct __attribute__((packed)) TensorShape
 {
-    std::uint8_t face_r_dim;      ///< Row dimension of each face (typically 16)
+    std::uint8_t face_r_dim;      ///< Row dimension of each face (valid: 1/2/4/8/16; full face is 16)
     std::uint8_t face_c_dim;      ///< Column dimension of each face (always 16 for HW)
     std::uint8_t num_faces_r_dim; ///< Number of faces in row dimension
     std::uint8_t num_faces_c_dim; ///< Number of faces in column dimension
@@ -85,10 +85,11 @@ constexpr TensorShape make_tensor_shape(
 }
 
 /**
- * @brief Build a TensorShape from a flat face count and face row dimension.
+ * @brief Build a TensorShape from a face row dimension and flat face count.
  *
- * Bridges legacy APIs that still carry a flat num_faces / face_r_dim (e.g. CB metadata) into a
- * TensorShape. Uses a canonical face-grid decomposition for tile-dependent ops, constrained to
+ * Bridges legacy APIs that still carry a flat face_r_dim / num_faces (e.g. CB metadata) into a
+ * TensorShape. Argument order matches @ref make_tensor_shape_from_legacy: (face_r_dim, num_faces).
+ * Uses a canonical face-grid decomposition for tile-dependent ops, constrained to
  * num_faces in {1, 2, 4}:
  *   - 1 -> 1x1 (e.g. 16x16 with face_r_dim=16)
  *   - 2 -> 1x2 (e.g. 16x32 with face_r_dim=16)
@@ -101,10 +102,10 @@ constexpr TensorShape make_tensor_shape(
  * paths that already know real row/col dims (e.g. get_operand_tensor_shape) should not go
  * through this helper.
  *
- * @param num_faces: Total number of faces in the tile (1, 2, or 4).
  * @param face_r_dim: Row dimension of each face (defaults to the full 16-row face).
+ * @param num_faces: Total number of faces in the tile (1, 2, or 4).
  */
-constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t num_faces, const std::uint32_t face_r_dim = MAX_FACE_R_DIM)
+constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t face_r_dim = MAX_FACE_R_DIM, const std::uint32_t num_faces = MAX_NUM_FACES)
 {
     // num_faces == 2 always maps to 1x2 (wide), never 2x1 (narrow). See note above.
     const std::uint8_t num_faces_r_dim = (num_faces == 4) ? 2 : 1;
@@ -115,13 +116,13 @@ constexpr TensorShape tensor_shape_from_num_faces(const std::uint32_t num_faces,
 /**
  * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
- * Same mapping and limitations as @ref tensor_shape_from_num_faces: num_faces == 2 becomes
- * 1x2 (16x32-class), not 2x1 (32x16). Prefer @ref make_tensor_shape for narrow tiles.
+ * Same argument order, mapping, and limitations as @ref tensor_shape_from_num_faces: num_faces == 2
+ * becomes 1x2 (16x32-class), not 2x1 (32x16). Prefer @ref make_tensor_shape for narrow tiles.
  */
 inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be one of the valid values: 1, 2, or 4");
-    return tensor_shape_from_num_faces(num_faces, face_r_dim);
+    return tensor_shape_from_num_faces(face_r_dim, num_faces);
 }
 
 /**

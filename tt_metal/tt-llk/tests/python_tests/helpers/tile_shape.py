@@ -29,7 +29,7 @@ class TileShape:
     """
 
     # Tile shape parameters
-    face_r_dim: int  # Row dimension of each face (typically 16)
+    face_r_dim: int  # Row dimension of each face (valid: 1/2/4/8/16; full face is 16)
     face_c_dim: int  # Column dimension of each face (always 16 for HW)
     num_faces_r_dim: int  # Number of faces in row dimension
     num_faces_c_dim: int  # Number of faces in column dimension
