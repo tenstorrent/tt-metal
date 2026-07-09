@@ -8,9 +8,11 @@ set(TTNN_OP_EXPERIMENTAL_INDEXER_SCORE_API_HEADERS
     device/indexer_score_device_operation.hpp
     device/indexer_score_device_operation_types.hpp
     device/indexer_score_program_factory.hpp
+    device/indexer_score_fused_program_factory.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_INDEXER_SCORE_SRCS
     device/indexer_score_device_operation.cpp
     device/indexer_score_program_factory.cpp
+    device/indexer_score_fused_program_factory.cpp
 )

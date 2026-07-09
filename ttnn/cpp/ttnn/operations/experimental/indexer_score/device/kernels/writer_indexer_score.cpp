@@ -148,7 +148,13 @@ void kernel_main() {
 
     for (uint32_t phase = 0; phase < num_groups; ++phase) {
         const uint32_t group = row_group0 + phase * group_stride;
-        for (uint32_t band = 0; band < num_bands; ++band) {
+        for (uint32_t band_i = 0; band_i < num_bands; ++band_i) {
+#ifdef FUSED_RING
+            // Reordered band-visit order, IDENTICAL to reader/compute (perm offsets at rt slots 11.., see factory).
+            const uint32_t band = get_arg_val<uint32_t>(11 + band_i);
+#else
+            const uint32_t band = band_i;
+#endif
             span.set(group, band0 + band);
             const uint32_t k_tile0 = span.k_tile_start();
             const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
