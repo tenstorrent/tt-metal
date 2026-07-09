@@ -101,34 +101,15 @@ Tensor GeluBwDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t GeluBwDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_tensor = tensor_args.input;
-    const auto& grad_output = tensor_args.grad_output;
-    const auto& input_shape = input_tensor.padded_shape();
-    operation::Hash hash = operation::hash_operation<GeluBwDeviceOperation>(
-        args,
-        input_tensor.dtype(),
-        input_tensor.memory_config(),
-        grad_output.dtype(),
-        grad_output.memory_config(),
-        input_shape.volume());
-
-    return hash;
-}
-
-}  // namespace ttnn::operations::unary_backward::gelu_bw
-
-namespace ttnn::operations::unary_backward::gelu_bw {
-
 Tensor launch_gelu_bw(
     const Tensor& grad_output,
     const Tensor& input,
+    bool approximate,
     DataType output_dtype,
     const MemoryConfig& output_memory_config,
     const std::optional<Tensor>& preallocated_output) {
     auto operation_attributes = GeluBwDeviceOperation::operation_attributes_t{
-        .output_dtype = output_dtype, .output_memory_config = output_memory_config};
+        .output_dtype = output_dtype, .output_memory_config = output_memory_config, .approximate = approximate};
     auto tensor_args = GeluBwDeviceOperation::tensor_args_t{
         .grad_output = grad_output, .input = input, .preallocated_input_grad = preallocated_output};
 

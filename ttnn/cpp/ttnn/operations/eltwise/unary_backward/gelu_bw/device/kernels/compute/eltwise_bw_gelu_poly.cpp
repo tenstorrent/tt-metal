@@ -19,8 +19,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
+    uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr auto cb_grad_out = tt::CBIndex::c_0;
     constexpr auto cb_input = tt::CBIndex::c_1;
@@ -34,32 +33,30 @@ void kernel_main() {
     gelu_derivative_tile_init<false>();
     mul_binary_tile_init();
 
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_grad_in_cb.reserve_back(per_core_block_size);
-        cb_grad_out_cb.wait_front(per_core_block_size);
-        cb_input_cb.wait_front(per_core_block_size);
+    // Per-tile canonical pattern: acquire → compute → commit → wait → pack → release
+    // Multi-tile batching in dest is not possible here because gelu_derivative_tile
+    // uses additional dest registers as scratch during polynomial evaluation.
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        cb_grad_in_cb.reserve_back(1);
+        cb_grad_out_cb.wait_front(1);
+        cb_input_cb.wait_front(1);
 
-        // Per-tile canonical pattern: acquire → compute → commit → wait → pack → release
-        // Multi-tile batching in dest is not possible here because gelu_derivative_tile
-        // uses additional dest registers as scratch during polynomial evaluation.
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
+        tile_regs_acquire();
 
-            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
-            copy_tile(cb_input, i, 1);       // dest[1] = input
-            gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
-            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
+        copy_tile(cb_grad_out, 0, 0);    // dest[0] = grad_out
+        copy_tile(cb_input, 0, 1);       // dest[1] = input
+        gelu_derivative_tile<false>(1);  // dest[1] = GELU'(input)
+        mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * GELU'(input)
 
-            tile_regs_commit();
-            tile_regs_wait();
+        tile_regs_commit();
+        tile_regs_wait();
 
-            pack_tile(0, cb_grad_in);
+        pack_tile(0, cb_grad_in);
 
-            tile_regs_release();
-        }
+        tile_regs_release();
 
-        cb_grad_out_cb.pop_front(per_core_block_size);
-        cb_input_cb.pop_front(per_core_block_size);
-        cb_grad_in_cb.push_back(per_core_block_size);
+        cb_grad_out_cb.pop_front(1);
+        cb_input_cb.pop_front(1);
+        cb_grad_in_cb.push_back(1);
     }
 }
