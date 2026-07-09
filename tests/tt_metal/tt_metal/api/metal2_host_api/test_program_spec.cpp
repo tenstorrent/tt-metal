@@ -3088,7 +3088,8 @@ TEST_F(ProgramSpecTestGen1, DMKernelSelfLoopOnGen1Succeeds) {
 }
 
 TEST_F(ProgramSpecTestGen1, TwoDMKernelsDifferentProcessorsSucceeds) {
-    // RISCV_0 and RISCV_1 on the same node — should succeed
+    // RISCV_0 and RISCV_1 on the same node — should succeed. (MakeMinimalGen1DMKernel gives them
+    // distinct NOCs, so they also satisfy the dedicated-NOC distinctness rule.)
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -3172,6 +3173,72 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+TEST_F(ProgramSpecTestGen1, TwoDMKernelsSameNocDedicatedFails) {
+    // Two DM kernels on distinct processors (RISCV_0, RISCV_1) but pinned to the SAME NOC in
+    // dedicated mode. Each kernel's NoC traffic is statically compiled to its config.noc, so both
+    // would drive NOC_0 and hang the device. Validation must reject this.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    // Force both onto NOC_0 (the helper would otherwise assign complementary NOCs). noc_mode
+    // defaults to DM_DEDICATED_NOC.
+    std::get<DataMovementHardwareConfig>(k0.hw_config).gen1_config->noc = NOC::NOC_0;
+    std::get<DataMovementHardwareConfig>(k1.hw_config).gen1_config->noc = NOC::NOC_0;
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("pinned to NOC_0")));
+}
+
+TEST_F(ProgramSpecTestGen1, TwoDMKernelsDistinctNocDedicatedSucceeds) {
+    // Two dedicated-NOC DM kernels on distinct processors AND distinct NOCs — the correct pairing.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    std::get<DataMovementHardwareConfig>(k0.hw_config).gen1_config->noc = NOC::NOC_0;
+    std::get<DataMovementHardwareConfig>(k1.hw_config).gen1_config->noc = NOC::NOC_1;
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, TwoDMKernelsSameNocDynamicSucceeds) {
+    // In DM_DYNAMIC_NOC mode, two DM kernels may intentionally share a NOC (it frees the other NOC
+    // for fabric). The NOC-distinctness rule is dedicated-mode only, so this is accepted even though
+    // both kernels name NOC_0.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    auto& cfg0 = std::get<DataMovementHardwareConfig>(k0.hw_config).gen1_config;
+    cfg0->noc = NOC::NOC_0;
+    cfg0->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+    auto& cfg1 = std::get<DataMovementHardwareConfig>(k1.hw_config).gen1_config;
+    cfg1->noc = NOC::NOC_0;
+    cfg1->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, ReaderAndWriterRolesOnSameNodeSucceed) {

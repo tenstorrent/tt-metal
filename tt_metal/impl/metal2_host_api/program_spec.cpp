@@ -870,11 +870,20 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // On Gen1 (WH/BH), check that no two DM kernels on the same node claim the same processor.
-    // (The kernel's effective node set is derived from WorkUnitSpec membership.)
+    // On Gen1 (WH/BH), two DM kernels sharing a node must claim distinct hardware:
+    //   1. Distinct DM processors (RISCV_0 vs RISCV_1) — no two kernels may pin the same RISC.
+    //   2. In DM_DEDICATED_NOC mode, distinct NOCs. Each DM kernel's NoC traffic is statically
+    //      compiled to NOC_INDEX == config.noc (see kernel.cpp), so two dedicated-NOC kernels
+    //      pinned to the same NOC deadlock the device. This restores the guarantee the legacy
+    //      CheckDataMovementConfig enforced and that KernelGroup finalize still relies on ("safe
+    //      due to prior correctness validation"). DM_DYNAMIC_NOC kernels are exempt: they may
+    //      intentionally share a NOC, freeing the other NOC for fabric.
+    // (Each kernel's effective node set is derived from WorkUnitSpec membership.)
     if (is_gen1_arch()) {
-        // Maps (node, processor) -> the kernel that already claimed it
-        std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed;
+        // (node, processor) -> the kernel that already claimed it.
+        std::map<std::pair<NodeCoord, DataMovementProcessor>, KernelSpecName> claimed_processor;
+        // (node, noc) -> the kernel that already claimed it (dedicated-NOC kernels only).
+        std::map<std::pair<NodeCoord, NOC>, KernelSpecName> claimed_noc;
         for (const auto& kernel : spec.kernels) {
             if (!kernel.is_data_movement_kernel()) {
                 continue;
@@ -884,15 +893,31 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             const NodeRangeSet& nodes = collected.kernel_node_set.at(kernel.unique_id);
             for (const auto& range : nodes.ranges()) {
                 for (const auto& node : range) {
-                    auto key = std::make_pair(node, gen1.processor);
-                    auto [it, inserted] = claimed.try_emplace(key, kernel.unique_id);
+                    auto [proc_it, proc_inserted] =
+                        claimed_processor.try_emplace(std::make_pair(node, gen1.processor), kernel.unique_id);
                     TT_FATAL(
-                        inserted,
+                        proc_inserted,
                         "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both claim the same DM processor. ",
                         kernel.unique_id,
-                        it->second,
+                        proc_it->second,
                         node.x,
                         node.y);
+
+                    // NOC-distinctness applies only to statically-pinned (dedicated-NOC) kernels.
+                    if (gen1.noc_mode == NOC_MODE::DM_DEDICATED_NOC) {
+                        auto [noc_it, noc_inserted] =
+                            claimed_noc.try_emplace(std::make_pair(node, gen1.noc), kernel.unique_id);
+                        TT_FATAL(
+                            noc_inserted,
+                            "KernelSpec '{}' conflicts with '{}' on node ({}, {}): both are dedicated-NOC data "
+                            "movement kernels pinned to NOC_{}, which hangs the device. Give them distinct NOCs, or "
+                            "use DM_DYNAMIC_NOC mode to intentionally share a NOC.",
+                            kernel.unique_id,
+                            noc_it->second,
+                            node.x,
+                            node.y,
+                            static_cast<int>(gen1.noc));
+                    }
                 }
             }
         }
