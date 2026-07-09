@@ -475,6 +475,10 @@ def run_chunked_transformer(
 
     # ONE shared KV cache holding all layers' slots [num_layers, 1, seq_local, 576]; layer i uses
     # cache_layer_idx=i. The ring scratch buffer is shared across layers inside TtPrefillTransformer.
+    # Sparse (DSA) requires an UNCOMPRESSED bf16/fp8_e4m3 ROW_MAJOR KVPE cache (sparse_sdpa reads it
+    # natively; mla.forward asserts) — NOT the init_kvpe_cache bfloat8_b/TILE default that dense
+    # ring_mla wants. Match the cache format to the path.
+    kvpe_dtype_layout = dict(dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) if resolve_has_indexer(config) else {}
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_dim,
         mesh_device=mesh_device,
@@ -483,6 +487,7 @@ def run_chunked_transformer(
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
         num_users=1,
+        **kvpe_dtype_layout,
     )
 
     # Sparse (DSA) layers read a block-cyclic indexer key cache that is caller-owned and passed into
