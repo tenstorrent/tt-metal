@@ -163,12 +163,16 @@ TESTS = {
     "gddr_full": "*DramDeployment_*",
 }
 
+# Tests executed per tier. ETH deployment tests (added in tt-metal #49215 and
+# compiled via tests/tt_metal/tt_metal/deployment/sources.cmake) are enabled here
+# to match the tier layout documented in run_diag.sh:
+#   light  -> eth link_up
+#   medium -> light + eth bandwidth + GDDR fast-pattern
+#   deploy -> full GDDR patterns + eth bandwidth
 TIER_TESTS = {
-    # ETH tests are temporarily disabled; they will be re-enabled once the ETH
-    # tests are updated.
-    "light": [],  # "eth_link_up"
-    "medium": ["gddr_fast"],  # "eth_link_up", "eth_bandwidth"
-    "deploy": ["gddr_full"],  # "eth_link_up", "eth_bandwidth"
+    "light": ["eth_link_up"],
+    "medium": ["gddr_fast", "eth_link_up", "eth_bandwidth"],
+    "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth"],
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
