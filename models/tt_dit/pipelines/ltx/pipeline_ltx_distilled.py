@@ -927,8 +927,34 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = "float" if output_path is not None else output_type
+        # An interior keyframe pins a real-image latent frame; the VAE decoder's temporal conv is fully
+        # causal, so that frame's out-of-distribution channel statistics ring FORWARD into the following
+        # frames' decoded pixels (flicker + chroma jumps just after the pin, at every tier/resolution).
+        # Frame-0 and the last pin have no forward neighbours on-clip, so only interior pins need it.
+        interior_pins = sorted(k for (k, _l, _s) in (full_image_conds or []) if 0 < k < latent_frames - 1)
+        composite = interior_pins and os.environ.get("LTX_KF_DECODE_COMPOSITE", "1") not in ("0", "false", "False")
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        if composite:
+            # Decode twice: once with each interior pin replaced by its neighbour interpolant (no
+            # real-vs-generated step for the causal conv to ring, so the forward frames decode clean),
+            # then splice the real pin's own pixel span back from a decode of the untouched latent —
+            # keeping the exact keyframe while the flicker after it is gone.
+            hw = latent_h * latent_w
+            bsz = s2_video.shape[0]
+            real5 = s2_video.reshape(bsz, latent_frames, hw, self.in_channels)
+            clean5 = real5.clone()
+            for k in interior_pins:
+                clean5[:, k] = 0.5 * (real5[:, k - 1] + real5[:, k + 1])
+            clean_flat = clean5.reshape(bsz, latent_frames * hw, self.in_channels)
+            video_pixels = self.decode_latents(clean_flat, latent_frames, latent_h, latent_w, output_type=decode_type)
+            pix_real = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+            for k in interior_pins:
+                lo, hi = (k - 1) * TEMPORAL_COMPRESSION + 1, k * TEMPORAL_COMPRESSION + 1
+                video_pixels[:, :, lo:hi] = pix_real[:, :, lo:hi]
+            del pix_real
+            logger.info(f"KF decode composite: spliced {len(interior_pins)} interior pin(s) over clean forward decode")
+        else:
+            video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
