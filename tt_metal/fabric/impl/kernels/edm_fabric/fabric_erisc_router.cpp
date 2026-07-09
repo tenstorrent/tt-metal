@@ -3095,6 +3095,12 @@ void kernel_main() {
         init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
         init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
+        // 5th VC0 sender channel (intra-mesh Z) first-level-ack stream. Only present (non-zero) on a
+        // 5-wide-VC0 intra-mesh-Z MESH router; other routers leave index 4 == 0 (no first level ack), so
+        // guard on non-zero to avoid clobbering stream register 0 (the VC0 receiver pkts_sent counter).
+        if constexpr (to_sender_packets_acked_streams[4] != 0) {
+            init_ptr_val<to_sender_packets_acked_streams[4]>(0);
+        }
 
         // Initialize completion streams and sender channel free slots for channels 2..MAX-1 using compile-time loop.
         // Index sequence covers Is=0..7 → channels 2..9 (MAX_NUM_SENDER_CHANNELS=10).
