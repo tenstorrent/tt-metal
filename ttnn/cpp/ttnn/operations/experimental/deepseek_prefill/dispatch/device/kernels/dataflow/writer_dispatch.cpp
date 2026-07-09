@@ -343,7 +343,7 @@ void kernel_main() {
                     DPRINT_DISPATCH("[SND] ring={} SENTINEL (consumed={})\n", s, consumed[s]);
                 } else {
 #ifdef SPARSE_MCAST_DISPATCH
-                    // Grouped ring slot (1D Ring, topk==4): route_info carries a direction-group of up
+                    // Grouped ring slot (1D Ring, any top-k): route_info carries a direction-group of up
                     // to 4 destinations plus the fields the sender needs to rebuild each destination's
                     // metadata locally (the producer leaves the meta ring slot unwritten for groups).
                     // Layout (written by writer_untilize_dispatch): [0]=direction, [1]=num_dests,
