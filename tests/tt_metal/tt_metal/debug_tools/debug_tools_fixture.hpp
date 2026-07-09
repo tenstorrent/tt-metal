@@ -228,6 +228,9 @@ protected:
     bool watcher_previous_assert_disabled_{};
 
     void SetUp() override {
+        // Save before the skip check: TearDown() runs even when SetUp() skips, so the
+        // restore must be based on the real previous state regardless of skip.
+        watcher_previous_assert_disabled_ = MetalContext::instance().rtoptions().watcher_assert_disabled();
         if (!MetalContext::instance().hal().has_tile_counter_registers()) {
             GTEST_SKIP() << "Tile counters are only used on Quasar";
         }
@@ -236,7 +239,6 @@ protected:
         // TILE_COUNTERS fault, which writes to the watcher mailbox and hangs. Disabling
         // assert here makes ASSERT a no-op so the ISR clears the interrupt and returns,
         // allowing the test to verify that watcher logs the TC mismatch correctly.
-        watcher_previous_assert_disabled_ = MetalContext::instance().rtoptions().watcher_assert_disabled();
         if (!watcher_previous_assert_disabled_) {
             MetalContext::instance().rtoptions().disable_watcher_assert();
         }
