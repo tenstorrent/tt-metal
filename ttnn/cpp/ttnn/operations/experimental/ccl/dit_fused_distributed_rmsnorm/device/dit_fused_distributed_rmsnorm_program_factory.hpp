@@ -50,7 +50,7 @@ private:
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create_at(
-        const DitFusedDistributedRmsnormParams& operation_attributes,
+        const DitFusedDistributedRmsnormParams& args,
         const ttnn::MeshCoordinate& mesh_coordinate,
         const DitFusedDistributedRmsnormInputs& tensor_args,
         std::vector<Tensor>& tensor_return_value);
