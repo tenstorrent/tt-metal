@@ -177,10 +177,14 @@ class HunyuanTtMoEParallel(LightweightModule):
                 weight_cache_path=weight_cache_path,
             )
 
+        # Expert matmuls are memory/compute-bound on low-precision weights (bf8/bf16),
+        # so HiFi4's 4 math passes and fp32 dest accumulation buy no accuracy the
+        # weights can carry — HiFi2 (2 passes) + bf16 accumulation roughly halves the
+        # compute-bound expert-matmul time. PCC-gated by the kv-cache decode/prefill tests.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
