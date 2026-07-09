@@ -87,8 +87,6 @@ PIPELINE_STAGES = ["denoise"]
 
 GRANULARITIES = ("composite", "mid", "deep")
 
-_MAX_NEG = -1.0e9  # additive attention bias for masked (padding) keys
-
 
 def _load_stub_module(name):
     path = os.path.join(_STUBS_DIR, name + ".py")
@@ -429,57 +427,21 @@ class HunyuanVideo15Pipeline:
 
     # ---- reorder / mask ----------------------------------------------------
     def _reorder_concat(self, enc_i, enc_b, enc_m, task):
-        """Static reorder of the three condition streams (pure ttnn.concat).
+        """Static reorder of the condition streams (pure ttnn.concat).
 
-        For both supported regimes all text tokens are valid; the reference valid
-        order is [image, byt5, mllm] (i2v) or [byt5, mllm, image] (t2v, image
-        invalid -> appended last so its keys can be masked)."""
+        i2v: image conditioning is valid -> keep it, order [image, byt5, mllm].
+        t2v: image conditioning is fully invalid (the caller already zeros
+        `enc_i` via `is_t2v`) -- EXCLUDED here entirely (order [byt5, mllm]),
+        not masked. `_joint_attention`'s fused-kernel replacement
+        (ttnn.transformer.joint_scaled_dot_product_attention) accepts no
+        per-key mask/bias at all, so a value that's *always* fully invalid for
+        the whole task must be dropped from the sequence outright rather than
+        included-and-masked -- unlike the mllm/byT5 padding case (see
+        `_trim_to_valid`), which is data-dependent and can't be resolved this
+        simply. See `_stubs/hunyuan_video15_transformer_block.py`."""
         if task == "i2v":
             return ttnn.concat([enc_i, enc_b, enc_m], dim=1)
-        return ttnn.concat([enc_b, enc_m, enc_i], dim=1)
-
-    def _build_attn_bias(self, task, n_latent, Li, Lb, Lm, mask_m=None, mask_b=None):
-        """Per-key additive attention bias (host constant, built OUTSIDE the hot
-        forward): 0 for valid keys, -inf for masked ones. Two sources of masking,
-        combined:
-          (a) the trailing image keys, for t2v only (image conditioning is invalid);
-          (b) real per-token PADDING within the mllm/byT5 text streams, from the
-              tokenizer's own `encoder_attention_mask{,_2}` -- e.g. the mllm stream
-              is padded to a fixed 1000 tokens and byT5 to 256 regardless of the
-              actual prompt length, so a short prompt is mostly padding. Without
-              this, every padding position is attended to as if it were real text,
-              diluting the conditioning signal. `build_inputs()`'s synthetic
-              all-ones masks make this a no-op for the PCC/e2e gate tests.
-
-        Built PER-BATCH-ITEM (not just batch 0): the CFG conditional/unconditional
-        branches can have different valid-token counts within the same padded
-        length, so a single shared bias would silently mis-mask one of them when
-        the two branches are batched into a single on-device call."""
-        import torch
-
-        B = 1
-        for m in (mask_m, mask_b):
-            if m is not None:
-                B = int(torch.as_tensor(m).shape[0])
-                break
-
-        seq = n_latent + Lb + Lm + Li
-        bias = torch.zeros(B, 1, 1, seq, dtype=torch.float32)
-        # Order must match `_reorder_concat`.
-        if task == "i2v":
-            i_off, b_off, m_off = 0, Li, Li + Lb
-        else:
-            b_off, m_off, i_off = 0, Lb, Lb + Lm
-            bias[:, 0, 0, n_latent + i_off :] = _MAX_NEG  # image invalid for t2v
-        if mask_b is not None:
-            mb = torch.as_tensor(mask_b)[:, :Lb]
-            sl = bias[:, 0, 0, n_latent + b_off : n_latent + b_off + Lb]
-            sl[mb == 0] = _MAX_NEG
-        if mask_m is not None:
-            mm = torch.as_tensor(mask_m)[:, :Lm]
-            sl = bias[:, 0, 0, n_latent + m_off : n_latent + m_off + Lm]
-            sl[mm == 0] = _MAX_NEG
-        return _f32(self.device, bias)
+        return ttnn.concat([enc_b, enc_m], dim=1)
 
     @staticmethod
     def _trim_to_valid(x, mask):
@@ -489,11 +451,13 @@ class HunyuanVideo15Pipeline:
         valid-then-padding prefix for the real Qwen/byT5 encoders). Real prompts
         are usually a handful of tokens inside a fixed max_length pad (mllm pads
         to 1000, byT5 to 256 regardless of prompt length) -- attending to that
-        padding is both wasted compute and (before this trim existed) diluted
-        the real conditioning signal. Masked-out keys contribute exactly zero
-        either way, so trimming is mathematically identical to masking the full
-        length, just cheaper; any leftover padding within the batch-max length
-        (mixed-length batches) is still handled by `_build_attn_bias`."""
+        padding is both wasted compute and diluted the real conditioning
+        signal (a bigger concern now than it used to be: the fused joint-
+        attention kernel in `_stubs/hunyuan_video15_transformer_block.py`
+        accepts no per-key mask/bias at all, so trimming here is the ONLY
+        mitigation left for padding dilution -- there is no bias-based
+        fallback anymore for any padding this leaves behind within a
+        mixed-length batch's shared trimmed length)."""
         if mask is None:
             return x, mask
         import torch
@@ -506,22 +470,21 @@ class HunyuanVideo15Pipeline:
     # ---- encode (host: upload inputs + positional constants OUTSIDE the hot path)
     def _encode(self, inputs):
         """Upload every input to device (ttnn) and pre-compute the shape-dependent
-        positional constants (RoPE cos/sin via the rope stub; the masked-key
-        attention bias).  This is the input-ENCODING boundary: the returned
-        context is pure-device, so :meth:`_forward_encoded` fires ZERO host ops."""
+        positional constant (RoPE cos/sin via the rope stub). This is the
+        input-ENCODING boundary: the returned context is pure-device, so
+        :meth:`_forward_encoded` fires ZERO host ops.
+
+        No attention bias/mask is built here (see `_reorder_concat` and
+        `_trim_to_valid`): the fused joint-attention kernel this feeds accepts
+        none at all."""
         d = self.device
         hidden = inputs["hidden_states"]
         task = inputs["task"]
         B, C, F, H, W = hidden.shape
-        pt, ph, pw = int(self.config.patch_size_t), int(self.config.patch_size), int(self.config.patch_size)
-        n_latent = (F // pt) * (H // ph) * (W // pw)
         mask_m = inputs.get("encoder_attention_mask")
         mask_b = inputs.get("encoder_attention_mask_2")
         ehs, mask_m = self._trim_to_valid(inputs["encoder_hidden_states"], mask_m)
         ehs2, mask_b = self._trim_to_valid(inputs["encoder_hidden_states_2"], mask_b)
-        Lm = int(ehs.shape[1])
-        Lb = int(ehs2.shape[1])
-        Li = int(inputs["image_embeds"].shape[1])
 
         cos, sin = self.s_rope(hidden)  # rope stub (positional constant)
         return dict(
@@ -534,7 +497,7 @@ class HunyuanVideo15Pipeline:
             image=_f32(d, inputs["image_embeds"]),
             cos=cos,
             sin=sin,
-            attn_bias=self._build_attn_bias(task, n_latent, Li, Lb, Lm, mask_m=mask_m, mask_b=mask_b),
+            attn_bias=None,
             task=task,
             out_shape=(B, C, F, H, W),
         )

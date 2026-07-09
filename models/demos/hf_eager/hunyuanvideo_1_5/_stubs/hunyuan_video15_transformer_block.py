@@ -72,6 +72,22 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         packer_l1_acc=True,
     )
 
+    # Joint (dual-stream) flash attention: replaces the old explicit
+    # matmul(q,kT)+softmax+matmul(.,v) sequence, which materializes the full
+    # (seq x seq) score matrix in DRAM -- at real video resolutions (>~60
+    # frames) that matrix alone exceeds one chip's DRAM (measured on QB2:
+    # ~40GB at 121 frames vs a ~34GB chip). ttnn.transformer.
+    # joint_scaled_dot_product_attention is a FlashAttention-2-style kernel
+    # purpose-built for this exact "two Q/K/V streams, concatenated rear-wise"
+    # shape and never materializes that matrix. Chunk sizes are a starting
+    # point, not tuned; adjust if the op rejects them for a given seq length.
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+
     def f32(t, mesh_mapper=None):
         if mesh_mapper is None and sharded:
             mesh_mapper = ttnn.ReplicateTensorToMesh(device)
@@ -244,10 +260,30 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         return ttnn.add(ttnn.multiply(x4, cos_b), ttnn.multiply(rot4, sin_b))
 
     def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None):
+        """Joint (dual-stream) attention via the fused flash-attention-style
+        ttnn.transformer.joint_scaled_dot_product_attention kernel instead of
+        an explicit matmul(q,kT)+softmax+matmul(.,v) sequence. The naive form
+        materializes the full (seq x seq) score matrix in DRAM -- at real
+        video resolutions (>~60 frames) that alone exceeds one chip's DRAM
+        (measured on QB2: ~40GB at 121 frames vs a ~34GB chip). The fused
+        kernel never materializes it.
+
+        `nh` (latent/"original") and `ne` (text/"joint") are attended jointly
+        by internally concatenating them rear-wise (joint_strategy="rear",
+        matching this model's [latent, text] token order) then splitting the
+        output back into the two streams -- the same math the old code did
+        by hand via ttnn.concat/ttnn.slice, just fused.
+
+        `attn_bias` is IGNORED: neither joint_scaled_dot_product_attention nor
+        its ring/sequence-parallel sibling accepts any mask/bias parameter
+        (checked against the op's C++ struct definitions, not just the
+        Python docstring). Callers must not rely on per-key masking here --
+        see tt/pipeline.py's `_reorder_concat` (excludes t2v's always-invalid
+        image tokens outright rather than masking them) and the note on
+        dropped per-row text-padding masking there."""
         B = int(nh.shape[0])
         Limg = int(nh.shape[1])
         Ltxt = int(ne.shape[1])
-        seq = Limg + Ltxt
 
         def heads_split(t):
             t = ttnn.reshape(t, (B, -1, heads, dim_head))
@@ -268,29 +304,32 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         ek = _rms(heads_split(_linear(ne, awk, abk)), nak_w)
         ev = heads_split(_linear(ne, awv, abv))
 
-        q = ttnn.concat([q, eq], dim=1)  # (B, seq, H, D)
-        k = ttnn.concat([k, ek], dim=1)
-        v = ttnn.concat([v, ev], dim=1)
-
-        q = ttnn.permute(q, (0, 2, 1, 3))  # (B, H, seq, D)
+        q = ttnn.permute(q, (0, 2, 1, 3))  # (B, H, Limg, D)
         k = ttnn.permute(k, (0, 2, 1, 3))
         v = ttnn.permute(v, (0, 2, 1, 3))
+        eq = ttnn.permute(eq, (0, 2, 1, 3))  # (B, H, Ltxt, D)
+        ek = ttnn.permute(ek, (0, 2, 1, 3))
+        ev = ttnn.permute(ev, (0, 2, 1, 3))
 
-        scores = ttnn.multiply(
-            ttnn.matmul(q, ttnn.permute(k, (0, 1, 3, 2)), compute_kernel_config=compute_config), scale
+        hid_out, enc_out = ttnn.transformer.joint_scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            eq,
+            ek,
+            ev,
+            joint_strategy="rear",
+            scale=scale,
+            program_config=sdpa_program_config,
+            compute_kernel_config=compute_config,
         )
-        # Additive attention bias (0 for valid, large-negative for masked keys); None -> unmasked.
-        if attn_bias is not None:
-            scores = ttnn.add(scores, attn_bias)
-        attn_w = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(attn_w, v, compute_kernel_config=compute_config)  # (B, H, seq, D)
-        out = ttnn.permute(out, (0, 2, 1, 3))  # (B, seq, H, D)
-        out = ttnn.reshape(out, (B, seq, inner))
+        hid_out = ttnn.permute(hid_out, (0, 2, 1, 3))  # (B, Limg, H, D)
+        enc_out = ttnn.permute(enc_out, (0, 2, 1, 3))  # (B, Ltxt, H, D)
+        hid_out = ttnn.reshape(hid_out, (B, Limg, inner))
+        enc_out = ttnn.reshape(enc_out, (B, Ltxt, inner))
 
-        hid = ttnn.slice(out, (0, 0, 0), (B, Limg, inner))
-        enc = ttnn.slice(out, (0, Limg, 0), (B, seq, inner))
-        hid = _row_linear(hid, wo, bo)
-        enc = _row_linear(enc, ao_w, ao_b)
+        hid = _row_linear(hid_out, wo, bo)
+        enc = _row_linear(enc_out, ao_w, ao_b)
         return hid, enc
 
     def _ff(x, parts):
