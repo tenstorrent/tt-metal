@@ -19,6 +19,9 @@ These exercise the SAME module-level hooks the perf/2CQ + host-op probes call:
 
 from __future__ import annotations
 
+import pytest
+
+import ttnn
 from models.demos.hf_eager.hunyuanvideo_1_5.tt import pipeline as P
 
 
@@ -43,6 +46,29 @@ def test_trace_capture_selftest_per_stage():
     ok = P.trace_capture_selftest()
     print(f"trace_capture_selftest -> {ok}")
     assert ok, "trace+2CQ per-stage capture/PCC self-test failed"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "l1_small_size": 24576,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "num_command_queues": 2,
+            "trace_region_size": P._TRACE_REGION_SIZE,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [4], indirect=True)
+def test_trace_capture_selftest_mesh(mesh_device):
+    """Same self-test as test_trace_capture_selftest_per_stage, but against the
+    real QB2 4-device mesh instead of a single device -- checks that trace
+    capture/execute works with the CCLManager all-reduce ops embedded in the
+    traced graph, and that the 2CQ write path works against a MeshDevice."""
+    ok = P.trace_capture_selftest(device=mesh_device)
+    print(f"trace_capture_selftest (mesh) -> {ok}")
+    assert ok, "trace+2CQ per-stage capture/PCC self-test failed on the 4-device mesh"
 
 
 if __name__ == "__main__":

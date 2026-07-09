@@ -13,10 +13,27 @@ ONE chip only with a truncated text seq at tiny res (HY_TRUNC).
 Full-res, untruncated-text generation needs QB2 multi-chip sharding -- see
 `test_stage2b_gen_qb2` below and `real_weights/README.md` "RESUME ON QB2":
 
-    HY_H=480 HY_W=832 HY_FRAMES=13 HY_STEPS=50 HY_OUT=/path \
+    HY_H=480 HY_W=848 HY_FRAMES=13 HY_STEPS=50 HY_OUT=/path \
         pytest tests/e2e/test_stage2b_gen.py::test_stage2b_gen_qb2 -s
+
+Width 848 matches this checkpoint's own computed default (HunyuanVideo15Pipeline's
+default_aspect_ratio + target_size); 832 (the earlier bring-up value) was off by
+16px. num_frames stays at 13, NOT this checkpoint's real default of 121: 121
+frames needs ~40GB per chip just for one layer's joint-attention score matrix
+(measured on live QB2 hardware) -- over a single chip's entire ~34GB DRAM,
+because attention here is unsharded along the sequence dimension (TP=4 shards
+only the head dimension, 16->4 heads/chip). 61 and 33 frames were also tried on
+live hardware and both OOM'd too, with a failure pattern that didn't scale as
+cleanly as buffer-size math predicts (deeper into the 54-layer stack before
+failing as the per-layer buffer shrinks, suggesting per-layer memory isn't
+fully freed/reused across layers) -- so this isn't just "pick a smaller number,"
+it's a real gap that needs either a flash-attention-style kernel (never
+materialize the full seq x seq score matrix) or sequence/context parallelism
+(shard attention along tokens too, not just heads) to close. Out of scope here.
 """
 import os
+import shutil
+import subprocess
 
 import pytest
 
@@ -149,7 +166,37 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     for i, im in enumerate(pil):
         im.save(f"{outdir}/frame_{i:03d}.png")
     pil[0].save(f"{outdir}/tt_blackhole.gif", save_all=True, append_images=pil[1:], duration=125, loop=0)
-    print(f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif -> {outdir}", flush=True)
+
+    fps = int(os.environ.get("HY_FPS", "24"))
+    mp4_path = f"{outdir}/tt_blackhole.mp4"
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-framerate",
+                str(fps),
+                "-i",
+                f"{outdir}/frame_%03d.png",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                mp4_path,
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print(
+            f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif + tt_blackhole.mp4 ({fps}fps) -> {outdir}",
+            flush=True,
+        )
+    else:
+        print(
+            f"[{label}] SAVED {len(pil)} frames + tt_blackhole.gif -> {outdir} (ffmpeg not found, no mp4)", flush=True
+        )
 
 
 def test_stage2b_gen(device):
@@ -176,13 +223,15 @@ def test_stage2b_gen_qb2(mesh_device):
     """QB2 flat-TP=4 variant: full resolution, NO text truncation -- the DiT is
     sharded (Megatron-style) across all 4 mesh devices, so the full-length text
     stream + real-resolution latent activations fit (see
-    `real_weights/README.md` "RESUME ON QB2"). Defaults match the README's
-    real-resolution target; override via the same HY_* env vars as
-    `test_stage2b_gen` (HY_TRUNC is intentionally not read here)."""
+    `real_weights/README.md` "RESUME ON QB2"). height/width default to this
+    checkpoint's own computed default (480x848); num_frames defaults to 13, NOT
+    this checkpoint's real default of 121 -- 121 (and 61, and 33) all OOM on
+    live QB2 hardware, see module docstring. Override via the same HY_* env
+    vars as `test_stage2b_gen` (HY_TRUNC is intentionally not read here)."""
     _run_stage2b_gen(
         mesh_device,
         height=int(os.environ.get("HY_H", "480")),
-        width=int(os.environ.get("HY_W", "832")),
+        width=int(os.environ.get("HY_W", "848")),
         frames=int(os.environ.get("HY_FRAMES", "13")),
         steps=int(os.environ.get("HY_STEPS", "50")),
         trunc=0,

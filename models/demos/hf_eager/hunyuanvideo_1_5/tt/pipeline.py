@@ -252,6 +252,8 @@ class HunyuanVideo15Pipeline:
 
         # Command-3 resident buffers (filled by <stage>_trace_setup)
         self._resident = None
+        self._write_event = None
+        self._op_event = None
 
     # ---- attention weight extraction ---------------------------------------
     def _extract_joint_attn(self, attn):
@@ -609,15 +611,20 @@ class HunyuanVideo15Pipeline:
     def denoise_trace_setup(self, inputs):
         """Pin the variable (latent-sequence) dim to a fixed capacity and
         PRE-UPLOAD every shape-dependent constant (RoPE cos/sin, the padded
-        input tensors, the masked-key attention bias) AND the one-shot prefix
-        (temb, patch tokens, conditioning streams) into persistent device buffers
-        OUTSIDE the trace.  Constant VALUES come from the graduated stubs /
-        reference so they match the golden exactly; the resulting resident state
-        is what :meth:`denoise_trace_step` reads for a host-op-free forward."""
+        input tensors, the masked-key attention bias) AND the step-INVARIANT
+        prefix (text/image conditioning) into persistent device buffers OUTSIDE
+        the trace. The raw latent (``hidden``) and ``timestep`` are ALSO
+        persistent resident buffers, but deliberately left un-embedded here:
+        their VALUES change every denoising step (the noisy latent evolves;
+        the timestep schedule advances) even though their shape/address don't,
+        so patch-embed (``s_patch``) and time-embed (``s_time``) must run
+        INSIDE :meth:`denoise_trace_step` -- baking them here would freeze
+        step 0's values into every trace replay. Also caches the host-side
+        torch tensors so a no-arg :meth:`denoise_write_inputs` (self-test) has
+        something to re-write, and records an initial "ready" event so the
+        first real write doesn't need a None-check."""
         ctx = self._encode(inputs)  # upload + rope + bias (host)
         task = ctx["task"]
-        temb = self.s_time(ctx["timestep"])  # timestep conditioning (resident)
-        x0 = self.s_patch(ctx["hidden"])  # patch tokens (resident)
 
         enc_m = ttnn.add(self._context_embedder(ctx["ehs"], ctx["timestep"], "composite"), self.cond[0])
         enc_b = ttnn.add(self.s_byt5(ctx["ehs2"]), self.cond[1])
@@ -625,46 +632,85 @@ class HunyuanVideo15Pipeline:
         if task == "t2v":
             enc_i = ttnn.multiply(enc_i, 0.0)
         enc_i = ttnn.add(enc_i, self.cond[2])
-        enc0 = self._reorder_concat(enc_i, enc_b, enc_m, task)  # conditioning (resident)
+        enc0 = self._reorder_concat(enc_i, enc_b, enc_m, task)  # conditioning (resident, step-invariant)
 
         self._resident = dict(
             cos=ctx["cos"],
             sin=ctx["sin"],
-            temb=temb,
-            x=x0,
+            hidden=ctx["hidden"],  # resident raw latent -- re-embedded fresh each step
+            timestep=ctx["timestep"],  # resident raw timestep -- re-embedded fresh each step
             enc=enc0,
             attn_bias=ctx["attn_bias"],
             inputs=inputs,
             out_shape=ctx["out_shape"],
+            _hidden_host=inputs["hidden_states"],
+            _timestep_host=inputs["timestep"],
         )
+        self._write_event = None
+        self._op_event = ttnn.record_event(self.device, 0)  # "nothing pending" -- safe to write immediately
         return self._resident
 
     def denoise_trace_step(self):
         """ONE host-op-free forward at the fixed shape, reading ONLY the resident
-        buffers (no from_torch / no per-call ttnn.zeros/arange inside)."""
+        buffers (no from_torch / no per-call ttnn.zeros/arange inside). Patch-
+        embed and time-embed run here (see :meth:`denoise_trace_setup`) so a
+        captured trace of this function re-embeds whatever the resident
+        hidden/timestep buffers currently hold, not step 0's frozen values."""
         r = self._resident
         if r is None:
             raise RuntimeError("call denoise_trace_setup(inputs) before denoise_trace_step()")
         cc = self.cc
-        x, enc, temb, freqs, bias = r["x"], r["enc"], r["temb"], (r["cos"], r["sin"]), r["attn_bias"]
+        temb = self.s_time(r["timestep"])
+        x = self.s_patch(r["hidden"])
+        enc, freqs, bias = r["enc"], (r["cos"], r["sin"]), r["attn_bias"]
         for blk in self.s_blocks:
             x, enc = blk(x, enc, temb, freqs_cis=freqs, attn_bias=bias)
         x = self.s_norm_out(x, temb)
         x = _linear(x, self.proj_out_w, self.proj_out_b, cc)
         return x
 
-    def denoise_write_inputs(self):
-        """Stage the next step's input on command-queue 1 (one-shot denoise stage:
-        re-stage the patch tokens for the next diffusion step) -> flips 2CQ path.
+    def denoise_write_inputs(self, new_hidden_states=None, new_timestep=None):
+        """Write the NEXT step's raw latent/timestep into the resident buffers
+        on command-queue 1 (the 2CQ write side) while CQ0 may still be finishing
+        the previous step's ``execute_trace`` -- overlapping the write with the
+        prior compute instead of serializing them. Waits on ``self._op_event``
+        (recorded by the CQ0 side after launching the previous trace) before
+        writing, so this never clobbers a buffer CQ0 is still reading, then
+        records ``self._write_event`` that CQ0 must wait on before its next
+        ``execute_trace``. Uses ``ttnn.copy_host_to_device_tensor``, which
+        overwrites the EXISTING resident buffer's contents in place -- it never
+        reallocates, so the trace's captured addresses stay valid.
 
-        The resident latent buffer is refreshed in place from the (host-prepared)
-        next latent; here we simply re-issue the resident x so the 2CQ engine has
-        a write target.  Real samplers overwrite ``self._resident['x']`` between
-        steps with the previous step's updated latent."""
+        Called with no args (the self-test's usage), re-writes the SAME
+        resident values cached at setup time -- this still exercises the real
+        CQ1 write path, just without changing data."""
         r = self._resident
         if r is None:
             raise RuntimeError("call denoise_trace_setup(inputs) before denoise_write_inputs()")
-        return r["x"]
+        d = self.device
+        hidden_t = new_hidden_states if new_hidden_states is not None else r["_hidden_host"]
+        timestep_t = new_timestep if new_timestep is not None else r["_timestep_host"]
+        r["_hidden_host"], r["_timestep_host"] = hidden_t, timestep_t
+
+        host_hidden = ttnn.from_torch(hidden_t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        host_timestep = ttnn.from_torch(timestep_t.contiguous().float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+
+        ttnn.wait_for_event(1, self._op_event)
+        ttnn.copy_host_to_device_tensor(host_hidden, r["hidden"], cq_id=1)
+        ttnn.copy_host_to_device_tensor(host_timestep, r["timestep"], cq_id=1)
+        self._write_event = ttnn.record_event(d, 1)
+        return self._write_event
+
+    def denoise_trace_execute(self, trace_id, blocking=False):
+        """CQ0 side of the 2CQ pair: wait for the pending write (if any), record
+        the "safe to overwrite past here" event the NEXT write waits on, then
+        replay the captured trace. Call ``denoise_write_inputs`` first for each
+        step; this only runs the already-captured graph, no host ops."""
+        d = self.device
+        if self._write_event is not None:
+            ttnn.wait_for_event(0, self._write_event)
+        self._op_event = ttnn.record_event(d, 0)
+        ttnn.execute_trace(d, trace_id, cq_id=0, blocking=blocking)
 
 
 # --------------------------------------------------------------------------- #
@@ -788,11 +834,12 @@ def trace_capture_selftest(device=None):
     host-free AND its trace output matches the HF golden (PCC >= 0.95).
 
     Called by the trace probe as ``trace_capture_selftest()`` (no args -> opens
-    its own device sized from ``_TRACE_REGION_SIZE``); a device may also be passed
-    (must have a trace region)."""
+    its own device sized from ``_TRACE_REGION_SIZE``, with 2 command queues so
+    ``denoise_write_inputs``'s CQ1 write actually has a CQ1 to target); a
+    device may also be passed (must have a trace region AND >= 2 CQs)."""
     own = device is None
     if own:
-        device = ttnn.open_device(device_id=0, trace_region_size=_TRACE_REGION_SIZE)
+        device = ttnn.open_device(device_id=0, trace_region_size=_TRACE_REGION_SIZE, num_command_queues=2)
     try:
         model = load_reference_model()
         pipe = build_pipeline(device, model)
