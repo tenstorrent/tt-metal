@@ -584,6 +584,14 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
+                Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
+                The op infers the sharded path when per-device joint seq == logical_l / ring_size.
+                If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
+            persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -595,17 +603,6 @@ void bind_sdpa(nb::module_& mod) {
         dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
         to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
         while kv_actual_isl marks the prior valid cache length before the current chunk.
-
-            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
-                Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
-                The op infers the sharded path when per-device joint seq == logical_l / ring_size.
-                If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
-            persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
-                gathered joint K tensor [b x nhv x L x dv]. Required for trace/ping-pong reuse.
-                Allocated internally when omitted.
-            persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
-                gathered joint V tensor [b x nhv x L x dv]. Required for trace/ping-pong reuse.
-                Allocated internally when omitted.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):

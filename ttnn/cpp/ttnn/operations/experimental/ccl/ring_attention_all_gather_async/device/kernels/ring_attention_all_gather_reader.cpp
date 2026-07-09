@@ -131,8 +131,6 @@ void kernel_main() {
         if (valid_pages < input_tile_id_end[input_idx]) {
             input_tile_id_end[input_idx] = valid_pages;
         }
-        // write_local (slot 9): writer-only (local-slice completion). Read here for arg-index alignment.
-        (void)get_arg_val<uint32_t>(arg_idx++);
     }
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);

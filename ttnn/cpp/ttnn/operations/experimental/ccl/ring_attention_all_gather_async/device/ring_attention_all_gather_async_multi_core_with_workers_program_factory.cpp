@@ -125,8 +125,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreCoord core_grid_offset,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> input_batch_slice_idx,
-    std::optional<uint32_t> gather_valid_Ht,
-    std::optional<uint32_t> write_local_from_input_idx) {
+    std::optional<uint32_t> gather_valid_Ht) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -492,10 +491,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 8 == valid_pages_per_batch_head
-            // 9 == write_local: writer also places this input's local slice into the local output buffer.
-            const uint32_t write_local =
-                (write_local_from_input_idx.has_value() && i >= *write_local_from_input_idx) ? 1u : 0u;
-            tensor_descriptor_args.push_back(write_local);  // 9 == write_local
         }
 
         KernelDescriptor::RTArgList reader_forward_rt_args;

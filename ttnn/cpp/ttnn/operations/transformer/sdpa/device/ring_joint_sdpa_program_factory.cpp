@@ -2451,17 +2451,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_output_tensors.push_back(gathered_input_tensor_v);
     }
     // Sharded-joint path: include joint K/V in the same fused gather so gathered_joint_k/v are
-    // produced by the gather that actually runs on device. The tensors are available from
-    // tensor_args after the device op resolved and stored them in gathered_joint_k/v.
-    // The joint inputs are appended AFTER the spatial inputs, so any input index >= the spatial
-    // count is a joint input that must have its local slice written into the gathered buffer
-    // (write_local) — the reader consumes joint K/V as a complete full-L replica.
-    std::optional<uint32_t> write_local_from_input_idx = std::nullopt;
+    // produced by the gather that actually runs on device. Same as spatial K/V: the AG omits each
+    // device's own local slice from the gathered buffer; the SDPA reader fetches that slice from
+    // the local joint tensor when ring_id == ring_index, and remote slices from the gathered buffer.
     if (joint_is_sharded) {
         TT_FATAL(
             tensor_args.gathered_joint_k.has_value() && tensor_args.gathered_joint_v.has_value(),
             "joint_is_sharded but gathered_joint_k/v not set in tensor_args");
-        write_local_from_input_idx = static_cast<uint32_t>(all_gather_input_tensors.size());
         all_gather_input_tensors.push_back(*joint_tensor_k);
         all_gather_output_tensors.push_back(tensor_args.gathered_joint_k.value());
         all_gather_input_tensors.push_back(*joint_tensor_v);
@@ -2492,8 +2488,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
         // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
         // dispatch on cache hits in apply_ring_joint_scalar_runtime_args.
-        compute_gather_valid_Ht(args, tensor_args),
-        write_local_from_input_idx);
+        compute_gather_valid_Ht(args, tensor_args));
 
     return desc;
 }
