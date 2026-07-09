@@ -870,9 +870,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(
-            conv_reader_indices_buffer->address());  // smuggled-rta-ok: parked conv_reader_indices buffer, allocated
-                                                     // once by create_workload_descriptor
+        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
         reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
@@ -1180,24 +1178,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     for (const auto& [k, v] : compute_defines) {
         compute_kernel_desc.defines.emplace_back(k, v);
     }
-    // When accumulating in fp32 with the C*filter (K) reduction split across blocks, the
-    // MATMUL_PARTIALS CB holds Float32 partials that conv_bmm_tilize reloads into DEST between
-    // blocks via copy_block_matmul_partials. Unless the CB is marked UnpackToDestFp32, the reload
-    // is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses
-    // precision on every block boundary. The partials CB is consumed only by the reload datacopy
-    // (never as a matmul operand on SrcA/SrcB), so it can be marked directly. The index guard
-    // skips the 1D-depthwise path, which allocates no partials CB (invalid index).
-    const auto& matmul_partials_cb_info = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS);
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && matmul_partials_cb_info.data_format == tt::DataFormat::Float32 &&
-        matmul_partials_cb_info.index < NUM_CIRCULAR_BUFFERS) {
-        unpack_to_dest_mode[matmul_partials_cb_info.index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
-        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
     // Helper lambda to setup mcast arguments

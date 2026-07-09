@@ -467,17 +467,6 @@ process_agmm_fusion_program_and_create_override_variables(
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_in1_kernel_defines});
 
-    // fp32 K-partials (interm0_cb_index) are reloaded into DEST between blocks via
-    // copy_block_matmul_partials; mark the CB UnpackToDestFp32 so the reload goes directly to
-    // DEST instead of through SrcA (which would truncate the fp32 partial to TF32). This mirrors
-    // the mcast/gather matmul factories; validated there on a single device (the identical
-    // bmm_..._gathered.cpp kernel), and applies here for the fused all-gather-matmul path.
-    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
-        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
-    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
-        unpack_to_dest_mode[interm0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-    }
-
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/compute/"
@@ -487,7 +476,6 @@ process_agmm_fusion_program_and_create_override_variables(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
-            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines});

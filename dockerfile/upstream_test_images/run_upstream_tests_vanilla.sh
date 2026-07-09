@@ -166,9 +166,6 @@ test_suite_wh_6u_metal_torus_xy_health_check_tests() {
 
 test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
-    # Precision regression runs first so it executes on a freshly initialized device, independent of
-    # the other CCL tests in this suite which can intermittently hang the device at collection time.
-    pytest tests/ttnn/unit_tests/operations/ccl/test_llama_all_gather_matmul_fp32_reload.py
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
     pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py
     pytest tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
@@ -305,9 +302,9 @@ test_suite_bh_pcie_didt_tests
 test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["wh_6u"]="
-test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_torus_xy_health_check_tests
+test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
