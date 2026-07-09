@@ -35,14 +35,20 @@ void push_i2s_cb_pair(
     uint32_t total_size,
     uint32_t page_size,
     const CoreRangeSet& core_ranges,
-    Buffer* bound_buffer) {
+    Buffer* bound_buffer,
+    std::optional<Tile> tile = std::nullopt ) {
     CBDescriptor cb;
     cb.total_size = total_size;
     cb.core_ranges = core_ranges;
+    std::optional<TileDescriptor> tile_descriptor = std::nullopt;
+    if (tile) {
+        tile_descriptor = tt::tt_metal::TileDescriptor(tile.value());
+    }
     cb.format_descriptors.push_back(CBFormatDescriptor{
         .buffer_index = static_cast<uint8_t>(cb_index),
         .data_format = data_format,
         .page_size = page_size,
+        .tile=tile_descriptor
     });
     cb.buffer = bound_buffer;
     desc.cbs.push_back(std::move(cb));
@@ -94,15 +100,17 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
-
+    std::optional<Tile> input_tile = std::nullopt;
+    std::optional<Tile> output_tile = std::nullopt;
     if (input.layout() == Layout::TILE) {
-        const auto& tile = input.tensor_spec().tile();
-        const uint32_t tile_height = input.tensor_spec().tile().get_height();
-        const uint32_t tile_width = input.tensor_spec().tile().get_width();
-        input_unit_size = tile.get_tile_size(input_cb_data_format);
-        output_unit_size = tile.get_tile_size(output_cb_data_format);
+        input_tile = input.tensor_spec().tile();
+        output_tile = output.tensor_spec().tile();
+        input_unit_size = input_tile.value().get_tile_size(input_cb_data_format);
+        output_unit_size = output_tile.value().get_tile_size(output_cb_data_format);
+        const uint32_t tile_height = input_tile.value().get_height();
+        const uint32_t tile_width = input_tile.value().get_width();
         TT_FATAL(
-            shard_spec.shape[0] % tile_height == 0 && shard_spec.shape[1] % tile_width == 0,
+            shard_spec.shape[0] % input_tile.value().get_height() == 0 && shard_spec.shape[1] % input_tile.value().get_width() == 0,
             "Shard shape {} must be tile {}x{} sized!",
             shard_spec.shape,
             tile_height,
@@ -163,7 +171,8 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             num_input_units * input_page_size,
             input_page_size,
             all_cores,
-            /*bound_buffer=*/nullptr);
+            /*bound_buffer=*/nullptr,
+            input_tile);
     }
 
     // Output CB. When destination is sharded (non-DRAM) we bind it to the output buffer
@@ -175,7 +184,8 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         num_input_units * output_page_size,
         output_page_size,
         all_cores,
-        /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer);
+        /*bound_buffer=*/dst_is_dram ? nullptr : dst_buffer,
+        output_tile);
 
     uint32_t dram_alignment = hal::get_dram_alignment();
     uint32_t l1_alignment = hal::get_l1_alignment();
@@ -192,7 +202,8 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             num_trids * scratch_cb_page_size,
             scratch_cb_page_size,
             all_cores,
-            /*bound_buffer=*/nullptr);
+            /*bound_buffer=*/nullptr,
+            input_tile);
     }
 
     // Reader kernel.
@@ -215,6 +226,7 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             "reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp";
         reader_desc.compile_time_args = std::move(reader_compile_time_args);
     }
+    log_info(tt::LogOp, "reader_desc.kernel_source: {}", reader_desc.kernel_source);
 
     // Writer kernel.
     KernelDescriptor writer_desc;
@@ -248,7 +260,8 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
         compute_desc.core_ranges = all_cores;
         compute_desc.config = ComputeConfigDescriptor{};
     }
-
+    log_info(tt::LogOp, "writer_desc.kernel_source: {}", writer_desc.kernel_source);
+    log_info(tt::LogOp, "compute_desc.kernel_source: {}", compute_desc.kernel_source);
     uint32_t starting_idx_h =
         operations::data_movement::detail::calculate_starting_idx_h(input, num_slices, slice_index);
     uint32_t curr_idx_h = 0;

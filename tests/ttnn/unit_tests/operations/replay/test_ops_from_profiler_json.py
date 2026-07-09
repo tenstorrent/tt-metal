@@ -21,7 +21,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
-TILE_HEIGHT = 32
+TILE_HEIGHT = 1
 TILE_WIDTH = 32
 tile = ttnn.Tile((TILE_HEIGHT, TILE_WIDTH))
 
