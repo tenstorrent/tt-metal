@@ -4010,3 +4010,109 @@ def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
 
     with expect_error(RuntimeError, r"Kt \(4\) must be divisible by in0_block_w \(3\)"):
         ttnn.matmul(in0, in1, program_config=program_config)
+
+
+def _offset_cancellation_inputs(m, k, n, offset, seed=0):
+    """Matrix A is a small random signal plus a large constant offset. Matrix B has each column that
+    sums to zero, so the offset contributes nothing to the true product A @ B, and the correct result
+    is small. But the partial sums during the K reduction are large (~offset in magnitude), so any
+    loss of precision mid-reduction destroys the small true result."""
+    torch.manual_seed(seed)
+    a = (torch.randn(m, k) + offset).bfloat16()
+    b = torch.randn(k, n)
+    b = (b - b.mean(dim=0, keepdim=True)).bfloat16()  # each column sums to 0
+    ref = (a.to(torch.float64) @ b.to(torch.float64)).float()
+    return a, b, ref
+
+
+def _crossblock_reload_mcast_1d_config(mt, nt, in0_block_w):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=mt,
+        out_subblock_w=nt,
+        per_core_M=mt,
+        per_core_N=nt,
+        fuse_batch=True,
+        mcast_in0=True,
+    )
+
+
+def _crossblock_reload_mcast_2d_config(mt, nt, in0_block_w):
+    # 2x2 grid, one output tile per core; small in0_block_w so K is split into many blocks.
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(2, 2),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=mt // 2,
+        per_core_N=nt // 2,
+        transpose_mcast=False,
+    )
+
+
+# Each entry drives a distinct matmul program factory that performs the cross-block reload.
+_CROSSBLOCK_RELOAD_FACTORY_CONFIGS = {
+    "mcast_1d": _crossblock_reload_mcast_1d_config,  # MatmulMultiCoreReuseMultiCast1DProgramConfig
+    "mcast_2d": _crossblock_reload_mcast_2d_config,  # MatmulMultiCoreReuseMultiCastProgramConfig
+}
+
+
+@pytest.mark.parametrize("factory", list(_CROSSBLOCK_RELOAD_FACTORY_CONFIGS))
+def test_matmul_fp32_crossblock_reload_precision(device, factory):
+    """Precision of fp32 accumulation over a long K reduction in the multicast matmul factories.
+
+    Matrix A (M x K) holds a large constant offset plus a small random signal. Matrix B (K x N) has
+    every column summing to zero over K, causing the offset to contribute nothing to the true product
+    A @ B once all the components are summed, so the correct result is small. However, partway through
+    the K reduction the running sum is dominated by the offset and is large. If the accumulator
+    silently loses precision mid-reduction, rounding those large partial sums destroys the small true
+    result and PCC collapses.
+
+    The matmul runs with fp32 accumulation enabled (see compute_kernel_config below) and a small
+    in0_block_w so K is split into many blocks and the reduction accumulates across them - the
+    configuration whose correctness depends on the partial sums staying at full fp32 precision. Both
+    the 1D and 2D multicast program factories are exercised.
+    """
+    m, k, n = 64, 8192, 64
+    in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the reload path is exercised
+    a, b, ref = _offset_cancellation_inputs(m, k, n, offset=1000.0)
+
+    program_config = _CROSSBLOCK_RELOAD_FACTORY_CONFIGS[factory](m // 32, n // 32, in0_block_w)
+    # fp32_dest_acc_en=True with packer_l1_acc=False is the configuration whose correctness
+    # depends on a lossless fp32 reload of the K-partials.
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    a_t = ttnn.from_torch(
+        a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_t = ttnn.from_torch(
+        b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out = ttnn.matmul(
+        a_t,
+        b_t,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out = ttnn.to_torch(out).float()
+
+    # A lossless fp32 reload gives PCC ~0.996 / rel-Frobenius ~0.09; the TF32-truncated reload
+    # collapses to PCC ~0.2 / rel-Frobenius ~8. allclose/ULP are not meaningful for a
+    # deliberately ill-conditioned bf16 matmul, so only PCC and Frobenius are checked.
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.99,
+        frobenius_threshold=0.5,
+        check_allclose=False,
+        check_pcc=True,
+        check_frobenius=True,
+        check_ulp=False,
+    )

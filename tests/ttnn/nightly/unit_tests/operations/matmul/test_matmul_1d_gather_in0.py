@@ -1241,3 +1241,89 @@ def test_matmul_1d_ring_llama_lm_head(
         in1_is_dram_interleaved=in1_is_dram_interleaved,
         in1_is_in_dram=in1_is_in_dram,
     )
+
+
+def test_matmul_gather_in0_fp32_crossblock_reload_precision(device):
+    """Precision of fp32 accumulation over a long K reduction in the gather_in0 1D matmul.
+
+    Matrix A (M x K) holds a large constant offset plus a small random signal. Matrix B (K x N) has
+    every column summing to zero over K, causing the offset to contribute nothing to the true product
+    A @ B once all the components are summed, so the correct result is small. However, partway through
+    the K reduction the running sum is dominated by the offset and is large. If the accumulator
+    silently loses precision mid-reduction, rounding those large partial sums destroys the small true
+    result and PCC collapses.
+
+    The matmul runs with fp32 accumulation enabled and an fp32 output (see compute_kernel_config
+    below), with K and N split across 8 cores so the reduction spans several blocks - the
+    configuration whose correctness depends on the partial sums staying at full fp32 precision.
+    """
+    grid_x, grid_y = 8, 1
+    num_cores = grid_x * grid_y
+    M, K, N = 32, 2048, 2048  # K,N split across the 8-core ring -> num_blocks = num_cores = 8
+    torch.manual_seed(0)
+
+    a = torch.randn(1, 1, M, K) + 1000.0
+    b = torch.randn(1, 1, K, N)
+    b = b - b.mean(dim=2, keepdim=True)  # each output column sums to 0 over K
+    a = a.bfloat16()
+    b = b.bfloat16()
+    ref = (a.double() @ b.double()).reshape(M, N).float()
+
+    k_per_shard = K // num_cores
+    n_per_shard = N // num_cores
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+
+    def width_sharded(shard_hw):
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core_range_set, shard_hw, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    a_t = ttnn.from_torch(
+        a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=width_sharded([M, k_per_shard])
+    )
+    b_t = ttnn.from_torch(
+        b, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=width_sharded([K, n_per_shard])
+    )
+
+    out_block_w = N // num_cores // ttnn.TILE_SIZE  # 8 tiles; out_subblock_w=4 -> 2 subblocks -> spill
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=K // num_cores // ttnn.TILE_SIZE,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=M // ttnn.TILE_SIZE,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        mcast_in0=False,
+        gather_in0=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+        dst_full_sync_en=True,
+    )
+
+    out = ttnn.matmul(
+        a_t,
+        b_t,
+        program_config=program_config,
+        memory_config=width_sharded([M, n_per_shard]),
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.float32,
+    )
+    out = ttnn.to_torch(out).reshape(M, N).float()
+
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.99,
+        frobenius_threshold=0.5,
+        check_allclose=False,
+        check_pcc=True,
+        check_frobenius=True,
+        check_ulp=False,
+    )
