@@ -258,7 +258,7 @@ struct addr_mod_t
 #define NUM_MATH_ADDR_MODS 8
 
     // Program source and dest registers
-    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = 1) const
+    __attribute__((always_inline)) inline addr_mod_t const& set(const std::uint8_t mod_index, std::uint32_t thread_id = TRISC_ID) const
     {
         auto cfg                                                                = (volatile std::uint32_t*)TENSIX_CFG_BASE;
         cfg[addr_mod_src_reg_addr[mod_index] + NUM_MATH_ADDR_MODS * thread_id]  = src_val();
