@@ -10,6 +10,14 @@ and logs a per-stage wall-clock breakdown (seconds + %, denoise it/s, images/s).
 ``docs/superpowers/specs/2026-07-09-fibo-perf-harness-design.md``: measures the real code path; no
 tracing / on_event / CI-assert / device-op profiling (those are documented follow-ups).
 
+Two tests share one ``_perf_breakdown`` helper:
+* ``test_fibo_pipeline_perf_breakdown`` -- a short free-text prompt (gs=1.0 -> no-CFG gate).
+* ``test_fibo_pipeline_perf_breakdown_json`` -- FIBO's intended structured-JSON prompt, read from the
+  committed ``fibo_vlm_prompt.json`` (a real VLM text->JSON caption), at production gs=5.0 (CFG on).
+
+The helper honors the CFG gate (``guidance_scale > 1``): at gs<=1 it skips the uncond branch, so the
+measured cost reflects what ``BriaFiboPipeline.__call__`` actually does at that guidance_scale.
+
 Run explicitly (not collected into CI perf):
   HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \\
     python_env/bin/python -m pytest \\
@@ -17,6 +25,7 @@ Run explicitly (not collected into CI perf):
 """
 
 import os
+from pathlib import Path
 from time import perf_counter
 
 import numpy as np
@@ -30,6 +39,12 @@ FIBO_PATH = os.environ.get("FIBO_PATH", "briaai/FIBO")
 
 STAGES = ("encode", "prepare", "denoise", "decode")
 
+# FIBO's intended input is a structured JSON caption (VLM text->JSON output); this committed fixture is
+# a real one captured by the VLM->image e2e test (test_vlm_pipeline.py).
+_JSON_PROMPT_PATH = Path(__file__).parent / "fibo_vlm_prompt.json"
+
+_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}
+
 
 def _fibo_local():
     try:
@@ -38,41 +53,40 @@ def _fibo_local():
         pytest.skip(f"FIBO not cached: {e}")
 
 
-@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
-    indirect=["device_params"],
-)
-@pytest.mark.parametrize(
-    "height, width, num_inference_steps, num_measured_runs",
-    [(1024, 1024, 30, 3)],
-)
-def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inference_steps, num_measured_runs):
-    """Print a per-stage wall-clock breakdown of one 1024x1024/30-step generation on the 2x2 mesh.
-
-    Sanity-asserts the produced image is valid + non-degenerate (proves the timed path really ran);
-    it does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to see the log.
-    Runtime ~ (1 warmup + num_measured_runs) full generations (~22s each) + ~44s model build.
-    """
+def _build_pipe(mesh_device, height, width):
     from models.tt_dit.pipelines.bria_fibo.pipeline_bria_fibo import BriaFiboPipeline, BriaFiboPipelineConfig
 
     ckpt = _fibo_local()
-    pipe = BriaFiboPipeline(
+    return BriaFiboPipeline(
         device=mesh_device,
         config=BriaFiboPipelineConfig.default(
             mesh_shape=mesh_device.shape, checkpoint_name=ckpt, height=height, width=width
         ),
     )
+
+
+def _perf_breakdown(
+    pipe,
+    *,
+    label,
+    prompt,
+    guidance_scale,
+    seed,
+    height,
+    width,
+    num_inference_steps,
+    num_measured_runs,
+    negative_prompt="",
+):
+    """Time one generation's stages (1 warmup + N measured), assert the image is valid, log a breakdown.
+
+    Drives the pipeline's own stage methods so it measures the real code path. Honors the CFG gate: at
+    ``guidance_scale <= 1`` the uncond branch is skipped (single cond forward/step), matching ``__call__``.
+    """
     submesh = pipe._submesh
-    prompt = "a luxury sports car"
-    negative_prompt = ""
-    guidance_scale = 5.0
-    seed = 0
+    do_cfg = guidance_scale > 1
 
     def run_once(record: dict):
-        """One full generation driving the stage methods; records per-stage seconds into ``record``."""
-
         def time_stage(name, fn):
             ttnn.synchronize_device(submesh)  # drain enqueued work so t0 is a real boundary
             t0 = perf_counter()
@@ -81,7 +95,7 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
             record[name] = perf_counter() - t0
             return result
 
-        encoded = time_stage("encode", lambda: pipe._encode(prompt, negative_prompt))
+        encoded = time_stage("encode", lambda: pipe._encode(prompt, negative_prompt, do_cfg=do_cfg))
         cond_branch, uncond_branch, timesteps, latent, ssl = time_stage(
             "prepare",
             lambda: pipe._prepare(
@@ -106,13 +120,13 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
         return image
 
     # 1 warmup pass (absorbs op compilation), then N measured passes.
-    logger.info("perf harness: warmup run...")
+    logger.info(f"perf harness [{label}]: warmup run...")
     run_once({})
 
     runs = []
     image = None
     for r in range(num_measured_runs):
-        logger.info(f"perf harness: measured run {r + 1}/{num_measured_runs}...")
+        logger.info(f"perf harness [{label}]: measured run {r + 1}/{num_measured_runs}...")
         record = {}
         image = run_once(record)
         runs.append(record)
@@ -129,9 +143,10 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
     hi = {s: max(run[s] for run in runs) for s in STAGES}
     total = sum(avg[s] for s in STAGES)
 
+    cfg_note = "CFG on (2 fwd/step)" if do_cfg else "no-CFG gate (1 fwd/step)"
     lines = [
-        f"\nFIBO perf breakdown — {width}x{height}, {num_inference_steps} steps, "
-        f"avg of {num_measured_runs} runs (after 1 warmup)"
+        f"\nFIBO perf breakdown [{label}] — {width}x{height}, {num_inference_steps} steps, "
+        f"gs={guidance_scale} [{cfg_note}], avg of {num_measured_runs} runs (after 1 warmup)"
     ]
     for s in STAGES:
         pct = 100.0 * avg[s] / total if total else 0.0
@@ -145,3 +160,56 @@ def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inferen
     images_per_s = 1.0 / total if total else 0.0
     lines.append(f"  {'total':<9} {total:7.2f} s             -> {images_per_s:.4f} images/s")
     logger.info("\n".join(lines))
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
+@pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
+def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inference_steps, num_measured_runs):
+    """Per-stage wall-clock breakdown for a short free-text prompt on the 2x2 mesh (gs=1.0 -> no-CFG gate).
+
+    Sanity-asserts the produced image is valid + non-degenerate (proves the timed path really ran); it
+    does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to see the log. Runtime
+    ~ (1 warmup + num_measured_runs) generations + ~44s model build.
+    """
+    pipe = _build_pipe(mesh_device, height, width)
+    _perf_breakdown(
+        pipe,
+        label="text",
+        prompt="a luxury sports car",
+        guidance_scale=1.0,
+        seed=0,
+        height=height,
+        width=width,
+        num_inference_steps=num_inference_steps,
+        num_measured_runs=num_measured_runs,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
+@pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
+def test_fibo_pipeline_perf_breakdown_json(*, mesh_device, height, width, num_inference_steps, num_measured_runs):
+    """Per-stage wall-clock breakdown for FIBO's intended structured-JSON prompt (gs=5.0, production CFG).
+
+    Reads the committed ``fibo_vlm_prompt.json`` (a real VLM text->JSON caption) and feeds it to the
+    pipeline as the raw prompt string -- the same handoff the VLM->image e2e test uses. This is the
+    realistic production input (a longer prompt -> more prompt tokens than the free-text case). Sanity-only
+    asserts; use ``-s`` to see the breakdown.
+    """
+    if not _JSON_PROMPT_PATH.is_file():
+        pytest.skip(f"JSON prompt fixture missing: {_JSON_PROMPT_PATH}")
+    json_prompt = _JSON_PROMPT_PATH.read_text().strip()  # drop the fixture's trailing newline
+
+    pipe = _build_pipe(mesh_device, height, width)
+    _perf_breakdown(
+        pipe,
+        label="json",
+        prompt=json_prompt,
+        guidance_scale=5.0,
+        seed=0,
+        height=height,
+        width=width,
+        num_inference_steps=num_inference_steps,
+        num_measured_runs=num_measured_runs,
+    )
