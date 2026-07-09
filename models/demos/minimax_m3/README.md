@@ -39,13 +39,13 @@ Verified on a Blackhole Galaxy against the torch golden KV-cache, per-layer, **r
 
 ## Run
 
-MiniMax-M3 is a `trust_remote_code` model — see [requirements.txt](requirements.txt) (update `transformers` locally). Weights load from `HF_MODEL`; a tilized weight cache (`M3_WEIGHTS_FROM_CACHE=1`) avoids re-conversion.
+MiniMax-M3 is a `trust_remote_code` model: install a `transformers` new enough to carry the `minimax_m3_vl` modeling code, and download the checkpoint (safetensors weights + `config.json` + tokenizer) from the official MiniMax-M3 release (HuggingFace / GitHub) into a local dir that `HF_MODEL` points at. A tilized weight cache (`M3_WEIGHTS_FROM_CACHE=1`) avoids re-conversion after the first load.
 
 ```bash
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
 export HF_MODEL=/path/to/MiniMax-M3
 export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
-export EXPERT_DTYPE=bf8 M3_WEIGHTS_FROM_CACHE=1
+export EXPERT_DTYPE=bf4 M3_WEIGHTS_FROM_CACHE=1   # bf4 experts (default); EXPERT_DTYPE=bf8 trades ~20% more memory for higher PCC
 
 # Per-layer KV-cache PCC vs golden (one-shot 5120):
 PREFILL_CHUNKED=0 PREFILL_TRACE_DIR=/path/to/golden/longbook_5120 \
