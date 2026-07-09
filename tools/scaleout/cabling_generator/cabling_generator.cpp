@@ -2689,11 +2689,20 @@ void CablingGenerator::apply_instance_filter(
     }
     deployment_hosts_ = std::move(filtered_hosts);
 
-    // Reset port availability consumed by the construction-time generate_logical_chip_connections()
-    // before regenerating chip connections for the pruned graph.
-    recreate_nodes_from_templates(*root_instance_);
+    // Filter the already-computed channel connections to the kept set (both endpoints) and remap to
+    // the new host_ids, keeping chip_connections_ sorted.
+    std::vector<LogicalChannelConnection> kept_connections;
+    for (auto conn : chip_connections_) {
+        if (kept_host_ids.contains(conn.first.host_id) && kept_host_ids.contains(conn.second.host_id)) {
+            conn.first.host_id = remap.at(conn.first.host_id);
+            conn.second.host_id = remap.at(conn.second.host_id);
+            kept_connections.push_back(conn);
+        }
+    }
+    std::sort(kept_connections.begin(), kept_connections.end());
+    chip_connections_ = std::move(kept_connections);
+
     populate_host_id_to_node();
-    generate_logical_chip_connections();
 
     log_info(
         tt::LogDistributed,
