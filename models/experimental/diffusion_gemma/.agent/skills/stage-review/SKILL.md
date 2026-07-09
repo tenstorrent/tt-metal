@@ -12,7 +12,11 @@ Load `diffusion-gemma` first; it overrides the autoregressive assumptions below 
 - Review the DIFFUSION capability contract: `canvas_length` (256), denoise-step budget (≤48), block granularity, three-phase KV semantics, bidirectional/sliding mask geometry, and 256K `prompt + generated` context — NOT autoregressive `max_model_len` / page / prefill-divisibility framing.
 - Drop the autoregressive quality gates: `meta_ifeval` / `meta_gpqa_cot` are not mandatory here, and the generation triggers ("prompt echo", token feedback, paged-cache decode, doubled/repeated tokens) do not apply. Review instead the diffusion decisions (entropy, Gumbel-max argmax agreement, accept/renoise agreement vs the injected-noise reference), canvas convergence, and RUN outcome via `DG_TEXT_DEMO_SUCCESS` / `DG_TEXT_DEMO_FAILURE`.
 - RUN-first: degenerate output is acceptable for the RUN milestone; #48291 fidelity is a separate track.
-- Hard review gate: the shared backbone must be untouched — `git diff main -- models/demos/gemma4/` empty (run `check_no_shared_gemma4_edits.sh`). Any footprint fix must be DiffusionGemma-local.
+- Hard review gate: run
+  `DG_BASE_REF=<actual-branch-base> bash models/experimental/diffusion_gemma/.agent/scripts/check_no_shared_gemma4_edits.sh`.
+  Do not use a stale local `main`. Any DiffusionGemma-owned shared-directory
+  delta is a failure and must be moved local or split into separately owned
+  upstream work.
 - Paths/evidence live under `models/experimental/diffusion_gemma/` (and `doc/<stage>/`), not an autoport directory.
 
 ## Mission
@@ -391,8 +395,11 @@ After the reviewer returns:
 3. If the verdict is `clean-pass`, record the review artifact or subagent final
    answer path in the stage work log.
 4. After `clean-pass`, create local checkpoint commits for stage-owned changes
-   in each touched repo, including `tt-metal` and `vllm` when applicable. Never
-   push these commits from autonomous bringup.
+   in each touched repo, including `tt-metal` and `vllm` when applicable, then
+   push the working branches as required by the `dg-*` stage commands. The
+   user's invocation of that command is the commit/push authorization. Never
+   force-push or push unrelated dirty changes; if authentication or branch
+   protection blocks the push, record the exact blocker.
 5. Record each repo, branch, and commit SHA in the stage work log. Do not
    include unrelated dirty files in a checkpoint commit. If stage-owned changes
    cannot be isolated from unrelated dirty state, treat that as more required

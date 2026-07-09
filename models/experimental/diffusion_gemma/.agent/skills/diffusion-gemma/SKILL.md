@@ -1,15 +1,15 @@
 ---
 name: diffusion-gemma
-description: Shared model context for the DiffusionGemma 26B-A4B-it bring-up on Tenstorrent hardware. Load this in EVERY DiffusionGemma stage before any stage-specific skill. It states what the model is, how it generates (block-autoregressive text diffusion, NOT autoregressive token-by-token), the reuse-vs-build boundary and the hard rule against editing the shared gemma4 backbone, how correctness is judged (diffusion decisions + injected noise, not teacher-forcing top-k), the QB2 memory budget, the module map, and the issue/stage ownership. Every other skill in this pipeline (functional-decoder, full-model, optimize, multichip, datatype-sweep, tt-enable-tracing, vllm-integration, tti-release, stage-review, ...) is a GENERIC autoregressive-LLM skill; this skill is the override that maps each of their autoregressive assumptions onto the diffusion path.
+description: Shared model context and binding invariants for DiffusionGemma 26B-A4B-it on Tenstorrent hardware. Load this before every stage-specific skill for block-diffusion semantics, correctness, QB2 memory, module ownership, and the no-shared-Gemma4-edits rule.
 ---
 
 # DiffusionGemma — shared bring-up context
 
-**Load this skill first in every DiffusionGemma stage.** The other skills in `models/experimental/diffusion_gemma/.agent/skills/`
-were written for a generic *autoregressive* LLM autoport pipeline. This skill is the authority
-that overrides their autoregressive assumptions for the text-diffusion path. When a stage skill and
-this skill disagree, **this skill wins**, and the per-skill "DiffusionGemma adaptation" sections
-inside those skills spell out the specific overrides.
+**Load this skill first in every DiffusionGemma stage.** Stage-specific skills
+live under `models/experimental/diffusion_gemma/.agent/skills/`. Some retain
+generic reference material, but their binding execution paths are
+DiffusionGemma-specific. When a stage skill and this skill disagree,
+**this skill wins**.
 
 Source of truth for the actual work lives in the module itself:
 `models/experimental/diffusion_gemma/plan.md` (full plan + live status),
@@ -84,12 +84,11 @@ These are the reasons the generic autoregressive skills need overriding. When an
 1. **Reuse, don't author. And never edit the shared backbone.** The backbone is
    `models/demos/gemma4/` — already tensor-parallel (TP=4), MoE-sharded, trace-compatible. The
    net-new work is the **diffusion delta** under `models/experimental/diffusion_gemma/`.
-   **HARD RULE: do NOT modify `models/demos/gemma4/` or any other shared directory.** `git diff main
-   -- models/demos/gemma4/` must stay empty. Any footprint change the backbone needs for the
+   **HARD RULE: do NOT modify `models/demos/gemma4/` or any other shared directory.** Any footprint change the backbone needs for the
    diffusion path (decode L1/DRAM reductions, commit-append) belongs in DiffusionGemma-local code
    (e.g. `tt/commit_decode.py`) that composes over the backbone — never in-place edits to gemma4.
-   (This is the F1/F2 isolation requirement in `plan.md`; the R-new risk is exactly ungated
-   shared-gemma4 edits.)
+   Run the shared-directory gate with `DG_BASE_REF` set to the actual branch base; a stale local
+   `main` is not a valid baseline. (This is the F1/F2 isolation requirement in `plan.md`.)
 2. **"Decode" = the denoise loop, not token-by-token.** There is no per-token `tt_out_tok`
    feedback, no advancing current-position cursor within a block, no greedy/top-k next-token
    sampling. The unit of work is a **denoise step over a fixed 256-token canvas** (≤48 steps/block),
@@ -105,13 +104,12 @@ These are the reasons the generic autoregressive skills need overriding. When an
    `make_replay_noise_fn`) and `demo/replay_hf_tt.py`. `bfp8` small-probability drift can **flip**
    an accept/renoise decision even when the argmax is unchanged, so any precision metric must be
    sensitive to small-probability mass — top-1/top-5 explicitly is not.
-4. **Data-dependent control flow vs static Metal Trace.** Entropy-budget acceptance is a
-   data-dependent cutoff (sort → cumsum → scatter/inverse-permutation over the 256 canvas positions),
-   and early-halt is data-dependent — both collide with static trace capture. The trace-safe shape
-   is a **fixed step budget (always run the max, ≤48) with an on-device tensor mask**, never a host
-   branch or a variable-length slice. Keep the cutoff decision as a device tensor; use tensor-valued
-   index arguments for scatter/gather so indices stay device-resident. Warm the program cache for
-   `sort`/`cumsum`/`scatter`/`gather`/entropy at the exact fixed canvas shape and argument values.
+4. **Data-dependent control flow vs Metal Trace.** Entropy-budget acceptance stays inside each
+   captured trace as a fixed-shape tensor cutoff (sort → cumsum → scatter/inverse-permutation).
+   The shipping default replays a fixed 48-step trace. The landed opt-in early-halt controller
+   replays one-step/window traces and reads one halt scalar between replays; it never branches
+   inside capture. Under #48291 it currently halts 0/5 prompts and remains default OFF. Keep
+   scatter/gather indices device-resident and warm exact-shape programs.
 5. **Serving is block-granular through the tenstorrent/vllm TT plugin (a fork, not upstream).**
    The whole denoise loop lives **inside** the tt-metal model's `prefill_forward`/`decode_forward`,
    which emits a **256-token block per step**, not one token. Speculative decoding is **hard-blocked**
@@ -150,8 +148,8 @@ Under `models/experimental/diffusion_gemma/`:
 - `demo/text_demo.py` (emits `DG_TEXT_DEMO_SUCCESS`/`DG_TEXT_DEMO_FAILURE` markers — grep these,
   the RUN-first denoise path emits expected `TT_THROW` fallback noise even on success),
   `demo/replay_hf_tt.py` (HF-vs-TT committed replay harness).
-- `tests/` — device-gated tests (`DG_RUN_DEVICE=1`, checkpoint via `DG_CKPT`). RUN regression:
-  `tests/test_device_text_demo_run.py`. See `tests/` for KV-phase, bidirectional SDPA, canvas
+- `models/experimental/diffusion_gemma/tests/` — device-gated tests (`DG_RUN_DEVICE=1`, checkpoint via `DG_CKPT`). RUN regression:
+  `models/experimental/diffusion_gemma/tests/test_device_text_demo_run.py`. See that directory for KV-phase, bidirectional SDPA, canvas
   sampling, entropy, trajectory PCC, self-conditioning, memory-budget coverage.
 
 ## Issue map / stage ownership (parent #47452, label `DiffusionGemma`)
@@ -172,8 +170,13 @@ Under `models/experimental/diffusion_gemma/`:
 - **Commit messages must NOT include a `Co-Authored-By` trailer.**
 - **Commit AND push after each meaningful, verified batch of changes** — don't accumulate a large
   uncommitted pile. Land increments on the working branch (`diffusion-gemma-function`); log SHAs.
+  Invoking a `dg-*` stage command is explicit authorization for the stage agent
+  to commit and push stage-owned changes after `clean-pass`; no additional
+  confirmation is required.
 - **Do NOT edit `models/demos/gemma4/` or any shared directory.** Keep every fix inside
-  `models/experimental/diffusion_gemma/`. `git diff main -- models/demos/gemma4/` empty is a gate.
+  `models/experimental/diffusion_gemma/`. Run
+  `DG_BASE_REF=<actual-branch-base> bash models/experimental/diffusion_gemma/.agent/scripts/check_no_shared_gemma4_edits.sh`;
+  any DiffusionGemma-owned shared delta is a gate failure.
 - **Do not skip device tests by default.** Run the relevant QB2 device test whenever hardware/env
   is available; only skip when genuinely inapplicable or blocked, and record the reason.
 - **RUN-first vs correctness:** the current priority is a reproducible prompt→text device run at

@@ -21,9 +21,10 @@ models/experimental/diffusion_gemma/.agent/
 
 There are no Codex artifacts here: no `agents/openai.yaml`, no `multigoal` runner, no
 `$skill`/`/goal` syntax, no 4000-char objective cap. Skills are referenced by name (Claude Code
-auto-invokes them from their `description`, or you type `/name` — except `beautify` and
-`code-quality-review`, which set `disable-model-invocation: true` and are `/name`-only); stages are
-ordinary slash commands.
+auto-invokes them from their `description`, or you type `/name` — except
+`beautify`, `code-quality-review`, and provenance-only
+`forge-functional-decoder`, which set `disable-model-invocation: true` and are
+explicit-only); stages are ordinary slash commands.
 
 ## Wiring it into Claude Code
 
@@ -43,8 +44,20 @@ done
 
 (Copy instead of symlink if you prefer, or point `~/.claude/skills` at them for personal use.)
 After that, `/help` lists the `dg-*` commands and the skills auto-trigger on their descriptions
-(except `beautify` and `code-quality-review`, which are `disable-model-invocation: true` and so are
-user-invoked only via `/name`, never auto-triggered).
+(except `beautify`, `code-quality-review`, and `forge-functional-decoder`,
+which are `disable-model-invocation: true` and never auto-triggered).
+
+## Cursor Agent version
+
+Cursor uses the independent project-level bundle under `.cursor/skills/` and
+`.cursor/commands/dg-*.md`. Do not point Cursor at the Claude Code symlinks:
+the Cursor copies translate Task/Agent, subagent-review, and recovery semantics
+to Cursor-native tools.
+
+Domain facts and stage contracts are shared conceptually, not by symlink.
+Whenever model behavior, performance conclusions, paths, or gates change,
+update both this Claude bundle and the Cursor bundle. Keep platform-specific
+orchestration in its own copy.
 
 ## This is not a greenfield bring-up
 

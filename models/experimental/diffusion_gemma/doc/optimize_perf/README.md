@@ -1,5 +1,12 @@
 # DiffusionGemma — optimize-perf stage (#47465)
 
+> **Historical dg-08 snapshot.** The 4175.7 ms/step, 137.55 ms/layer, and
+> sequential-commit numbers below predate true-sparse MoE, OPT-004, batched
+> commit, traced denoise, and the L1-residency pass. Do not quote them as the
+> current model. Current shipping performance is ~18 t/s @48; the
+> `DG_NORM_FULLCANVAS=1` opt-in path measures 20.68 t/s. Start with
+> `perf_campaign_worklog.md`, `l1_residency.md`, and `early_halt.md`.
+
 Per-device performance optimization of the DiffusionGemma **denoise step / per-block** path on
 QB2 (`bh-qbge-06`, P150x4, mesh `(1,4)`, TP=4). The optimization unit is the **denoise step over
 the 256-token canvas** (≤48 steps/block) plus the commit — *not* per-token autoregressive decode.

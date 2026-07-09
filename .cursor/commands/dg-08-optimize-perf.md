@@ -1,0 +1,18 @@
+---
+description: DiffusionGemma stage 08 — optimize the denoise-step / per-block performance.
+---
+
+Read `.cursor/skills/diffusion-gemma/SKILL.md` and `.cursor/skills/optimize/SKILL.md` first, including its DiffusionGemma denoise-step playbook. Current state: true-sparse token-gather MoE + OPT-004 geometry tuning are default and the expert matmul is ~92% of practical DRAM roofline. The shipping path is ~18 t/s @48. The latest L1 pass found one additional material lever: `DG_NORM_FULLCANVAS=1` reaches **20.68 t/s (+15.8%)** but remains opt-in because it is not bit-identical; `DG_MOE_L1` is an end-to-end wash. The early-halt controller is implemented but remains default OFF because #48291 produced 0/5 halts and ~2% no-halt overhead. Start with `models/experimental/diffusion_gemma/doc/optimize_perf/perf_campaign_worklog.md`, `l1_residency.md`, `early_halt.md`, and `norm_fullcanvas_flip_gate.md`; use `path_to_100tps.md` only for roadmap arithmetic because its starting-state numbers are stale. Build is `ENABLE_TRACY=OFF`, so use traced Metal capture/replay + synchronized per-op device-time tables, not `tt-perf-report` op-CSV.
+
+This is the PERF stage (#47465). The optimization unit is the DENOISE STEP over the 256-token canvas (≤48 steps/block) + the commit, NOT per-token autoregressive decode. Preserve the selected precision config and the diffusion decisions. Do NOT begin vLLM work. Do NOT edit models/demos/gemma4/ — optimize DiffusionGemma-local code and drive the backbone through its existing knobs. Work only under models/experimental/diffusion_gemma/.
+
+Goal completion requirements:
+- Performance is reported per-denoise-step, per-block, and full-generation (prefill TTFT + Σ steps + commit), with a traced measured path — eager/untraced denoise-step numbers are not acceptable for ranking. Report tokens-per-block / blocks-per-second, never 1000/mean_tpot_ms.
+- An operation-topology audit of the measured denoise step: the sort → cumsum → scatter/inverse-permutation entropy-accept chain, the per-step canvas recompute (256-token mini-prefill against the frozen prefix), the [P+C] KV concat, the soft-embedding vocab matmul, self-conditioning, and the logits path. Program configs / sharding / DRAM-vs-L1 placement for sort/cumsum/scatter over the 256 axis are tuned with before/after evidence (these ops have no generic autoregressive guidance — add a candidate table).
+- The roofline is computed for the diffusion path: per step it re-reads weights and recomputes over the full 256 canvas against the frozen prefix; there is no incremental single-token KV read. Reconcile measured device time against this per-step-weight-traffic × steps model.
+- Every captured trace remains static. Record whether the selected path is fixed-48 replay or the landed per-step/window replay with one halt-scalar read between traces; never branch inside a captured trace.
+- Because this build has Tracy disabled, record the approved substitute: traced Metal ranking plus synchronized per-op/component device-time tables with provenance and `hardware-profiler-limited`. Runtime fallback audit clean; watcher-clean.
+- `models/experimental/diffusion_gemma/doc/optimize_perf/README.md` and current work logs record before/after step/block performance, topology audit, roofline reconciliation, configs, rejected options, limitations, and exact artifacts.
+- `stage-review` returns clean-pass; findings fixed/rereviewed. Locally commit under models/experimental/diffusion_gemma/ (no Co-Authored-By); then push — invoking this stage command explicitly authorizes both actions; never edit models/demos/gemma4/; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `autofix` fails.

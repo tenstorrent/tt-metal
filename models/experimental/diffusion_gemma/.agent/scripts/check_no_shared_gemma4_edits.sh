@@ -6,8 +6,8 @@
 # Exit codes: 0 pass, 2 critical failure, 3 checker error.
 #
 # DG_BASE_REF is the ref the DiffusionGemma work started from — the baseline the shared
-# dirs must match. On a main-based DiffusionGemma dev branch that is `main` (the exact
-# plan.md F1/F2 rule: `git diff main -- models/demos/gemma4` empty). On a branch stacked on
+# dirs must match. On a main-based DiffusionGemma dev branch prefer `origin/main`; a stale
+# local `main` can produce false violations. On a branch stacked on
 # other work (e.g. this skills branch sits on agentic-research/fast-models-fast, which itself
 # carries unrelated shared-dir edits), set DG_BASE_REF to THAT base so the gate flags only
 # shared edits introduced by DiffusionGemma work, not the pre-existing divergence.
@@ -18,7 +18,13 @@ set -u
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "CHECKER ERROR: not inside a git worktree" >&2; exit 3; }
 cd "$ROOT" || { echo "CHECKER ERROR: cannot cd to repo root $ROOT" >&2; exit 3; }
 
-BASE="${DG_BASE_REF:-main}"
+if [ -n "${DG_BASE_REF:-}" ]; then
+    BASE="$DG_BASE_REF"
+elif git rev-parse --verify --quiet origin/main >/dev/null; then
+    BASE="origin/main"
+else
+    BASE="main"
+fi
 
 if ! git rev-parse --verify --quiet "$BASE" >/dev/null; then
   echo "CHECKER ERROR: base ref '$BASE' not found (set DG_BASE_REF)" >&2
