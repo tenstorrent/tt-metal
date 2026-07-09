@@ -42,3 +42,32 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
 )
+
+# target_link_libraries() alone is not enough: when LIB_TYPE is OBJECT (the
+# default), CMake does not propagate an OBJECT library's compiled objects
+# through an INTERFACE library indirection, so ttnncpp would silently end up
+# without these ops' code (undefined symbols at final link time). Splice the
+# object files in directly via generator expression so they still land in
+# whatever ultimately links this umbrella target.
+if(LIB_TYPE STREQUAL "OBJECT")
+    target_sources(
+        ttnn_op_deepseek_prefill
+        INTERFACE
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Combine>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Extract>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::Insert>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache>
+            $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache>
+    )
+endif()
