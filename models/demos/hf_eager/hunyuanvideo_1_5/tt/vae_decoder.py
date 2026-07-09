@@ -20,21 +20,25 @@ from models.tt_dit.utils.conv3d import get_conv3d_config, register_conv3d_config
 # channel-expand upsample convs (e.g. 1024->8192). Cap C_in_block small; these
 # are correctness-first (untuned) and can be re-swept for speed later.
 _K = (3, 3, 3)
+# Tuned blockings (hw_product ~32 for core-grid parallelism + wider C_out_block)
+# over the conservative (C,32,1,1,1) default, following swept wan/ltx entries in
+# conv3d.py::_BLOCKINGS. C_in_block capped at 128 so the wide channel-expand
+# upsample convs (e.g. 1024->8192) fit L1.
 register_conv3d_configs(
     {
-        (32, 1024, _K): (32, 32, 1, 1, 1),
-        (1024, 1024, _K): (128, 32, 1, 1, 1),
-        (1024, 8192, _K): (128, 32, 1, 1, 1),
-        (1024, 4096, _K): (128, 32, 1, 1, 1),
-        (512, 512, _K): (128, 32, 1, 1, 1),
-        (512, 1024, _K): (128, 32, 1, 1, 1),
-        (512, 2048, _K): (128, 32, 1, 1, 1),
-        (256, 256, _K): (128, 32, 1, 1, 1),
-        (256, 512, _K): (128, 32, 1, 1, 1),
-        (256, 1024, _K): (128, 32, 1, 1, 1),
-        (128, 128, _K): (128, 32, 1, 1, 1),
-        (128, 512, _K): (128, 32, 1, 1, 1),
-        (128, 3, _K): (128, 32, 1, 1, 1),
+        (32, 1024, _K): (32, 64, 1, 8, 4),
+        (1024, 1024, _K): (128, 64, 1, 8, 4),
+        (1024, 8192, _K): (128, 32, 1, 8, 4),
+        (1024, 4096, _K): (128, 32, 1, 8, 4),
+        (512, 512, _K): (128, 64, 1, 8, 4),
+        (512, 1024, _K): (128, 64, 1, 8, 4),
+        (512, 2048, _K): (128, 32, 1, 8, 4),
+        (256, 256, _K): (128, 64, 1, 8, 4),
+        (256, 512, _K): (128, 64, 1, 8, 4),
+        (256, 1024, _K): (128, 64, 1, 8, 4),
+        (128, 128, _K): (128, 64, 1, 8, 4),
+        (128, 512, _K): (128, 64, 1, 8, 4),
+        (128, 3, _K): (128, 32, 1, 8, 4),
     }
 )
 
