@@ -8,7 +8,7 @@ mesh (8 completions per submesh). All 16 completions must be identical -- otherw
 two submeshes decoded differently for the same input. Single process, no MPI/bridge.
 
 Run (needs >= 2 chips + HF_TOKEN):
-    cd tt-train/sources/examples/grpo/tests
+    cd tt-train/tests/python/grpo_remote_rollout
     python3 -m pytest -s test_ttt_worker_gsm8k.py
 """
 
