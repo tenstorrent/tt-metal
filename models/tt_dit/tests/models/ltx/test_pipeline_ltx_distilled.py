@@ -1213,7 +1213,8 @@ def test_kf_fringe_repro(
     seed = int(os.environ.get("SEED", "10"))
     pf = os.environ.get("PROMPT_FILE")
     prompt = open(pf).read().strip() if pf and os.path.exists(pf) else os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
-    s_int = float(os.environ.get("LTX_KF_INTERIOR_S1", "1.0"))  # interior-pin coarse hold (fix knob)
+    s_int = float(os.environ.get("LTX_KF_INTERIOR_S1", "1.0"))  # interior-pin coarse (s1) hold
+    s_int2 = float(os.environ.get("LTX_KF_INTERIOR_S2", "1.0"))  # interior-pin refine (s2) hold
 
     latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
     mid_pixel = (latent_frames // 2) * TEMPORAL_COMPRESSION
@@ -1247,7 +1248,7 @@ def test_kf_fringe_repro(
     pipeline.generate(
         prompt,
         output_path=str(out),
-        images=[(kf0, 0, 1.0, 1.0), (kfmid, mid_pixel, s_int, 1.0), (kflast, last_pixel, s_int, 1.0)],
+        images=[(kf0, 0, 1.0, 1.0), (kfmid, mid_pixel, s_int, s_int2), (kflast, last_pixel, s_int, s_int2)],
         num_frames=num_frames,
         height=height,
         width=width,
@@ -1291,5 +1292,26 @@ def test_kf_fringe_repro(
     )
     print(
         "KF_FRINGE mid[pin..+12]=" + ",".join(f"{fr[i] / med:.2f}" for i in range(mid_pixel, min(nfr, mid_pixel + 13))),
+        flush=True,
+    )
+
+    # Temporal COHERENCE — the real defect: jerk = |f[t+1] - 2 f[t] + f[t-1]| zeros out smooth motion
+    # and spikes on frame-to-frame flicker/jumps. A hard interior pin makes its neighbors flicker (luma
+    # + colour jumping). RATIO near 1.0 = as coherent as the rest of the clip.
+    rgb = np.stack([np.asarray(Image.open(p).convert("RGB")).astype("float32") for p in paths])
+    lum = rgb.mean(3)
+    jerk = np.abs(lum[2:] - 2 * lum[1:-1] + lum[:-2]).mean((1, 2))
+    nj = len(jerk)
+    near = jerk[max(0, mid_pixel - 6) : min(nj, mid_pixel + 10)]
+    far = np.concatenate([jerk[18:58], jerk[93:133]]) if nj > 133 else jerk
+    fmean = float(far.mean()) or 1.0
+    print(
+        f"KF_JERK (temporal coherence): near-pin-max={near.max():.2f}@f{max(0, mid_pixel - 6) + int(near.argmax()) + 1} "
+        f"far-mean={fmean:.2f} -> RATIO={near.max() / fmean:.2f}x (1.0=coherent, baseline~2.7x)",
+        flush=True,
+    )
+    print(
+        "KF_JERK near[pin-2..+10]="
+        + ",".join(f"{jerk[i]:.1f}" for i in range(max(0, mid_pixel - 2), min(nj, mid_pixel + 11))),
         flush=True,
     )
