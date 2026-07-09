@@ -1965,8 +1965,8 @@ double lookup_fabric_link_bw(tt::ARCH arch) {
     switch (arch) {
         // WH: 100 Gbps per link = 12.5 GB/s
         case tt::ARCH::WORMHOLE_B0: return 12.5;
-        // BH: 400 Gbps per link = 50 GB/s
-        case tt::ARCH::BLACKHOLE: return 50.0;
+        // ~~BH: 400 Gbps per link = 50 GB/s~~ TODO (AM) currently devices limited to half BW: 25.0 GB/s
+        case tt::ARCH::BLACKHOLE: return 25.0;
         default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
     }
 }
