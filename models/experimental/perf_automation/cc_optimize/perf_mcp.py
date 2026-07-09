@@ -369,6 +369,37 @@ def _reap_measurement_dir(path) -> bool:
     return True
 
 
+_STABLE_ARTIFACT_DIR = Path(tempfile.gettempdir()) / "perf_mcp_last_profile"
+
+
+def _persist_artifacts(prof: dict) -> dict:
+    """Copy prof['artifacts'] CSVs out of the about-to-be-reaped tmpdir into one fixed dir
+    (overwritten each call) and repoint the paths there, so they stay readable after the
+    reap. Best-effort: never raises, so profiling is unaffected if persistence fails."""
+    arts = prof.get("artifacts")
+    if not isinstance(arts, dict):
+        return prof
+    try:
+        _shutil.rmtree(_STABLE_ARTIFACT_DIR, ignore_errors=True)
+        _STABLE_ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
+        repointed = {}
+        for key, src in arts.items():
+            sp = Path(str(src))
+            try:
+                if sp.is_file():
+                    dst = _STABLE_ARTIFACT_DIR / sp.name
+                    _shutil.copy2(sp, dst)
+                    repointed[key] = str(dst)
+                else:
+                    repointed[key] = src
+            except Exception:
+                repointed[key] = src
+        prof["artifacts"] = repointed
+    except Exception:
+        pass
+    return prof
+
+
 def _profile_once() -> dict:
     ctx = _Ctx()
     tmpdir = ctx.run.dir
@@ -379,6 +410,9 @@ def _profile_once() -> dict:
             prof = roofline.annotate_profile(prof, _ENV)
         except Exception:  # annotation is best-effort; raw profile still usable
             pass
+        # Persist per-op CSVs to a stable path BEFORE the finally reaps tmpdir, so the
+        # artifact paths handed back stay readable (e.g. for op->source attribution).
+        prof = _persist_artifacts(prof)
         return prof
     finally:
         _reap_measurement_dir(tmpdir)
