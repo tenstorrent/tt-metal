@@ -494,22 +494,26 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    std::unordered_map<std::string, uint32_t> reader_named_rtas;
+    experimental::Table<std::string, experimental::Table<experimental::NodeCoord, uint32_t>> reader_rta;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
+        reader_rta = {
+            {"N", {{node, dims.N}}},
+            {"Ht", {{node, dims.Ht}}},
+            {"Wt", {{node, dims.Wt}}},
+            {"HtWt", {{node, dims.Ht * dims.Wt}}},
+        };
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = {{"num_tiles", dims.num_tensor_tiles}, {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
+        reader_rta = {
+            {"num_tiles", {{node, dims.num_tensor_tiles}}},
+            {"scaler", {{node, *reinterpret_cast<uint32_t*>(&scaler)}}},
+        };
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
 
     experimental::ProgramRunArgs params;
-    experimental::Table<std::string, experimental::Table<experimental::NodeCoord, uint32_t>> reader_rta;
-    for (const auto& [name, value] : reader_named_rtas) {
-        reader_rta[name][node] = value;
-    }
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
