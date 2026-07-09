@@ -345,6 +345,19 @@ def encoder_tp_block_sharded_matmul(
     return program_config, in0_mem, out_mem
 
 
+def encoder_tp_interleaved_matmul_program_config(
+    device: ttnn.Device,
+    m: int,
+    k: int,
+    n: int,
+) -> Optional[ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig]:
+    """1D multicast fallback PC for text-encoder TP interleaved matmul at tuned ``(k, n)``."""
+    ibw = _ENCODER_TP_BS_IBW.get((k, n))
+    if ibw is None:
+        return None
+    return matmul_multicast_1d_program_config(device, m=m, k=k, n=n, force_in0_block_w=ibw)
+
+
 # T2U tuned 2D matmul layouts from ``test_t2u_matmul_perf_report_sweep`` (BH 11×10, M=512 chunks).
 # ``in0`` / ``out``: ``l1`` (interleaved), ``dram``, or ``bs`` (L1 block-sharded).
 _T2U_TUNED_MATMUL = {

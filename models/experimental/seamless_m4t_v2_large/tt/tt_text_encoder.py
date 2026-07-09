@@ -19,6 +19,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     dram_linear_input_mem_config,
     dram_matmul_program_config,
     encoder_tp_block_sharded_matmul,
+    encoder_tp_interleaved_matmul_program_config,
     ensure_interleaved_bsh,
     ensure_l1_width_sharded_activation,
     sdpa_program_config,
@@ -90,6 +91,27 @@ class TTSeamlessM4Tv2Encoder:
         self._sdpa_pc_cache: dict = {}
         self._dram_matmul_pc_cache: dict = {}
         self._width_shard_mem_cache: dict = {}
+        self._chunked_tp_compute_cfg = None
+
+    @staticmethod
+    def _tp_bs_chunk_rows() -> int:
+        """Row chunk size for long-seq TP block-sharded matmul (``SEAMLESS_TP_BS_CHUNK_M``, default 2048)."""
+        try:
+            return int(os.environ.get("SEAMLESS_TP_BS_CHUNK_M", "2048"))
+        except ValueError:
+            return 2048
+
+    def _chunked_tp_linear_compute_cfg(self) -> ttnn.DeviceComputeKernelConfig:
+        # Multiple LoFi block-sharded matmul chunks compound bf16 noise; HiFi2 matches TP=1 chunked path PCC.
+        if self._chunked_tp_compute_cfg is None:
+            self._chunked_tp_compute_cfg = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+            )
+        return self._chunked_tp_compute_cfg
 
     def _width_shard_mem_config(self, token_rows: int, channels: int, out_channels: int) -> ttnn.MemoryConfig:
         key = (token_rows, channels, out_channels)
@@ -495,6 +517,136 @@ class TTSeamlessM4Tv2Encoder:
         ttnn.deallocate(normed_sharded)
         return normed
 
+    def _linear_tp_block_sharded(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        m: int,
+        k: int,
+        n: int,
+        fused_activation,
+        program_config,
+        in0_mem: ttnn.MemoryConfig,
+        out_mem: ttnn.MemoryConfig,
+        memory_config: ttnn.MemoryConfig,
+        compute_kernel_config,
+    ) -> ttnn.Tensor:
+        if ttnn.is_sharded(x) and x.memory_config() == in0_mem:
+            x_bs = x
+            owns_x_bs = False
+        elif ttnn.is_sharded(x):
+            x_bs = ttnn.to_memory_config(x, in0_mem)
+            owns_x_bs = True
+        else:
+            x2d = x if len(x.shape) == 2 else ttnn.reshape(x, (m, k))
+            x_bs = ttnn.to_memory_config(x2d, in0_mem)
+            if x2d is not x:
+                ttnn.deallocate(x2d)
+            owns_x_bs = True
+        out_bs = ttnn.linear(
+            x_bs,
+            weight,
+            bias=bias,
+            program_config=program_config,
+            memory_config=out_mem,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if owns_x_bs:
+            ttnn.deallocate(x_bs)
+        out = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
+        ttnn.deallocate(out_bs)
+        if len(x.shape) >= 3:
+            out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
+        return out
+
+    def _linear_tp_chunked(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        *,
+        m: int,
+        k: int,
+        n: int,
+        chunk_m: int,
+        batch: int,
+        seq: int,
+        memory_config: ttnn.MemoryConfig,
+        fused_activation,
+        program_config,
+        in0_mem: ttnn.MemoryConfig,
+        out_mem: ttnn.MemoryConfig,
+    ) -> ttnn.Tensor:
+        """Long-seq TP block-sharded matmul via ``ceil(m / chunk_m)`` tuned chunk kernels."""
+        num_chunks = (m + chunk_m - 1) // chunk_m
+        compute_cfg = self._chunked_tp_linear_compute_cfg() if num_chunks > 1 else self._linear_ln_compute_cfg
+
+        if ttnn.is_sharded(x):
+            x_inter = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            owns_x_inter = True
+        else:
+            x_inter = x
+            owns_x_inter = False
+        if len(x_inter.shape) == 3:
+            x_inter = ttnn.reshape(x_inter, (m, k))
+        elif len(x_inter.shape) != 2:
+            x_inter = ttnn.reshape(x_inter, (m, k))
+        if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
+            prev = x_inter
+            x_inter = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
+            if prev is not x:
+                ttnn.deallocate(prev)
+
+        chunks: list[ttnn.Tensor] = []
+        for i in range(num_chunks):
+            start = i * chunk_m
+            end = min(start + chunk_m, m)
+            chunk_rows = end - start
+
+            chunk = ttnn.slice(x_inter, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if chunk_rows < chunk_m:
+                chunk = self._pad_token_rows(chunk, chunk_rows, chunk_m)
+            x2d = chunk if len(chunk.shape) == 2 else ttnn.reshape(chunk, (chunk_m, k))
+            x_bs = ttnn.to_memory_config(x2d, in0_mem)
+            if x2d is not chunk:
+                ttnn.deallocate(x2d)
+            if chunk is not x_inter:
+                ttnn.deallocate(chunk)
+
+            out_bs = ttnn.linear(
+                x_bs,
+                weight,
+                bias=bias,
+                program_config=program_config,
+                memory_config=out_mem,
+                compute_kernel_config=compute_cfg,
+            )
+            ttnn.deallocate(x_bs)
+            out_inter = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
+            ttnn.deallocate(out_bs)
+            if chunk_rows < chunk_m:
+                out_inter = ttnn.slice(
+                    out_inter,
+                    [0, 0],
+                    [chunk_rows, int(out_inter.shape[-1])],
+                    [1, 1],
+                    memory_config=memory_config,
+                )
+            chunks.append(out_inter)
+
+        if owns_x_inter:
+            ttnn.deallocate(x_inter)
+
+        if len(chunks) == 1:
+            out_concat = chunks[0]
+        else:
+            out_concat = ttnn.concat(chunks, dim=0, memory_config=memory_config)
+            for c in chunks:
+                ttnn.deallocate(c)
+        return ttnn.reshape(out_concat, (batch, seq, n))
+
     def _linear_tp(
         self,
         x: ttnn.Tensor,
@@ -502,7 +654,7 @@ class TTSeamlessM4Tv2Encoder:
         bias: ttnn.Tensor,
         *,
         activation: Optional[str] = None,
-        memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+        memory_config: Optional[ttnn.MemoryConfig] = None,
     ) -> ttnn.Tensor:
         """Regular (non-DRAM-sharded) linear for TP>1 path.
 
@@ -510,68 +662,77 @@ class TTSeamlessM4Tv2Encoder:
         Each device computes a local partial result; the caller applies
         ``encoder_all_reduce_sum_replicate`` after row-parallel layers.
 
-        Uses ``encoder_tp_block_sharded_matmul`` when shapes are tuned; otherwise falls back to
-        interleaved ``ttnn.linear``. Output is resharded back to interleaved.
+        Uses ``encoder_tp_block_sharded_matmul`` when shapes are tuned; long-seq
+        (``m > SEAMLESS_TP_BS_CHUNK_M``) runs the same kernel on row chunks. Otherwise
+        falls back to tuned 1D interleaved ``ttnn.linear``.
         """
+        if memory_config is None:
+            memory_config = getattr(self, "_activation_mc", ttnn.L1_MEMORY_CONFIG)
         k = int(weight.shape[-2])
         n = int(weight.shape[-1])
         m = self._linear_token_rows(x)
+        chunk_m = self._tp_bs_chunk_rows()
         fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
-        tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
-        # Block-sharded L1 matmul CBs clash with decode-trace L1 reservation at long prefill
-        # (``demo_perf_sweep`` / demo @ seq=4096). Use interleaved DRAM fallback above 2048 tokens.
-        _TP_BS_M_MAX = 2048
-        if tuned is not None and m <= _TP_BS_M_MAX:
-            program_config, in0_mem, out_mem = tuned
-            if ttnn.is_sharded(x) and x.memory_config() == in0_mem:
-                # Upstream (block-sharded LN) already produced this matmul's in0 layout — feed it
-                # straight in, skipping the interleaved->block reshard. Caller still owns ``x``.
-                x_bs = x
-                owns_x_bs = False
-            elif ttnn.is_sharded(x):
-                # Sharded but a different spec: reshard directly (reshape on a sharded tensor is
-                # unsafe, so avoid the 2-D reshape path here).
-                x_bs = ttnn.to_memory_config(x, in0_mem)
-                owns_x_bs = True
-            else:
-                x2d = x if len(x.shape) == 2 else ttnn.reshape(x, (m, k))
-                x_bs = ttnn.to_memory_config(x2d, in0_mem)
-                if x2d is not x:
-                    ttnn.deallocate(x2d)
-                owns_x_bs = True
-            out_bs = ttnn.linear(
-                x_bs,
+
+        tuned_chunk = encoder_tp_block_sharded_matmul(self.device, chunk_m, k, n, fused_activation=fused_activation)
+        if m > chunk_m and tuned_chunk is not None:
+            program_config, in0_mem, out_mem = tuned_chunk
+            batch = int(x.shape[0]) if len(x.shape) >= 3 else 1
+            seq = int(x.shape[1]) if len(x.shape) >= 3 else m
+            return self._linear_tp_chunked(
+                x,
                 weight,
-                bias=bias,
+                bias,
+                m=m,
+                k=k,
+                n=n,
+                chunk_m=chunk_m,
+                batch=batch,
+                seq=seq,
+                memory_config=memory_config,
+                fused_activation=fused_activation,
                 program_config=program_config,
-                memory_config=out_mem,
+                in0_mem=in0_mem,
+                out_mem=out_mem,
+            )
+
+        tuned = encoder_tp_block_sharded_matmul(self.device, m, k, n, fused_activation=fused_activation)
+        if tuned is not None:
+            program_config, in0_mem, out_mem = tuned
+            return self._linear_tp_block_sharded(
+                x,
+                weight,
+                bias,
+                m=m,
+                k=k,
+                n=n,
+                fused_activation=fused_activation,
+                program_config=program_config,
+                in0_mem=in0_mem,
+                out_mem=out_mem,
+                memory_config=memory_config,
                 compute_kernel_config=self._linear_ln_compute_cfg,
             )
-            if owns_x_bs:
-                ttnn.deallocate(x_bs)
-            out = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
-            ttnn.deallocate(out_bs)
-            if len(x.shape) >= 3:
-                out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
-            return out
 
-        # Untuned-shape fallback: the generic sharded matmul rejects the ``activation=`` kwarg, and a
-        # block-sharded input (e.g. from the block-sharded LN) isn't valid here. Convert any sharded
-        # input to interleaved so this path stays the plain "interleaved in, interleaved out" linear.
+        # Untuned-shape fallback: block-sharded LN input is not valid here — convert to interleaved.
         x_in = x
         owns_x_in = False
         if ttnn.is_sharded(x):
-            x_in = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            x_in = ttnn.sharded_to_interleaved(x, memory_config, output_dtype=ttnn.bfloat16)
             owns_x_in = True
+        if len(x_in.shape) == 3:
+            x_in = ttnn.reshape(x_in, (m, k))
         kwargs = {}
         if activation == "relu":
             kwargs["activation"] = "relu"
-        out_mc = ttnn.DRAM_MEMORY_CONFIG if m > _TP_BS_M_MAX else memory_config
+        fallback_pc = encoder_tp_interleaved_matmul_program_config(self.device, m, k, n)
+        if fallback_pc is not None:
+            kwargs["program_config"] = fallback_pc
         out = ttnn.linear(
             x_in,
             weight,
             bias=bias,
-            memory_config=out_mc,
+            memory_config=memory_config,
             compute_kernel_config=self._linear_ln_compute_cfg,
             **kwargs,
         )
