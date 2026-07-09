@@ -419,6 +419,16 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
     }
 
+    // TT_MM_MCAST=1 replaces the O(chain_length) in0 store-and-forward relay with a single hardware
+    // multicast from the injector to the whole in0-sharing core rectangle. Set on the shared `defines`
+    // (before the in0_injector_defines copy below) so both the in0 sender and receiver kernels see it.
+    const char* env_mcast = std::getenv("TT_MM_MCAST");
+    const bool enable_mcast = (env_mcast != nullptr && env_mcast[0] == '1');
+    if (enable_mcast) {
+        TT_FATAL(double_buffer_factor >= 2, "MCAST_BROADCAST requires in0 CB depth >= 2 for slot reuse safety");
+        defines["MCAST_BROADCAST"] = "1";
+    }
+
     if (fuse_op) {
         // Create semaphores
         fused_op_signaler->init_fused_op(program, device, in0_sender_cores);
@@ -432,6 +442,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         const char* skip_in0_read_env = std::getenv("SKIP_IN0_DRAM_READ");
         if (skip_in0_read_env != nullptr && skip_in0_read_env[0] == '1') {
             defines["SKIP_IN0_DRAM_READ"] = "1";
+        }
+        // Timing-isolation knob: SKIP_IN1_DRAM_READ=1 makes the in1 injector skip the DRAM read
+        // (semaphores still fire) to measure the read's contribution. PCC is garbage under this flag.
+        const char* skip_in1_read_env = std::getenv("SKIP_IN1_DRAM_READ");
+        if (skip_in1_read_env != nullptr && skip_in1_read_env[0] == '1') {
+            defines["SKIP_IN1_DRAM_READ"] = "1";
         }
         if (fused_op_signaler->read_local_slice_from_input) {
             in0_injector_defines = defines;
@@ -762,6 +778,37 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             defer_write_k_block,
             max_defer_write_k_block,
         };
+        if (enable_mcast) {
+            // in0 broadcast rectangle: the whole in0-sharing axis minus the injector (the low-coordinate
+            // endpoint at axis index 0). Physical axis extent, not chain order. transpose flips which axis:
+            // x when not transposed, y when transposed (mirrors the chain axis). Appended right after the
+            // fixed block and before the variable-length ternary/output/fuse tail, matching the kernel read.
+            CoreCoord in0_rf_l, in0_rl_l;
+            uint32_t num_in0_recv = 0;
+            if (!transpose_core_grid) {
+                in0_rf_l = {std::min<std::size_t>(1, grid_size.x - 1), (std::size_t)core.y};
+                in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
+                num_in0_recv = grid_size.x - 1;
+            } else {
+                in0_rf_l = {(std::size_t)core.x, std::min<std::size_t>(1, grid_size.y - 1)};
+                in0_rl_l = {(std::size_t)core.x, (std::size_t)grid_size.y - 1};
+                num_in0_recv = grid_size.y - 1;
+            }
+            auto in0_mc_s = device->worker_core_from_logical_core(in0_rf_l);
+            auto in0_mc_e = device->worker_core_from_logical_core(in0_rl_l);
+            // Multicast rect corner ordering must match the mcast NoC (swap iff NOC_1).
+            if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+                std::swap(in0_mc_s, in0_mc_e);
+            }
+            auto in0_injector_virtual_core = device->worker_core_from_logical_core(in0_core_order.front());
+            in0_args.push_back((std::uint32_t)in0_mc_s.x);
+            in0_args.push_back((std::uint32_t)in0_mc_s.y);
+            in0_args.push_back((std::uint32_t)in0_mc_e.x);
+            in0_args.push_back((std::uint32_t)in0_mc_e.y);
+            in0_args.push_back(num_in0_recv);
+            in0_args.push_back((std::uint32_t)in0_injector_virtual_core.x);
+            in0_args.push_back((std::uint32_t)in0_injector_virtual_core.y);
+        }
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
@@ -876,7 +923,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->read_local_slice_from_input,
+        enable_mcast};
 }
 
 MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
@@ -959,19 +1007,24 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 15;
 
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
     constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
     constexpr uint32_t in1_ternary_b_addr_idx = 14;
 
+    // With mcast enabled the in0 kernels read 7 extra RT args right after max_defer_write_k_block and
+    // before the ternary/output tail (see minimal_matmul_factory_helper_common). Only in0 is affected;
+    // in1 carries no mcast args.
+    const uint32_t in0_mcast_shift = override_variables.enable_mcast ? 7u : 0u;
+    const uint32_t in0_ternary_a_addr_idx = 14 + in0_mcast_shift;  // After max_defer_write_k_block (index 13) for in0
+    const uint32_t in0_ternary_b_addr_idx = 15 + in0_mcast_shift;
+
     // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after max_defer_write_k_block and optional ternary addresses
-    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 17 : 14;
+    // Output addresses start after max_defer_write_k_block, optional mcast args, and optional ternary addresses
+    uint32_t in0_out_addr_start_idx = (has_fused_ternary ? 17 : 14) + in0_mcast_shift;
     uint32_t in1_out_addr_start_idx = has_fused_ternary ? 16 : 13;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {

@@ -21,6 +21,9 @@ struct MinimalMatmulProgramFactory {
         tt::tt_metal::KernelHandle compute_kernels_id{};
         bool transpose_core_grid{};
         bool read_local_slice_from_input{};
+        // When set, the in0 kernels carry 7 extra mcast RT args before the output/ternary tail, so
+        // override_runtime_arguments must shift the in0 address offsets by that many.
+        bool enable_mcast{};
     };
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 

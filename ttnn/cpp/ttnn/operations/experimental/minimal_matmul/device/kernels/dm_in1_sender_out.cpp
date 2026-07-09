@@ -248,6 +248,9 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
+#ifndef SKIP_IN1_DRAM_READ
+                    // Skipped under SKIP_IN1_DRAM_READ to isolate the in1 read cost; the semaphore wait in
+                    // compute_actual_k_block_iter above still runs, so the CB is pushed with stale L1 (garbage PCC).
                     read_in1_block_sync<K_block_tiles, N_block_tiles>(
                         in1_reader,
                         in1_shape,
@@ -257,6 +260,9 @@ void kernel_main() {
                         (k_block + 1) * K_block_tiles,
                         n_tile,
                         n_tile_end);
+#else
+                    (void)k_block;  // still computed for its semaphore side effects; just not read from
+#endif
                 } else {
                     DeviceZoneScopedN("RECV-WAIT");
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);

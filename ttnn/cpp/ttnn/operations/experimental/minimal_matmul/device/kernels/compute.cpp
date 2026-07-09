@@ -421,16 +421,16 @@ void kernel_main() {
                 cb_in0.wait_front(in0_block_num_tiles);
                 cb_in1.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                // matmul_blocks(
+                //     in0_cb,
+                //     in1_cb,
+                //     intermediate_cb,
+                //     current_M_block_tiles,
+                //     current_N_block_tiles,
+                //     N_block_tiles,
+                //     K_block_tiles,
+                //     current_subblock_h,
+                //     current_subblock_w);
 
                 if (k_block == K_num_blocks - 1) {
                     /**

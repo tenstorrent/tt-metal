@@ -53,6 +53,19 @@ void kernel_main() {
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
+#ifdef MCAST_BROADCAST
+    // Broadcast rectangle for the in0-sharing axis minus the injector, plus the injector's coords so
+    // receivers can signal slot-free directly to it. Read at this fixed position, before the variable-length
+    // ternary/output/fuse tail, so host and kernel agree on the offset. Present iff MCAST_BROADCAST.
+    const uint32_t in0_mc_start_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_mc_start_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_mc_end_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_mc_end_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_num_recv = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_inj_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_inj_noc_y = get_arg_val<uint32_t>(argidx++);
+#endif
+
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
     const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
@@ -200,6 +213,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
     const uint64_t in0_sender_semaphore_noc_addr =
         get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
+#ifdef MCAST_BROADCAST
+    // Same L1 offset on every core, so receivers increment the injector's sender semaphore directly.
+    const uint64_t in0_injector_sender_sem_noc_addr =
+        get_noc_addr(in0_inj_noc_x, in0_inj_noc_y, in0_sender_semaphore_addr);
+#endif
 
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
@@ -313,15 +331,44 @@ void kernel_main() {
                 } else {
                     DeviceZoneScopedN("RECV-WAIT");
                     // Get from previous device
+#ifdef MCAST_BROADCAST
+                    // Signal slot-free to the injector, then wait for its broadcast.
+                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(in0_injector_sender_sem_noc_addr, 1);
+                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+#else
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+#endif
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_in0.push_back(in0_block_num_tiles);
 
+#ifdef MCAST_BROADCAST
+                // Only the injector broadcasts: wait until every receiver signaled a free slot, then one
+                // multicast write of the block followed by one multicast set of their valid sems.
+                if constexpr (is_injector_core) {
+                    if (in0_num_recv > 0) {  // single-core in0 group => no receivers, skip mcast
+                        DeviceZoneScopedN("MCAST-SEND");
+                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
+                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+
+                        uint64_t mcast_data_addr = get_noc_multicast_addr(
+                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
+                        noc_async_write_multicast(
+                            in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
+                        // Barrier on the source L1 read before the k-loop reuses this CB slot.
+                        noc.async_writes_flushed();
+
+                        uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                            in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_receiver_semaphore_addr);
+                        noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                    }
+                }
+#else
                 if (!is_sink_core) {
                     DeviceZoneScopedN("MCAST-SEND");
                     noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
@@ -341,6 +388,7 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
+#endif
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
                     if (not_first_block && k_block_iter == max_defer_write_k_block) {
