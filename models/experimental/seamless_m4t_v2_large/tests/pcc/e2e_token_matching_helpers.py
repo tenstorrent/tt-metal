@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E token-matching helpers (``models/tt_transformers/demo/simple_text_demo.py`` pattern).
+"""E2E token-matching helpers and ISL sweep utilities.
 
 Teacher-forced greedy decode: HF reference tokens are fed as decoder inputs at each step while
 TT ``lm_head`` predictions are compared to offline HF top-1 / top-5 from a ``.refpt`` file.
@@ -9,6 +9,7 @@ TT ``lm_head`` predictions are compared to offline HF top-1 / top-5 from a ``.re
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
@@ -18,11 +19,32 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.scripts.demo_perf_sweep import (
+    SEQ_LEN_MAX,
+    SEQ_LEN_MIN,
+    sequence_lengths,
+)
+from models.experimental.seamless_m4t_v2_large.scripts.generate_t2tt_token_accuracy_reference import (
+    generate_speech_sweep_reference,
+    generate_text_sweep_reference,
+    sweep_refpt_path,
+)
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import TextDecoderPccInputs
 from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers import tt_encode_speech_via_model
-from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import _make_tt_model
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import from_torch_uint32_rm, mesh_default_device
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_tt_model_helpers import make_tt_model
+from models.experimental.seamless_m4t_v2_large.tests.pcc.token_matching_result_store import (
+    record_token_matching_result,
+)
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
+    DEVICE_PARAMS_TEXT,
+    DEVICE_PARAMS_TEXT_SINGLE,
+    MESH_DEVICE_PARAMETRIZE_TEXT_SINGLE_AND_1X4,
+    MESH_SHAPE_SINGLE,
+    _mesh_device_param,
+    _mesh_device_param_for_shape,
+    from_torch_uint32_rm,
+    mesh_default_device,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import _ttnn_ids_from_list
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import init_text_decoder_kv_cache
 
@@ -52,10 +74,6 @@ S2ST_MIN_TOKEN_REF_STEPS = 1
 MIN_TOP1_GATE_STEPS = 8
 
 
-from models.experimental.seamless_m4t_v2_large.tests.pcc.token_matching_result_store import (
-    record_token_matching_result,
-)
-
 _REF_DIR = Path(__file__).resolve().parent.parent / "reference_outputs"
 _REFPT_NAMES = {
     "t2tt": "seamless_m4t_v2_t2tt_eng_hin.refpt",
@@ -65,12 +83,7 @@ _REFPT_NAMES = {
     "asr": "seamless_m4t_v2_asr.refpt",
 }
 
-# E2E correctness split by output modality:
-#   text-output tasks → token matching + logit PCC
-#   speech-output tasks → WER (full generate → vocoder)
 TEXT_OUTPUT_TASKS = ("t2tt", "s2tt", "asr")
-SPEECH_OUTPUT_TASKS = ("t2st", "s2st")
-ALL_E2E_TASKS = TEXT_OUTPUT_TASKS + SPEECH_OUTPUT_TASKS
 TASK_TGT_LANG = {
     "t2tt": "hin",
     "t2st": "hin",
@@ -84,27 +97,6 @@ SPEECH_INPUT_TASKS = frozenset({"s2tt", "s2st", "asr"})
 
 def default_refpt_path(task: str) -> Path:
     return _REF_DIR / _REFPT_NAMES[task]
-
-
-def default_t2tt_refpt_path() -> Path:
-    return default_refpt_path("t2tt")
-
-
-def weights_dir_or_skip() -> str:
-    try:
-        return ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        pytest.skip(str(e))
-    except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
-
-
-def refpt_or_skip(task: str = "t2tt", path: Path | None = None) -> Path:
-    ref_path = path or default_refpt_path(task)
-    if not ref_path.is_file():
-        gen = "models/experimental/seamless_m4t_v2_large/scripts/generate_t2tt_token_accuracy_reference.py"
-        pytest.skip(f"Missing token-matching reference {ref_path}. Run: python {gen} --task {task}")
-    return ref_path
 
 
 @dataclass(frozen=True)
@@ -323,7 +315,7 @@ def run_t2tt_e2e_token_accuracy(
     t2u_cfg = hf_model.t2u_model.config
 
     with mesh_default_device(mesh_device):
-        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        tt_model = make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
 
         src_ids_tt = from_torch_uint32_rm(mesh_device, ref.src_ids.to(torch.int32))
         src_mask_tt = from_torch_uint32_rm(mesh_device, ref.src_mask.to(torch.int32))
@@ -363,7 +355,7 @@ def run_speech_e2e_token_accuracy(
     t2u_cfg = hf_model.t2u_model.config
 
     with mesh_default_device(mesh_device):
-        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        tt_model = make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
         try:
             enc_tt, enc_mask_tt = tt_encode_speech_via_model(
                 mesh_device,
@@ -387,3 +379,365 @@ def run_speech_e2e_token_accuracy(
             )
         finally:
             tt_model.release_generation_runtime()
+
+
+# ---------------------------------------------------------------------------
+# ISL sweep utilities (token-matching + logit-PCC sweeps)
+# ---------------------------------------------------------------------------
+
+SWEEP_EVAL_STEPS = 128
+SANITY_SWEEP_LENGTHS = (32, 64, 128)
+
+_SWEEP_LEN_THRESHOLD_OVERRIDES: dict[tuple[str, int], tuple[float, float]] = {
+    ("t2tt", 256): (0.94, T2TT_TOP5_THRESHOLD),
+    ("s2tt", 2048): (0.80, 0.84),
+    ("asr", 2048): (0.79, 0.84),
+}
+
+
+def sweep_sequence_lengths() -> list[int]:
+    return sequence_lengths(SEQ_LEN_MIN, SEQ_LEN_MAX)
+
+
+def sweep_mesh_parametrize():
+    """Pytest mesh params for token-matching / logit-PCC sweeps."""
+    mesh_env = os.environ.get("MESH_DEVICE", "").strip()
+    if mesh_env == "P150":
+        return (
+            "mesh_device,device_params",
+            [_mesh_device_param_for_shape(MESH_SHAPE_SINGLE, DEVICE_PARAMS_TEXT_SINGLE, id="1x1")],
+        )
+    if mesh_env == "BH-QB":
+        return ("mesh_device,device_params", [_mesh_device_param(DEVICE_PARAMS_TEXT)])
+    return MESH_DEVICE_PARAMETRIZE_TEXT_SINGLE_AND_1X4
+
+
+def sweep_auto_ref_enabled() -> bool:
+    return os.environ.get("SEAMLESS_SWEEP_AUTO_REF", "1") != "0"
+
+
+def sweep_thresholds_for_task(task: str, seq_len: int) -> tuple[float, float]:
+    if task not in TEXT_OUTPUT_TASKS:
+        raise ValueError(f"token matching sweep expects a text-output task, got {task!r}")
+    override = _SWEEP_LEN_THRESHOLD_OVERRIDES.get((task, seq_len))
+    if override is not None:
+        return override
+    if task in TEXT_INPUT_TASKS:
+        return T2TT_TOP1_THRESHOLD, T2TT_TOP5_THRESHOLD
+    if task in SPEECH_INPUT_TASKS:
+        return SPEECH_TOP1_THRESHOLD, SPEECH_TOP5_THRESHOLD
+    raise ValueError(f"unknown task {task!r}")
+
+
+def ensure_sweep_reference(
+    task: str,
+    seq_len: int,
+    weights_dir: str,
+    *,
+    max_decode_steps: int = SWEEP_EVAL_STEPS,
+) -> Path:
+    """Return sweep ``.refpt`` path, generating offline HF reference if missing."""
+    if task not in TEXT_OUTPUT_TASKS:
+        raise ValueError(f"token matching sweep expects a text-output task, got {task!r}")
+    ref_path = sweep_refpt_path(task, seq_len, max_decode_steps)
+    if ref_path.is_file():
+        return ref_path
+    if not sweep_auto_ref_enabled():
+        gen = "models/experimental/seamless_m4t_v2_large/scripts/generate_t2tt_token_accuracy_reference.py"
+        pytest.skip(
+            f"Missing sweep reference {ref_path}. Run: "
+            f"python {gen} --sweep --task {task} --seq_len {seq_len} "
+            f"(or set SEAMLESS_SWEEP_AUTO_REF=1 to generate on first run)"
+        )
+    if task in TEXT_INPUT_TASKS:
+        generate_text_sweep_reference(
+            weights_dir=weights_dir,
+            output_file=ref_path,
+            task=task,
+            seq_len=seq_len,
+            max_decode_steps=max_decode_steps,
+        )
+    else:
+        generate_speech_sweep_reference(
+            weights_dir=weights_dir,
+            output_file=ref_path,
+            task=task,
+            mel_frames=seq_len,
+            max_decode_steps=max_decode_steps,
+        )
+    return ref_path
+
+
+def maybe_skip_short_speech_sweep(task: str, ref_teacher_steps: int, seq_len: int) -> None:
+    if ref_teacher_steps >= S2ST_MIN_TOKEN_REF_STEPS:
+        return
+    pytest.skip(
+        f"{task.upper()} sweep len={seq_len} reference has {ref_teacher_steps} decode steps "
+        f"(need >={S2ST_MIN_TOKEN_REF_STEPS}); HF hit EOS early on short mel input"
+    )
+
+
+def default_speech_sweep_mel_debug_dir(*, task: str, mel_frames: int) -> Path:
+    return (
+        Path(__file__).resolve().parent.parent
+        / "teacher_forced_sweep_outputs"
+        / "debug_mel_inputs"
+        / f"mel{mel_frames}"
+        / task
+    )
+
+
+def save_speech_sweep_mel_artifacts(
+    *,
+    task: str,
+    mel_frames: int,
+    input_features: torch.Tensor,
+    mel_attention_mask: torch.Tensor,
+    seed_ids: torch.Tensor | None = None,
+    teacher_tokens: torch.Tensor | None = None,
+    out_dir: Path | None = None,
+    wav_path: Path | None = None,
+) -> Path:
+    import json
+
+    dest = out_dir or default_speech_sweep_mel_debug_dir(task=task, mel_frames=mel_frames)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    payload: dict = {
+        "task": task,
+        "mel_frames": mel_frames,
+        "input_features": input_features.detach().cpu(),
+        "mel_attention_mask": mel_attention_mask.detach().cpu(),
+    }
+    if seed_ids is not None:
+        payload["seed_ids"] = seed_ids.detach().cpu()
+    if teacher_tokens is not None:
+        payload["teacher_tokens"] = teacher_tokens.detach().cpu()
+
+    torch.save(payload, dest / "mel_input.pt")
+
+    meta = {
+        "task": task,
+        "mel_frames": mel_frames,
+        "input_features_shape": list(input_features.shape),
+        "mel_valid_frames": int(mel_attention_mask.sum().item()),
+        "teacher_decode_steps": int(teacher_tokens.numel()) if teacher_tokens is not None else None,
+        "note": (
+            "mel_input.pt is the exact tensor fed to the speech encoder in token-matching sweep "
+            "(first mel_frames of processor output from long preamble audio)."
+        ),
+    }
+    (dest / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+
+    if wav_path is not None and wav_path.is_file():
+        import shutil
+
+        shutil.copy2(wav_path, dest / "long_preamble_source.wav")
+
+    return dest
+
+
+def maybe_save_speech_sweep_mel_env(
+    *,
+    task: str,
+    seq_len: int,
+    input_features: torch.Tensor,
+    mel_attention_mask: torch.Tensor,
+    seed_ids: torch.Tensor,
+    teacher_tokens: torch.Tensor,
+) -> None:
+    want = os.environ.get("SEAMLESS_SWEEP_SAVE_MEL", "").strip()
+    if not want or str(seq_len) != want:
+        return
+    if task not in SPEECH_INPUT_TASKS:
+        return
+    dest = save_speech_sweep_mel_artifacts(
+        task=task,
+        mel_frames=seq_len,
+        input_features=input_features,
+        mel_attention_mask=mel_attention_mask,
+        seed_ids=seed_ids,
+        teacher_tokens=teacher_tokens,
+    )
+    logger.info(f"Saved speech sweep mel debug artifacts for {task.upper()} mel={seq_len} to {dest}")
+
+
+# ---------------------------------------------------------------------------
+# ISL sweep utilities (token-matching + logit-PCC sweeps)
+# ---------------------------------------------------------------------------
+
+SWEEP_EVAL_STEPS = 128
+SANITY_SWEEP_LENGTHS = (32, 64, 128)
+
+_SWEEP_LEN_THRESHOLD_OVERRIDES: dict[tuple[str, int], tuple[float, float]] = {
+    ("t2tt", 256): (0.94, T2TT_TOP5_THRESHOLD),
+    ("s2tt", 2048): (0.80, 0.84),
+    ("asr", 2048): (0.79, 0.84),
+}
+
+
+def sweep_sequence_lengths() -> list[int]:
+    return sequence_lengths(SEQ_LEN_MIN, SEQ_LEN_MAX)
+
+
+def sweep_mesh_parametrize():
+    """Pytest mesh params for token-matching / logit-PCC sweeps."""
+    mesh_env = os.environ.get("MESH_DEVICE", "").strip()
+    if mesh_env == "P150":
+        return (
+            "mesh_device,device_params",
+            [_mesh_device_param_for_shape(MESH_SHAPE_SINGLE, DEVICE_PARAMS_TEXT_SINGLE, id="1x1")],
+        )
+    if mesh_env == "BH-QB":
+        return ("mesh_device,device_params", [_mesh_device_param(DEVICE_PARAMS_TEXT)])
+    return MESH_DEVICE_PARAMETRIZE_TEXT_SINGLE_AND_1X4
+
+
+def sweep_auto_ref_enabled() -> bool:
+    return os.environ.get("SEAMLESS_SWEEP_AUTO_REF", "1") != "0"
+
+
+def sweep_thresholds_for_task(task: str, seq_len: int) -> tuple[float, float]:
+    if task not in TEXT_OUTPUT_TASKS:
+        raise ValueError(f"token matching sweep expects a text-output task, got {task!r}")
+    override = _SWEEP_LEN_THRESHOLD_OVERRIDES.get((task, seq_len))
+    if override is not None:
+        return override
+    if task in TEXT_INPUT_TASKS:
+        return T2TT_TOP1_THRESHOLD, T2TT_TOP5_THRESHOLD
+    if task in SPEECH_INPUT_TASKS:
+        return SPEECH_TOP1_THRESHOLD, SPEECH_TOP5_THRESHOLD
+    raise ValueError(f"unknown task {task!r}")
+
+
+def ensure_sweep_reference(
+    task: str,
+    seq_len: int,
+    weights_dir: str,
+    *,
+    max_decode_steps: int = SWEEP_EVAL_STEPS,
+) -> Path:
+    """Return sweep ``.refpt`` path, generating offline HF reference if missing."""
+    if task not in TEXT_OUTPUT_TASKS:
+        raise ValueError(f"token matching sweep expects a text-output task, got {task!r}")
+    ref_path = sweep_refpt_path(task, seq_len, max_decode_steps)
+    if ref_path.is_file():
+        return ref_path
+    if not sweep_auto_ref_enabled():
+        gen = "models/experimental/seamless_m4t_v2_large/scripts/generate_t2tt_token_accuracy_reference.py"
+        pytest.skip(
+            f"Missing sweep reference {ref_path}. Run: "
+            f"python {gen} --sweep --task {task} --seq_len {seq_len} "
+            f"(or set SEAMLESS_SWEEP_AUTO_REF=1 to generate on first run)"
+        )
+    if task in TEXT_INPUT_TASKS:
+        generate_text_sweep_reference(
+            weights_dir=weights_dir,
+            output_file=ref_path,
+            task=task,
+            seq_len=seq_len,
+            max_decode_steps=max_decode_steps,
+        )
+    else:
+        generate_speech_sweep_reference(
+            weights_dir=weights_dir,
+            output_file=ref_path,
+            task=task,
+            mel_frames=seq_len,
+            max_decode_steps=max_decode_steps,
+        )
+    return ref_path
+
+
+def maybe_skip_short_speech_sweep(task: str, ref_teacher_steps: int, seq_len: int) -> None:
+    if ref_teacher_steps >= S2ST_MIN_TOKEN_REF_STEPS:
+        return
+    pytest.skip(
+        f"{task.upper()} sweep len={seq_len} reference has {ref_teacher_steps} decode steps "
+        f"(need >={S2ST_MIN_TOKEN_REF_STEPS}); HF hit EOS early on short mel input"
+    )
+
+
+def default_speech_sweep_mel_debug_dir(*, task: str, mel_frames: int) -> Path:
+    return (
+        Path(__file__).resolve().parent.parent
+        / "teacher_forced_sweep_outputs"
+        / "debug_mel_inputs"
+        / f"mel{mel_frames}"
+        / task
+    )
+
+
+def save_speech_sweep_mel_artifacts(
+    *,
+    task: str,
+    mel_frames: int,
+    input_features: torch.Tensor,
+    mel_attention_mask: torch.Tensor,
+    seed_ids: torch.Tensor | None = None,
+    teacher_tokens: torch.Tensor | None = None,
+    out_dir: Path | None = None,
+    wav_path: Path | None = None,
+) -> Path:
+    import json
+
+    dest = out_dir or default_speech_sweep_mel_debug_dir(task=task, mel_frames=mel_frames)
+    dest.mkdir(parents=True, exist_ok=True)
+
+    payload: dict = {
+        "task": task,
+        "mel_frames": mel_frames,
+        "input_features": input_features.detach().cpu(),
+        "mel_attention_mask": mel_attention_mask.detach().cpu(),
+    }
+    if seed_ids is not None:
+        payload["seed_ids"] = seed_ids.detach().cpu()
+    if teacher_tokens is not None:
+        payload["teacher_tokens"] = teacher_tokens.detach().cpu()
+
+    torch.save(payload, dest / "mel_input.pt")
+
+    meta = {
+        "task": task,
+        "mel_frames": mel_frames,
+        "input_features_shape": list(input_features.shape),
+        "mel_valid_frames": int(mel_attention_mask.sum().item()),
+        "teacher_decode_steps": int(teacher_tokens.numel()) if teacher_tokens is not None else None,
+        "note": (
+            "mel_input.pt is the exact tensor fed to the speech encoder in token-matching sweep "
+            "(first mel_frames of processor output from long preamble audio)."
+        ),
+    }
+    (dest / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+
+    if wav_path is not None and wav_path.is_file():
+        import shutil
+
+        shutil.copy2(wav_path, dest / "long_preamble_source.wav")
+
+    return dest
+
+
+def maybe_save_speech_sweep_mel_env(
+    *,
+    task: str,
+    seq_len: int,
+    input_features: torch.Tensor,
+    mel_attention_mask: torch.Tensor,
+    seed_ids: torch.Tensor,
+    teacher_tokens: torch.Tensor,
+) -> None:
+    want = os.environ.get("SEAMLESS_SWEEP_SAVE_MEL", "").strip()
+    if not want or str(seq_len) != want:
+        return
+    if task not in SPEECH_INPUT_TASKS:
+        return
+    dest = save_speech_sweep_mel_artifacts(
+        task=task,
+        mel_frames=seq_len,
+        input_features=input_features,
+        mel_attention_mask=mel_attention_mask,
+        seed_ids=seed_ids,
+        teacher_tokens=teacher_tokens,
+    )
+    logger.info(f"Saved speech sweep mel debug artifacts for {task.upper()} mel={seq_len} to {dest}")

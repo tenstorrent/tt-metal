@@ -12,11 +12,8 @@ Inputs are derived from the real downloaded weights (no synthetic weights). If
 per the project policy "real weights or skip".
 """
 
-import os
-
 import pytest
 import torch
-import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -25,7 +22,11 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_text_encoder impo
     forward_torch_reference,
     load_pretrained_text_encoder,
 )
-from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
+from models.experimental.seamless_m4t_v2_large.tests.pcc.pcc_test_common import (
+    legacy_device_params,
+    legacy_mesh_device_param,
+    weights_dir_or_skip,
+)
 from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     from_torch_uint32_rm,
@@ -38,26 +39,6 @@ PCC_THRESHOLD = 0.99
 MAX_SEQ = 4096  # HF ``max_position_embeddings``
 
 
-def _mesh_device_param():
-    mesh_env = os.environ.get("MESH_DEVICE")
-    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
-        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
-    if "TT_MESH_WIDTH" in os.environ:
-        return int(os.environ["TT_MESH_WIDTH"])
-    try:
-        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
-    except Exception:
-        return (1, 1)
-
-
-def _device_params():
-    mesh_param = _mesh_device_param()
-    params = {"l1_small_size": 32768, "num_command_queues": 2}
-    if mesh_param != (1, 1) and mesh_param != 1:
-        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
-    return params
-
-
 def _create_position_ids_from_input_ids(input_ids: torch.Tensor, padding_idx: int) -> torch.Tensor:
     """HF helper used by SeamlessM4Tv2 positional embedding."""
     mask = input_ids.ne(padding_idx).int()
@@ -66,8 +47,8 @@ def _create_position_ids_from_input_ids(input_ids: torch.Tensor, padding_idx: in
 
 
 @pytest.mark.timeout(1800)
-@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [legacy_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [legacy_device_params()], indirect=True)
 def test_seamless_m4t_v2_text_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
     """Text encoder PCC ≥ 0.99 at the HF maximum sequence length (``max_position_embeddings`` = 4096).
 
@@ -77,12 +58,7 @@ def test_seamless_m4t_v2_text_encoder_max_seq_pcc(mesh_device, device_params, re
     _ = reset_seeds
     _ = device_params
 
-    try:
-        weights_dir = ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        raise pytest.skip.Exception(str(e))
-    except Exception as e:
-        raise pytest.skip.Exception(f"Could not prepare seamless-m4t-v2-large weights: {e}")
+    weights_dir = weights_dir_or_skip()
 
     with mesh_default_device(mesh_device):
         torch.manual_seed(0)

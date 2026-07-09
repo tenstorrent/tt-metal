@@ -38,18 +38,16 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_help
     SPEECH_INPUT_TASKS,
     TEXT_INPUT_TASKS,
     TEXT_OUTPUT_TASKS,
-    load_speech_token_accuracy_reference,
-    load_t2tt_token_accuracy_reference,
-    weights_dir_or_skip,
-)
-from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_sweep_helpers import (
     SANITY_SWEEP_LENGTHS,
     SWEEP_EVAL_STEPS,
     ensure_sweep_reference,
+    load_speech_token_accuracy_reference,
+    load_t2tt_token_accuracy_reference,
     maybe_save_speech_sweep_mel_env,
     sweep_mesh_parametrize,
     sweep_sequence_lengths,
 )
+from models.experimental.seamless_m4t_v2_large.tests.pcc.pcc_test_common import weights_dir_or_skip
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_default_device
 
 

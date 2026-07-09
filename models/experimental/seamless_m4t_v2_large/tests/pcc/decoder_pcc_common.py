@@ -9,7 +9,6 @@ Random hidden states in, layer block out, PCC ≥ 0.99 — same contract as
 
 from __future__ import annotations
 
-import pytest
 import torch
 import ttnn
 from loguru import logger
@@ -20,7 +19,6 @@ from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import (
 )
 
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
-from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import load_hf_model_and_processor
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_causal_with_padding_4d,
@@ -44,15 +42,6 @@ PCC_BATCH_SIZE = 1
 DECODE_GENERATION_LENGTH = 10
 CROSS_ENC_SEQ = 128
 PREFILL_LAYER_SEQ_LENGTHS = (32, 64, 128, 256, 512, 1024, 2048, 4096)
-
-
-def weights_dir_or_skip() -> str:
-    try:
-        return ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        pytest.skip(str(e))
-    except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
 
 def load_hf_model_for_layer_pcc(weights_dir: str):

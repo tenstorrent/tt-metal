@@ -115,17 +115,6 @@ Limits below are what the TT port exercises on **BH QB `MeshShape(1, 4)`**. HF c
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Input unit**                    | Tokenized source tokens (`processor(text=..., src_lang=...)`)                                                                                                                                                                | Log-mel frames from 16 kHz audio (`processor(audios=..., sampling_rate=16000)`)                                                                                                                                       |
 | **Design / HF maximum**           | **4096** source tokens (`max_position_embeddings`)                                                                                                                                                                           | **4096** mel frames                                                                                                                                                                                                   |
-| **Longest shape validated (PCC)** | Text encoder forward @ **4096** tokens (`[test_text_encoder.py](tests/pcc/test_text_encoder.py)`); text-decoder cross-attention prefill @ **1024** encoder frames (`[test_text_decoder.py](tests/pcc/test_text_decoder.py)`) | Speech encoder forward @ **4096** mel frames (`[test_speech_encoder.py](tests/pcc/test_speech_encoder.py)`); text-decoder cross-attention prefill @ **1024** subsampled encoder frames (same decoder test, S2TT path) |
-| **Typical demo input**            | Joyce-style English paragraph                                                                                                                                                                                                | Preamble WAV resampled to 16 kHz: **~479** mel frames (~9.6 s)                                                                                                                                                        |
-
-
-Notes:
-
-- **Encoder timeline vs raw input.** For text tasks the encoder timeline equals the tokenized source length (1 token → 1 text-encoder frame). For speech tasks the Conformer stack plus length adaptor (kernel/stride **8**) subsamples mel into a shorter encoder timeline fed to the text decoder (~8× shorter than mel length at the upper bound).
-- **Decoder cross-attention prefill.** Text-decoder prefill is PCC-validated up to **1024** encoder frames on BH 1×4 (`[test_text_decoder.py](tests/pcc/test_text_decoder.py)`; `MAX_ENC_SEQ=1024`).
-- **End-to-end `generate()` at max length.** `[scripts/demo_perf_sweep.py](scripts/demo_perf_sweep.py)` exercises all five tasks at **4096** tokens / mel frames (warm JIT, split speech warmups at mel ≥ 1792). E2E **PCC** against HF at that scale is not yet certified — the sweep is a runtime/throughput harness, not a correctness gate.
-- **Decoder KV budget.** `TTSeamlessM4Tv2Model` allocates text-decoder KV cache for `**max_text_seq_len=4096`** (seed + generated tokens). T2U is separately validated at **4096** encoder frames (`[test_text_to_unit.py](tests/pcc/test_text_to_unit.py)`).
-- **Utterance-level behavior.** SeamlessM4T v2 is trained on short clips; very long text or audio can degrade quality on both HF and TT (see **Known Limitations**). Segment long-form inputs for production use.
 
 ---
 
@@ -462,13 +451,7 @@ On **1×4**, look for prefill matmuls with batch **128** and decode ops (`SdpaDe
 
 ### PCC tests (functional correctness)
 
-End-to-end per-task generate PCC (requires four devices):
-
-```bash
-pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_m4t_v2_model.py -v
-```
-
-Individual modules:
+**Per-module PCC** (PCC ≥ 0.99 at max sequence length):
 
 ```bash
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_text_encoder.py -v
@@ -478,7 +461,28 @@ pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_text_to_unit.py 
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_code_hifigan.py -v
 ```
 
-All PCC tests pass at `PCC_THRESHOLD = 0.99` (`[tests/pcc/test_seamless_m4t_v2_model.py](tests/pcc/test_seamless_m4t_v2_model.py)`). E2E generate PCC uses prefix/voicing gates (not bit-identical token match) on demo-length inputs; T2ST asserts HF/TT sample-count ratio within **8%**.
+**Prefill and Decode PCC**:
+
+```bash
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_prefill.py -v
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_decode.py -v
+```
+
+**E2E ISL sweeps** (input-length ladder 32→4096):
+
+```bash
+# Text-output tasks (T2TT, S2TT, ASR): teacher-forced token top-1/top-5 vs offline HF refs
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
+
+# Text-output tasks: full-vocabulary logits PCC (HF-greedy decode)
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
+
+# Speech-output / ASR WER (T2ST, S2ST, ASR): teacher-forced and whisper round-trip flavors
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k "teacher_forced and sweep" -v
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k "whisper and sweep" -v
+```
+
+Per-module tests use `PCC_THRESHOLD = 0.99`. E2E sweeps use task-specific gates (token matching top-1/top-5, logits PCC ≥ 0.90, WER thresholds) documented in each test file.
 
 ### Device-level performance (kernel-only)
 
@@ -505,6 +509,7 @@ tt-perf-report "$CSV" --start-signpost start --end-signpost stop
 
 ```
 models/experimental/seamless_m4t_v2_large/
+├── README.md
 ├── demo/
 │   ├── demo.py                          # Full five-task TTNN demo (writes WAVs)
 │   └── outputs/                         # Generated: preamble WAV, demo speech outputs
@@ -518,16 +523,35 @@ models/experimental/seamless_m4t_v2_large/
 ├── scripts/
 │   ├── download_weights.py              # HF snapshot downloader + CLI
 │   ├── demo_perf_sweep.py               # Sequence-length perf sweep (32→4096, all five tasks)
-│   └── outputs/                         # Generated: perf_sweep.txt, sweep WAVs, cached inputs
+│   ├── generate_t2tt_token_accuracy_reference.py  # Offline HF refs for token-matching / logit-PCC sweeps
+│   ├── generate_wer_sweep_reference.py  # Offline HF refs for WER sweeps
+│   └── outputs/                         # Generated: perf_sweep.txt, sweep WAVs, cached long inputs
 ├── tests/
-│   ├── pcc/                             # PCC ≥ 0.99 per-module and per-task
-│   │   ├── test_seamless_m4t_v2_model.py
-│   │   ├── test_text_encoder.py
-│   │   ├── test_speech_encoder.py
-│   │   ├── test_text_decoder.py
-│   │   ├── test_text_to_unit.py
-│   │   ├── test_code_hifigan.py
-│   │   └── decoder_pcc_fixtures.py      # Shared decoder PCC inputs / helpers
+│   ├── conftest.py                      # pytest markers + E2E sweep summary tables
+│   ├── reference_outputs/               # Generated: fixed-length token-matching .refpt files
+│   ├── teacher_forced_sweep_outputs/  # Generated: ISL sweep artifacts
+│   │   ├── references/                  #   token-matching / logit-PCC .refpt (per task × length)
+│   │   ├── wer_references/              #   WER sweep .refpt (T2ST, S2ST, ASR)
+│   │   └── debug_mel_inputs/            #   optional mel debug dumps (SEAMLESS_SWEEP_SAVE_MEL)
+│   ├── pcc/
+│   │   ├── test_text_encoder.py         # Per-module PCC @ max seq (4096 tokens)
+│   │   ├── test_speech_encoder.py       # Per-module PCC @ max mel (4096 frames)
+│   │   ├── test_text_decoder.py         # T2TT / S2TT decoder PCC @ MAX_ENC_SEQ=4096
+│   │   ├── test_text_to_unit.py         # T2U PCC @ encoder seq 4096
+│   │   ├── test_code_hifigan.py         # Vocoder PCC @ unit seq 1024
+│   │   ├── test_prefill.py              # Layer-0 decoder prefill PCC (ISL sweep)
+│   │   ├── test_decode.py               # Layer-0 decoder decode PCC (10 steps)
+│   │   ├── test_seamless_e2e_token_matching_sweep.py   # E2E top-1/top-5 ISL sweep (T2TT, S2TT, ASR)
+│   │   ├── test_seamless_e2e_logit_pcc_sweep.py       # E2E logits PCC ISL sweep (T2TT, S2TT, ASR)
+│   │   ├── test_seamless_e2e_wer_sweep.py             # E2E WER ISL sweep (T2ST, S2ST, ASR)
+│   │   ├── pcc_test_common.py           # Shared weights / mesh pytest helpers
+│   │   ├── decoder_pcc_common.py        # Layer-0 decode/prefill shared logic
+│   │   ├── decoder_pcc_fixtures.py      # Production-shaped decoder inputs
+│   │   ├── e2e_tt_model_helpers.py      # TTSeamlessM4Tv2Model builder + torch→ttnn I/O
+│   │   ├── e2e_logit_pcc_helpers.py     # Logits PCC loop + speech E2E input builders
+│   │   ├── e2e_token_matching_helpers.py  # Token matching loop + ISL sweep utilities
+│   │   ├── e2e_wer_helpers.py           # WER / whisper round-trip + sweep utilities
+│   │   └── token_matching_result_store.py  # In-process sweep result rows (pytest summary)
 │   └── perf/
 │       ├── test_seamless_device_perf.py              # Tracy outer driver (full-model kernel-only)
 │       ├── test_device_perf_forwards.py              # Inner eager forwards for device perf
@@ -618,7 +642,7 @@ On `**MeshShape(1, 4)`** with the default demo settings (greedy decode, trace + 
 
 A prior regression that caused **S2TT (and other speech-path tasks) to emit repetitive token loops** was traced to using `ttnn.all_reduce` for speech / T2U TP reductions. That path is **fixed**: speech encoder and T2U keep `all_gather` + `sum`; the text decoder now uses a separate linear `all_reduce` path that does not deallocate residuals (`[decoder_all_reduce_sum_replicate](tt/common.py)`).
 
-TT outputs are **not required to be bit-identical to Hugging Face** on every task (integrated PCC uses chrF / CER / plausible-voiced gates, not exact token or sample match). Residual gaps include:
+TT outputs are **not required to be bit-identical to Hugging Face** on every task (E2E sweeps gate token matching, logits PCC, and WER — not exact token or sample match). Residual gaps include:
 
 - **T2ST / S2ST waveform length** can differ from HF by a modest sample count while still passing PCC voicing checks.
 - **Strict bit-reproducibility** (every greedy step identical run-to-run under all TP tie cases) is not yet guaranteed — see **To Do**.
@@ -633,9 +657,6 @@ Vocoder conv timelines are **length-bucketed** (short single-shot and chunked/up
 
 ## To Do
 
-- **Bit-exact deterministic decode.** Text encoder + text decoder use `ttnn.all_reduce`; speech encoder and T2U still use gather+sum for L1 stability. Traced decode still combines per-shard chunk argmax on host.
-- **E2E PCC at max input length.** Per-module PCC reaches 4096 on encoders and 1024 on decoder cross-attn; `demo_perf_sweep.py` exercises `generate()` at 4096, but E2E HF-vs-TT certification at that scale is still open.
-- **S2ST waveform length vs HF.** Speech-input S2ST can diverge in intermediate text length vs HF (sample ratio logged in E2E PCC, not gated); T2ST text-path sample ratio is gated within 8%.
 - **Utterance segmentation (speech).** Optional VAD / audio chunking for long-form speech inputs (text tasks: `SEAMLESS_DEMO_MAX_SENTENCES` in `[demo/demo.py](demo/demo.py)`).
 
 ---

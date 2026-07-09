@@ -25,12 +25,6 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.experimental.seamless_m4t_v2_large.scripts.demo_perf_sweep import (
-    SEQ_LEN_MAX,
-    SEQ_LEN_MIN,
-    sequence_lengths,
-)
-from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import (
     TextDecoderPccInputs,
     _hf_speech_encoder_hidden_and_mask,
@@ -44,15 +38,14 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers i
 from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_helpers import (
     TEXT_INPUT_TASKS,
 )
-from models.experimental.seamless_m4t_v2_large.tests.pcc.test_seamless_m4t_v2_model import (
-    _make_tt_model,
-    _torch_feats_to_ttnn,
-    _torch_ids_to_ttnn,
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_tt_model_helpers import (
+    make_tt_model,
+    torch_feats_to_ttnn,
+    torch_ids_to_ttnn,
 )
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_causal_with_padding_4d,
     build_cross_attn_mask_4d,
-    hf_aligned_generation_kwargs,
     to_torch_replicated_first_shard,
     tt_position_ids,
     tt_position_ids_decode_step,
@@ -68,7 +61,6 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     get_tp,
     mesh_default_device,
 )
-from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import TTSeamlessM4Tv2GenerationOutput
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     init_text_decoder_kv_cache,
     warm_text_decoder_kv_cache_prefill,
@@ -89,14 +81,6 @@ WER_SWEEP_TASKS = ("t2st", "s2st", "asr")
 # suites keep using e2e_token_matching_helpers.TASK_TGT_LANG (T2ST=hin) via their own references.
 WER_TASK_TGT_LANG = {"t2st": "spa", "s2st": "spa", "asr": "eng"}
 
-T2ST_WER_THRESHOLD = 0.35
-S2ST_WER_THRESHOLD = 0.45
-ASR_WER_THRESHOLD = 0.45  # speech-input like S2ST; transcription target (eng)
-SANITY_SWEEP_LENGTHS = (32, 64, 128)
-
-# Teacher-forced WER: TT decoder is fed HF's reference tokens (no free-running cascade), so this
-# measures per-step fidelity, not decoding luck. Bands are far tighter than free-running. S2ST/ASR
-# are looser than T2ST because the TT/HF speech-encoder timeline mismatch adds a few divergent tokens.
 T2ST_TF_WER_THRESHOLD = 0.20
 S2ST_TF_WER_THRESHOLD = 0.30
 ASR_TF_WER_THRESHOLD = 0.30
@@ -117,27 +101,7 @@ _TF_EOS_TOKEN_ID = 3
 
 _REF_DIR = Path(__file__).resolve().parent.parent / "teacher_forced_sweep_outputs" / "wer_references"
 
-_SWEEP_LEN_WER_OVERRIDES: dict[tuple[str, int], float] = {
-    ("t2st", 256): 0.42,
-    ("t2st", 512): 0.45,
-    ("t2st", 1024): 0.48,
-    ("t2st", 2048): 0.52,
-    ("t2st", 4096): 0.55,
-    ("s2st", 512): 0.50,
-    ("s2st", 1024): 0.52,
-    ("s2st", 2048): 0.55,
-    ("s2st", 4096): 0.58,
-    # ASR (speech in → transcription); mirror S2ST bands as a starting point — tune after a run.
-    ("asr", 512): 0.50,
-    ("asr", 1024): 0.52,
-    ("asr", 2048): 0.55,
-    ("asr", 4096): 0.58,
-}
-
 _P150_WER_SCALE = 1.25
-_P150_SWEEP_LEN_WER_OVERRIDES: dict[tuple[str, int], float] = {
-    key: min(1.0, val * _P150_WER_SCALE) for key, val in _SWEEP_LEN_WER_OVERRIDES.items()
-}
 
 # ---------------------------------------------------------------------------
 # In-process result store (pytest summary)
@@ -216,15 +180,6 @@ def print_wer_summary() -> None:
 
 def wer_refpt_path(task: str, seq_len: int) -> Path:
     return _REF_DIR / f"seamless_m4t_v2_{task}_len{seq_len}.refpt"
-
-
-def weights_dir_or_skip() -> str:
-    try:
-        return ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        pytest.skip(str(e))
-    except Exception as e:
-        pytest.skip(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
 
 def normalize_text_for_wer(text: str) -> str:
@@ -355,10 +310,6 @@ def load_wer_sweep_reference(path: Path) -> WerSweepReference:
 # ---------------------------------------------------------------------------
 
 
-def sweep_sequence_lengths() -> list[int]:
-    return sequence_lengths(SEQ_LEN_MIN, SEQ_LEN_MAX)
-
-
 def sweep_auto_ref_enabled() -> bool:
     return os.environ.get("SEAMLESS_SWEEP_AUTO_REF", "1") != "0"
 
@@ -379,19 +330,6 @@ def wer_sweep_mesh_parametrize():
     if mesh_env == "BH-QB":
         return ("mesh_device,device_params", [_mesh_device_param(DEVICE_PARAMS_E2E_2CQ_GENERATE)])
     return MESH_DEVICE_PARAMETRIZE_E2E_2CQ_GENERATE_SINGLE_AND_1X4
-
-
-def sweep_wer_threshold_for_task(task: str, seq_len: int, *, mesh_id: str = "") -> float:
-    if task not in WER_SWEEP_TASKS:
-        raise ValueError(f"WER sweep expects one of {WER_SWEEP_TASKS}, got {task!r}")
-    overrides = _P150_SWEEP_LEN_WER_OVERRIDES if mesh_id == "1x1" else _SWEEP_LEN_WER_OVERRIDES
-    override = overrides.get((task, seq_len))
-    if override is not None:
-        return override
-    base = {"t2st": T2ST_WER_THRESHOLD, "s2st": S2ST_WER_THRESHOLD, "asr": ASR_WER_THRESHOLD}[task]
-    if mesh_id == "1x1":
-        return min(1.0, base * _P150_WER_SCALE)
-    return base
 
 
 def sweep_teacher_forced_wer_threshold_for_task(task: str, seq_len: int, *, mesh_id: str = "") -> float:
@@ -479,114 +417,6 @@ def maybe_skip_short_speech_wer(task: str, ref_text: str, seq_len: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def decode_tt_sequences(tokenizer: Any, sequences_tt: ttnn.Tensor) -> str:
-    ids = to_torch_replicated_first_shard(sequences_tt).to(torch.int64).cpu()
-    return tokenizer.batch_decode(ids, skip_special_tokens=True)[0]
-
-
-def release_speech_generation_output(out: TTSeamlessM4Tv2GenerationOutput) -> None:
-    ttnn.deallocate(out.sequences)
-    ttnn.deallocate(out.waveform)
-    ttnn.deallocate(out.waveform_lengths)
-    if out.unit_sequences is not None:
-        ttnn.deallocate(out.unit_sequences)
-
-
-def run_speech_output_wer(
-    mesh_device: ttnn.Device,
-    hf_model: Any,
-    tokenizer: Any,
-    ref: WerSweepReference,
-    *,
-    wer_threshold: float,
-    log_label: str,
-) -> None:
-    """Full TT ``generate``; WER on the output text vs HF ref.
-
-    t2st/s2st → ``generate_speech=True`` (compare the intermediate translation text); asr →
-    ``generate_speech=False`` (compare the English transcription text). asr shares the S2ST
-    speech-input path but emits text, not speech.
-    """
-    cfg = hf_model.config
-    t2u_cfg = hf_model.t2u_model.config
-    gen_common = hf_aligned_generation_kwargs(hf_model.generation_config)
-    tt_extra = dict(use_kv_cache=True, use_decode_trace=True, use_2cq=True)
-
-    with mesh_default_device(mesh_device):
-        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
-        try:
-            if ref.task == "t2st":
-                assert ref.src_ids is not None and ref.src_mask is not None
-                out = tt_model.generate(
-                    input_ids=_torch_ids_to_ttnn(mesh_device, ref.src_ids),
-                    attention_mask=_torch_ids_to_ttnn(mesh_device, ref.src_mask),
-                    generate_speech=True,
-                    return_intermediate_token_ids=True,
-                    tgt_lang=ref.tgt_lang,
-                    speaker_id=0,
-                    **gen_common,
-                    **tt_extra,
-                )
-            elif ref.task == "s2st":
-                assert ref.input_features is not None and ref.mel_attention_mask is not None
-                mel_frames = int(ref.mel_attention_mask.sum().item())
-                tt_model.prewarm_speech_encoder([mel_frames])
-                out = tt_model.generate(
-                    input_features=_torch_feats_to_ttnn(mesh_device, ref.input_features),
-                    attention_mask=_torch_ids_to_ttnn(mesh_device, ref.mel_attention_mask),
-                    generate_speech=True,
-                    return_intermediate_token_ids=True,
-                    tgt_lang=ref.tgt_lang,
-                    speaker_id=0,
-                    **gen_common,
-                    **tt_extra,
-                )
-            else:
-                assert ref.task == "asr"
-                assert ref.input_features is not None and ref.mel_attention_mask is not None
-                mel_frames = int(ref.mel_attention_mask.sum().item())
-                tt_model.prewarm_speech_encoder([mel_frames])
-                out = tt_model.generate(
-                    input_features=_torch_feats_to_ttnn(mesh_device, ref.input_features),
-                    attention_mask=_torch_ids_to_ttnn(mesh_device, ref.mel_attention_mask),
-                    generate_speech=False,
-                    tgt_lang=ref.tgt_lang,
-                    **gen_common,
-                    **tt_extra,
-                )
-
-            tt_text = decode_tt_sequences(tokenizer, out.sequences)
-            if isinstance(out, TTSeamlessM4Tv2GenerationOutput):
-                release_speech_generation_output(out)  # speech output: free waveform + units too
-            else:
-                ttnn.deallocate(out.sequences)  # text output (asr): only the token sequence
-        finally:
-            tt_model.release_generation_runtime()
-
-    wer = compute_wer(ref.reference_text, tt_text)
-    ref_words = word_count(ref.reference_text)
-    tt_words = word_count(tt_text)
-    logger.info(
-        f"SeamlessM4Tv2 E2E WER ({log_label}) seq={ref.seq_len} "
-        f"WER={wer:.4f} (threshold<={wer_threshold:.3f}, ref_words={ref_words}, tt_words={tt_words})"
-    )
-    logger.info(f"  HF reference: {ref.reference_text[:240]}{'…' if len(ref.reference_text) > 240 else ''}")
-    logger.info(f"  TT output:    {tt_text[:240]}{'…' if len(tt_text) > 240 else ''}")
-
-    record_wer_result(
-        label=log_label,
-        seq_len=ref.seq_len,
-        wer=wer,
-        wer_threshold=wer_threshold,
-        reference_words=ref_words,
-        tt_words=tt_words,
-    )
-    assert wer <= wer_threshold, (
-        f"{log_label}: WER {wer:.4f} > threshold {wer_threshold:.3f} "
-        f"(ref_words={ref_words}, tt_words={tt_words}). TT text: {tt_text!r}"
-    )
-
-
 def _tt_waveform_to_mono_np(waveform_tt: ttnn.Tensor, lengths_tt: ttnn.Tensor) -> "np.ndarray":
     """TT vocoder output ``[B, T, 1]`` → 1-D fp32 numpy, trimmed to the valid sample count."""
     arr = to_torch_replicated_first_shard(waveform_tt).float().reshape(-1).cpu().numpy()
@@ -627,7 +457,7 @@ def run_speech_output_whisper_wer(
     language = whisper_language_for_tgt(ref.tgt_lang)
 
     with mesh_default_device(mesh_device):
-        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        tt_model = make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
         try:
             # Feed HF's exact (offset-applied) unit ids to ONLY the TT vocoder — teacher-forces the
             # T2U so the metric measures vocoder fidelity alone (no encoder / text-decode / T2U run).
@@ -678,8 +508,8 @@ def _tt_encoder_for_task(mesh_device: ttnn.Device, tt_model: Any, ref: WerSweepR
     """
     if ref.task == "t2st":
         assert ref.src_ids is not None and ref.src_mask is not None
-        ids_tt = _torch_ids_to_ttnn(mesh_device, ref.src_ids)
-        mask_tt = _torch_ids_to_ttnn(mesh_device, ref.src_mask)
+        ids_tt = torch_ids_to_ttnn(mesh_device, ref.src_ids)
+        mask_tt = torch_ids_to_ttnn(mesh_device, ref.src_mask)
         enc_tt, enc_mask_tt, _ = tt_model._encode_text(ids_tt, mask_tt)
         ttnn.deallocate(ids_tt)
         if enc_mask_tt is not mask_tt:
@@ -689,8 +519,8 @@ def _tt_encoder_for_task(mesh_device: ttnn.Device, tt_model: Any, ref: WerSweepR
     assert ref.task in ("s2st", "asr")  # both are speech-input; only the decoder target lang differs
     assert ref.input_features is not None and ref.mel_attention_mask is not None
     tt_model.prewarm_speech_encoder([int(ref.mel_attention_mask.sum().item())])
-    feats_tt = _torch_feats_to_ttnn(mesh_device, ref.input_features)
-    mask_tt = _torch_ids_to_ttnn(mesh_device, ref.mel_attention_mask)
+    feats_tt = torch_feats_to_ttnn(mesh_device, ref.input_features)
+    mask_tt = torch_ids_to_ttnn(mesh_device, ref.mel_attention_mask)
     enc_tt, enc_mask_tt, _ = tt_model._encode_speech(feats_tt, mask_tt)
     ttnn.deallocate(feats_tt)
     if enc_mask_tt is not mask_tt:
@@ -859,7 +689,7 @@ def run_speech_output_teacher_forced_wer(
 
     # TT side: production encoder + production decoder (same as generate), teacher-forced.
     with mesh_default_device(mesh_device):
-        tt_model = _make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
+        tt_model = make_tt_model(mesh_device, hf_model, cfg, t2u_cfg)
         try:
             enc_tt, enc_mask_tt = _tt_encoder_for_task(mesh_device, tt_model, ref)
             tt_pred = _teacher_forced_tt_predictions(

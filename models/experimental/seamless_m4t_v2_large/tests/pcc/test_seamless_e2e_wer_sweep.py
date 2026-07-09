@@ -77,9 +77,9 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_wer_helpers import 
     sweep_sequence_lengths,
     sweep_teacher_forced_wer_threshold_for_task,
     sweep_whisper_wer_threshold_for_task,
-    weights_dir_or_skip,
     wer_sweep_mesh_parametrize,
 )
+from models.experimental.seamless_m4t_v2_large.tests.pcc.pcc_test_common import weights_dir_or_skip
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_default_device, mesh_num_devices
 
 

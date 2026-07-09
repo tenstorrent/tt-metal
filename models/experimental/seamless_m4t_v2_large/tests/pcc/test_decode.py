@@ -13,8 +13,8 @@ import pytest
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_common import (
     load_hf_model_for_layer_pcc,
     run_decode_layer_pcc,
-    weights_dir_or_skip,
 )
+from models.experimental.seamless_m4t_v2_large.tests.pcc.pcc_test_common import weights_dir_or_skip
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import MESH_DEVICE_PARAMETRIZE_TEXT, mesh_default_device
 
 

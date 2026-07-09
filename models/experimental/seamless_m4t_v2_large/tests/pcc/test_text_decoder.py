@@ -9,8 +9,6 @@ two-token decoder seed.
 
 from __future__ import annotations
 
-import os
-
 import pytest
 import torch
 import ttnn
@@ -19,7 +17,6 @@ from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
 
 from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import forward_torch_reference
-from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import (
     TextDecoderPccInputs,
     align_case_for_tt_prefill,
@@ -41,6 +38,11 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     mesh_default_device,
 )
 from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import create_text_decoder_parameters
+from models.experimental.seamless_m4t_v2_large.tests.pcc.pcc_test_common import (
+    legacy_device_params,
+    legacy_mesh_device_param,
+    weights_dir_or_skip,
+)
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     TTSeamlessM4Tv2Decoder,
     init_text_decoder_kv_cache,
@@ -53,35 +55,6 @@ MAX_ENC_SEQ = 4096
 # decoder forward (``seq_len=1``); a single step already exercises the decode self/cross-attn,
 # paged-cache-write, and position-stepping paths. Bump for deeper cache-drift / decode profiling.
 DECODE_STEPS = 1
-
-
-def _mesh_device_param():
-    mesh_env = os.environ.get("MESH_DEVICE")
-    if mesh_env in {"P150": (1, 1), "BH-QB": (1, 4)}:
-        return {"P150": (1, 1), "BH-QB": (1, 4)}[mesh_env]
-    if "TT_MESH_WIDTH" in os.environ:
-        return int(os.environ["TT_MESH_WIDTH"])
-    try:
-        return (1, 4) if ttnn.get_num_devices() >= 4 else (1, 1)
-    except Exception:
-        return (1, 1)
-
-
-def _device_params():
-    mesh_param = _mesh_device_param()
-    params = {"l1_small_size": 32768, "num_command_queues": 2}
-    if mesh_param != (1, 1) and mesh_param != 1:
-        params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
-    return params
-
-
-def _weights_dir_or_skip() -> str:
-    try:
-        return ensure_seamless_m4t_v2_large_weights()
-    except ImportError as e:
-        raise pytest.skip.Exception(str(e))
-    except Exception as e:
-        raise pytest.skip.Exception(f"Could not prepare seamless-m4t-v2-large weights: {e}")
 
 
 def _run_decoder_pcc(
@@ -327,13 +300,13 @@ def _run_decoder_prefill_decode_pcc(
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [legacy_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [legacy_device_params()], indirect=True)
 def test_seamless_m4t_v2_text_decoder_t2tt_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
     """T2TT decoder prefill PCC ≥ 0.99 at ``MAX_ENC_SEQ`` text-encoder timeline (decoder seed = 2)."""
     _ = reset_seeds
     _ = device_params
-    weights_dir = _weights_dir_or_skip()
+    weights_dir = weights_dir_or_skip()
 
     with mesh_default_device(mesh_device):
         hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
@@ -343,14 +316,14 @@ def test_seamless_m4t_v2_text_decoder_t2tt_max_enc_seq_pcc(mesh_device, device_p
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
+@pytest.mark.parametrize("mesh_device", [legacy_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("device_params", [legacy_device_params()], indirect=True)
 def test_seamless_m4t_v2_text_decoder_s2tt_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
     """S2TT decoder PCC ≥ 0.99 at ``MAX_ENC_SEQ`` speech-encoder timeline: prefill cache-fill (seed = 2)
     plus ``DECODE_STEPS`` KV-cache decode steps, validating both the prefill and decode paths."""
     _ = reset_seeds
     _ = device_params
-    weights_dir = _weights_dir_or_skip()
+    weights_dir = weights_dir_or_skip()
 
     with mesh_default_device(mesh_device):
         hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
