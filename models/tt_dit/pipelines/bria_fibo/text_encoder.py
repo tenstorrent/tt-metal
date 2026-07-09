@@ -94,6 +94,7 @@ class SmolLM3TextEncoderWrapper:
         tokenized = self.tokenizer(
             [prompt],
             padding="longest",
+            max_length=3000,  # matches diffusers pipeline_bria_fibo.py default max_sequence_length
             truncation=True,
             add_special_tokens=True,
             return_tensors="pt",
