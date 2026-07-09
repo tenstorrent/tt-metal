@@ -428,9 +428,17 @@ class Ideogram4Pipeline:
             attention_mask=None,
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
         )
-        # taps: 13 x [1, MAX_TEXT_TOKENS, 4096] replicated on TP; slice to real rows [:, :n_text]
-        # (causal => pad rows do not influence the real rows) then interleave to [1, n_text, 53248].
-        taps_t = [tensor.to_torch(t, mesh_axes=[None, None, None])[:, :n_text] for t in taps]
+        # taps: 13 x [1, MAX_TEXT_TOKENS, 4096], REPLICATED across the whole mesh.
+        # Read back cheaply: slice to the real text rows [0:n_text] ON DEVICE (causal => pad rows
+        # never influence the real rows, and the model masks them anyway), then read a SINGLE
+        # replica via get_device_tensors(t)[0]. The old `to_torch(mesh_axes=[None,None,None])`
+        # built a composer over every mesh axis, so ttnn.to_torch pulled ALL N device copies to
+        # host and discarded N-1 (~1.4 s/chip => ~45 s on a 32-chip galaxy). Slicing to n_text
+        # first and reading one replica moves ~n_text/2048 x 1/N the bytes; values are identical
+        # (same device-0 data). Interleave to [1, n_text, 53248] (element = f*13 + l) on host.
+        taps_t = [
+            ttnn.to_torch(ttnn.get_device_tensors(ttnn.slice(t, [0, 0, 0], [1, n_text, t.shape[-1]]))[0]) for t in taps
+        ]
         feats = torch.stack(taps_t, dim=0).permute(1, 2, 3, 0).reshape(1, n_text, -1).to(torch.bfloat16)
         return feats, n_text
 
