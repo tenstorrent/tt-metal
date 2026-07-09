@@ -4,15 +4,8 @@
 #   python3 boolq_training_example.py --model qwen3 --model_source Qwen/Qwen3-32B \
 #     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 #
-# Uses lazy parameter init (the default on the Qwen3 FSDP path): each param is
-# built as deferred metadata, fully_shard rewrites its mapper to shard on the
-# 'fsdp' axis, and materialize_module allocates it already-sharded while the HF
-# weights stream in sharded -- the full 32B model is never materialized on one
-# chip. (Eager full-replication would OOM; set device_config.lazy_parameter_init
-# to false only if you specifically want it.)
-#
-# per_device_train_batch_size * num_devices must be divisible by num_generations
-# (here 8 * 32 = 256, divisible by 8 -> 32 prompts per micro-batch).
+# Lazy parameter init (default on Qwen3 FSDP) shards each param on load; eager full-replication would OOM.
+# per_device_train_batch_size * num_devices (8*32=256) must be divisible by num_generations (8).
 # model_config is omitted: the architecture is streamed from --model_source.
 
 training_config:

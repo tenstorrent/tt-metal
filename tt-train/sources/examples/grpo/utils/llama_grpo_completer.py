@@ -4,27 +4,11 @@
 
 """ttml-backed :class:`GRPOCompleter` that delegates generation over RPC.
 
-The completer is intended to run on the ttml rank of a two-rank
-ttml -> tt-transformers setup. It owns the local ttml ``Llama`` model
-(used for :meth:`compute_nlog_probs`) and a :class:`MPIRolloutClient`
-that proxies :meth:`generate` / :meth:`generate_str` to a remote
-:class:`TttGenerationWorker` on the ttt rank.
-
-The split is:
-
-* ``compute_nlog_probs`` -- runs locally against the ttml model. This
-  is where the gradient flows during GRPO training.
-* ``generate`` / ``generate_str`` -- run remotely on the ttt rank via
-  :meth:`MPIRolloutClient.remote_generate`. The ttt worker holds a
-  ``tt-transformers`` ``Transformer`` for fast prefill+decode.
-* :meth:`push_weights` -- exports the ttml model as an HF-keyed weight
-  dict and ships it across in a single ``MPIRolloutClient.send_weights``
-  call. Use this once before :meth:`GRPOTrainer.train` (to overwrite
-  the worker's dummy boot weights) and after every optimizer step.
-
-The :class:`WeightSyncCallback` provided here is the standard glue for
-that post-step sync: register it in the trainer's ``callbacks=`` list
-to push fresh weights on every ``on_step_end``.
+Runs on the ttml rank: ``compute_nlog_probs`` runs locally (gradient path);
+``generate`` / ``generate_str`` proxy to the remote :class:`TttGenerationWorker`
+via :class:`MPIRolloutClient`; :meth:`push_weights` ships the ttml weights over.
+Push once before :meth:`GRPOTrainer.train` (to overwrite the worker's dummy boot
+weights) and after every step (via :class:`WeightSyncCallback`).
 """
 
 from __future__ import annotations
@@ -58,18 +42,10 @@ TILE_SIZE = 32
 
 @dataclass
 class LlamaCompletionCtx:
-    """Generation parameters shared between the ttml model owner and the
-    remote ttt worker.
+    """Generation parameters shared with the remote ttt worker.
 
-    ``max_tokens_to_complete``, ``temperature``, and
-    ``completions_per_prompt`` mirror the fields the old in-process
-    ``LlamaCompleterTtml`` consumed. They are forwarded verbatim into
-    the remote ``generate`` request so the worker sees the same knobs
-    the trainer thinks it set.
-
-    ``_tokenizer`` and ``_pad_token`` are populated by
-    :class:`LlamaGRPOCompleter` after the HF tokenizer for
-    ``model_source`` loads; callers should not set them manually.
+    ``_tokenizer`` / ``_pad_token`` are populated by
+    :class:`LlamaCompleterRemoteRollout`; callers should not set them manually.
     """
 
     max_tokens_to_complete: int
@@ -77,11 +53,6 @@ class LlamaCompletionCtx:
     completions_per_prompt: int = 1
     _tokenizer: Any = None
     _pad_token: Optional[int] = None
-
-
-# ---------------------------------------------------------------------------
-# Local helpers (ported from the old LlamaCompleterTtml; ttml-internal)
-# ---------------------------------------------------------------------------
 
 
 def _deallocate_tensors(tensors: Any) -> None:
@@ -131,11 +102,8 @@ def _round_up(x: int) -> int:
 
 
 def _ensure_safetensors_dir(model_dir: str) -> str:
-    """Make sure ``model_dir`` exposes at least one ``*.safetensors`` file.
-
-    Some HF repos ship only legacy ``pytorch_model.bin``; convert once
-    on first use so ``load_from_safetensors`` can read it.
-    """
+    """Ensure ``model_dir`` has a ``*.safetensors`` file, converting a legacy
+    ``pytorch_model.bin`` once on first use if needed."""
     p = Path(model_dir)
     if list(p.glob("*.safetensors")):
         return model_dir
@@ -160,43 +128,12 @@ def _ensure_safetensors_dir(model_dir: str) -> str:
     return model_dir
 
 
-# ---------------------------------------------------------------------------
-# LlamaGRPOCompleter
-# ---------------------------------------------------------------------------
+class LlamaCompleterRemoteRollout(GRPOCompleter):
+    """ttml-side :class:`GRPOCompleter`: remote ttt worker for generation,
+    local ttml ``Llama`` for nlog-prob computation.
 
-
-class LlamaGRPOCompleter(GRPOCompleter):
-    """ttml-side :class:`GRPOCompleter` that uses a remote ttt worker
-    for generation and a local ttml ``Llama`` for nlog-prob computation.
-
-    The completer does NOT open or close any device. The caller must
-    open the ttml ``AutoContext`` (via
-    ``ttml.autograd.AutoContext.get_instance().open_device(...)`` or
-    equivalent) and pass the resulting ``ttnn.MeshDevice`` via the
-    mandatory ``mesh_device`` kwarg. The caller also owns the
-    corresponding ``close_device()`` after the completer is dropped.
-
-    Args:
-        ctx: Generation parameters. ``_tokenizer`` and ``_pad_token``
-            are populated automatically from ``model_source``.
-        transformer_config: Model architecture config (typically
-            from ``get_model_config``).
-        mesh_device: An already-open ``ttnn.MeshDevice`` that
-            ``AutoContext`` has been pointed at. Mandatory.
-        model_source: HuggingFace model id (e.g.
-            ``meta-llama/Llama-3.2-1B-Instruct``) or a local directory
-            containing ``model.safetensors``.
-        inference_client: Already-constructed :class:`MPIRolloutClient`
-            connected to the remote worker. The completer does not
-            tear this client down.
-        top_p: Forwarded to ``inference_client.remote_generate``.
-            Defaults to 1.0 (no top-p filtering).
-        seed: Forwarded to ``inference_client.remote_generate``.
-            ``None`` lets the worker draw fresh randomness each call.
-        enable_ddp: Initialise the ``AutoContext`` parallelism context
-            with DDP enabled. Mirrors the
-            ``device_config.enable_ddp`` flag from the standard ttml
-            yaml device blocks.
+    Does NOT open/close the device: the caller opens the ttml ``AutoContext``,
+    passes the resulting ``mesh_device``, and owns ``close_device()``.
     """
 
     def __init__(
@@ -293,10 +230,6 @@ class LlamaGRPOCompleter(GRPOCompleter):
         self._top_p = float(top_p)
         self._seed = seed
 
-    # ------------------------------------------------------------------ #
-    # GRPOCompleter abstract surface                                      #
-    # ------------------------------------------------------------------ #
-
     @property
     def tokenizer(self) -> Any:
         return self._ctx._tokenizer
@@ -307,11 +240,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
         return self._model
 
     def generate(self, prompts: List[List[int]]) -> List[List[int]]:
-        """Generate completions remotely via the tt-transformers worker.
+        """Generate remotely via the ttt worker.
 
-        For N prompts, returns N * ``completions_per_prompt`` completions
-        (one per replicated prompt; the worker is responsible for
-        per-prompt fanout below).
+        For N prompts, returns N * ``completions_per_prompt`` completions.
         """
         ctx = self._ctx
         if ctx.completions_per_prompt > 1:
@@ -327,8 +258,7 @@ class LlamaGRPOCompleter(GRPOCompleter):
         )
 
     def generate_str(self, prompt_strs: List[str]) -> List[str]:
-        """Generate completions from strings; tokenises locally, ships IDs,
-        decodes the returned IDs locally."""
+        """Generate from strings: tokenise locally, ship IDs, decode locally."""
         tok = self._ctx._tokenizer
         prompts = [tok.encode(s) for s in prompt_strs]
         completions = self.generate(prompts)
@@ -337,12 +267,8 @@ class LlamaGRPOCompleter(GRPOCompleter):
     def compute_nlog_probs(
         self, prompts: List[List[int]], completions: List[List[int]]
     ) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
-        """Local-only: cross-entropy of (prompt + completion) on ttml.
-
-        Identical to the old ``LlamaCompleterTtml.compute_nlog_probs``
-        body -- the trainer needs gradients on the ttml model, so this
-        path stays in-process.
-        """
+        """Local-only cross-entropy of (prompt + completion) on ttml (gradient
+        path, stays in-process)."""
         assert len(completions) == len(prompts)
 
         B = len(completions)
@@ -403,35 +329,18 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         return nlog, loss_mask_tt
 
-    # ------------------------------------------------------------------ #
-    # Weight sync                                                         #
-    # ------------------------------------------------------------------ #
-
     def push_weights(self) -> None:
-        """Ship the current ttml weights to the remote ttt worker.
+        """Export the ttml model to an HF-keyed dict and send_weights it once.
 
-        Exports the local ttml model as an HF-keyed dict (already on
-        device, replicated, DRAM-interleaved, TILE, bfloat16 -- the
-        contract the :class:`WeightBridge` enforces) and runs a single
-        :meth:`MPIRolloutClient.send_weights` round-trip.
-
-        Call this:
-
-        * Once before ``GRPOTrainer.train()`` to overwrite the worker's
-          dummy boot weights with real instruct weights.
-        * Periodically during training via :class:`WeightSyncCallback`
-          so the worker sees the latest policy.
+        Call once before ``GRPOTrainer.train()`` (to overwrite the worker's
+        dummy boot weights) and periodically via :class:`WeightSyncCallback`.
         """
-        hf_dict = self._model.export_to_hf_dict()
+        hf_dict = self._model.weights_ref_hf_dict()
         try:
             self._client.send_weights(hf_dict)
         finally:
             del hf_dict
             gc.collect()
-
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                    #
-    # ------------------------------------------------------------------ #
 
     def _forward(self, input_ids_np: np.ndarray, pad_lengths: List[int], B: int) -> ttml.autograd.Tensor:
         """Run a full forward pass (no KV cache) and return logits."""
@@ -470,29 +379,15 @@ class LlamaGRPOCompleter(GRPOCompleter):
         return ttml.autograd.Tensor.from_numpy(mask_4d, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, self._dp_mapper)
 
 
-# ---------------------------------------------------------------------------
-# WeightSyncCallback
-# ---------------------------------------------------------------------------
-
-
 class WeightSyncCallback(TrainerCallback):
-    """Push fresh ttml weights to the ttt worker every ``every`` steps.
+    """Push fresh ttml weights to the ttt worker on ``on_step_end`` every
+    ``every`` steps (``(step + 1) % every == 0``).
 
-    Registers on the trainer's ``on_step_end`` hook. Trigger condition:
-    ``(step + 1) % every == 0``. With the default ``every=1`` the
-    callback fires on every gradient step, which is what GRPO training
-    typically wants (the policy network on ttml has just been updated;
-    the remote worker is using stale weights for the next generate
-    call otherwise).
-
-    Note that the initial push -- the one that overwrites the worker's
-    dummy boot weights with real ones before the first ``trainer.train()``
-    generate -- is the user's responsibility. Call
-    ``completer.push_weights()`` explicitly once before constructing
-    the trainer (or before calling ``trainer.train()``).
+    The initial push (overwriting the worker's dummy boot weights before the
+    first ``trainer.train()`` generate) is the caller's responsibility.
     """
 
-    def __init__(self, completer: LlamaGRPOCompleter, every: int = 1) -> None:
+    def __init__(self, completer: LlamaCompleterRemoteRollout, every: int = 1) -> None:
         if every < 1:
             raise ValueError(f"WeightSyncCallback: 'every' must be >= 1 (got {every})")
         self._completer = completer

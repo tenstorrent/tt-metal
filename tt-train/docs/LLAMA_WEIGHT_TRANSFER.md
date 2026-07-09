@@ -5,7 +5,7 @@ Reference for two related dict formats:
 1. The HuggingFace `transformers` Llama state-dict (the format on the
    HF Hub).
 2. The on-device dict that
-   [`LlamaCompositeKV.export_to_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+   [`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
    produces for transfer to
    [`tt_transformers.tt.model.Transformer.update_weights`](../../models/tt_transformers/tt/model.py).
    This same dict is also the wire format consumed by the cross-rank
@@ -115,7 +115,7 @@ lm_head.weight                                   shape=(128256, 2048)
 
 ## 3. Transfer format: `ttml → tt-transformers`
 
-[`LlamaCompositeKV.export_to_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
+[`LlamaCompositeKV.weights_ref_hf_dict()`](../sources/examples/grpo/utils/llama_overrides.py)
 returns a `dict[str, ttnn.Tensor]` that is the **wire format** between
 ttml and tt-transformers'
 [`Transformer.update_weights(hf_state_dict, hf_rope=False)`](../../models/tt_transformers/tt/model.py).
@@ -204,7 +204,7 @@ embedding `(V, H)` / gamma `(H,)` shapes from §2 exactly.
 
 - **Aliasing & lifetime.** Apart from the per-layer K / V slices, every
   value in the dict is a *handle* into ttml's live parameter store. Do
-  not mutate ttml's parameters between the call to `export_to_hf_dict`
+  not mutate ttml's parameters between the call to `weights_ref_hf_dict`
   and the call to `update_weights`. After `update_weights` returns the
   K / V slices may be deallocated; the rest are owned by ttml and stay
   live as long as the ttml model lives.
@@ -235,7 +235,7 @@ In-process (ttml model and tt-transformers model on the same Python
 process and the same mesh):
 
 ```python
-hf_dict = ttml_model.export_to_hf_dict()
+hf_dict = ttml_model.weights_ref_hf_dict()
 try:
     ttt_model.update_weights(hf_dict, hf_rope=False)
 finally:
@@ -248,7 +248,7 @@ meshes; the BoolQ GRPO example uses this path on every step):
 ```python
 # ttml rank
 client = MPIRolloutClient(peer_rank=TTT_RANK, device=ttml_mesh)
-client.send_weights(ttml_model.export_to_hf_dict())
+client.send_weights(ttml_model.weights_ref_hf_dict())
 
 # ttt rank — inside MPIRolloutServer.serve_forever, on_weights_received:
 ttt_model.update_weights(received_hf_dict, hf_rope=False)

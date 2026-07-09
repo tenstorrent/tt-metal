@@ -1,27 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Construction-equivalence pytest test for ``Attention.update``.
+"""Construction-equivalence test for ``Attention.update`` (real weights, HF auth).
 
-Real Llama-3.2-1B-Instruct weights (HF auth required). Round-trip on
-every attention layer:
-
-    1.  Generate greedily with the real, ``__init__``-loaded weights -> ``tokens_A``.
-    2.  Snapshot every layer's ``wqkv`` / ``wo`` back to HF-shape torch
-        tensors (one per ``q_proj`` / ``k_proj`` / ``v_proj`` /
-        ``o_proj``).
-    3.  Overwrite every layer with a constant (deliberately break the model).
-    4.  Generate again -> ``tokens_broken`` (sanity: must differ from
-        ``tokens_A``, otherwise the overwrite was a no-op and the rest
-        of the test is meaningless).
-    5.  Restore every layer via ``Attention.update(q_proj=..., k_proj=...,
-        v_proj=..., o_proj=...)``.
-    6.  Generate again -> ``tokens_B``.
-    7.  Assert ``tokens_A == tokens_B`` byte-for-byte.
-
-Greedy generation through the full stack is the cheapest way to exercise
-every consumer of the buffers (prefill matmul, decode matmul, fused
-all-gather matmul if used, KV cache attention, captured traces).
+Round-trip per layer: generate -> snapshot wqkv/wo -> overwrite with a constant
+(must change output) -> restore via update -> generate must match the original.
 """
 
 from __future__ import annotations
@@ -44,20 +27,8 @@ def completer():
 
 
 def _snapshot_attn_hf(a):
-    """Read ``wqkv`` / ``wo`` back as HF-shape torch tensors.
-
-    On a single-device mesh ``wqkv`` is the internal fused
-    ``(1, 1, H, n_q + n_kv + n_kv)`` tensor. Inverting the
-    constructor's chunk-transpose-concat amounts to: squeeze to 2D
-    ``(H, qkv)``, transpose to ``(qkv, H)``, split along axis 0 into
-    Q / K / V each at HF Linear shape ``(out, H)``.
-
-    ``wo`` is stored as ``(1, 1, n_q, H)`` (the constructor takes
-    HF ``(H, n_q)`` and transposes). Inverting: squeeze to ``(n_q, H)``,
-    transpose to HF ``(H, n_q)``.
-
-    Returned tensors are HF Linear shape, ready for ``as_update_input``.
-    """
+    """Invert the constructor to read ``wqkv`` / ``wo`` back as HF-shape torch
+    tensors (q/k/v/o_proj), ready for ``as_update_input``."""
     n_q = a.n_heads * a.head_dim
     n_kv = a.n_kv_heads * a.head_dim
 

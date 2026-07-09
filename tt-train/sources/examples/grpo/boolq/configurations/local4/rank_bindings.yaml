@@ -1,20 +1,9 @@
-# Maps MPI ranks to the mesh ids declared in mgd.textproto and pins each rank
-# to a disjoint N300 board via TT_VISIBLE_DEVICES.
-#
-# Rank 0 = TTML rank (GRPOTrainer driver + WeightBridge sender) -> mesh_id 0,
-#          a [1, 2] DDP mesh (board 0, two chips).
-# Rank 1 = TTT  rank (WeightBridge receiver) -> mesh_id 1, a [1, 2] parent
-#          mesh (board 1, two chips) that the example splits into two [1, 1]
-#          submeshes, one TttGenerationWorker each.
-#
-# This is the 2->2 sibling of configurations/local8/rank_bindings.yaml.
+# Maps MPI ranks (0 = TTML, 1 = TTT) to mgd.textproto mesh ids, pinning each to
+# a disjoint N300 board via TT_VISIBLE_DEVICES.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# TT_VISIBLE_DEVICES indexes PCIe devices, not UMD chip ids. Each N300 board is
-# one PCIe device (valid ids 0..3 on this four-board host) exposing two chips (a
-# local chip + its eth-paired remote). So "0" = board 0 = two chips for rank 0
-# and "1" = board 1 = two chips for rank 1, each a routable [1, 2] line. Adjust
-# to your machine.
+# TT_VISIBLE_DEVICES indexes PCIe devices (0..3 here), not UMD chip ids; each
+# N300 board is one PCIe device exposing two chips. Adjust to your machine.
 
 rank_bindings:
   - rank: 0

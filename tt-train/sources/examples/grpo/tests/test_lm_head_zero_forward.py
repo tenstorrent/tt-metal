@@ -1,20 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Uniform-distribution pytest test for ``LMHead.update``.
+"""Zero-weights tests for ``LMHead.update`` (dummy weights).
 
-After zeroing every chunk of ``LMHead.output_weights_dram_sharded`` we
-have ``logits = x @ 0 = 0``. Softmax over zero logits is uniform across
-the entire vocab -- every token has the exact same probability.
-
-Two assertions on the same zeroed state (sharing one ``completer``
-fixture to avoid two heavy completer builds):
-
-1. ``LMHead.forward`` produces elementwise-zero logits.
-2. Greedy generation under those uniform logits collapses to a single
-   repeated token (the deterministic tie-broken argmax of zero).
-
-Uses ``dummy_weights=True`` -- no HF auth required.
+Zeroing the LM head gives ``logits = 0`` -> uniform softmax. Checks (1) forward
+logits are elementwise zero and (2) greedy decoding collapses to one token.
 """
 
 from __future__ import annotations
@@ -26,7 +16,7 @@ from _completer_utils import as_update_input, open_completer
 
 PROMPT = "Explain a tensor in a paragraph."
 MAX_NEW_TOKENS = 8
-TEMPERATURE = 0.0  # greedy -> uniform softmax collapses to a fixed argmax tie-break
+TEMPERATURE = 0.0  # greedy
 
 
 @pytest.fixture(scope="module")
@@ -41,18 +31,12 @@ def completer():
 
 
 def _build_random_hidden_state(completer):
-    """Construct a synthetic ``(1, 1, 32, dim)`` hidden state already in
-    the DRAM-sharded layout that ``LMHead.forward`` expects in prefill mode.
+    """Construct a synthetic ``(1, 1, 32, dim)`` hidden state in the layout
+    ``LMHead.forward`` expects in prefill mode.
 
-    32 rows matches a single decode-mode tile and is the shape
-    ``_apply_norm_and_lm_head`` itself documents
-    (``models/tt_transformers/tt/model.py``). We mirror the resharding
-    step that function does after the final RMSNorm: read the
-    LM-head-input memory config from ``model_args`` and, if it's
-    sharded, call ``interleaved_to_sharded`` before handing the tensor
-    back. Without that, the program config inside ``LMHead.forward``'s
-    ``ttnn.linear`` dereferences a shard spec the interleaved DRAM
-    tensor doesn't carry, throwing ``RuntimeError: bad optional access``.
+    Must reshard to the LM-head-input memory config when it's sharded, else
+    ``ttnn.linear`` throws ``RuntimeError: bad optional access`` on the missing
+    shard spec.
     """
     import ttnn
 

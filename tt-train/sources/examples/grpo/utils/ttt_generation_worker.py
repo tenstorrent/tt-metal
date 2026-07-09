@@ -4,55 +4,15 @@
 
 """Family-agnostic tt-transformers generation worker.
 
-The worker hosts a ``tt-transformers`` ``Transformer`` on a single
-``ttnn.MeshDevice`` and exposes two methods:
+Hosts a ``Transformer`` on one ``ttnn.MeshDevice``. ``generate`` is the
+``generate_fn`` and ``update_weights`` the ``on_weights_received`` callback of
+:class:`MPIRolloutServer`.
 
-* :meth:`TttGenerationWorker.generate` -- prefill + decode for a batch
-  of pre-tokenised prompts. Returns lists of token IDs. Intended to be
-  passed as the ``generate_fn`` callback of
-  :class:`MPIRolloutServer`.
-* :meth:`TttGenerationWorker.update_weights` -- one-liner forwarder to
-  ``Transformer.update_weights``. Intended to be passed as the
-  ``on_weights_received`` callback of :class:`MPIRolloutServer`.
-
-Design choices:
-
-* ``dummy_weights`` (constructor kwarg, default ``True``) is passed
-  straight to ``ModelArgs.__init__``. With the default the worker boots
-  fast: no HF tokenizer load (line 640 of ``model_config.py``
-  short-circuits), no HF Hub safetensors download (the bundled
-  ``model_params/<model_name>/`` directory backs the ``AutoConfig``
-  lookup instead). The very first :meth:`update_weights` call is
-  expected to overwrite the dummy state with real weights pushed from
-  the ttml peer; until then any :meth:`generate` output is meaningless.
-  Pass ``dummy_weights=False`` to load the real HF checkpoint (and
-  tokenizer) at construction -- used by the ``.update()`` unit tests,
-  which need a real model as ground truth.
-* ``disable_disk_cache=True`` is hard-coded because the dump_tensor
-  flatbuffer collective inside the on-disk cache writer deadlocks
-  against an asymmetric peer mesh shape on ``MPI_COMM_WORLD``
-  (concretely: the ttml side opens ``[1, 2]`` while the worker opens
-  ``[1, 1]``).
-* No tokenizer is held by the worker. Stop-token IDs and the
-  pad/filler ID are constructor arguments; the launcher resolves them
-  once at startup (see :func:`utils.llama_ttt_presets.llama_stop_and_pad`
-  for the Llama-family helper) and the worker never touches HuggingFace.
-* The ``optimizations`` argument is a ``Callable[[int, str], Any]``
-  returning a ``DecodersPrecision`` (or compatible) instance. The
-  worker wraps it in ``lambda ma: optimizations(ma.n_layers,
-  ma.model_name)`` so each ``ModelArgs`` instance picks the right
-  per-layer config. See :func:`utils.llama_ttt_presets.bf16_attn_bfp8_mlp_optimizations`
-  for the Llama-family default.
-* Sampling is **on-device**. ``temperature``, ``top_k``, ``top_p`` and
-  ``seed`` are constructor kwargs that get baked into a
-  ``SamplingParams`` instance and fused into the captured decode trace
-  on the first :meth:`generate` call. Subsequent calls re-execute the
-  same closed-loop trace (logits -> sampled token -> next-step input
-  buffer, all on device) with no host roundtrip per step. The
-  per-call ``temperature`` / ``top_p`` / ``seed`` kwargs of
-  :meth:`generate` are accepted for RPC-signature stability but
-  ignored at runtime; mutating them after construction would silently
-  diverge from the trace.
+Sampling is on-device: ``temperature`` / ``top_k`` / ``top_p`` / ``seed`` are
+baked into the captured decode trace at construction. The per-call
+``temperature`` / ``top_p`` / ``seed`` kwargs of :meth:`generate` are accepted
+for RPC-signature stability but IGNORED -- mutating them would silently diverge
+from the trace.
 """
 
 from __future__ import annotations
@@ -62,10 +22,9 @@ import time
 from typing import Any, Callable, List, Optional, Sequence
 
 import numpy as np
+
 import ttnn
-
 from models.common.sampling import SamplingParams
-
 
 OptimizationsFn = Callable[[int, str], Any]
 
@@ -73,9 +32,8 @@ OptimizationsFn = Callable[[int, str], Any]
 class TttGenerationWorker:
     """Generic tt-transformers generation worker.
 
-    The worker does NOT open or close any device. The caller must pass an
-    already-open ``ttnn.MeshDevice`` via the mandatory ``mesh_device``
-    keyword, and owns its lifetime; the worker only stores the handle.
+    Does NOT open/close the device: the caller passes an already-open
+    ``mesh_device`` and owns its lifetime.
     """
 
     def __init__(
@@ -111,18 +69,11 @@ class TttGenerationWorker:
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
         self._pad_token_id: int = int(pad_token_id)
 
-        # ModelArgs reads HF_MODEL from the environment for both checkpoint
-        # and tokenizer paths. The worker owns the env var while it lives.
+        # ModelArgs reads HF_MODEL from the env for checkpoint + tokenizer paths.
         os.environ["HF_MODEL"] = model_source
 
-        # dummy_weights (default True) passed straight through to the ctor.
-        # When True it:
-        #   - skips AutoTokenizer.from_pretrained (line 640 of model_config.py)
-        #   - swaps _set_hf_params over to LOCAL_HF_PARAMS[self.model_name]
-        #     so no HF Hub round-trip is needed for the arch config either
-        # When False, ModelArgs loads the real HF checkpoint + tokenizer.
-        # disable_disk_cache=True: short-circuits the dump_tensor_flatbuffer
-        # collective that would otherwise deadlock with an asymmetric peer.
+        # dummy_weights=True boots fast (skips HF tokenizer load + Hub download);
+        # first update_weights() overwrites the dummy state with real weights.
         self.model_args = ModelArgs(
             self.mesh_device,
             instruct=instruct,
@@ -130,15 +81,16 @@ class TttGenerationWorker:
             optimizations=lambda ma: optimizations(ma.n_layers, ma.model_name),
             max_seq_len=max_seq_len,
             cache_hf=True,
+            # Hard-coded: short-circuits the dump_tensor_flatbuffer collective that
+            # would otherwise deadlock with an asymmetric peer.
             disable_disk_cache=True,
             dummy_weights=dummy_weights,
         )
         self.model_args.lm_head_dtype = ttnn.bfloat16
         self.model_args.ccl_dtype = ttnn.bfloat16
 
-        # Paged-attention block-table sizing (mirrors the old
-        # LlamaCompleterTtt). Big enough so the worst-case prompt+decode
-        # never overflows max_seq_len.
+        # Paged-attention block-table sizing: big enough that worst-case
+        # prompt+decode never overflows max_seq_len.
         required_blocks_per_user = (max_seq_len + paged_block_size - 1) // paged_block_size
         max_num_blocks = max(min_num_blocks, max_batch_size * required_blocks_per_user)
         blocks_per_user = max_num_blocks // max_batch_size
@@ -150,7 +102,7 @@ class TttGenerationWorker:
         self._paged_cache_max_seq_len = paged_block_size * blocks_per_user
         self.page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, blocks_per_user)
 
-        state_dict = self.model_args.load_state_dict()  # dummy or real per dummy_weights
+        state_dict = self.model_args.load_state_dict()
 
         self.model = Transformer(
             args=self.model_args,
@@ -162,9 +114,8 @@ class TttGenerationWorker:
         )
         self.kv_cache = [layer.attention.layer_past for layer in self.model.layers]
 
-        # tokenizer=None: the worker holds no tokenizer of its own, and
-        # Generator only reads its tokenizer from multimodal helpers we
-        # don't call. Stop/pad IDs live on this class instead.
+        # tokenizer=None: Generator only reads its tokenizer from multimodal
+        # helpers we don't call; stop/pad IDs live on this class instead.
         self.generator = Generator(
             model=[self.model],
             model_args=[self.model_args],
@@ -172,17 +123,10 @@ class TttGenerationWorker:
             tokenizer=None,
         )
 
-        # Pin a single SamplingParams. With sampling_params != None,
-        # decode_forward fuses the sampling kernel into the captured trace:
-        # the sampled token is written directly into the trace's
-        # next-step `tokens` input buffer, closing the decode loop on
-        # device. The 'logits' return slot of decode_forward then carries
-        # sampled token IDs instead of raw logits (see
-        # models/tt_transformers/tt/generator.py:1286-1288, 1475-1490).
-        #
-        # These values are baked into the trace on first capture. Changing
-        # them at runtime would either be silently ignored (existing trace
-        # reused) or force a re-capture, so we pin once at construction.
+        # Pin one SamplingParams: decode_forward fuses the sampling kernel into
+        # the captured trace and its return slot then carries sampled token IDs
+        # instead of raw logits. Values are baked in at first capture, so pin
+        # once here -- runtime changes would be ignored or force a re-capture.
         assert self.model.sampling is not None, (
             "TttGenerationWorker requires on-device sampling support, but "
             "model.sampling is None for this configuration (vocab_size / "
@@ -194,10 +138,6 @@ class TttGenerationWorker:
             top_p=float(top_p),
             seed=seed,
         )
-
-    # ------------------------------------------------------------------ #
-    # Public API                                                          #
-    # ------------------------------------------------------------------ #
 
     def generate(
         self,
@@ -212,10 +152,8 @@ class TttGenerationWorker:
     ) -> List[List[int]]:
         """Prefill + decode a batch of token-ID prompts.
 
-        ``temperature`` / ``top_p`` / ``seed`` are accepted for
-        RPC-signature stability but ignored: the sampling parameters
-        baked into the trace at construction time are the ones that
-        actually drive the device-side sampler. See class docstring.
+        ``temperature`` / ``top_p`` / ``seed`` are ignored (baked into the trace
+        at construction); see the module docstring.
         """
         import torch
 
@@ -243,11 +181,8 @@ class TttGenerationWorker:
         kv_cache = [self.kv_cache]
         self._reset_kv_cache()
 
-        # Prefill with on-device sampling. With sampling_params != None,
-        # prefill_forward_text returns (output_tokens, log_probs) instead
-        # of raw logits (generator.py:1038-1041). output_tokens has shape
-        # [batch_size, 1] int64; squeeze the trailing 1 to match the
-        # per-user .item() indexing used below.
+        # With on-device sampling, prefill_forward_text returns
+        # (output_tokens, log_probs); output_tokens is [batch_size, 1] int64.
         _t_prefill = time.perf_counter()
         output_tokens, _log_probs = self.generator.prefill_forward_text(
             input_tokens_prefill_pt,
@@ -260,9 +195,7 @@ class TttGenerationWorker:
         )
         prefilled_token = output_tokens.reshape(-1)
         _prefill_s = time.perf_counter() - _t_prefill
-        # Real prompt tokens processed by prefill (sum of un-padded lengths
-        # over active users only; filler slots are 1-token dummies and
-        # don't represent meaningful work).
+        # Un-padded prompt lengths over active users only (filler slots excluded).
         prefill_real_tokens = sum(prompt_lens[:active_batch_size])
         prefill_tok_s = (prefill_real_tokens / _prefill_s) if _prefill_s > 0 else 0.0
         print(
@@ -277,10 +210,6 @@ class TttGenerationWorker:
             user_done[u] = True
         stop_ids = self._stop_token_ids if stop_at_eos else frozenset()
 
-        # active_completion_tokens counts useful tokens written to
-        # completions[:active_batch_size]: the prefill-sampled first
-        # tokens plus every decode-step token that wasn't a stop token.
-        # decode_active_tokens is the decode-loop subset of that.
         active_completion_tokens = 0
         for u in range(batch_size):
             if user_done[u]:
@@ -310,8 +239,7 @@ class TttGenerationWorker:
         steps_executed = 0
         decode_active_tokens = 0
 
-        # Chunk bookkeeping: ``pending`` is the just-finished chunk
-        # whose host tensors get drained at the *next* boundary;
+        # ``pending`` is the just-finished chunk drained at the next boundary;
         # ``current`` is the chunk being filled this step.
         pending_hosts: List[Any] = []
         pending_event: Any = None
@@ -319,20 +247,16 @@ class TttGenerationWorker:
         current_event: Any = None
 
         def _drain_chunk(host_chunks: List[Any]) -> None:
-            """Materialise an event-synced chunk's host token tensors
-            into per-user token IDs and fold them into completions /
-            user_done / decode_active_tokens, preserving the original
-            per-user 'first stop wins' semantics."""
+            """Fold an event-synced chunk's host tokens into completions /
+            user_done / decode_active_tokens ('first stop wins' per user)."""
             nonlocal decode_active_tokens
             if not host_chunks:
                 return
             chunk_len = len(host_chunks)
             chunk_arr = np.empty((batch_size, chunk_len), dtype=np.int64)
             for j, host_outs in enumerate(host_chunks):
-                # data_parallel == 1 here, so host_outs has one entry,
-                # which is either (tokens_host, log_probs_host) or a
-                # bare tokens host tensor. process_output_decode does
-                # the canonical reshape + slice to [B] int tokens.
+                # data_parallel == 1: host_outs has one entry, either
+                # (tokens_host, log_probs_host) or a bare tokens host tensor.
                 h0 = host_outs[0]
                 token_host = h0[0] if isinstance(h0, tuple) else h0
                 tok_torch = self.model.process_output_decode(token_host, self._max_batch_size, S=1, is_tokens=True)
@@ -365,9 +289,8 @@ class TttGenerationWorker:
             )
             host_outs, event_list = self.generator.read_decode_output(tt_decode_output, async_read=True)
             current_hosts.append(host_outs)
-            # cq=0 is in-order, so the most recent record_event covers
-            # every d2h enqueued earlier in the chunk. We only need to
-            # synchronize on this single event at the boundary.
+            # cq=0 is in-order, so the latest event covers every d2h enqueued
+            # earlier in the chunk -- sync only on this one at the boundary.
             current_event = event_list[-1]
             current_pos = current_pos + 1
             steps_executed += 1
@@ -382,9 +305,8 @@ class TttGenerationWorker:
                 pending_hosts, pending_event = current_hosts, current_event
                 current_hosts, current_event = [], None
 
-        # Final flush. Even when we broke early on EOS we still
-        # event_synchronize any in-flight events so the d2h DMAs
-        # complete before the host tensors fall out of scope.
+        # Final flush: even on early EOS break, event_synchronize in-flight
+        # events so d2h DMAs finish before the host tensors fall out of scope.
         if pending_event is not None:
             ttnn.event_synchronize(mesh_event=pending_event)
             if not broke_on_stop:
@@ -397,14 +319,8 @@ class TttGenerationWorker:
         active_completion_tokens += decode_active_tokens
         _decode_s = time.perf_counter() - _t_decode
         _per_step_ms = (_decode_s / steps_executed * 1000.0) if steps_executed > 0 else 0.0
-        # Two throughput numbers:
-        #   * "active" -- useful tokens written for active users only,
-        #     dropping early on EOS. This is what the launcher sees in
-        #     the returned completions.
-        #   * "device" -- everything the device actually computed,
-        #     including padded filler slots and EOS-suppressed tokens.
-        #     This is the number that matches typical benchmark figures
-        #     (e.g. simple_text_demo's tok/s throughput at full batch).
+        # "active" tok/s = useful tokens for active users; "device" tok/s =
+        # everything computed incl. filler slots (matches benchmark figures).
         decode_active_tok_s = (decode_active_tokens / _decode_s) if _decode_s > 0 else 0.0
         decode_device_tokens = steps_executed * batch_size
         decode_device_tok_s = (decode_device_tokens / _decode_s) if _decode_s > 0 else 0.0
@@ -424,17 +340,8 @@ class TttGenerationWorker:
         return completions[:active_batch_size]
 
     def update_weights(self, hf_dict: dict) -> None:
-        """Apply a received HF-keyed weight dict to the underlying model.
-
-        Plumbed directly into ``MPIRolloutServer(on_weights_received=...)``
-        so each ``OP_REQUEST_TRANSFER`` round-trip replaces the worker's
-        weights with whatever the ttml peer just pushed.
-        """
+        """Apply a received HF-keyed weight dict to the underlying model."""
         self.model.update_weights(hf_dict)
-
-    # ------------------------------------------------------------------ #
-    # Internal helpers                                                    #
-    # ------------------------------------------------------------------ #
 
     def _reset_kv_cache(self) -> None:
         for layer in self.model.layers:

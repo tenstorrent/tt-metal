@@ -692,6 +692,7 @@ class GRPOTrainer:
                 optimizer.zero_grad()
 
                 step_time_s = time.perf_counter() - step_t0
+
                 # Generation runs once per effective batch; attribute its cost to
                 # the first mini-epoch's step only.
                 generation_time_s_for_step = generation_time_s if mini_epoch == 0 else 0.0
@@ -708,20 +709,19 @@ class GRPOTrainer:
                     max_completion_len = 0
 
                 if grpo_cfg.logging_steps > 0 and num_steps % grpo_cfg.logging_steps == 0:
-                    step_metrics = {
-                        "reward_mean": mean_reward,
-                        "reward_std": float(rewards_np.std()),
-                        "mean_completion_len": mean_completion_len,
-                        "min_completion_len": min_completion_len,
-                        "max_completion_len": max_completion_len,
-                        "lr": base_lr * warmup_factor,
-                        "step_time_s": step_time_s,
-                        "generation_time_s": generation_time_s_for_step,
-                    }
                     for cb in self.callbacks:
+                        step_metrics = {
+                            "reward_mean": mean_reward,
+                            "reward_std": float(rewards_np.std()),
+                            "mean_completion_len": mean_completion_len,
+                            "min_completion_len": min_completion_len,
+                            "max_completion_len": max_completion_len,
+                            "lr": base_lr * warmup_factor,
+                            "step_time_s": step_time_s,
+                            "step_time_and_previous_callbacks_s": time.perf_counter() - step_t0,
+                            "generation_time_s": generation_time_s_for_step,
+                        }
                         cb.on_step_end(self, num_steps, **step_metrics)
-
-                step_t0 = time.perf_counter()
 
                 if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                     ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
@@ -737,6 +737,8 @@ class GRPOTrainer:
                     )
                     for cb in self.callbacks:
                         cb.on_save(self, num_steps, ckpt_dir)
+
+                step_t0 = time.perf_counter()
 
             for nlog_old, mask_old in probs_old_list:
                 _deallocate_tensors([nlog_old, mask_old])
