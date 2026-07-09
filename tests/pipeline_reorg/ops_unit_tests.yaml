@@ -362,6 +362,21 @@
   team: ttnn
   category: cpp_accessor
 
+- name: ttnn C++ permute ND provenance gtests
+  cmd: './build/test/ttnn/unit_tests_ttnn --gtest_filter="*PermuteImplicitOutputConfigPreservesNdProvenance*"'
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+    wh_n300_civ2:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2_viommu:
+      timeout: 5
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  category: cpp_unit_tests
+
 - name: Nightly TTNN university lab examples
   cmd: './build/test/ttnn/lab_examples/test_lab_eltwise_binary && ./build/test/ttnn/lab_examples/test_lab_multicast'
   skus:
