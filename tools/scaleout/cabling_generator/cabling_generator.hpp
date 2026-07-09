@@ -144,7 +144,22 @@ class CablingGenerator {
 public:
     // Constructor with full deployment descriptor (includes physical location info)
     // cluster_descriptor_path can be a single file or a directory containing multiple .textproto files
-    CablingGenerator(const std::string& cluster_descriptor_path, const std::string& deployment_descriptor_path);
+    //
+    // include_paths / exclude_paths are an optional opt-in sub-cluster filter. Each entry is a path
+    // of instance keys (e.g. {"bh_galaxy_sp_0", "bh_galaxy_node_2"}). A path matches any instance
+    // whose full path ENDS WITH those segments (relative/suffix match), so {"bh_galaxy_node_0"}
+    // matches that instance under every parent while {"bh_galaxy_sp_0"} matches only the top-level
+    // one; matching a subgraph selects every node under it. The kept set is:
+    // (all nodes if include_paths is empty, else those matched by include_paths) minus those matched
+    // by exclude_paths. Only connections whose BOTH endpoints are kept are emitted. Survivors are
+    // re-indexed to a dense 0..M-1 host_id space (required by the positional host_id in the FSD
+    // format), and deployment_hosts_ is sourced from the original deployment host each survivor maps
+    // to. When both lists are empty, no filtering occurs. Only supported for single-file cabling.
+    CablingGenerator(
+        const std::string& cluster_descriptor_path,
+        const std::string& deployment_descriptor_path,
+        const std::vector<std::vector<std::string>>& include_paths = {},
+        const std::vector<std::vector<std::string>>& exclude_paths = {});
 
     // Constructor with just hostnames (no physical location info)
     // cluster_descriptor_path can be a single file or a directory containing multiple .textproto files
@@ -204,6 +219,24 @@ public:
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
+
+    // Opt-in sub-cluster filter (see the (path, path, include_paths, exclude_paths) constructor).
+    // Both empty => no filter.
+    std::vector<std::vector<std::string>> include_paths_;
+    std::vector<std::vector<std::string>> exclude_paths_;
+    // Populated by apply_instance_filter(): dense host_id (index) -> original (raw) host_id it was
+    // built from. Used to source deployment_hosts_ from the original deployment descriptor.
+    std::vector<HostId> filtered_source_host_ids_;
+
+    // Prune the resolved graph to (include_paths_ minus exclude_paths_), keeping only connections
+    // with both endpoints selected, then re-index survivors to a dense 0..M-1 host_id space.
+    // No-op if both include_paths_ and exclude_paths_ are empty.
+    void apply_instance_filter();
+
+    // Build deployment_hosts_ for a filtered (sub-cluster) run: dense host_id i is sourced from
+    // deployment.hosts()[filtered_source_host_ids_[i]].
+    void build_filtered_deployment_hosts(const deployment::proto::DeploymentDescriptor& deployment_descriptor);
+
     // Common initialization logic for all constructors
     void initialize_cluster(
         const cabling_generator::proto::ClusterDescriptor& cluster_descriptor,
