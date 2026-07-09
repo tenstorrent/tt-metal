@@ -186,8 +186,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
     const uint32_t patch_size = stride_h * stride_w;       // Size of each patch
     const uint32_t output_width = input_width / stride_w;  // Output width
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_rta;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_rta;
+    KernelRunArgs::RuntimeArgValues reader_rta;
+    KernelRunArgs::RuntimeArgValues writer_rta;
 
     for (auto core : cores) {
         uint32_t curr_input_height_idx = block_start_id;
@@ -409,8 +409,8 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
     uint32_t dst_idx = 0;
     uint32_t src_col_offset = 0;
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_rta;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_rta;
+    KernelRunArgs::RuntimeArgValues reader_rta;
+    KernelRunArgs::RuntimeArgValues writer_rta;
 
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
