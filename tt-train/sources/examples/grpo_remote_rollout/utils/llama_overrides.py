@@ -107,3 +107,81 @@ class LlamaCompositeKV(Llama):
                 rope_params=old.rope_params,
                 bias_linears=config.attention_bias,
             )
+
+    def weights_ref_hf_dict(self) -> dict[str, ttnn.Tensor]:
+        """Export this ttml model's parameters as an HF-keyed dict of on-device
+        ``ttnn.Tensor`` handles, shaped for tt-transformers'
+        ``Transformer.update_weights(hf_state_dict, hf_rope=False)`` (HF
+        safetensors dot-keys; HF shapes wrapped in two leading unit dims;
+        bf16, TILE, DRAM-interleaved, replicated).
+
+        Q/K row order: both ttml and TTT store Meta-permuted rows for
+        Llama-3.2-1B, so the consumer uses ``hf_rope=False`` (no permutation).
+
+        Tied embeddings: with ``weight_tying=Enabled``, ``embed_tokens`` and
+        ``lm_head`` point at the same handle; safe because the consumer
+        ``ttnn.copy``s into a separate destination and never aliases the source.
+
+        Most values are live handles into ttml's parameter store; do not mutate
+        ttml's parameters between this call and ``update_weights``. The K/V split
+        is the exception: ttml fuses K and V into one ``kv_linear/weight``
+        (K rows first, then V), so we expose them via two ``ttnn.slice`` calls
+        (newly allocated, ~64 MB total for Llama-3.2-1B-Instruct).
+
+        Single-device assumption: parameters must be replicated across the mesh
+        (no DDP/TP shard mapper). The grpo single-device config satisfies this;
+        DDP/TP would need a host-side per-parameter concat first.
+        """
+        from ttml.models import WeightTyingType
+
+        cfg = self.config
+        assert cfg.weight_tying == WeightTyingType.Enabled, (
+            "weights_ref_hf_dict requires weight_tying=Enabled (Llama-3.2-1B/-Instruct "
+            f"tie embed_tokens and lm_head). Got weight_tying={cfg.weight_tying!r}."
+        )
+
+        n_heads = cfg.num_attention_heads
+        n_kv = cfg.num_key_value_heads
+        H = cfg.hidden_size
+        head_dim = H // n_heads
+        kv_dim = n_kv * head_dim
+
+        params = self.parameters()
+
+        def t(name: str) -> ttnn.Tensor:
+            if name not in params:
+                raise RuntimeError(
+                    f"ttml parameter {name!r} not found; available keys (first 10): " f"{sorted(params.keys())[:10]}"
+                )
+            return params[name].get_value()
+
+        out: dict[str, ttnn.Tensor] = {}
+
+        # Tied: same handle exposed under both HF keys.
+        fc = t("Llama/fc/weight")
+        out["model.embed_tokens.weight"] = fc
+        out["lm_head.weight"] = fc
+        out["model.norm.weight"] = t("Llama/ln_fc/gamma")
+
+        for i in range(len(self.blocks)):
+            p = f"Llama/blocks/{i}"
+
+            out[f"model.layers.{i}.input_layernorm.weight"] = t(f"{p}/attention_norm/gamma")
+            out[f"model.layers.{i}.post_attention_layernorm.weight"] = t(f"{p}/mlp_norm/gamma")
+
+            out[f"model.layers.{i}.self_attn.q_proj.weight"] = t(f"{p}/attention/q_linear/weight")
+            out[f"model.layers.{i}.self_attn.o_proj.weight"] = t(f"{p}/attention/out_linear/weight")
+
+            kv = t(f"{p}/attention/kv_linear/weight")
+            kv_shape = tuple(kv.shape)
+            assert kv_shape == (1, 1, 2 * kv_dim, H), (
+                f"kv_linear shape mismatch at layer {i}: got {kv_shape}, " f"expected (1, 1, {2 * kv_dim}, {H})"
+            )
+            out[f"model.layers.{i}.self_attn.k_proj.weight"] = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, kv_dim, H])
+            out[f"model.layers.{i}.self_attn.v_proj.weight"] = ttnn.slice(kv, [0, 0, kv_dim, 0], [1, 1, 2 * kv_dim, H])
+
+            out[f"model.layers.{i}.mlp.gate_proj.weight"] = t(f"{p}/mlp/w1/weight")
+            out[f"model.layers.{i}.mlp.up_proj.weight"] = t(f"{p}/mlp/w3/weight")
+            out[f"model.layers.{i}.mlp.down_proj.weight"] = t(f"{p}/mlp/w2/weight")
+
+        return out
