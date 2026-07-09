@@ -35,18 +35,22 @@ def total_and_iters(region):
     return float(df[DUR].sum()), int(len(df)), iters
 
 
+VARIANTS = ("deepseek_v32", "glm_5_1")
+
+
 def discover():
-    out = {}  # commit -> {(mode,scenario): {dir,total_ns,calls,iters,branch}}
-    for mode in ("sparse", "dense"):
-        for man in glob.glob(f"{BASE}/deepseek_v32_{mode}_mla_perf/reports/*/run_manifest.json"):
-            m = json.load(open(man))
-            d = os.path.dirname(man)
-            key = (m.get("commit") or "?")[:11]
-            out.setdefault(key, {"branch": m.get("branch"), "runs": {}})
-            # keep the latest dir per (mode,scenario) for this commit (dir name sorts by timestamp)
-            slot = out[key]["runs"].setdefault(f"{mode}/{m['scenario']}", {"dir": None})
-            if slot["dir"] is None or d > slot["dir"]:
-                slot["dir"] = d
+    out = {}  # commit -> {branch, runs:{"variant/mode/scenario": {dir}}}
+    for variant in VARIANTS:
+        for mode in ("sparse", "dense"):
+            for man in glob.glob(f"{BASE}/{variant}_{mode}_mla_perf/reports/*/run_manifest.json"):
+                m = json.load(open(man))
+                d = os.path.dirname(man)
+                key = (m.get("commit") or "?")[:11]
+                out.setdefault(key, {"branch": m.get("branch"), "runs": {}})
+                # keep the latest dir per (variant,mode,scenario) for this commit (dir sorts by timestamp)
+                slot = out[key]["runs"].setdefault(f"{variant}/{mode}/{m['scenario']}", {"dir": None})
+                if slot["dir"] is None or d > slot["dir"]:
+                    slot["dir"] = d
     return out
 
 
@@ -63,7 +67,7 @@ if __name__ == "__main__":
                 continue
             tot, calls, iters = total_and_iters(reg)
             result[k] = {"total_ns": tot, "calls": calls, "iters": iters, "dir": slot["dir"]}
-            print(f"{commit} {info['branch']:38} {k:14} {tot/1e6:9.3f}ms  {calls:4d} calls  {iters:2d} it")
+            print(f"{commit} {k:30} {tot/1e6:9.3f}ms  {calls:5d} calls  {iters:2d} it")
     if want:
         json.dump(
             result, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), f"totals_{want}.json"), "w"), indent=1

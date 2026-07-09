@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""Generate the self-contained DeepSeek V3.2 sparse-MLA performance report HTML."""
-import json, os, html
+"""Generate the self-contained DeepSeek V3.2 / GLM-5.1 sparse-MLA performance report HTML."""
+import copy, json, os, html
 
 SP = os.path.dirname(os.path.abspath(__file__))
 DATA = json.load(open(SP + "/perf_data.json"))
 
-# Fold parse_percall's per-call attribution into DATA as the JS expects it:
+# Fold parse_percall's per-call attribution into each variant's data as the JS expects it:
 #   data.block_timing[mode][scen] = {total_ns, nodes:{block_id: ns}}   (semantic-node real durations)
 #   data.expanded[mode][scen]     = {block_id: [ordered op nodes]}      (intra-block dataflow)
+# (percall.json and perf_data.json are both keyed variant → mode → scenario.)
 PERCALL = json.load(open(SP + "/percall.json"))
-DATA["block_timing"], DATA["expanded"] = {}, {}
-for _mode in PERCALL["blocks"]:
-    DATA["block_timing"][_mode], DATA["expanded"][_mode] = {}, {}
-    for _scen, _blk in PERCALL["blocks"][_mode].items():
-        _tot = (DATA["modes"].get(_mode, {}).get(_scen) or {}).get("total_ns") or sum(_blk.values())
-        DATA["block_timing"][_mode][_scen] = {"total_ns": _tot, "nodes": _blk}
-        _exp = {}
-        for _n in sorted(PERCALL["nodes"][_mode][_scen], key=lambda x: x["order"]):
-            _exp.setdefault(_n["block"], []).append(_n)
-        DATA["expanded"][_mode][_scen] = _exp
+for _v, _vd in DATA["variants"].items():
+    _vd["block_timing"], _vd["expanded"] = {}, {}
+    for _mode in PERCALL["blocks"].get(_v, {}):
+        _vd["block_timing"][_mode], _vd["expanded"][_mode] = {}, {}
+        for _scen, _blk in PERCALL["blocks"][_v][_mode].items():
+            _tot = (_vd["modes"].get(_mode, {}).get(_scen) or {}).get("total_ns") or sum(_blk.values())
+            _vd["block_timing"][_mode][_scen] = {"total_ns": _tot, "nodes": _blk}
+            _exp = {}
+            for _n in sorted(PERCALL["nodes"][_v][_mode][_scen], key=lambda x: x["order"]):
+                _exp.setdefault(_n["block"], []).append(_n)
+            _vd["expanded"][_mode][_scen] = _exp
 
 # ------------------------------------------------------------------ block metadata
 # Authored from the two code-verified trace specs. file:line + snippet feed the
@@ -410,8 +412,63 @@ DENSE_EDGES = [
     ["d7", "out", "out", "[1,1,1280,1792]", "bf16", "TILE", DH],
 ]
 
-BLOCKS = {"sparse": SPARSE_BLOCKS, "dense": DENSE_BLOCKS}
-EDGES = {"sparse": SPARSE_EDGES, "dense": DENSE_EDGES}
+# GLM-5.1 sparse graph = the SAME 10 semantic blocks as deepseek (s1..s10) — the per-op differences live
+# in the expanded view (from percall, GLM template): s2/s3 drop the rope-permute matmul (interleaved
+# indexer RoPE), and s8 gains the thin-head transpose. Patch the block-level desc/ops for s2/s3/s8; layout
+# and edges are identical (same block graph). Dense is structurally shared.
+GLM_SPARSE_BLOCKS = copy.deepcopy(SPARSE_BLOCKS)
+for _b in GLM_SPARSE_BLOCKS:
+    if _b["id"] == "s2":
+        _b["desc"] += " (GLM: interleaved indexer RoPE — no rope-permute matmul.)"
+        _b["ops"] = [
+            "Matmul×1 (wk)",
+            "ReduceScatter+AllGather (TP AR)",
+            "LayerNorm×1",
+            "Slice×2",
+            "RotaryEmbeddingIndexed×1",
+            "Concat×1",
+            "Typecast×1",
+            "UpdatePaddedKvCache×1",
+        ]
+    if _b["id"] == "s3":
+        _b["desc"] += " (GLM: interleaved indexer RoPE — no rope-permute matmul.)"
+        _b["ops"] = [
+            "MeshPartition×2 (TP seq-shard qr / weights)",
+            "Matmul×2 (wq_b, weights_proj)",
+            "NlpCreateHeads×1",
+            "RotaryEmbeddingLlama×1",
+            "ReduceScatter+AllGather (weights AR)",
+            "BinaryNg×1",
+            "Permute×1",
+            "AllGather (SP index-K gather)",
+            "IndexerScore×1",
+            "TopkLargeIndices×1",
+            "AllGather (TP top-k index gather)",
+        ]
+    if _b["id"] == "s8":
+        _b["desc"] = (
+            "GLM has 16 heads/chip (< 32), so ttMLA._sparse_mla fires the head→sequence reshard: "
+            "sparse_sdpa is wrapped by an all-gather(q, dim1) + mesh_partition BEFORE, and "
+            "mesh_partition + all-gather + mesh_partition AFTER. The two all-gather reshards "
+            "(~1.1 ms + ~1.5 ms) DOMINATE this block — together larger than sparse_sdpa itself "
+            "(~1.3 ms). DeepSeek (32 heads/chip) skips all of these."
+        )
+        _b["ops"] = [
+            "AllGatherAsync×2 (thin-head reshard — dominant)",
+            "MeshPartition×3",
+            "Untilize×1",
+            "SparseSDPA×1",
+            "Tilize×1",
+        ]
+
+BLOCKS = {
+    "deepseek_v32": {"sparse": SPARSE_BLOCKS, "dense": DENSE_BLOCKS},
+    "glm_5_1": {"sparse": GLM_SPARSE_BLOCKS, "dense": copy.deepcopy(DENSE_BLOCKS)},
+}
+EDGES = {
+    "deepseek_v32": {"sparse": SPARSE_EDGES, "dense": DENSE_EDGES},
+    "glm_5_1": {"sparse": SPARSE_EDGES, "dense": DENSE_EDGES},
+}
 
 META = {
     "branch": "mvasilijevic/indexer_sp32",
@@ -463,6 +520,11 @@ CAVEATS = [
     },
     {
         "sev": "info",
+        "title": "GLM-5.1 variant: thin-head reshard dominates; report is within-variant",
+        "body": "GLM-5.1 (64 q-heads → 16/chip at TP=4, vs DeepSeek's 128 → 32/chip) runs the same TP=4 mesh but triggers the head→sequence reshard in ttMLA._sparse_mla: two all-gather reshards wrap sparse_sdpa in the SDPA block and DOMINATE it (~1.1 + ~1.5 ms vs sparse_sdpa's ~1.3 ms) — see the GLM s8 block. Consequently GLM sparse is SLOWER than GLM dense at short prefix (warm 7.75 vs 3.72 ms) and only pulls ahead at the long prefix (17.43 vs 19.55 ms); the SP×TP indexer still helps GLM sparse a lot vs its own baseline (warm −14.4%, cold −15.1%, long −43.0%). GLM's indexer RoPE is interleaved, so the rope-permute matmul in s2/s3 is absent. Comparisons are WITHIN a variant (the Variant toggle swaps the whole report) — DeepSeek and GLM have different model dims, so a cross-variant ms number would not be apples-to-apples.",
+    },
+    {
+        "sev": "info",
         "title": "Node durations are measured per call, assigned by execution order",
         "body": "Every device op call is device-collapsed across the 8 chips (compute=max=critical path, collectives=avg) and assigned to a semantic block by walking the execution-ordered call stream against the code-verified op template; once-per-forward structural ops (SparseSDPA, RingJointSDPA, IndexerScore, Topk, FastReduceNC, …) are pinned to their node. Block and op durations are thus REAL per-call Tracy times (not code-average estimates), and sum exactly to the scenario total. Caveat: a few ttnn ops are relabels/composites (the prefix gather surfaces as AllBroadcast; MeshPartition/Copy/padding come from to_memory_config/CCL internals) — these are placed in their issuing block with real time but flagged “composite” in the expanded view, as their internal wiring is inferred, not a literal Python call.",
     },
@@ -470,7 +532,7 @@ CAVEATS = [
 
 # output-tensor annotation per authored internal op node (feeds the expanded intra-block edges).
 # shape · dtype · layout · dist — omitted for composite/relabel nodes (marked separately).
-TENSOR = {
+TENSOR_DS = {
     # sparse
     "s1.qa": "[1,1,1280,1536] bf16 TILE · " + DR,
     "s1.norm": "[1,1,1280,1536] bf16 TILE · " + DR,
@@ -517,6 +579,21 @@ TENSOR = {
     "d7.o": "[1,1,1280,7168] bf16 · " + DH,
     "d7.rs": "out [1,1,1280,1792] bf16 TILE · " + DH,
 }
+# GLM tensor annotations = deepseek's + the s8 thin-head reshard nodes (16 heads/chip → head→seq reshard).
+TENSOR_GLM = dict(TENSOR_DS)
+TENSOR_GLM.update(
+    {
+        "s8.agq": "q [1,16,1280,576]→[1,64,1280,576] bf16 · gather heads (dim1) over TP",
+        "s8.mp1": "q [1,64,1280/tp,576] bf16 · reshard heads→seq",
+        "s8.q2rm": "q [1,64,1280,576] bf16 ROW_MAJOR · seq-sharded",
+        "s8.mpidx": "indices [1,1,1280/tp,2048] uint32 · reshard to seq",
+        "s8.sdpa": "attn_out [1,64,1280,512] bf16 ROW_MAJOR · seq-sharded",
+        "s8.o2tile": "attn_out [1,64,1280,512] bf16 TILE",
+        "s8.ago": "attn_out [1,64,1280,512]→gather seq (dim2) over TP",
+        "s8.mp2": "attn_out [1,16,1280,512] bf16 · reshard seq→heads",
+    }
+)
+TENSOR = {"deepseek_v32": TENSOR_DS, "glm_5_1": TENSOR_GLM}
 
 # Node placement (col = level, top→down; row = lane, left→right) chosen to keep dataflow edges
 # crossing-free: index / query / kv columns kept straight, branches converge on the attention node.
@@ -548,16 +625,26 @@ LAYOUT = {
         "out": (6, 1),
     },
 }
-for _m, _mp in LAYOUT.items():
-    for _b in BLOCKS[_m]:
-        if _b["id"] in _mp:
-            _b["col"], _b["row"] = _mp[_b["id"]]
+# LAYOUT is mode-keyed (shared across variants — same 10 sparse blocks / dense blocks). Apply per variant.
+for _v in BLOCKS:
+    for _m, _mp in LAYOUT.items():
+        for _b in BLOCKS[_v][_m]:
+            if _b["id"] in _mp:
+                _b["col"], _b["row"] = _mp[_b["id"]]
 
-payload = {"data": DATA, "blocks": BLOCKS, "edges": EDGES, "meta": META, "caveats": CAVEATS, "tensor": TENSOR}
+payload = {
+    "variants": {
+        _v: {"data": DATA["variants"][_v], "blocks": BLOCKS[_v], "edges": EDGES[_v], "tensor": TENSOR[_v]}
+        for _v in DATA["variants"]
+    },
+    "meta": META,
+    "caveats": CAVEATS,
+    "default_variant": DATA.get("default_variant", "deepseek_v32"),
+}
 PAYLOAD_JSON = json.dumps(payload, separators=(",", ":"))
 
 # ------------------------------------------------------------------ HTML
-TITLE = "DeepSeek V3.2 · Sparse MLA Performance"
+TITLE = "DeepSeek V3.2 / GLM-5.1 · Sparse MLA Performance"
 HTML = r"""<title>__TITLE__</title>
 <style>
 :root{
@@ -725,6 +812,11 @@ details.appx .ac{padding:0 16px 16px;}
 <header class="top">
   <div class="top-inner">
     <div class="brand"><span class="k">DeepSeek V3.2 · DSA</span><span class="t">Sparse MLA Perf Report</span></div>
+    <div class="ctl"><span class="seg-label">Variant</span>
+      <div class="seg" id="segVariant" role="group" aria-label="model variant">
+        <button data-vr="deepseek_v32" aria-pressed="true">DeepSeek V3.2</button>
+        <button data-vr="glm_5_1" aria-pressed="false">GLM 5.1</button>
+      </div></div>
     <div class="ctl"><span class="seg-label">Scenario</span>
       <div class="seg" id="segScenario" role="group" aria-label="scenario">
         <button data-s="warm" aria-pressed="true">Warm</button>
@@ -854,7 +946,13 @@ details.appx .ac{padding:0 16px 16px;}
 <script id="payload" type="application/json">__PAYLOAD__</script>
 <script>
 const P = JSON.parse(document.getElementById('payload').textContent);
-const {data, blocks, edges, meta, caveats, tensor} = P;
+const {meta, caveats} = P;
+// data/blocks/edges/tensor are REBOUND per variant (deepseek_v32 | glm_5_1) by selVariant(), so all the
+// existing data.modes[M][S] / blocks[M] / tensor[id] accesses stay variant-agnostic.
+let data, blocks, edges, tensor;
+let V = P.default_variant;
+function selVariant(v){ V=v; const p=P.variants[v]; data=p.data; blocks=p.blocks; edges=p.edges; tensor=p.tensor; }
+selVariant(V);
 let S = 'warm', M = 'sparse', sortKey='ord', sortDir=1;
 let view='semantic';               // graph detail: 'semantic' | 'ops'
 let expanded=new Set();            // per-node expand state (block ids)
@@ -1247,7 +1345,7 @@ function drawStatic(){
   }));
   document.getElementById('appxReports').innerHTML=rep;
   // C: meta
-  const L=meta.local,G=meta.galaxy,C=meta.config;
+  const L=meta.local,G=meta.galaxy,C=data.config;
   document.getElementById('appxMeta').innerHTML=`
     <div class="kv">Branch / commit</div>
     <p class="note"><span class="mono">${esc(meta.branch)}</span> @ <span class="mono">${esc(meta.commit)}</span><br>${esc(meta.commit_subject)}</p>
@@ -1268,11 +1366,12 @@ function drawStatic(){
     <p class="note">Tracy reports device-kernel time per <b>op code</b>, device-collapsed across the 8 chips (compute = max = critical path; collectives = avg), sliced to the <span class="mono">signpost("start")…signpost("stop")</span> region. Semantic-block time is not directly measured, so each op-code total is distributed across the blocks that emit it, weighted by the number of calls each block issues, per the code-verified block→op mapping shown on every node (Appendix A / node drawer).</p>
     <p class="note">Consequences: (1) block times sum <b>exactly</b> to the scenario total; (2) uniquely-placed ops — <span class="mono">SparseSDPA</span>, <span class="mono">RingJointSDPA</span>, <span class="mono">IndexerScore</span>, <span class="mono">TopkLargeIndices</span> — are exact; (3) a block's share of a multi-call op code (e.g. the 11 Matmuls) assumes equal cost per call, an approximation; (4) some collective ops are relabelled by ttnn (AllGather→AllBroadcast, non-minimal ReduceScatter) and composite ops (MeshPartition, Copy, Untilize/Tilize padding) decompose internally — these are attributed to their issuing block (gather / reshard / cache-format) from the source trace. The dominant <span class="mono">AllBroadcast</span> (the full-prefix KVPE gather) is placed on the prefix-gather node, which is why that node grows with sequence length in the long scenario.</p>`;
   // footer
-  document.getElementById('footer').innerHTML=`Generated from Tracy dumps under <span class="mono">generated/profiler/deepseek_v32_{sparse,dense}_mla_perf/</span> · ${esc(meta.hardware)} · ${esc(meta.branch)}@${esc(meta.commit)}. Node graph verified against <span class="mono">tt/mla/mla.py</span> &amp; <span class="mono">tt/mla/indexer.py</span>.`;
+  document.getElementById('footer').innerHTML=`Generated from Tracy dumps under <span class="mono">generated/profiler/{deepseek_v32,glm_5_1}_{sparse,dense}_mla_perf/</span> · ${esc(meta.hardware)} · ${esc(meta.branch)}@${esc(meta.commit)}. Node graph verified against <span class="mono">tt/mla/mla.py</span> &amp; <span class="mono">tt/mla/indexer.py</span>.`;
 }
 
 /* ---------- wire controls ---------- */
 function syncPressed(){
+  document.querySelectorAll('#segVariant button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.vr===V));
   document.querySelectorAll('#segScenario button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.s===S));
   document.querySelectorAll('#segMode button').forEach(x=>x.setAttribute('aria-pressed',x.dataset.m===M));
 }
@@ -1287,6 +1386,9 @@ document.querySelectorAll('#segScenario button').forEach(b=>b.onclick=()=>{
   if(!data.modes[M][b.dataset.s])return; S=b.dataset.s; syncPressed(); draw();});
 document.querySelectorAll('#segMode button').forEach(b=>b.onclick=()=>{
   M=b.dataset.m; expanded.clear(); window._selNode=null; if(!ent())S='warm'; syncPressed(); draw();});
+document.querySelectorAll('#segVariant button').forEach(b=>b.onclick=()=>{
+  selVariant(b.dataset.vr); expanded.clear(); window._selNode=null; if(!ent())S='warm';
+  syncPressed(); drawStatic(); draw();});
 document.querySelectorAll('#segView button').forEach(b=>b.onclick=()=>{
   view=b.dataset.v; document.querySelectorAll('#segView button').forEach(x=>x.setAttribute('aria-pressed',x===b)); drawGraph();});
 function draw(){ if(!ent())S='warm'; syncPressed(); updateAvail();

@@ -10,13 +10,15 @@ sys.path.insert(0, os.getcwd())
 from models.tt_transformers.tests.test_utils import merge_device_rows
 
 DUR = "DEVICE KERNEL DURATION [ns]"
-RPT = {
-    ("sparse", "warm"): "generated/profiler/deepseek_v32_sparse_mla_perf/reports/2026_07_07_23_24_02",
-    ("sparse", "cold"): "generated/profiler/deepseek_v32_sparse_mla_perf/reports/2026_07_07_23_25_57",
-    ("sparse", "long"): "generated/profiler/deepseek_v32_sparse_mla_perf/reports/2026_07_08_07_42_02",
-    ("dense", "warm"): "generated/profiler/deepseek_v32_dense_mla_perf/reports/2026_07_07_23_24_37",
-    ("dense", "cold"): "generated/profiler/deepseek_v32_dense_mla_perf/reports/2026_07_07_23_26_48",
-}
+SP = os.path.dirname(os.path.abspath(__file__))
+# BRANCH report dirs per (variant, mode, scenario), from variant-aware discover.py (keys "v/m/s").
+BRANCH_TOTALS = os.path.join(SP, "totals_e71a1b0a666.json")
+RPT = {}  # (variant, mode, scenario) -> report dir
+for _k, _v in json.load(open(BRANCH_TOTALS)).items():
+    _variant, _mode, _scen = _k.split("/")
+    RPT[(_variant, _mode, _scen)] = _v["dir"]
+VARIANTS = sorted({k[0] for k in RPT})
+SCENS = ["warm", "cold", "long"]
 
 # alias groups: a template code accepts any code in its group (ttnn relabels)
 AG = {"AllGatherAsyncDeviceOperation", "AllBroadcastDeviceOperation"}
@@ -45,6 +47,11 @@ SPARSE_TMPL = [
     ("s2", "s2.cat", "concat pe·nope", C("ConcatDeviceOperation")),
     ("s2", "s2.tc", "typecast → bf8", C("TypecastDeviceOperation")),
     ("s2", "s2.wr", "update index K-cache", C("UpdatePaddedKvCacheDeviceOperation")),
+    # SP×TP seq-sharded indexer (commit c7f7dc30f3b). wq_b is replicated (all H_idx heads on-chip) so the
+    # score head-sum is complete on-chip — the old TP logit all-reduce (tilize/RS/AG/untilize over the
+    # ~end_pos-wide logits) is GONE. Instead the query seq is TP-sharded (mesh_partition qr), and only the
+    # small top-k indices are gathered back over TP after top-k.
+    ("s3", "s3.mpq", "TP seq-shard qr (mesh_partition)", C("MeshPartitionDeviceOperation")),
     ("s3", "s3.wqb", "indexer wq_b matmul", C("MatmulDeviceOperation")),
     ("s3", "s3.heads", "create heads", C("NlpCreateHeadsDeviceOperation")),
     ("s3", "s3.sl1", "slice rope", C("SliceDeviceOperation")),
@@ -54,15 +61,15 @@ SPARSE_TMPL = [
     ("s3", "s3.cat", "concat q", C("ConcatDeviceOperation")),
     ("s3", "s3.wproj", "weights_proj matmul", C("MatmulDeviceOperation")),
     ("s3", "s3.wrs", "weights reduce-scatter", RS),
+    ("s3", "s3.wag", "weights all-gather", AG),
     ("s3", "s3.mul", "scale multiply", C("BinaryNgDeviceOperation")),
+    ("s3", "s3.mpw", "TP seq-shard weights (mesh_partition)", C("MeshPartitionDeviceOperation")),
     ("s3", "s3.pm", "permute weights", C("PermuteDeviceOperation")),
     ("s3", "s3.gk", "gather index K (SP)", AG),
     ("s3", "s3.score", "indexer_score_dsa", C("IndexerScoreDeviceOperation")),
-    ("s3", "s3.tl", "logits tilize", C("TilizeDeviceOperation")),
-    ("s3", "s3.lrs", "logits reduce-scatter", RS),
-    ("s3", "s3.lag", "logits all-gather", AG),
-    ("s3", "s3.ut", "logits untilize", C("UntilizeDeviceOperation")),
     ("s3", "s3.topk", "top-k indices", C("TopkLargeIndicesDeviceOperation")),
+    ("s3", "s3.idxag", "TP gather top-k indices", AG),
+    ("s3", "s3.idxcat", "index gather concat", C("ConcatDeviceOperation")),
     ("s4", "s4.qb", "q_b_proj matmul", C("MatmulDeviceOperation")),
     ("s4", "s4.heads", "create heads", C("NlpCreateHeadsDeviceOperation")),
     ("s4", "s4.sl1", "slice nope", C("SliceDeviceOperation")),
@@ -117,11 +124,35 @@ DENSE_TMPL = [
     ("d7", "d7.o", "o_proj matmul", C("MatmulDeviceOperation")),
     ("d7", "d7.rs", "TP reduce-scatter", RS),
 ]
-TMPL = {"sparse": SPARSE_TMPL, "dense": DENSE_TMPL}
+# GLM sparse = deepseek SPARSE_TMPL with variant deltas (confirmed from the glm_5_1 warm-sparse dump):
+#  - interleaved indexer RoPE (index_rope_interleave=True) → _rope_perm is None → NO rope-permute matmul,
+#    so drop s2.perm and s3.rperm.
+#  - 16 heads/chip (< 32) → _needs_head_to_seq_reshard fires → s8 gains the thin-head transpose: an
+#    all-gather(q, dim1) + mesh_partition BEFORE sparse_sdpa, and mesh_partition + all-gather + mesh_partition
+#    AFTER. The two AllGatherAsync reshards (~1.1 ms + ~1.5 ms) dominate — larger than sparse_sdpa itself.
+_GLM_S8 = [
+    ("s8", "s8.agq", "thin-head q all-gather (dim1)", AG),
+    ("s8", "s8.mp1", "reshard q (mesh_partition)", C("MeshPartitionDeviceOperation")),
+    ("s8", "s8.q2rm", "q → ROW_MAJOR", C("UntilizeDeviceOperation")),
+    ("s8", "s8.mpidx", "reshard indices (mesh_partition)", C("MeshPartitionDeviceOperation")),
+    ("s8", "s8.sdpa", "sparse_sdpa (top-k)", C("SparseSDPAOperation")),
+    ("s8", "s8.o2tile", "out → TILE", C("TilizeDeviceOperation")),
+    ("s8", "s8.ago", "thin-head out all-gather (dim2)", AG),
+    ("s8", "s8.mp2", "reshard out (mesh_partition)", C("MeshPartitionDeviceOperation")),
+]
+GLM_SPARSE_TMPL = [n for n in SPARSE_TMPL if n[0] != "s8" and n[1] not in ("s2.perm", "s3.rperm")] + _GLM_S8
+GLM_SPARSE_TMPL.sort(key=lambda n: int(n[0][1:]))  # keep block order (s1..s10); stable within block
+
+TMPL = {
+    ("deepseek_v32", "sparse"): SPARSE_TMPL,
+    ("deepseek_v32", "dense"): DENSE_TMPL,
+    ("glm_5_1", "sparse"): GLM_SPARSE_TMPL,
+    ("glm_5_1", "dense"): DENSE_TMPL,
+}
 LABELS = {}
 BLOCK_OF = {}
-for m, tp in TMPL.items():
-    for blk, nid, lab, codes in tp:
+for _tp in TMPL.values():
+    for blk, nid, lab, codes in _tp:
         LABELS[nid] = lab
         BLOCK_OF[nid] = blk
 
@@ -158,8 +189,9 @@ def walk_forward(calls, tmpl):
     anch = anchor_map(tmpl)
     order = {}
     oi = 0
-    # Node ids consumed by the anchor branch (pinned by code, label-only). ptr must auto-skip them,
-    # else it stalls on score/topk/mul and the in-order tail falls through to composites.
+    # Node ids consumed by the anchor branch (pinned by code, label-only). They must NOT hold up the
+    # sequential pointer, so ptr auto-skips them: otherwise ptr would stall on score/topk/mul and the
+    # in-order tail (idxag, gather, etc.) would fall through to composites.
     anchor_nids = {tmpl[i][1] for i in anch.values()}
 
     def rec(nid, dur):
@@ -188,13 +220,11 @@ def walk_forward(calls, tmpl):
         cur = tmpl[ptr][0]
         # candidate 1: STRICT — only the (non-anchor) node exactly at ptr. Scanning ahead within the
         # block (the old behaviour) let an unmodeled composite whose code equals a LATER named node
-        # (a rope-internal MeshPartition matching a later mesh_partition node; an RS-internal Concat
-        # matching a later concat node) jump the pointer and orphan everything between — block sums
-        # stay exact and anchors still match, so the asserts PASS while the distribution silently
-        # scrambles. Strict-at-ptr keeps composites in-block; ptr only advances on a real in-order
-        # match. ASSUMES the template lists every emitted node in program order (re-derive it against
-        # the actual dump, per the skill). ALWAYS eyeball the per-block node distribution, not just
-        # block-sum==total.
+        # (e.g. a rope-internal MeshPartition matching s3.mpw, or an RS-internal Concat matching
+        # s3.idxcat) jump the pointer and orphan every node between — block sums stay exact but the
+        # distribution scrambles. Strict-at-ptr keeps composites in-block; ptr only advances on a
+        # real, in-order match. (Verified: every template node is present and in program order for the
+        # DeepSeek block-cyclic path on this box, so no legitimate node is skipped.)
         if code in tmpl[ptr][3]:
             rec(tmpl[ptr][1], dur)
             ptr += 1
@@ -219,10 +249,10 @@ def ordered_calls(df):
     return list(zip(df["OP CODE"].tolist(), pd.to_numeric(df[DUR], errors="coerce").fillna(0).tolist()))
 
 
-out = {"sparse": {}, "dense": {}}
-for (mode, scen), rp in RPT.items():
+out = {v: {"sparse": {}, "dense": {}} for v in VARIANTS}  # variant -> mode -> scenario -> agg
+for (variant, mode, scen), rp in RPT.items():
     f = glob.glob(rp + "/ops_perf_results_*.csv")[0]
-    df0 = pd.read_csv(f)
+    df0 = pd.read_csv(f, low_memory=False)
     mk = df0[df0["OP TYPE"] == "signpost"]["OP CODE"]
     a = mk[mk == "start"].index[0]
     b = mk[mk == "stop"].index[0]
@@ -234,76 +264,81 @@ for (mode, scen), rp in RPT.items():
     agg = {}
     for i in range(len(starts)):
         seg = merge_device_rows(ri.iloc[bounds[i] + 1 : bounds[i + 1]])
-        nd, od = walk_forward(ordered_calls(seg), TMPL[mode])
+        nd, od = walk_forward(ordered_calls(seg), TMPL[(variant, mode)])
         for nid, ds in nd.items():
             e = agg.setdefault(nid, {"total_ns": 0.0, "count": 0, "order": od[nid]})
             e["total_ns"] += sum(ds)
             e["count"] += len(ds)
             e["order"] = min(e["order"], od[nid])
-    out[mode][scen] = agg
+    out[variant][mode][scen] = agg
 
-# assemble: per (mode,scenario): block totals + node list (label, total, count, block, provenance)
+# assemble: per (variant,mode,scenario): block totals + node list
 result = {"nodes": {}, "blocks": {}}
-for mode in out:
-    result["nodes"][mode] = {}
-    result["blocks"][mode] = {}
-    for scen, agg in out[mode].items():
-        blocks = {}
-        nodes = []
-        for nid, e in agg.items():
-            misc = ".misc:" in nid
-            blk = nid.split(".misc:")[0] if misc else BLOCK_OF.get(nid, nid.split(".")[0])
-            lab = (nid.split(".misc:")[1] + " (composite)") if misc else LABELS.get(nid, nid)
-            nodes.append(
-                {
-                    "id": nid,
-                    "block": blk,
-                    "label": lab,
-                    "total_ns": e["total_ns"],
-                    "count": e["count"],
-                    "misc": misc,
-                    "order": e["order"],
-                }
-            )
-            blocks[blk] = blocks.get(blk, 0.0) + e["total_ns"]
-        result["nodes"][mode][scen] = sorted(nodes, key=lambda x: -x["total_ns"])
-        result["blocks"][mode][scen] = blocks
+for variant in out:
+    result["nodes"][variant] = {"sparse": {}, "dense": {}}
+    result["blocks"][variant] = {"sparse": {}, "dense": {}}
+    for mode in out[variant]:
+        for scen, agg in out[variant][mode].items():
+            blocks = {}
+            nodes = []
+            for nid, e in agg.items():
+                misc = ".misc:" in nid
+                blk = nid.split(".misc:")[0] if misc else BLOCK_OF.get(nid, nid.split(".")[0])
+                lab = (nid.split(".misc:")[1] + " (composite)") if misc else LABELS.get(nid, nid)
+                nodes.append(
+                    {
+                        "id": nid,
+                        "block": blk,
+                        "label": lab,
+                        "total_ns": e["total_ns"],
+                        "count": e["count"],
+                        "misc": misc,
+                        "order": e["order"],
+                    }
+                )
+                blocks[blk] = blocks.get(blk, 0.0) + e["total_ns"]
+            result["nodes"][variant][mode][scen] = sorted(nodes, key=lambda x: -x["total_ns"])
+            result["blocks"][variant][mode][scen] = blocks
 
-SP = os.path.dirname(os.path.abspath(__file__))
 json.dump(result, open(SP + "/percall.json", "w"))
 
 # ---- validation ----
 data = json.load(open(SP + "/perf_data.json"))
+ANCHORS = {
+    "sparse": [
+        ("s8.sdpa", "SparseSDPAOperation"),
+        ("s3.score", "IndexerScoreDeviceOperation"),
+        ("s3.topk", "TopkLargeIndicesDeviceOperation"),
+    ],
+    "dense": [("d5.ring", "RingJointSDPADeviceOperation")],
+}
 print("=== validation: block sums vs scenario total; anchor ops vs summary ===")
-for mode in ["sparse", "dense"]:
-    for scen in ["warm", "cold", "long"]:
-        if (mode, scen) not in RPT:
-            print(f"{mode}/{scen}: (no report)")
-            continue
-        blks = result["blocks"][mode][scen]
-        s = sum(blks.values())
-        tot = data["modes"][mode][scen]["total_ns"]
-        # anchor check
-        anchors = {
-            "sparse": [
-                ("s8.sdpa", "SparseSDPAOperation"),
-                ("s3.score", "IndexerScoreDeviceOperation"),
-                ("s3.topk", "TopkLargeIndicesDeviceOperation"),
-            ],
-            "dense": [("d5.ring", "RingJointSDPADeviceOperation")],
-        }[mode]
-        nd = {n["id"]: n for n in result["nodes"][mode][scen]}
-        astr = []
-        for nid, code in anchors:
-            got = nd.get(nid, {}).get("total_ns", 0)
-            ref = next((o["total_ns"] for o in data["modes"][mode][scen]["ops"] if o["op"] == code), 0)
-            astr.append(f"{nid.split('.')[1]} {got/1e6:.2f}vs{ref/1e6:.2f}")
-        print(f"{mode}/{scen}: sum {s/1e6:8.2f} / total {tot/1e6:8.2f}  diff {abs(s-tot):.0f}ns | anchors {astr}")
-        # where did AllBroadcast-ish / big composites land
-        if mode == "sparse" and scen == "long":
-            miscs = [n for n in result["nodes"][mode][scen] if n["misc"]][:6]
+for variant in VARIANTS:
+    for mode in ["sparse", "dense"]:
+        for scen in SCENS:
+            if (variant, mode, scen) not in RPT:
+                continue
+            blks = result["blocks"][variant][mode][scen]
+            s = sum(blks.values())
+            tot = data["variants"][variant]["modes"][mode][scen]["total_ns"]
+            nd = {n["id"]: n for n in result["nodes"][variant][mode][scen]}
+            astr = []
+            for nid, code in ANCHORS[mode]:
+                got = nd.get(nid, {}).get("total_ns", 0)
+                ref = next(
+                    (o["total_ns"] for o in data["variants"][variant]["modes"][mode][scen]["ops"] if o["op"] == code), 0
+                )
+                astr.append(f"{nid.split('.')[1]} {got/1e6:.2f}vs{ref/1e6:.2f}")
+            flag = "" if abs(s - tot) < 1 else "  <<< MISMATCH"
             print(
-                "   top composite nodes:",
-                [(n["block"], n["label"].split(" ")[0], round(n["total_ns"] / 1e6, 2)) for n in miscs],
+                f"{variant:12} {mode}/{scen}: sum {s/1e6:8.2f} / total {tot/1e6:8.2f}  diff {abs(s-tot):.0f}ns | {astr}{flag}"
             )
+
+# eyeball GLM s3/s8 per-node distribution (the variant-specific blocks)
+print("\n=== glm_5_1 sparse/warm s3+s8 node distribution ===")
+for n in sorted(result["nodes"]["glm_5_1"]["sparse"]["warm"], key=lambda x: x["order"]):
+    if n["block"] in ("s3", "s8"):
+        print(
+            f"   {n['block']:3} {n['id']:16} {n['label'][:32]:32} {n['total_ns']/1e3:8.1f}us x{n['count']} {'MISC' if n['misc'] else ''}"
+        )
 print("wrote percall.json")
