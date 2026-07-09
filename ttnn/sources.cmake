@@ -382,48 +382,9 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/pipeline_module_nanobind.cpp
 )
 
-set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
-    cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_gather_async/all_gather_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/strided_all_gather_async/strided_all_gather_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/ccl_experimental_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/all_gather_minimal_matmul_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async_d2h/send_async_d2h_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/deepseek_moe_reduce_scatter/deepseek_moe_reduce_scatter_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/all_to_all_dispatch_metadata/all_to_all_dispatch_metadata_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/moe_compute/moe_compute_nanobind.cpp
-    cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/selective_reduce_combine_nanobind.cpp
-)
-
-set(TTNN_P2P_PYBIND cpp/ttnn/operations/point_to_point/point_to_point_nanobind.cpp)
-
-# ccl/'s own nanobind sources are registered directly on the `ttnn` target
-# from ttnn/cpp/ttnn/operations/ccl/CMakeLists.txt — not listed here.
-
-set(DEBUG_TTNN_SRCS_PYBIND
-    cpp/ttnn/operations/debug/debug_nanobind.cpp
-    cpp/ttnn/operations/debug/apply_device_delay_nanobind.cpp
-)
+# experimental/ccl/'s, point_to_point's, and debug/'s own nanobind sources
+# are registered directly on the `ttnn` target from those ops' own
+# CMakeLists.txt — not listed here.
 
 ####################################################################################################
 # ttnn_core FILE_SET jit_api headers
