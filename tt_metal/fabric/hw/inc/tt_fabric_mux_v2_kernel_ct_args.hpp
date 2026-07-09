@@ -25,6 +25,8 @@ constexpr uint32_t shared_ring_region_base_address =
     FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_shared_ring_region_base_address");
 constexpr uint32_t shared_control_region_base_address =
     FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_shared_control_region_base_address");
+constexpr uint32_t credit_notify_scratch_region_base_address =
+    FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_credit_notify_scratch_region_base_address");
 constexpr uint32_t channel_buffer_size_bytes = FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_channel_buffer_size_bytes");
 constexpr uint32_t per_channel_scalar_region_stride_bytes =
     FABRIC_MUX_V2_NAMED_CT_ARG("fabric_mux_v2_per_channel_scalar_region_stride_bytes");

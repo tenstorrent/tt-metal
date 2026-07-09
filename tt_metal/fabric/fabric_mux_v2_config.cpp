@@ -183,6 +183,11 @@ FabricMuxV2Config::FabricMuxV2Config(
     shared_control_region_ = MemoryRegion(current_address, sizeof(FabricMuxV2SharedControlBlock), 1);
     current_address = shared_control_region_.get_end_address();
 
+    current_address = align_up(current_address, noc_aligned_address_size_bytes_);
+    credit_notify_scratch_region_ =
+        MemoryRegion(current_address, per_channel_scalar_region_stride_bytes_, num_channels_);
+    current_address = credit_notify_scratch_region_.get_end_address();
+
     memory_map_end_address_ = current_address;
 
     const size_t l1_end_address =
@@ -239,6 +244,8 @@ std::unordered_map<std::string, uint32_t> FabricMuxV2Config::get_fabric_mux_v2_n
         {"fabric_mux_v2_shared_trid_ring_capacity", trid_ring_capacity_},
         {"fabric_mux_v2_shared_control_region_base_address",
          to_uint32_checked(shared_control_region_.get_address(), "shared_control_region_base_address")},
+        {"fabric_mux_v2_credit_notify_scratch_region_base_address",
+         to_uint32_checked(credit_notify_scratch_region_.get_address(), "credit_notify_scratch_region_base_address")},
         {"fabric_mux_v2_channel_buffer_size_bytes",
          to_uint32_checked(channel_buffer_size_bytes_, "channel_buffer_size_bytes")},
         {"fabric_mux_v2_per_channel_scalar_region_stride_bytes",

@@ -369,6 +369,9 @@ private:
     MemoryRegion shared_ring_region_{};
     MemoryRegion channel_region_{};
     MemoryRegion shared_control_region_{};
+    // Per-channel L1 scratch for BH spoofed posted credit notifies with flush disabled.
+    // Unused on Wormhole (flush is a no-op there) but allocated on both for a uniform map.
+    MemoryRegion credit_notify_scratch_region_{};
 
     size_t memory_map_end_address_ = 0;
 };

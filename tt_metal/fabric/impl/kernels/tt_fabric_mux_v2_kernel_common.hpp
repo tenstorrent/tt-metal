@@ -92,6 +92,10 @@ inline volatile tt_l1_ptr uint32_t* get_connection_handshake_ptr(uint32_t logica
         get_per_channel_scalar_address(ct_args::connection_handshake_region_base_address, logical_channel_id));
 }
 
+inline uint32_t get_credit_notify_scratch_address(uint32_t logical_channel_id) {
+    return get_per_channel_scalar_address(ct_args::credit_notify_scratch_region_base_address, logical_channel_id);
+}
+
 inline volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader* get_shared_ring_header_ptr() {
     return reinterpret_cast<volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader*>(
         ct_args::shared_ring_region_base_address);

@@ -10,11 +10,8 @@
 
 namespace tt::tt_fabric::mux_v2::kernel {
 
-inline uint8_t get_forwarder_noc() {
-    // The forwarder issues tracked downstream writes on its local noc_index directly.
-    // This manager kernel runs on the sibling RISC, so it retires those TRIDs on 1 - noc_index.
-    return static_cast<uint8_t>(1 - noc_index);
-}
+// noc_index is a compile-time constant (NOC_INDEX); forwarder owns the sibling NOC.
+constexpr uint8_t get_forwarder_noc() { return static_cast<uint8_t>(1 - noc_index); }
 
 struct ManagerClientState {
     uint32_t local_read_counter = 0;
@@ -34,13 +31,22 @@ inline void cache_worker_semaphore_address(
         worker_info.worker_semaphore_address);
 }
 
-inline void publish_pending_read_counter_to_worker(ManagerClientState& state) {
+inline void publish_pending_read_counter_to_worker(ManagerClientState& state, uint32_t logical_channel_id) {
     if (state.published_read_counter == state.local_read_counter) {
         return;
     }
 
-    noc_inline_dw_write<InlineWriteDst::L1, true, true>(
-        state.cached_worker_semaphore_address, state.local_read_counter, 0xf, tt::tt_fabric::worker_handshake_noc);
+    // Posted + flush=false: skip the BH spoof-write dual *_writes_sent wait (~tens of cycles).
+    // Per-channel scratch avoids cross-worker counter clobber; same-channel overwrite with a
+    // newer free counter is benign (matches fabric router credit-notify rationale).
+    // On Wormhole, flush/customized_src are unused by the inline-write path.
+    noc_inline_dw_write<InlineWriteDst::L1, /*posted=*/true, /*flush=*/false>(
+        state.cached_worker_semaphore_address,
+        state.local_read_counter,
+        0xf,
+        noc_index,
+        NOC_UNICAST_WRITE_VC,
+        get_credit_notify_scratch_address(logical_channel_id));
     state.published_read_counter = state.local_read_counter;
 }
 
@@ -60,10 +66,14 @@ inline void teardown_worker_connection(
         static_cast<uint32_t>(worker_info.worker_xy.x),
         static_cast<uint32_t>(worker_info.worker_xy.y),
         worker_info.worker_teardown_semaphore_address);
-    noc_semaphore_inc(worker_teardown_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
+    noc_semaphore_inc(worker_teardown_semaphore_address, 1, noc_index);
 }
 
 inline void record_retired_worker_credit(ManagerClientState& state) { state.local_read_counter += 1; }
+
+// Bounded head poll: with flush=false credit notify, the next retire often races ahead of
+// HW `_sent`. A short spaced retry absorbs that gap without returning to service_client.
+constexpr uint32_t kTridHeadSentRetryAttempts = 5;
 
 inline void retire_published_ring_entries(
     volatile tt_l1_ptr tt::tt_fabric::FabricMuxV2SharedTridRingHeader* shared_ring_header_ptr,
@@ -72,11 +82,21 @@ inline void retire_published_ring_entries(
     std::array<ManagerClientState, kMaxRuntimeChannels>& client_states) {
     auto shared_ring_entries_ptr = get_shared_ring_entries_ptr();
     const uint32_t starting_read_count = read_count;
+    constexpr uint8_t forwarder_noc = get_forwarder_noc();
 
     while ((write_count_snapshot - read_count) != 0) {
         const uint32_t ring_index_and_trid = read_count & ct_args::shared_trid_ring_mask;
         const uint32_t logical_channel_id = shared_ring_entries_ptr[ring_index_and_trid];
-        if (!ncrisc_noc_nonposted_write_with_transaction_id_sent(get_forwarder_noc(), ring_index_and_trid)) {
+
+        uint32_t attempt = 0;
+        for (; attempt < kTridHeadSentRetryAttempts; ++attempt) {
+            if (ncrisc_noc_nonposted_write_with_transaction_id_sent(forwarder_noc, ring_index_and_trid)) {
+                break;
+            }
+            asm volatile("nop");
+            asm volatile("nop");
+        }
+        if (attempt == kTridHeadSentRetryAttempts) {
             break;
         }
 
@@ -116,7 +136,7 @@ inline void service_client(uint32_t logical_channel_id, ManagerClientState& stat
         return;
     }
 
-    publish_pending_read_counter_to_worker(state);
+    publish_pending_read_counter_to_worker(state, logical_channel_id);
 }
 
 inline void run_manager() {
