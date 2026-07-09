@@ -345,8 +345,10 @@ def test_rope_1d_decode_forward_vs_reference(
     assert "decode" in trans_mats
     assert "prefill" in trans_mats
 
-    # Prefill trans mat PCC: TTTv2 uses head_dim x head_dim
-    prefill_ref = get_rot_transformation_mat(dhead=head_dim)  # [1, 1, head_dim, head_dim]
+    # Prefill trans mat PCC: the rotary_embedding_llama op requires a single
+    # TILE_SIZE x TILE_SIZE tile (TT_FATAL on any other shape), so the module
+    # builds the prefill trans-mat at TILE_SIZE, not head_dim. See rope_1d.py.
+    prefill_ref = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE)  # [1, 1, 32, 32]
     prefill_tt = to_torch_auto_compose(trans_mats["prefill"])
     prefill_tt_trimmed = prefill_tt[:1, :1, : prefill_ref.shape[2], : prefill_ref.shape[3]]
     pcc_prefill, msg_prefill = comp_pcc(prefill_ref.to(torch.bfloat16), prefill_tt_trimmed.to(torch.bfloat16), 0.9999)

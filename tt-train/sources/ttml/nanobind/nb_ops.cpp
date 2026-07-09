@@ -458,13 +458,19 @@ void py_module(nb::module_& m) {
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
+        // `seed_axes` (optional): the mesh axes across which the caller wants DISTINCT per-device
+        // noise -- i.e. the axes over which the logits/batch are sharded (data-distinct). Axes not
+        // listed are seeded identically (replicated). The CALLER owns this decision: only pass axes
+        // whose devices hold different data (dp / fsdp), and NEVER a replicated axis (tp).
+        //  seed_axes=None (default): every device draws the same noise (original single-seed behavior).
         py_sample.def(
             "sample_op",
             &ttml::ops::sample_op,
             nb::arg("logits"),
             nb::arg("temperature"),
             nb::arg("seed"),
-            nb::arg("logits_padding_mask") = nb::none());
+            nb::arg("logits_padding_mask") = nb::none(),
+            nb::arg("seed_axes") = nb::none());
     }
 
     {

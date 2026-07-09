@@ -74,7 +74,7 @@ experimental::DataMovementHardwareConfig make_dm_config(DataMovementProcessor pr
     return experimental::DataMovementHardwareConfig{
         .gen1_config = experimental::DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{
-            .disable_implicit_sync_for = {SCRATCH_DFB},
+            .disable_dfb_implicit_sync_for_all = true,
         }};
 }
 

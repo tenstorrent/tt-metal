@@ -838,7 +838,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRange) {
 
     // Create HostBuffer on top of dst
     HostBuffer host_buffer(
-        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_unique = experimental::PinnedMemory::Create(
@@ -894,7 +894,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadWithDistributedHostBufferAndPinnedMemory)
 
     // Create HostBuffer on top of dst
     HostBuffer host_buffer(
-        tt::stl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
+        ttsl::Span<uint32_t>(dst_ptr_aligned, bytes_per_device / sizeof(uint32_t)), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_shared = experimental::PinnedMemory::Create(
@@ -940,10 +940,10 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheUpgradesCoverageForSameHostBuffer) 
     const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const auto num_words = single_tile_size / sizeof(uint32_t);
     auto src =
-        std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(num_words, 0);
+        std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(num_words, 0);
     std::iota(src->begin(), src->end(), 0);
 
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), num_words), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), num_words), MemoryPin(src));
 
     const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
     const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
@@ -988,14 +988,14 @@ TEST_F(MeshBufferTestSuite, PinnedMemoryCacheEvictsOldestEntryToStayWithinLimit)
 
     const uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const auto num_words = single_tile_size / sizeof(uint32_t);
-    using AlignedVector = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>;
+    using AlignedVector = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>;
     auto src0 = std::make_shared<AlignedVector>(num_words, 0);
     auto src1 = std::make_shared<AlignedVector>(num_words, 1);
     auto src2 = std::make_shared<AlignedVector>(num_words, 2);
 
-    HostBuffer host_buffer0(tt::stl::Span<uint32_t>(src0->data(), num_words), MemoryPin(src0));
-    HostBuffer host_buffer1(tt::stl::Span<uint32_t>(src1->data(), num_words), MemoryPin(src1));
-    HostBuffer host_buffer2(tt::stl::Span<uint32_t>(src2->data(), num_words), MemoryPin(src2));
+    HostBuffer host_buffer0(ttsl::Span<uint32_t>(src0->data(), num_words), MemoryPin(src0));
+    HostBuffer host_buffer1(ttsl::Span<uint32_t>(src1->data(), num_words), MemoryPin(src1));
+    HostBuffer host_buffer2(ttsl::Span<uint32_t>(src2->data(), num_words), MemoryPin(src2));
 
     const auto first_coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
     const auto single_coord_range = MeshCoordinateRangeSet(MeshCoordinateRange(first_coord, first_coord));
@@ -1055,7 +1055,7 @@ TEST_F(MeshBufferTestSuite, EnqueueReadShardsWithPinnedMemoryFullRangeUnaligned)
     uint8_t* dst_ptr_unaligned = dst->data() + unaligned_shift;
 
     // Create HostBuffer on top of dst
-    HostBuffer host_buffer(tt::stl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
+    HostBuffer host_buffer(ttsl::Span<uint8_t>(dst_ptr_unaligned, bytes_per_device), MemoryPin(dst));
 
     auto coordinate_range_set = MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord));
     auto pinned_shared = experimental::PinnedMemory::Create(
@@ -1099,13 +1099,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRange) {
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
     // Prepare write source buffer and pin the entire destination range for the target shard
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
     // Create HostBuffer on top of src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
     // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
-    auto dst = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>(
+    auto dst = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>(
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -1155,16 +1155,16 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryWaitsOnClose) {
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
 
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
-    std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>> dst(
+    std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>> dst(
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinate coord(0, 0);
     {
         HostBuffer host_buffer(
-            tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+            ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
         auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
@@ -1211,13 +1211,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeLargePage
         << "Source vector alignment must be equal to PCIE read alignment: " << hal.get_read_alignment(HalMemType::HOST)
         << std::endl;
     // Prepare write source buffer and pin the entire destination range for the target shard
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         bytes_per_device / sizeof(uint32_t), 0);
     std::iota(src->begin(), src->end(), 0);
     // Create HostBuffer on top of src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src->data(), bytes_per_device / sizeof(uint32_t)), MemoryPin(src));
     // Prepare read destination buffer. Use aigned vector for ease of verification with src above.
-    auto dst = std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>(
+    auto dst = std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>(
         bytes_per_device / sizeof(uint32_t), 0);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -1273,7 +1273,7 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
     ASSERT_EQ(aligned_byte_shift % hal.get_alignment(HalMemType::L1), 0u)
         << "Alignment prefix must preserve L1 alignment for pinned relay";
 
-    using AlignedByteVector = std::vector<uint8_t, tt::stl::aligned_allocator<uint8_t, device_read_align>>;
+    using AlignedByteVector = std::vector<uint8_t, ttsl::aligned_allocator<uint8_t, device_read_align>>;
     const MeshCoordinate remote_coord(0, 1);
     std::vector<std::shared_ptr<AlignedByteVector>> source_storage;
     std::vector<HostBuffer> source_host_buffers;
@@ -1296,7 +1296,7 @@ TEST_F(MeshBufferTest1x2MultiCQ, EnqueueWriteShardsWithRemotePinnedMemoryAndAlig
         }
 
         source_storage.push_back(src);
-        source_host_buffers.emplace_back(tt::stl::Span<uint8_t>(src_shifted, bytes_per_device), MemoryPin(src));
+        source_host_buffers.emplace_back(ttsl::Span<uint8_t>(src_shifted, bytes_per_device), MemoryPin(src));
         pinned_sources.push_back(tt_metal::experimental::PinnedMemory::Create(
             *mesh_device_,
             MeshCoordinateRangeSet(MeshCoordinateRange(coord, coord)),
@@ -1385,7 +1385,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
         const size_t unaligned_word_shift = aligned_byte_shift / sizeof(uint32_t);
         const size_t num_words = (bytes_per_device / sizeof(uint32_t));
         // Prepare write source buffer and pin the entire destination range for the target shard
-        auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+        auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
             num_words + unaligned_word_shift, 0);
 
         uint32_t* src_unaligned = src->data() + unaligned_word_shift;
@@ -1394,7 +1394,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteShardsWithPinnedMemoryFullRangeUnaligned
         // Create a copy of the source vector to make it easy to verify with the destination vector.
         std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + num_words);
         // Create HostBuffer on top of src
-        HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
+        HostBuffer host_buffer(ttsl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
         std::vector<uint32_t> dst(num_words, 0);
 
         distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -1503,10 +1503,10 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
     ASSERT_TRUE(device_read_align % hal.get_read_alignment(HalMemType::HOST) == 0)
         << "Source vector alignment must be a multiple of PCIE read alignment: "
         << hal.get_read_alignment(HalMemType::HOST);
-    auto pinned_src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto pinned_src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         pinned_write_size / sizeof(uint32_t), 0);
     std::iota(pinned_src->begin(), pinned_src->end(), 0);
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(pinned_src->data(), pinned_src->size()), MemoryPin(pinned_src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(pinned_src->data(), pinned_src->size()), MemoryPin(pinned_src));
     auto pinned_memory = tt_metal::experimental::PinnedMemory::Create(
         *mesh_device_, MeshCoordinateRangeSet(all_devices), host_buffer, /*map_to_noc=*/true);
     ASSERT_TRUE(pinned_memory);
@@ -1560,7 +1560,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     const size_t num_words = (buf_size / sizeof(uint32_t));
 
     // Prepare write source buffer and pin it
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         num_words + unaligned_word_shift, 0);
 
     uint32_t* src_unaligned = src->data() + unaligned_word_shift;
@@ -1570,7 +1570,7 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     std::vector<uint32_t> src_vector(src_unaligned, src_unaligned + num_words);
 
     // Create HostBuffer on top of unaligned src
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src_unaligned, num_words), MemoryPin(src));
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(
@@ -1648,13 +1648,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     const size_t source_word_shift = source_byte_shift / sizeof(uint32_t);
     const size_t num_words = buf_size / sizeof(uint32_t);
 
-    auto src = std::make_shared<std::vector<uint32_t, tt::stl::aligned_allocator<uint32_t, device_read_align>>>(
+    auto src = std::make_shared<std::vector<uint32_t, ttsl::aligned_allocator<uint32_t, device_read_align>>>(
         num_words + source_word_shift, 0);
     uint32_t* src_shifted = src->data() + source_word_shift;
     std::iota(src_shifted, src_shifted + num_words, 0);
 
     std::vector<uint32_t> expected(src_shifted, src_shifted + num_words);
-    HostBuffer host_buffer(tt::stl::Span<uint32_t>(src_shifted, num_words), MemoryPin(src));
+    HostBuffer host_buffer(ttsl::Span<uint32_t>(src_shifted, num_words), MemoryPin(src));
 
     const MeshCoordinate coord = *MeshCoordinateRange(mesh_device_->shape()).begin();
     auto pinned_shared = tt_metal::experimental::PinnedMemory::Create(

@@ -24,6 +24,7 @@ from helpers.param_config import (
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
@@ -145,9 +146,9 @@ def generate_qsr_pack_combinations(
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        dimensions,
-                                        relu_type,
-                                        tile_dims,
+                                        runtime(dimensions),
+                                        runtime(relu_type),
+                                        runtime(tile_dims),
                                     )
                                 )
 

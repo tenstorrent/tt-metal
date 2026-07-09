@@ -64,47 +64,47 @@ constexpr tt::tt_metal::mx::FormatParams kMxInt2Params = {
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxint8_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxInt8Params);
 }
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxint4_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxInt4Params);
 }
 
 template <typename T>
 std::vector<uint32_t> pack_as_mxint2_tiles(
-    tt::stl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const T> data, bool row_major_input, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::pack_as_mx_tiles_impl(data, row_major_input, tile, kMxInt2Params);
 }
 
 // Explicit instantiations — keep in sync with the supported input element types.
 template std::vector<uint32_t> pack_as_mxint8_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 template std::vector<uint32_t> pack_as_mxint4_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 template std::vector<uint32_t> pack_as_mxint2_tiles<float>(
-    tt::stl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
+    ttsl::Span<const float>, bool, const std::optional<tt::tt_metal::Tile>&);
 
 std::vector<float> unpack_mxint8_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const uint32_t> mxint_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxint_tiles, row_major_output, tile, kMxInt8Params);
 }
 
 std::vector<float> unpack_mxint4_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const uint32_t> mxint_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxint_tiles, row_major_output, tile, kMxInt4Params);
 }
 
 std::vector<float> unpack_mxint2_tiles_into_float_vec(
-    tt::stl::Span<const uint32_t> mxint_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
+    ttsl::Span<const uint32_t> mxint_tiles, bool row_major_output, const std::optional<tt::tt_metal::Tile>& tile) {
     ZoneScoped;
     return tt::tt_metal::mx::unpack_mx_tiles_into_float_vec_impl(mxint_tiles, row_major_output, tile, kMxInt2Params);
 }

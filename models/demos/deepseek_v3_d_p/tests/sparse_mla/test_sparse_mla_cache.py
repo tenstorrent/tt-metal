@@ -10,8 +10,8 @@ never dense), completeness covers the indexer files, and a sparse cache-only con
 warns and stays sparse (mirrors dense's lenient placeholder load) instead of silently going dense.
 
 The `matches_config` test is host-only (no device); the build→cache-only→PCC test runs on a TP>=2
-mesh so the sparse epilogue / GLM (TP≤2) fit. Validity gating (so collected==run) is the same as
-test_sparse_mla.py — here we just fix one (4,2) mesh that both variants support.
+mesh so the dense 128-head epilogue fits (TP=1 overflows L1). Validity gating (so collected==run) is
+the same as test_sparse_mla.py — here we just fix one (4,2) mesh that both variants support.
 """
 
 import shutil

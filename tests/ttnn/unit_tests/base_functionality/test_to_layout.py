@@ -328,6 +328,29 @@ def test_to_layout_sharded(dtype, device):
     assert_quality(torch_input_tensor1, ttnn.to_torch(output), dtype)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_to_layout_sharded_batched_unpad(dtype, device):
+    # Height-sharded TILE input whose per-core shard holds MULTIPLE padded matrices (batch > 1) and
+    # whose logical height (17) is not tile-aligned. Untilize-with-unpadding must strip the interior
+    # pad rows of every matrix; the output shard height must be batch * logical_H (16 * 17 = 272),
+    # not round_up-to-tile (288). Regression for the batched HEIGHT_SHARDED -> HEIGHT_SHARDED path.
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))])
+
+    shape = [32, 32, 17, 64]  # padded to [32, 32, 32, 64]; 1024 matrices, 16 per core over 64 cores
+    shard_shape = (512, 64)  # 16 padded matrices of [32, 64] per core
+
+    shard_spec = ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch_input_tensor = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device, memory_config=memory_config)
+
+    output = ttnn.to_layout(ttnn_input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+
+    assert_quality(torch_input_tensor, ttnn.to_torch(output), dtype)
+
+
 @pytest.mark.parametrize("batch_size", [9, 32])
 @pytest.mark.parametrize("sentence_size", [32, 256])
 def test_int_untilize(device, batch_size, sentence_size):

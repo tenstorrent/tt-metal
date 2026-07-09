@@ -39,7 +39,7 @@ ttnn::Tensor repeat_interleave(
 
     rm_input = ttnn::to_layout(rm_input, Layout::ROW_MAJOR);
     const auto& rm_input_shape = rm_input.logical_shape();
-    SmallVector<uint32_t> final_shape;
+    ttsl::SmallVector<uint32_t> final_shape;
     final_shape.reserve(input_rank);
     for (uint32_t i = 0; i < rm_input_shape.rank(); i++) {
         final_shape.push_back(rm_input_shape[i]);

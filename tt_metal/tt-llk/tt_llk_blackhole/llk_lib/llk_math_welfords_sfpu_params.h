@@ -13,5 +13,5 @@ inline void _llk_math_welfords_sfpu_params_(Callable&& sfpu_func, std::uint32_t 
 {
     _llk_math_eltwise_sfpu_start_(dst_index0);
     std::forward<Callable>(sfpu_func)(std::forward<ARGS>(args)...);
-    _llk_math_eltwise_sfpu_done_with_addrmod_reset_(); // Finalize
+    _llk_math_eltwise_sfpu_done_(); // Finalize
 }
