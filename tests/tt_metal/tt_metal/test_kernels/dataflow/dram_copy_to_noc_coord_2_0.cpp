@@ -156,6 +156,7 @@ void kernel_main() {
         noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(dst, local_buffer[0], 0xF);
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, write_at_cmd_buf);
     } else if (use_inline_dw_write_with_state) {
+#if defined(ARCH_WORMHOLE) || defined(ARCH_QUASAR)
         // with_state mirrors cq_noc_inline_dw_write_with_state: program WR/complex command-buffer state, then
         // sanitize before issue. CQ_NOC_send is 0, so the write is not issued.
         uint64_t dst = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
@@ -163,6 +164,7 @@ void kernel_main() {
         noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_NDVB, CQ_NOC_wait, CQ_NOC_send>(
             noc_index, dst, local_buffer[0], 0xF);
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
+#endif
     } else {
         noc.async_write(
             local_buffer,

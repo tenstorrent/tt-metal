@@ -386,6 +386,9 @@ void RunTestOnCore(
             use_inline_dw_write_from_state = true;
             break;
         case SanitizeNOCInlineWriteWithState:
+            if (hal.get_arch() == tt::ARCH::BLACKHOLE) {
+                GTEST_SKIP() << "cq_noc_inline_dw_write_with_state-style helper is not exposed on Blackhole";
+            }
             output_buf_noc_xy.x = 26;
             output_buf_noc_xy.y = 18;
             use_inline_dw_write_with_state = true;
@@ -957,7 +960,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCWriteWithState) {
 
 // Regression test for the inline-dw-write NOC sanitizer, exercised through noc_inline_dw_write_set_state:
 // the destination is programmed into the inline command buffer and then sanitized via
-// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE. This covers Quasar simple-command-buffer readback.
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE.
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteFromState) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -969,7 +972,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteFromState) {
 
 // Regression test for the inline-dw-write NOC sanitizer, exercised the way cq_noc_inline_dw_write_with_state
 // does: the destination is programmed into the WR_REG command buffer and then sanitized via
-// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE. This covers Quasar complex-command-buffer readback.
+// DEBUG_SANITIZE_NOC_ADDR_FROM_STATE.
 TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCInlineWriteWithState) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
