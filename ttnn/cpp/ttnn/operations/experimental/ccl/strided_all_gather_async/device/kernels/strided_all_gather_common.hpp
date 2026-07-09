@@ -19,6 +19,7 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "subchunk_bands.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
 
@@ -141,14 +142,12 @@ FORCE_INLINE uint32_t read_chunk(
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
 
-    uint32_t band_rows = (subchunk_height + mm_sub_chunks - 1) / mm_sub_chunks;
-
     for (uint32_t band = 0; band < mm_sub_chunks; band++) {
-        uint32_t band_lo = band * band_rows;
-        if (band_lo >= subchunk_height) {
-            break;
+        uint32_t band_lo, band_h;
+        balanced_band(subchunk_height, mm_sub_chunks, band, band_lo, band_h);
+        if (band_h == 0) {
+            break;  // empty trailing band, only when mm_sub_chunks > subchunk_height
         }
-        uint32_t band_h = std::min(band_rows, subchunk_height - band_lo);
         uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
         uint32_t worker_tiles_in_band =
             (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
@@ -239,9 +238,9 @@ FORCE_INLINE uint32_t write_chunk(
     const uint32_t num_targets_backward_direction,
     bool write_local,
     // Streaming matmul signal (Option W, M sub-chunking). The chunk's subchunk_height M-rows are
-    // delivered as mm_sub_chunks row-bands: for each band the walk sweeps band_rows rows of EVERY
+    // delivered as mm_sub_chunks row-bands: for each band the walk sweeps the band's rows of EVERY
     // injector (injector-major, same as the whole-chunk walk but height-limited), then fires one
-    // matmul-aggregator inc. Because a band is band_rows rows of all injectors, "band s landed" is
+    // matmul-aggregator inc. Because a band is a contiguous row-range of all injectors, "band s landed" is
     // true for every injector at once -- the invariant the injector reader relies on. The out_ready
     // sem and chunk_start advance stay per-chunk (the AG receiver counts one per chunk).
     // mm_sub_chunks==1 => a single band spanning the whole chunk => byte-identical to no sub-chunking.
@@ -260,14 +259,12 @@ FORCE_INLINE uint32_t write_chunk(
     Noc noc_obj;
     CircularBuffer cb_output(cb_output_id);
 
-    uint32_t band_rows = (subchunk_height + mm_sub_chunks - 1) / mm_sub_chunks;
-
     for (uint32_t band = 0; band < mm_sub_chunks; band++) {
-        uint32_t band_lo = band * band_rows;
-        if (band_lo >= subchunk_height) {
-            break;  // more bands than rows (only when mm_sub_chunks > subchunk_height)
+        uint32_t band_lo, band_h;
+        balanced_band(subchunk_height, mm_sub_chunks, band, band_lo, band_h);
+        if (band_h == 0) {
+            break;  // empty trailing band, only when mm_sub_chunks > subchunk_height
         }
-        uint32_t band_h = std::min(band_rows, subchunk_height - band_lo);
         uint32_t tiles_in_band = chunk_width * band_h * mm_cores_y;
         uint32_t worker_tiles_in_band =
             (tiles_in_band / ag_worker_cores) + ((ag_worker_core_id < (tiles_in_band % ag_worker_cores)) ? 1 : 0);
