@@ -270,6 +270,9 @@ run_t3000_ccl_tests() {
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_1d -k "zeros_width_dim-check"
   pytest tests/nightly/t3000/ccl/test_neighbor_pad_async.py::test_neighbor_pad_async_2d -k "small_5d_h0w1"
 
+  # deepseek moe reduce scatter: exercises the deepseek_moe_fast_reduce_nc(+_fused) writer (Device 2.0 migration)
+  pytest tests/nightly/t3000/ccl/test_deepseek_moe_reduce_scatter.py::test_deepseek_moe_reduce_scatter
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
