@@ -1905,7 +1905,7 @@ class TTSeamlessM4Tv2Model:
         cross_attn_cache: list,
         cross_4d: Optional[ttnn.Tensor] = None,
     ) -> Optional[ttnn.Tensor]:
-        """Populate KV caches with one batched prefill forward (``slice_write`` self + cross copy).
+        """Populate KV caches with one batched prefill forward (``fill_cache`` self + cross copy).
 
         Returns decoder hidden states ``[B, S, H]`` (caller must deallocate), or ``None`` if ``seq==0``.
         """

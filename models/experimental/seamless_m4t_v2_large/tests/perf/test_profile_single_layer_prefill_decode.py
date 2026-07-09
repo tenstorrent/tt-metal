@@ -7,8 +7,10 @@ Runs **one** ``TTSeamlessM4Tv2Decoder`` layer (layer 0 weights only) with prefil
 ``PREFILL_SEQ_LEN`` decoder tokens and one KV-cache decode step — same pattern as
 ``devstral2_123B_instruct/tests/perf/test_profile_single_layer_prefill_decode.py``.
 
-Each measured iteration runs prefill then decode inside the ``start``/``stop`` signpost
-window. Warmup iteration runs first without signposts.
+Each measured iteration places ``start``/``stop`` signposts around the two
+``TTSeamlessM4Tv2Decoder.forward`` calls only (prefill then decode). Mask
+building, embeddings, KV-cache init, and teardown run outside the signpost window.
+Warmup iteration runs first without signposts.
 
 Standalone Tracy capture::
 
@@ -200,7 +202,12 @@ def _setup_seamless_decoder_one_layer_from_case(
     )
 
 
-def _run_prefill_decode_step(mesh_device, fixtures: _LayerPerfFixtures) -> None:
+def _run_prefill_decode_step(
+    mesh_device,
+    fixtures: _LayerPerfFixtures,
+    *,
+    use_signpost: bool = False,
+) -> None:
     """One KV prefill + one decode forward on the single decoder layer."""
     tt_dec = fixtures.tt_dec
     aligned = fixtures.aligned
@@ -223,6 +230,18 @@ def _run_prefill_decode_step(mesh_device, fixtures: _LayerPerfFixtures) -> None:
     causal_tt = build_causal_with_padding_4d(None, fixtures.batch, fixtures.padded_dec, mesh_device)
     cross_prefill_tt = build_cross_attn_mask_4d(fixtures.enc_mask_tt, tgt_seq=fixtures.padded_dec, device=mesh_device)
 
+    cross_decode_tt = build_cross_attn_mask_4d(fixtures.enc_mask_tt, tgt_seq=1, device=mesh_device)
+    step_ids_torch = torch.full((fixtures.batch, 1), fixtures.decode_token, dtype=torch.long)
+    step_embeds_tt = _token_embeds_to_tt(mesh_device, _hf_token_embeds(fixtures.text_decoder, step_ids_torch))
+    token_ids = from_torch_uint32_rm(mesh_device, step_ids_torch.to(torch.int32))
+    step_pos = tt_position_ids_decode_step(token_ids, fixtures.pad_id, DECODE_POS)
+    cur_pos = tt_dec.borrow_current_decode_pos_tensor(DECODE_POS, batch_size=fixtures.batch)
+
+    if use_signpost:
+        from tracy import signpost
+
+        signpost("start")
+
     prefill_out = tt_dec.forward(
         None,
         pos_tt,
@@ -235,19 +254,7 @@ def _run_prefill_decode_step(mesh_device, fixtures: _LayerPerfFixtures) -> None:
         prefill_kv_cache_fill=True,
         kv_cache_fill_len=fixtures.logical_dec,
     )
-    ttnn.deallocate(prefill_out)
-    ttnn.deallocate(prefill_embeds_tt)
-    ttnn.deallocate(ids_tt)
-    ttnn.deallocate(pos_tt)
-    ttnn.deallocate(causal_tt)
-    ttnn.deallocate(cross_prefill_tt)
 
-    cross_decode_tt = build_cross_attn_mask_4d(fixtures.enc_mask_tt, tgt_seq=1, device=mesh_device)
-    step_ids_torch = torch.full((fixtures.batch, 1), fixtures.decode_token, dtype=torch.long)
-    step_embeds_tt = _token_embeds_to_tt(mesh_device, _hf_token_embeds(fixtures.text_decoder, step_ids_torch))
-    token_ids = from_torch_uint32_rm(mesh_device, step_ids_torch.to(torch.int32))
-    step_pos = tt_position_ids_decode_step(token_ids, fixtures.pad_id, DECODE_POS)
-    cur_pos = tt_dec.borrow_current_decode_pos_tensor(DECODE_POS, batch_size=fixtures.batch)
     dec_out = tt_dec.forward(
         None,
         step_pos,
@@ -261,6 +268,17 @@ def _run_prefill_decode_step(mesh_device, fixtures: _LayerPerfFixtures) -> None:
         current_decode_pos=cur_pos,
         cache_seq_len=DECODE_POS + 1,
     )
+
+    if use_signpost:
+        ttnn.synchronize_device(mesh_device)
+        signpost("stop")
+
+    ttnn.deallocate(prefill_out)
+    ttnn.deallocate(prefill_embeds_tt)
+    ttnn.deallocate(ids_tt)
+    ttnn.deallocate(pos_tt)
+    ttnn.deallocate(causal_tt)
+    ttnn.deallocate(cross_prefill_tt)
     ttnn.deallocate(dec_out)
     ttnn.deallocate(step_embeds_tt)
     ttnn.deallocate(token_ids)
@@ -274,14 +292,15 @@ def _run_prefill_decode_step(mesh_device, fixtures: _LayerPerfFixtures) -> None:
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", [_profile_device_params()], indirect=True)
 def test_profile_single_layer_prefill_decode(mesh_device, device_params):
-    """Prefill 128 + decode 1 on a 1-layer ``TTSeamlessM4Tv2Decoder`` (Tracy profile target)."""
+    """Prefill 128 + decode 1 on a 1-layer ``TTSeamlessM4Tv2Decoder`` (Tracy profile target).
+
+    Signposts bracket only the two ``forward`` calls when Tracy is available.
+    """
     del device_params
     weights_dir = _weights_dir_or_skip()
 
     use_signpost = _tracy_signpost_available()
-    if use_signpost:
-        from tracy import signpost
-    else:
+    if not use_signpost:
         logger.info("tracy.signpost unavailable; running profile workload without signpost markers.")
 
     with mesh_default_device(mesh_device):
@@ -296,14 +315,9 @@ def test_profile_single_layer_prefill_decode(mesh_device, device_params):
             _run_prefill_decode_step(mesh_device, fixtures)
             ttnn.synchronize_device(mesh_device)
 
-        if use_signpost:
-            signpost("start")
-
-        _run_prefill_decode_step(mesh_device, fixtures)
-        ttnn.synchronize_device(mesh_device)
-
-        if use_signpost:
-            signpost("stop")
+        _run_prefill_decode_step(mesh_device, fixtures, use_signpost=use_signpost)
+        if not use_signpost:
+            ttnn.synchronize_device(mesh_device)
 
         ttnn.deallocate(fixtures.enc_tt)
         ttnn.deallocate(fixtures.enc_mask_tt)

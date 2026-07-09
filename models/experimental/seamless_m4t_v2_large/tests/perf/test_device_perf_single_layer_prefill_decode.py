@@ -9,7 +9,8 @@ No golden perf assertion — this script is for collecting / inspecting reports.
 
 The profile workload matches ``test_profile_single_layer_prefill_decode.py`` (layer 0 only,
 prefill 128 decoder tokens, cross-attn encoder timeline 128, decode at position 128).
-Each measured iteration profiles **both** prefill and decode inside the signpost window.
+Each measured iteration profiles **decoder forward only** (prefill + decode
+``TTSeamlessM4Tv2Decoder.forward`` calls) inside the signpost window.
 
 This script intentionally avoids importing ``ttnn`` so it does not compete for the UMD
 ``CHIP_IN_USE_*_PCIe`` lock with another pytest parent on multi-chip hosts.

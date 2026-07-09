@@ -438,7 +438,7 @@ Isolated **layer-0** text-decoder kernel profiling: one **128-token prefill** (K
 
 This is **not** the full five-task demo (no encoder, no 24-layer stack, no `generate()` loop). Same **128-token** decoder ISL as the `128` rung on `[scripts/demo_perf_sweep.py](scripts/demo_perf_sweep.py)`, but kernel numbers are **not** comparable to demo `prefill_ms` (all layers + trace). On **1×1**, decode matmul head dims differ from **1×4** (no TP sharding); compare like mesh shapes only.
 
-The driver avoids importing `ttnn` (no parent `CHIP_IN_USE` lock). It spawns Tracy on `[tests/perf/test_profile_single_layer_prefill_decode.py](tests/perf/test_profile_single_layer_prefill_decode.py)` (warmup, then signpost `start` → prefill+decode → `stop`). Artifacts: `generated/profiler/seamless_m4t_v2_L1_prefill_decode/reports/<timestamp>/ops_perf_results_*.csv` plus a partial benchmark JSON (`seamless_m4t_v2_L1_prefill128_decode1_<mesh>`).
+The driver avoids importing `ttnn` (no parent `CHIP_IN_USE` lock). It spawns Tracy on `[tests/perf/test_profile_single_layer_prefill_decode.py](tests/perf/test_profile_single_layer_prefill_decode.py)` (warmup, then signpost `start` → decoder `forward` prefill + decode → `stop`; masks/embeddings/KV init outside the window). Artifacts: `generated/profiler/seamless_m4t_v2_L1_prefill_decode/reports/<timestamp>/ops_perf_results_*.csv` plus a partial benchmark JSON (`seamless_m4t_v2_L1_prefill128_decode1_<mesh>`).
 
 ```bash
 cd tt-metal

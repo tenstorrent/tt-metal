@@ -8,7 +8,7 @@ Prefill and decode linears use interleaved L1 weights with
 encoder / speech encoder pattern). Decode self-attn QKV uses a separate ``qkv_decode`` weight
 tensor for KV-cache PCC.
 
-KV-cache: batched prefill uses ``slice_write`` (self; cross on bf16), decode cross reuses DRAM
+KV-cache: batched prefill uses ``ttnn.fill_cache`` (self; cross on bf16), decode cross reuses DRAM
 cache with Q-only ``nlp_create_qkv_heads`` when ``cross_attn_cache_valid``.
 """
 
@@ -156,26 +156,24 @@ def make_current_decode_pos_tensor(device: ttnn.Device, position: int, batch_siz
     )
 
 
-def write_self_kv_prefill_to_cache(
+def _fill_prefill_kv_to_cache(
     key_states: ttnn.Tensor,
     value_states: ttnn.Tensor,
-    kv_cache: list[ttnn.Tensor],
+    k_cache: ttnn.Tensor,
+    v_cache: ttnn.Tensor,
     *,
     seq_len: int,
+    update_idx: int = 0,
 ) -> None:
-    """Bulk-write prefilled self-attention K/V ``[B, H, L, D]`` into KV cache (Whisper ``slice_write`` path).
+    """Write prefilled K/V ``[B, H, L, D]`` into a ``[B, H, max_seq, D]`` TILE cache via ``fill_cache``.
 
-    Writes only ``[0:seq_len)`` along the sequence axis so tile-padded prefill forwards do not
-    pollute the cache past the real token count.
+    Slices to ``seq_len`` when tile-padded prefill would otherwise write past the logical token
+    count. ``fill_cache`` expects input ``[1, H, S, D]`` per batch row.
     """
-    k_cache, v_cache = kv_cache
     bsz = int(key_states.shape[0])
     nh = int(key_states.shape[1])
     head_dim = int(key_states.shape[3])
     padded_seq = int(key_states.shape[2])
-    begins = [0, 0, 0, 0]
-    ends = [bsz, nh, seq_len, head_dim]
-    strides = [1, 1, 1, 1]
     if padded_seq != seq_len:
         k_src = ttnn.slice(
             key_states, [0, 0, 0, 0], [bsz, nh, seq_len, head_dim], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -187,30 +185,69 @@ def write_self_kv_prefill_to_cache(
             [1, 1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        sliced = True
     else:
         k_src = key_states
         v_src = value_states
+        sliced = False
+
     cache_dtype = k_cache.dtype
     if k_src.dtype != cache_dtype:
         k_typed = ttnn.typecast(k_src, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_typed = ttnn.typecast(v_src, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        typed = True
     else:
         k_typed = k_src
         v_typed = v_src
-    k_dram = ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    v_dram = ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.experimental.slice_write(k_dram, k_cache, begins, ends, strides)
-    ttnn.experimental.slice_write(v_dram, v_cache, begins, ends, strides)
-    if k_dram is not k_typed:
-        ttnn.deallocate(k_dram)
-    if v_dram is not v_typed:
-        ttnn.deallocate(v_dram)
-    if k_typed is not k_src:
+        typed = False
+
+    for batch_idx in range(bsz):
+        if bsz == 1:
+            k_fill, v_fill = k_typed, v_typed
+        else:
+            fill_seq = int(k_typed.shape[2])
+            k_fill = ttnn.slice(
+                k_typed,
+                [batch_idx, 0, 0, 0],
+                [batch_idx + 1, nh, fill_seq, head_dim],
+                [1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            v_fill = ttnn.slice(
+                v_typed,
+                [batch_idx, 0, 0, 0],
+                [batch_idx + 1, nh, fill_seq, head_dim],
+                [1, 1, 1, 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        ttnn.fill_cache(k_cache, k_fill, batch_idx=batch_idx, update_idx=update_idx)
+        ttnn.fill_cache(v_cache, v_fill, batch_idx=batch_idx, update_idx=update_idx)
+        if bsz > 1:
+            ttnn.deallocate(k_fill)
+            ttnn.deallocate(v_fill)
+
+    if typed:
         ttnn.deallocate(k_typed)
         ttnn.deallocate(v_typed)
-    if padded_seq != seq_len:
+    if sliced:
         ttnn.deallocate(k_src)
         ttnn.deallocate(v_src)
+
+
+def write_self_kv_prefill_to_cache(
+    key_states: ttnn.Tensor,
+    value_states: ttnn.Tensor,
+    kv_cache: list[ttnn.Tensor],
+    *,
+    seq_len: int,
+) -> None:
+    """Bulk-write prefilled self-attention K/V ``[B, H, L, D]`` into KV cache via ``fill_cache``.
+
+    Writes only ``[0:seq_len)`` along the sequence axis so tile-padded prefill forwards do not
+    pollute the cache past the real token count.
+    """
+    k_cache, v_cache = kv_cache
+    _fill_prefill_kv_to_cache(key_states, value_states, k_cache, v_cache, seq_len=seq_len)
 
 
 def write_cross_kv_prefill_to_cache(
@@ -220,51 +257,10 @@ def write_cross_kv_prefill_to_cache(
     *,
     seq_len: Optional[int] = None,
 ) -> None:
-    """Bulk-write cross K/V into cross cache via ``slice_write`` (bf16 warm path; bf8 keeps ``copy``)."""
+    """Bulk-write cross K/V into cross cache via ``fill_cache`` (bf16 warm path; bf8 keeps ``copy``)."""
     k_cache, v_cache = cross_cache
-    bsz = int(key_states.shape[0])
-    nh = int(key_states.shape[1])
-    head_dim = int(key_states.shape[3])
-    padded_seq = int(key_states.shape[2])
-    fill_len = seq_len if seq_len is not None else padded_seq
-    begins = [0, 0, 0, 0]
-    ends = [bsz, nh, fill_len, head_dim]
-    strides = [1, 1, 1, 1]
-    if padded_seq != fill_len:
-        k_src = ttnn.slice(
-            key_states, [0, 0, 0, 0], [bsz, nh, fill_len, head_dim], [1, 1, 1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        v_src = ttnn.slice(
-            value_states,
-            [0, 0, 0, 0],
-            [bsz, nh, fill_len, head_dim],
-            [1, 1, 1, 1],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-    else:
-        k_src = key_states
-        v_src = value_states
-    cache_dtype = k_cache.dtype
-    if k_src.dtype != cache_dtype:
-        k_typed = ttnn.typecast(k_src, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        v_typed = ttnn.typecast(v_src, dtype=cache_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    else:
-        k_typed = k_src
-        v_typed = v_src
-    k_dram = ttnn.to_memory_config(k_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    v_dram = ttnn.to_memory_config(v_typed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.experimental.slice_write(k_dram, k_cache, begins, ends, strides)
-    ttnn.experimental.slice_write(v_dram, v_cache, begins, ends, strides)
-    if k_dram is not k_typed:
-        ttnn.deallocate(k_dram)
-    if v_dram is not v_typed:
-        ttnn.deallocate(v_dram)
-    if k_typed is not k_src:
-        ttnn.deallocate(k_typed)
-        ttnn.deallocate(v_typed)
-    if padded_seq != fill_len:
-        ttnn.deallocate(k_src)
-        ttnn.deallocate(v_src)
+    fill_len = seq_len if seq_len is not None else int(key_states.shape[2])
+    _fill_prefill_kv_to_cache(key_states, value_states, k_cache, v_cache, seq_len=fill_len)
 
 
 def warm_text_decoder_kv_cache_prefill(
@@ -689,6 +685,34 @@ class TTSeamlessM4Tv2Decoder:
         )[0]
 
     @staticmethod
+    def _cross_qkv_heads_prefill_fused(
+        q: ttnn.Tensor,
+        kv_tail: ttnn.Tensor,
+        *,
+        batch: int,
+        seq: int,
+        num_heads: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """One ``nlp_create_qkv_heads`` for cross-attn prefill when ``seq_q == seq_k``.
+
+        ``kv_tail`` is either fused ``[B, S, 2*H]`` KV or ``[B, S, H]`` when passed as part of a
+        triple concat by the caller.
+        """
+        qkv = ttnn.concat([q, kv_tail], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        qkv_dim = int(q.shape[-1]) + int(kv_tail.shape[-1])
+        qkv_4d = ttnn.reshape(qkv, (batch, 1, seq, qkv_dim))
+        qh, kh, vh = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_4d,
+            num_heads=num_heads,
+            num_kv_heads=num_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv)
+        ttnn.deallocate(qkv_4d)
+        return qh, kh, vh
+
+    @staticmethod
     def _cross_q_heads_decode(q: ttnn.Tensor, *, num_heads: int) -> ttnn.Tensor:
         """Decode cross Q via ``nlp_create_qkv_heads`` (``num_kv_heads=0``)."""
         if len(q.shape) == 3:
@@ -1026,6 +1050,7 @@ class TTSeamlessM4Tv2Decoder:
                 program_config=pc_q,
             )
             kv_packed = None
+            cross_heads_fused = seq_q == seq_k
             if hasattr(attn_module, "kv"):
                 kv_out_dim = int(attn_module.kv.weight.shape[-1])  # 2H or 2H//tp
                 pc_kv2 = self._matmul_pc(batch * seq_k, hidden_size, kv_out_dim)
@@ -1036,9 +1061,25 @@ class TTSeamlessM4Tv2Decoder:
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     program_config=pc_kv2,
                 )
-                kv_half = int(kv_packed.shape[-1]) // 2
-                k = ttnn.slice(kv_packed, [0, 0, 0], [batch, seq_k, kv_half], [1, 1, 1])
-                v = ttnn.slice(kv_packed, [0, 0, kv_half], [batch, seq_k, 2 * kv_half], [1, 1, 1])
+                if cross_heads_fused:
+                    qh, kh, vh = self._cross_qkv_heads_prefill_fused(
+                        q,
+                        kv_packed,
+                        batch=batch,
+                        seq=seq_q,
+                        num_heads=num_local_heads,
+                    )
+                    ttnn.deallocate(q)
+                    ttnn.deallocate(kv_packed)
+                else:
+                    kv_half = int(kv_packed.shape[-1]) // 2
+                    k = ttnn.slice(kv_packed, [0, 0, 0], [batch, seq_k, kv_half], [1, 1, 1])
+                    v = ttnn.slice(kv_packed, [0, 0, kv_half], [batch, seq_k, 2 * kv_half], [1, 1, 1])
+                    qh = self._heads_fused(q, num_local_heads)
+                    kh = self._heads_fused(k, num_local_heads)
+                    vh = self._heads_fused(v, num_local_heads)
+                    ttnn.deallocate(q)
+                    ttnn.deallocate(kv_packed)
             else:
                 k_out_dim = int(attn_module.k_proj.weight.shape[-1])
                 pc_kv_single = self._matmul_pc(batch * seq_k, hidden_size, k_out_dim)
@@ -1056,18 +1097,26 @@ class TTSeamlessM4Tv2Decoder:
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     program_config=pc_kv_single,
                 )
-
-            # Fused head-split (avoids the ~27µs reshape+permute per K/V at enc_seq=512).
-            qh = self._heads_fused(q, num_local_heads)
-            kh = self._heads_fused(k, num_local_heads)
-            vh = self._heads_fused(v, num_local_heads)
-
-            ttnn.deallocate(q)
-            if kv_packed is not None:
-                ttnn.deallocate(kv_packed)
-            else:
-                ttnn.deallocate(k)
-                ttnn.deallocate(v)
+                if cross_heads_fused:
+                    kv_tail = ttnn.concat([k, v], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+                    qh, kh, vh = self._cross_qkv_heads_prefill_fused(
+                        q,
+                        kv_tail,
+                        batch=batch,
+                        seq=seq_q,
+                        num_heads=num_local_heads,
+                    )
+                    ttnn.deallocate(q)
+                    ttnn.deallocate(k)
+                    ttnn.deallocate(v)
+                    ttnn.deallocate(kv_tail)
+                else:
+                    qh = self._heads_fused(q, num_local_heads)
+                    kh = self._heads_fused(k, num_local_heads)
+                    vh = self._heads_fused(v, num_local_heads)
+                    ttnn.deallocate(q)
+                    ttnn.deallocate(k)
+                    ttnn.deallocate(v)
 
             qh = ttnn.multiply(qh, 1.0 / math.sqrt(head_dim), memory_config=ttnn.L1_MEMORY_CONFIG)
 
