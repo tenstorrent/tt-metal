@@ -51,7 +51,7 @@ def _pipeline_path():
     return snapshot_download(_COMMUNITY)  # cached if present, else downloads (~50GB)
 
 
-def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, label):
+def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, label, use_trace):
     import numpy as np
     import torch
     from diffusers import HunyuanVideo15Pipeline
@@ -75,11 +75,37 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         earlier calls' already-returned tensors in place via `Tensor.set_`
         (diffusers just stashed the reference; nothing reads it until after
         the group's last call returns). `_build_attn_bias`/`_trim_to_valid` in
-        tt/pipeline.py were built for exactly this per-batch-item case."""
+        tt/pipeline.py were built for exactly this per-batch-item case.
 
-        def __init__(self, real, ttpipe, guider):
+        The captured-trace + 2CQ write/replay path (tt/pipeline.py's
+        denoise_trace_setup/step/write_inputs/trace_execute), controlled by
+        the use_trace param below, can replace the eager per-step tt.run()
+        path. Defaults differ by caller (see _use_trace_single/_use_trace_qb2
+        near the bottom of this file): ON for test_stage2b_gen_qb2 (mesh,
+        verified correct on live QB2 hardware -- coherent video, same real-
+        on-device-run count), OFF for test_stage2b_gen (single device --
+        a 256MB trace region OOMs during plain weight loading there since the
+        full unsharded model has far less headroom than the mesh's per-chip
+        sharded weights; unverified even at the smaller 1MB size that does
+        get past weight loading). Where verified (mesh, 13 frames/50 steps),
+        traced measured NO speedup over eager: steady-state ~3.20s/it eager
+        vs ~3.25s/it traced, and the one-time setup+warmup+capture overhead
+        makes the total denoise loop slightly SLOWER (166s vs 187s) -- this
+        workload is compute/CCL-bound, not host-dispatch-bound, so skipping
+        repeated op dispatch has nothing to save here. Kept on for the mesh
+        case anyway as validated infrastructure in case a future compute-side
+        optimization shifts the bottleneck enough for this to start paying
+        off."""
+
+        def __init__(self, real, ttpipe, guider, use_trace=True):
             self.__dict__["_real"], self.__dict__["_tt"], self.__dict__["_guider"] = real, ttpipe, guider
             self.__dict__["_pending"] = []  # [(inp_dict, dtype, placeholder)] for the in-flight CFG group
+            # Command-3 trace+2CQ path (default varies by caller, see below): captured
+            # once on the first denoise step's batched group, then write+replay for
+            # every step after. None means "not captured yet".
+            self.__dict__["_use_trace"] = use_trace
+            self.__dict__["_trace_id"] = None
+            self.__dict__["_trace_out"] = None
             self.config, self.dtype = real.config, real.dtype
 
         def __getattr__(self, k):
@@ -136,13 +162,33 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
                 k: (torch.cat([g[0][k] for g in group], dim=0) if torch.is_tensor(keys[k]) else keys[k]) for k in keys
             }
             calls["device_runs"] += 1
-            batched_out = self.__dict__["_tt"].run(batched_inp, granularity="composite")
+            tt = self.__dict__["_tt"]
+            if not self.__dict__["_use_trace"]:
+                batched_out = tt.run(batched_inp, granularity="composite")
+            elif self.__dict__["_trace_id"] is None:
+                # First step's group: encode once (text/image conditioning, RoPE,
+                # attn_bias -- all step-invariant, see tt/pipeline.py), warm up
+                # (compiles/caches kernels, untraced), then capture ONE step.
+                # This capture run's own execution IS step 0's real result.
+                tt.denoise_trace_setup(batched_inp)
+                tt.denoise_trace_step()
+                tid = ttnn.begin_trace_capture(tt.device, cq_id=0)
+                trace_out = tt.denoise_trace_step()
+                ttnn.end_trace_capture(tt.device, tid, cq_id=0)
+                self.__dict__["_trace_id"], self.__dict__["_trace_out"] = tid, trace_out
+                batched_out = tt._unpatchify(trace_out, tt._resident["out_shape"])
+            else:
+                # Every later step: write the new latent/timestep on CQ1, replay
+                # the captured trace on CQ0, read the (in-place refreshed) output.
+                tt.denoise_write_inputs(batched_inp["hidden_states"], batched_inp["timestep"])
+                tt.denoise_trace_execute(self.__dict__["_trace_id"], blocking=True)
+                batched_out = tt._unpatchify(self.__dict__["_trace_out"], tt._resident["out_shape"])
             for (_, g_dtype, g_placeholder), row in zip(group[:-1], batched_out[:-1]):
                 g_placeholder.set_(row.unsqueeze(0).to(g_dtype).clone())
             out = batched_out[-1].unsqueeze(0).to(dtype)
             return Transformer2DModelOutput(sample=out) if return_dict else (out,)
 
-    pipe.transformer = TTTransformer(real_tf, tt, getattr(pipe, "guider", None))
+    pipe.transformer = TTTransformer(real_tf, tt, getattr(pipe, "guider", None), use_trace=use_trace)
 
     out = pipe(
         prompt="A cat walks on the grass, realistic",
@@ -199,6 +245,23 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         )
 
 
+# Single-device trace+2CQ defaults OFF: unlike the mesh case (weights sharded
+# 4-way, ~4GB/chip, verified working with a 256MB trace region), a single chip
+# holds the FULL ~16.6GB bf16 model with much less headroom, and a
+# trace_region_size of 256MB OOMs during plain weight loading there (measured;
+# only 1MB was confirmed to get past weight loading, and even that wasn't
+# confirmed sufficient for an actual trace capture). Opt in at your own risk
+# via HY_TRACE=1 -- don't flip this default without re-verifying on hardware.
+_use_trace_single = os.environ.get("HY_TRACE", "0") == "1"
+_SINGLE_DEVICE_PARAMS = {}
+if _use_trace_single:
+    _SINGLE_DEVICE_PARAMS = {
+        "num_command_queues": 2,
+        "trace_region_size": int(os.environ.get("HY_TRACE_REGION_SIZE", str(1 * 1024 * 1024))),
+    }
+
+
+@pytest.mark.parametrize("device_params", [_SINGLE_DEVICE_PARAMS], indirect=True)
 def test_stage2b_gen(device):
     """One-chip smoke test: tiny resolution + truncated text (documented DRAM
     limitation -- see module docstring)."""
@@ -211,13 +274,30 @@ def test_stage2b_gen(device):
         trunc=int(os.environ.get("HY_TRUNC", "0")),
         outdir=os.environ.get("HY_OUT", "/tmp/hy15_stage2b"),
         label="stage2b",
+        use_trace=_use_trace_single,
     )
 
 
+# Mesh trace+2CQ defaults ON: verified end-to-end on live QB2 hardware (480x848,
+# 13 frames, 50 steps) -- coherent output, correct trace capture/replay across
+# the 4-device mesh with CCL all-reduce embedded in the trace. Set HY_TRACE=0
+# to fall back to the eager per-step path.
+_use_trace_qb2 = os.environ.get("HY_TRACE", "1") == "1"
+_QB2_DEVICE_PARAMS = {"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}
+if _use_trace_qb2:
+    # Only reserve a 2nd command queue + trace region when trace+2CQ is actually
+    # requested -- both eat into the same tight per-chip DRAM budget the eager
+    # path doesn't need (see the OOM notes in the module docstring), so don't
+    # pay for them in a HY_TRACE=0 run.
+    _QB2_DEVICE_PARAMS = {
+        **_QB2_DEVICE_PARAMS,
+        "num_command_queues": 2,
+        "trace_region_size": int(os.environ.get("HY_TRACE_REGION_SIZE", str(256 * 1024 * 1024))),
+    }
+
+
 @pytest.mark.timeout(3600)  # full-res, 50-step, 54-layer x4-chip denoise loop is far slower than pytest.ini's 300s
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [_QB2_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [4], indirect=True)
 def test_stage2b_gen_qb2(mesh_device):
     """QB2 flat-TP=4 variant: full resolution, NO text truncation -- the DiT is
@@ -237,4 +317,5 @@ def test_stage2b_gen_qb2(mesh_device):
         trunc=0,
         outdir=os.environ.get("HY_OUT", "/tmp/hy15_stage2b_qb2"),
         label="stage2b-qb2",
+        use_trace=_use_trace_qb2,
     )
