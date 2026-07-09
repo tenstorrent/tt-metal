@@ -31,20 +31,18 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 /**
  * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
  *
- * Face count and face row dimension are derived from the operand's CB metadata (mirroring
- * llk_unpack_tilize_init) so the canonical Tile_x_dim / SrcA stride restore matches the operand's
- * tile geometry. Deriving face_r_dim (rather than defaulting it to FACE_R_DIM) is what lets the
- * tiny-tile (face_r_dim < 16) restore reach the Compute API, whose tilize_uninit /
- * tilize_uninit_with_dt call this with the operand only.
+ * Restores the tile descriptor to the standard full-tile baseline (DEFAULT_TENSOR_SHAPE = 4 faces,
+ * 16-row faces) rather than the operand's own geometry. Deriving the operand geometry here (#45127)
+ * regressed Qwen3-32B on Galaxy to Top-1 0.0%: for a non-standard operand the teardown left the
+ * descriptor's num_faces/face_r_dim in a non-default state that polluted the following op. The
+ * default restore matches the proven pre-#45127 behavior; per-op init reprograms geometry anyway.
+ * See issue #49266.
  *
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilize_uninit(const std::uint32_t operand) {
     std::uint32_t operand_id = get_operand_id(operand);
-    const std::uint32_t num_faces = get_operand_num_faces(operand_id);
-    const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
-    _llk_unpack_tilize_uninit_(
-        (std::uint32_t)unpack_dst_format[operand_id], ckernel::tensor_shape_from_num_faces(num_faces, face_r_dim));
+    _llk_unpack_tilize_uninit_((std::uint32_t)unpack_dst_format[operand_id]);
 }
 
 /**
