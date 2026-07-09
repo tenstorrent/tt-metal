@@ -33,7 +33,7 @@ def main():
     ap.add_argument("--prompt", default="a photograph of a cat sitting on a red sofa")
     ap.add_argument("--negative_prompt", default="")
     ap.add_argument("--size", type=int, default=512)
-    ap.add_argument("--steps", type=int, default=24)
+    ap.add_argument("--steps", type=int, default=50)  # HF reference default
     ap.add_argument("--guidance", type=float, default=4.5)
     ap.add_argument("--max_length", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
