@@ -44,7 +44,9 @@ STAGES = ("encode", "prepare", "denoise", "decode")
 # a real one captured by the VLM->image e2e test (test_vlm_pipeline.py).
 _JSON_PROMPT_PATH = Path(__file__).parent / "fibo_vlm_prompt.json"
 
-_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}
+# trace_region_size holds BOTH resident denoise traces (cond + uncond). Each is ~70 MB at 1024² (the
+# 4096-token spatial sequence dominates, so prompt length barely matters), so ~200 MB gives headroom.
+_DEVICE_PARAMS = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 200000000}
 
 
 def _fibo_local():

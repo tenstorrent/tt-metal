@@ -145,15 +145,13 @@ class BriaFiboPipeline:
         self._num_blocks = checkpoint._config.num_layers + checkpoint._config.num_single_layers
         ttnn.synchronize_device(self._submesh)
 
-        # Denoise trace: one Tracer per CFG branch (cond/uncond run at different, unpadded prompt
-        # token lengths, so each needs its own captured shape). prep_run=True compiles all programs
-        # at the real prompt shape before begin_trace_capture (variable-shape compile-before-capture
-        # safety). See docs/superpowers/specs/2026-07-09-fibo-denoise-trace-design.md.
-        self._tracers = {
-            name: Tracer(self._traced_step, device=self._submesh, prep_run=True, clone_prep_inputs=True)
-            for name in ("cond", "uncond")
-        }
-        self._captured_lengths: dict[str, int | None] = {"cond": None, "uncond": None}
+        # Denoise trace: ONE trace per step that runs both CFG forwards + the guidance combine. A
+        # single trace per device is the pattern every tt_dit pipeline uses; two separate traces
+        # sharing this submesh + CCLManager corrupt each other on replay (verified: two-tracer CFG
+        # gave ~0 PCC, one trace is bit-exact). prep_run=True compiles the whole step at the real
+        # prompt shape before capture. See docs/superpowers/specs/2026-07-09-fibo-denoise-trace-design.md.
+        self._tracer = Tracer(self._traced_step, device=self._submesh, prep_run=True, clone_prep_inputs=False)
+        self._captured_key: tuple | None = None  # (cfg_on, cond_prompt_len, uncond_prompt_len) last captured
 
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(config.checkpoint_name, subfolder="scheduler")
         self._solver = EulerSolver()
@@ -168,14 +166,19 @@ class BriaFiboPipeline:
         ttnn.synchronize_device(self._submesh)
 
         logger.info("creating VAE decoder...")
-        # Decode the Wan 2.2 residual VAE on the same 2x2 submesh as the transformer, reusing its
-        # CCLManager for the decoder's halo/all-gather exchange. Sharing the submesh (rather than a
-        # dedicated 1-device submesh) spreads the decode's activations across all 4 devices, which
-        # coexists with the resident transformer/encoder shards.
+        # Decode the Wan 2.2 residual VAE on the same 2x2 submesh as the transformer. It gets its OWN
+        # CCLManager (not the transformer's): the transformer's CCLManager carries the resident denoise
+        # trace, and CCLManager ping-pong buffers/semaphores are stateful (a Python index flips each
+        # call). An untraced VAE/latent-gather all-gather on that same manager between traced
+        # generations would desync the state the trace baked, corrupting replay (verified: shared
+        # manager -> gen 2+ diverged to ~0.13 PCC). Separate manager mirrors wan/ltx
+        # (dit_ccl_manager vs vae_ccl_manager). Sharing the submesh still spreads the decode's
+        # activations across all 4 devices.
+        self._vae_ccl_manager = CCLManager(self._submesh, num_links=config.num_links, topology=config.topology)
         self._vae = WanVAEDecoderAdapter(
             checkpoint_name=config.checkpoint_name,
             parallel_config=config.vae_parallel_config,
-            ccl_manager=self._ccl_manager,
+            ccl_manager=self._vae_ccl_manager,
             height=config.height,
             width=config.width,
             num_frames=1,
@@ -183,6 +186,16 @@ class BriaFiboPipeline:
         )
 
         self._image_processor = VaeImageProcessor(vae_scale_factor=_VAE_SCALE_FACTOR)
+
+        # Allocation/warmup run (mirrors pipeline_flux1.py's __init__): run the full pipeline once
+        # UNTRACED so every device buffer -- crucially the on-device VAE decode's -- is allocated BEFORE
+        # any denoise trace is captured. Without it, the first traced generation captures the trace and
+        # only then allocates the VAE buffers *during an active trace*, which corrupts the decoded image
+        # (verified: no alloc-run -> traced image std 0.85/degenerate; with it -> bit-identical to
+        # untraced). Cheap 2-step run; op compilation is amortized here too.
+        logger.info("pipeline allocation run (untraced)...")
+        self(prompt="", num_inference_steps=2, guidance_scale=2.0, traced=False, force_device_decode=True)
+        ttnn.synchronize_device(self._submesh)
 
     @torch.no_grad()
     def __call__(
@@ -358,51 +371,44 @@ class BriaFiboPipeline:
         spatial_sequence_length: int,
         guidance_scale: float,
     ) -> ttnn.Tensor:
-        """Traced denoise loop (mirrors pipeline_flux1.py:315-359).
+        """Traced denoise loop: one captured step (both forwards + guidance combine) replayed per step.
 
-        Captures each branch's transformer forward on step 0 and replays it on later steps. The
-        constant conditioning (prompt/layers/ropes) is passed as the real tensor only on step 0 and as
-        the captured buffer (``tracer.inputs[...]``) thereafter, so it is not re-uploaded. The changing
-        ``latent`` is passed every step. CFG ``lerp`` and the Euler ``solver.step`` (per-step scalar)
-        stay untraced. One sync at the end (not per step) so the steps pipeline.
+        The step is captured on the first call (``Tracer.prep_run`` compiles it first) and replayed
+        thereafter; only the changing ``latent`` and ``timestep`` are copied into the captured input
+        buffers each step -- the constant conditioning dicts keep the same tensors, so the tracer skips
+        them. The Euler ``solver.step`` (per-step scalar) stays untraced. One sync at the end (not per
+        step) so the steps pipeline.
         """
         logger.info("denoising (traced)...")
         submesh = self._submesh
-        branches = [("cond", cond_branch)]
-        if uncond_branch is not None:
-            branches.append(("uncond", uncond_branch))
-        self._ensure_traces(branches)
+        self._ensure_trace(cond_branch, uncond_branch)
 
+        # Pass the fresh conditioning ONLY on the call that captures; on every replay pass the captured
+        # buffers (self._tracer.inputs[...]) so the tracer skips re-copying them. This mirrors flux1 and
+        # is REQUIRED: ttnn.copy of the (replicated + sharded) conditioning into the captured buffers on
+        # replay corrupts them (verified -- reusing captured buffers holds PCC 1.0 across generations,
+        # re-copying fresh conditioning gives ~0 PCC). Only latent/timestep genuinely change and those
+        # copy correctly each step. A fixed prompt keeps the trace (see _ensure_trace); a changed prompt
+        # releases + recaptures, so `capturing` is True again and the fresh conditioning is captured.
+        capturing = not self._tracer.trace_captured
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             timestep = tt_tensor.from_torch(
                 torch.full((1, 1), float(t), dtype=torch.bfloat16), device=submesh, dtype=ttnn.bfloat16
             )
-            velocities: dict[str, ttnn.Tensor] = {}
-            for name, branch in branches:
-                tracer = self._tracers[name]
-                inp = tracer.inputs  # captured buffers, populated after step 0
-                velocities[name] = tracer(
-                    latent=latent,
-                    prompt=branch["prompt"] if i == 0 else inp["prompt"],
-                    timestep=timestep,
-                    layers=branch["layers"] if i == 0 else inp["layers"],
-                    spatial_rope=branch["spatial_rope"] if i == 0 else inp["spatial_rope"],
-                    prompt_rope=branch["prompt_rope"] if i == 0 else inp["prompt_rope"],
-                    spatial_sequence_length=spatial_sequence_length,
-                    prompt_sequence_length=branch["prompt_sequence_length"],
-                    traced=True,
-                    tracer_blocking_execution=False,
-                )
-
+            fresh = capturing and i == 0
+            velocity = self._tracer(
+                latent=latent,
+                timestep=timestep,
+                cond=cond_branch if fresh else self._tracer.inputs["cond"],
+                uncond=uncond_branch if fresh else self._tracer.inputs["uncond"],
+                spatial_sequence_length=spatial_sequence_length,
+                guidance_scale=guidance_scale,
+                traced=True,
+                tracer_blocking_execution=False,
+            )
             # Trace replay can clobber the tensor object passed as `latent`; the captured input buffer
-            # is the safe handle for the solver step (both branches copied the same value into it).
-            latent = self._tracers["cond"].inputs["latent"]
-
-            if uncond_branch is not None:
-                velocity = ttnn.lerp(velocities["uncond"], velocities["cond"], guidance_scale)
-            else:
-                velocity = velocities["cond"]
-
+            # is the safe handle for the solver step.
+            latent = self._tracer.inputs["latent"]
             latent = self._solver.step(step=i, latent=latent, velocity_pred=velocity)
 
         ttnn.synchronize_device(submesh)
@@ -466,52 +472,47 @@ class BriaFiboPipeline:
         self,
         *,
         latent: ttnn.Tensor,
-        prompt: ttnn.Tensor,
         timestep: ttnn.Tensor,
-        layers,
-        spatial_rope,
-        prompt_rope,
+        cond: dict,
+        uncond: dict | None,
         spatial_sequence_length: int,
-        prompt_sequence_length: int,
+        guidance_scale: float,
     ) -> ttnn.Tensor:
-        """The unit captured by the Tracer: one branch's transformer forward (velocity prediction).
+        """The unit captured by the Tracer: both CFG forwards + the guidance combine -> velocity.
 
-        All args are Tracer-valid (tensors, a list of tensors, tuples of tensors, int scalars). The
-        two seq-length scalars are constant for a fixed prompt+resolution, satisfying the tracer's
-        scalar-equality check on replay.
+        Kept as ONE trace (not one per branch): a single trace per device is the working tt_dit
+        pattern; two interleaved traces on this submesh corrupt each other on replay. All inputs are
+        Tracer-valid -- tensors, dicts/lists/tuples of tensors, and int/float scalars; the per-branch
+        ``prompt_sequence_length`` (in the dicts), ``spatial_sequence_length`` and ``guidance_scale``
+        are constant for a fixed prompt+resolution, satisfying the tracer's scalar-equality check.
         """
-        return self._transformer.forward(
-            spatial=latent,
-            prompt=prompt,
-            timestep=timestep,
-            text_encoder_layers=layers,
-            spatial_rope=spatial_rope,
-            prompt_rope=prompt_rope,
-            spatial_sequence_length=spatial_sequence_length,
-            prompt_sequence_length=prompt_sequence_length,
+        v_cond = self._run_transformer(latent, cond, timestep, spatial_sequence_length)
+        if uncond is None:
+            return v_cond  # gs <= 1: noise = cond directly (uncond term cancels)
+        v_uncond = self._run_transformer(latent, uncond, timestep, spatial_sequence_length)
+        # noise = uncond + guidance_scale * (cond - uncond)
+        return ttnn.lerp(v_uncond, v_cond, guidance_scale)
+
+    def _ensure_trace(self, cond_branch: dict, uncond_branch: dict | None) -> None:
+        """Release + recapture the trace when the CFG mode or a prompt token length changed.
+
+        A trace bakes tensor shapes and the cfg-on/off structure, so it is reusable only while those
+        are fixed (``spatial_sequence_length`` is fixed by resolution). Same prompt+gs across runs ->
+        reuse; a change -> release+recapture (amortized over that generation's steps).
+        """
+        key = (
+            uncond_branch is not None,
+            cond_branch["prompt_sequence_length"],
+            uncond_branch["prompt_sequence_length"] if uncond_branch is not None else None,
         )
-
-    def _ensure_traces(self, branches: list[tuple[str, dict]]) -> None:
-        """Release + rebuild a branch's tracer when its prompt token length changed since capture.
-
-        A trace bakes tensor shapes, so it is only reusable while ``prompt_sequence_length`` is fixed
-        (``spatial_sequence_length`` is fixed by resolution). Same prompt across runs -> reuse; a new
-        prompt -> recapture (amortized over that generation's steps).
-        """
-        for name, branch in branches:
-            length = branch["prompt_sequence_length"]
-            if self._captured_lengths[name] is not None and self._captured_lengths[name] != length:
-                self._tracers[name].release_trace()
-                self._tracers[name] = Tracer(
-                    self._traced_step, device=self._submesh, prep_run=True, clone_prep_inputs=True
-                )
-            self._captured_lengths[name] = length
+        if self._captured_key is not None and self._captured_key != key:
+            self.release_traces()
+        self._captured_key = key
 
     def release_traces(self) -> None:
-        """Release both branch traces (call at teardown; mirrors pipeline_wan.py's release_traces)."""
-        for name, tracer in self._tracers.items():
-            tracer.release_trace()
-            self._captured_lengths[name] = None
+        """Release the denoise trace (call at teardown; mirrors pipeline_wan.py's release_traces)."""
+        self._tracer.release_trace()
+        self._captured_key = None
 
     def _random_latents(
         self, *, height: int, width: int, seed: int, latents: torch.Tensor | None = None
@@ -546,7 +547,11 @@ class BriaFiboPipeline:
         sp_axis = self._parallel_config.sequence_parallel.mesh_axis
 
         ttnn.synchronize_device(submesh)
-        latent = self._ccl_manager.all_gather_persistent_buffer(latent, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
+        # VAE CCLManager, not the transformer's: this untraced all-gather must not touch the ping-pong
+        # state carrying the resident denoise trace (see the VAE CCLManager note in __init__).
+        latent = self._vae_ccl_manager.all_gather_persistent_buffer(
+            latent, dim=1, mesh_axis=sp_axis, use_hyperparams=True
+        )
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(latent)[0])  # (1, h*w, 48)
         return torch_latents.to(torch.float32)
 
@@ -564,9 +569,12 @@ class BriaFiboPipeline:
         latent_h = height // _VAE_SCALE_FACTOR
         latent_w = width // _VAE_SCALE_FACTOR
 
-        # Gather the sequence-sharded latent, then rebuild BCTHW (T=1) for the VAE.
+        # Gather the sequence-sharded latent, then rebuild BCTHW (T=1) for the VAE. Uses the VAE
+        # CCLManager (not the transformer's) so it doesn't disturb the resident denoise trace.
         ttnn.synchronize_device(submesh)
-        latent = self._ccl_manager.all_gather_persistent_buffer(latent, dim=1, mesh_axis=sp_axis, use_hyperparams=True)
+        latent = self._vae_ccl_manager.all_gather_persistent_buffer(
+            latent, dim=1, mesh_axis=sp_axis, use_hyperparams=True
+        )
         torch_latents = ttnn.to_torch(ttnn.get_device_tensors(latent)[0])
 
         # (1, h*w, 48) -> (1, 48, h, w) (inverse of the no-patch pack) -> (1, 48, 1, h, w).
