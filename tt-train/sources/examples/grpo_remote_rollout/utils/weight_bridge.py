@@ -60,13 +60,14 @@ def _check_role_rank(owner: str, role: str, local_rank: int) -> None:
 
 
 def _handshake(role: str, peer_rank: int) -> None:
-    """Two-rank barrier: each side eager-sends, then blocks on recv."""
+    """Two-rank barrier: sender sends then waits for the ack; receiver recvs first
+    then acks -- recv-first on one side avoids deadlock if send_bytes is blocking."""
     if role == _ROLE_SENDER:
         _mpi_send_bytes(_HANDSHAKE_PAYLOAD, peer_rank, _HANDSHAKE_TAG_FROM_SENDER)
         _mpi_recv_bytes(len(_HANDSHAKE_PAYLOAD), peer_rank, _HANDSHAKE_TAG_FROM_RECEIVER)
     else:
-        _mpi_send_bytes(_HANDSHAKE_PAYLOAD, peer_rank, _HANDSHAKE_TAG_FROM_RECEIVER)
         _mpi_recv_bytes(len(_HANDSHAKE_PAYLOAD), peer_rank, _HANDSHAKE_TAG_FROM_SENDER)
+        _mpi_send_bytes(_HANDSHAKE_PAYLOAD, peer_rank, _HANDSHAKE_TAG_FROM_RECEIVER)
 
 
 def _shape_to_list(shape) -> List[int]:
