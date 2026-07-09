@@ -176,6 +176,36 @@ def tuned_configs_enabled():
     return os.environ.get("DG_SPARSE_MOE_TUNED", "1") != "0"
 
 
+# ---------------------------------------------------------------------------------------------
+# L1-residency (dg-08 L1 pass): keep the MoE token-gather activation intermediates L1-resident
+# across an op boundary instead of round-tripping DRAM. Two self-contained levers:
+#   HIGH-1 (gather): the gather matmul writes ``dispatched`` [1,1,EC,H] = 23.1 MB to DRAM, then
+#       gate (:296) and up (:303) re-read it (46 MB). Pin it L1 so gate/up read from L1.
+#   HIGH-2 (down):   the down matmul writes ``down`` [1,E,C,H] = 23.1 MB to DRAM, then the combine
+#       matmul (:385) re-reads ``down_flat`` (23 MB) as its in1. Pin it L1 so combine reads from L1.
+# The expert gate/up/down matmuls themselves are WEIGHT-BOUND (~138 MB weight read each, ~92% of the
+# 256 GB/s roofline; the ~1.5 MB gate/up outputs are ~1% of their traffic), so MED-5 (L1 gate/up
+# outputs) is expected to be ~a no-op and is bundled under mode ``chain`` only for measurement.
+# Default OFF -> the path is bit-identical to the DRAM prototype until measured PCC-clean.
+# ``both``/``all`` combine the levers. ``out`` (combine output) always stays DRAM: it feeds the
+# gemma4 ``ccl_allreduce`` (out-of-gate; MED-7). All matmul math (dtype/fidelity/program_config) is
+# unchanged -> a pure placement change; PCC must stay at the DRAM value.
+# ---------------------------------------------------------------------------------------------
+
+
+def moe_l1_mode():
+    """DG_MOE_L1 selects which MoE activation intermediates stay L1-resident (opt-in, default off).
+
+    Modes: ``off`` (DRAM, current default) | ``gather`` (HIGH-1) | ``down`` (HIGH-2) |
+    ``chain`` (MED-5 gate/up outputs, expected no-op) | ``both`` (gather+down) | ``all``.
+    """
+    return os.environ.get("DG_MOE_L1", "off").lower()
+
+
+def _l1_or_dram(use_l1):
+    return ttnn.L1_MEMORY_CONFIG if use_l1 else ttnn.DRAM_MEMORY_CONFIG
+
+
 def _divisors(n):
     return [d for d in range(1, n + 1) if n % d == 0]
 
@@ -283,12 +313,13 @@ def build_tuned_configs(mesh, E, C, H, I, S):
     return cfgs
 
 
-def _batched_experts(gathered, weights, compute_kernel_config, program_configs=None):
+def _batched_experts(gathered, weights, compute_kernel_config, program_configs=None, l1_gate_up=False, l1_down=False):
     """Batched gate/up/geglu/down over active experts.
 
     gathered: [1, E, C, H] — each expert's capacity tokens.
     program_configs: optional dict with ``gate_up`` / ``down`` OPT-004 program configs; None keeps the
         auto-config path (bit-identical to the untuned prototype).
+    l1_gate_up / l1_down: L1-residency levers (see ``moe_l1_mode``). Pure output-placement change.
     Returns: [1, E, C, H] partial (TP-sharded down output, pre all-reduce).
     """
     gate_up_pc = program_configs.get("gate_up") if program_configs else None
@@ -296,14 +327,14 @@ def _batched_experts(gathered, weights, compute_kernel_config, program_configs=N
     gate = ttnn.matmul(
         gathered,
         weights.gate_proj,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=_l1_or_dram(l1_gate_up),
         compute_kernel_config=compute_kernel_config,
         program_config=gate_up_pc,
     )
     up = ttnn.matmul(
         gathered,
         weights.up_proj,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=_l1_or_dram(l1_gate_up),
         compute_kernel_config=compute_kernel_config,
         program_config=gate_up_pc,
     )
@@ -313,7 +344,7 @@ def _batched_experts(gathered, weights, compute_kernel_config, program_configs=N
     down = ttnn.matmul(
         down_input,
         weights.down_proj,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=_l1_or_dram(l1_down),
         compute_kernel_config=compute_kernel_config,
         program_config=down_pc,
     )
@@ -359,6 +390,12 @@ def sparse_experts_forward(
         else None
     )
 
+    # L1-residency levers (dg-08 L1 pass; opt-in via DG_MOE_L1, default off -> bit-identical DRAM path)
+    mode = moe_l1_mode()
+    l1_gather = mode in ("gather", "both", "all")
+    l1_down = mode in ("down", "both", "all")
+    l1_gate_up = mode in ("chain", "all")
+
     disp, comb = build_capacity_dispatch(dense_routing, E, C, cfg.top_k)
 
     # gather: dispatched[EC, H] = disp^T @ hidden  ([1,1,EC,S] @ [1,1,S,H])
@@ -367,7 +404,7 @@ def sparse_experts_forward(
     dispatched = ttnn.matmul(
         disp_t,
         hidden_states,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=_l1_or_dram(l1_gather),
         compute_kernel_config=ckcfg,
         program_config=(tuned["gather"] if tuned else None),
     )
@@ -376,7 +413,9 @@ def sparse_experts_forward(
     dispatched.deallocate(True)
 
     # experts (batched matmul over active experts only)
-    down = _batched_experts(gathered, weights, ckcfg, program_configs=tuned)  # [1, E, C, H] partial
+    down = _batched_experts(
+        gathered, weights, ckcfg, program_configs=tuned, l1_gate_up=l1_gate_up, l1_down=l1_down
+    )  # [1, E, C, H] partial
     gathered.deallocate(True)
     down_flat = ttnn.reshape(down, (1, 1, EC, H))
     down.deallocate(True)

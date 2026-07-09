@@ -219,6 +219,45 @@ it is a ~2% net loss today. Flip when #48291 lifts the entropy floor below 0.005
 and beats fixed-48 for any converged block) or a schedule cut lowers the step budget. This is the
 in-repo mechanism half of `path_to_100tps.md` lever 8; the quality half stays gated on #48291.
 
+## 2026-07-09 — L1-residency pass (dg-08): full-canvas RMSNorm is a NEW +15.8% @48 lever
+
+Full detail: `doc/optimize_perf/l1_residency.md` + `l1_residency_summary.json`. **First on-device
+measurement of the "layout/glue (28%)" lever this log flagged as unexecuted** (this campaign ran
+device-free; the box was free this session — 4x Blackhole p300c, `(1,4)` TP=4). Two DG-local flags
+added, both **default OFF** (default path byte-unchanged); zero `models/demos/gemma4/` edits.
+
+**HIGH-4 `DG_NORM_FULLCANVAS` (`tt/denoise_forward.py`) — LANDED opt-in, the pass's win.** Collapses
+the 8×(32-row slice → gemma4 fast-path norm → DRAM-concat) chunked RMSNorm into ONE 256-row
+width-sharded `rms_norm` (`block_h=8`, reuses `norm.tt_weight`). Per-norm micro **9.8×** (1.32 →
+0.134 ms), PCC 0.999998. **Traced e2e (30L, seed 0): @48 17.855 → 20.676 t/s (+15.8%); @12 49.841 →
+61.476 t/s (+23.3%)** — ~41 ms/step saved. It SURVIVES trace (removes real `Slice`/`Concat`/norm-launch
+ops, unlike the MoE DRAM writes below). NOT bit-identical (`committed_sha` differs; `block_h=8` vs 8×
+`block_h=1` bf16 reduction-order compounds under #48291), so opt-in default OFF pending a dg-05
+decision-fidelity check to flip default. **This refutes the earlier "norm de-chunking is not fresh
+headroom" note** — that was framed against the 137 ms/layer dense state; at tuned MoE the chunked-norm
+slice/concat glue is ~15% of the step and is NOT overlap-hidden. So the "@48 ≈ 17.8–18.2 t/s
+precision-neutral ceiling" is really ~20.7 t/s (per-row-identical math; only bf16 reduction-order
+differs) once the norm glue is removed.
+
+**HIGH-1/HIGH-2/MED-5 `DG_MOE_L1` (`tt/sparse_moe.py`) — MEASURED WASH, rejected as default.** Pin the
+23 MB gather / 23 MB down MoE activation outputs L1 instead of DRAM. Isolated micro: full MoE fwd
+−3.2% (gather matmul −57%), **bit-identical** (PCC vs off 1.000025, vs dense 0.99955 unchanged). But
+traced e2e @48 18.128 → 18.016 (−0.6%), @12 53.213 → 53.421 (+0.4%) — a wash within noise, bit-identical
+output. The DRAM round-trips are **overlap-hidden** under trace (the ~1.5–1.74× FW overlap); L1 reclaims
+nothing on the critical path. MED-5 (gate/up L1) is a no-op (`batched_experts` weight-bound, flat).
+Flag kept opt-in for reuse if a fused gather-experts kernel removes the overlap.
+
+**Reasoned-closed:** HIGH-3 residual-stream L1 (coupled — every consumer takes DRAM → net-zero without
+the full stack); MED-6 attention L1 (the `diffusion_attention.py:400-411` DRAM force is a guarded
+passthrough no-op; real L1-SDPA blocked by the flash CB clash; attn ~1 ms/6L); MED-7 masks (~2 MB,
+sub-ms). Measured: all `InterleavedToSharded`+`ShardedToInterleaved` in denoise = <3% of the step, so
+conversion round-trips were never the lever — the chunked-norm slice/concat was.
+
+**Watcher:** clean on `DG_NORM_FULLCANVAS=1` with `TT_METAL_WATCHER_DISABLE_ETH=1` (the plain-watcher
+ACTIVE_ETH kernel-config-buffer overflow is the known watcher+fabric limitation, not a norm defect).
+
+---
+
 **Stage review (independent, xhigh): clean-pass** @ commit `b88f2c361f8` (+ follow-up doc/comment
 clarifications). No required work. Confirmed: on-device single-scalar halt (not the retired 5-tensor
 readback), host branch == eager StableAndConfident rule, trace-safe capture, Guard 1 byte-identical,

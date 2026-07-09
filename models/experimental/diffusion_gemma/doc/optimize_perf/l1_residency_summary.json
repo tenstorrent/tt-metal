@@ -1,0 +1,52 @@
+{
+  "stage": "dg-08 L1-residency pass (#47465)",
+  "workload": {
+    "profile": "block_diffusion_denoise_step",
+    "prompt": "Explain what a diffusion language model is in one sentence.",
+    "canvas_length": 256,
+    "max_denoise_steps": 48,
+    "batch": 1,
+    "mesh": [1, 4],
+    "tensor_parallel": 4,
+    "device": "Blackhole P150x4 (4x p300c, consumer B850M-C host), (1,4) mesh, TP=4"
+  },
+  "measured_path": "traced Metal capture/replay + synchronized per-op/per-component device-time tables",
+  "levers": {
+    "DG_NORM_FULLCANVAS": {
+      "what": "HIGH-4: one 256-row width-sharded rms_norm instead of 8x(32-row slice->norm->DRAM-concat)",
+      "isolated_speedup_per_norm": 9.8,
+      "isolated_pcc_per_norm": 0.999998,
+      "traced_at48": {"baseline_tps": 17.855, "lever_tps": 20.676, "delta_pct": 15.8, "baseline_block_s": 14.3376, "lever_block_s": 12.3815},
+      "traced_at12": {"baseline_tps": 49.841, "lever_tps": 61.476, "delta_pct": 23.3, "baseline_block_s": 5.1364, "lever_block_s": 4.1642},
+      "ms_per_denoise_step_baseline": 266.0,
+      "ms_per_denoise_step_lever": 225.0,
+      "bit_identical": false,
+      "committed_sha_baseline_at48": "a9f0d18709b07d1e",
+      "committed_sha_lever_at48": "ead6eaa16dee8a57",
+      "default": "off (opt-in)",
+      "landing": "opt-in; not bit-identical (bf16 block_h reduction-order); recommend default-flip pending dg-05 decision-fidelity vs HF"
+    },
+    "DG_MOE_L1": {
+      "what": "HIGH-1 gather + HIGH-2 down: pin the 23MB gather/down MoE activation outputs L1 instead of DRAM",
+      "isolated_full_moe_delta_pct": -3.2,
+      "isolated_pcc_vs_off": 1.000025,
+      "isolated_pcc_vs_dense": 0.99955,
+      "traced_at48": {"baseline_tps": 18.128, "lever_tps": 18.016, "delta_pct": -0.6},
+      "traced_at12": {"baseline_tps": 53.213, "lever_tps": 53.421, "delta_pct": 0.4},
+      "bit_identical": true,
+      "committed_sha_baseline_at48": "a9f0d18709b07d1e",
+      "committed_sha_lever_at48": "a9f0d18709b07d1e",
+      "default": "off (opt-in)",
+      "landing": "rejected as default (wash within noise; DRAM round-trips overlap-hidden under trace); flag retained for reuse if a fused gather-experts kernel removes the overlap"
+    }
+  },
+  "roofline_ms_per_step_estimate": 49.1,
+  "decode_ms_per_token_device": null,
+  "named_limitations": [
+    "hardware-profiler-limited: ENABLE_TRACY=OFF, tt-perf-report op-CSV unavailable; per-step/per-block/full-generation numbers are from traced Metal capture/replay + synchronized per-op device-time tables",
+    "watcher-clean verified with TT_METAL_WATCHER_DISABLE_ETH=1 (ACTIVE_ETH kernel-config-buffer overflow is a known watcher+fabric limitation, not a norm-change defect)",
+    "HIGH-4 not bit-identical to the chunked path (bf16 sharded-norm block_h reduction-order); coherent output, per-norm PCC 0.999998; lands opt-in until decision-fidelity vs HF is validated",
+    "MoE expert matmul is weight-bound at ~92% of the 256 GB/s roofline (immovable in-repo); terminal argmax/entropy over 262144 vocab blocked by the 18-bit-index fp32-reduction wall (out-of-gate)",
+    "model-faithful @48 baseline 17.86-18.13 t/s; HIGH-4 lifts the model-faithful @48 to 20.68 t/s if flipped on"
+  ]
+}

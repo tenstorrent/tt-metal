@@ -27,6 +27,7 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
 from models.experimental.diffusion_gemma.weight_mapping import GEMMA4_LM_PREFIX, remap_state_dict
 
 NEG = -1.0e9
+TILE_SIZE = getattr(ttnn, "TILE_SIZE", 32)
 
 
 def default_self_conditioning_compute_kernel_config():
@@ -186,7 +187,108 @@ def _deallocate_prompt_source(prompt_source) -> None:
         _deallocate_optional_tensor(prompt_source)
 
 
+# ---------------------------------------------------------------------------------------------
+# HIGH-4 (dg-08 L1 pass): collapse the chunked RMSNorm to ONE full-canvas width-sharded rms_norm.
+#
+# DiffusionGemma chunks the 256-row canvas into 8x 32-row slices (``_chunked_norm_forward`` /
+# ``_rms_norm_dram``) SO THAT each slice hits gemma4 RMSNorm's width-sharded fast path
+# (``_forward_sharded``, block_h=1, 32-row-only); ``norm.forward`` on the full 256 rows falls to the
+# slow plain-interleaved path (rms_norm.py:145-176). That costs 7 extra slices + 1 DRAM concat +
+# 7 extra sharded-norm launches + 8 I2S/S2I round-trips PER norm call (~6-8 norm calls/layer x 30).
+#
+# RMSNorm normalizes each ROW independently over the hidden width, so block_h=8 (256 rows in one op)
+# is per-row EQUIVALENT to 8x block_h=1 (the cross-core width reduction is per-row regardless of
+# block_h). It is NOT, however, bit-identical: the bf16 reduction/accumulation ORDER differs between
+# block_h=8 and 8x block_h=1, ~2e-6/norm (PCC 0.999998), which compounds over 30L x 48 steps under
+# #48291 (no argmax cushion) and flips some committed tokens. So this runs one 256-row width-sharded
+# rms_norm (reusing ``norm.tt_weight`` — reading the weight is data-use, NOT a gemma4 edit) and hands
+# the L1 output straight back, dropping the slice/concat glue. MEASURED +15.8% @48 / +23.3% @12 traced
+# (doc/optimize_perf/l1_residency.md). Gated DG_NORM_FULLCANVAS, default OFF (default path unchanged /
+# bit-identical) until a decision-fidelity check vs HF clears the non-bit-identity for a default flip.
+# ---------------------------------------------------------------------------------------------
+
+_NORM_FULLCANVAS_CFG_CACHE = {}
+
+
+def _norm_fullcanvas_enabled():
+    return os.environ.get("DG_NORM_FULLCANVAS", "0") == "1"
+
+
+def _build_fullcanvas_norm_cfg(mesh, seq_len, hidden_size):
+    """Width-sharded rms_norm config for the FULL canvas (``seq_len`` rows, ``block_h=seq_len//32``).
+
+    Largest core grid whose count divides the hidden tile-cols (mirrors gemma4
+    RMSNorm._build_sharded_cfg, but block_h>1 for the whole canvas). Returns
+    ``(input_memcfg, program_config)`` or ``None`` if no usable grid divides the width.
+    """
+    if hidden_size % TILE_SIZE != 0 or seq_len % TILE_SIZE != 0:
+        return None
+    key = (id(mesh), seq_len, hidden_size)
+    cached = _NORM_FULLCANVAS_CFG_CACHE.get(key)
+    if cached is not None:
+        return cached
+    tiles = hidden_size // TILE_SIZE
+    grid = mesh.compute_with_storage_grid_size()
+    best = None  # (num_cores, gx, gy)
+    for gy in range(1, grid.y + 1):
+        for gx in range(1, grid.x + 1):
+            n = gx * gy
+            if tiles % n == 0 and (best is None or n > best[0]):
+                best = (n, gx, gy)
+    if best is None or best[0] == 1:
+        _NORM_FULLCANVAS_CFG_CACHE[key] = None
+        return None
+    num_cores, gx, gy = best
+    block_w = tiles // num_cores
+    subblock_w = 4
+    while subblock_w > 1 and block_w % subblock_w != 0:
+        subblock_w -= 1
+    input_memcfg = ttnn.create_sharded_memory_config(
+        shape=(seq_len, hidden_size // num_cores),
+        core_grid=ttnn.CoreGrid(x=gx, y=gy),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[gx, gy],
+        subblock_w=subblock_w,
+        block_h=seq_len // TILE_SIZE,
+        block_w=block_w,
+        inplace=False,
+    )
+    cfg = (input_memcfg, program_config)
+    _NORM_FULLCANVAS_CFG_CACHE[key] = cfg
+    return cfg
+
+
+def _fullcanvas_norm(norm, hidden_states):
+    """One 256-row width-sharded rms_norm (HIGH-4). Returns normed [1,1,S,H] DRAM, or None if the
+    width-sharded config is unavailable (caller falls back to the chunked path)."""
+    cfg = _build_fullcanvas_norm_cfg(hidden_states.device(), hidden_states.shape[-2], hidden_states.shape[-1])
+    if cfg is None:
+        return None
+    input_memcfg, program_config = cfg
+    weight = getattr(norm, "tt_weight", None)
+    x_sh = ttnn.to_memory_config(hidden_states, input_memcfg)
+    out_sh = ttnn.rms_norm(
+        x_sh,
+        weight=weight,
+        epsilon=norm.eps,
+        program_config=program_config,
+        memory_config=input_memcfg,
+    )
+    x_sh.deallocate(True)
+    out = ttnn.sharded_to_interleaved(out_sh, ttnn.DRAM_MEMORY_CONFIG)
+    out_sh.deallocate(True)
+    return out
+
+
 def _chunked_norm_forward(norm, hidden_states, *, chunk_size: int = 32):
+    if _norm_fullcanvas_enabled() and hidden_states.shape[-2] > chunk_size:
+        out = _fullcanvas_norm(norm, hidden_states)
+        if out is not None:
+            return out
     if getattr(norm, "with_scale", True) is False and getattr(norm, "tt_weight", None) is None:
         return _rms_norm_dram(hidden_states, epsilon=norm.eps, chunk_size=chunk_size)
     seq_len = hidden_states.shape[-2]
