@@ -78,6 +78,7 @@ def _perf_breakdown(
     num_inference_steps,
     num_measured_runs,
     negative_prompt="",
+    traced=False,
 ):
     """Time one generation's stages (1 warmup + N measured), assert the image is valid, log a breakdown.
 
@@ -110,7 +111,7 @@ def _perf_breakdown(
         )
         latent = time_stage(
             "denoise",
-            lambda: pipe._denoise(cond_branch, uncond_branch, timesteps, latent, ssl, guidance_scale),
+            lambda: pipe._denoise(cond_branch, uncond_branch, timesteps, latent, ssl, guidance_scale, traced=traced),
         )
         image = time_stage(
             "decode",
@@ -152,9 +153,10 @@ def _perf_breakdown(
     total = sum(avg[s] for s in STAGES)
 
     cfg_note = "CFG on (2 fwd/step)" if do_cfg else "no-CFG gate (1 fwd/step)"
+    trace_note = "traced" if traced else "untraced"
     lines = [
         f"\nFIBO perf breakdown [{label}] — {width}x{height}, {num_inference_steps} steps, "
-        f"gs={guidance_scale} [{cfg_note}], avg of {num_measured_runs} runs (after 1 warmup)"
+        f"gs={guidance_scale} [{cfg_note}, {trace_note}], avg of {num_measured_runs} runs (after 1 warmup)"
     ]
     for s in STAGES:
         pct = 100.0 * avg[s] / total if total else 0.0
@@ -169,28 +171,35 @@ def _perf_breakdown(
     lines.append(f"  {'total':<9} {total:7.2f} s             -> {images_per_s:.4f} images/s")
     logger.info("\n".join(lines))
 
+    # Free the resident denoise traces so a subsequent build/test starts with a clean trace region.
+    if traced:
+        pipe.release_traces()
+
 
 @pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [_DEVICE_PARAMS], indirect=["device_params"])
 @pytest.mark.parametrize("height, width, num_inference_steps, num_measured_runs", [(1024, 1024, 30, 3)])
-def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inference_steps, num_measured_runs):
-    """Per-stage wall-clock breakdown for a short free-text prompt on the 2x2 mesh (gs=1.0 -> no-CFG gate).
+@pytest.mark.parametrize("traced", [False, True], ids=["untraced", "traced"])
+def test_fibo_pipeline_perf_breakdown(*, mesh_device, height, width, num_inference_steps, num_measured_runs, traced):
+    """Per-stage wall-clock breakdown for a short free-text prompt on the 2x2 mesh (gs=5.0 -> CFG on).
 
-    Sanity-asserts the produced image is valid + non-degenerate (proves the timed path really ran); it
-    does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to see the log. Runtime
-    ~ (1 warmup + num_measured_runs) generations + ~44s model build.
+    Runs both untraced and traced (parametrized) so the denoise it/s delta from tracing is visible in
+    one command. Sanity-asserts the produced image is valid + non-degenerate (proves the timed path
+    really ran); it does NOT assert on timing (dev instrument, not a regression gate). Use ``-s`` to
+    see the log. Runtime ~ (1 warmup + num_measured_runs) generations + ~44s model build, per param.
     """
     pipe = _build_pipe(mesh_device, height, width)
     _perf_breakdown(
         pipe,
         label="text",
         prompt="a luxury sports car",
-        guidance_scale=1.0,
+        guidance_scale=5.0,
         seed=0,
         height=height,
         width=width,
         num_inference_steps=num_inference_steps,
         num_measured_runs=num_measured_runs,
+        traced=traced,
     )
 
 
