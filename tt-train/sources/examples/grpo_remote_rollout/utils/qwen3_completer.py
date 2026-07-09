@@ -4,7 +4,7 @@
 
 """Qwen3-specific GRPO completion engine with FSDP support.
 
-Unlike :class:`LlamaGRPOCompleter` (which drives the C++ Llama binding), this
+Unlike :class:`LlamaCompleterRemoteRollout` (which drives the C++ Llama binding), this
 completer runs the pure-Python ttml Qwen3 model (``ttml.models.qwen3.Qwen3``)
 and shards it across the ``"fsdp"`` mesh axis with :func:`ttml.fsdp.fully_shard`.
 
@@ -63,7 +63,7 @@ class Qwen3GRPOCompleter(GRPOCompleter):
     Args:
         ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are filled
             in automatically from ``model_source``.
-        transformer_config: Present for parity with ``LlamaGRPOCompleter``;
+        transformer_config: Present for parity with ``LlamaCompleterRemoteRollout``;
             only ``max_sequence_length`` is consulted (to bound the generation
             horizon). The architecture itself is read from the HF config of
             ``model_source``.
