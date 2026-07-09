@@ -11,7 +11,7 @@ on:
         description: "All SKUs (every Wormhole + Blackhole SKU)"
         required: false
         type: boolean
-        default: false
+        default: true
       wormhole:
         description: "All Wormhole SKUs (wh_n150_civ2, wh_galaxy)"
         required: false
@@ -28,7 +28,7 @@ on:
         type: boolean
         default: false
       skus:
-        description: "Specific SKUs (comma-separated), added to any boxes ticked above. e.g. 'bh_galaxy, wh_galaxy'. Tick the 'all' box above to run every SKU."
+        description: "Specific SKUs (comma-separated), added to any boxes ticked above. e.g. 'bh_galaxy, wh_galaxy'. The 'all' box above is ticked by default (every SKU); untick it to run only the boxes/SKUs you pick."
         required: false
         type: string
         default: ""
