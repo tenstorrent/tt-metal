@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-KV-cache single-token decode + 24 per-step traces + optional 2CQ.
+KV-cache single-token decode + N per-layer traces + optional 2CQ.
 
 NOTE ON WHICH GENERATION PATH IS CANONICAL (added after session-end review):
   This module's generate_traced_cached() is the Stage 1 deliverable path.
@@ -15,9 +15,7 @@ NOTE ON WHICH GENERATION PATH IS CANONICAL (added after session-end review):
   vs. generate()), but generate_traced() is NOT benchmarked against any
   bounty Stage 1 target (throughput, sample-generation-under-1s, single
   -sequence-latency) and should not be confused with generate_traced_cached()
-  below, which is the only path with KV-caching, per-step trace reuse,
-  hardware-probe-verified 2CQ event choreography, and passing throughput
-  /sample-generation/CRPS/NLL results against the actual bounty targets.
+  below.
 
 KEY CONSTRAINT (discovered from hardware error this session):
   ttnn.experimental.slice_write is a device WRITE and is forbidden inside
@@ -37,14 +35,68 @@ KEY CONSTRAINT (discovered from hardware error this session):
     padding in positions step+1..T_max-1 has no effect on the output.
   - Phase 2 only reads the caches (pure compute), so it is traceable.
 
-Architecture:
-- 24 separate traces (one per step): required because slice_write's Python-int
-  offsets are baked into untraced calls, and the causal mask shape varies per
-  step — confirmed by probe_slice_write_tensor_offset.py on hardware.
-- Cross-attn KV precomputed once (encoder hidden is fixed).
-- CPU embedding prep per step (no device ops between trace replays).
+CORRECTNESS FIX (this revision -- confirmed via real hardware PCC run,
+~0.31-0.33 against the HF reference at every step tested, and via code
+inspection of the previous version of this file):
 
-NOTE ON A REVERTED EXPERIMENT (this revision):
+  The PREVIOUS version of this module captured ONE trace for the whole
+  2-layer decoder stack, and computed EVERY layer's Q (inside the trace,
+  via _extract_q_only) and EVERY layer's K/V (outside the trace, via
+  _extract_and_write_kv) from `captured_dec_input` -- the raw single-token
+  embedding. That is correct for layer 0, but WRONG for every layer after
+  it: layer 1's self-attention Q/K/V must be projected from layer 0's real
+  output hidden state, not from the raw input. Layer 1 was therefore
+  attending over content it never actually received. This bug was invisible
+  to every existing test in this repo: test_tst_pcc.py and test_tst_e2e.py
+  only exercise the untraced generate()/run_decoder_step() path, and
+  test_tst_e2e_traced.py only exercises the older, KV-cache-less
+  generate_traced() -- neither ever calls generate_traced_cached() or
+  build_traced_decoder_context_cached().
+
+  FIX: one trace PER DECODER LAYER instead of one trace for the whole
+  stack, chained through real device buffers:
+    - Untraced: write layer i's K/V from layer i's REAL input
+                (captured_dec_input for i=0, layer i-1's real trace
+                output buffer for i>0).
+    - Trace i:  layer i self-attn(from cache) + cross-attn + FFN. Q is
+                computed INSIDE this trace via _extract_q_only on layer
+                i's real input buffer, so every replay picks up whatever
+                is actually in that buffer. Produces layer i's output at
+                a FIXED device buffer address (same mechanism the
+                original code already relied on for captured_dec_input
+                and the old single traced_out).
+    - Repeat for layer i+1, reading layer i's real output buffer.
+    - After the last layer, its output buffer is read for the
+      distribution head (ctx.traced_out now points at this buffer).
+
+  This means num_decoder_layers separate trace captures and
+  num_decoder_layers separate execute_trace calls per autoregressive step,
+  instead of 1. More host-dispatch overhead per step than the (broken)
+  single-trace version -- this works against the Stage 1 latency target
+  and will need to be re-measured and possibly optimized (e.g. batching
+  independent per-sample work, or investigating whether consecutive
+  layer traces can be merged once a write-free formulation is found) once
+  correctness is confirmed on hardware. Correctness comes first.
+
+  THIS HAS NOT BEEN HARDWARE-VERIFIED YET. Before trusting output from
+  generate_traced_cached() again:
+    1. Re-run test_tst_perf.py::test_2cq_matches_single_queue_output --
+       it already does real NaN/Inf/shape/distributional checks against
+       this exact function and will catch gross breakage.
+    2. Write and run a PCC-level gate (mirroring test_tst_e2e_traced.py's
+       pattern, but calling generate_traced_cached()/
+       build_traced_decoder_context_cached() instead of generate_traced())
+       comparing per-step distribution params against generate(). No such
+       test currently exists for this path -- that gap is exactly why the
+       original bug shipped undetected.
+
+Architecture:
+  - num_decoder_layers separate traces, one per layer, captured once and
+    reused across all `prediction_length` autoregressive steps.
+  - Cross-attn KV precomputed once (encoder hidden is fixed).
+  - CPU embedding prep per step (no device ops between trace replays).
+
+NOTE ON A REVERTED EXPERIMENT (prior revision):
   A prior revision attempted to replace the manual Q@K_cache attend-from-cache
   below with ttnn.transformer.scaled_dot_product_attention_decode (FlashDecode)
   plus a cur_pos_tensor, to try to collapse per-step host overhead further.
@@ -71,23 +123,36 @@ NOTE ON A REVERTED EXPERIMENT (this revision):
       ttnn.wait_for_event(cq_id, event)
 
   There is no separate ttnn.create_event() and no ttnn.event_synchronize() in
-  this pattern — an earlier revision of this file invented both, and used
-  them entirely within CQ0 (no cross-queue handoff at all), which provided
-  zero actual overlap and relied on an unverified API (create_event).
+  this pattern.
 
   This revision follows the report's "ops + readback on CQ0, input writes on
-  CQ1" layout (section 2.3.2 / 3.3.1.1), adapted to this model's per-step loop:
+  CQ1" layout (section 2.3.2 / 3.3.1.1), adapted to this model's per-step,
+  PER-LAYER loop:
     - CQ1: copy_host_to_device_tensor for the step input, and the K/V
-           slice_write cache updates (the "write" work).
-    - CQ0: execute_trace (the "compute" work, pure read-from-cache).
-  Two events per step:
-    - `op_event` (recorded on CQ0): signals CQ0 has finished consuming the
-      PREVIOUS step's input buffer / caches, so CQ1 may overwrite them.
-    - `write_event` (recorded on CQ1): signals CQ1 has finished writing the
-      CURRENT step's input buffer and cache updates, so CQ0 may run its trace.
-  This still must be re-verified end-to-end on hardware (see test_tst_perf.py's
-  test_single_sequence_latency_2cq); use_2cq=False remains the default for
-  correctness testing until that verification happens.
+           slice_write cache updates (the "write" work) -- now once PER
+           LAYER, not once per step, because layer i+1's write depends on
+           layer i's real trace output.
+    - CQ0: execute_trace (the "compute" work, pure read-from-cache) -- also
+           once per layer.
+  Two events, now recorded once per LAYER (not once per step):
+    - `op_event` (recorded on CQ0 after each layer's execute_trace):
+      signals CQ0 has finished producing that layer's output, so CQ1 may
+      read it to write the NEXT layer's K/V (or, after the last layer,
+      overwrite step k+1's input).
+    - `write_event` (recorded on CQ1 after each layer's writes): signals
+      CQ1 has finished writing this layer's K/V (and, for layer 0, the
+      step input and mask), so CQ0 may run that layer's trace.
+  IMPORTANT CAVEAT vs. the previous (single-trace, buggy) version: because
+  layer i+1's write now genuinely depends on layer i's compute output,
+  the per-step critical path is more serialized than before -- the old
+  version could pipeline all-layers'-writes against nothing, this version
+  cannot skip the write->compute->write->compute chain within a step.
+  Cross-step overlap (layer 0's write for step k+1 against the last
+  layer's compute for step k) should still be possible in principle since
+  layer 0's input never depends on other layers, but this has NOT been
+  verified. use_2cq=False remains the default until test_2cq_matches_
+  single_queue_output has been re-run against THIS version and confirmed
+  passing.
 """
 
 import time
@@ -119,6 +184,24 @@ from .ttnn_utils import layer_norm_padded
 
 _NEG_INF = -1e9
 
+# ── Sub-op timing breakdown for write_prep (diagnostic only) ──────────────
+_OP_TIMES = {}
+
+
+def _reset_op_times():
+    _OP_TIMES.clear()
+
+
+def _accum(name, dt):
+    _OP_TIMES[name] = _OP_TIMES.get(name, 0.0) + dt
+
+
+def _print_op_times():
+    if not _OP_TIMES:
+        return
+    parts = " ".join(f"{k}={v*1000:.1f}ms" for k, v in sorted(_OP_TIMES.items(), key=lambda kv: -kv[1]))
+    print(f"[OP BREAKDOWN] {parts}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 1 helpers: extract Q/K/V and write K/V to cache (untraced)
@@ -143,24 +226,45 @@ def _extract_and_write_kv(
     here. For the 2CQ path this should be the WRITER queue (CQ1), so these
     writes can be issued/run while CQ0 is still executing the previous
     step's trace.
+
+    CALLER RESPONSIBILITY (post layer-threading fix): hidden_1tok must be
+    THIS layer's real input -- captured_dec_input for layer 0, or the
+    PREVIOUS layer's real trace output buffer for layer i>0. Passing the
+    same raw embedding for every layer reproduces the confirmed
+    layer-threading bug this file was rewritten to fix.
     """
     BS = hidden_1tok.shape[0]
 
+    t0 = time.perf_counter()
     fused_qkv = ttnn.linear(hidden_1tok, w["qkv_weight"], bias=w["qkv_bias"], queue_id=cq_id)
+    _accum("qkv_linear", time.perf_counter() - t0)
+
+    t0 = time.perf_counter()
     query, key, value = ttnn.transformer.split_query_key_value_and_split_heads(
         fused_qkv,
         num_heads=NUM_HEADS,
         queue_id=cq_id,
     )
+    _accum("qkv_split", time.perf_counter() - t0)
     # query: [BS, H, 1, D]
     # key:   [BS, H, D, 1]  (already transposed by TTNN — matches k_cache's
     #         [B, H, D, T_max] layout directly, no permute needed)
     # value: [BS, H, 1, D]
 
+    t0 = time.perf_counter()
     key_rm = ttnn.to_layout(key, ttnn.ROW_MAJOR_LAYOUT, queue_id=cq_id)
-    value_rm = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, queue_id=cq_id)
+    # V: only convert to ROW_MAJOR when v_cache is ROW_MAJOR (BS > 1, original
+    # slice_write path). When BS == 1, v_cache is TILE_LAYOUT (see
+    # allocate_kv_cache) and `value` is already TILE straight out of
+    # split_query_key_value_and_split_heads -- no conversion needed, and
+    # skipping it is the entire point of this path.
+    use_update_cache_for_v = BS == 1
+    if not use_update_cache_for_v:
+        value_rm = ttnn.to_layout(value, ttnn.ROW_MAJOR_LAYOUT, queue_id=cq_id)
+    _accum("to_layout_kv", time.perf_counter() - t0)
 
     _step = [1, 1, 1, 1]
+    t0 = time.perf_counter()
     ttnn.experimental.slice_write(
         key_rm,
         k_cache,
@@ -169,14 +273,29 @@ def _extract_and_write_kv(
         _step,
         queue_id=cq_id,
     )
-    ttnn.experimental.slice_write(
-        value_rm,
-        v_cache,
-        [0, 0, step, 0],
-        [BS, NUM_HEADS, step + 1, HEAD_DIM_PADDED],
-        _step,
-        queue_id=cq_id,
-    )
+    if use_update_cache_for_v:
+        # BS == 1 only: ttnn.update_cache hard-asserts
+        # input_tensor.padded_shape()[0] == 1 (update_cache_device_operation.cpp:53,
+        # confirmed empirically -- B=4/32/33/100 all TT_FATAL on this check,
+        # B=1 passes). Verified in isolation
+        # (tests/diagnostics/probe_v_cache_update_cache*.py): exact match vs
+        # slice_write ground truth across multiple steps, and correct behavior
+        # when captured once and replayed inside a trace with update_idx frozen
+        # as a Python int (same constraint slice_write's `step` already has
+        # here) -- confirmed the trace re-reads `value`'s live contents on each
+        # replay rather than baking in a stale reference. queue_id confirmed
+        # accepted by ttnn.update_cache (tested against a 2-CQ device).
+        ttnn.update_cache(v_cache, value, update_idx=step, batch_offset=0, queue_id=cq_id)
+    else:
+        ttnn.experimental.slice_write(
+            value_rm,
+            v_cache,
+            [0, 0, step, 0],
+            [BS, NUM_HEADS, step + 1, HEAD_DIM_PADDED],
+            _step,
+            queue_id=cq_id,
+        )
+    _accum("slice_write_kv", time.perf_counter() - t0)
 
     return query  # [BS, H, 1, D] TILE_LAYOUT
 
@@ -188,7 +307,13 @@ def _extract_q_only(
     """
     Phase 1, trace-capture version: project hidden_1tok → Q/K/V but
     return Q only (K/V already written before begin_trace_capture).
-    Used during warmup/compile run only.
+
+    CALLER RESPONSIBILITY (post layer-threading fix): hidden_1tok is
+    captured and re-read fresh on every trace replay -- it must be THIS
+    layer's real input buffer (captured_dec_input for layer 0, the
+    previous layer's real trace-output buffer for layer i>0), so that
+    every replay computes Q from whatever real hidden state is currently
+    sitting there.
     """
     fused_qkv = ttnn.linear(hidden_1tok, w["qkv_weight"], bias=w["qkv_bias"])
     query, _, _ = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -206,7 +331,7 @@ def _extract_q_only(
 def _attend_from_cache(
     query: ttnn.Tensor,  # [BS, H, 1, D] TILE
     k_cache: ttnn.Tensor,  # [BS, H, D, T_max] ROW_MAJOR (read as TILE)
-    v_cache: ttnn.Tensor,  # [BS, H, T_max, D] ROW_MAJOR (read as TILE)
+    v_cache: ttnn.Tensor,  # [BS, H, T_max, D] ROW_MAJOR when BS>1 (read as TILE); already TILE_LAYOUT when BS==1
     causal_mask_1tok: ttnn.Tensor,  # [1, 1, 1, T_max] TILE
     w: dict,
 ) -> ttnn.Tensor:
@@ -218,72 +343,80 @@ def _attend_from_cache(
     masked = ttnn.add(scaled, causal_mask_1tok)
     probs = ttnn.softmax(masked, dim=-1)
 
-    v_tile = ttnn.to_layout(v_cache, ttnn.TILE_LAYOUT)  # [BS, H, T_max, D]
+    # v_cache is already TILE_LAYOUT when BS == 1 (see allocate_kv_cache) --
+    # skip the conversion in that case, it's already the layout matmul needs.
+    # For BS > 1, v_cache stays ROW_MAJOR and still needs this conversion,
+    # unchanged from the original path.
+    v_tile = (
+        v_cache if v_cache.layout == ttnn.TILE_LAYOUT else ttnn.to_layout(v_cache, ttnn.TILE_LAYOUT)
+    )  # [BS, H, T_max, D]
     context = ttnn.matmul(probs, v_tile)  # [BS, H, 1, D]
     context = ttnn.transformer.concatenate_heads(context)  # [BS, 1, PADDED_WIDTH]
     return ttnn.linear(context, w["out_proj_weight"], bias=w["out_proj_bias"])
 
 
+from .tst_attention import tst_cross_attention_with_kv  # noqa: E402  (used below)
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Traced decoder stack: reads caches (pre-written), no slice_write inside
+# Single-layer traced compute: reads caches (pre-written), no slice_write
+# inside. THIS REPLACES THE OLD FUSED-2-LAYER _run_traced_decoder_stack --
+# see module docstring "CORRECTNESS FIX" section for why the fused version
+# was wrong.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _run_traced_decoder_stack(
-    hidden_1tok: ttnn.Tensor,  # [BS, 1, PADDED_WIDTH]
-    queries: list,  # per-layer [BS, H, 1, D] query tensors (pre-extracted)
-    kv_caches: list,  # per-layer (k_cache, v_cache) — already updated
-    precomputed_kv: list,  # per-layer (k_pre, v_pre) for cross-attn
+def _run_single_layer_compute(
+    hidden_in: ttnn.Tensor,  # [BS, 1, PADDED_WIDTH] -- THIS layer's real input
+    query: ttnn.Tensor,  # [BS, H, 1, D] -- Q projected from hidden_in
+    k_cache: ttnn.Tensor,
+    v_cache: ttnn.Tensor,
+    k_pre: ttnn.Tensor,
+    v_pre: ttnn.Tensor,
     causal_mask_1tok: ttnn.Tensor,  # [1, 1, 1, T_max]
-    weights: dict,
-    num_decoder_layers: int,
+    w: dict,  # THIS layer's full weight dict (self_attn/encoder_attn/fc.../ln...)
 ) -> ttnn.Tensor:
     """
-    Pure-compute decoder stack. No slice_write. Safe to trace.
+    Pure-compute single decoder layer: self-attn(from cache) + cross-attn
+    (from precomputed KV) + FFN, with residual/layernorm after each.
+    No writes -- safe to trace.
 
-    Reads k_cache/v_cache at their current (already updated) state.
+    Each layer gets its OWN trace (see build_traced_decoder_context_cached).
+    `hidden_in` and `query` must both be derived from the SAME real hidden
+    state for this layer -- captured_dec_input for layer 0, the previous
+    layer's real output buffer for layer i>0. This is what makes it
+    possible for layer i>0 to actually receive layer i-1's output, instead
+    of every layer independently re-deriving Q/K/V from the raw embedding
+    (the bug this file was rewritten to fix).
     """
-    hidden = hidden_1tok
-    for layer_idx in range(num_decoder_layers):
-        w = weights[f"decoder.layers.{layer_idx}"]
-        q = queries[layer_idx]
-        k_cache, v_cache = kv_caches[layer_idx]
-        k_pre, v_pre = precomputed_kv[layer_idx]
+    self_attn_out = _attend_from_cache(query, k_cache, v_cache, causal_mask_1tok, w["self_attn"])
+    residual = ttnn.add(hidden_in, self_attn_out)
+    hidden = layer_norm_padded(
+        residual,
+        w["self_attn_layer_norm_weight"],
+        w["self_attn_layer_norm_bias"],
+        orig_dim=D_MODEL,
+    )
 
-        # Masked self-attention (attend from cache — no writes)
-        self_attn_out = _attend_from_cache(q, k_cache, v_cache, causal_mask_1tok, w["self_attn"])
-        residual = ttnn.add(hidden, self_attn_out)
-        hidden = layer_norm_padded(
-            residual,
-            w["self_attn_layer_norm_weight"],
-            w["self_attn_layer_norm_bias"],
-            orig_dim=D_MODEL,
-        )
+    cross_out = tst_cross_attention_with_kv(hidden, k_pre, v_pre, w["encoder_attn"])
+    residual = ttnn.add(hidden, cross_out)
+    hidden = layer_norm_padded(
+        residual,
+        w["encoder_attn_layer_norm_weight"],
+        w["encoder_attn_layer_norm_bias"],
+        orig_dim=D_MODEL,
+    )
 
-        # Cross-attention (precomputed KV — no writes)
-        cross_out = tst_cross_attention_with_kv(hidden, k_pre, v_pre, w["encoder_attn"])
-        residual = ttnn.add(hidden, cross_out)
-        hidden = layer_norm_padded(
-            residual,
-            w["encoder_attn_layer_norm_weight"],
-            w["encoder_attn_layer_norm_bias"],
-            orig_dim=D_MODEL,
-        )
+    ffn_out = tst_ffn(hidden, w)
+    residual = ttnn.add(hidden, ffn_out)
+    hidden = layer_norm_padded(
+        residual,
+        w["final_layer_norm_weight"],
+        w["final_layer_norm_bias"],
+        orig_dim=D_MODEL,
+    )
 
-        # FFN
-        ffn_out = tst_ffn(hidden, w)
-        residual = ttnn.add(hidden, ffn_out)
-        hidden = layer_norm_padded(
-            residual,
-            w["final_layer_norm_weight"],
-            w["final_layer_norm_bias"],
-            orig_dim=D_MODEL,
-        )
+    return hidden  # [BS, 1, PADDED_WIDTH] -- fixed-address buffer for THIS layer
 
-    return hidden  # [BS, 1, PADDED_WIDTH]
-
-
-from .tst_attention import tst_cross_attention_with_kv  # noqa: E402  (used above)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Causal mask helper
@@ -297,14 +430,11 @@ def _update_causal_mask(device: ttnn.Device, mask_tensor: ttnn.Tensor, step: int
     PERF/CORRECTNESS FIX: previously hardcoded cq_id=0 unconditionally, so in
     the use_2cq=True path this write landed on the COMPUTE queue (CQ0)
     instead of the WRITER queue (CQ1/CQ_WRITE) that every other per-step
-    write (input, K/V cache) uses. It produced correct output only because
-    same-queue FIFO ordering happened to sequence it before execute_trace --
-    but it forced CQ0 to block on a host->device copy synchronously, which
-    defeats the entire purpose of the 2CQ split (CQ1 writes overlap with
-    CQ0 finishing the PREVIOUS step's trace). Callers now pass cq_id=CQ_WRITE
+    write (input, K/V cache) uses. Callers now pass cq_id=CQ_WRITE
     explicitly, matching how the input buffer and K/V caches are already
     written on CQ_WRITE in run_traced_generation_cached.
     """
+    t0 = time.perf_counter()
     mask = torch.full((1, 1, 1, T_max), _NEG_INF)
     mask[:, :, :, : step + 1] = 0.0
     new_tt = ttnn.from_torch(
@@ -313,7 +443,19 @@ def _update_causal_mask(device: ttnn.Device, mask_tensor: ttnn.Tensor, step: int
         layout=ttnn.TILE_LAYOUT,
         device=None,
     )
+    _accum("mask_build_host", time.perf_counter() - t0)
+    t0 = time.perf_counter()
     ttnn.copy_host_to_device_tensor(new_tt, mask_tensor, cq_id=cq_id)
+    _accum("mask_copy_to_device", time.perf_counter() - t0)
+
+
+def _update_causal_mask_precomputed(
+    device: ttnn.Device, mask_tensor: ttnn.Tensor, precomputed_host_tensor, cq_id: int = 0
+) -> None:
+    """Hot-loop version: copy an already-built host tensor, no torch work."""
+    t0 = time.perf_counter()
+    ttnn.copy_host_to_device_tensor(precomputed_host_tensor, mask_tensor, cq_id=cq_id)
+    _accum("mask_copy_to_device", time.perf_counter() - t0)
 
 
 def _build_causal_mask_1tok(device: ttnn.Device, step: int, T_max: int) -> ttnn.Tensor:
@@ -327,6 +469,20 @@ def _build_causal_mask_1tok(device: ttnn.Device, step: int, T_max: int) -> ttnn.
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+def _precompute_causal_masks_host(T_max: int) -> list:
+    """
+    PERF FIX: build all T_max host-side ttnn tensors ONCE here; per-step
+    work becomes a single copy_host_to_device_tensor from an already-built
+    host tensor, no torch construction in the hot loop.
+    """
+    masks = []
+    for step in range(T_max):
+        mask = torch.full((1, 1, 1, T_max), _NEG_INF)
+        mask[:, :, :, : step + 1] = 0.0
+        masks.append(ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None))
+    return masks
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -352,9 +508,6 @@ def _prepare_dec_step_cpu_1tok(
     """
     CPU: single-token decoder embedding for step k.
     Returns [BS, 1, PADDED_WIDTH] bfloat16.
-
-    Verified identical to _prepare_dec_step_cpu[:, k, :] from tst_model.py
-    across a simulated 5-step run (see prior session notes).
     """
     BS = past_values_cpu.shape[0]
     lags = [1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 23, 24, 25, 35, 36, 37]
@@ -402,6 +555,7 @@ class TracedDecoderContextCached:
         "device",
         "trace_ids",
         "captured_dec_input",
+        "layer_hidden_buffers",
         "traced_out",
         "kv_caches",
         "precomputed_kv",
@@ -420,6 +574,7 @@ class TracedDecoderContextCached:
         "num_decoder_layers",
         "_released",
         "shared_causal_mask",
+        "precomputed_masks_host",
     )
 
     def release(self):
@@ -449,10 +604,14 @@ def build_traced_decoder_context_cached(
     num_parallel_samples=NUM_PARALLEL_SAMPLES,
 ) -> TracedDecoderContextCached:
     """
-    One-time setup: encoder, cross-attn KV, KV-cache allocation, 24 trace captures.
+    One-time setup: encoder, cross-attn KV, KV-cache allocation, ONE trace
+    PER DECODER LAYER (not one trace for the whole stack -- see module
+    docstring "CORRECTNESS FIX" for why).
 
-    Each trace captures ONLY pure compute (attend-from-cache + cross-attn + FFN).
-    The slice_write cache updates happen outside the trace in run_traced_generation_cached.
+    Each layer's trace captures ONLY pure compute (attend-from-cache +
+    cross-attn + FFN), reading Q computed inside the trace from that
+    layer's REAL input. The slice_write cache updates for layer i happen
+    outside trace i, immediately before it, in run_traced_generation_cached.
     """
     B = past_values.shape[0]
     S = num_parallel_samples
@@ -529,7 +688,8 @@ def build_traced_decoder_context_cached(
         k_cache, v_cache = allocate_kv_cache(device, BS, T_max=T_max)
         kv_caches.append((k_cache, v_cache))
 
-    # ── Persistent input buffer (allocated before any trace capture) ───────
+    # ── Persistent input buffer for layer 0 (allocated before any trace
+    #    capture) ──────────────────────────────────────────────────────────
     captured_dec_input = ttnn.from_torch(
         torch.zeros(BS, 1, PADDED_WIDTH, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -539,44 +699,47 @@ def build_traced_decoder_context_cached(
     )
 
     # ── Shared causal mask buffer (fixed address; contents updated per step
-    #    via _update_causal_mask outside the trace) ─────────────────────────
+    #    via _update_causal_mask outside any trace) ─────────────────────────
     shared_causal_mask = _build_causal_mask_1tok(device, 0, T_max)
+    precomputed_masks_host = _precompute_causal_masks_host(T_max)
 
-    # ── Warmup compile run (step 0, untraced) ─────────────────────────────
-    queries_0 = [
-        _extract_q_only(captured_dec_input, weights[f"decoder.layers.{i}"]["self_attn"])
-        for i in range(num_decoder_layers)
-    ]
-    traced_out = _run_traced_decoder_stack(
-        captured_dec_input,
-        queries_0,
-        kv_caches,
-        precomputed_kv,
-        shared_causal_mask,
-        weights,
-        num_decoder_layers,
-    )
-    ttnn.synchronize_device(device)
+    # ── Per-layer warmup + trace capture, chained through real buffers ─────
+    # THIS is the fix: hidden_in starts as captured_dec_input (layer 0's
+    # real input) and after each layer is captured, hidden_in is
+    # reassigned to THAT layer's real output buffer -- so layer i+1's
+    # warmup/capture genuinely reads layer i's real output, not the raw
+    # embedding.
+    trace_ids = []
+    layer_hidden_buffers = []
 
-    # ── Capture ONE trace using a shared mask buffer ──────────────────────
-    # The mask buffer address is fixed (baked into the trace); we update its
-    # contents before each execute_trace call instead of capturing 24 traces.
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    queries_traced = [
-        _extract_q_only(captured_dec_input, weights[f"decoder.layers.{i}"]["self_attn"])
-        for i in range(num_decoder_layers)
-    ]
-    traced_out = _run_traced_decoder_stack(
-        captured_dec_input,
-        queries_traced,
-        kv_caches,
-        precomputed_kv,
-        shared_causal_mask,
-        weights,
-        num_decoder_layers,
-    )
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    trace_ids = [trace_id]  # single trace reused for all 24 steps
+    hidden_in = captured_dec_input
+    for layer_idx in range(num_decoder_layers):
+        w_layer = weights[f"decoder.layers.{layer_idx}"]
+        w_self = w_layer["self_attn"]
+        k_cache, v_cache = kv_caches[layer_idx]
+        k_pre, v_pre = precomputed_kv[layer_idx]
+
+        # Untraced warmup at step 0: write this layer's K/V from its REAL
+        # input, then run the layer once untraced to compile kernels
+        # before capture (mirrors the original single-trace warmup).
+        q_warmup = _extract_and_write_kv(hidden_in, w_self, k_cache, v_cache, step=0, cq_id=0)
+        _ = _run_single_layer_compute(hidden_in, q_warmup, k_cache, v_cache, k_pre, v_pre, shared_causal_mask, w_layer)
+        ttnn.synchronize_device(device)
+
+        # Capture this layer's trace. Q is computed INSIDE the trace via
+        # _extract_q_only(hidden_in, ...) -- hidden_in is this layer's
+        # real input (captured_dec_input for layer 0, the previous
+        # layer's real output buffer for layer i>0).
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        q_traced = _extract_q_only(hidden_in, w_self)
+        layer_out = _run_single_layer_compute(
+            hidden_in, q_traced, k_cache, v_cache, k_pre, v_pre, shared_causal_mask, w_layer
+        )
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+        trace_ids.append(trace_id)
+        layer_hidden_buffers.append(layer_out)
+        hidden_in = layer_out  # next layer's real input
 
     # Reset KV caches to zero before actual generation
     _zero_kv_caches(kv_caches, device, BS, T_max)
@@ -584,11 +747,12 @@ def build_traced_decoder_context_cached(
 
     ctx = TracedDecoderContextCached()
     ctx.device = device
-    ctx.trace_ids = trace_ids
+    ctx.trace_ids = trace_ids  # length == num_decoder_layers
     ctx.shared_causal_mask = shared_causal_mask
-    ctx.T_max = T_max
+    ctx.precomputed_masks_host = precomputed_masks_host
     ctx.captured_dec_input = captured_dec_input
-    ctx.traced_out = traced_out
+    ctx.layer_hidden_buffers = layer_hidden_buffers
+    ctx.traced_out = layer_hidden_buffers[-1]  # final layer's real output
     ctx.kv_caches = kv_caches
     ctx.precomputed_kv = precomputed_kv
     ctx.enc_hidden_rep = enc_hidden_rep
@@ -609,16 +773,21 @@ def build_traced_decoder_context_cached(
 
 
 def _zero_kv_caches(kv_caches, device, BS, T_max):
-    """Zero-fill KV caches via slice_write (outside any trace)."""
+    """Zero-fill KV caches via slice_write (outside any trace).
+
+    When BS == 1, v_cache is TILE_LAYOUT (see allocate_kv_cache) and is
+    zeroed via ttnn.update_cache, called once per T_max position, writing
+    IN PLACE into the SAME tensor object already referenced by any trace
+    captured earlier in build_traced_decoder_context_cached. This must stay
+    in-place: allocating a new device tensor here instead would zero a
+    different buffer than the one execute_trace actually reads from later,
+    silently breaking correctness without raising an error. K cache and,
+    for BS > 1, V cache are unchanged: zeroed via slice_write exactly as
+    before, which already writes into the given tensor in place.
+    """
     for k_cache, v_cache in kv_caches:
         zero_k = ttnn.from_torch(
             torch.zeros(BS, NUM_HEADS, HEAD_DIM_PADDED, T_max, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-        )
-        zero_v = ttnn.from_torch(
-            torch.zeros(BS, NUM_HEADS, T_max, HEAD_DIM_PADDED, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -630,13 +799,32 @@ def _zero_kv_caches(kv_caches, device, BS, T_max):
             [BS, NUM_HEADS, HEAD_DIM_PADDED, T_max],
             [1, 1, 1, 1],
         )
-        ttnn.experimental.slice_write(
-            zero_v,
-            v_cache,
-            [0, 0, 0, 0],
-            [BS, NUM_HEADS, T_max, HEAD_DIM_PADDED],
-            [1, 1, 1, 1],
-        )
+
+        if v_cache.layout == ttnn.TILE_LAYOUT:
+            # BS == 1 path: zero via update_cache, one call per position,
+            # writing in place into the same v_cache tensor object.
+            zero_v_1tok = ttnn.from_torch(
+                torch.zeros(BS, NUM_HEADS, 1, HEAD_DIM_PADDED, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+            )
+            for pos in range(T_max):
+                ttnn.update_cache(v_cache, zero_v_1tok, update_idx=pos, batch_offset=0)
+        else:
+            zero_v = ttnn.from_torch(
+                torch.zeros(BS, NUM_HEADS, T_max, HEAD_DIM_PADDED, dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            ttnn.experimental.slice_write(
+                zero_v,
+                v_cache,
+                [0, 0, 0, 0],
+                [BS, NUM_HEADS, T_max, HEAD_DIM_PADDED],
+                [1, 1, 1, 1],
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -652,21 +840,29 @@ def run_traced_generation_cached(
     use_2cq: bool = True,
 ) -> torch.Tensor:
     """
-    Per step:
-      1. CPU: build single-token embedding
-      2. Device: copy input + slice_write K/V into caches, update causal mask
-           - use_2cq=False: all on CQ0, blocking, no event choreography.
-           - use_2cq=True:  writes on CQ1, compute (execute_trace) on CQ0,
-                             handed off via record_event/wait_for_event
-                             exactly per the tech report's documented
-                             "ops+readback on CQ0, input writes on CQ1"
-                             pattern (section 2.3.2 / 3.3.1.1). There is no
-                             ttnn.create_event or ttnn.event_synchronize in
-                             that pattern — record_event both creates and
-                             records the event, and wait_for_event is the
-                             only blocking-on-event primitive used.
-      3. Device (traced): Q attend-from-cache + cross-attn + FFN
-      4. Host: sample from distribution
+    Per step, per decoder layer i (0..num_layers-1):
+      1. CPU (once per step, before the layer loop): build single-token
+         embedding.
+      2. Device: write this layer's input (raw embedding for i=0, the
+         PREVIOUS layer's real output buffer for i>0) + slice_write K/V
+         into layer i's cache + (i==0 only) update the shared causal mask.
+      3. Device (traced): execute layer i's trace -- reads the
+         just-written K/V cache, pure compute, writes layer i's fixed
+         output buffer.
+    After the last layer:
+      4. Host: read the last layer's output buffer, sample from
+         distribution.
+
+    use_2cq=False: everything blocking on CQ0, strictly ordered layer by
+                   layer -- no race possible by construction.
+    use_2cq=True:  writes on CQ1, execute_trace on CQ0, handoff via
+                   record_event/wait_for_event -- now once PER LAYER, not
+                   once per step, because layer i+1's write genuinely
+                   depends on layer i's real output. See module docstring
+                   2CQ section for the caveat this implies. UNVERIFIED for
+                   this multi-layer version -- re-run
+                   test_2cq_matches_single_queue_output before trusting
+                   use_2cq=True here.
 
     Returns [BS, prediction_length] float32.
     """
@@ -678,6 +874,10 @@ def run_traced_generation_cached(
 
     CQ_COMPUTE = 0  # runs execute_trace, always
     CQ_WRITE = 1 if use_2cq else 0  # writes input + KV cache updates + mask
+
+    def _layer_input(i):
+        """Layer i's real input buffer for the step currently being written."""
+        return ctx.captured_dec_input if i == 0 else ctx.layer_hidden_buffers[i - 1]
 
     past_values_cpu = ttnn.to_torch(ctx.repeated_past_raw_tt).float()
     future_time_cpu = ttnn.to_torch(ctx.repeated_future_time_tt).float()
@@ -700,43 +900,35 @@ def run_traced_generation_cached(
         cat_emb_w_cpu,
     )
 
+    _reset_op_times()
     future_samples = []
     cpu_prep_time = 0.0
     device_enqueue_time = 0.0
+    write_prep_time = 0.0
+    trace_exec_time = 0.0
     readback_time = 0.0
     sample_time = 0.0
 
-    # Dummy initial op_event on CQ_COMPUTE: signals "compute has finished
-    # with the input buffer / caches" so the writer queue can proceed on
-    # the very first step too (mirrors the tech report's "dummy record an
-    # op event ... since we wait on this first in the loop" pattern).
+    op_event = None
     if use_2cq:
-        # CORRECTNESS FIX (hardware-verified this session): an op's kernel
-        # binary must be resident on a queue BEFORE it is dispatched near a
-        # trace-execute handoff, or the first real call absorbs a JIT-compile
-        # stall -- confirmed via isolated probe (ttnn.sum failed inside
-        # trace capture until warmed up untraced first; identical mechanism
-        # applies here to _extract_and_write_kv / _update_causal_mask on
-        # CQ_WRITE, which -- unlike the compute-side ops -- have NEVER been
-        # run on CQ_WRITE before this point; the existing warmup block above
-        # only exercises CQ0). Warming up against real step=0 is harmless:
-        # the actual step 0 of the loop below immediately overwrites
-        # position 0 with the correct value before it's ever read.
+        # Warmup pass through every layer's write at step 0, on CQ_WRITE,
+        # so the first real step's kernels are already resident there
+        # (same rationale as the original single-trace warmup).
         for layer_idx in range(num_layers):
             w_self = weights[f"decoder.layers.{layer_idx}"]["self_attn"]
             k_cache, v_cache = ctx.kv_caches[layer_idx]
             _extract_and_write_kv(
-                ctx.captured_dec_input,
+                _layer_input(layer_idx),
                 w_self,
                 k_cache,
                 v_cache,
                 step=0,
                 cq_id=CQ_WRITE,
             )
-        _update_causal_mask(device, ctx.shared_causal_mask, step=0, T_max=ctx.T_max, cq_id=CQ_WRITE)
-        ttnn.synchronize_device(device, cq_id=CQ_WRITE)
-
-        op_event = ttnn.record_event(device, CQ_COMPUTE)
+            if layer_idx == 0:
+                _update_causal_mask(device, ctx.shared_causal_mask, step=0, T_max=ctx.T_max, cq_id=CQ_WRITE)
+            ttnn.synchronize_device(device, cq_id=CQ_WRITE)
+            op_event = ttnn.record_event(device, CQ_COMPUTE)
 
     for step in range(prediction_length):
         # ── 1. CPU embedding ──────────────────────────────────────────────
@@ -767,61 +959,80 @@ def run_traced_generation_cached(
         )
 
         if use_2cq:
-            # Stall the writer queue until compute (CQ0) has signalled it is
-            # done reading the previous step's buffer/caches.
+            # Layer 0: write step k's raw input + K/V + mask, then trace.
             ttnn.wait_for_event(CQ_WRITE, op_event)
-
-            # ── 2. Writer queue (CQ1): write input + update KV caches + mask
             ttnn.copy_host_to_device_tensor(host_tt, ctx.captured_dec_input, cq_id=CQ_WRITE)
-            for layer_idx in range(num_layers):
-                w_self = weights[f"decoder.layers.{layer_idx}"]["self_attn"]
-                k_cache, v_cache = ctx.kv_caches[layer_idx]
-                _extract_and_write_kv(
-                    ctx.captured_dec_input,
-                    w_self,
-                    k_cache,
-                    v_cache,
-                    step,
-                    cq_id=CQ_WRITE,
-                )
-            _update_causal_mask(device, ctx.shared_causal_mask, step, ctx.T_max, cq_id=CQ_WRITE)
-            # Signal that this step's writes are complete.
+            w_self0 = weights["decoder.layers.0"]["self_attn"]
+            k_cache0, v_cache0 = ctx.kv_caches[0]
+            _extract_and_write_kv(ctx.captured_dec_input, w_self0, k_cache0, v_cache0, step, cq_id=CQ_WRITE)
+            _update_causal_mask_precomputed(
+                device, ctx.shared_causal_mask, ctx.precomputed_masks_host[step], cq_id=CQ_WRITE
+            )
             write_event = ttnn.record_event(device, CQ_WRITE)
+            write_prep_time += time.perf_counter() - t_dev0
 
-            # ── 3. Compute queue (CQ0): wait for writes, then run trace ──
+            t_trace0 = time.perf_counter()
             ttnn.wait_for_event(CQ_COMPUTE, write_event)
             ttnn.execute_trace(device, ctx.trace_ids[0], cq_id=CQ_COMPUTE, blocking=False)
-            # Signal that compute is done consuming the input buffer/caches
-            # for THIS step, so the writer queue may overwrite them for the
-            # next step's input write (the loop's next iteration).
             op_event = ttnn.record_event(device, CQ_COMPUTE)
-        else:
-            # ── 2/3. Single-queue path: everything blocking on CQ0 ───────
-            ttnn.copy_host_to_device_tensor(host_tt, ctx.captured_dec_input, cq_id=CQ_WRITE)
-            for layer_idx in range(num_layers):
+            trace_exec_time += time.perf_counter() - t_trace0
+
+            # Layers 1..N-1: this layer's write reads the PREVIOUS layer's
+            # real output, only valid once that layer's trace finished --
+            # hence waiting on op_event, recorded right after that
+            # execute_trace.
+            for layer_idx in range(1, num_layers):
+                t_w0 = time.perf_counter()
+                ttnn.wait_for_event(CQ_WRITE, op_event)
                 w_self = weights[f"decoder.layers.{layer_idx}"]["self_attn"]
                 k_cache, v_cache = ctx.kv_caches[layer_idx]
                 _extract_and_write_kv(
-                    ctx.captured_dec_input,
+                    _layer_input(layer_idx),
                     w_self,
                     k_cache,
                     v_cache,
                     step,
                     cq_id=CQ_WRITE,
                 )
-            _update_causal_mask(device, ctx.shared_causal_mask, step, ctx.T_max, cq_id=CQ_WRITE)
-            ttnn.execute_trace(device, ctx.trace_ids[0], cq_id=CQ_COMPUTE, blocking=True)
+                write_event = ttnn.record_event(device, CQ_WRITE)
+                write_prep_time += time.perf_counter() - t_w0
+
+                t_tr = time.perf_counter()
+                ttnn.wait_for_event(CQ_COMPUTE, write_event)
+                ttnn.execute_trace(device, ctx.trace_ids[layer_idx], cq_id=CQ_COMPUTE, blocking=False)
+                op_event = ttnn.record_event(device, CQ_COMPUTE)
+                trace_exec_time += time.perf_counter() - t_tr
+        else:
+            # Single-queue path: everything blocking on CQ0, strictly
+            # ordered layer by layer.
+            ttnn.copy_host_to_device_tensor(host_tt, ctx.captured_dec_input, cq_id=CQ_WRITE)
+            t_mask0 = time.perf_counter()
+            _update_causal_mask_precomputed(
+                device, ctx.shared_causal_mask, ctx.precomputed_masks_host[step], cq_id=CQ_WRITE
+            )
+            write_prep_time += time.perf_counter() - t_mask0
+
+            for layer_idx in range(num_layers):
+                t_w0 = time.perf_counter()
+                w_self = weights[f"decoder.layers.{layer_idx}"]["self_attn"]
+                k_cache, v_cache = ctx.kv_caches[layer_idx]
+                _extract_and_write_kv(
+                    _layer_input(layer_idx),
+                    w_self,
+                    k_cache,
+                    v_cache,
+                    step,
+                    cq_id=CQ_WRITE,
+                )
+                write_prep_time += time.perf_counter() - t_w0
+
+                t_tr = time.perf_counter()
+                ttnn.execute_trace(device, ctx.trace_ids[layer_idx], cq_id=CQ_COMPUTE, blocking=True)
+                trace_exec_time += time.perf_counter() - t_tr
 
         device_enqueue_time += time.perf_counter() - t_dev0
         t_readback0 = time.perf_counter()
         # ── 4. Read + sample ──────────────────────────────────────────────
-        # Per-step output readback is a blocking host read regardless of
-        # use_2cq -- the distribution head / sampler runs on host and needs
-        # the values now, so there is no benefit to a non-blocking .cpu()
-        # here the way there is for whole-model output readback in the
-        # tech report's examples. A final ttnn.synchronize_device() is not
-        # needed for this reason (unlike the report's batched-output
-        # examples), since every step already blocks on its own readback.
         dec_out = ttnn.to_torch(ctx.traced_out).float()[..., :D_MODEL]
         readback_time += time.perf_counter() - t_readback0
         t_sample0 = time.perf_counter()
@@ -832,8 +1043,11 @@ def run_traced_generation_cached(
 
     total_time = cpu_prep_time + device_enqueue_time + readback_time + sample_time
     print(
-        f"\n[TIMING] cpu_prep={cpu_prep_time*1000:.1f}ms device_enqueue={device_enqueue_time*1000:.1f}ms readback={readback_time*1000:.1f}ms sample={sample_time*1000:.1f}ms total={total_time*1000:.1f}ms"
+        f"\n[TIMING] cpu_prep={cpu_prep_time*1000:.1f}ms device_enqueue={device_enqueue_time*1000:.1f}ms "
+        f"(write_prep={write_prep_time*1000:.1f}ms trace_exec={trace_exec_time*1000:.1f}ms) "
+        f"readback={readback_time*1000:.1f}ms sample={sample_time*1000:.1f}ms total={total_time*1000:.1f}ms"
     )
+    _print_op_times()
     return torch.stack(future_samples, dim=1)  # [BS, prediction_length]
 
 
@@ -859,20 +1073,19 @@ def generate_traced_cached(
     traced_ctx=None,
 ) -> torch.Tensor:
     """
-    KV-cache traced generation. Mirrors generate_traced() signature.
+    KV-cache traced generation, one trace per decoder layer. Mirrors
+    generate_traced() signature.
 
     Pass a pre-built TracedDecoderContextCached via traced_ctx to reuse
     across multiple calls. Without it, builds/releases context per call.
 
     Returns [B, num_parallel_samples, prediction_length] float32.
 
-    NOTE: use_2cq defaults to False. The 2CQ path (CQ event choreography)
-    follows the tech report's documented record_event(device, cq_id) /
-    wait_for_event(cq_id, event) pattern with writes on CQ1 and compute on
-    CQ0, but it has NOT yet been hardware-verified. Use False for
-    correctness testing first; only flip to True once
-    test_single_sequence_latency_2cq has been run and confirmed both
-    correct (matches use_2cq=False output distributionally) and not hanging.
+    NOTE: use_2cq defaults to False. Neither queue mode of the per-layer
+    chained version has been hardware-verified as of this revision --
+    use_2cq=False first (test_2cq_matches_single_queue_output treats it
+    as ground truth), then compare use_2cq=True against it, before
+    trusting either for the bounty's perf numbers.
     """
     B = past_values.shape[0]
     S = num_parallel_samples

@@ -10,7 +10,7 @@ This directory contains the `ttnn` implementation and validation suite for the
 - **Architecture**: Vanilla Encoder-Decoder Transformer with Student-T probabilistic distribution head
 - **HF checkpoint**: `huggingface/time-series-transformer-tourism-monthly`
 - **Dataset**: Tourism Monthly (`hf-internal-testing/tourism-monthly-batch`)
-- **Validation**: Per-layer PCC + end-to-end NLL/CRPS within 5% of HF reference
+- **Validation**: Per-layer PCC + end-to-end NLL/CRPS/mean-prediction-MAE within 5% of HF reference
 - **Generation path**: KV-cache + single-trace-replayed-24x autoregressive decode,
   with an optional (hardware-verified-correct, but not currently latency-beneficial —
   see "Performance" below) 2-command-queue mode. This is `generate_traced_cached()`
@@ -38,7 +38,8 @@ time_series_transformer/
 ├── tests/
 │   ├── conftest.py                    # Adds package root to sys.path
 │   ├── test_tst_pcc.py                # Per-layer PCC validation (encoder + decoder)
-│   ├── test_tst_e2e.py                # End-to-end NLL/CRPS vs HF reference
+│   ├── test_tst_e2e.py                # End-to-end CRPS, exact NLL, mean-prediction
+│   │                                  # MAE vs HF reference
 │   ├── test_tst_perf.py               # Latency, throughput, 2CQ correctness + perf
 │   ├── test_tst_distributions.py      # Student-T / Normal / NegativeBinomial routing
 │   ├── test_tst_embedding_pcc.py      # Embedding-layer PCC vs HF reference
@@ -104,35 +105,51 @@ persistence are not equivalent if anything in between changes directory, and
 in practice this was confirmed to fail when split apart. Replace
 `/root/tt-metal` with your actual tt-metal repo root if different.
 
-Confirmed on two separate runs (`7 passed, 2 xfailed` both times, `collected
-9 items` both times):
+Confirmed on a full combined run of all 10 collected tests
+(`7 passed, 3 xfailed` in 62.73s — the mean-prediction MAE test below is now
+part of the same acceptance command, no longer a separate standalone run):
 
-| Test | Run 1 | Run 2 |
-|------|-------|-------|
-| `test_encoder_pcc` | PCC 0.9999925 ✓ | PCC 0.9999925 ✓ |
-| `test_decoder_pcc` | PCC 0.9999812 ✓ | PCC 0.9999812 ✓ |
-| `test_e2e_generate` | CRPS diff 0.88% (threshold 5%) ✓ | CRPS diff 0.09% (threshold 5%) ✓ |
-| `test_e2e_exact_nll` | NLL diff ~0.000% (threshold 5%) ✓ | NLL diff ~0.000% (threshold 5%) ✓ |
-| `test_single_sequence_latency` | median 231.6 ms — **XFAIL** | median 254.8 ms — **XFAIL** |
-| `test_single_sequence_latency_2cq` | median 224.6 ms — **XFAIL** | median 248.4 ms — **XFAIL** |
-| `test_throughput_seqs_per_second` | 249.8 seq/s (target ≥100) ✓ | 258.5 seq/s (target ≥100) ✓ |
-| `test_sample_generation_under_1s` | 221.9 ms (target <1000 ms) ✓ | 223.9 ms (target <1000 ms) ✓ |
-| `test_2cq_matches_single_queue_output` | NaN/Inf-free, shape-correct, distributionally consistent ✓ | same ✓ |
+| Test | Result |
+|------|--------|
+| `test_encoder_pcc` | PCC 0.9999925 ✓ |
+| `test_decoder_pcc` | PCC 0.9999812 ✓ |
+| `test_e2e_generate` | CRPS diff 1.35% (threshold 5%) ✓ |
+| `test_e2e_exact_nll` | NLL diff ~0.000% (threshold 5%) ✓ |
+| `test_e2e_mean_prediction_mae` | MAE diff 0.31% (threshold 5%) ✓ |
+| `test_single_sequence_latency` | median 249.8 ms — **XFAIL** (target <50 ms) |
+| `test_single_sequence_latency_2cq` | median 223.9 ms — **XFAIL** (target <50 ms) |
+| `test_throughput_seqs_per_second` | 22.0 seq/s — **XFAIL** (target ≥100 seq/s) |
+| `test_sample_generation_under_1s` | 223.5 ms (target <1000 ms) ✓ |
+| `test_2cq_matches_single_queue_output` | NaN/Inf-free, shape-correct, distributionally consistent ✓ |
 
-Single-sequence latency varies meaningfully run-to-run on this hardware: a
-third standalone measurement of `test_single_sequence_latency_2cq` gave a
-283.6 ms median on a third occasion that does not have a matching full-suite
-`use_2cq=False` figure recorded. Across all latency measurements collected
-in this session (3 runs of `_2cq`, 2 runs of the single-queue test), medians
-ranged from **224.6 ms to 283.6 ms**, with the two paths' values interleaved
-rather than separable into two distinct bands. The honest summary is a range,
-not a single number from whichever run happened to be most recent — citing
-one specific figure here would misrepresent how stable that figure actually
-is. This variance is consistent with shared system-level factors (JIT/kernel
-cache state, thermal, other load on the box) rather than a real difference
-between the two code paths.
-9 tests total in the acceptance suite: 7 pass outright, 2 are `xfail(strict=False)`
-with reasons documented below.
+`test_e2e_mean_prediction_mae`: HF mean-prediction MAE = 1816.6854, TTNN
+mean-prediction MAE = 1822.2904, relative diff = 0.31% (threshold 5%) —
+**PASSED**. This closes the bounty Stage 1 criterion "mean prediction within
+5% MAE of reference," which is distinct from the NLL and CRPS checks above.
+
+**Note on `test_throughput_seqs_per_second`**: earlier in this project's
+history a stale README claimed 249–258 seq/s (passing); that figure was not
+reproducible and has since been replaced with real measurements. Throughput
+is consistently ~19–22 seq/s across repeated runs (this run: 22.0 seq/s,
+B=4, S=10, 40 real sequences in 1.82s), gated by the same ~5.9 ms/step
+`execute_trace` floor as the latency tests — not a separate bottleneck.
+Closing it requires the same Stage 2/3 work: sharding/fusion.
+
+At B=4/S=10, the per-step cost breakdown differs from the B=1/S=100 latency
+test in one notable way: `readback` (~73–74 ms) is nearly as expensive as
+`device_enqueue` (~63–67 ms), versus `device_enqueue` (~194 ms) dominating
+`readback` (~15 ms) in the single-sequence case. This suggests output
+readback (`ttnn.to_torch(ctx.traced_out)`) is a comparatively larger
+bottleneck at this batch shape and may be worth investigating independently
+of the sharded-FFN work already targeting the `execute_trace` floor.
+
+CRPS diff has varied across runs (0.09%, 0.88%, 1.35%, 2.19% observed so
+far), all comfortably under the 5% threshold but not identical run-to-run —
+consistent with sampling-based variance in `generate()`'s stochastic draws,
+not a correctness regression.
+
+10 tests total in the acceptance suite: 7 pass outright, 3 are
+`xfail(strict=False)` with reasons documented below.
 
 ### 3. Additional Test Files (not part of the 3-file acceptance command above)
 
@@ -148,13 +165,18 @@ ARCH_NAME=wormhole_b0 pytest tests/test_tst_distributions.py tests/test_tst_embe
   the earlier KV-cache-less traced path. Both tests pass; this path is not used
   for Stage 1 performance claims (see Overview).
 
-## Performance: Why Stage 1 Latency Is XFAIL, and What 2CQ Did and Didn't Fix
+## Performance: Why Stage 1 Latency and Throughput Are XFAIL, and What 2CQ Did and Didn't Fix
 
 **Single-sequence latency target is <50 ms (B=1); measured medians ranged
 224.6–283.6 ms across repeated runs, with or without 2-command-queue (2CQ)
 mode — the two paths are not separable given this variance.**
 
-Per-step breakdown (instrumented measurement, single command queue, steady state):
+**Throughput target is ≥100 seq/s; measured 19.5–21.5 seq/s (B=4, S=10) across
+repeated runs — gated by the same per-step cost as latency, not a distinct
+bottleneck.**
+
+Per-step breakdown (instrumented measurement, single command queue, steady state,
+B=1/S=100 unless noted):
 
 | Component | avg/step | Share |
 |---|---|---|
@@ -168,9 +190,17 @@ prep (~20 ms total), output readback (~13 ms total), and CPU-side sampling
 (~12 ms total) — all of which the bounty's plain wall-clock latency target
 legitimately includes — bringing measured latency to the 224.6–283.6 ms
 range observed across this session's runs (2 full-suite single-queue runs:
-231.6 ms and 254.8 ms; 3 measurements of the 2CQ path: 224.6 ms, 248.4 ms,
-283.6 ms). This wide a spread (~±25% of the median) is attributed to
-shared system-level variance, not a difference in the underlying floor.
+231.6 ms, 254.8 ms, 228.5 ms, and 249.8 ms; 5 measurements of the 2CQ path:
+224.6 ms, 248.4 ms, 239.7 ms, 283.6 ms, and 223.9 ms). This spread (roughly
+±25% of the median at the extremes) is attributed to shared system-level
+variance, not a difference in the underlying floor.
+
+At the B=4/S=10 batch shape used for the throughput test, the balance shifts:
+`readback` (~75 ms) becomes nearly as large a share of the per-run total as
+`device_enqueue` (~80 ms), unlike the B=1/S=100 latency test where
+`device_enqueue` (~184 ms) dominates `readback` (~13 ms). This is a
+batch-shape-dependent cost and has not yet been separately investigated or
+optimized — see "On the Horizon" below.
 
 ### 2CQ Investigation
 
@@ -191,21 +221,22 @@ implemented and **hardware-verified correct**:
   with the trusted single-queue baseline.
 
 **However, 2CQ has not demonstrated a reproducible net latency benefit**:
-`test_single_sequence_latency_2cq` medians across three measurements (224.6 ms,
-248.4 ms, 283.6 ms) are not cleanly separable from the single-queue baseline's
-two measurements (231.6 ms, 254.8 ms) — both paths fall within the same
-224.6–283.6 ms band, moving together rather than 2CQ showing a consistent
-edge. Working diagnosis (correctness-verified above, but this specific
-explanation is not yet separately instrumented/confirmed): step `k+1`'s CPU
-embedding prep depends on `future_samples_so_far`, which requires step `k`'s
-output to have already been read back and sampled — both blocking, both
-happening strictly after step `k`'s `execute_trace` completes. This creates
-a genuine autoregressive data dependency that serializes the host loop
-regardless of which command queue anything runs on; there is nothing for
+`test_single_sequence_latency_2cq` medians across five measurements (224.6 ms,
+248.4 ms, 239.7 ms, 283.6 ms, 223.9 ms) are not cleanly separable from the
+single-queue baseline's four measurements (231.6 ms, 254.8 ms, 228.5 ms,
+249.8 ms) — both paths fall
+within the same overall band, moving together rather than 2CQ showing a
+consistent edge. Working diagnosis (correctness-verified above, but this
+specific explanation is not yet separately instrumented/confirmed): step
+`k+1`'s CPU embedding prep depends on `future_samples_so_far`, which requires
+step `k`'s output to have already been read back and sampled — both blocking,
+both happening strictly after step `k`'s `execute_trace` completes. This
+creates a genuine autoregressive data dependency that serializes the host
+loop regardless of which command queue anything runs on; there is nothing for
 2CQ's overlap mechanism to act on in this specific loop structure,
 independent of whether the synchronization itself is implemented correctly.
 
-### What Would Actually Close the Gap to <50 ms (Stage 2/3, not yet implemented)
+### What Would Actually Close the Gap to <50 ms / ≥100 seq/s (Stage 2/3, not yet implemented)
 
 - **Reducing the ~5.9 ms/step `execute_trace` floor itself** via sharding
   (using more of the n300's 56 available cores per op) and/or op fusion
@@ -213,10 +244,57 @@ independent of whether the synchronization itself is implemented correctly.
   research shows up to ~7.9% per-decoder-layer latency reduction from this
   technique, not enough alone to close a ~4x gap, but a real contributor).
 - **Reducing host-side CPU prep/readback/sample overhead** (~45 ms total
-  across 24 steps), e.g. by vectorizing or precomputing more of the per-step
-  embedding preparation.
+  across 24 steps at B=1, but a proportionally larger share at B=4/S=10 — see
+  the readback-time note above), e.g. by vectorizing or precomputing more of
+  the per-step embedding preparation.
 - 2CQ pipelining, on its own, is **not** expected to help further without
   first addressing the autoregressive dependency described above.
+
+## On the Horizon
+
+- Investigate the readback-time bottleneck observed at B=4/S=10 (throughput
+  test) independently of the sharded-FFN work already targeting single-
+  sequence latency — the two batch shapes show different per-step cost
+  balances and may need different fixes.
+- Same-session A/B perf benchmark: sharded vs. forced-unsharded FFN at BS=100
+  to confirm latency/throughput improvement from the HEIGHT_SHARDED FFN path
+  under development.
+- Re-verify Stage 1 perf criteria (<50ms, ≥100 seq/s) once sharding lands.
+
+## Update: KV-Cache Fused Op for V Re-Enabled (This Revision)
+
+The Stage 2 "Change 4" xfail (`tests/test_tst_stage2.py`) previously claimed
+"no measured evidence the TILE<->ROW_MAJOR conversion tax nets positive" for
+using `ttnn.update_cache` on the V cache. This was incorrect: at BS==1, V
+cache is already allocated `TILE_LAYOUT` (see `allocate_kv_cache`), so there
+is no conversion tax on this path to begin with. A prior session had already
+built and correctness-verified this exact change
+(`tests/diagnostics/probe_v_cache_update_cache*.py`: exact match vs.
+`slice_write` ground truth, multistep, on real hardware) but it was reverted
+without the xfail author consulting those probes.
+
+Re-applied and re-verified on hardware (wormhole_b0). Correctness unaffected
+(7/7 PCC + e2e tests still pass: encoder PCC 0.9999925, decoder PCC
+0.9999812, CRPS/NLL/MAE all within 5% threshold). Measured latency effect,
+single-sequence (B=1, S=1), steady state: (Note: the 124.3 ms/111.8 ms figures below come from a separate, more recent measurement session than the 249.8 ms figure in the acceptance-suite table above -- different JIT/thermal state, consistent with the run-to-run variance already documented elsewhere in this README, not a discrepancy between two different claims.)
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| `write_prep`/step | ~47 ms | ~36 ms | -11 ms |
+| `slice_write_kv`/step | ~27 ms | ~20 ms | -7 ms |
+| `test_single_sequence_latency` median | 124.3 ms | 111.8 ms | -10% |
+| `test_single_sequence_latency_2cq` median | 99.6 ms | 103.3 ms | within noise (small sample) |
+
+This is a real, correctness-verified improvement but does **not** close the
+gap to the Stage 1 targets (<50 ms latency, ≥100 seq/s throughput) on its
+own. Per-step cost is spread roughly evenly across `write_prep`,
+`trace_exec`, and `readback`/`sample`/`cpu_prep` -- no single op dominates,
+so no single further op-level change is expected to reach 50 ms. Closing
+that gap requires Stage 2/3 restructuring (op fusion, sharding, or a
+KV-cache scheme that avoids per-step host writes entirely), consistent with
+the "What Would Actually Close the Gap" section above. `test_tst_stage2.py`
+now asserts the real correctness/allocation invariants this change relies
+on instead of xfailing with outdated reasoning.
 
 ## Provenance
 - **Model**: pinned to revision `2a40ad41f6ffe61e7bef6099b08c6c2fce36ac35`

@@ -47,20 +47,34 @@ NEG_INF = -1e9
 # ──────────────────────────────────────────────────────────────────────────
 
 
-def build_causal_mask(device, seq_len):
+def build_causal_mask(device, seq_len, batch_size=1):
     """
-    [1, 1, seq_len, seq_len] additive mask: 0 where attention is allowed
+    [batch_size, 1, seq_len, seq_len] additive mask: 0 where attention is allowed
     (j <= i), NEG_INF where it isn't (j > i, future positions).
     Verified on hardware: produces 0% leakage into future positions.
+
+    batch_size: ttnn.transformer.attention_softmax requires mask.padded_shape()[0]
+    to exactly match the input tensor's batch dim -- no implicit broadcast, unlike
+    the old ttnn.add(scaled, mask) path. Pass the real batch size of the tensor this
+    mask will be used with. Expanded once on host via .repeat(), so this is a
+    one-time cost at mask-construction time, not a per-layer/per-step cost.
     """
     mask = torch.zeros(seq_len, seq_len)
     mask = mask.masked_fill(torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool(), NEG_INF)
-    mask = mask.unsqueeze(0).unsqueeze(0)
+    mask = mask.unsqueeze(0).unsqueeze(0).repeat(batch_size, 1, 1, 1)
     return ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-def causal_softmax(scores, mask, scale):
-    """scores: ttnn [B, heads, T, T]. mask: ttnn [1, 1, T, T], broadcasts over B and heads."""
+def causal_softmax(scores, mask):
+    """
+    scores: ttnn [B, heads, T, T]. mask: ttnn [1, 1, T, T], broadcasts over B and heads.
+    REVERTED (2026-07-09): the fused ttnn.transformer.attention_softmax path caused a
+    real PCC regression on the MASKED case specifically (decoder PCC 0.9999812 -> 0.9831,
+    while the unmasked encoder path via the same fused op stayed at 0.9999924, unchanged).
+    Reverting to the explicit 3-op sequence until the masked-fusion numerical mismatch is
+    root-caused. See PERF_NOTES.md / session log for the isolation test that identified this.
+    """
+    scale = HEAD_DIM_TRUE**-0.5
     scaled = ttnn.multiply(scores, scale)
     masked = ttnn.add(scaled, mask)
     return ttnn.softmax(masked, dim=-1)
@@ -88,10 +102,10 @@ def tst_self_attention(hidden_states, w, causal=False, causal_mask=None):
 
     if causal:
         assert causal_mask is not None, "causal=True requires a pre-built causal_mask tensor"
-        probs = causal_softmax(scores, causal_mask, scale)
+        probs = causal_softmax(scores, causal_mask)
     else:
-        scaled = ttnn.multiply(scores, scale)
-        probs = ttnn.softmax(scaled, dim=-1)
+        # FUSED: single dispatch instead of multiply(scale) -> softmax.
+        probs = ttnn.transformer.attention_softmax(scores, head_size=HEAD_DIM_TRUE)
 
     context = ttnn.matmul(probs, value)
     context = ttnn.transformer.concatenate_heads(context)
@@ -136,9 +150,11 @@ def tst_cross_attention_with_kv(decoder_hidden, k, v, w):
     q = ttnn.permute(q, (0, 2, 1, 3))
 
     scores = ttnn.matmul(q, k)
-    scale = HEAD_DIM_TRUE**-0.5
-    scaled = ttnn.multiply(scores, scale)
-    probs = ttnn.softmax(scaled, dim=-1)
+    # FUSED: attention_softmax scales by head_size**-0.5 internally
+    # (head_size=HEAD_DIM_TRUE=13 reproduces the verified-correct scale,
+    # NOT the padded tile width 32 -- see module-level scale-factor note).
+    # Replaces multiply(scale) -> softmax (2 dispatches) with 1 dispatch.
+    probs = ttnn.transformer.attention_softmax(scores, head_size=HEAD_DIM_TRUE)
 
     context = ttnn.matmul(probs, v)
     context = ttnn.transformer.concatenate_heads(context)
@@ -157,10 +173,22 @@ def allocate_kv_cache(device, B, T_max=24):
     K cache shape: [B, NUM_HEADS, HEAD_DIM_PADDED, T_max] -- K comes out of
     split_query_key_value_and_split_heads already transposed ([B,H,D,1]), so we
     store it transposed and the Q@K matmul works without an extra permute.
+    Always ROW_MAJOR (required by ttnn.experimental.slice_write) -- K's
+    transposed layout is incompatible with ttnn.update_cache's fixed axis
+    contract (verified against update_cache_device_operation.cpp validation:
+    it expects [..., seq, head_dim] with seq at dim -2, not K's [...,D,T_max]),
+    so K stays on the slice_write path unconditionally, for all B.
 
     V cache shape: [B, NUM_HEADS, T_max, HEAD_DIM_PADDED] -- V comes out [B,H,1,D].
+    When B == 1, V cache is allocated TILE_LAYOUT so the write path can use
+    ttnn.update_cache directly (no ROW_MAJOR<->TILE conversion needed, since
+    split_query_key_value_and_split_heads already outputs TILE). This is
+    gated on B == 1 because ttnn.update_cache hard-asserts
+    input_tensor.padded_shape()[0] == 1 (update_cache_device_operation.cpp:53,
+    confirmed empirically: B=1 OK, B=4/32/33/100 all TT_FATAL on that check).
+    For B > 1, V cache stays ROW_MAJOR and uses the original slice_write path,
+    unchanged.
 
-    Both in ROW_MAJOR layout (required by ttnn.experimental.slice_write).
     Returns (k_cache, v_cache).
     """
     k_cache = ttnn.from_torch(
@@ -169,10 +197,11 @@ def allocate_kv_cache(device, B, T_max=24):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
+    v_layout = ttnn.TILE_LAYOUT if B == 1 else ttnn.ROW_MAJOR_LAYOUT
     v_cache = ttnn.from_torch(
         torch.zeros(B, NUM_HEADS, T_max, HEAD_DIM_PADDED, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=v_layout,
         device=device,
     )
     return k_cache, v_cache
@@ -216,6 +245,13 @@ def tst_self_attention_cached(hidden_1token, w, k_cache, v_cache, step, causal_m
     k_tile = ttnn.to_layout(k_cache, ttnn.TILE_LAYOUT)  # [B, H, D, T_max]
     scores = ttnn.matmul(query, k_tile)  # [B, H, 1, T_max]
 
+    # REVERTED (2026-07-09): the fused ttnn.transformer.attention_softmax path with
+    # attention_mask caused a confirmed PCC regression in the (non-cached) masked
+    # self-attention path -- see causal_softmax() note above for the isolation test.
+    # This call site uses the identical masked-fusion pattern and was NEVER
+    # independently PCC-tested (test_tst_pcc.py only exercises the non-cached path),
+    # so it is reverted preemptively rather than assumed safe. Do not re-fuse this
+    # until a PCC-level test that actually exercises tst_self_attention_cached exists.
     scale = HEAD_DIM_TRUE**-0.5
     scaled = ttnn.multiply(scores, scale)
     masked = ttnn.add(scaled, causal_mask_1tok)
@@ -276,12 +312,11 @@ def tst_cross_attention(decoder_hidden, encoder_hidden, w):
 
     # Attention scores [B, NUM_HEADS, T_dec, T_enc]
     scores = ttnn.matmul(q, k)
-    # FIX: scale by the TRUE head dimension (13), not the padded tile
-    # width (32). See module-level note above -- confirmed via direct
-    # measurement, ratio 0.637377, identical bug as self-attention.
-    scale = HEAD_DIM_TRUE**-0.5
-    scaled = ttnn.multiply(scores, scale)
-    probs = ttnn.softmax(scaled, dim=-1)
+    # FUSED: attention_softmax scales by head_size**-0.5 internally
+    # (head_size=HEAD_DIM_TRUE=13 reproduces the verified-correct scale,
+    # NOT the padded tile width 32 -- see module-level scale-factor note).
+    # Replaces multiply(scale) -> softmax (2 dispatches) with 1 dispatch.
+    probs = ttnn.transformer.attention_softmax(scores, head_size=HEAD_DIM_TRUE)
 
     # Weighted sum: [B, NUM_HEADS, T_dec, HEAD_DIM_PADDED]
     context = ttnn.matmul(probs, v)

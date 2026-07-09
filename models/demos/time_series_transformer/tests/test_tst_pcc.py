@@ -116,7 +116,7 @@ def test_decoder_pcc(setup):
     dec_emb_tt = ttnn.from_torch(dec_emb_padded, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     T_dec = dec_emb.shape[1]
-    causal_mask = build_causal_mask(device, T_dec)
+    causal_mask = build_causal_mask(device, T_dec, batch_size=dec_emb_tt.shape[0])
 
     result = run_decoder_step(device, dec_emb_tt, enc_hidden, weights, causal_mask=causal_mask)
     result_torch = ttnn.to_torch(result).float()[..., : dec_emb.shape[-1]]

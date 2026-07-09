@@ -149,3 +149,79 @@ def test_e2e_exact_nll(setup):
     logger.info(f"NLL relative diff: {nll_diff:.4f} (threshold {TOLERANCE})")
     assert nll_diff <= TOLERANCE, f"NLL diff {nll_diff:.4f} > {TOLERANCE}"
     logger.info("PASSED: exact NLL within 5% of HF reference")
+
+
+def mean_prediction_mae(samples, targets):
+    """
+    Point-forecast MAE: mean the sample draws down to a single point forecast
+    per (batch, timestep), then compare against the real future values.
+
+    samples: [B, S, T] (S = num_parallel_samples draws from the predicted
+             distribution). targets: [B, T].
+    Returns a scalar float.
+    """
+    point_forecast = samples.mean(dim=1)  # [B, T]
+    return (point_forecast - targets).abs().mean().item()
+
+
+@pytest.mark.timeout(600)
+def test_e2e_mean_prediction_mae(setup):
+    """
+    Bounty Stage 1 acceptance criterion (separate from NLL/CRPS):
+    'Mean prediction within 5% MAE of reference.'
+
+    Mirrors test_e2e_generate's structure: generate samples from both HF and
+    TTNN on the same real inputs, reduce each to a point forecast via
+    sample-mean, compute MAE against the real future_values for each, and
+    compare the two MAE figures to each other (not to some absolute
+    threshold) -- consistent with how the CRPS/NLL criteria are already
+    interpreted in this suite as "TTNN vs HF reference," not "TTNN vs a
+    fixed number."
+    """
+    device, hf_model, weights, inputs = setup
+
+    past_values = inputs["input_past_values"]
+    past_time = inputs["input_past_time_features"]
+    future_time = inputs["input_future_time_features"]
+    past_mask = inputs["input_past_observed_mask"]
+    static_cat = inputs["input_static_categorical_features"].long()
+    static_real = inputs["input_static_real_features"]
+    future_values = inputs["input_future_values"]
+
+    hf_model.config.num_parallel_samples = NUM_SAMPLES
+    t0 = time.time()
+    hf_out = hf_model.generate(
+        past_values=past_values,
+        past_time_features=past_time,
+        future_time_features=future_time,
+        past_observed_mask=past_mask,
+        static_categorical_features=static_cat,
+        static_real_features=static_real,
+    )
+    hf_time = time.time() - t0
+    hf_samples = hf_out.sequences
+    logger.info(f"HF generate (MAE test): {hf_time:.2f}s, samples shape {hf_samples.shape}")
+
+    hf_mae = mean_prediction_mae(hf_samples, future_values)
+    logger.info(f"HF mean-prediction MAE={hf_mae:.4f}")
+
+    t0 = time.time()
+    tt_samples = generate(
+        device=device,
+        weights=weights,
+        past_values=past_values,
+        past_time_features=past_time,
+        future_time_features=future_time,
+        past_observed_mask=past_mask,
+        static_categorical_features=static_cat,
+        static_real_features=static_real,
+    )
+    tt_time = time.time() - t0
+    logger.info(f"TTNN generate (MAE test): {tt_time:.2f}s, samples shape {tt_samples.shape}")
+
+    tt_mae = mean_prediction_mae(tt_samples, future_values)
+    logger.info(f"TTNN mean-prediction MAE={tt_mae:.4f}")
+
+    mae_diff = abs(tt_mae - hf_mae) / (abs(hf_mae) + 1e-8)
+    logger.info(f"Mean-prediction MAE relative diff: {mae_diff:.4f} (threshold {TOLERANCE})")
+    assert mae_diff <= TOLERANCE, f"Mean-prediction MAE diff {mae_diff:.4f} > {TOLERANCE}"

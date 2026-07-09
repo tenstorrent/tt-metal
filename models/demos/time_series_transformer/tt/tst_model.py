@@ -60,15 +60,19 @@ def _pad_input_dim(W_in_out, target_in=D_MODEL):
     return F.pad(W_in_out, (0, 0, 0, pad_rows))
 
 
-def _to_ttnn(t, device, layout=ttnn.TILE_LAYOUT):
-    return ttnn.from_torch(t.contiguous().float(), dtype=ttnn.bfloat16, layout=layout, device=device)
+def _to_ttnn(t, device, layout=ttnn.TILE_LAYOUT, memory_config=None):
+    return ttnn.from_torch(
+        t.contiguous().float(), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
+    )
 
 
-def _to_ttnn_int(t, device, layout=ttnn.ROW_MAJOR_LAYOUT):
-    return ttnn.from_torch(t.contiguous().to(torch.int32), dtype=ttnn.uint32, layout=layout, device=device)
+def _to_ttnn_int(t, device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=None):
+    return ttnn.from_torch(
+        t.contiguous().to(torch.int32), dtype=ttnn.uint32, layout=layout, device=device, memory_config=memory_config
+    )
 
 
-def _build_fused_qkv(state, prefix, device):
+def _build_fused_qkv(state, prefix, device, memory_config=None):
     def padded_in_out(name):
         W = state[f"{prefix}.{name}.weight"].float()
         b = state[f"{prefix}.{name}.bias"].float()
@@ -82,10 +86,12 @@ def _build_fused_qkv(state, prefix, device):
     Wv, bv = padded_in_out("v_proj")
     fused_w = torch.cat([Wq, Wk, Wv], dim=1)
     fused_b = torch.cat([bq, bk, bv], dim=0)
-    return _to_ttnn(fused_w, device), _to_ttnn(fused_b, device)
+    return _to_ttnn(fused_w, device, memory_config=memory_config), _to_ttnn(
+        fused_b, device, memory_config=memory_config
+    )
 
 
-def _build_cross_attn_weights(state, prefix, device):
+def _build_cross_attn_weights(state, prefix, device, memory_config=None):
     Wq = state[f"{prefix}.q_proj.weight"].float()
     bq = state[f"{prefix}.q_proj.bias"].float()
     Wq_padded = _pad_input_dim(_pad_weight_per_head(Wq))
@@ -103,24 +109,26 @@ def _build_cross_attn_weights(state, prefix, device):
     fused_kv_w = torch.cat([Wk_padded, Wv_padded], dim=1)
     fused_kv_b = torch.cat([bk_padded, bv_padded], dim=0)
     return (
-        _to_ttnn(Wq_padded, device),
-        _to_ttnn(bq_padded, device),
-        _to_ttnn(fused_kv_w, device),
-        _to_ttnn(fused_kv_b, device),
+        _to_ttnn(Wq_padded, device, memory_config=memory_config),
+        _to_ttnn(bq_padded, device, memory_config=memory_config),
+        _to_ttnn(fused_kv_w, device, memory_config=memory_config),
+        _to_ttnn(fused_kv_b, device, memory_config=memory_config),
     )
 
 
-def _build_out_proj(state, prefix, device):
+def _build_out_proj(state, prefix, device, memory_config=None):
     W = state[f"{prefix}.out_proj.weight"].float()
     b = state[f"{prefix}.out_proj.bias"].float()
     W_t = W.T
     W_input_padded = _pad_input_per_head(W_t)
     W_padded = F.pad(W_input_padded, (0, PADDED_WIDTH - D_MODEL))
     b_padded = F.pad(b, (0, PADDED_WIDTH - D_MODEL))
-    return _to_ttnn(W_padded, device), _to_ttnn(b_padded, device)
+    return _to_ttnn(W_padded, device, memory_config=memory_config), _to_ttnn(
+        b_padded, device, memory_config=memory_config
+    )
 
 
-def _build_ffn(state, prefix, device, ffn_dim):
+def _build_ffn(state, prefix, device, ffn_dim, memory_config=None):
     W1 = state[f"{prefix}.fc1.weight"].float()
     b1 = state[f"{prefix}.fc1.bias"].float()
     W1_padded = F.pad(W1.T, (0, 0, 0, PADDED_WIDTH - D_MODEL))
@@ -130,17 +138,17 @@ def _build_ffn(state, prefix, device, ffn_dim):
     W2_padded = F.pad(W2.T, (0, PADDED_WIDTH - D_MODEL))
     b2_padded = F.pad(b2, (0, PADDED_WIDTH - D_MODEL))
     return (
-        _to_ttnn(W1_padded, device),
-        _to_ttnn(b1, device),
-        _to_ttnn(W2_padded, device),
-        _to_ttnn(b2_padded, device),
+        _to_ttnn(W1_padded, device, memory_config=memory_config),
+        _to_ttnn(b1, device, memory_config=memory_config),
+        _to_ttnn(W2_padded, device, memory_config=memory_config),
+        _to_ttnn(b2_padded, device, memory_config=memory_config),
     )
 
 
-def _build_layer_norm(state, prefix, device):
+def _build_layer_norm(state, prefix, device, memory_config=None):
     w = state[f"{prefix}.weight"].float()
     b = state[f"{prefix}.bias"].float()
-    return _to_ttnn(w, device), _to_ttnn(b, device)
+    return _to_ttnn(w, device, memory_config=memory_config), _to_ttnn(b, device, memory_config=memory_config)
 
 
 def _build_layer_norm_dict(state, prefix, device):
@@ -148,7 +156,7 @@ def _build_layer_norm_dict(state, prefix, device):
     return {"weight": w, "bias": b}
 
 
-def load_weights(hf_model, device):
+def load_weights(hf_model, device, hot_path_memory_config=None):
     state = hf_model.state_dict()
     cfg = hf_model.config
     weights = {}
@@ -177,16 +185,30 @@ def load_weights(hf_model, device):
 
     for i in range(cfg.decoder_layers):
         prefix = f"model.decoder.layers.{i}"
-        self_qkv_w, self_qkv_b = _build_fused_qkv(state, f"{prefix}.self_attn", device)
-        self_out_w, self_out_b = _build_out_proj(state, f"{prefix}.self_attn", device)
-        cross_q_w, cross_q_b, cross_kv_w, cross_kv_b = _build_cross_attn_weights(
-            state, f"{prefix}.encoder_attn", device
+        self_qkv_w, self_qkv_b = _build_fused_qkv(
+            state, f"{prefix}.self_attn", device, memory_config=hot_path_memory_config
         )
-        cross_out_w, cross_out_b = _build_out_proj(state, f"{prefix}.encoder_attn", device)
-        fc1_w, fc1_b, fc2_w, fc2_b = _build_ffn(state, prefix, device, cfg.decoder_ffn_dim)
-        ln1_w, ln1_b = _build_layer_norm(state, f"{prefix}.self_attn_layer_norm", device)
-        ln2_w, ln2_b = _build_layer_norm(state, f"{prefix}.encoder_attn_layer_norm", device)
-        ln3_w, ln3_b = _build_layer_norm(state, f"{prefix}.final_layer_norm", device)
+        self_out_w, self_out_b = _build_out_proj(
+            state, f"{prefix}.self_attn", device, memory_config=hot_path_memory_config
+        )
+        cross_q_w, cross_q_b, cross_kv_w, cross_kv_b = _build_cross_attn_weights(
+            state, f"{prefix}.encoder_attn", device, memory_config=hot_path_memory_config
+        )
+        cross_out_w, cross_out_b = _build_out_proj(
+            state, f"{prefix}.encoder_attn", device, memory_config=hot_path_memory_config
+        )
+        fc1_w, fc1_b, fc2_w, fc2_b = _build_ffn(
+            state, prefix, device, cfg.decoder_ffn_dim, memory_config=hot_path_memory_config
+        )
+        ln1_w, ln1_b = _build_layer_norm(
+            state, f"{prefix}.self_attn_layer_norm", device, memory_config=hot_path_memory_config
+        )
+        ln2_w, ln2_b = _build_layer_norm(
+            state, f"{prefix}.encoder_attn_layer_norm", device, memory_config=hot_path_memory_config
+        )
+        ln3_w, ln3_b = _build_layer_norm(
+            state, f"{prefix}.final_layer_norm", device, memory_config=hot_path_memory_config
+        )
         weights[f"decoder.layers.{i}"] = {
             "self_attn": {
                 "qkv_weight": self_qkv_w,
@@ -454,7 +476,7 @@ def generate(
             context_length=context_length,
         )
         dec_emb_k = _apply_layernorm_ttnn(dec_emb_k, weights["decoder_layernorm_ttnn"])
-        mask_k = build_causal_mask(device, k + 1)
+        mask_k = build_causal_mask(device, k + 1, batch_size=dec_emb_k.shape[0])
         dec_out = run_decoder_step(device, dec_emb_k, enc_hidden_rep, weights, causal_mask=mask_k)
         dec_out_torch = ttnn.to_torch(dec_out).float()[..., :D_MODEL]
 
@@ -655,7 +677,7 @@ def build_traced_decoder_context(
         k_pre, v_pre = precompute_cross_attn_kv(enc_hidden_rep, w_cross)
         precomputed_kv.append((k_pre, v_pre))
 
-    causal_mask_full = build_causal_mask(device, T_max)
+    causal_mask_full = build_causal_mask(device, T_max, batch_size=BS)
 
     # Pre-allocate device buffer that the trace reads from.
     # Must be allocated BEFORE begin_trace_capture so it isn't captured
@@ -992,7 +1014,7 @@ def teacher_forced_nll(
     )
     dec_emb = _apply_layernorm_ttnn(dec_emb, weights["decoder_layernorm_ttnn"])
 
-    causal_mask = build_causal_mask(device, prediction_length)
+    causal_mask = build_causal_mask(device, prediction_length, batch_size=dec_emb.shape[0])
     dec_out = run_decoder_step(device, dec_emb, encoder_hidden, weights, causal_mask=causal_mask)
     dec_out_torch = ttnn.to_torch(dec_out).float()[..., :D_MODEL]
 
