@@ -1,27 +1,12 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Construction-equivalence pytest test for ``LMHead.update``.
+"""Construction-equivalence test for ``LMHead.update`` (real weights, HF auth).
 
-Real Llama-3.2-1B-Instruct weights (HF auth required). Round-trip on
-the model's single ``LMHead``:
-
-    1.  Generate greedily with the real, ``__init__``-loaded weights -> ``tokens_A``.
-    2.  Snapshot the dram_sharded chunks back to a torch ``(V, H)`` tensor,
-        i.e. the exact shape of ``state_dict["output.weight"]``.
-    3.  Overwrite with a constant via ``LMHead.update``.
-    4.  Generate again -> ``tokens_broken`` (sanity: must differ from
-        ``tokens_A``, otherwise the overwrite was a no-op).
-    5.  Restore via ``LMHead.update(weight=snapshot)``.
-    6.  Generate again -> ``tokens_B``.
-    7.  Assert ``tokens_A == tokens_B`` byte-for-byte.
-
-The snapshot path also doubles as a regression check on
-``LMHead._update_output_weights_dram_sharded``'s on-device
-``pad + transpose + slice`` pipeline -- if it disagrees with the
-constructor's host-side ``_permute_and_pad_output_weights`` +
-``_build_dram_sharded_output_weights``, the restored model won't match
-the original.
+Round-trip: generate -> snapshot dram_sharded chunks to a torch ``(V, H)``
+tensor -> overwrite with a constant (must change output) -> restore via update
+-> generate must match. Also regresses the on-device snapshot pad/transpose/slice
+pipeline against the constructor's host-side path.
 """
 
 from __future__ import annotations
@@ -44,19 +29,9 @@ def completer():
 
 
 def _snapshot_lm_head_hf(lm_head):
-    """Read ``output_weights_dram_sharded`` back into a torch
-    ``(vocab_size, hidden_size)`` tensor -- the exact HF shape of
-    ``state_dict["lm_head.weight"]`` (or ``state_dict["output.weight"]``
-    in the Meta/internal naming).
-
-    Inverse of ``__init__``:
-        chunks -> concat along vocab axis -> slice off padding
-        -> transpose to (V, dim)
-
-    For a multi-device mesh, ``ttnn.to_torch`` of a
-    ``ShardTensorToMesh(dim=-1)`` tensor returns the concatenated form
-    across the mesh, so the column-concat below works regardless of
-    ``num_devices``.
+    """Invert ``__init__`` (concat chunks -> slice padding -> transpose) to read
+    ``output_weights_dram_sharded`` back into a torch ``(vocab_size, hidden_size)``
+    tensor. The column-concat works for any ``num_devices``.
     """
     chunks_2d = [to_torch_2d(chunk) for chunk in lm_head.output_weights_dram_sharded]
     permuted_padded = torch.cat(chunks_2d, dim=-1)  # (dim, padded_vocab_size)

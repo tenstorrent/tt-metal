@@ -1,19 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Zero-weights forward pytest test for ``MLP.update``.
+"""Zero-weights forward test for ``MLP.update`` (dummy weights).
 
-After ``MLP.update`` zeros every projection, ``MLP.forward`` must
-collapse to all zeros:
-
-* gate = x @ gate_proj^T  -> 0 because gate_proj = 0
-* up   = x @ up_proj^T    -> 0 because up_proj = 0
-* act  = silu(gate) * up = silu(0) * 0 = 0
-* out  = act @ down_proj^T = 0 @ down_proj^T = 0
-
-Exercises every ``ttnn.copy`` path in ``MLP._update_w{1,2,3}`` (plus the
-on-device transpose in ``MLP.update``) without needing real model
-weights -- uses ``dummy_weights=True``, no HF auth.
+Zeroing every projection must make ``MLP.forward`` collapse to all zeros,
+exercising the ``ttnn.copy`` paths in ``MLP._update_w{1,2,3}``.
 """
 
 from __future__ import annotations
@@ -23,9 +14,7 @@ import torch
 
 from _completer_utils import as_update_input, open_completer
 
-# Prefill seq_len for the synthetic MLP input. 128 stays well below
-# args.prefill_len_cutoff (512 on WH / 1024 on BH) so MLP.forward does
-# not take the chunked-prefill reshape branch.
+# Stays below args.prefill_len_cutoff so MLP.forward skips the chunked-prefill branch.
 SEQ_LEN = 128
 
 
@@ -36,12 +25,7 @@ def completer_and_mlp():
 
 
 def _build_random_mlp_input(completer):
-    """Construct a synthetic ``(1, 1, SEQ_LEN, dim)`` MLP input.
-
-    Random values exercise the "activations multiply against weights"
-    path properly -- if gate/up/down_proj are exactly zero the product
-    is exactly zero regardless of the activation magnitudes.
-    """
+    """Construct a synthetic random ``(1, 1, SEQ_LEN, dim)`` MLP input."""
     import ttnn
 
     dim = completer.model_args.dim

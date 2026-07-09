@@ -103,7 +103,7 @@ model architecture (Llama, Qwen, etc.).
 | `generate_str` | `(prompt_strs: List[str]) -> List[str]` | Generate completions from string prompts, returning decoded strings. |
 | `compute_nlog_probs` | `(prompts, completions) -> (nlog_probs, mask)` | Compute per-token negative log probabilities for prompt+completion pairs. Returns tensors `[B_local, T_padded]`. |
 
-The shipped concrete completer is `LlamaGRPOCompleter` (in
+The shipped concrete completer is `LlamaCompleterRemoteRollout` (in
 `tt-train/sources/examples/grpo/utils/llama_grpo_completer.py`),
 documented alongside the [BoolQ example](../sources/examples/grpo/boolq/README.md).
 
@@ -192,7 +192,7 @@ GRPOTrainer(
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `completer` | `GRPOCompleter` | A model-specific completion engine (e.g. `LlamaGRPOCompleter`). Responsible for generation, forward passes, and device setup. |
+| `completer` | `GRPOCompleter` | A model-specific completion engine (e.g. `LlamaCompleterRemoteRollout`). Responsible for generation, forward passes, and device setup. |
 | `dataset` | `Dataset` | HuggingFace `datasets.Dataset` with at least a `"prompt"` column. All other columns are passed to the reward function. |
 | `config` | `GRPOConfig` | Training configuration (see above). |
 | `reward_func` | `Callable` | Reward function. Receives decoded completions and any dataset columns (see [Reward Functions](#reward-functions)). |
@@ -466,7 +466,7 @@ dataset = load_dataset("google/boolq", split="train").map(format_fn)
 
 | Aspect | TRL `GRPOTrainer` | ttml `GRPOTrainer` |
 |--------|-------------------|---------------------|
-| **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaGRPOCompleter`) from a HF ID or local path |
+| **Model** | Passed as a `transformers` model object | Built by a `GRPOCompleter` (e.g. `LlamaCompleterRemoteRollout`) from a HF ID or local path |
 | **Reward functions** | List of functions (`reward_funcs=[f1, f2]`), summed | Single function (`reward_func=f`) |
 | **Training budget** | `max_steps` (optimizer steps) | `prompts_to_train` (total prompts) |
 | **Optimizer** | String name (`optim="adamw_bnb_8bit"`) | Config dict (`{"type": "MorehAdamW", ...}`) |

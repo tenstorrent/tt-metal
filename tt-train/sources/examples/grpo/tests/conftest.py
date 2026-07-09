@@ -1,21 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Shared pytest configuration for the grpo_speedup update-method tests.
-
-Two responsibilities:
-
-1. Put ``HERE`` (``tests/``), ``GRPO_SPEEDUP`` (``grpo_speedup/``), and
-   ``REPO_ROOT`` (``tt-metal/``) on ``sys.path`` so the tests can import
-   ``utils.llama_completer_ttt``, ``models.tt_transformers.*``, and the
-   sibling ``_completer_utils`` helpers regardless of where pytest was
-   invoked from.
-
-2. Configure ttnn's fabric exactly once per pytest session, before any
-   test fixture opens a device. We do this in an ``autouse=True``
-   session-scoped fixture so individual tests don't have to remember to
-   declare the dependency.
-"""
+"""Shared pytest config: put tests/, grpo_speedup/, and repo root on sys.path,
+and set ttnn fabric once per session before any device opens."""
 
 from __future__ import annotations
 

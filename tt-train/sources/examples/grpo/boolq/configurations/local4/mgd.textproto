@@ -1,20 +1,9 @@
-# Mesh Graph Descriptor for the 2->2 GRPO BoolQ training example.
-#
-# Two [1, 2] meshes (one per MPI rank), each covering ONE N300 board (two
-# chips):
-#   * Rank 0 (TTML, GRPOTrainer driver + WeightBridge sender) -> mesh_id 0,
-#     a [1, 2] DDP mesh.
-#   * Rank 1 (TTT,  WeightBridge receiver) -> mesh_id 1, a [1, 2] parent mesh
-#     that the example splits into two [1, 1] submeshes.
-# The FABRIC graph wires the two meshes together so the cross-rank
-# handshake/transport can route across them. This is the smaller sibling of
-# configurations/local8/mgd.textproto (the 4->4 split); the Python example
-# logic is hardware-agnostic and does not depend on these exact values.
+# Mesh Graph Descriptor for the 2->2 GRPO BoolQ example: two [1, 2] meshes
+# (one per MPI rank), each covering one N300 board; the FABRIC graph wires them
+# together for the cross-rank transport.
 #
 # !!! HARDWARE-SPECIFIC TEMPLATE !!!
-# This declares a [1, 2] line per rank spanning the two chips of one N300
-# board. Each board is one PCIe device with two chips reachable to UMD via the
-# on-board eth link. The full physical eth topology must be declared here or
+# The full physical eth topology must be declared here or
 # ControlPlane::init_control_plane() trips `Fabric node ID not yet assigned for
 # ASIC id ...`. Adjust this file (and rank_bindings.yaml) for your machine.
 

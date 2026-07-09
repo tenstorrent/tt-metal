@@ -2,17 +2,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Validate ``Embedding.update`` directly via ``Embedding.forward()``.
+"""Validate ``Embedding.update`` via ``Embedding.forward()`` alone.
 
-Skips the generator entirely and compares the per-position embedding vectors
-returned by the embedding layer alone. The invariant:
-
-    A: original embeddings  x  all-TARGET_TOKEN_ID ids
-    C: collapsed embeddings x  real prompt ids
-    A == C
-
-Both runs must produce ``E[TARGET_TOKEN_ID]`` at every position, so the two
-``(1, 1, 1, S, H)`` tensors must be byte-identical.
+Invariant: original embeddings x all-TARGET_TOKEN_ID ids must equal collapsed
+embeddings x real prompt ids (both yield ``E[TARGET_TOKEN_ID]`` at every pos).
 """
 
 from __future__ import annotations
@@ -39,13 +32,8 @@ PROMPT = "Explain a tensor in a paragraph."
 
 
 def _build_collapsed_embedding(completer):
-    """Return the HF-format ``embed_tokens`` input for
-    :meth:`Embedding.update` with every row replaced by row 16000.
-
-    Shape: ``(1, 1, vocab_size, hidden_size)`` after ``as_update_input``
-    wraps the natural HF ``(V, H)`` shape -- replicated, DRAM-interleaved,
-    TILE_LAYOUT, bfloat16, as the new update contract requires.
-    """
+    """Return the HF-format ``embed_tokens`` update input with every row
+    replaced by row TARGET_TOKEN_ID."""
     from _completer_utils import as_update_input, to_torch_2d
 
     emb_hf_2d = to_torch_2d(completer.model.embd.weights)  # (V, H)
@@ -56,8 +44,8 @@ def _build_collapsed_embedding(completer):
 
 
 def _ids_to_ttnn(completer, ids: List[int]):
-    """Convert a python list of token ids to the ``(1, 1, 1, S)`` ttnn tensor
-    that ``Embedding.forward`` expects (mirrors ``prepare_inputs_prefill``)."""
+    """Convert token ids to the ``(1, 1, 1, S)`` ttnn tensor ``Embedding.forward``
+    expects."""
     import torch
     import ttnn
 

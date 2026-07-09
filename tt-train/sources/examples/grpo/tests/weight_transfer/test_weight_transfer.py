@@ -3,28 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end ttml -> tt-transformers RPC + weight transfer test (4 -> 4 submeshes).
 
-Launched under tt-run with world_size == 2 (see ``runner.sh``), 4 chips per rank
-(8 total -- the ``configurations/local8`` topology).
+Rank 0 (TTML) pushes its weights through an MPIRolloutClient/HostWeightBridge
+sender; rank 1 (TTT) receives onto four [1, 1] submeshes and applies one dict per
+submesh. Flow: pre-push generate (gibberish) -> push_weights -> post-push generate
+(identical) -> shutdown, then per-submesh verify that all four match.
 
-* **Rank 0 (TTML)** opens a ``[1, 4]`` DDP mesh from ``grpo_boolq_llama_1b_ddp_4dev.yaml``,
-  loads the instruct ``LlamaCompositeKV``, and pushes its weights through a
-  :class:`MPIRolloutClient` backed by a :class:`HostWeightBridge` sender.
-* **Rank 1 (TTT)** opens a ``[1, 4]`` parent mesh, splits it into four ``[1, 1]``
-  submeshes, builds one :class:`TttGenerationWorker` per submesh (dummy boot
-  weights), and serves via a :class:`MPIRolloutServer` backed by a
-  :class:`HostWeightBridge` receiver. The bridge moves each weight to host
-  (``torch.save`` over MPI) and re-materialises it replicated onto every submesh;
-  ``receive_weights()`` returns one dict per submesh, applied to that submesh's worker.
-
-Flow (driven by the TTML rank): pre-push remote generate (dummy-weight gibberish, a
-pure RPC sanity check on submesh 0) -> ``completer.push_weights()`` -> post-push
-remote generate (all completions identical -> submesh 0's weights landed) ->
-``client.shutdown()``. After ``serve_forever`` returns, the TTT rank generates the
-same prompt on **all four** workers and asserts identical output -- proving every
-submesh received correct weights.
-
-Self-skips when not launched under tt-run (``OMPI_COMM_WORLD_SIZE`` unset or != 2).
-Requires ``HF_TOKEN`` set (the instruct repo is gated).
+Runs under tt-run with world_size == 2 (see ``runner.sh``); self-skips otherwise.
+Requires ``HF_TOKEN`` (the instruct repo is gated).
 """
 
 from __future__ import annotations
@@ -61,16 +46,14 @@ TTML_DEVICE_CONFIG_REL = "tt-train/configs/training_configs/grpo_boolq_llama_1b_
 TTT_PARENT_MESH_SHAPE = (1, 4)
 NUM_SUBMESHES = 4
 
-# Post-push RPC batch (served by submesh 0). Each worker is built with this
-# max_batch_size, so it must be >= POST_PUSH_BATCH.
+# Post-push RPC batch; TTT_MAX_BATCH_SIZE must be >= this.
 POST_PUSH_BATCH = 8
 TTT_MAX_BATCH_SIZE = 8
 TTT_MAX_SEQ_LEN = 512
 
 
 def _ttml_side() -> None:
-    """Drive the flow: client handshake -> pre-push gen -> push_weights ->
-    post-push gen (consistency) -> shutdown."""
+    """Drive: handshake -> pre-push gen -> push_weights -> post-push gen -> shutdown."""
     import ttml
     from transformers import AutoTokenizer
     from ttml.common.config import get_model_config
@@ -78,7 +61,7 @@ def _ttml_side() -> None:
     from _completer_utils import close_device, load_device_config, open_device
     from utils.mpi_rollout import MPIRolloutClient
     from utils.weight_bridge import HostWeightBridge
-    from utils.llama_grpo_completer import LlamaCompletionCtx, LlamaGRPOCompleter
+    from utils.llama_grpo_completer import LlamaCompletionCtx, LlamaCompleterRemoteRollout
 
     autograd_ctx = ttml.autograd.AutoContext.get_instance()
     autograd_ctx.initialize_distributed_context(*sys.argv)
@@ -88,17 +71,15 @@ def _ttml_side() -> None:
     completer: Any = None
     client: Any = None
     try:
-        # The caller builds the concrete bridge; the client only drives it.
         # Constructing the client blocks on the bridge handshake.
         bridge = HostWeightBridge.init_sender(mesh=mesh_device, peer_rank=TTT_RANK)
         client = MPIRolloutClient(peer_rank=TTT_RANK, bridge=bridge)
 
-        completer = LlamaGRPOCompleter(
+        completer = LlamaCompleterRemoteRollout(
             ctx=LlamaCompletionCtx(
                 max_tokens_to_complete=MAX_NEW_TOKENS,
                 temperature=TEMPERATURE,
-                # compute_nlog_probs is not exercised here; any value that would
-                # satisfy its B % num_devices == 0 assertion is fine.
+                # Any value satisfying the B % num_devices == 0 assertion works here.
                 completions_per_prompt=device_config.total_devices(),
             ),
             transformer_config=get_model_config(raw["training_config"]["model_config"]),
@@ -111,7 +92,7 @@ def _ttml_side() -> None:
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
 
-        # --- step 1: pre-push remote generate (dummy weights -> gibberish). --- #
+        # step 1: pre-push remote generate (dummy weights -> gibberish).
         pre_push_ids = client.remote_generate(
             [prompt_ids],
             max_new_tokens=MAX_NEW_TOKENS,
@@ -123,12 +104,12 @@ def _ttml_side() -> None:
             flush=True,
         )
 
-        # --- step 2: single-call weight transfer via the completer. --- #
+        # step 2: single-call weight transfer via the completer.
         print(f"[TTML rank {TTML_RANK}] completer.push_weights()", flush=True)
         completer.push_weights()
         print(f"[TTML rank {TTML_RANK}] push_weights() complete", flush=True)
 
-        # --- step 3: post-push remote generate, consistency check (submesh 0). --- #
+        # step 3: post-push remote generate, consistency check (submesh 0).
         completions = client.remote_generate(
             [prompt_ids] * POST_PUSH_BATCH,
             max_new_tokens=MAX_NEW_TOKENS,
@@ -228,7 +209,7 @@ def _ttt_side() -> None:
         )
         server.serve_forever()
 
-        # ---- verify all four submeshes got correct weights ---- #
+        # verify all four submeshes got correct weights
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
         print("\n========= per-submesh verification =========", flush=True)
@@ -247,8 +228,7 @@ def _ttt_side() -> None:
         ttnn.close_mesh_device(parent_mesh)
 
 
-# Long, interactive, multi-model hardware test (HF download + four worker builds
-# before the transfer). Disable the repo-wide pytest-timeout default.
+# Disable the repo-wide pytest-timeout default (long HF download + four builds).
 @pytest.mark.timeout(0)
 def test_ttml_to_ttt_weight_bridge_transfer() -> None:
     """End-to-end remote generate + 4->4 submesh bridge transfer + per-submesh verify."""
