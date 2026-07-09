@@ -247,9 +247,10 @@ jobs:
           wait_for_devices_ready() {
             mpirun --pernode --tag-output bash -lc '
               for i in 1 2 3 4 5 6; do
-                snapshot=$(tt-smi --snapshot_no_tty --snapshot 2>/dev/null) || snapshot=""
-                count=$(jq ".device_info | length" <<< "${snapshot:-{}}" 2>/dev/null || echo 0)
-                if [ "${count}" -ge 32 ] && jq -e ".device_info[0].board_info" <<< "${snapshot}" >/dev/null 2>&1; then
+                snapshot=$(tt-smi --snapshot_no_tty --snapshot 2>/dev/null) || snapshot="{}"
+                count=$(printf "%s" "$snapshot" | jq -r "(.device_info // []) | length" 2>/dev/null | head -n1)
+                count=${count:-0}
+                if [ "$count" -ge 32 ] 2>/dev/null; then
                   echo "$(hostname): devices ready (${count} chips) on attempt ${i}"
                   exit 0
                 fi
