@@ -13,6 +13,7 @@ from models.experimental.hunyuan_image_3_0.ref.vae.encoder import (
     load_mid as load_encoder_mid,
 )
 from models.experimental.hunyuan_image_3_0.tt.vae.decoder_weights import (
+    _load_gn,
     load_attn_block,
     load_resnet_block,
 )
@@ -58,6 +59,6 @@ def init_encoder_mid(module) -> None:
 
 def init_encoder_head(module) -> None:
     ref = load_encoder_head(dtype=_REF_DTYPE)
-    _load_state(module.norm_out, ref.norm_out.state_dict())
+    _load_gn(module.norm_out, ref.norm_out.state_dict())
     _load_state(module.conv_out, ref.conv_out.state_dict())
     del ref
