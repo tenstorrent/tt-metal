@@ -49,7 +49,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     enable_trace=True,
     cluster_axis=1,
     num_workers_per_link=None,
-    num_buffers_per_channel=None,
+    num_buffers_per_channel=8,
     allowed_pcc=1,
     skip_check=False,
     num_l1_banks=64,
