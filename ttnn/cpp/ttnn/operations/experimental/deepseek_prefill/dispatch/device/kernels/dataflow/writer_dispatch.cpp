@@ -495,7 +495,7 @@ void kernel_main() {
 #else
     // ===== Row-major path: standard CB protocol on c_4/c_5/c_6 pushed by the sender reader.
 #ifdef SPARSE_MCAST_DISPATCH
-    // Grouped path (1D Ring, topk==4): each route_info is a direction-group of up to 4 destinations.
+    // Grouped path (1D Ring, any top-k): each route_info is a direction-group of up to 4 destinations.
     // The identical payload is delivered to all of them in ONE per-page sparse-multicast; metadata
     // (distinct per destination) is still sent per-destination. Grouped route_info layout:
     // [0]=direction, [1]=num_dests, [2..5]=page_idx[0..3], [6..9]=distance[0..3].
