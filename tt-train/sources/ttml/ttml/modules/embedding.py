@@ -109,8 +109,6 @@ class VocabParallelEmbedding(AbstractModuleBase):
             starts_np, ttnn.Layout.TILE, ttnn.DataType.FLOAT32, weight_mapper
         ).get_value(ttml.autograd.PreferredPrecision.FULL)
 
-        self._tp_checked = False
-
     def _check_tp_replicated(self, x: ttml.autograd.Tensor) -> None:
         """Reject ids that are sharded along the TP axis.
 
@@ -139,10 +137,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
             Embeddings ``[batch_size, 1, seq_len, embedding_dim]``, replicated
             across the TP axis.
         """
-        # Validate the input layout once — it's stable across a run.
-        if not self._tp_checked:
-            self._check_tp_replicated(x)
-            self._tp_checked = True
+        self._check_tp_replicated(x)
 
         ids = x.get_value(ttml.autograd.PreferredPrecision.FULL)
         ids_f = ttnn.typecast(ttnn.to_layout(ids, ttnn.Layout.TILE), ttnn.DataType.FLOAT32)
