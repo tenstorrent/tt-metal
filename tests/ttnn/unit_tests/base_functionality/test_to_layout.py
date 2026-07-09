@@ -362,8 +362,8 @@ def _height_sharded_l1_config(grid_end, shard_shape):
 @pytest.mark.parametrize(
     "shape, grid_end, shard_shape",
     [
-        # issue_test.py repro: 1024 padded [32,64] matrices, 16 per core over an 8x8 grid; logical
-        # height 17 is not tile-aligned so every matrix carries 15 interior pad rows to be stripped.
+        # many whole matrices per core: 1024 padded [32, 64] matrices, 16 per core over an 8x8 grid;
+        # logical height 17 is not tile-aligned so every matrix carries 15 interior pad rows to strip.
         ([32, 32, 17, 64], (7, 7), (512, 64)),
         # batch == 1 per core, 64 matrices total: each core holds exactly one padded [32, 64] matrix.
         # The old writer advanced the interleaved output pointer by the padded height (32) instead of
@@ -386,7 +386,7 @@ def _height_sharded_l1_config(grid_end, shard_shape):
         ([1, 1, 500, 64], (7, 0), (64, 64)),
     ],
     ids=[
-        "repro_1024x16",
+        "batch16_per_core",
         "batch1_per_core_h17_w49",
         "batch1_per_core_h32_w49",
         "batch1_per_core_h17_w50",
