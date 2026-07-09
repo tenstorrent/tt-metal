@@ -165,14 +165,16 @@ inline void llk_unpack_tilizeA_B(
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
-    // FIX: the row-to-row stride must include the FULL channel-tile width (block_ct_dim), matching the LLK
-    // reference driver (unpack_reduce_col_tilizeA_strided test uses FULL_CT_DIM*num_faces_r_dim*face_r_dim)
-    // and the WH/BH core (_llk_unpack_tilizeA_B_ scales the bottom-face stride by block_ct_dim). Without it,
-    // for >1 channel tile (C>=64) later window rows/columns under-advance and alias into earlier tiles' data.
-    const std::uint32_t tile_row_stride =
-        block_ct_dim * tensor_shape_A.num_faces_r_dim *
-        tensor_shape_A.face_r_dim;  // used to advance to the next row of tiles in the L1 buffer
-    const std::uint32_t l1_index_a = rd_entry_idx_a * tile_row_stride + tile_index_a;
+    // Compute how many l1_index units fit in one DFB entry. _llk_unpack_reduce_col_tilizeA_strided_
+    // internally scales l1_index by num_faces_c_dim, so one l1_index unit = num_faces_c_dim face-rows in L1.
+    // Derive the per-entry stride from the actual DFB entry_size (rather than hardcoding block_ct_dim) so
+    // this supports arbitrary num_entries/entry_size DFB configs. (amokan/fix_tilizeA_B_index; equal to the
+    // prior block_ct_dim * num_faces_r_dim * face_r_dim when an entry holds exactly block_ct_dim tiles.)
+    const std::uint32_t entry_size_16B = local_dfb_interface_a.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                                      // buffer-descriptor granularity in 16B
+        SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry = entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
+    const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 
     const std::uint32_t l1_index_b =
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;

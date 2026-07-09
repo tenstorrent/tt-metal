@@ -109,6 +109,13 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
+        // Quasar: the fused matmul+bias compute kernel (bmm_large_block_zm_fused_bias_activation_metal2)
+        // trips a TILE_COUNTERS hardware fault (bias-DFB credit mismatch, esp. the padded-lane /
+        // num_blocks_w_dim==1 path). Plain (unbiased) matmul passes, so route bias through a post-process
+        // ttnn::add on the matmul output instead. Revert once the fused-bias tile-counter path is fixed.
+        if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
+            return true;
+        }
         // Fused matmul+bias does not support batched weights; apply bias via add().
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
             return true;
