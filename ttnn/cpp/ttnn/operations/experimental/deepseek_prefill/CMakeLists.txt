@@ -43,14 +43,17 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
 )
 
-# target_link_libraries() alone is not enough: CMake does not propagate an
-# OBJECT library's compiled objects through an INTERFACE library indirection,
-# so with the default LIB_TYPE=OBJECT, ttnncpp would silently end up without
-# these ops' code (undefined symbols at final link time). Splice the object
-# files in directly via generator expression so they still land in whatever
-# ultimately links this umbrella target. TARGET_OBJECTS resolves to nothing
-# (and is harmless) for leaves that are SHARED instead of OBJECT, e.g. under
-# ENABLE_TTNN_SHARED_SUBLIBS, so this is safe unconditionally.
+# target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
+# library named in a target's INTERFACE_LINK_LIBRARIES (as these leaves are,
+# via the INTERFACE keyword above) is treated as a plain Interface Library by
+# further consumers — only usage requirements propagate, not its compiled
+# objects. So with the default LIB_TYPE=OBJECT, ttnncpp would silently end up
+# without these ops' code (undefined symbols at final link time). Splice the
+# object files in directly via generator expression so they still land in
+# whatever ultimately links this umbrella target. TARGET_OBJECTS resolves to
+# nothing (and is harmless) for leaves that aren't OBJECT libraries — e.g.
+# SHARED or STATIC, both of which ttnn can compile these as depending on
+# build options — so this is safe unconditionally.
 target_sources(
     ttnn_op_deepseek_prefill
     INTERFACE
