@@ -144,39 +144,21 @@ class RMSNorm(LightweightModule):
     def update(self, *, weight: ttnn.Tensor) -> None:
         """In-place replace the RMSNorm gamma via ``ttnn.copy``.
 
-        HF-format input contract:
+        HF-format input: ``weight`` is HF ``...norm.weight``, shape
+        ``(1, 1, 1, dim)``, bf16, TILE, DRAM-interleaved, replicated.
 
-        * key       -- HF ``...norm.weight`` (passed as kwarg ``weight``).
-        * shape     -- ``(1, 1, 1, dim)`` (HF 1D gamma wrapped in three
-                       leading unit dims).
-        * dtype     -- ``ttnn.bfloat16``.
-        * layout    -- ``ttnn.TILE_LAYOUT``.
-        * memcfg    -- ``ttnn.DRAM_MEMORY_CONFIG`` (interleaved).
-        * mesh      -- replicated (``ttnn.ReplicateTensorToMesh``).
+        ``_inplace_copy`` reshapes to the storage shape
+        ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and TILE -> ROW_MAJOR to
+        match ``self.weight``. No ``add_unit_offset`` here: the constructor's
+        offset is baked into the cached weights once, and ``.update`` ships in
+        already-prepared gamma values.
 
-        ``_inplace_copy`` reshapes from ``(1, 1, 1, dim)`` to the storage
-        shape ``(1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT)`` and converts
-        ``TILE_LAYOUT`` -> ``ROW_MAJOR_LAYOUT`` to match
-        ``self.weight``. No ``add_unit_offset`` is applied here: the
-        constructor's offset is baked into the cached weights once and
-        ``.update`` is intended to ship in already-prepared gamma values.
-
-        When the constructor populated ``self.weight_distributed`` (the
-        column-sharded mirror used by the distributed RMSNorm path),
-        that buffer is kept in sync entirely on device: we project the
-        freshly-updated ``self.weight`` from its replicated layout into
-        the same sharded layout via ``ttnn.mesh_partition`` -- the
-        inverse direction of the all-gather pair that
-        ``_distributed_rmsnorm`` uses in its forward -- and ``ttnn.copy``
-        the result into the existing ``self.weight_distributed`` buffer.
-        Address is preserved on both buffers across the update, so any
-        captured trace and the DRAM prefetcher's recorded addresses
-        remain valid.
-
-        ``ttnn.mesh_partition``'s ``dim=2, cluster_axis=1`` arguments are
-        the inverse of ``self.weight_distributed``'s constructor mesh
-        mapper, ``ShardTensor2dMesh(dims=(None, 2))`` -- "don't shard
-        along mesh axis 0; shard the tensor's axis 2 along mesh axis 1".
+        When ``self.weight_distributed`` (the column-sharded mirror) exists it's
+        kept in sync on device: project ``self.weight`` into the sharded layout
+        via ``ttnn.mesh_partition`` (the inverse of the constructor's
+        ``ShardTensor2dMesh(dims=(None, 2))``, hence ``dim=2, cluster_axis=1``)
+        and ``ttnn.copy`` into it. Both buffers keep their address, so captured
+        traces and the prefetcher's recorded addresses stay valid.
         """
         self._inplace_copy(weight, self.weight, self.weight.dtype)
 

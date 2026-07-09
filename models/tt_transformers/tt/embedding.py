@@ -60,33 +60,17 @@ class Embedding(LightweightModule):
     def update(self, *, embed_tokens: ttnn.Tensor) -> None:
         """In-place replace the embedding table via ``ttnn.copy``.
 
-        HF-format input contract (matches the rest of the model's
-        ``.update()`` methods; see ``LLAMA_WEIGHT_TRANSFER.md``):
+        HF-format input (see ``LLAMA_WEIGHT_TRANSFER.md``): ``embed_tokens`` is
+        ``model.embed_tokens.weight``, shape ``(1, 1, vocab_size, hidden_size)``,
+        bf16, TILE, DRAM-interleaved, replicated.
 
-        * key       -- HF ``model.embed_tokens.weight`` (passed as kwarg
-                       ``embed_tokens``).
-        * shape     -- ``(1, 1, vocab_size, hidden_size)`` (HF shape
-                       ``(V, H)`` wrapped in two leading unit dims).
-        * dtype     -- ``ttnn.bfloat16``.
-        * layout    -- ``ttnn.TILE_LAYOUT``.
-        * memcfg    -- ``ttnn.DRAM_MEMORY_CONFIG`` (interleaved).
-        * mesh      -- replicated (``ttnn.ReplicateTensorToMesh``).
+        No vocab padding: the assert requires ``vocab_size == padded_vocab_size``
+        (always true for Llama-3.2-1B-Instruct); padding would need extending.
 
-        ``Embedding.update`` does not support vocab padding: the assertion
-        below requires ``self.vocab_size == self.padded_vocab_size``. For
-        the typical Llama config (Llama-3.2-1B-Instruct, ``V = 128256``,
-        ``padded_V = 128256``) this is always satisfied. If a future
-        config pads the vocab dim, this method must be extended (and the
-        ``LLAMA_WEIGHT_TRANSFER.md`` checklist updated).
-
-        Single-device-only today: the ``(None, 3)`` 2D-mesh sharding on
-        ``self.weights`` is a no-op on a 1x1 mesh, so a replicated input
-        ends up correct after ``_inplace_copy``. Extending this to a
-        multi-device mesh requires a ``ttnn.mesh_partition(dim=3,
-        cluster_axis=1)`` projection step prior to the in-place copy.
-
-        Buffer-address preservation: ``self.weights``' device buffer is
-        kept, so any captured trace remains valid across the update.
+        Single-device-only: ``self.weights``' ``(None, 3)`` sharding is a no-op
+        on a 1x1 mesh; a multi-device mesh needs a ``ttnn.mesh_partition(dim=3,
+        cluster_axis=1)`` before the copy. Buffer address is preserved so any
+        captured trace stays valid.
         """
         assert self.vocab_size == self.padded_vocab_size, (
             f"Embedding.update requires self.vocab_size == self.padded_vocab_size "
