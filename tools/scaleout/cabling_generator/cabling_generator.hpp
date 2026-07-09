@@ -174,16 +174,11 @@ public:
     const std::vector<Host>& get_deployment_hosts() const;
     const std::vector<LogicalChannelConnection>& get_chip_connections() const;
 
-    // In-place opt-in sub-cluster filter. Each entry of include_paths / exclude_paths is a path of
-    // instance keys (e.g. {"bh_galaxy_sp_0", "bh_galaxy_node_2"}) that matches any instance whose
-    // full path ENDS WITH those segments (relative/suffix match): {"bh_galaxy_node_0"} matches that
-    // instance under every parent, while {"bh_galaxy_sp_0"} matches only the top-level one. Matching
-    // an instance applies to its whole subtree. The kept set is (all nodes if include_paths is empty,
-    // else those matched by include_paths) minus those matched by exclude_paths; only connections
-    // whose BOTH endpoints are kept are retained. Survivors are re-indexed to a dense 0..M-1 host_id
-    // space (required by the positional host_id in the FSD format) and deployment_hosts_, host_id_to_node_
-    // and chip_connections_ are rebuilt for the sub-cluster. A path matching no instance, or a filter
-    // that keeps no nodes, throws. No-op when both lists are empty.
+    // In-place opt-in sub-cluster filter. Each include/exclude entry is an instance path matched as a
+    // suffix (relative): {"bh_galaxy_node_0"} matches under every parent, and matching an instance
+    // selects its whole subtree. Kept = (all nodes, or include-matched) minus exclude-matched; only
+    // connections with both endpoints kept survive, and survivors re-index to a dense 0..M-1 space.
+    // Throws on a path matching nothing or a filter keeping no nodes; no-op when both lists are empty.
     void apply_instance_filter(
         const std::vector<std::vector<std::string>>& include_paths,
         const std::vector<std::vector<std::string>>& exclude_paths);

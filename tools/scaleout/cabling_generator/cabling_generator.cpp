@@ -576,9 +576,8 @@ HostId resolve_path_from_proto(
     throw std::runtime_error("Subgraph " + subgraph_name + " is not a graph instance");
 }
 
-// Reject instance names that would break instance-path addressing. '/' and ',' are reserved: '/'
-// joins the segments of the FSD instance_path field and splits --include/--exclude paths, and ',' is
-// the CLI list separator for those flags.
+// Reject instance names that break instance-path addressing: '/' and ',' are reserved (they delimit
+// the FSD instance_path field and the --include/--exclude filter paths).
 void validate_instance_name(const std::string& name, const std::string& template_name) {
     if (name.empty()) {
         throw std::runtime_error(fmt::format("Empty child instance name in graph template '{}'", template_name));
@@ -2503,11 +2502,8 @@ void CablingGenerator::recreate_nodes_from_templates(ResolvedGraphInstance& grap
 
 namespace {
 
-// True if `suffix` matches the trailing segments of `instance_path` (i.e. instance_path ends with
-// suffix). A filter path matches an instance when it is a suffix of that instance's full path, so
-// a relative name like {"bh_galaxy_node_0"} matches that instance under every parent, while a
-// root-level name like {"bh_galaxy_sp_0"} still matches only the top-level instance (nothing deeper
-// ends with it).
+// True if `suffix` matches the trailing segments of `instance_path`. A filter matches an instance
+// when it is a suffix of that instance's full path (relative match).
 bool path_is_suffix(const std::vector<std::string>& suffix, const std::vector<std::string>& instance_path) {
     if (suffix.size() > instance_path.size()) {
         return false;
@@ -2545,10 +2541,8 @@ void CablingGenerator::apply_instance_filter(
     std::vector<bool> include_used(includes.size(), false);
     std::vector<bool> exclude_used(excludes.size(), false);
 
-    // A filter matches an instance when it is a suffix of that instance's path, and applies to the
-    // whole subtree beneath it (carried down via included_by_ancestor / excluded_by_ancestor). A leaf
-    // is kept iff it is in the base set (all nodes if no include filter, else include-matched) and
-    // not excluded.
+    // A suffix-matched filter applies to its instance's whole subtree (carried via
+    // included/excluded_by_ancestor). Keep a leaf iff base-selected (or no include) and not excluded.
     auto walk = [&](auto& self,
                     const ResolvedGraphInstance& graph,
                     std::vector<std::string>& prefix,
