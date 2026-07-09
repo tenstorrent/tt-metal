@@ -225,13 +225,16 @@ void run_single_dfb_program(
     // Gen2 (auto-assigned) variants so the same KernelSpec runs on WH/BH and Quasar.
     experimental::DataMovementHardwareConfig dm_producer_cfg;
     experimental::DataMovementHardwareConfig dm_consumer_cfg;
+    experimental::ComputeHardwareConfig compute_cfg;
     if (arch == ARCH::QUASAR) {
         dm_producer_cfg = experimental::DataMovementGen2Config{};
         dm_consumer_cfg = experimental::DataMovementGen2Config{};
+        compute_cfg = experimental::ComputeGen2Config{};
     } else {
         dm_producer_cfg = experimental::DataMovementGen1Config{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
         dm_consumer_cfg = experimental::CreateReaderGen1DataMovementConfig();
+        compute_cfg = experimental::ComputeGen1Config{};
     }
 
     experimental::KernelSpec producer_spec;
@@ -265,7 +268,7 @@ void run_single_dfb_program(
             .num_threads = dfb_config.num_producers,
             .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
             .compile_time_args = {{"num_entries_per_producer", num_entries_per_producer}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = compute_cfg,
         };
     }
 
@@ -311,21 +314,24 @@ void run_single_dfb_program(
                 .access_pattern = consumer_pattern,
             }},
             .compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}},
-            .hw_config = experimental::ComputeHardwareConfig{},
+            .hw_config = compute_cfg,
         };
     }
 
     // Each DM endpoint votes on opting out of implicit sync (for the single DFB it binds).
+    // Gen2-only field; WH/BH carry DataMovementGen1Config (disable_isync is forced true there).
     const bool disable_isync = !dfb_config.enable_producer_implicit_sync;
-    if (producer_type == DFBPorCType::DM && disable_isync) {
-        auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
-            std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
-        producer_hw_config.disable_dfb_implicit_sync_for_all = true;
-    }
-    if (consumer_type == DFBPorCType::DM && disable_isync) {
-        auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
-            std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config));
-        consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
+    if (arch == ARCH::QUASAR && disable_isync) {
+        if (producer_type == DFBPorCType::DM) {
+            auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
+            producer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        }
+        if (consumer_type == DFBPorCType::DM) {
+            auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
+                std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config));
+            consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
+        }
     }
 
     experimental::WorkUnitSpec wu{
@@ -790,7 +796,7 @@ void run_concurrent_tensix_dm_dfbs_program(
         .num_threads = 1,
         .compiler_options = {.defines = {{"TEST_NUM_DFBS", std::to_string(num_dfbs)}}},
         .compile_time_args = {{"num_entries_per_producer", entries_per_dfb}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         producer_spec.dfb_bindings.push_back(experimental::DFBBinding{
@@ -1245,7 +1251,7 @@ void run_in_dfb_out_dfb_program(
                 },
             },
         .compile_time_args = {{"num_entries", num_entries_per_unpacker}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::KernelSpec consumer_spec{
@@ -1699,7 +1705,8 @@ static void run_dfb_size_override_test(
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config = dm_consumer_cfg,
     };
-    if (!implicit_sync) {
+    // Implicit sync is gen2 only
+    if (device->arch() == ARCH::QUASAR && !implicit_sync) {
         auto& producer_hw_config = std::get<experimental::DataMovementGen2Config>(
             std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config));
         auto& consumer_hw_config = std::get<experimental::DataMovementGen2Config>(
@@ -2184,7 +2191,7 @@ static void run_intra_tensix_dfb_program(
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -2365,7 +2372,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
                 {"entries_per_neo", entries_per_neo},
                 {"words_per_entry", words_per_entry},
             },
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec wu{

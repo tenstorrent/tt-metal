@@ -72,7 +72,7 @@ distributed::MeshWorkload create_workload(
         .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/risc_math.cpp",
         .num_threads = kNumComputeNEOs,
         .runtime_arg_schema = {.runtime_arg_names = {"l1_address"}},
-        .hw_config = experimental::ComputeHardwareConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     });
     wu_kernel_names.push_back(COMPUTE_KERNEL);
 
