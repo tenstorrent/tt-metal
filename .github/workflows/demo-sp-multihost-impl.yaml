@@ -242,8 +242,9 @@ jobs:
 
           verify_chip_enumeration() {
             mpirun --pernode --tag-output bash -lc '
-              count=$(lspci -d 1e52: | wc -l)
-              echo "$(hostname): pcie_tt_devices=${count}"
+              snapshot=$(tt-smi --snapshot_no_tty --snapshot)
+              count=$(jq ".device_info | length" <<< "$snapshot")
+              echo "$(hostname): tt_devices=${count}"
               test "${count}" -ge 32
             '
           }
