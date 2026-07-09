@@ -491,15 +491,19 @@ def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
         pytest.skip(f"DP-{data_parallel} needs {data_parallel} single-device groups; have {n} devices")
 
 
-def assert_no_special_tokens(generated_token_ids, tokenizer) -> None:
-    """The only correctness check for the DP smoke: no special tokens mid-stream.
+def assert_no_special_tokens(
+    generated_token_ids, tokenizer, *, case_name: str = "", is_ci_env: bool | None = None
+) -> None:
+    """Garbage guard: no special token mid-stream. Mirrors TTTv1 ``simple_text_demo.py``.
 
-    Mirrors TTTv1 ``simple_text_demo.py``'s special-token guard. TTTv2's
-    ``result.generated_token_ids[user]`` already starts at the first generated token
-    (prefill argmax), so unlike TTTv1 we do not slice off the prompt — these are
-    output-only. Each user's output is truncated at the first stop token (EoS / eot) before
-    scanning, then asserted free of any ``tokenizer.all_special_ids`` member.
+    TTTv2's ``result.generated_token_ids[user]`` already starts at the first generated token
+    (prefill argmax), so unlike TTTv1 we do not slice off the prompt — these are output-only. Each
+    user's output is truncated at the first stop token (EoS / eot) before scanning, then checked for
+    any ``tokenizer.all_special_ids`` member. Following TTTv1, a survivor logs a warning always but
+    hard-fails only under CI (``CI == "true"``), so local runs finish while CI stays strict.
     """
+    if is_ci_env is None:
+        is_ci_env = os.environ.get("CI") == "true"
     special = set(tokenizer.all_special_ids)
     stop = set()
     if tokenizer.eos_token_id is not None:
@@ -516,7 +520,10 @@ def assert_no_special_tokens(generated_token_ids, tokenizer) -> None:
                 break
         if any(t in special for t in seq):
             offenders += 1
-    assert offenders == 0, f"model produced special tokens ({offenders} users)"
+    if offenders:
+        logger.warning(f"[{case_name}] model produced special tokens ({offenders}/{len(generated_token_ids)} users)")
+        if is_ci_env:
+            assert False, f"model produced special tokens ({offenders} users)"
 
 
 def _run_dp_smoke(
@@ -615,7 +622,7 @@ def _run_dp_smoke(
             all_generated.append(result.generated_token_ids[0])
             log_generated_text(prompts[i : i + 1], result.generated_token_ids, tokenizer)
 
-        assert_no_special_tokens(all_generated, tokenizer)
+        assert_no_special_tokens(all_generated, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
     finally:
         for ex in executors:
             ex.cleanup()
@@ -901,6 +908,7 @@ def _run_perf_benchmark(
             f"decode latency: {result.decode_latency_mean_ms:.2f}ms"
         )
         log_generated_text(prompts, result.generated_token_ids, tokenizer)
+        assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=case_name)
 
         if expected:
             failures = []
