@@ -691,9 +691,17 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
         NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO),                                             \
         NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_AT_LEN_BE),                                                \
         false);
-// Used for inline writes, whose destination (coordinate + address) lives in NOC_TARG_ADDR. The low 32 bits
-// (NOC_TARG_ADDR_LO) must be OR'd in: a stray comma operator previously discarded them, leaving the local
-// offset reading as 0 and defeating the address check.
+// Used for inline writes. On tt-1xx, the destination lives in NOC_TARG_ADDR; on Quasar RoCC-backed command
+// buffers, the destination lives in DEST, exposed through the legacy NOC_RET_ADDR aliases.
+#if defined(ARCH_QUASAR)
+#define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)                                                  \
+    DEBUG_SANITIZE_NOC_ADDR(                                                                                 \
+        noc_id,                                                                                              \
+        ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_COORDINATE) << NOC_ADDR_COORD_SHIFT) | \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_MID) << 32) |                      \
+            ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_RET_ADDR_LO)),                              \
+        4);
+#else
 #define DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_id, cmd_buf)                                                   \
     DEBUG_SANITIZE_NOC_ADDR(                                                                                  \
         noc_id,                                                                                               \
@@ -701,6 +709,7 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_MID) << 32) |                      \
             ((uint64_t)NOC_CMD_BUF_READ_REG(noc_id, cmd_buf, NOC_TARG_ADDR_LO)),                              \
         4);
+#endif
 #define DEBUG_SANITIZE_NOC_ADDR_(noc_id, a, l, check_linked)                                                     \
     debug_sanitize_noc_addr(noc_id, a, 0, l, DEBUG_SANITIZE_NOC_UNICAST, DEBUG_SANITIZE_NOC_READ, check_linked); \
     LOG_LEN(l)
