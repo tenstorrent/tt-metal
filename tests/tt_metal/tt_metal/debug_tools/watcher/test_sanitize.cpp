@@ -424,29 +424,30 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
+        const experimental::NodeCoord node{core};
         experimental::ProgramRunArgs params;
         params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
             .runtime_arg_values =
-                {{"local_buffer_addr", {{experimental::NodeCoord{core}, buffer_addr}}},
-                 {"buffer_src_addr", {{experimental::NodeCoord{core}, input_buffer_addr}}},
-                 {"src_noc_x", {{experimental::NodeCoord{core}, input_buf_noc_xy.x}}},
-                 {"src_noc_y", {{experimental::NodeCoord{core}, input_buf_noc_xy.y}}},
-                 {"buffer_dst_addr", {{experimental::NodeCoord{core}, output_buffer_addr}}},
-                 {"dst_noc_x", {{experimental::NodeCoord{core}, output_buf_noc_xy.x}}},
-                 {"dst_noc_y", {{experimental::NodeCoord{core}, output_buf_noc_xy.y}}},
-                 {"buffer_size", {{experimental::NodeCoord{core}, buffer_size}}},
-                 {"use_inline_dw_write", {{experimental::NodeCoord{core}, use_inline_dw_write}}},
-                 {"bad_linked_transaction", {{experimental::NodeCoord{core}, bad_linked_transaction}}},
-                 {"l1_overflow_addr", {{experimental::NodeCoord{core}, l1_overflow_addr}}},
-                 {"eth_src_overflow_addr", {{experimental::NodeCoord{core}, eth_src_overflow_addr_words}}},
-                 {"eth_dest_overflow_addr", {{experimental::NodeCoord{core}, eth_dest_overflow_addr_words}}},
-                 {"use_multicast_semaphore_inc", {{experimental::NodeCoord{core}, use_multicast_semaphore_inc}}},
-                 {"mcast_dst_end_x", {{experimental::NodeCoord{core}, mcast_dst_end_x}}},
-                 {"mcast_dst_end_y", {{experimental::NodeCoord{core}, mcast_dst_end_y}}},
-                 {"use_write_with_state", {{experimental::NodeCoord{core}, use_write_with_state}}},
-                 {"use_inline_dw_write_from_state", {{experimental::NodeCoord{core}, use_inline_dw_write_from_state}}},
-                 {"use_inline_dw_write_with_state", {{experimental::NodeCoord{core}, use_inline_dw_write_with_state}}}},
+                {{"local_buffer_addr", {{node, buffer_addr}}},
+                 {"buffer_src_addr", {{node, input_buffer_addr}}},
+                 {"src_noc_x", {{node, input_buf_noc_xy.x}}},
+                 {"src_noc_y", {{node, input_buf_noc_xy.y}}},
+                 {"buffer_dst_addr", {{node, output_buffer_addr}}},
+                 {"dst_noc_x", {{node, output_buf_noc_xy.x}}},
+                 {"dst_noc_y", {{node, output_buf_noc_xy.y}}},
+                 {"buffer_size", {{node, buffer_size}}},
+                 {"use_inline_dw_write", {{node, use_inline_dw_write}}},
+                 {"bad_linked_transaction", {{node, bad_linked_transaction}}},
+                 {"l1_overflow_addr", {{node, l1_overflow_addr}}},
+                 {"eth_src_overflow_addr", {{node, eth_src_overflow_addr_words}}},
+                 {"eth_dest_overflow_addr", {{node, eth_dest_overflow_addr_words}}},
+                 {"use_multicast_semaphore_inc", {{node, use_multicast_semaphore_inc}}},
+                 {"mcast_dst_end_x", {{node, mcast_dst_end_x}}},
+                 {"mcast_dst_end_y", {{node, mcast_dst_end_y}}},
+                 {"use_write_with_state", {{node, use_write_with_state}}},
+                 {"use_inline_dw_write_from_state", {{node, use_inline_dw_write_from_state}}},
+                 {"use_inline_dw_write_with_state", {{node, use_inline_dw_write_with_state}}}},
         }};
         experimental::SetProgramRunArgs(program, params);
     }
