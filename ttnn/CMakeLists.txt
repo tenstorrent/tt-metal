@@ -260,24 +260,8 @@ target_link_libraries(
         TTNN::Ops::Embedding::Backward
         TTNN::Ops::Examples
         TTNN::Ops::Experimental
-        TTNN::Ops::Experimental::BcastTo
-        TTNN::Ops::Experimental::MultiScaleDeformableAttn
-        TTNN::Ops::Experimental::Copy
-        TTNN::Ops::Experimental::TensorPrefetcher
-        TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::DeepSeekPrefill
-        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
-        TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
-        TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
-        TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
-        TTNN::Ops::Experimental::TopkRouterGpt
-        TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
-        TTNN::Ops::Experimental::PlusOne
-        TTNN::Ops::Experimental::Reshape
-        TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::Transformer
-        TTNN::Ops::Experimental::UnaryBackward
-        TTNN::Ops::Experimental::Test
         TTNN::Ops::Full
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
@@ -501,24 +485,8 @@ add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
 add_subdirectory(cpp/ttnn/operations/examples)
 add_subdirectory(cpp/ttnn/operations/experimental)
-add_subdirectory(cpp/ttnn/operations/experimental/bcast_to)
-add_subdirectory(cpp/ttnn/operations/experimental/multi_scale_deformable_attn)
-add_subdirectory(cpp/ttnn/operations/experimental/copy)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
-add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
-add_subdirectory(cpp/ttnn/operations/experimental/dropout)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate)
-add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
-add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
-add_subdirectory(cpp/ttnn/operations/experimental/plusone)
-add_subdirectory(cpp/ttnn/operations/experimental/reshape)
-add_subdirectory(cpp/ttnn/operations/experimental/ssm)
-add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
-add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)

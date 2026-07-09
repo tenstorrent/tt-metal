@@ -5,13 +5,15 @@
 # here and self-approve, without ttnn-core or infra needing to be pinged, and
 # without touching ttnn/CMakeLists.txt.
 #
-# Only the ops below have been migrated in so far — everything else under
-# experimental/ is still add_subdirectory()'d directly from
-# ttnn/CMakeLists.txt, either because it has no team/individual owner in
-# CODEOWNERS at all (a gap to close separately, not a CMake problem), or
-# because it's one CMake target spanning multiple teams' code and needs an
-# actual target split before ownership can split too (e.g. transformer/).
-# Folding in more is later work, one owner at a time.
+# Everything under experimental/ is migrated in here now except transformer/,
+# which is one CMake target spanning multiple teams' code and needs an
+# actual target split before ownership can split too.
+#
+# A number of the ops below have no team-specific CODEOWNERS rule at all and
+# fall back to the generic ops-leads catch-all — that's the status quo, kept
+# as-is here rather than guessed at. metalium-developers-ops-leads is listed
+# on this file for exactly that reason, not because it's the deliberate,
+# active owner of those ops.
 
 # metalium-developers-convolutions
 add_subdirectory(adaptive_pool)
@@ -46,10 +48,29 @@ add_subdirectory(minimal_matmul)
 add_subdirectory(padded_slice)
 add_subdirectory(slice_write)
 
-# Umbrella target for everything migrated into this file so far: ttnncpp
-# links this one target instead of enumerating these 15 op libraries itself.
-# Add/remove entries here when adding/removing one of the ops above — never
-# in ttnn/CMakeLists.txt.
+# No team-specific CODEOWNERS rule — falls back to the ops-leads catch-all
+# today. Kept as the status quo owner rather than guessed at.
+add_subdirectory(bcast_to)
+add_subdirectory(copy)
+add_subdirectory(deepseek/mla/matmul_wo)
+add_subdirectory(deepseek/moe/deepseek_moe_gate)
+add_subdirectory(deepseek/moe/generalized_moe_gate)
+add_subdirectory(deepseek/moe/moe_gate_mm)
+add_subdirectory(deepseek_moe_post_combine_tilize)
+add_subdirectory(dropout)
+add_subdirectory(multi_scale_deformable_attn)
+add_subdirectory(plusone)
+add_subdirectory(reshape)
+add_subdirectory(ssm)
+add_subdirectory(tensor_prefetcher)
+add_subdirectory(test)
+add_subdirectory(topk_router_gpt)
+add_subdirectory(unary_backward)
+
+# Umbrella target for everything migrated into this file: ttnncpp links this
+# one target instead of enumerating these op libraries itself. Add/remove
+# entries here when adding/removing one of the ops above — never in
+# ttnn/CMakeLists.txt.
 add_library(ttnn_op_experimental_shared INTERFACE)
 add_library(TTNN::Ops::Experimental ALIAS ttnn_op_experimental_shared)
 target_link_libraries(
@@ -70,6 +91,22 @@ target_link_libraries(
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::SliceWrite
+        TTNN::Ops::Experimental::BcastTo
+        TTNN::Ops::Experimental::Copy
+        TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
+        TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
+        TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
+        TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
+        TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
+        TTNN::Ops::Experimental::Dropout
+        TTNN::Ops::Experimental::MultiScaleDeformableAttn
+        TTNN::Ops::Experimental::PlusOne
+        TTNN::Ops::Experimental::Reshape
+        TTNN::Ops::Experimental::SSM
+        TTNN::Ops::Experimental::TensorPrefetcher
+        TTNN::Ops::Experimental::Test
+        TTNN::Ops::Experimental::TopkRouterGpt
+        TTNN::Ops::Experimental::UnaryBackward
 )
 
 # target_link_libraries() alone is not enough: per the CMake docs, an OBJECT
@@ -101,4 +138,20 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MinimalMatmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PaddedSlice>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SliceWrite>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::BcastTo>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Copy>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Dropout>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MultiScaleDeformableAttn>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Test>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkRouterGpt>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::UnaryBackward>
 )
