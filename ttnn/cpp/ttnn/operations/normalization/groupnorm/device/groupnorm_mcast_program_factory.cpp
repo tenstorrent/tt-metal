@@ -240,11 +240,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     //    UnpackToDestFp32 writes into.
     //  - Legacy (non-welford): intermediates are stored fp32 (im_data_format=Float32) and
     //    accumulated in the fp32 DEST register, which requires fp32_dest_acc_en.
-    // Without fp32 DEST, inputs are silently truncated to TF32 (10 mantissa bits) through SrcA.
+    // Without fp32_dest_acc_en the DEST register is bfloat16, so accumulated/intermediate results are
+    // silently rounded to bf16 (7 mantissa bits) and UnpackToDestFp32 cannot be enabled. (SrcA's TF32
+    // rounding on FPU operands is separate and applies regardless of this flag.)
     TT_FATAL(
         !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
         "group_norm with Float32 input requires fp32_dest_acc_en=true in the compute kernel config; "
-        "otherwise precision is silently lost in the unpacker format conversion.");
+        "otherwise the DEST accumulator is bfloat16 and intermediate/accumulated results are silently "
+        "rounded to bf16.");
 
     // welford_unpack_fp32_active is true iff the compute kernel's intake transpose_tile
     // reads from a CB that carries UnpackToDestFp32, regardless of which CB is used: c_29

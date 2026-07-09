@@ -731,11 +731,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     //    UnpackToDestFp32 writes into.
     //  - Legacy (non-welford): the reduction is accumulated in the fp32 DEST register, which requires
     //    fp32_dest_acc_en.
-    // Without fp32 DEST, inputs are silently truncated to TF32 (10 mantissa bits) through SrcA.
+    // Without fp32_dest_acc_en the DEST register is bfloat16, so accumulated/intermediate results are
+    // silently rounded to bf16 (7 mantissa bits) and UnpackToDestFp32 cannot be enabled. (SrcA's TF32
+    // rounding on FPU operands is separate and applies regardless of this flag.)
     TT_FATAL(
         !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
         "group_norm with Float32 input requires fp32_dest_acc_en=true in the compute kernel config; "
-        "otherwise precision is silently lost in the unpacker format conversion.");
+        "otherwise the DEST accumulator is bfloat16 and intermediate/accumulated results are silently "
+        "rounded to bf16.");
 
     // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
     // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode).
