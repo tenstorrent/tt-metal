@@ -172,7 +172,7 @@ FORCE_INLINE
     }
     // Standard local-write types are 0..NOC_UNICAST_SCATTER_WRITE; nothing above that range reaches this
     // point (sparse returned above, and the gap types between it and sparse never hit the local-write path).
-    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE) {
+    if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
