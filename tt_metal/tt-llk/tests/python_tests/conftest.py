@@ -280,6 +280,18 @@ def pytest_addoption(parser):
         "setting TT_METAL_DISABLE_SFPLOADMACRO=1).",
     )
 
+    parser.addoption(
+        "--op",
+        action="append",
+        default=[],
+        metavar="OP",
+        help="Run only tests for the given SFPU op(s), matched by MathOperation "
+        "name (case-insensitive, EXACT — so '--op exp' does not also select "
+        "Exp2). Repeatable: --op exp --op log. Every SFPU op is accepted, but "
+        "ops not defined in helpers/include/sfpu_operations.h are still selected "
+        "with a warning (their tests may not build/run).",
+    )
+
 
 _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
@@ -467,8 +479,102 @@ def _collapse_runtime_only_variants(config, items):
         items[:] = keep
 
 
+_SFPU_OPS_HEADER = (
+    Path(__file__).resolve().parent.parent / "helpers" / "include" / "sfpu_operations.h"
+)
+
+
+def _sfpu_operations_header_text() -> str:
+    try:
+        return _SFPU_OPS_HEADER.read_text()
+    except OSError:
+        return ""
+
+
+def _op_defined_in_header(cpp_enum_value: str, header_text: str) -> bool:
+    """Whether an op's C++ enum name is referenced in sfpu_operations.h.
+
+    If the header can't be read we return True so we never emit false warnings.
+    """
+    if not header_text:
+        return True
+    return re.search(rf"\b{re.escape(cpp_enum_value)}\b", header_text) is not None
+
+
+def _item_op_names(item) -> set:
+    """Return the SFPU op name(s) a test covers, lowercased (e.g. {"exp"}).
+
+    First looks for a MathOperation in the test's parameters. If there isn't
+    one, it reads the op name from the test id instead (e.g. "MathOperation.Exp").
+    """
+    from helpers.llk_params import MathOperation
+
+    names = set()
+    callspec = getattr(item, "callspec", None)
+    if callspec is not None:
+        for val in callspec.params.values():
+            if isinstance(val, MathOperation):
+                names.add(val.name.lower())
+    if not names:
+        names.update(
+            m.lower() for m in re.findall(r"MathOperation\.(\w+)", item.nodeid)
+        )
+    return names
+
+
+def _select_tests_by_op(config, items):
+    """Run only the tests for the op(s) passed with --op.
+
+    Matching is case-insensitive and exact, so "exp" selects Exp but not Exp2.
+    If op isn't listed in sfpu_operations.h it is still run, just with a warning
+    that it may not work. A name that isn't an SFPU op at all is skipped with a warning.
+    Does nothing when --op isn't given.
+    """
+    requested = config.getoption("--op") or []
+    if not requested:
+        return
+
+    from helpers.llk_params import MathOperation
+
+    by_name = {op.name.lower(): op for op in MathOperation}
+    header_text = _sfpu_operations_header_text()
+
+    wanted = set()
+    for raw in requested:
+        op = by_name.get(raw.lower())
+        if op is None:
+            logger.warning(
+                f"--op {raw!r}: not a known SFPU op (MathOperation) — ignoring. "
+                f"Names are case-insensitive, e.g. Exp, Reciprocal, Gelu."
+            )
+            continue
+        cpp = op.value.cpp_enum_value
+        if not _op_defined_in_header(cpp, header_text):
+            logger.warning(
+                f"--op {raw!r}: '{op.name}' (C++ '{cpp}') is not defined in "
+                f"sfpu_operations.h; its tests may not build or run."
+            )
+        wanted.add(op.name.lower())
+
+    if not wanted:
+        return
+
+    selected, deselected = [], []
+    for item in items:
+        (selected if _item_op_names(item) & wanted else deselected).append(item)
+
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    logger.info(
+        f"--op kept {len(selected)} test(s) for op(s): {', '.join(sorted(wanted))}"
+    )
+
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
+    _select_tests_by_op(config, items)
+
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
         _collapse_runtime_only_variants(config, items)
 
