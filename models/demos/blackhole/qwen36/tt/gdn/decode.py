@@ -7,6 +7,7 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
+import models.demos.blackhole.qwen36.tt.gdn._experimental_path  # noqa: F401  (puts experimental backend on sys.path)
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, split_fused_conv_state
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn

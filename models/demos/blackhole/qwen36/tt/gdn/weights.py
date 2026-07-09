@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 import torch
 
+import models.demos.blackhole.qwen36.tt.gdn._experimental_path  # noqa: F401  (puts experimental backend on sys.path)
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
