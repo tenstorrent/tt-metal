@@ -85,7 +85,8 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
 
 MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
-void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+Program& MeshWorkloadImpl::add_program_impl(const MeshCoordinateRange& device_range, Program&& program) {
+    TT_FATAL(!is_finalized(), "Cannot add programs to a MeshWorkload after it has been finalized.");
     auto potential_intersection = find_intersection(programs_, device_range);
     TT_FATAL(
         !potential_intersection,
@@ -94,6 +95,11 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         *potential_intersection);
     Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
     programs_[device_range] = std::move(program);
+    return programs_.at(device_range);
+}
+
+void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
+    add_program_impl(device_range, std::move(program));
 }
 
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
@@ -110,7 +116,37 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     program.impl().validate_dataflow_buffer_region(mesh_device);
 }
 
+void MeshWorkloadImpl::add_program_and_compile(
+    const MeshCoordinateRange& device_range, Program&& program, MeshDevice& mesh_device) {
+    if (!program_binary_status_.empty()) {
+        TT_FATAL(
+            program_binary_status_.contains(mesh_device.id()),
+            "Reusing MeshWorkloads across MeshDevices is currently not supported.");
+    }
+    auto& added_program = add_program_impl(device_range, std::move(program));
+
+    // Compile and validate ahead of time as much as possible
+    added_program.impl().compile(&mesh_device);
+    added_program.impl().allocate_circular_buffers(&mesh_device);
+    added_program.impl().validate_circular_buffer_core_ranges(&mesh_device);
+    added_program.impl().validate_circular_buffer_region(&mesh_device);
+    added_program.impl().finalize_dataflow_buffer_configs();
+    added_program.impl().allocate_dataflow_buffers(&mesh_device);
+    // Validates only the DFB without considering the scratchpad region, as that requires runtime
+    // args to be set and must be validated at enqueue time.
+    added_program.impl().validate_dataflow_buffer_region(&mesh_device);
+
+    // Bind the workload to this MeshDevice ahead of any binary load. NotSent is accurate: the
+    // binaries have not been written yet.
+    set_program_binary_status(mesh_device.id(), ProgramBinaryStatus::NotSent);
+}
+
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
+    if (!program_binary_status_.empty()) {
+        TT_FATAL(
+            program_binary_status_.contains(mesh_device->id()),
+            "Reusing MeshWorkloads across MeshDevices is currently not supported.");
+    }
     // Multi-Step Compile:
     // 1. Compile Kernel Binaries
     // 2. Allocate and Validate CBs
@@ -138,9 +174,11 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
         TT_FATAL(
             program_binary_status_.contains(mesh_device->id()),
             "Reusing MeshWorkloads across MeshDevices is currently not supported.");
+    }
+    if (get_program_binary_status(mesh_device->id()) != ProgramBinaryStatus::NotSent) {
         TT_FATAL(
-            program_binary_status_.at(mesh_device->id()) == ProgramBinaryStatus::Committed,
-            "Expected Program Biinaries to be committed to DRAM.");
+            get_program_binary_status(mesh_device->id()) == ProgramBinaryStatus::Committed,
+            "Expected Program Binaries to be committed to DRAM.");
     } else {
         // Allocate kernel binary buffers of max size across all devices, to ensure we have lock step allocation.
         uint32_t max_kernel_bin_buf_size = 0;
@@ -445,6 +483,11 @@ std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() {
 
 const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_programs() const {
     return pimpl_->get_programs();
+}
+
+void MeshWorkload::add_program_and_compile(
+    const MeshCoordinateRange& device_range, Program&& program, MeshDevice& mesh_device) {
+    pimpl_->add_program_and_compile(device_range, std::move(program), mesh_device);
 }
 
 // For testing purposes only

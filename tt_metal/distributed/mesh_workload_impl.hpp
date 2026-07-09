@@ -43,6 +43,7 @@ private:
     bool runs_on_noc_multicast_only_cores();
     bool runs_on_noc_unicast_only_cores();
     void compile(MeshDevice* mesh_device);
+    Program& add_program_impl(const MeshCoordinateRange& device_range, Program&& program);
     void load_binaries(MeshCommandQueue& mesh_cq);
     void generate_dispatch_commands(MeshCommandQueue& mesh_cq);
     std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
@@ -93,6 +94,7 @@ public:
     uint64_t get_id() const { return id; }
 
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
+    void add_program_and_compile(const MeshCoordinateRange& device_range, Program&& program, MeshDevice& mesh_device);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
 

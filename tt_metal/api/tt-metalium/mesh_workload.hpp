@@ -33,6 +33,7 @@ public:
     // Requirement: In one MeshWorkload, device ranges for different programs must not share devices; each device can
     // belong to only one program. Not all devices need a program—leaving some devices unassigned is allowed.
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
+    void add_program_and_compile(const MeshCoordinateRange& device_range, Program&& program, MeshDevice& mesh_device);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
 

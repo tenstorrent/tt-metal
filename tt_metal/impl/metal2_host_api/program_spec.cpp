@@ -3192,4 +3192,26 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     return Program(std::move(program_impl));
 }
 
+distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
+    distributed::MeshDevice& mesh_device,
+    const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
+    bool skip_validation) {
+    distributed::MeshWorkload workload;
+    for (const auto& [device_range, program_spec] : program_specs) {
+        workload.add_program_and_compile(
+            device_range, MakeProgramFromSpec(mesh_device, program_spec, skip_validation), mesh_device);
+    }
+    return workload;
+}
+
+distributed::MeshWorkload MakeMeshWorkloadFromSpec(
+    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation) {
+    distributed::MeshWorkload workload;
+    workload.add_program_and_compile(
+        distributed::MeshCoordinateRange(mesh_device.shape()),
+        MakeProgramFromSpec(mesh_device, program_spec, skip_validation),
+        mesh_device);
+    return workload;
+}
+
 }  // namespace tt::tt_metal::experimental
