@@ -134,7 +134,7 @@ def _ttml_side() -> None:
 
 
 def _ttt_side() -> None:
-    """Host four TttGenerationWorkers (one per [1, 1] submesh) + MPIRolloutServer."""
+    """Host one TttGenerationWorker over four [1, 1] submeshes + MPIRolloutServer."""
     from transformers import AutoTokenizer
     from utils.mpi_rollout import MPIRolloutServer
     from utils.weight_bridge import HostWeightBridge
@@ -148,32 +148,28 @@ def _ttt_side() -> None:
         mesh_shape=ttnn.MeshShape(*TTT_PARENT_MESH_SHAPE),
         offset=ttnn.MeshCoordinate(0, 0),
     )
-    # One [1, 1] submesh per device; submeshes[i] is parent coord (0, i).
-    submeshes = parent_mesh.create_submeshes(ttnn.MeshShape(1, 1))
-    assert len(submeshes) == NUM_SUBMESHES, f"expected {NUM_SUBMESHES} submeshes, got {len(submeshes)}"
 
-    workers: List[Any] = []
+    worker: Any = None
     server: Any = None
     try:
         stop_token_ids, pad_token_id = llama_stop_and_pad(MODEL_ID)
-        for i, submesh in enumerate(submeshes):
-            print(f"[TTT rank {TTT_RANK}] building worker on submesh {i}", flush=True)
-            workers.append(
-                TttGenerationWorker(
-                    mesh_device=submesh,
-                    model_source=MODEL_ID,
-                    max_batch_size=TTT_MAX_BATCH_SIZE,
-                    max_seq_len=TTT_MAX_SEQ_LEN,
-                    instruct=True,
-                    optimizations=bf16_attn_bfp8_mlp_optimizations,
-                    stop_token_ids=stop_token_ids,
-                    pad_token_id=pad_token_id,
-                    temperature=TEMPERATURE,
-                    top_k=0,
-                    top_p=1.0,
-                    seed=0,
-                )
-            )
+        worker = TttGenerationWorker(
+            mesh_device=parent_mesh,
+            model_source=MODEL_ID,
+            max_batch_size=TTT_MAX_BATCH_SIZE,
+            max_seq_len=TTT_MAX_SEQ_LEN,
+            instruct=True,
+            optimizations=bf16_attn_bfp8_mlp_optimizations,
+            stop_token_ids=stop_token_ids,
+            pad_token_id=pad_token_id,
+            temperature=TEMPERATURE,
+            top_k=0,
+            top_p=1.0,
+            seed=0,
+        )
+        assert (
+            len(worker.submeshes) == NUM_SUBMESHES
+        ), f"expected {NUM_SUBMESHES} submeshes, got {len(worker.submeshes)}"
 
         def _on_weights_received(per_submesh: List[dict]) -> None:
             """Validate each submesh's dict against the update_weights contract, then apply."""
@@ -193,37 +189,38 @@ def _ttt_side() -> None:
                     assert required_key in hf_dict, f"submesh {i} missing required HF key {required_key!r}"
             print(f"[TTT rank {TTT_RANK}] received weights for {len(per_submesh)} submeshes; applying", flush=True)
             t0 = time.perf_counter()
-            for i, (worker, hf_dict) in enumerate(zip(workers, per_submesh)):
-                worker.update_weights(hf_dict)
+            worker.update_weights(per_submesh)
             print(
-                f"[TTT rank {TTT_RANK}] applied to all {len(workers)} workers in {time.perf_counter() - t0:.2f}s",
+                f"[TTT rank {TTT_RANK}] applied to all {len(per_submesh)} submeshes in {time.perf_counter() - t0:.2f}s",
                 flush=True,
             )
 
-        bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=submeshes)
+        bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=worker.submeshes)
         server = MPIRolloutServer(
             peer_rank=TTML_RANK,
             bridge=bridge,
-            generate_fn=workers[0].generate,  # RPC generate is served by submesh 0
+            generate_fn=worker.generate,
             on_weights_received=_on_weights_received,
         )
         server.serve_forever()
 
-        # verify all four submeshes got correct weights
+        # verify all submeshes got correct weights: a batch spanning every submesh
+        # (identical prompts) must produce identical output.
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         prompt_ids = tokenizer.encode(PROMPT, add_special_tokens=True)
+        verify_batch = NUM_SUBMESHES * TTT_MAX_BATCH_SIZE
         print("\n========= per-submesh verification =========", flush=True)
-        outs = []
-        for i, worker in enumerate(workers):
-            out = worker.generate([prompt_ids], max_new_tokens=VERIFY_NEW_TOKENS, temperature=TEMPERATURE)[0]
-            outs.append(out)
-            print(f"[submesh {i}] ({len(out)} tok) {tokenizer.decode(out, skip_special_tokens=False)!r}", flush=True)
-        for i in range(1, NUM_SUBMESHES):
-            assert outs[i] == outs[0], f"submesh {i} completion diverged from submesh 0 -> weights differ"
-        print("all 4 submeshes produced identical output\n============================================\n", flush=True)
+        outs = worker.generate([prompt_ids] * verify_batch, max_new_tokens=VERIFY_NEW_TOKENS, temperature=TEMPERATURE)
+        print(f"[submesh 0] ({len(outs[0])} tok) {tokenizer.decode(outs[0], skip_special_tokens=False)!r}", flush=True)
+        for i in range(1, verify_batch):
+            assert outs[i] == outs[0], f"submesh completion {i} diverged from 0 -> weights differ"
+        print(
+            f"all {NUM_SUBMESHES} submeshes produced identical output\n============================================\n",
+            flush=True,
+        )
     finally:
         server = None
-        workers = []
+        worker = None
         gc.collect()
         ttnn.close_mesh_device(parent_mesh)
 

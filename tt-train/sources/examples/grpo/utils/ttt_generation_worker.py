@@ -2,17 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Family-agnostic tt-transformers generation worker.
+"""Data-parallel tt-transformers generation worker: owns a [1, N] mesh, splits it into
+N [1, 1] submeshes, and runs prefill/decode concurrently across one model per submesh
+via a single Generator (data_parallel == N).
 
-Hosts a ``Transformer`` on one ``ttnn.MeshDevice``. ``generate`` is the
-``generate_fn`` and ``update_weights`` the ``on_weights_received`` callback of
-:class:`MPIRolloutServer`.
-
-Sampling is on-device: ``temperature`` / ``top_k`` / ``top_p`` / ``seed`` are
-baked into the captured decode trace at construction. The per-call
-``temperature`` / ``top_p`` / ``seed`` kwargs of :meth:`generate` are accepted
-for RPC-signature stability but IGNORED -- mutating them would silently diverge
-from the trace.
+On-device sampling: temperature/top_k/top_p/seed are baked into each submesh's decode
+trace at construction, so generate()'s per-call temperature/top_p/seed are IGNORED.
 """
 
 from __future__ import annotations
@@ -21,8 +16,6 @@ import os
 import time
 from typing import Any, Callable, List, Optional, Sequence
 
-import numpy as np
-
 import ttnn
 from models.common.sampling import SamplingParams
 
@@ -30,11 +23,7 @@ OptimizationsFn = Callable[[int, str], Any]
 
 
 class TttGenerationWorker:
-    """Generic tt-transformers generation worker.
-
-    Does NOT open/close the device: the caller passes an already-open
-    ``mesh_device`` and owns its lifetime.
-    """
+    """Owns the caller's already-open [1, N] mesh (never closes it) and its submeshes."""
 
     def __init__(
         self,
@@ -58,80 +47,86 @@ class TttGenerationWorker:
         import torch
 
         from models.tt_transformers.tt.common import PagedAttentionConfig
-        from models.tt_transformers.tt.generator import Generator
+        from models.tt_transformers.tt.generator import Generator, create_submeshes
         from models.tt_transformers.tt.model import Transformer
         from models.tt_transformers.tt.model_config import ModelArgs
 
-        self.mesh_device: Any = mesh_device
-        self._model_source: str = model_source
+        self.parent_mesh: Any = mesh_device
         self._dtype: Any = ttnn.bfloat16
-        self._max_batch_size: int = int(max_batch_size)
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
         self._pad_token_id: int = int(pad_token_id)
 
-        # ModelArgs reads HF_MODEL from the env for checkpoint + tokenizer paths.
-        os.environ["HF_MODEL"] = model_source
+        # one [1,1] submesh per device of the parent mesh
+        self._data_parallel: int = mesh_device.get_num_devices()
+        self.submeshes: List[Any] = create_submeshes(mesh_device, self._data_parallel)
+        assert (
+            len(self.submeshes) == self._data_parallel
+        ), f"expected {self._data_parallel} submeshes, got {len(self.submeshes)}"
 
-        # dummy_weights=True boots fast (skips HF tokenizer load + Hub download);
-        # first update_weights() overwrites the dummy state with real weights.
-        self.model_args = ModelArgs(
-            self.mesh_device,
-            instruct=instruct,
-            max_batch_size=max_batch_size,
-            optimizations=lambda ma: optimizations(ma.n_layers, ma.model_name),
-            max_seq_len=max_seq_len,
-            cache_hf=True,
-            # Hard-coded: short-circuits the dump_tensor_flatbuffer collective that
-            # would otherwise deadlock with an asymmetric peer.
-            disable_disk_cache=True,
-            dummy_weights=dummy_weights,
-        )
-        self.model_args.lm_head_dtype = ttnn.bfloat16
-        self.model_args.ccl_dtype = ttnn.bfloat16
+        # max_batch_size is per-submesh; the global batch spans all submeshes
+        self._max_batch_size_per_dp: int = int(max_batch_size)
+        self._global_batch_size: int = self._max_batch_size_per_dp * self._data_parallel
 
-        # Paged-attention block-table sizing: big enough that worst-case
-        # prompt+decode never overflows max_seq_len.
+        os.environ["HF_MODEL"] = model_source  # ModelArgs reads HF_MODEL from env
+
+        # paged block-table sizing (per submesh), sized for worst-case prompt+decode
         required_blocks_per_user = (max_seq_len + paged_block_size - 1) // paged_block_size
-        max_num_blocks = max(min_num_blocks, max_batch_size * required_blocks_per_user)
-        blocks_per_user = max_num_blocks // max_batch_size
-        max_num_blocks = blocks_per_user * max_batch_size
-        self._paged_attention_config = PagedAttentionConfig(
-            block_size=paged_block_size,
-            max_num_blocks=max_num_blocks,
-        )
+        max_num_blocks = max(min_num_blocks, self._max_batch_size_per_dp * required_blocks_per_user)
+        blocks_per_user = max_num_blocks // self._max_batch_size_per_dp
+        max_num_blocks = blocks_per_user * self._max_batch_size_per_dp
+        self._paged_attention_config = PagedAttentionConfig(block_size=paged_block_size, max_num_blocks=max_num_blocks)
         self._paged_cache_max_seq_len = paged_block_size * blocks_per_user
-        self.page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, blocks_per_user)
 
-        state_dict = self.model_args.load_state_dict()
+        # global page table; decode_forward chunks it per submesh
+        base = torch.arange(max_num_blocks, dtype=torch.int32).repeat(self._data_parallel)
+        self.page_table = base.reshape(self._global_batch_size, blocks_per_user)
 
-        self.model = Transformer(
-            args=self.model_args,
-            mesh_device=self.mesh_device,
-            dtype=self._dtype,
-            state_dict=state_dict,
-            weight_cache_path=None,
-            paged_attention_config=self._paged_attention_config,
-        )
-        self.kv_cache = [layer.attention.layer_past for layer in self.model.layers]
+        # one model per submesh, reusing one host state_dict (DP copies, not shards)
+        self.model_args: List[Any] = []
+        self.models: List[Any] = []
+        self.tt_kv_cache: List[Any] = []
+        state_dict = None
+        for submesh in self.submeshes:
+            model_args = ModelArgs(
+                submesh,
+                instruct=instruct,
+                max_batch_size=self._max_batch_size_per_dp,
+                optimizations=lambda ma: optimizations(ma.n_layers, ma.model_name),
+                max_seq_len=max_seq_len,
+                cache_hf=True,
+                dummy_weights=dummy_weights,  # fast boot; first update_weights() installs real weights
+            )
+            model_args.lm_head_dtype = ttnn.bfloat16
+            model_args.ccl_dtype = ttnn.bfloat16
+            if state_dict is None:
+                state_dict = model_args.load_state_dict()
+            weight_cache_path = model_args.weight_cache_path(self._dtype)
+            model = Transformer(
+                args=model_args,
+                mesh_device=submesh,
+                dtype=self._dtype,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                paged_attention_config=self._paged_attention_config,
+            )
+            self.model_args.append(model_args)
+            self.models.append(model)
+            self.tt_kv_cache.append([layer.attention.layer_past for layer in model.layers])
 
-        # tokenizer=None: Generator only reads its tokenizer from multimodal
-        # helpers we don't call; stop/pad IDs live on this class instead.
+        # tokenizer=None: unused here (stop/pad IDs live on this class)
         self.generator = Generator(
-            model=[self.model],
-            model_args=[self.model_args],
-            mesh_device=self.mesh_device,
+            model=self.models,
+            model_args=self.model_args,
+            mesh_device=self.parent_mesh,
             tokenizer=None,
         )
 
-        # Pin one SamplingParams: decode_forward fuses the sampling kernel into
-        # the captured trace and its return slot then carries sampled token IDs
-        # instead of raw logits. Values are baked in at first capture, so pin
-        # once here -- runtime changes would be ignored or force a re-capture.
-        assert self.model.sampling is not None, (
-            "TttGenerationWorker requires on-device sampling support, but "
-            "model.sampling is None for this configuration (vocab_size / "
-            "mesh shape combination unsupported)."
-        )
+        # baked into each submesh's decode trace at first capture, so pin once
+        for model in self.models:
+            assert model.sampling is not None, (
+                "TttGenerationWorker requires on-device sampling support, but model.sampling "
+                "is None for this configuration (vocab_size / mesh shape combination unsupported)."
+            )
         self._sampling_params = SamplingParams(
             temperature=float(temperature),
             top_k=int(top_k),
@@ -150,11 +145,8 @@ class TttGenerationWorker:
         enable_trace: bool = True,
         stop_at_eos: bool = True,
     ) -> List[List[int]]:
-        """Prefill + decode a batch of token-ID prompts.
-
-        ``temperature`` / ``top_p`` / ``seed`` are ignored (baked into the trace
-        at construction); see the module docstring.
-        """
+        """Prefill + decode a token-ID prompt batch, data-parallel across submeshes. The
+        batch is padded to the global size; temperature/top_p/seed are ignored (baked in)."""
         import torch
 
         del temperature, top_p, seed  # baked into self._sampling_params
@@ -165,12 +157,12 @@ class TttGenerationWorker:
         _t_total = time.perf_counter()
 
         prompts, prompt_lens, active_batch_size = self._prepare_prompt_batch(prompts, max_new_tokens)
-        batch_size = len(prompts)
+        batch_size = len(prompts)  # == self._global_batch_size
         max_prompt_len = max(prompt_lens)
         print(
-            f"[TttGenerationWorker] generate() start: active_batch_size={active_batch_size}, "
-            f"batch_size={batch_size}, max_prompt_len={max_prompt_len}, "
-            f"max_new_tokens={max_new_tokens}, enable_trace={enable_trace}",
+            f"[TttGenerationWorker] generate() start: data_parallel={self._data_parallel}, "
+            f"active_batch_size={active_batch_size}, global_batch_size={batch_size}, "
+            f"max_prompt_len={max_prompt_len}, max_new_tokens={max_new_tokens}, enable_trace={enable_trace}",
         )
 
         pad_id = self._pad_token_id
@@ -178,30 +170,25 @@ class TttGenerationWorker:
         for i, p in enumerate(prompts):
             input_tokens_prefill_pt[i, : len(p)] = torch.tensor(p, dtype=torch.int32)
 
-        kv_cache = [self.kv_cache]
         self._reset_kv_cache()
 
-        # With on-device sampling, prefill_forward_text returns
-        # (output_tokens, log_probs); output_tokens is [batch_size, 1] int64.
+        # On-device sampling -> prefill returns (tokens, log_probs); tokens is [global_batch, 1].
         _t_prefill = time.perf_counter()
-        output_tokens, _log_probs = self.generator.prefill_forward_text(
+        prefill_out = self.generator.prefill_forward_text(
             input_tokens_prefill_pt,
             page_table=self.page_table,
-            kv_cache=kv_cache,
+            kv_cache=self.tt_kv_cache,
             prompt_lens=prompt_lens,
             sampling_params=self._sampling_params,
             warmup_prefill=False,
             enable_trace=enable_trace,
         )
-        prefilled_token = output_tokens.reshape(-1)
+        prefilled_token = (prefill_out[0] if isinstance(prefill_out, tuple) else prefill_out).reshape(-1)
         _prefill_s = time.perf_counter() - _t_prefill
-        # Un-padded prompt lengths over active users only (filler slots excluded).
         prefill_real_tokens = sum(prompt_lens[:active_batch_size])
-        prefill_tok_s = (prefill_real_tokens / _prefill_s) if _prefill_s > 0 else 0.0
         print(
             f"[TttGenerationWorker] generate(): prefill done in {_prefill_s:.2f}s "
-            f"({batch_size} users, {prefill_real_tokens} real prompt tokens, "
-            f"{prefill_tok_s:.1f} prompt tok/s)",
+            f"({batch_size} users, {prefill_real_tokens} real prompt tokens)",
         )
 
         completions: List[List[int]] = [[] for _ in range(batch_size)]
@@ -210,76 +197,48 @@ class TttGenerationWorker:
             user_done[u] = True
         stop_ids = self._stop_token_ids if stop_at_eos else frozenset()
 
-        active_completion_tokens = 0
-        for u in range(batch_size):
-            if user_done[u]:
-                continue
-            tok = int(prefilled_token[u].item())
-            if stop_at_eos and tok in stop_ids:
-                user_done[u] = True
-            else:
-                completions[u].append(tok)
-                active_completion_tokens += 1
+        def _collect_step(step_tokens: List[int]) -> None:
+            for u in range(batch_size):
+                if user_done[u]:
+                    continue
+                tok = step_tokens[u]
+                if stop_at_eos and tok in stop_ids:
+                    user_done[u] = True
+                else:
+                    completions[u].append(tok)
+
+        _collect_step([int(t) for t in prefilled_token.tolist()])  # first token came from prefill
 
         if all(user_done) or max_new_tokens <= 1:
             print(
-                f"[TttGenerationWorker] generate() done (no decode loop needed): "
-                f"total={time.perf_counter() - _t_total:.2f}s, "
-                f"completion_tokens={active_completion_tokens}",
+                f"[TttGenerationWorker] generate() done (no decode loop): "
+                f"total={time.perf_counter() - _t_total:.2f}s",
             )
             return completions[:active_batch_size]
 
         current_pos = torch.tensor(prompt_lens, dtype=torch.int32)
-        # decode_forward expects `tokens` shape [batch_size, 1].
-        out_tok = prefilled_token.unsqueeze(1)
+        out_tok = prefilled_token.unsqueeze(1)  # stays on device; decoding continues on-device
 
-        ASYNC_READ_CHUNK = 4
+        READ_EVERY = 4
+        buffered_reads: List[Any] = []
+        read_events: Any = None
+
+        def _drain() -> None:
+            for ev in read_events:
+                ttnn.event_synchronize(mesh_event=ev)
+            for step_reads in buffered_reads:
+                gathered = self.generator.process_decode_output_host(step_reads, is_tokens=True)
+                tokens = gathered[0] if isinstance(gathered, tuple) else gathered
+                _collect_step([int(t) for t in tokens.reshape(-1).tolist()])
 
         _t_decode = time.perf_counter()
         steps_executed = 0
-        decode_active_tokens = 0
-
-        # ``pending`` is the just-finished chunk drained at the next boundary;
-        # ``current`` is the chunk being filled this step.
-        pending_hosts: List[Any] = []
-        pending_event: Any = None
-        current_hosts: List[Any] = []
-        current_event: Any = None
-
-        def _drain_chunk(host_chunks: List[Any]) -> None:
-            """Fold an event-synced chunk's host tokens into completions /
-            user_done / decode_active_tokens ('first stop wins' per user)."""
-            nonlocal decode_active_tokens
-            if not host_chunks:
-                return
-            chunk_len = len(host_chunks)
-            chunk_arr = np.empty((batch_size, chunk_len), dtype=np.int64)
-            for j, host_outs in enumerate(host_chunks):
-                # data_parallel == 1: host_outs has one entry, either
-                # (tokens_host, log_probs_host) or a bare tokens host tensor.
-                h0 = host_outs[0]
-                token_host = h0[0] if isinstance(h0, tuple) else h0
-                tok_torch = self.model.process_output_decode(token_host, self._max_batch_size, S=1, is_tokens=True)
-                chunk_arr[:, j] = tok_torch.to(torch.int64).numpy()
-
-            for j in range(chunk_len):
-                for u in range(batch_size):
-                    if user_done[u]:
-                        continue
-                    tok = int(chunk_arr[u, j])
-                    if stop_at_eos and tok in stop_ids:
-                        user_done[u] = True
-                    else:
-                        completions[u].append(tok)
-                        decode_active_tokens += 1
-
-        broke_on_stop = False
         for step in range(max_new_tokens - 1):
-            tt_decode_output = self.generator.decode_forward(
+            decoded = self.generator.decode_forward(
                 out_tok,
                 current_pos,
                 page_table=self.page_table,
-                kv_cache=kv_cache,
+                kv_cache=self.tt_kv_cache,
                 enable_trace=enable_trace,
                 sampling_params=self._sampling_params,
                 reset_batch=(step == 0),
@@ -287,67 +246,45 @@ class TttGenerationWorker:
                 output_tokens=out_tok,
                 read_from_device=False,
             )
-            host_outs, event_list = self.generator.read_decode_output(tt_decode_output, async_read=True)
-            current_hosts.append(host_outs)
-            # cq=0 is in-order, so the latest event covers every d2h enqueued
-            # earlier in the chunk -- sync only on this one at the boundary.
-            current_event = event_list[-1]
+            step_reads, read_events = self.generator.read_decode_output(decoded, async_read=True)
+            buffered_reads.append(step_reads)
             current_pos = current_pos + 1
             steps_executed += 1
+            if (step + 1) % READ_EVERY == 0:
+                _drain()
+                buffered_reads = []
+                if stop_at_eos and all(user_done):
+                    break
 
-            if (step + 1) % ASYNC_READ_CHUNK == 0:
-                if pending_event is not None:
-                    ttnn.event_synchronize(mesh_event=pending_event)
-                    _drain_chunk(pending_hosts)
-                    if stop_at_eos and all(user_done):
-                        broke_on_stop = True
-                        break
-                pending_hosts, pending_event = current_hosts, current_event
-                current_hosts, current_event = [], None
+        if buffered_reads:
+            _drain()
 
-        # Final flush: even on early EOS break, event_synchronize in-flight
-        # events so d2h DMAs finish before the host tensors fall out of scope.
-        if pending_event is not None:
-            ttnn.event_synchronize(mesh_event=pending_event)
-            if not broke_on_stop:
-                _drain_chunk(pending_hosts)
-        if current_event is not None:
-            ttnn.event_synchronize(mesh_event=current_event)
-            if not broke_on_stop:
-                _drain_chunk(current_hosts)
-
-        active_completion_tokens += decode_active_tokens
         _decode_s = time.perf_counter() - _t_decode
-        _per_step_ms = (_decode_s / steps_executed * 1000.0) if steps_executed > 0 else 0.0
-        # "active" tok/s = useful tokens for active users; "device" tok/s =
-        # everything computed incl. filler slots (matches benchmark figures).
-        decode_active_tok_s = (decode_active_tokens / _decode_s) if _decode_s > 0 else 0.0
-        decode_device_tokens = steps_executed * batch_size
-        decode_device_tok_s = (decode_device_tokens / _decode_s) if _decode_s > 0 else 0.0
-        print(
-            f"[TttGenerationWorker] generate(): decode loop done in {_decode_s:.2f}s "
-            f"({steps_executed} steps, {_per_step_ms:.1f} ms/step, "
-            f"active_tokens={decode_active_tokens} -> {decode_active_tok_s:.1f} tok/s, "
-            f"device_tokens={decode_device_tokens} (B={batch_size}) -> {decode_device_tok_s:.1f} tok/s)",
-        )
         total_s = time.perf_counter() - _t_total
-        overall_active_tok_s = (active_completion_tokens / total_s) if total_s > 0 else 0.0
+        decode_active_tokens = sum(len(c) for c in completions[:active_batch_size])
+        overall_tok_s = (decode_active_tokens / total_s) if total_s > 0 else 0.0
         print(
             f"[TttGenerationWorker] generate() done: total={total_s:.2f}s "
-            f"(prefill={_prefill_s:.2f}s, decode={_decode_s:.2f}s), "
-            f"completion_tokens={active_completion_tokens} -> {overall_active_tok_s:.1f} tok/s overall",
+            f"(prefill={_prefill_s:.2f}s, decode={_decode_s:.2f}s over {steps_executed} steps), "
+            f"completion_tokens={decode_active_tokens} -> {overall_tok_s:.1f} tok/s overall",
         )
         return completions[:active_batch_size]
 
-    def update_weights(self, hf_dict: dict) -> None:
-        """Apply a received HF-keyed weight dict to the underlying model."""
-        self.model.update_weights(hf_dict)
+    def update_weights(self, per_submesh: List[dict]) -> None:
+        """Apply one received HF-keyed weight dict per submesh (order matches
+        ``self.submeshes`` / the bridge's replication targets)."""
+        assert len(per_submesh) == len(
+            self.models
+        ), f"update_weights got {len(per_submesh)} dicts but worker has {len(self.models)} submeshes"
+        for model, hf_dict in zip(self.models, per_submesh):
+            model.update_weights(hf_dict)
 
     def _reset_kv_cache(self) -> None:
-        for layer in self.model.layers:
-            k_cache, v_cache = layer.attention.layer_past
-            ttnn.mul(k_cache, 0, output_tensor=k_cache)
-            ttnn.mul(v_cache, 0, output_tensor=v_cache)
+        for model in self.models:
+            for layer in model.layers:
+                k_cache, v_cache = layer.attention.layer_past
+                ttnn.mul(k_cache, 0, output_tensor=k_cache)
+                ttnn.mul(v_cache, 0, output_tensor=v_cache)
         self.generator.prev_page_table = None
 
     def _prepare_prompt_batch(
@@ -356,37 +293,35 @@ class TttGenerationWorker:
         assert max_new_tokens >= 0, "max_new_tokens must be non-negative"
 
         active_batch_size = len(prompts)
-        assert 0 < active_batch_size <= self._max_batch_size, (
-            f"generate() got {active_batch_size} prompts but worker was built with "
-            f"max_batch_size={self._max_batch_size}"
+        assert 0 < active_batch_size <= self._global_batch_size, (
+            f"generate() got {active_batch_size} prompts but worker global batch is "
+            f"{self._global_batch_size} (data_parallel={self._data_parallel} x "
+            f"max_batch_size={self._max_batch_size_per_dp})"
         )
 
         normalized_prompts = [[int(tok) for tok in prompt] for prompt in prompts]
         prompt_lens = [len(p) for p in normalized_prompts]
         assert min(prompt_lens) > 0, "empty prompts are not supported"
 
-        max_prefill_len = self.model_args.max_seq_len - max_new_tokens
+        max_prefill_len = self.model_args[0].max_seq_len - max_new_tokens
         assert (
             max_prefill_len > 0
-        ), f"max_new_tokens ({max_new_tokens}) must be smaller than max_seq_len ({self.model_args.max_seq_len})"
+        ), f"max_new_tokens ({max_new_tokens}) must be smaller than max_seq_len ({self.model_args[0].max_seq_len})"
 
         if max(prompt_lens) > max_prefill_len:
             normalized_prompts = [p[-max_prefill_len:] for p in normalized_prompts]
             prompt_lens = [len(p) for p in normalized_prompts]
 
         max_prompt_len = max(prompt_lens)
-        assert max_prompt_len + max_new_tokens <= self.model_args.max_seq_len, (
-            f"prompt prefill tokens ({max_prompt_len}) + decode tokens ({max_new_tokens}) "
-            f"must be <= max_seq_len ({self.model_args.max_seq_len})"
-        )
         assert max_prompt_len + max_new_tokens <= self._paged_cache_max_seq_len, (
             f"prompt prefill tokens ({max_prompt_len}) + decode tokens ({max_new_tokens}) "
             f"must be <= paged-cache capacity ({self._paged_cache_max_seq_len})"
         )
 
-        if active_batch_size < self._max_batch_size:
+        # Pad to the global batch so every submesh's slots are filled.
+        if active_batch_size < self._global_batch_size:
             filler_prompt = [int(self._pad_token_id)]
-            pad_slots = self._max_batch_size - active_batch_size
+            pad_slots = self._global_batch_size - active_batch_size
             normalized_prompts.extend([filler_prompt] * pad_slots)
             prompt_lens.extend([1] * pad_slots)
 

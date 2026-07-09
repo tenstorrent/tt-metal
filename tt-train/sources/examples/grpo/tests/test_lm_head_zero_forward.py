@@ -23,10 +23,11 @@ TEMPERATURE = 0.0  # greedy
 def completer():
     """Module-scoped: build once, zero the LM head once, run both tests."""
     with open_completer(dummy_weights=True) as c:
-        V = c.model.lm_head.vocab_size
-        H = c.model.lm_head.args.dim
+        model = c.models[0]
+        V = model.lm_head.vocab_size
+        H = model.lm_head.args.dim
         weight_hf = torch.zeros(V, H, dtype=torch.bfloat16)
-        c.model.lm_head.update(weight=as_update_input(weight_hf, c.mesh_device))
+        model.lm_head.update(weight=as_update_input(weight_hf, model.mesh_device))
         yield c
 
 
@@ -42,17 +43,18 @@ def _build_random_hidden_state(completer):
 
     from models.tt_transformers.tt.common import Mode
 
-    dim = completer.model_args.dim
+    model = completer.models[0]
+    dim = model.args.dim
     x = ttnn.from_torch(
         torch.randn(1, 1, 32, dim, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=completer.mesh_device,
+        device=model.mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(completer.mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
     )
 
-    lm_head_input_mem_cfg = completer.model_args.get_lm_head_input_mem_config(Mode.PREFILL, None)
+    lm_head_input_mem_cfg = model.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
     if lm_head_input_mem_cfg.is_sharded():
         x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
 
@@ -63,7 +65,8 @@ def test_lm_head_logits_zero_when_weights_zero(completer):
     """Zero weights -> zero logits elementwise."""
     import ttnn
 
-    logits = ttnn.to_torch(completer.model.lm_head.forward(_build_random_hidden_state(completer)))
+    model = completer.models[0]
+    logits = ttnn.to_torch(model.lm_head.forward(_build_random_hidden_state(completer)))
     assert torch.equal(logits, torch.zeros_like(logits)), (
         "LMHead logits != 0 after zeroing weights: "
         f"max|logits|={float(logits.abs().max()):.6g}, "

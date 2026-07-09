@@ -51,12 +51,10 @@ _TOPOLOGIES = {
     "2x2": {
         "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_2dev.yaml",
         "ttt_parent_mesh_shape": (1, 2),
-        "num_submeshes": 2,
     },
     "4x4": {
         "ttml_device_config_rel": "tt-train/configs/training_configs/grpo_boolq_llama_1b_ddp_4dev.yaml",
         "ttt_parent_mesh_shape": (1, 4),
-        "num_submeshes": 4,
     },
 }
 
@@ -70,7 +68,6 @@ _TOPO = _TOPOLOGIES[TOPOLOGY]
 
 TTML_DEVICE_CONFIG_REL = _TOPO["ttml_device_config_rel"]
 TTT_PARENT_MESH_SHAPE = _TOPO["ttt_parent_mesh_shape"]
-NUM_SUBMESHES = _TOPO["num_submeshes"]
 
 TTT_MAX_BATCH_SIZE = 32
 TTT_MAX_SEQ_LEN = 2048
@@ -272,54 +269,47 @@ def _ttt_main() -> None:
         mesh_shape=ttnn.MeshShape(*TTT_PARENT_MESH_SHAPE),
         offset=ttnn.MeshCoordinate(0, 0),
     )
-    submeshes = parent_mesh.create_submeshes(ttnn.MeshShape(1, 1))
-    assert len(submeshes) == NUM_SUBMESHES, f"expected {NUM_SUBMESHES} submeshes, got {len(submeshes)}"
 
     # Read the same yaml as the ttml rank so both use the same GRPO sampling
     # temperature (the worker bakes it into the captured decode trace).
     raw = load_config(os.path.join(str(REPO_ROOT), TTML_DEVICE_CONFIG_REL))
     grpo_temperature = float(raw["training_config"]["grpo_config"]["temperature"])
 
-    workers: list[Any] = []
+    worker: Any = None
     server: Any = None
     try:
         stop_token_ids, pad_token_id = llama_stop_and_pad(MODEL_ID)
 
-        for submesh in submeshes:
-            workers.append(
-                TttGenerationWorker(
-                    mesh_device=submesh,
-                    model_source=MODEL_ID,
-                    max_batch_size=TTT_MAX_BATCH_SIZE,
-                    max_seq_len=TTT_MAX_SEQ_LEN,
-                    instruct=True,
-                    optimizations=bf16_attn_bfp8_mlp_optimizations,
-                    stop_token_ids=stop_token_ids,
-                    pad_token_id=pad_token_id,
-                    temperature=grpo_temperature,
-                    top_k=0,
-                    top_p=1.0,
-                    seed=None,
-                )
-            )
+        # One worker owns the whole parent mesh: it splits it into [1,1] submeshes
+        # and runs generation data-parallel across them.
+        worker = TttGenerationWorker(
+            mesh_device=parent_mesh,
+            model_source=MODEL_ID,
+            max_batch_size=TTT_MAX_BATCH_SIZE,
+            max_seq_len=TTT_MAX_SEQ_LEN,
+            instruct=True,
+            optimizations=bf16_attn_bfp8_mlp_optimizations,
+            stop_token_ids=stop_token_ids,
+            pad_token_id=pad_token_id,
+            temperature=grpo_temperature,
+            top_k=0,
+            top_p=1.0,
+            seed=None,
+        )
 
-        # Bridge replicates each transferred policy onto every submesh (one dict
-        # per submesh); generate RPCs are served by submesh 0's worker.
-        bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=submeshes)
-
-        def _on_weights_received(per_submesh: list) -> None:
-            for worker, hf_dict in zip(workers, per_submesh):
-                worker.update_weights(hf_dict)
+        # The bridge replicates each transferred policy onto every submesh; the
+        # worker applies one dict per submesh in update_weights().
+        bridge = HostWeightBridge.init_receiver(mesh=parent_mesh, peer_rank=TTML_RANK, submeshes=worker.submeshes)
 
         server = MPIRolloutServer(
             peer_rank=TTML_RANK,
             bridge=bridge,
-            generate_fn=workers[0].generate,
-            on_weights_received=_on_weights_received,
+            generate_fn=worker.generate,
+            on_weights_received=worker.update_weights,
         )
         server.serve_forever()
     finally:
-        workers = []
+        worker = None
         server = None
         gc.collect()
         ttnn.close_mesh_device(parent_mesh)

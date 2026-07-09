@@ -21,21 +21,23 @@ SEQ_LEN = 128
 @pytest.fixture(scope="module")
 def completer_and_mlp():
     with open_completer(dummy_weights=True) as completer:
-        yield completer, completer.model.layers[0].feed_forward
+        model = completer.models[0]
+        yield completer, model.layers[0].feed_forward
 
 
 def _build_random_mlp_input(completer):
     """Construct a synthetic random ``(1, 1, SEQ_LEN, dim)`` MLP input."""
     import ttnn
 
-    dim = completer.model_args.dim
+    model = completer.models[0]
+    dim = model.args.dim
     return ttnn.from_torch(
         torch.randn(1, 1, SEQ_LEN, dim, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=completer.mesh_device,
+        device=model.mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(completer.mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
     )
 
 
