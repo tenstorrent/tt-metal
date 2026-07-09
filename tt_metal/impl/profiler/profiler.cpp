@@ -234,7 +234,11 @@ void populateZoneSrcLocations(
 
         auto did_insert = zone_src_locations.insert(zone_src_location);
         if (did_insert.second && (hash_to_zone_src_locations.contains(hash_16bit))) {
-            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
+            // WORKAROUND: with full per-op zones on a large fused layer, the 16-bit
+            // zone-source hash space collides. Skip the colliding zone instead of
+            // aborting the whole device-profiler read (loses one zone label).
+            zone_src_locations.erase(zone_src_location);
+            continue;
         }
 
         std::stringstream ss(zone_src_location);
