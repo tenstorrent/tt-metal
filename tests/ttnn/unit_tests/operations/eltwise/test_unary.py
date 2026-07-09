@@ -725,7 +725,7 @@ def test_relu6(device, h, w, dtype):
     torch.manual_seed(0)
 
     if dtype == ttnn.bfloat16:
-        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16) * 10 - 2
+        torch_input_tensor = torch.randn((h, w), dtype=torch.bfloat16) * 10 - 2
     elif dtype == ttnn.int32:
         torch_input_tensor = torch.randint(
             torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32

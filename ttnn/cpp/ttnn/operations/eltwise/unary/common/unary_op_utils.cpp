@@ -178,6 +178,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MAX upper_limit {} out of range for UInt16",
+                    as_int);
                 return {
                     "relu_max_tile_init();",
                     fmt::format("relu_max_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
@@ -185,6 +190,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
             // U32-layout kernel clamps it correctly with the same unsigned compare logic.
             if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MAX upper_limit {} out of range for UInt8",
+                        as_int);
+                }
                 return {
                     "relu_max_tile_init();",
                     fmt::format("relu_max_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
@@ -202,6 +214,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::UINT16) {
+                const auto as_int = static_cast<std::int32_t>(param0_raw);
+                TT_FATAL(
+                    as_int >= 0 && as_int <= std::numeric_limits<std::uint16_t>::max(),
+                    "RELU_MIN lower_limit {} out of range for UInt16",
+                    as_int);
                 return {
                     "relu_min_tile_init();",
                     fmt::format("relu_min_tile_uint16({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
@@ -209,6 +226,13 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             // UINT8 is zero-extended to 32 bits in DST by the unpacker (high bits = 0), so the
             // U32-layout kernel clamps it correctly with the same unsigned compare logic.
             if (input_dtype == DataType::UINT32 || input_dtype == DataType::UINT8) {
+                if (input_dtype == DataType::UINT8) {
+                    const auto as_int = static_cast<std::int32_t>(param0_raw);
+                    TT_FATAL(
+                        as_int >= 0 && as_int <= std::numeric_limits<std::uint8_t>::max(),
+                        "RELU_MIN lower_limit {} out of range for UInt8",
+                        as_int);
+                }
                 return {
                     "relu_min_tile_init();",
                     fmt::format("relu_min_tile_uint32({}, {}u);", idst, static_cast<uint32_t>(param0_raw))};
