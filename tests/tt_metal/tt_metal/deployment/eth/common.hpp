@@ -860,9 +860,9 @@ static std::string get_connector(IDevice* sdev, CoreCoord score) {
                 return "ExaMAX";
             }
             break;
-
-        default: return "unknown";
     }
+
+    return "unknown";
 }
 
 [[maybe_unused]]

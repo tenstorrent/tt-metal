@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional, AsyncIterator, Iterator, TextIO
-from dataclasses import dataclass, asdict
 from argparse import ArgumentParser
+from dataclasses import dataclass
 from asyncio import StreamReader
-from dateutil import parser
 from enum import Enum, auto
 from sys import stdout
-import fileinput
 import asyncio
-import pprint
 import json
 import sys
 import re
@@ -834,7 +831,7 @@ async def main():
         program = "build/test/tt_metal/unit_tests_deployment"
         args = [f"--gtest_filter={filters}"]
 
-        env = os.environ
+        env = os.environ.copy()
         env["ETH_TEST_EXPECTED_LINKS"] = str(10)
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
