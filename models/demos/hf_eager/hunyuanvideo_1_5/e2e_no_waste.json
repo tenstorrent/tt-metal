@@ -27,37 +27,37 @@
     {
       "task": "i2v",
       "granularity": "composite",
-      "pcc": 0.9999793093421966,
+      "pcc": 0.9999792150130326,
       "invoked": 8
     },
     {
       "task": "i2v",
       "granularity": "mid",
-      "pcc": 0.9999793093421966,
+      "pcc": 0.9999793059960375,
       "invoked": 11
     },
     {
       "task": "i2v",
       "granularity": "deep",
-      "pcc": 0.9999793093421966,
+      "pcc": 0.9999792150130326,
       "invoked": 13
     },
     {
       "task": "t2v",
       "granularity": "composite",
-      "pcc": 0.9999790316181318,
+      "pcc": 0.9999787552180786,
       "invoked": 8
     },
     {
       "task": "t2v",
       "granularity": "mid",
-      "pcc": 0.9999790316181318,
+      "pcc": 0.9999788462238093,
       "invoked": 11
     },
     {
       "task": "t2v",
       "granularity": "deep",
-      "pcc": 0.9999790316181318,
+      "pcc": 0.9999787552180786,
       "invoked": 13
     }
   ]

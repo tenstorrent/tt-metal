@@ -184,6 +184,8 @@ class HunyuanVideo15Pipeline:
         self.ccl_manager = (
             CCLManager(mesh_device=device, num_links=2, topology=ttnn.Topology.Linear) if self.is_mesh else None
         )
+        if self.is_mesh:
+            device.enable_program_cache()  # repeated denoise steps reuse the same op shapes
 
         def wrap(name, fwd):
             def _call(*a, **k):
@@ -445,24 +447,59 @@ class HunyuanVideo15Pipeline:
               actual prompt length, so a short prompt is mostly padding. Without
               this, every padding position is attended to as if it were real text,
               diluting the conditioning signal. `build_inputs()`'s synthetic
-              all-ones masks make this a no-op for the PCC/e2e gate tests."""
+              all-ones masks make this a no-op for the PCC/e2e gate tests.
+
+        Built PER-BATCH-ITEM (not just batch 0): the CFG conditional/unconditional
+        branches can have different valid-token counts within the same padded
+        length, so a single shared bias would silently mis-mask one of them when
+        the two branches are batched into a single on-device call."""
         import torch
 
+        B = 1
+        for m in (mask_m, mask_b):
+            if m is not None:
+                B = int(torch.as_tensor(m).shape[0])
+                break
+
         seq = n_latent + Lb + Lm + Li
-        bias = torch.zeros(1, 1, 1, seq, dtype=torch.float32)
+        bias = torch.zeros(B, 1, 1, seq, dtype=torch.float32)
         # Order must match `_reorder_concat`.
         if task == "i2v":
             i_off, b_off, m_off = 0, Li, Li + Lb
         else:
             b_off, m_off, i_off = 0, Lb, Lb + Lm
-            bias[0, 0, 0, n_latent + i_off :] = _MAX_NEG  # image invalid for t2v
+            bias[:, 0, 0, n_latent + i_off :] = _MAX_NEG  # image invalid for t2v
         if mask_b is not None:
-            invalid = torch.as_tensor(mask_b).reshape(-1)[:Lb] == 0
-            bias[0, 0, 0, n_latent + b_off : n_latent + b_off + Lb][invalid] = _MAX_NEG
+            mb = torch.as_tensor(mask_b)[:, :Lb]
+            sl = bias[:, 0, 0, n_latent + b_off : n_latent + b_off + Lb]
+            sl[mb == 0] = _MAX_NEG
         if mask_m is not None:
-            invalid = torch.as_tensor(mask_m).reshape(-1)[:Lm] == 0
-            bias[0, 0, 0, n_latent + m_off : n_latent + m_off + Lm][invalid] = _MAX_NEG
+            mm = torch.as_tensor(mask_m)[:, :Lm]
+            sl = bias[:, 0, 0, n_latent + m_off : n_latent + m_off + Lm]
+            sl[mm == 0] = _MAX_NEG
         return _f32(self.device, bias)
+
+    @staticmethod
+    def _trim_to_valid(x, mask):
+        """Trim a padded (B, L, ...) text-conditioning tensor (and its mask) down
+        to the longest real prefix any row in the batch actually uses, per the
+        tokenizer's own `encoder_attention_mask{,_2}` (confirmed a contiguous
+        valid-then-padding prefix for the real Qwen/byT5 encoders). Real prompts
+        are usually a handful of tokens inside a fixed max_length pad (mllm pads
+        to 1000, byT5 to 256 regardless of prompt length) -- attending to that
+        padding is both wasted compute and (before this trim existed) diluted
+        the real conditioning signal. Masked-out keys contribute exactly zero
+        either way, so trimming is mathematically identical to masking the full
+        length, just cheaper; any leftover padding within the batch-max length
+        (mixed-length batches) is still handled by `_build_attn_bias`."""
+        if mask is None:
+            return x, mask
+        import torch
+
+        vl = max(1, int(torch.as_tensor(mask).sum(dim=-1).max()))
+        if vl >= x.shape[1]:
+            return x, mask
+        return x[:, :vl], mask[:, :vl]
 
     # ---- encode (host: upload inputs + positional constants OUTSIDE the hot path)
     def _encode(self, inputs):
@@ -476,11 +513,13 @@ class HunyuanVideo15Pipeline:
         B, C, F, H, W = hidden.shape
         pt, ph, pw = int(self.config.patch_size_t), int(self.config.patch_size), int(self.config.patch_size)
         n_latent = (F // pt) * (H // ph) * (W // pw)
-        Lm = int(inputs["encoder_hidden_states"].shape[1])
-        Lb = int(inputs["encoder_hidden_states_2"].shape[1])
-        Li = int(inputs["image_embeds"].shape[1])
         mask_m = inputs.get("encoder_attention_mask")
         mask_b = inputs.get("encoder_attention_mask_2")
+        ehs, mask_m = self._trim_to_valid(inputs["encoder_hidden_states"], mask_m)
+        ehs2, mask_b = self._trim_to_valid(inputs["encoder_hidden_states_2"], mask_b)
+        Lm = int(ehs.shape[1])
+        Lb = int(ehs2.shape[1])
+        Li = int(inputs["image_embeds"].shape[1])
 
         cos, sin = self.s_rope(hidden)  # rope stub (positional constant)
         return dict(
@@ -488,8 +527,8 @@ class HunyuanVideo15Pipeline:
                 hidden.contiguous().float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=d
             ),
             timestep=_f32(d, inputs["timestep"]),
-            ehs=_f32(d, inputs["encoder_hidden_states"]),
-            ehs2=_f32(d, inputs["encoder_hidden_states_2"]),
+            ehs=_f32(d, ehs),
+            ehs2=_f32(d, ehs2),
             image=_f32(d, inputs["image_embeds"]),
             cos=cos,
             sin=sin,

@@ -210,12 +210,9 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         return y
 
     def _rms(x, w):
-        # x: (B, L, H, D); normalize over D.
-        var = ttnn.mean(ttnn.multiply(x, x), dim=-1, keepdim=True)
-        x = ttnn.multiply(x, ttnn.rsqrt(ttnn.add(var, rms_eps)))
-        if w is not None:
-            x = ttnn.multiply(x, w)
-        return x
+        # x: (B, L, H, D); normalize over D. Fused kernel (verified PCC~1.0 vs
+        # the prior manual mean/multiply/rsqrt/multiply sequence it replaces).
+        return ttnn.rms_norm(x, epsilon=rms_eps, weight=w, compute_kernel_config=compute_config)
 
     def _adazero(x, temb, ws, bs, eps):
         s = ttnn.silu(temb)

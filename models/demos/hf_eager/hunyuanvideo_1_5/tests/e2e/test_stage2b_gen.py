@@ -45,11 +45,24 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     pipe = HunyuanVideo15Pipeline.from_pretrained(_pipeline_path(), torch_dtype=torch.bfloat16)
     real_tf = pipe.transformer
     tt = P.build_pipeline(device, real_tf)
-    calls = {"n": 0}
+    calls = {"n": 0, "device_runs": 0}
 
     class TTTransformer:
-        def __init__(self, real, ttpipe):
-            self.__dict__["_real"], self.__dict__["_tt"] = real, ttpipe
+        """diffusers' Guider (`pipe.guider`) calls the transformer once PER
+        CONDITION (conditional, unconditional, ...) as separate batch=1 Python
+        calls within the same denoise step -- never as one pre-batched call.
+        `guider.num_conditions` (read live, since CFG can be step-range-gated
+        and so can vary across steps) says how many calls belong to the
+        current step's group. We defer every call but the last one in a group,
+        then run the WHOLE group as one real on-device batch and backfill the
+        earlier calls' already-returned tensors in place via `Tensor.set_`
+        (diffusers just stashed the reference; nothing reads it until after
+        the group's last call returns). `_build_attn_bias`/`_trim_to_valid` in
+        tt/pipeline.py were built for exactly this per-batch-item case."""
+
+        def __init__(self, real, ttpipe, guider):
+            self.__dict__["_real"], self.__dict__["_tt"], self.__dict__["_guider"] = real, ttpipe, guider
+            self.__dict__["_pending"] = []  # [(inp_dict, dtype, placeholder)] for the in-flight CFG group
             self.config, self.dtype = real.config, real.dtype
 
         def __getattr__(self, k):
@@ -75,23 +88,44 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
                 encoder_attention_mask = encoder_attention_mask[:, :trunc]
                 encoder_hidden_states_2 = encoder_hidden_states_2[:, : max(1, trunc // 4)]
                 encoder_attention_mask_2 = encoder_attention_mask_2[:, : max(1, trunc // 4)]
-            outs = []
-            for b in range(hidden_states.shape[0]):  # per-sample (handles CFG batching)
-                inp = dict(
-                    hidden_states=hidden_states[b : b + 1],
-                    timestep=timestep[b : b + 1],
-                    encoder_hidden_states=encoder_hidden_states[b : b + 1],
-                    encoder_attention_mask=encoder_attention_mask[b : b + 1],
-                    encoder_hidden_states_2=encoder_hidden_states_2[b : b + 1],
-                    encoder_attention_mask_2=encoder_attention_mask_2[b : b + 1],
-                    image_embeds=image_embeds[b : b + 1],
-                    task="t2v",
-                )
-                outs.append(self.__dict__["_tt"].run(inp, granularity="composite").to(hidden_states.dtype))
-            out = torch.cat(outs, dim=0)
+            inp = dict(
+                hidden_states=hidden_states,
+                timestep=timestep,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=encoder_attention_mask,
+                encoder_hidden_states_2=encoder_hidden_states_2,
+                encoder_attention_mask_2=encoder_attention_mask_2,
+                image_embeds=image_embeds,
+                task="t2v",
+            )
+            dtype = hidden_states.dtype
+            guider = self.__dict__["_guider"]
+            n = int(guider.num_conditions) if guider is not None else 1
+
+            if n <= 1:  # CFG disabled this step (or no guider) -- nothing to batch
+                calls["device_runs"] += 1
+                out = self.__dict__["_tt"].run(inp, granularity="composite").to(dtype)
+                return Transformer2DModelOutput(sample=out) if return_dict else (out,)
+
+            pending = self.__dict__["_pending"]
+            placeholder = torch.empty(0, dtype=dtype)
+            pending.append((inp, dtype, placeholder))
+            if len(pending) < n:  # more conditions still to arrive this step
+                return Transformer2DModelOutput(sample=placeholder) if return_dict else (placeholder,)
+
+            group, self.__dict__["_pending"] = pending, []
+            keys = group[0][0]
+            batched_inp = {
+                k: (torch.cat([g[0][k] for g in group], dim=0) if torch.is_tensor(keys[k]) else keys[k]) for k in keys
+            }
+            calls["device_runs"] += 1
+            batched_out = self.__dict__["_tt"].run(batched_inp, granularity="composite")
+            for (_, g_dtype, g_placeholder), row in zip(group[:-1], batched_out[:-1]):
+                g_placeholder.set_(row.unsqueeze(0).to(g_dtype).clone())
+            out = batched_out[-1].unsqueeze(0).to(dtype)
             return Transformer2DModelOutput(sample=out) if return_dict else (out,)
 
-    pipe.transformer = TTTransformer(real_tf, tt)
+    pipe.transformer = TTTransformer(real_tf, tt, getattr(pipe, "guider", None))
 
     out = pipe(
         prompt="A cat walks on the grass, realistic",
@@ -101,7 +135,11 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
         num_inference_steps=steps,
         generator=torch.Generator().manual_seed(0),
     ).frames[0]
-    print(f"\n[{label}] generated {len(out)} frames; on-device transformer calls={calls['n']}", flush=True)
+    print(
+        f"\n[{label}] generated {len(out)} frames; transformer __call__s={calls['n']}, "
+        f"real on-device runs={calls['device_runs']}",
+        flush=True,
+    )
 
     os.makedirs(outdir, exist_ok=True)
     pil = [
