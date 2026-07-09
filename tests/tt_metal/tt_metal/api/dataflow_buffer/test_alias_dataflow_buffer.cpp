@@ -116,7 +116,6 @@ AliasDFBProgramComponents make_alias_dfb_program_spec(
         .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
     const DataMovementHardwareConfig consumer_cfg{
-        // NOC_1: distinct NOC from the RISCV_0/NOC_0 producer (Gen1 dedicated-NOC distinctness rule).
         .gen1_config =
             DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
         .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
@@ -328,7 +327,6 @@ AliasBorrowedDFBComponents make_alias_borrowed_dfb_program_spec(
         .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
     const DataMovementHardwareConfig consumer_cfg{
-        // NOC_1: distinct NOC from the RISCV_0/NOC_0 producer (Gen1 dedicated-NOC distinctness rule).
         .gen1_config =
             DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1},
         .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
