@@ -240,22 +240,66 @@ jobs:
               --num-iterations 5
           }
 
+          verify_chip_enumeration() {
+            mpirun --pernode --tag-output bash -lc '
+              count=$(lspci -d 1e52: | wc -l)
+              echo "$(hostname): pcie_tt_devices=${count}"
+              test "${count}" -ge 32
+            '
+          }
+
+          # Per exabox health_check RESET_PLAN medium (SYS-4365): -r then -glx_reset.
+          # -r alone can leave UMD reading 0xffffffff until -glx_reset runs.
+          reset_galaxy_cards() {
+            local r_ok=false glx_ok=false
+
+            echo "--- Step 1/2: tt-smi -r (PCIe reset) ---"
+            if mpirun --pernode --tag-output tt-smi -r; then
+              r_ok=true
+            else
+              echo "WARNING: tt-smi -r failed"
+            fi
+
+            echo "--- Step 2/2: tt-smi -glx_reset (Galaxy tray reset) ---"
+            if mpirun --pernode --tag-output tt-smi -glx_reset; then
+              glx_ok=true
+            else
+              echo "WARNING: tt-smi -glx_reset failed"
+            fi
+
+            if [ "$glx_ok" = true ]; then
+              return 0
+            fi
+            if [ "$r_ok" = true ]; then
+              echo "WARNING: -glx_reset failed after -r; chips may read 0xffffffff"
+            fi
+            return 1
+          }
+
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
             reset_success=false
             validation_success=false
 
-            echo "--- Resetting cards with tt-smi ---"
-            if mpirun --pernode tt-smi -r; then
+            echo "--- Resetting cards (tt-smi -r, then tt-smi -glx_reset) ---"
+            if reset_galaxy_cards; then
               reset_success=true
             else
-              echo "WARNING: Reset failed on attempt $attempt"
+              echo "WARNING: Galaxy reset sequence failed on attempt $attempt"
             fi
 
             if [ "$reset_success" = true ]; then
-              echo "--- Sleeping 5s after reset to allow links/services to settle ---"
-              sleep 5
+              echo "--- Sleeping 15s after reset to allow links/services to settle ---"
+              sleep 15
 
+              echo "--- Verifying chip enumeration before cluster validation ---"
+              if ! verify_chip_enumeration; then
+                echo "WARNING: Chip enumeration check failed on attempt $attempt"
+                reset_success=false
+              fi
+            fi
+
+            if [ "$reset_success" = true ]; then
               echo "--- Running cluster validation ---"
               if run_cluster_validation; then
                 validation_success=true
@@ -263,7 +307,7 @@ jobs:
                 echo "WARNING: Validation failed on attempt $attempt"
               fi
             else
-              echo "WARNING: Skipping validation because reset failed on attempt $attempt"
+              echo "WARNING: Skipping validation because reset/enumeration failed on attempt $attempt"
             fi
 
             if [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
