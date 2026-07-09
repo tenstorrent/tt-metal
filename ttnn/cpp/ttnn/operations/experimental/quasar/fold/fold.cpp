@@ -471,8 +471,15 @@ Tensor fold(
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
 
         // 1) NCHW -> NHWC (C last), interleaved L1.
-        Tensor processed_tensor = ttnn::prim::permute(
-            input_tensor, ttnn::SmallVector<uint32_t>({0, 2, 3, 1}), std::make_optional(l1_interleaved), std::nullopt);
+        //    There is NO Quasar permute op, so ttnn::prim::permute builds a legacy DataMovementKernel
+        //    (rejected on Quasar: kernel.hpp:382). Decompose the NCHW->NHWC permute (0,2,3,1) into two
+        //    Quasar transposes: transpose(1,2) [N,C,H,W]->[N,H,C,W], then transpose(2,3)->[N,H,W,C].
+        //    NOTE: transpose(2,3) is the interleaved WH transpose, which is the known-broken multi-plane
+        //    path on the 2-core config (see ~/fold_quasar.md) -- this clears the DataMovementKernel FATAL
+        //    but lands on that transpose blocker, confirming both fold paths require a correct Quasar WH
+        //    transpose.
+        Tensor processed_tensor = ttnn::operations::experimental::quasar::transpose(input_tensor, 1, 2, l1_interleaved);
+        processed_tensor = ttnn::operations::experimental::quasar::transpose(processed_tensor, 2, 3, l1_interleaved);
 
         // 2) Pad C up to the 16B-aligned width, while interleaved (no sub-16B row-major shard width).
         {
