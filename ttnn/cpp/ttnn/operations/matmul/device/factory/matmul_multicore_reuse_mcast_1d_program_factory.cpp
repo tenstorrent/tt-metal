@@ -739,6 +739,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
+    // When accumulating in fp32 (fp32_dest_acc_en) with the K reduction split across blocks,
+    // the intermediate partials CB (cb_intermed0, c_5) holds Float32 and is reloaded into DEST
+    // between blocks by copy_block_matmul_partials. Unless the CB is marked UnpackToDestFp32,
+    // that reload is routed through SrcA and rounded to TF32 (10 mantissa bits), so the fp32
+    // partial loses precision on every block boundary. cb_intermed0 is consumed only by the
+    // reload datacopy (never as a matmul operand on SrcA/SrcB), so it can be marked directly
+    // without needing an aliased CB descriptor.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create compute kernel
     // bool fp32_dest_acc_en = false;
     // Gelu currently has better accuracy when run in approx mode
@@ -750,6 +763,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -2418,6 +2432,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
                 {"cb_sync2", sync_cb2_index},
                 {"cb_remote", remote_cb_index}}});
 
+    // fp32 K-partials (interm0_cb_index) are reloaded into DEST between blocks via
+    // copy_block_matmul_partials; mark the CB UnpackToDestFp32 so the reload goes directly to
+    // DEST instead of through SrcA (which would truncate the fp32 partial to TF32). The gather
+    // kernel uses interm0_cb_index rather than the fixed c_5 of the mcast kernels.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[interm0_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     auto mm_kernel = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp",
@@ -2426,6 +2450,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -3596,8 +3621,23 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB (cb_intermed0, c_5) holds Float32 and is reloaded into DEST between blocks by
+    // copy_block_matmul_partials. Unless the CB is marked UnpackToDestFp32, that reload is routed
+    // through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on
+    // every block boundary and accuracy degrades as the number of K-blocks grows. cb_intermed0 is
+    // consumed only by the reload datacopy (never as a matmul operand on SrcA/SrcB), so it can be
+    // marked directly without needing an aliased CB descriptor.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -4482,8 +4522,23 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB (cb_intermed0, c_5) holds Float32 and is reloaded into DEST between blocks by
+    // copy_block_matmul_partials. Unless the CB is marked UnpackToDestFp32, that reload is routed
+    // through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on
+    // every block boundary and accuracy degrades as the number of K-blocks grows. cb_intermed0 is
+    // consumed only by the reload datacopy (never as a matmul operand on SrcA/SrcB), so it can be
+    // marked directly without needing an aliased CB descriptor.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+        .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Build CBDescriptors
@@ -4847,10 +4902,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());  // in0
     const MeshTensor& in1_tensor = b.mesh_tensor();
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype());  // in1
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());   // output
 
     ttsl::optional_reference<const MeshTensor> bias_mesh_tensor;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr

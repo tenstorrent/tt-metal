@@ -921,10 +921,23 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         }
         compute_kernel_desc.named_compile_time_args = std::move(named_compile_args);
     }
+    // When accumulating in fp32 with the K reduction split across blocks, the intermediate
+    // partials CB (cb_intermed0, c_5) holds Float32 and is reloaded into DEST between blocks by
+    // copy_block_matmul_partials. Unless the CB is marked UnpackToDestFp32, that reload is routed
+    // through SrcA and rounded to TF32 (10 mantissa bits), so the fp32 partial loses precision on
+    // every block boundary and accuracy degrades as the number of K-blocks grows. cb_intermed0 is
+    // consumed only by the reload datacopy (never as a matmul operand on SrcA/SrcB), so it can be
+    // marked directly without needing an aliased CB descriptor.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
         .math_approx_mode = math_approx_mode};
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1294,7 +1307,11 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_mesh.has_value()
+                        ? (std::uint32_t)bias_mesh->address()  // smuggled-rta-ok: bias address re-patched on cache hits
+                                                               // in override_runtime_arguments
+                        : 0);
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
@@ -2372,6 +2389,15 @@ create_program_mcast_in0_in1(
         compute_named_compile_args["activation_param2"] = params.param2;
     }
 
+    // fp32 K-partials (cb_intermed0, c_5) are reloaded into DEST between blocks; mark the CB
+    // UnpackToDestFp32 so the reload goes directly to DEST instead of through SrcA (which would
+    // truncate the fp32 partial to TF32). See the descriptor path above for the full rationale.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_5)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
     // Create compute kernel
     // bool fp32_dest_acc_en = true;
     // Gelu currently has better accuracy when run in approx mode
@@ -2384,6 +2410,7 @@ create_program_mcast_in0_in1(
             .math_fidelity = math_fidelity,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
             .defines = mm_kernel_defines,
@@ -2748,7 +2775,11 @@ create_program_mcast_in0_in1(
                     mm_in1_sender_writer_args.push_back(0);
                 }
 
-                mm_in1_sender_writer_args.push_back(bias_mesh.has_value() ? (std::uint32_t)bias_mesh->address() : 0);
+                mm_in1_sender_writer_args.push_back(
+                    bias_mesh.has_value()
+                        ? (std::uint32_t)bias_mesh->address()  // smuggled-rta-ok: bias address re-patched on cache hits
+                                                               // in override_runtime_arguments
+                        : 0);
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
                 if (!output_is_sharded) {
@@ -3103,10 +3134,10 @@ matmul_multi_core_reuse_mcast_2d_optimized_(
     const auto output_tile = tt::tt_metal::Tile({in0_tile.get_height(), in1_tile.get_width()});
 
     // CB dataformats
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());          // in0
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());  // in0
     const auto& in1_tensor = b.mesh_tensor();
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(in1_tensor.dtype());  // in1
-    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
+    tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());   // output
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
     // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,

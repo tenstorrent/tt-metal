@@ -566,7 +566,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
 
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
-        activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());
+        activation_kernel_compile_args.push_back(
+            conv_reader_indices_buffer->address());  // smuggled-rta-ok: parked conv_reader_indices buffer, allocated
+                                                     // once by create_workload_descriptor
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(activation_kernel_compile_args);
     }
@@ -612,9 +614,22 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     for (const auto& [k, v] : compute_defines) {
         compute_kernel_desc.defines.emplace_back(k, v);
     }
+    // fp32 K-partials (MATMUL_PARTIALS CB) are reloaded into DEST between blocks via
+    // copy_block_matmul_partials; mark the CB UnpackToDestFp32 so the reload goes directly to DEST
+    // instead of through SrcA (which would truncate the fp32 partial to TF32). The partials CB is
+    // consumed only by the reload datacopy (never as a matmul operand). The index guard skips
+    // paths that allocate no partials CB (invalid index).
+    const auto& matmul_partials_cb_info = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS);
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    if (fp32_dest_acc_en && matmul_partials_cb_info.data_format == tt::DataFormat::Float32 &&
+        matmul_partials_cb_info.index < NUM_CIRCULAR_BUFFERS) {
+        unpack_to_dest_mode[matmul_partials_cb_info.index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
+        .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
 
     auto full_core_grid = device->compute_with_storage_grid_size();
