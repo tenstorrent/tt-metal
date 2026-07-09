@@ -560,9 +560,10 @@ void kernel_main() {
         if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
             continue;
         }
-        // Sharded joint: the fused all-gather delivers one L/P shard per ring iteration (and writes
-        // the local shard immediately via write_local). Each shard is available right after its
-        // ring_id sync, so we process joint K/V on EVERY ring iteration — no need to batch at the end.
+        // Sharded joint: the fused all-gather delivers one remote L/P shard per ring iteration (local
+        // slice is read from the local joint tensor, same as spatial). Each shard is available right
+        // after its ring_id sync, so we process joint K/V on EVERY ring iteration — no need to batch
+        // at the end.
         // Replicated joint: gathered K/V is only complete at the last active iteration (processing it
         // earlier would read a partially-filled buffer and deadlock). See original ring_iter vs ring_id note.
         const bool do_joint_kv =

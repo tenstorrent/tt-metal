@@ -61,10 +61,6 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
-    // write_local: when 1, also write this input's local slice into THIS device's own output buffer.
-    // Default 0 preserves the startup-latency optimization (local slice read from input directly).
-    // Set by consumers (ring-joint SDPA sharded joint) that read the gathered buffer as a full replica.
-    std::array<uint32_t, num_inputs> write_local;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         input_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
@@ -84,8 +80,6 @@ void kernel_main() {
         if (valid_pages < input_tile_id_end[input_idx]) {
             input_tile_id_end[input_idx] = valid_pages;
         }
-        // write_local (slot 9): also write this input's local slice into THIS device's own output buffer.
-        write_local[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
@@ -173,16 +167,6 @@ void kernel_main() {
                 if (num_pages_to_read == 2) {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
 
-                    // Place the local slice into THIS device's own output buffer.
-                    if (direction == 1 && write_local[input_idx]) {
-                        noc_async_write(
-                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id, 0), output_page_size);
-                        noc_async_write(
-                            l1_read_addr + output_page_size,
-                            output_addrgens[input_idx].get_noc_addr(second_tile_id, 0),
-                            output_page_size);
-                    }
-
                     if constexpr (num_targets_in_direction) {
                         scatter_fabric_write_unidir(
                             tile_id,
@@ -201,13 +185,6 @@ void kernel_main() {
                     }
                 } else {
                     ASSERT(num_pages_to_read == 1);
-
-                    // Place the local slice into this device's own output buffer.
-                    // Forward writer only (see two-page branch); direction is constexpr.
-                    if (direction == 1 && write_local[input_idx]) {
-                        noc_async_write(
-                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id, 0), output_page_size);
-                    }
 
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to

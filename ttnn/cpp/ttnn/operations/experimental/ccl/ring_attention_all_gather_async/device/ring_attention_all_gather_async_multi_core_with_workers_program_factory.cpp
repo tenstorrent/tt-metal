@@ -125,8 +125,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreCoord core_grid_offset,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> input_batch_slice_idx,
-    std::optional<uint32_t> gather_valid_Ht,
-    std::optional<uint32_t> write_local_from_input_idx) {
+    std::optional<uint32_t> gather_valid_Ht) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -492,17 +491,13 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
                                             : single_batch_head_num_pages;
             tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 8 == valid_pages_per_batch_head
-            // 9 == write_local: writer also places this input's local slice into the local output buffer.
-            const uint32_t write_local =
-                (write_local_from_input_idx.has_value() && i >= *write_local_from_input_idx) ? 1u : 0u;
-            tensor_descriptor_args.push_back(write_local);  // 9 == write_local
         }
 
         KernelDescriptor::RTArgList reader_forward_rt_args;
         reader_forward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
         reader_forward_rt_args.push_back(ring_size);                   // ring_size
-        reader_forward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(1).address()));  // out_ready_semaphore_backward
+        reader_forward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(1).address()));  // out_ready_semaphore_backward; smuggled-rta-ok: persistent GlobalSemaphore
         reader_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(input_tensor[input_idx].buffer());
@@ -521,8 +516,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         KernelDescriptor::RTArgList reader_backward_rt_args;
         reader_backward_rt_args.push_back(static_cast<uint32_t>(dim));  // dim to gather on
         reader_backward_rt_args.push_back(ring_size);                   // ring_size
-        reader_backward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(0).address()));  // out_ready_semaphore_backward
+        reader_backward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(0).address()));  // out_ready_semaphore_backward; smuggled-rta-ok: persistent GlobalSemaphore
         reader_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer());
@@ -549,8 +544,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_forward_rt_args.push_back(static_cast<uint32_t>(sender_forward_worker_core.x));  // out_ready_sem_noc0_x
         writer_forward_rt_args.push_back(static_cast<uint32_t>(sender_forward_worker_core.y));  // out_ready_sem_noc0_y
         writer_forward_rt_args.push_back(ring_size);                                            // ring_size
-        writer_forward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(1).address()));  // out_ready_semaphore_backward
+        writer_forward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(1).address()));  // out_ready_semaphore_backward; smuggled-rta-ok: persistent GlobalSemaphore
         writer_forward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer());
@@ -585,8 +580,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         writer_backward_rt_args.push_back(
             static_cast<uint32_t>(sender_backward_worker_core.y));  // out_ready_sem_noc0_y
         writer_backward_rt_args.push_back(ring_size);               // ring_size
-        writer_backward_rt_args.push_back(
-            static_cast<uint32_t>(semaphore.at(0).address()));  // out_ready_semaphore_backward
+        writer_backward_rt_args.push_back(static_cast<uint32_t>(
+            semaphore.at(0).address()));  // out_ready_semaphore_backward; smuggled-rta-ok: persistent GlobalSemaphore
         writer_backward_rt_args.append(tensor_descriptor_args);
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer());
