@@ -88,10 +88,7 @@
 <li class="toctree-l3"><a class="reference internal" href="api/ttnn.synchronize_device.html">ttnn.synchronize_device</a></li>
 <li class="toctree-l3"><a class="reference internal" href="api/ttnn.SetDefaultDevice.html">ttnn.SetDefaultDevice</a></li>
 <li class="toctree-l3"><a class="reference internal" href="api/ttnn.GetDefaultDevice.html">ttnn.GetDefaultDevice</a></li>
-<li class="toctree-l3"><a class="reference internal" href="#deprecated-device-apis">Deprecated Device APIs</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#ttnn-pad-to-tile-shape"><code class="docutils literal notranslate"><span class="pre">ttnn.pad_to_tile_shape</span></code></a></li>
-</ul>
-</li>
+<li class="toctree-l3"><a class="reference internal" href="api/ttnn.pad_to_tile_shape.html">ttnn.pad_to_tile_shape</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#memory-config">Memory Config</a><ul>
@@ -751,46 +748,12 @@
 <td><p><a class="reference internal" href="api/ttnn.GetDefaultDevice.html#ttnn.GetDefaultDevice" title="ttnn.GetDefaultDevice"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.GetDefaultDevice</span></code></a></p></td>
 <td><p>GetDefaultDevice() -&gt; ttnn._ttnn.multi_device.MeshDevice</p></td>
 </tr>
+<tr class="row-odd">
+<td><p><a class="reference internal" href="api/ttnn.pad_to_tile_shape.html#ttnn.pad_to_tile_shape" title="ttnn.pad_to_tile_shape"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.pad_to_tile_shape</span></code></a></p></td>
+<td><p>collections.abc.Sequence[int]) -&gt; list</p></td>
+</tr>
 </tbody>
 </table>
-<section id="deprecated-device-apis">
-<h3>Deprecated Device APIs<a class="headerlink" href="#deprecated-device-apis" title="Permalink to this heading"></a>
-</h3>
-<section id="ttnn-pad-to-tile-shape">
-<span id="ttnn-pad-to-tile-shape-deprecated"></span><h4>
-<code class="docutils literal notranslate"><span class="pre">ttnn.pad_to_tile_shape</span></code><a class="headerlink" href="#ttnn-pad-to-tile-shape" title="Permalink to this heading"></a>
-</h4>
-<p><code class="docutils literal notranslate"><span class="pre">ttnn.pad_to_tile_shape</span></code> has been removed. It previously rounded the last two
-dimensions of a shape to multiples of 32 (tile alignment).</p>
-<p><strong>Migration options:</strong></p>
-<ol class="arabic">
-<li>
-<p><strong>Preferred</strong> — use <a class="reference internal" href="api/ttnn.to_layout.html#ttnn.to_layout" title="ttnn.to_layout"><code class="xref py py-func docutils literal notranslate"><span class="pre">ttnn.to_layout()</span></code></a> which handles tile-alignment
-automatically when converting to tile layout:</p>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="c1"># Before</span>
-<span class="n">padded</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">pad_to_tile_shape</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">padded_shape</span><span class="p">)</span>
-<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tilize_with_val_padding</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">padded</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="n">mem_config</span><span class="p">)</span>
-
-<span class="c1"># After</span>
-<span class="n">tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">memory_config</span><span class="o">=</span><span class="n">mem_config</span><span class="p">)</span>
-</pre></div>
-</div>
-</li>
-<li>
-<p>If you only need the padded shape value (e.g. for memory config calculations),
-use <code class="docutils literal notranslate"><span class="pre">align_shape_to_tile</span></code> from model utilities:</p>
-<div class="highlight-python notranslate">
-<div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">models.common.tensor_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">align_shape_to_tile</span>
-
-<span class="n">padded</span> <span class="o">=</span> <span class="n">align_shape_to_tile</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">384</span><span class="p">,</span> <span class="mi">49</span><span class="p">,</span> <span class="mi">96</span><span class="p">])</span>
-<span class="c1"># =&gt; [1, 384, 64, 96]</span>
-</pre></div>
-</div>
-</li>
-</ol>
-</section>
-</section>
 </section>
 <section id="memory-config">
 <h2>Memory Config<a class="headerlink" href="#memory-config" title="Permalink to this heading"></a>
@@ -1694,7 +1657,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.outer.html#ttnn.outer" title="ttnn.outer"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.outer</span></code></a></p></td>
-<td><p>Computes the outer product of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code>.</p></td>
+<td><p>Computes outer for <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns the tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.polyval.html#ttnn.polyval" title="ttnn.polyval"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.polyval</span></code></a></p></td>
