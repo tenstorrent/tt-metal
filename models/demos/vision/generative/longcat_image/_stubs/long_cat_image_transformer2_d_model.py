@@ -88,6 +88,7 @@ class _Transformer:
         self._rms = {}
         self._R = None
         self._compute = None
+        self._sdpa_pc = {}  # SDPAProgramConfig cache, keyed by (q_chunk, k_chunk)
 
     # ── low-level helpers ────────────────────────────────────────────────
     def _ck(self):
@@ -130,7 +131,10 @@ class _Transformer:
                 ttnn.from_torch(wl, dtype=BF16, layout=TILE, device=self.device, memory_config=DRAM),
                 ttnn.from_torch(
                     b.detach().reshape(1, 1, -1).to(torch.float32),
-                    dtype=F32, layout=TILE, device=self.device, memory_config=DRAM,
+                    dtype=F32,
+                    layout=TILE,
+                    device=self.device,
+                    memory_config=DRAM,
                 )
                 if b is not None
                 else None,
@@ -235,6 +239,35 @@ class _Transformer:
         return [ttnn.slice(emb, [0, 0, i * d], [1, 1, (i + 1) * d], [1, 1, 1]) for i in range(n)]
 
     # ── attention ────────────────────────────────────────────────────────
+    def _sdpa(self, q, k, v, S):
+        """FlashAttention-2 (fused softmax(q·kᵀ·scale)·v). Replaces the manual
+        matmul→softmax→matmul, which materialized the full [heads,S,S] scores tensor
+        in DRAM (226 MB at 512px, 2 GB at 1024px) — FlashAttention tiles it in L1
+        instead, so this is the dominant per-step win at high resolution. is_causal=False
+        (image tokens attend fully). Uses the SAME compute kernel config (HiFi4,
+        fp32_dest_acc) and scale as the manual path, so numerics are preserved; precision
+        knobs (HiFi2 / fp32_dest_acc=False) are a separate follow-up. q/k/v: [1,heads,S,hd]."""
+        # Tile-align chunk sizes and never exceed S (small e2e-gate sizes have tiny S).
+        st = max(32, (S // 32) * 32)
+        qc, kc = min(128, st), min(512, st)
+        key = (qc, kc)
+        if key not in self._sdpa_pc:
+            self._sdpa_pc[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                q_chunk_size=qc,
+                k_chunk_size=kc,
+                exp_approx_mode=False,  # False is the numerically-correct softmax
+            )
+        return ttnn.transformer.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            is_causal=False,
+            scale=self.scale,
+            program_config=self._sdpa_pc[key],
+            compute_kernel_config=self._ck(),
+        )
+
     def _single_attn(self, a, norm_hs, cos, sin, S):
         # pre_only single-stream attention (no added_kv, no to_out).
         q = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_q), S), a.norm_q)
@@ -243,10 +276,7 @@ class _Transformer:
         if cos is not None:
             q = self._rope(q, cos, sin)
             k = self._rope(k, cos, sin)
-        scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
-        scores = ttnn.multiply(scores, self.scale)
-        probs = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
+        out = self._sdpa(q, k, v, S)
         return self._merge_heads(out, S)
 
     def _double_attn(self, a, norm_hs, norm_enc, cos, sin, img_len, txt_len):
@@ -267,10 +297,7 @@ class _Transformer:
             q = self._rope(q, cos, sin)
             k = self._rope(k, cos, sin)
 
-        scores = ttnn.matmul(q, k, transpose_b=True, dtype=F32, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
-        scores = ttnn.multiply(scores, self.scale)
-        probs = ttnn.softmax(scores, dim=-1)
-        out = ttnn.matmul(probs, v, dtype=self.wdtype, compute_kernel_config=self._ck(), memory_config=DRAM, core_grid=ttnn.CoreGrid(y=8, x=8))
+        out = self._sdpa(q, k, v, S)
         out = self._merge_heads(out, S)  # [1,S,dim]
 
         enc_attn = ttnn.slice(out, [0, 0, 0], [1, txt_len, self.dim], [1, 1, 1])
