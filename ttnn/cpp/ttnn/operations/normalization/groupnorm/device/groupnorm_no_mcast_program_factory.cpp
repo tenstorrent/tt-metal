@@ -275,6 +275,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     bool tilize_in = a.layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.layout() == Layout::ROW_MAJOR;
 
+    // ROW_MAJOR output with tile-straddling groups (block_w_last != block_w) requires out_block_h == 1;
+    // cross-group untilize corrupts mt > 0 tile-rows otherwise.
+    if (!use_welford && untilize_out && block_wt_last != block_wt) {
+        log_debug(
+            tt::LogOp,
+            "group_norm: ROW_MAJOR output with tile-straddling groups requires out_block_h==1; overriding "
+            "requested num_out_blocks={} with {}.",
+            num_out_blocks,
+            block_ht_group_1);
+        num_out_blocks = block_ht_group_1;
+    }
+
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
 
@@ -442,6 +454,50 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         xmm_CB_size_group_2 = single_tile_size * 3;
     }
 
+    // c_30 (untilize output) and c_20 (row-major reread) scratch for the ROW_MAJOR-output path; one out-block per
+    // group.
+    uint32_t rm_untilize_CB_size_group_1 = in_CB_size_group_1;
+    uint32_t rm_untilize_CB_size_group_2 = in_CB_size_group_2;
+
+    // Legacy ROW_MAJOR-input fast path: cb_in_tilized (c_17) holds the whole per-core group tilized once so the
+    // mean/variance/normalize passes reuse it. It spans all num_out_blocks out-blocks, so for num_out_blocks > 1 it
+    // can exceed L1; when the estimated footprint won't fit, fall back to the (always-fitting) re-tilize-per-pass
+    // path. Both per-core groups share block_ht/num_out_blocks/block_wt, so their footprints are identical and the
+    // group-1 estimate covers group 2.
+    uint32_t in_tilized_CB_size_group_1 = 0;
+    uint32_t in_tilized_CB_size_group_2 = 0;
+    bool input_fits_l1 = !use_welford && tilize_in;
+    if (input_fits_l1) {
+        in_tilized_CB_size_group_1 =
+            groupnorm_tilized_group_tiles(block_ht_group_1, num_out_blocks, block_wt) * in_single_tile_size;
+        if (!equal_batches_per_core) {
+            in_tilized_CB_size_group_2 =
+                groupnorm_tilized_group_tiles(block_ht_group_2, num_out_blocks, block_wt) * in_single_tile_size;
+        }
+
+        // Estimated per-core L1: resident tilized group + per-out-block CBs (c_0/c_29/c_16/c_24/c_25/c_23/c_22) +
+        // gamma/beta/mask + a flat allowance for the small scalar/reduction CBs, plus c_30/c_20 when output is RM.
+        uint64_t fast_path_l1 = in_tilized_CB_size_group_1 + in0_CB_size_group_1 + in_CB_size_group_1 +
+                                out_CB_size_group_1 + x_CB_size_group_1 + xmm_CB_size_group_1 + xmm2_CB_size_group_1 +
+                                xmm3_CB_size_group_1 +
+                                static_cast<uint64_t>(kGroupnormSmallCbAllowanceTiles) * single_tile_size;
+        fast_path_l1 += gamma.has_value() ? in5_CB_size : 0;
+        fast_path_l1 += beta.has_value() ? in6_CB_size : 0;
+        fast_path_l1 += input_mask.has_value() ? in_mask_CB_size : 0;
+        if (untilize_out) {
+            fast_path_l1 += rm_untilize_CB_size_group_1 + in_CB_size_group_1;  // c_30 + c_20
+        }
+
+        // Usable L1 = per-core L1 minus the base-allocated region (kernel binaries, etc.).
+        const uint64_t available_l1 =
+            device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        if (fast_path_l1 * 100 > available_l1 * kGroupnormTilizedL1UsagePercent) {
+            input_fits_l1 = false;
+            in_tilized_CB_size_group_1 = 0;
+            in_tilized_CB_size_group_2 = 0;
+        }
+    }
+
     // Application Setup
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
     std::vector<CoreCoord> virtual_core_coords = grid_to_cores(num_cores, num_virtual_cols, num_virtual_rows, row_wise);
@@ -520,6 +576,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
     if (tilize_in) {
         reader_mcast_sender_defines["TILIZE_IN"] = "1";
+    }
+    if (input_fits_l1) {
+        // Fits-in-L1 variant: reader gathers from DRAM only on the first pass; compute tilizes once and
+        // keeps the whole group in L1. Without this define the reader re-gathers every pass (re-tilize
+        // fallback), used when the tilized-group CB would not fit in L1.
+        reader_mcast_sender_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
         reader_mcast_sender_defines["UNTILIZE_OUT"] = "1";
@@ -736,12 +798,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                      : "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/"
                        "writer_unary_gn_rm_gb.cpp");
 
+    std::map<std::string, std::string> writer_defines;
+    if (untilize_out) {
+        writer_defines["UNTILIZE_OUT"] = "1";
+    }
+
     KernelDescriptor writer_desc_g1;
     writer_desc_g1.kernel_source = writer_kernel;
     writer_desc_g1.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc_g1.core_ranges = all_cores_group_1;
     writer_desc_g1.compile_time_args = writer_mcast_sender_compile_time_args_group_1;
     writer_desc_g1.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_1);
+    writer_desc_g1.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
     writer_desc_g1.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = writer_noc,
@@ -755,6 +823,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         writer_desc_g2.core_ranges = all_cores_group_2;
         writer_desc_g2.compile_time_args = writer_mcast_sender_compile_time_args_group_2;
         writer_desc_g2.named_compile_time_args = to_named_args_no_mcast(writer_named_compile_time_args_group_2);
+        writer_desc_g2.defines = KernelDescriptor::Defines(writer_defines.begin(), writer_defines.end());
         writer_desc_g2.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
@@ -767,6 +836,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     }
     if (tilize_in) {
         eltwise_binary_defines["TILIZE_IN"] = "1";
+    }
+    if (input_fits_l1) {
+        eltwise_binary_defines["INPUT_FITS_L1"] = "1";
     }
     if (untilize_out) {
         eltwise_binary_defines["UNTILIZE_OUT"] = "1";
@@ -1008,10 +1080,36 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }}},
     });
 
+    // Legacy ROW_MAJOR input: tilized-group CB (c_17), holds the whole per-core group so the
+    // three passes reuse it without re-reading DRAM / re-tilizing.
+    if (in_tilized_CB_size_group_1 > 0) {
+        constexpr uint32_t in_tilized_cb_index = tt::CBIndex::c_17;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = in_tilized_CB_size_group_1,
+            .core_ranges = all_cores_group_1,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(in_tilized_cb_index),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size,
+            }}},
+        });
+        if (in_tilized_CB_size_group_2 > 0) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_tilized_CB_size_group_2,
+                .core_ranges = all_cores_group_2,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(in_tilized_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+        }
+    }
+
     if (untilize_out) {
         constexpr uint32_t out_cb_index = tt::CBIndex::c_30;
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_1,
+            .total_size = rm_untilize_CB_size_group_1,
             .core_ranges = all_cores_group_1,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -1020,7 +1118,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
         desc.cbs.push_back(CBDescriptor{
-            .total_size = in_CB_size_group_2,
+            .total_size = rm_untilize_CB_size_group_2,
             .core_ranges = all_cores_group_2,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(out_cb_index),
@@ -1028,6 +1126,28 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
                 .page_size = in_single_tile_size,
             }}},
         });
+
+        if (!use_welford) {
+            constexpr uint32_t reread_rm_cb_index = tt::CBIndex::c_20;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_1,
+                .core_ranges = all_cores_group_1,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = in_CB_size_group_2,
+                .core_ranges = all_cores_group_2,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(reread_rm_cb_index),
+                    .data_format = in_data_format,
+                    .page_size = in_single_tile_size,
+                }}},
+            });
+        }
     }
 
     constexpr uint32_t in2_cb_index = tt::CBIndex::c_2;

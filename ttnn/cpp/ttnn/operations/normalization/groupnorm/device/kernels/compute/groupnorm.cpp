@@ -136,6 +136,12 @@ void kernel_main() {
     // input cbs
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
+    // ROW_MAJOR input, fits-in-L1 variant: dedicated CB holding the whole per-core group tilized once and
+    // kept resident across all three passes. Separate from cb_in (c_29), which is left free for gamma/beta
+    // scratch.
+    constexpr uint32_t cb_in_resident_id = tt::CBIndex::c_17;
+#endif
     constexpr uint32_t cb_scaler_id = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global_id = tt::CBIndex::c_4;
     constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
@@ -161,6 +167,11 @@ void kernel_main() {
     constexpr uint32_t cb_fusion_id = cb_xmm_id;
     constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
     constexpr uint32_t cb_reread_write_out_id = tt::CBIndex::c_22;
+#ifdef UNTILIZE_OUT
+    // Row-major reread scratch CB (c_20): the reader gathers the previously written ROW_MAJOR output
+    // rows here; tilized on-core into cb_reread_out (c_23) for cross-group accumulation.
+    constexpr uint32_t cb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     // output cb
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
@@ -189,17 +200,18 @@ void kernel_main() {
     constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
 #ifdef UNTILIZE_OUT
-    constexpr int cb_outgamma_id = cb_in_id;
+    // Affine wiring matches the TILE path (tiled result -> c_16, or c_22 when no gamma/beta); the
+    // untilize stage below converts that tiled result into the row-major output c_30.
+    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
     constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_reread_write_out_id;
-    constexpr int cb_outbeta_id = do_gamma ? cb_out_id : cb_in_id;
-    constexpr int cb_untilize_in_id = (do_gamma and not do_beta) ? cb_outgamma_id
-                                      : do_beta                  ? cb_outbeta_id
-                                                                 : cb_reread_write_out_id;
+    constexpr int cb_outbeta_id = cb_out0_id;
+    constexpr int cb_untilize_in_id = (do_gamma or do_beta) ? cb_out0_id : cb_reread_write_out_id;
     constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
         cb_repack_out_id;
 #else
-        cb_out0_id;
+        // Untilize target is cb_out_id (c_30, the row-major output CB)
+        cb_out_id;
 #endif
 #else
     constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
@@ -219,6 +231,9 @@ void kernel_main() {
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_gamma(cb_gamma_id);
     CircularBuffer cb_in(cb_in_id);
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
+    CircularBuffer cb_in_resident(cb_in_resident_id);
+#endif
     CircularBuffer cb_in0(cb_in0_id);
     CircularBuffer cb_inbeta(cb_inbeta_id);
     CircularBuffer cb_input_mask(cb_input_mask_id);
@@ -231,32 +246,25 @@ void kernel_main() {
     CircularBuffer cb_x(cb_x_id);
     CircularBuffer cb_xmm(cb_xmm_id);
 
-// tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
-// Tilize in0 -> in (row-major to tiled)
+    // Row-major tilize source: repacked channels or cb_in0.
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    cb_in.wait_front(per_core_MN);
+    // Tilize target: whole group once into L1-resident cb_in_resident, else per-out-block into cb_in.
+#ifdef INPUT_FITS_L1
+    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_resident_id);
+    constexpr uint32_t cb_input_id = cb_in_resident_id;
 #else
+    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+    constexpr uint32_t cb_input_id = cb_in_id;
+#endif
+#else
+    // TILE input: cb_in0 feeds compute directly.
     binary_op_init_common(cb_in0_id, cb_input_mask_id, cb_x_id);
+    constexpr uint32_t cb_input_id = cb_in0_id;
 #endif
 
     index_b_offset = 0;
@@ -305,25 +313,49 @@ void kernel_main() {
                     out_block_h_actual = out_block_h_normal;
                     out_block_hw_actual = out_block_hw_normal;
                 }
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
+                // Tilize this out-block into cb_in_resident, appending (no pop) so the whole group
+                // accumulates in L1 and stays available for the variance and normalize passes.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_in_rm_id,
+                    cb_in_resident_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+                cb_in_resident.wait_front((out_block_index + 1) * out_block_hw_normal);
+                uint32_t out_block_base = out_block_index * out_block_hw_normal;
+#elif defined(TILIZE_IN)
+                // Fallback: tilize this out-block into cb_in, consumed and popped within this pass.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_in_rm_id,
+                    cb_in_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+                cb_in.wait_front(out_block_hw_normal);
+                constexpr uint32_t out_block_base = 0;
+#else
                 cb_in0.wait_front(out_block_hw_normal);
+                constexpr uint32_t out_block_base = 0;
+#endif
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
                 // mask input
-                mul_tiles_init(cb_in0_id, cb_input_mask_id);
+                mul_tiles_init(cb_input_id, cb_input_mask_id);
                 cb_x.reserve_back(out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                            uint32_t index = w + index_subblock_w_offset + index_h_offset + out_block_base;
                             uint32_t index_mask = w + index_subblock_w_offset;
-#ifdef TILIZE_IN
-                            mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
-#else
-                            mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
-#endif
+                            mul_tiles(cb_input_id, cb_input_mask_id, index, index_mask, w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -335,9 +367,10 @@ void kernel_main() {
                     }
                     index_h_offset += block_w;
                 }
-#ifdef TILIZE_IN
-                cb_in.pop_front(out_block_hw_actual);
-#else
+                // Fast path keeps the whole group resident (no pop); fallback / tile paths pop the out-block.
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                cb_in.pop_front(out_block_hw_normal);
+#elif !defined(TILIZE_IN)
                 cb_in0.pop_front(out_block_hw_normal);
 #endif
                 cb_x.push_back(out_block_hw_normal);
@@ -390,19 +423,39 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+                // Fast path (TILIZE_IN + INPUT_FITS_L1) reuses the resident tilized group, indexed below.
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                // Only when the input didn't fit L1: re-tilize this out-block into cb_in (the re-tilize-
+                // each-pass fallback).
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_in_rm_id,
+                    cb_in_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+                cb_in.wait_front(out_block_hw_normal);
+#elif !defined(TILIZE_IN)
                 cb_in0.wait_front(out_block_hw_normal);
+#endif
                 // x - E[x]
-                sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                sub_tiles_bcast_scalar_init_short(cb_input_id, cb_ex_global_id);
 
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
+                    uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+#else
+                    constexpr uint32_t row_base = 0;
+#endif
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, index, 0, w);
+                            uint32_t index = w + index_subblock_w_offset + row_base;
+                            sub_tiles_bcast_scalar(cb_input_id, cb_ex_global_id, index, 0, w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -412,10 +465,19 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
+                    // Fast path keeps the group resident (no pop); fallback / tile paths pop the re-read rows.
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                    cb_in.pop_front(block_w);
+#elif !defined(TILIZE_IN)
                     cb_in0.pop_front(block_w);
+#endif
                 }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                    cb_in.pop_front(out_block_hw_normal - out_block_hw_last);
+#elif !defined(TILIZE_IN)
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+#endif
                 }
                 cb_xmm.push_back(out_block_hw_normal);
 
@@ -544,18 +606,39 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+                // Fast path (TILIZE_IN + INPUT_FITS_L1) reuses the resident tilized group, indexed below;
+                // the whole group is popped once after this pass completes.
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                // Only when the input didn't fit L1: re-tilize this out-block into cb_in (the re-tilize-
+                // each-pass fallback).
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_in_rm_id,
+                    cb_in_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+                cb_in.wait_front(out_block_hw_normal);
+#elif !defined(TILIZE_IN)
                 cb_in0.wait_front(out_block_hw_normal);
+#endif
                 // x - E[x]
-                sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                sub_tiles_bcast_scalar_init_short(cb_input_id, cb_ex_global_id);
                 cb_xmm.reserve_back(out_block_hw_normal);
                 cb_ex_global.wait_front(1);
                 for (uint32_t i = 0; i < out_block_h_actual; i++) {
                     index_subblock_w_offset = 0;
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
+                    uint32_t row_base = out_block_index * out_block_hw_normal + i * block_w;
+#else
+                    constexpr uint32_t row_base = 0;
+#endif
                     for (uint32_t j = 0; j < num_subblocks_w; j++) {
                         tile_regs_acquire();
                         for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, index, 0, w);
+                            uint32_t index = w + index_subblock_w_offset + row_base;
+                            sub_tiles_bcast_scalar(cb_input_id, cb_ex_global_id, index, 0, w);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -565,10 +648,19 @@ void kernel_main() {
                         tile_regs_release();
                         index_subblock_w_offset += subblock_w;
                     }
+                    // Fast path keeps the group resident (no pop); fallback / tile paths pop the re-read rows.
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                    cb_in.pop_front(block_w);
+#elif !defined(TILIZE_IN)
                     cb_in0.pop_front(block_w);
+#endif
                 }
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+#if defined(TILIZE_IN) && !defined(INPUT_FITS_L1)
+                    cb_in.pop_front(out_block_hw_normal - out_block_hw_last);
+#elif !defined(TILIZE_IN)
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+#endif
                 }
                 cb_xmm.push_back(out_block_hw_normal);
 
@@ -636,6 +728,19 @@ void kernel_main() {
 
                 // add or copy with previous output results
                 uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
+
+#ifdef UNTILIZE_OUT
+                // ROW_MAJOR output: tilize the reread rows (cb_reread_rm c_20 -> cb_reread_out c_23) so the
+                // cross-group accumulation below sees the previous group's result in tiled form.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_reread_rm_id,
+                    cb_reread_out_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_normal);
+#endif
 
                 cb_reread_out.wait_front(out_block_hw_normal);
                 cb_reread_write_out.reserve_back(out_block_hw_normal);
@@ -762,17 +867,22 @@ void kernel_main() {
                 // End Optional Beta
 
 #ifdef UNTILIZE_OUT
-                // untilize - DEST capacity auto-detected
+                // ROW_MAJOR output: untilize this block (tiled -> row-major c_30) for the writer.
                 compute_kernel_lib::untilize<
-                    per_core_N,
+                    block_w,
                     cb_untilize_in_id,
                     cb_untilize_out_id,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+                    compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                    out_block_h_normal);
 #endif
             }
             // End Final Val Calc
+#if defined(TILIZE_IN) && defined(INPUT_FITS_L1)
+            // Release the whole tilized group now that all three passes have consumed it.
+            cb_in_resident.pop_front(num_out_blocks_padded * out_block_hw_normal);
+#endif
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                 if (row_offset == tile_width) {
                     index_g_offset += block_w;
