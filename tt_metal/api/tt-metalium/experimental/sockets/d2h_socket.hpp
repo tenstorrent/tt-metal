@@ -17,6 +17,8 @@ namespace tt::tt_metal::distributed {
 
 class NamedShm;
 class PCIeCoreWriter;
+struct HDSocketDescriptor;
+struct HDSocketConnectorState;
 
 /**
  * @brief A socket for streaming data from a device core to the host.
@@ -129,6 +131,22 @@ public:
         const std::string& socket_id, std::optional<uint32_t> timeout_ms = std::nullopt);
 
     /**
+     * @brief Attaches to an existing D2HSocket from an in-memory descriptor.
+     *
+     * Used by D2HStreamService::connect to attach every per-coord socket from
+     * the embedded service descriptor without a separate file read per socket.
+     */
+    static std::unique_ptr<D2HSocket> connect_from_descriptor(const HDSocketDescriptor& desc);
+
+    /**
+     * @brief Populates an HDSocketDescriptor from the owner-side socket state.
+     *
+     * Used by D2HStreamService::export_descriptor to embed socket descriptors
+     * inline in the service descriptor.
+     */
+    HDSocketDescriptor populate_descriptor() const;
+
+    /**
      * @brief Exports a descriptor file for cross-process socket attachment.
      *
      * Writes a flatbuffer binary to /dev/shm/ containing all metadata needed for
@@ -158,6 +176,13 @@ public:
      * @return The page size in bytes, or 0 if not yet set.
      */
     uint32_t get_page_size() const { return page_size_; }
+
+    /**
+     * @brief Returns the current size of the FIFO in bytes.
+     *
+     * @return The current size of the FIFO in bytes.
+     */
+    uint32_t get_fifo_curr_size() const { return fifo_curr_size_; }
 
     /**
      * @brief Returns the L1 address of the socket configuration buffer on the device.
@@ -192,11 +217,12 @@ public:
      * without blocking. Useful for poll-based readers that need to check
      * a shutdown flag between iterations.
      *
-     * @return true if at least one page can be read immediately.
+     * @param num_bytes_to_check Optional number of bytes to check. If not provided, the default page size is used.
+     * @return true if at least the requested number of bytes can be read immediately.
      *
      * @throws TT_FATAL if page_size has not been set.
      */
-    bool has_data();
+    bool has_data(std::optional<uint32_t> num_bytes_to_check = std::nullopt);
 
     /**
      * @brief Reads data pages from the socket FIFO.
@@ -259,6 +285,17 @@ public:
 
     MeshDevice* get_mesh_device() const;
 
+    /**
+     * @brief Returns whether the prior connector process shut down cleanly.
+     *
+     * On the owner side this is always true (no prior connector existed). On a
+     * connector created via connect(), this reflects the clean_shutdown flag
+     * left in SHM by the previous process: true if it ran its destructor, false
+     * if it exited via crash, _exit, or kill. Useful for warning the operator
+     * or deciding whether to call discard_pending_pages() to drop stale data.
+     */
+    bool had_clean_prior_shutdown() const { return prior_clean_shutdown_; }
+
     D2HSocket(const D2HSocket&) = delete;
     D2HSocket& operator=(const D2HSocket&) = delete;
 
@@ -318,10 +355,15 @@ private:
     bool is_owner_ = true;
     std::string descriptor_path_;
     bool exported_ = false;
+    HDSocketConnectorState* connector_state_ = nullptr;
+    uint32_t connector_state_offset_ = 0;
+    bool prior_clean_shutdown_ = true;
 
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
+
+    std::optional<DeviceAddr> svc_config_l1_addr_;
 };
 
 }  // namespace tt::tt_metal::distributed

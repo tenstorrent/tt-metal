@@ -18,14 +18,14 @@
 #endif
 #endif  // COMPILE_FOR_TRISC
 
-namespace experimental {
-
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
     : local_dfb_interface_(get_local_cb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {}
 
 inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interface_.fifo_page_size; }
 
 inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.fifo_page_size; }
+
+inline uint32_t DataflowBuffer::get_total_num_entries() const { return local_dfb_interface_.fifo_num_pages; }
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #ifdef COMPILE_FOR_TRISC
@@ -97,12 +97,8 @@ inline uint32_t DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t el
 
     return value;
 }
+
 #else
-#ifdef DATA_FORMATS_DEFINED
-inline uint32_t DataflowBuffer::get_tile_size() const { return ::get_tile_size(logical_dfb_id_); }
-inline uint32_t DataflowBuffer::get_tile_hw() const { return ::get_tile_hw(logical_dfb_id_); }
-inline DataFormat DataflowBuffer::get_dataformat() const { return ::get_dataformat(logical_dfb_id_); }
-#endif
 
 inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const { return cb_pages_reservable_at_back(logical_dfb_id_, num_pages); }
 
@@ -119,7 +115,5 @@ inline void DataflowBuffer::finish_impl() {}
 inline uint32_t DataflowBuffer::get_write_ptr_impl() const { return local_dfb_interface_.fifo_wr_ptr; }
 
 inline uint32_t DataflowBuffer::get_read_ptr_impl() const { return local_dfb_interface_.fifo_rd_ptr; }
-
-}  // namespace experimental
 
 #endif  // !ARCH_QUASAR

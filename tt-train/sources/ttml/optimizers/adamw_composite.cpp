@@ -103,6 +103,7 @@ void MorehAdamW::step() {
     state_dict[kFirstMoment] = m_first_moment;
     state_dict[kSecondMoment] = m_second_moment;
     state_dict[kSteps] = m_steps;
+    state_dict["lr"] = m_config.lr;
 
     return state_dict;
 }
@@ -111,6 +112,7 @@ void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
     m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
     m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -202,7 +204,8 @@ void AdamWComposite::step() {
             ttnn::multiply(second_moment, m_config.beta2),
             ttnn::multiply(ttnn::square(gradients), 1.F - m_config.beta2));
         // first_moment_hat = first_moment / (1 - beta1^steps)
-        auto first_moment_hat = ttnn::multiply(first_moment, 1.F / (1.F - std::pow(m_config.beta1, m_steps)));
+        auto first_moment_hat =
+            ttnn::multiply(first_moment, static_cast<float>(1.F / (1.F - std::pow(m_config.beta1, m_steps))));
 
         first_moment_ptr->set_value(first_moment);
         second_moment_ptr->set_value(second_moment);
@@ -216,11 +219,13 @@ void AdamWComposite::step() {
             max_exp_avg_sq = ttnn::maximum(max_exp_avg_sq, second_moment);
             max_exp_avg_sq_ptr->set_value(max_exp_avg_sq);
             // Apply bias correction after taking max
-            auto max_exp_avg_sq_hat = ttnn::multiply(max_exp_avg_sq, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
+            auto max_exp_avg_sq_hat =
+                ttnn::multiply(max_exp_avg_sq, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
             denom_tensor = ttnn::add(ttnn::sqrt(max_exp_avg_sq_hat), m_config.epsilon);
         } else {
             // second_moment_hat = second_moment / (1 - beta2^steps)
-            auto second_moment_hat = ttnn::multiply(second_moment, 1.F / (1.F - std::pow(m_config.beta2, m_steps)));
+            auto second_moment_hat =
+                ttnn::multiply(second_moment, static_cast<float>(1.0f / (1.0f - std::pow(m_config.beta2, m_steps))));
             denom_tensor = ttnn::add(ttnn::sqrt(second_moment_hat), m_config.epsilon);
         }
 
@@ -256,6 +261,7 @@ void AdamWComposite::step() {
     state_dict[kMaxExpAvgSq] = m_max_exp_avg_sq;
     state_dict[kKahanCompensation] = m_kahan_compensation;
     state_dict[kSteps] = m_steps;
+    state_dict["lr"] = m_config.lr;
 
     return state_dict;
 }
@@ -266,6 +272,7 @@ void AdamWComposite::set_state_dict(const serialization::StateDict& dict) {
     m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at(kMaxExpAvgSq));
     m_kahan_compensation = std::get<serialization::NamedParameters>(dict.at(kKahanCompensation));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
 }
 
 [[nodiscard]] size_t AdamWComposite::get_steps() const {

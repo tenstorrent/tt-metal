@@ -4,8 +4,11 @@
 
 #include <gmock/gmock.h>
 #include <tt_stl/reflection.hpp>
+#include <map>
 #include <sstream>
 #include <string>
+#include <type_traits>
+#include <unordered_map>
 
 // Define test types in a DIFFERENT namespace to avoid ADL finding the operators
 // This is the scenario that triggers the ordering issue
@@ -130,6 +133,35 @@ TEST(ReflectionTest, FmtFormatContainerWithReflectable) {
     EXPECT_THAT(result, HasSubstr("name=fmt_test"));
     EXPECT_THAT(result, HasSubstr("x=15"));
     EXPECT_THAT(result, HasSubstr("y=25"));
+}
+
+// Regression test for issue #48265: from_json_t<std::unordered_map<K, V>> declared its
+// operator() return type as std::map<K, V> while returning a std::unordered_map, so any
+// instantiation of from_json for an unordered_map failed to compile. Exercising that
+// instantiation here guards it (and asserts the declared return type is unordered_map).
+TEST(ReflectionTest, FromJsonUnorderedMapRoundTrip) {
+    const std::unordered_map<std::string, int> original{{"a", 1}, {"b", 2}, {"c", 3}};
+
+    const nlohmann::json json_object = ttsl::json::to_json(original);
+    const auto restored = ttsl::json::from_json<std::unordered_map<std::string, int>>(json_object);
+
+    static_assert(
+        std::is_same_v<decltype(restored), const std::unordered_map<std::string, int>>,
+        "from_json for std::unordered_map must return std::unordered_map");
+    EXPECT_EQ(restored, original);
+}
+
+// The sibling std::map specialization (the correct one the bug was copy-pasted from) still works.
+TEST(ReflectionTest, FromJsonMapRoundTrip) {
+    const std::map<std::string, int> original{{"a", 1}, {"b", 2}, {"c", 3}};
+
+    const nlohmann::json json_object = ttsl::json::to_json(original);
+    const auto restored = ttsl::json::from_json<std::map<std::string, int>>(json_object);
+
+    static_assert(
+        std::is_same_v<decltype(restored), const std::map<std::string, int>>,
+        "from_json for std::map must return std::map");
+    EXPECT_EQ(restored, original);
 }
 
 }  // namespace

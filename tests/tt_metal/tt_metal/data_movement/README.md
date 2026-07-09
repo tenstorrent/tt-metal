@@ -14,18 +14,21 @@ Some test suites use slow dispatch mode for reliable program execution. These te
 - **Conv Hardcoded** (IDs 21-23)
 - **Reshard Hardcoded** (IDs 17-20)
 
+### Quasar Simulator
+Quasar data movement tests (IDs 912-927) use `GenericMeshDeviceFixture` with `arch == ARCH::QUASAR` branches inside each test. They require `TT_METAL_SLOW_DISPATCH_MODE=1` (fast dispatch is not yet supported on the Quasar emulator). The base fixture skips gracefully if fast dispatch is attempted. Tests that require `≥2 Tensix columns` (e.g. subordinate core `{1,0}`) also skip with an informative message when run on a 1-column emulator — use `emu-quasar-2x3` or larger for those tests.
+
 ## Device 2.0 API Support
-This test suite now includes tests using the new device 2.0 experimental NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
+This test suite now includes tests using the new device 2.0 NOC API alongside the original implementations. These tests provide validation and performance comparison for the updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, and `experimental::noc_traits_t` for structured NOC operations
+- **NOC API**: Uses `Noc`, `UnicastEndpoint`, and `noc_traits_t` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Test Suites:
-- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using experimental write API
-- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using experimental read API
+- **One to One** (ID: 158): Device 2.0 version of packet sizes tests using write API
+- **One From One** (ID: 159): Device 2.0 version of packet sizes tests using read API
 
-Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new experimental API.
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as validation and performance comparison for the new API.
 
 ## Tests in the Test Suite
 
@@ -57,7 +60,7 @@ Both API versions run the same test cases but use different underlying implement
 | PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
 | PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
 | Matmul                      | 1000-1231                       | 1D v1, 1D v2, and 2D matmul DM tests across grid shapes, subblock dims, K depths, non-origin starts, and DRAM banks. Per-variant offsets: 1D v1 +0 (1000-1031), 1D v2 +100 (1100-1131), 2D +200 (1200-1231). 1D: in0 row multicast + in1 column multicast (row 0 reads its DRAM slice once, then multicasts down the column). 2D: in0 row multicast + in1 column multicast (all L1, no DRAM). Perf-characterization sweeps: 1029 (4x4 K=1 sub_r {1..256}), 1030 (4x4 K=8 (sub_r, sub_c) 2D), 1031 (8x7 K=8 (sub_r, sub_c) 2D). |
-| NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
+| NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using dataflow 2.0 API.         |
 | NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 | Quasar Addrgen              | 900-909                         | Quasar-only: example kernels exercising the hardware address generator (1D/2D/face/interleaved). Requires Quasar simulator. |
 | Quasar IDMA                 | 910-911                         | Quasar-only: example kernels exercising the IDMA engine (basic linear copy and 1D strided). Requires Quasar simulator. |
@@ -98,6 +101,7 @@ Follow these steps to add new tests to this test suite.
 1. **Choose dispatch mode:** Decide whether your test should use fast dispatch (Mesh Device API) or slow dispatch:
     - **Fast Dispatch (recommended)**: Use `GenericMeshDeviceFixture` for new performance tests
     - **Slow Dispatch**: Use `MeshDeviceFixture` only if fast dispatch APIs don't work for your specific test case
+    - **Quasar Simulator**: Use `GenericMeshDeviceFixture` with an `arch == ARCH::QUASAR` branch inside the test; run with `TT_METAL_SLOW_DISPATCH_MODE=1`
 2. Create a new directory with a descriptive name for the test.
     - **Example:** `./dram_unary`
 3. In this directory, create the c++ test file with a filename that starts with "test_".

@@ -8,9 +8,17 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     uint32_t argrt = 0;
@@ -31,15 +39,27 @@ void kernel_main() {
     constexpr uint32_t out_cb = get_compile_time_arg_val(7);
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
     constexpr uint32_t n_heads = get_compile_time_arg_val(9);
+    constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
 
-    const uint32_t my_seq_tiles = seq_t_end - seq_t_start;
-    const uint32_t my_cos_sin_tiles = my_seq_tiles * Wt;
+    CircularBuffer in_cb_obj(in_cb);
+    CircularBuffer cos_cb_obj(cos_cb);
+    CircularBuffer sin_cb_obj(sin_cb);
+    CircularBuffer trans_mat_cb_obj(trans_mat_cb);
+    CircularBuffer rotated_in_interm_cb_obj(rotated_in_interm_cb);
+    CircularBuffer cos_interm_cb_obj(cos_interm_cb);
+    CircularBuffer sin_interm_cb_obj(sin_interm_cb);
+    CircularBuffer out_cb_obj(out_cb);
 
-    mm_init(in_cb, trans_mat_cb, out_cb);
+    const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
+    const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
+    const uint32_t my_cos_sin_tiles = my_rotary_seq_tiles * Wt;
+
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
+    matmul_init(in_cb, trans_mat_cb);
     binary_op_init_common(rotated_in_interm_cb, cos_cb, out_cb);  // General Init for all binary ops
 
     // Get the trans_mat
-    cb_wait_front(trans_mat_cb, onetile);
+    trans_mat_cb_obj.wait_front(onetile);
 
     uint32_t in0_index = 0;
     uint32_t in1_index = 0;
@@ -47,34 +67,36 @@ void kernel_main() {
 
     for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
 #if RELOAD_IMPL == 0
-        cb_wait_front(sin_cb, my_cos_sin_tiles);
-        cb_wait_front(cos_cb, my_cos_sin_tiles);
+        if (my_cos_sin_tiles > 0) {
+            sin_cb_obj.wait_front(my_cos_sin_tiles);
+            cos_cb_obj.wait_front(my_cos_sin_tiles);
+        }
 #endif
         for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
             uint32_t sin_cos_row_cnt = 0;
-            for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
+            for (uint32_t seq_tile = seq_t_start; seq_tile < rotary_seq_t_end; ++seq_tile) {
                 // input cb wait and reserve
-                cb_wait_front(in_cb, Wt);
+                in_cb_obj.wait_front(Wt);
 #if RELOAD_IMPL == 1
-                cb_wait_front(sin_cb, Wt);
-                cb_wait_front(cos_cb, Wt);
+                sin_cb_obj.wait_front(Wt);
+                cos_cb_obj.wait_front(Wt);
 #endif
 
-                cb_reserve_back(rotated_in_interm_cb, Wt);
-                cb_reserve_back(sin_interm_cb, Wt);
-                cb_reserve_back(cos_interm_cb, Wt);
-                cb_reserve_back(out_cb, Wt);
+                rotated_in_interm_cb_obj.reserve_back(Wt);
+                sin_interm_cb_obj.reserve_back(Wt);
+                cos_interm_cb_obj.reserve_back(Wt);
+                out_cb_obj.reserve_back(Wt);
 
                 // // rotated = x @ trans_mat
-                mm_init_short(in_cb, trans_mat_cb);
+                matmul_init(in_cb, trans_mat_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
                     matmul_tiles(in_cb, trans_mat_cb, j, in1_index, j);
                     pack_tile(j, rotated_in_interm_cb, j);
                 }
                 REL();
-                cb_push_back(rotated_in_interm_cb, Wt);
-                cb_wait_front(rotated_in_interm_cb, Wt);
+                rotated_in_interm_cb_obj.push_back(Wt);
+                rotated_in_interm_cb_obj.wait_front(Wt);
 
                 mul_tiles_init(rotated_in_interm_cb, sin_cb);
                 ACQ();
@@ -84,8 +106,8 @@ void kernel_main() {
                     pack_tile(j, sin_interm_cb, j);
                 }
                 REL();
-                cb_push_back(sin_interm_cb, Wt);
-                cb_pop_front(rotated_in_interm_cb, Wt);
+                sin_interm_cb_obj.push_back(Wt);
+                rotated_in_interm_cb_obj.pop_front(Wt);
 
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
@@ -94,15 +116,15 @@ void kernel_main() {
                     pack_tile(j, cos_interm_cb, j);
                 }
                 REL();
-                cb_push_back(cos_interm_cb, Wt);
-                cb_pop_front(in_cb, Wt);  // Done with input
+                cos_interm_cb_obj.push_back(Wt);
+                in_cb_obj.pop_front(Wt);  // Done with input
 #if RELOAD_IMPL == 1
-                cb_pop_front(sin_cb, Wt);
-                cb_pop_front(cos_cb, Wt);
+                sin_cb_obj.pop_front(Wt);
+                cos_cb_obj.pop_front(Wt);
 #endif
 
-                cb_wait_front(sin_interm_cb, Wt);
-                cb_wait_front(cos_interm_cb, Wt);
+                sin_interm_cb_obj.wait_front(Wt);
+                cos_interm_cb_obj.wait_front(Wt);
                 add_tiles_init(cos_interm_cb, sin_interm_cb);
                 ACQ();
                 for (uint32_t j = 0; j < Wt; ++j) {
@@ -111,9 +133,9 @@ void kernel_main() {
                     pack_tile(j, out_cb, j);
                 }
                 REL();
-                cb_push_back(out_cb, Wt);
-                cb_pop_front(sin_interm_cb, Wt);
-                cb_pop_front(cos_interm_cb, Wt);
+                out_cb_obj.push_back(Wt);
+                sin_interm_cb_obj.pop_front(Wt);
+                cos_interm_cb_obj.pop_front(Wt);
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter
@@ -124,11 +146,13 @@ void kernel_main() {
         }
 
 #if RELOAD_IMPL == 0
-        cb_pop_front(sin_cb, my_cos_sin_tiles);
-        cb_pop_front(cos_cb, my_cos_sin_tiles);
+        if (my_cos_sin_tiles > 0) {
+            sin_cb_obj.pop_front(my_cos_sin_tiles);
+            cos_cb_obj.pop_front(my_cos_sin_tiles);
+        }
 #endif
     }
 
     // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
+    trans_mat_cb_obj.pop_front(onetile);
 }

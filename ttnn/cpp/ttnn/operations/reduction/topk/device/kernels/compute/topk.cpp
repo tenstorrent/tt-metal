@@ -5,10 +5,11 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
+#include "api/dataflow/circular_buffer.h"
 
 /**
  * Transpose tiles from width-height to height-width format and pack to destination buffer
@@ -20,31 +21,37 @@
  */
 FORCE_INLINE void transpose_and_pack(
     const uint32_t input_cb_index, const uint32_t dest_cb_index, const uint32_t total_tiles) {
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer dest_cb(dest_cb_index);
+
     // Configure data formats for transpose operation.
     // Pack using the DESTINATION CB format: input_cb may be bf16 (higher-precision
     // intermediate) while dest_cb is the original bfp8/bfp4 output format.
     reconfig_data_format_srca(input_cb_index);
-    transpose_wh_init_short(input_cb_index);
+    transpose_init(input_cb_index);
     pack_reconfig_data_format(dest_cb_index);
 
     // Wait for all tiles to be available (double-buffered, hence 2 * total_tiles)
-    cb_wait_front(input_cb_index, 2 * total_tiles);
+    input_cb.wait_front(2 * total_tiles);
     for (uint32_t i = 0; i < total_tiles; ++i) {
-        acquire_dst();
-        cb_reserve_back(dest_cb_index, 1);
-
         // Transpose tile from WH to HW format
-        transpose_wh_tile(input_cb_index, i, 0);
+        tile_regs_acquire();
+        transpose_tile(input_cb_index, i, 0);
+        tile_regs_commit();
+
+        dest_cb.reserve_back(1);
 
         // Pack transposed tile to destination
+        tile_regs_wait();
         pack_tile(0, dest_cb_index);
-        cb_push_back(dest_cb_index, 1);
-        release_dst();
+        tile_regs_release();
+
+        dest_cb.push_back(1);
     }  // i loop
     // Pop in two halves so a single pop never crosses the circular buffer
     // wrap boundary (fifo_rd_ptr must not exceed fifo_limit in one step).
-    cb_pop_front(input_cb_index, total_tiles);
-    cb_pop_front(input_cb_index, total_tiles);
+    input_cb.pop_front(total_tiles);
+    input_cb.pop_front(total_tiles);
 }
 
 /**
@@ -76,10 +83,10 @@ FORCE_INLINE void pack_results(const uint32_t cb0, const uint32_t cb1, const uin
  */
 FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_offset) {
     reconfig_data_format_srca(cb);
-    transpose_wh_init_short(cb);
+    transpose_init(cb);
 
     // Transpose first tile to destination register
-    transpose_wh_tile(cb, 0, base_offset);
+    transpose_tile(cb, 0, base_offset);
 }
 
 /**
@@ -90,8 +97,9 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t cb, const uint32_t base_o
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
 FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
-    cb_wait_front(cb, count);
-    cb_pop_front(cb, count);
+    CircularBuffer cb_obj(cb);
+    cb_obj.wait_front(count);
+    cb_obj.pop_front(count);
 }
 
 /**
@@ -102,8 +110,9 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t cb, const uint32_t count) {
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
 FORCE_INLINE void cb_reserve_push_back(const uint32_t cb, const uint32_t count) {
-    cb_reserve_back(cb, count);
-    cb_push_back(cb, count);
+    CircularBuffer cb_obj(cb);
+    cb_obj.reserve_back(count);
+    cb_obj.push_back(count);
 }
 
 void kernel_main() {
@@ -125,9 +134,15 @@ void kernel_main() {
     constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
+    compute_kernel_hw_startup(input_val_cb_index, input_ind_cb_index, output_val_cb_index);
     ckernel::topk_tile_init();
-    transpose_wh_init(input_val_cb_index, output_val_cb_index);
-    transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
+
+    CircularBuffer input_val_cb(input_val_cb_index);
+    CircularBuffer input_ind_cb(input_ind_cb_index);
+    CircularBuffer transposed_val_cb(transposed_val_cb_index);
+    CircularBuffer transposed_ind_cb(transposed_ind_cb_index);
+    CircularBuffer result_prep_val_cb(result_prep_val_cb_index);
+    CircularBuffer result_prep_ind_cb(result_prep_ind_cb_index);
 
     constexpr uint32_t DST_VAL = 0;
     constexpr uint32_t DST_IND = 2;
@@ -213,21 +228,21 @@ void kernel_main() {
             // Transpose input tiles from WH to HW format and pack to intermediate buffers
 
             for (uint32_t i = 0; i < input_take; i++) {
-                cb_reserve_back(transposed_val_cb_index, 1);
-                cb_reserve_back(transposed_ind_cb_index, 1);
-
-                cb_wait_front(input_val_cb_index, 1);
-                cb_wait_front(input_ind_cb_index, 1);
+                input_val_cb.wait_front(1);
+                input_ind_cb.wait_front(1);
 
                 tile_regs_acquire();
-
                 read_cb_and_transpose(input_val_cb_index, DST_VAL);  // Values: dest regs 0,1
                 read_cb_and_transpose(input_ind_cb_index, DST_IND);  // Indices: dest regs 2,3
-
                 tile_regs_commit();
 
-                tile_regs_wait();
+                input_val_cb.pop_front(1);
+                input_ind_cb.pop_front(1);
 
+                transposed_val_cb.reserve_back(1);
+                transposed_ind_cb.reserve_back(1);
+
+                tile_regs_wait();
                 // Pack transposed values
                 pack_reconfig_data_format(transposed_val_cb_index);
                 pack_tile(DST_VAL, transposed_val_cb_index);
@@ -235,15 +250,11 @@ void kernel_main() {
                 // Pack transposed indices
                 pack_reconfig_data_format(transposed_ind_cb_index);
                 pack_tile(DST_IND, transposed_ind_cb_index);
-
                 tile_regs_release();
 
-                cb_pop_front(input_val_cb_index, 1);
-                cb_pop_front(input_ind_cb_index, 1);
-
                 // Store each transposed tile separately so a push can wrap at the CB boundary.
-                cb_push_back(transposed_val_cb_index, 1);
-                cb_push_back(transposed_ind_cb_index, 1);
+                transposed_val_cb.push_back(1);
+                transposed_ind_cb.push_back(1);
             }
 
             // Insertion sort into result preparation buffer
@@ -291,18 +302,20 @@ void kernel_main() {
 
                 // Prepare data for merge operation
                 // Wait for required tiles to be available
-                cb_wait_front(cb0, in_cb_offset);  // Wait for existing sorted data
-                cb_wait_front(cb1, in_cb_offset);
+                CircularBuffer cb0_obj(cb0);
+                CircularBuffer cb1_obj(cb1);
+                cb0_obj.wait_front(in_cb_offset);  // Wait for existing sorted data
+                cb1_obj.wait_front(in_cb_offset);
                 if (transposed_offset == 0) {
-                    cb_wait_front(transposed_val_cb_index, 1);  // Wait for new input tile
-                    cb_wait_front(transposed_ind_cb_index, 1);
+                    transposed_val_cb.wait_front(1);  // Wait for new input tile
+                    transposed_ind_cb.wait_front(1);
                 }
 
                 // Reserve space for intermediate results
-                cb_reserve_back(transposed_val_cb_index, 1);
-                cb_reserve_back(transposed_ind_cb_index, 1);
+                transposed_val_cb.reserve_back(1);
+                transposed_ind_cb.reserve_back(1);
 
-                acquire_dst();
+                tile_regs_acquire();
 
                 // Load tiles into destination registers for merging
                 // Load existing sorted values into dest reg 0
@@ -316,8 +329,8 @@ void kernel_main() {
                 if (first_sort_from_transposed) {
                     // Avoid indexed reads across the CB wrap boundary: once tile 0 is in DST,
                     // pop it so the second staged tile can be read as tile 0.
-                    cb_pop_front(transposed_val_cb_index, 1);
-                    cb_pop_front(transposed_ind_cb_index, 1);
+                    transposed_val_cb.pop_front(1);
+                    transposed_ind_cb.pop_front(1);
                 }
 
                 // Load new input values into dest reg 1
@@ -334,39 +347,41 @@ void kernel_main() {
                 // largest flag determines ascending (0) vs descending (1) sort order
                 ckernel::topk_local_sort(0, (int)!largest, end_phase);
 
-                // Store sorted results back to buffers
-                // Reserve space for storing the best K elements
-                cb_reserve_back(result_prep_val_cb_index, incr);
-                cb_reserve_back(result_prep_ind_cb_index, incr);
-
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
-                pack_results(result_prep_val_cb_index, cb2, 0);  // Store top 32 elements
-                pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
+                tile_regs_commit();
 
                 // Clean up source buffers
                 if (first_sort_from_transposed) {
-                    cb_pop_front(transposed_val_cb_index, 1);
-                    cb_pop_front(transposed_ind_cb_index, 1);
+                    transposed_val_cb.pop_front(1);
+                    transposed_ind_cb.pop_front(1);
                 } else {
-                    cb_pop_front(cb0, in_cb_offset);
-                    cb_pop_front(cb1, in_cb_offset);
+                    cb0_obj.pop_front(in_cb_offset);
+                    cb1_obj.pop_front(in_cb_offset);
                 }
 
-                // Advance result prep buffer pointers
-                cb_push_back(result_prep_val_cb_index, incr);
-                cb_push_back(result_prep_ind_cb_index, incr);
+                // Store sorted results back to buffers
+                // Reserve space for storing the best K elements
+                result_prep_val_cb.reserve_back(incr);
+                result_prep_ind_cb.reserve_back(incr);
 
-                release_dst();
+                tile_regs_wait();
+                pack_results(result_prep_val_cb_index, cb2, 0);  // Store top 32 elements
+                pack_results(result_prep_ind_cb_index, cb3, 2);  // Store corresponding indices
+                tile_regs_release();
+
+                // Advance result prep buffer pointers
+                result_prep_val_cb.push_back(incr);
+                result_prep_ind_cb.push_back(incr);
 
                 // Clean up transposed buffers if we consumed from them
                 if ((transposed_offset == 0) && !first_sort_from_transposed) {
-                    cb_pop_front(transposed_val_cb_index, 1);
-                    cb_pop_front(transposed_ind_cb_index, 1);
+                    transposed_val_cb.pop_front(1);
+                    transposed_ind_cb.pop_front(1);
                 }
 
                 // Maintain transposed buffer structure
-                cb_push_back(transposed_val_cb_index, 1);
-                cb_push_back(transposed_ind_cb_index, 1);
+                transposed_val_cb.push_back(1);
+                transposed_ind_cb.push_back(1);
             }  // index loop
 
             // After first iteration, process only 1 tile at a time

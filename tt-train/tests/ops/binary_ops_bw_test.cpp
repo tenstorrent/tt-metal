@@ -14,14 +14,17 @@
 namespace ttml::ops::tests {
 
 class BinaryOpsBackwardTest : public ::testing::Test {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         autograd::ctx().open_device();
     }
+    static void TearDownTestSuite() {
+        autograd::ctx().close_device();
+    }
 
+protected:
     void TearDown() override {
         autograd::ctx().reset_graph();
-        autograd::ctx().close_device();
     }
 };
 

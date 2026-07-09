@@ -2,26 +2,27 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
+import re
 from functools import partial
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
+    get_mesh_shape,
     mesh_tensor_to_torch,
     reconcile_golden_to_actual,
 )
-
-from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
 )
-import re
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 
 def dict_to_layernorm_program_config(cfg):
@@ -32,6 +33,8 @@ def dict_to_layernorm_program_config(cfg):
 
     if "LayerNormShardedMultiCoreProgramConfig" in cfg_type:
         m = re.search(r"x\s*=\s*(\d+).*?y\s*=\s*(\d+)", val_str)
+        if not m:
+            m = re.search(r"compute_with_storage_grid_size\s*=\s*(\d+)\s*-\s*(\d+)", val_str)
         grid = ttnn.CoreCoord(int(m.group(1)), int(m.group(2))) if m else ttnn.CoreCoord(8, 4)
 
         def _int(name, default=0):
@@ -124,14 +127,31 @@ def run(
     if program_config is not None:
         op_kwargs["program_config"] = program_config
 
-    # Do NOT inject memory_config — the master trace only records it when the model
-    # explicitly passed it as a kwarg.  Injecting from vector metadata causes
-    # extra_key diffs in validation.
+    # Use __absent_keys__ to inject memory_config only when the master trace had it.
+    # When the master had memory_config=None, we must pass None explicitly.
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if "memory_config" not in absent_keys:
+        traced_memory_config = kwargs.get("memory_config")
+        if traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+            from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+            parsed_mc = (
+                parse_dict_value("memory_config", traced_memory_config)
+                if isinstance(traced_memory_config, dict)
+                else traced_memory_config
+            )
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+            else:
+                op_kwargs["memory_config"] = None
+        else:
+            op_kwargs["memory_config"] = None
 
     input_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
     # Extract weight named tensor kwargs
     weight_info = extract_named_tensor_kwargs(kwargs, "weight")
+    _weight_traced = bool(weight_info and weight_info.get("shape") is not None)
     if weight_info and weight_info["shape"] is not None:
         w_shape = (
             tuple(weight_info["shape"]) if isinstance(weight_info["shape"], (list, tuple)) else weight_info["shape"]
@@ -147,11 +167,24 @@ def run(
         w_mem = ttnn.DRAM_MEMORY_CONFIG
         w_placement = None
 
+    # gamma must share the input's element type: an untraced weight leaves w_dtype
+    # None, so ttnn.from_torch would build a float32 gamma. ttnn.rms_norm with a
+    # float32 gamma on a bf16 input produces garbage (≈0 PCC), so default the gamma
+    # dtype to the input dtype.
+    if w_dtype is None:
+        w_dtype = input_a_dtype
+
     torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         input_shape
     )
 
-    torch_weight = torch.randn(w_shape, dtype=torch.float32)
+    # When the model didn't trace a weight, rms_norm ran without affine gamma.
+    # Use a ONES gamma (identity) rather than a random one: it's mathematically
+    # equivalent (x/rms) AND makes the result independent of the device gamma's
+    # tiled channel layout, so golden and device agree regardless of reshape.
+    torch_weight = (
+        torch.randn(w_shape, dtype=torch.float32) if _weight_traced else torch.ones(w_shape, dtype=torch.float32)
+    )
 
     # PyTorch golden: RMS norm = x * weight / sqrt(mean(x^2) + eps)
     # Need 1D weight matching input's last dim for broadcasting. When weight
@@ -197,14 +230,21 @@ def run(
     else:
         input_tensor = ttnn.from_torch(torch_input, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Reshape weight for TILE layout compatibility
-    if w_layout == ttnn.TILE_LAYOUT and len(w_shape) >= 2:
+    # Reshape weight for layout compatibility.
+    _w_layout = w_layout if w_layout is not None else ttnn.ROW_MAJOR_LAYOUT
+    if _w_layout == ttnn.TILE_LAYOUT and len(w_shape) >= 2:
         weight_size = input_shape[-1]
         torch_weight_reshaped = torch_weight.flatten()[:weight_size].reshape([1, 1, 1, weight_size])
     elif len(w_shape) == 1:
-        torch_weight_reshaped = (
-            torch_weight.reshape([1, 1, 1, w_shape[0]]) if w_layout == ttnn.TILE_LAYOUT else torch_weight
-        )
+        if _w_layout == ttnn.TILE_LAYOUT:
+            torch_weight_reshaped = torch_weight.reshape([1, 1, 1, w_shape[0]])
+        else:
+            # ROW_MAJOR gamma: ttnn.rms_norm requires gamma's last padded dim to
+            # equal the tile width (32) ("gamma's last padded dim needs to equal
+            # tile width"); a flat [C] gamma has last dim C and is rejected.
+            # Reshape [C] -> [1,1,C/32,32] when C is tile-aligned.
+            _c = int(w_shape[0])
+            torch_weight_reshaped = torch_weight.reshape([1, 1, _c // 32, 32]) if _c % 32 == 0 else torch_weight
     else:
         torch_weight_reshaped = torch_weight
 
@@ -213,7 +253,7 @@ def run(
             torch_weight_reshaped,
             device,
             w_dtype,
-            w_layout,
+            _w_layout,
             w_mem,
             w_placement,
         )
@@ -221,7 +261,7 @@ def run(
         weight_tensor = ttnn.from_torch(
             torch_weight_reshaped,
             dtype=w_dtype,
-            layout=w_layout,
+            layout=_w_layout,
             device=device,
             memory_config=w_mem,
         )

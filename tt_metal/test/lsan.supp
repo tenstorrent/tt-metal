@@ -7,3 +7,7 @@
 # Bug: https://github.com/open-mpi/ompi/issues/12584
 # ASan Build with LeakSantizer complains about leaks in openmpi lib.
 leak:openmpi
+
+# WatcherServer singleton allocates a small buffer in attach_devices() that
+# intentionally outlives main(). Triggered by any test that opens mock devices.
+leak:tt::tt_metal::WatcherServer::Impl::attach_devices

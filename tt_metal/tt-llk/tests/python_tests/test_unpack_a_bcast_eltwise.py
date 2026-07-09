@@ -127,8 +127,6 @@ def test_unp_bcast_sub_sdpa(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
-            TILE_COUNT(tile_cnt_A),
-            SRCA_REUSE_COUNT(srca_reuse_count),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

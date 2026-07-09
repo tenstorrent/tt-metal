@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_index_fill ${LIB_TYPE})
 add_library(TTNN::Ops::IndexFill ALIAS ttnn_op_index_fill)
 
-tt_reuse_precompile_headers(ttnn_op_index_fill TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_index_fill TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_index_fill)
 
 set_target_properties(
@@ -20,24 +22,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_INDEX_FILL_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/index_fill_device_operation.cpp
-        device/index_fill_multi_core_factory.cpp
-        index_fill.cpp
+        ${TTNN_OP_INDEX_FILL_SRCS}
 )
 
-target_include_directories(ttnn_op_index_fill PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_index_fill
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_index_fill PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -48,4 +42,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_index_fill LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_index_fill FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

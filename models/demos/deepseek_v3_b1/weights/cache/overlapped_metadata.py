@@ -81,4 +81,5 @@ def overlapped_tensor_from_view_dict(fused_tensor: ttnn.Tensor, d: dict) -> "Ove
 
 
 def views_dict_from_overlapped(views: dict[str, "OverlappedTensor"]) -> dict[str, dict]:
+    """Serialize all OverlappedTensor views for metadata.json."""
     return {name: overlapped_tensor_to_view_dict(ot) for name, ot in views.items()}

@@ -18,6 +18,7 @@ from helpers.param_config import (
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
+    runtime,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
@@ -51,7 +52,7 @@ SFPU_SQUARE_FORMATS = input_output_formats(
 )
 
 SFPU_SQUARE_COMBINATIONS = [
-    (fmt, dest_acc, implied_math_format, input_dimensions)
+    (fmt, dest_acc, implied_math_format, runtime(input_dimensions))
     for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(SFPU_SQUARE_FORMATS)
     for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     for input_dimensions in [[32, 32], [64, 64]]
@@ -76,7 +77,6 @@ def test_isolate_sfpu_square_quasar(formats_dest_acc_implied_math_input_dims):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     # Both caps invert the squaring op so x² stays representable. For the input

@@ -6,7 +6,7 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoModelForVision2Seq
+from transformers import AutoConfig, AutoModelForImageTextToText
 from transformers.models.mllama.modeling_mllama import MllamaVisionEncoderLayer
 
 import ttnn
@@ -65,7 +65,7 @@ def test_block_inference(batch, num_chunks, mesh_device, gated, reset_seeds, ens
     config.vision_config._attn_implementation = "sdpa"
     reference_model = MllamaVisionEncoderLayer(config.vision_config, is_gated=gated)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
-    partial_state_dict = load_partial_weights(AutoModelForVision2Seq, model_repo_name, hf_layer_prefix)
+    partial_state_dict = load_partial_weights(AutoModelForImageTextToText, model_repo_name, hf_layer_prefix)
     reference_model.load_state_dict(partial_state_dict)
 
     tt_ccl = TT_CCL(mesh_device)

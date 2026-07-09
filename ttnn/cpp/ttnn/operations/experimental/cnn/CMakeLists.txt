@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_cnn OBJECT)
 add_library(TTNN::Ops::Experimental::CNN ALIAS ttnn_op_experimental_cnn)
 
-tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_cnn TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_cnn)
 
 set_target_properties(
@@ -23,28 +25,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_CNN_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        convert_to_chw/convert_to_chw.cpp
-        convert_to_chw/device/convert_to_chw_device_operation.cpp
-        convert_to_chw/device/convert_to_chw_program_factory.cpp
-        convert_to_hwc/convert_to_hwc.cpp
-        convert_to_hwc/device/convert_to_hwc_device_operation.cpp
-        convert_to_hwc/device/convert_to_hwc_program_factory.cpp
-        convert_to_hwc/device/gather.cpp
+        ${TTNN_OP_EXPERIMENTAL_CNN_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_cnn PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_cnn
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_cnn PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -55,4 +45,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_cnn LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_experimental_cnn FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

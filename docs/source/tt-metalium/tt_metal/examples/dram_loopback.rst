@@ -161,10 +161,10 @@ The ``TensorAccessor`` object handles bank addressing and page size automaticall
         const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr, tile_size_bytes);
 
         for(uint32_t i=0;i<num_tiles;i++) {
-            noc_async_read_tile(i, in0, l1_buffer_addr);
+            noc_async_read_page(i, in0, l1_buffer_addr);
             noc_async_read_barrier();
 
-            noc_async_write_tile(i, out0, l1_buffer_addr);
+            noc_async_write_page(i, out0, l1_buffer_addr);
             noc_async_write_barrier();
         }
     }

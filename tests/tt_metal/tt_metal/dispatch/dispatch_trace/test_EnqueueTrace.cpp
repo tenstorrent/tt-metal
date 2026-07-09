@@ -25,7 +25,7 @@
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "dispatch_test_utils.hpp"
 #include "env_lib.hpp"
@@ -52,19 +52,19 @@ Program create_simple_unary_program(Buffer& input, Buffer& output) {
     CoreCoord worker = {0, 0};
     auto reader_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary.cpp",
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
     auto writer_kernel = CreateKernel(
         program,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary.cpp",
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     CreateKernel(
         program,
-        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu.cpp",
         worker,
         ComputeConfig{
             .math_approx_mode = true,
@@ -1081,7 +1081,8 @@ DFBConfigReaderProgram create_dfb_config_reader_program(uint32_t entry_size, uin
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     auto dfb_id = experimental::dfb::CreateDataflowBuffer(program, core_range, dfb_config);
     experimental::dfb::BindDataflowBufferToProducerConsumerKernels(program, dfb_id, producer_kernel, consumer_kernel);

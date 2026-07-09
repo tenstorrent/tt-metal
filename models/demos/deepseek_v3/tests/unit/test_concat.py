@@ -7,6 +7,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.utils_for_testing import maybe_trace
 
@@ -67,7 +68,7 @@ CLUSTER_AXIS = 1
 
 @pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("shape_list", DEEPSEEK_SHAPE_LISTS)
 @pytest.mark.parametrize("dim", [3, 1])  # slightly overkill

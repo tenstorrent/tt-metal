@@ -11,7 +11,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     ethernet/test_all_ethernet_links.cpp
     routing/benchmark_fabric_mux_v2_throughput.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
-    routing/test_tt_fabric.cpp
     noc/test_noc_unicast_vs_multicast_to_single_core_latency.cpp
     tensix/test_gathering.cpp
     old/matmul/matmul_global_l1.cpp
@@ -39,19 +38,4 @@ set(X86_64_ONLY_TESTS
     dispatch/test_bw_and_latency.cpp
     dispatch/test_dispatcher.cpp
     3_pcie_transfer/test_pull_from_pcie.cpp
-)
-
-set(TEST_TT_FABRIC_ADDITIONAL_SOURCES
-    routing/tt_fabric_test_common_types.cpp
-    routing/tt_fabric_test_config.cpp
-    routing/tt_fabric_test_results.cpp
-    routing/tt_fabric_test_latency_results.cpp
-    routing/tt_fabric_test_bandwidth_results.cpp
-    routing/tt_fabric_test_context.cpp
-    routing/tt_fabric_test_bandwidth_profiler.cpp
-    routing/tt_fabric_test_device_setup.cpp
-    routing/tt_fabric_test_progress_monitor.cpp
-    routing/tt_fabric_test_eth_readback.cpp
-    routing/tt_fabric_test_code_profiler.cpp
-    routing/tt_fabric_telemetry_manager.cpp
 )

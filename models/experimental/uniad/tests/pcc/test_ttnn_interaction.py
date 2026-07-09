@@ -28,7 +28,7 @@ from ttnn.model_preprocessing import (
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.experimental.uniad.common import load_torch_model
+from models.experimental.uniad.tests.common import load_torch_model
 
 
 def custom_preprocessor(model, name):

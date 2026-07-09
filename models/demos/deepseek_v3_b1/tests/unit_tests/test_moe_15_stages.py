@@ -80,6 +80,12 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 @pytest.mark.parametrize("vocab_size, embedding_dim", [(64, 7168)])
 @pytest.mark.parametrize("token_id", [0])
 @pytest.mark.timeout(120000)
+# TODO(#43083): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_moe_15_stages[blackhole-0-64-7168-device_params0-mesh_device0] hit Fabric Router Sync timeout "
+    "after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43083"
+)
 def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_params, get_reference_model_state_dict):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -447,6 +453,12 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
 @pytest.mark.parametrize("embedding_dim", [7168])
 @pytest.mark.parametrize("iterations", [4000])
 @pytest.mark.timeout(120000)
+# TODO(#43083): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_persistent_moe_15_stages[blackhole-4000-7168-device_params0-mesh_device0] hit Fabric Router Sync "
+    "timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43083"
+)
 def test_persistent_moe_15_stages(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
 ):
@@ -835,6 +847,12 @@ def test_persistent_moe_15_stages(
 @pytest.mark.parametrize("embedding_dim", [7168])
 @pytest.mark.parametrize("iterations", [4000])
 @pytest.mark.timeout(120000)
+# TODO(#43083): Root-cause this exact Blackhole FABRIC_2D_TORUS_Y mesh setup failure and remove the temporary skip.
+@pytest.mark.skip(
+    reason="[SKIP REASON]: mesh_device setup for "
+    "test_persistent_moe_multi_token[blackhole-4000-7168-device_params0-mesh_device0] hit Fabric Router Sync "
+    "timeout after 10000 ms on Device 0 with FABRIC_2D_TORUS_Y. Issue: #43083"
+)
 def test_persistent_moe_multi_token(
     mesh_device, embedding_dim, iterations, device_params, get_reference_model_state_dict
 ):

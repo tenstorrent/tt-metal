@@ -62,21 +62,6 @@ RingSDPABwKVDeviceOperation::tensor_return_value_t RingSDPABwKVDeviceOperation::
     return {grad_key, grad_value};
 }
 
-ttsl::hash::hash_t RingSDPABwKVDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Hash based on operation configuration - buffer addresses are updated via override_runtime_arguments
-    return ttsl::hash::hash_objects(
-        1,  // KV marker (different from Q)
-        attrs.ring_size,
-        attrs.ring_axis,
-        attrs.step,
-        static_cast<int>(attrs.mask_type),
-        static_cast<int>(attrs.ring_direction),
-        tensor_args.query.tensor_spec().logical_shape(),
-        tensor_args.query.dtype(),
-        tensor_args.key.tensor_spec().logical_shape());
-}
-
 }  // namespace ttml::metal::ops::ring_sdpa_bw::kv
 
 namespace ttnn::prim {

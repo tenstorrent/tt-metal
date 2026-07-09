@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_bernoulli ${LIB_TYPE})
 add_library(TTNN::Ops::Bernoulli ALIAS ttnn_op_bernoulli)
 
-tt_reuse_precompile_headers(ttnn_op_bernoulli TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_bernoulli TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_bernoulli)
 
 set_target_properties(
@@ -19,24 +21,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_BERNOULLI_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        bernoulli.cpp
-        device/bernoulli_device_operation.cpp
-        device/bernoulli_program_factory.cpp
+        ${TTNN_OP_BERNOULLI_SRCS}
 )
 
-target_include_directories(ttnn_op_bernoulli PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_bernoulli
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_bernoulli PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -47,4 +41,4 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_bernoulli LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_bernoulli FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

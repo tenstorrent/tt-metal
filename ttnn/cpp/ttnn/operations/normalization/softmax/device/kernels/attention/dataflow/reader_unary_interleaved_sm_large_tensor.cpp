@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 
@@ -40,7 +40,7 @@ void kernel_main() {
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
 
     const auto addr_mask = TensorAccessor(mask_args, mask_addr);
-    experimental::CircularBuffer cb_id_attn_obj(cb_id_attn);
+    CircularBuffer cb_id_attn_obj(cb_id_attn);
 
 #if CAUSAL_MASK
     constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
@@ -52,7 +52,7 @@ void kernel_main() {
     uint32_t mask_id = start_mask_id;
     bool read_mask = true;
     constexpr auto cb_fused_scale = tt::CBIndex::c_3;
-    generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
+    generate_bcast_unary_scalar(CircularBuffer(cb_fused_scale), pre_scale);
 #endif
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
@@ -70,8 +70,8 @@ void kernel_main() {
             ckernel::ReduceDim::REDUCE_ROW>();
     }
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_id_in0_obj(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_id_in0_obj(cb_id_in0);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #if NUMERIC_STABLE

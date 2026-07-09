@@ -9,6 +9,7 @@
 #include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -190,10 +191,10 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
 namespace ttnn::prim {
 
-SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::create(
+tt::tt_metal::ProgramDescriptor SliceRmShardedProgramFactory::create_descriptor(
     const SliceParams& args, const SliceInputs& tensor_args, Tensor& output) {
     const auto& input = tensor_args.input;
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    ProgramDescriptor desc;
 
     [[maybe_unused]] uint32_t num_padded_sticks = input.physical_volume() / input.padded_shape()[-1];
     [[maybe_unused]] uint32_t num_unpadded_sticks = output.physical_volume() / output.padded_shape()[-1];
@@ -245,32 +246,41 @@ SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::cre
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    uint32_t src0_cb_index = 0;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(shard_height_padded * stick_size_padded, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_padded)
-            .set_globally_allocated_address(*input.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores_unpadded, cb_src0_config);
+    // Sharded CBs: total_size and page_size vary with shard shape / element size,
+    // so padded_shape is folded into compute_program_hash() to keep each unique
+    // sizing in its own cache entry.  On cache hit, the framework copies runtime
+    // args and patches dynamic CB addresses (.buffer is set below); CB sizing
+    // itself is not re-applied — it is carried by the cached descriptor.
+    constexpr uint8_t src0_cb_index = 0;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_height_padded * stick_size_padded,
+        .core_ranges = all_cores_unpadded,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = src0_cb_index,
+            .data_format = cb_data_format,
+            .page_size = stick_size_padded,
+        }}},
+        .buffer = input.buffer(),
+    });
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            shard_height_unpadded * stick_size_unpadded, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, stick_size_unpadded)
-            .set_globally_allocated_address(*output.buffer());
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores_unpadded, cb_output_config);
+    constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = shard_height_unpadded * stick_size_unpadded,
+        .core_ranges = all_cores_unpadded,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = output_cb_index,
+            .data_format = dst_cb_data_format,
+            .page_size = stick_size_unpadded,
+        }}},
+        .buffer = output.buffer(),
+    });
 
     std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)stick_size_padded, (std::uint32_t)stick_size_unpadded, (std::uint32_t)shard_height_unpadded};
-
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
-        "slice_reader_unary_unpad_dims_rm_sharded.cpp",
-        all_cores_unpadded,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+        static_cast<uint32_t>(stick_size_padded),
+        static_cast<uint32_t>(stick_size_unpadded),
+        static_cast<uint32_t>(shard_height_unpadded)};
 
     auto all_runtime_args = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
         input,
@@ -285,26 +295,61 @@ SliceRmShardedProgramFactory::cached_program_t SliceRmShardedProgramFactory::cre
         num_cores_x_padded,
         num_cores_y_padded);
 
-    for (uint32_t i = 0; i < num_cores_unpadded; i++) {
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
+        "slice_reader_unary_unpad_dims_rm_sharded.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores_unpadded;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    reader_desc.runtime_args.reserve(num_cores_unpadded);
+    for (uint32_t i = 0; i < num_cores_unpadded; ++i) {
         CoreCoord core;
         if (row_major) {
             core = {i % num_cores_x_unpadded, i / num_cores_x_unpadded};
         } else {
             core = {i / num_cores_y_unpadded, i % num_cores_y_unpadded};
         }
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
+        reader_desc.runtime_args.emplace_back(core, std::move(all_runtime_args[i].first));
     }
 
-    return {std::move(program), {cb_src0, cb_output}};
+    desc.kernels.push_back(std::move(reader_desc));
+
+    return desc;
 }
 
-void SliceRmShardedProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program, const SliceParams& /*args*/, const SliceInputs& tensor_args, Tensor& output) {
-    auto* src_buffer_a = tensor_args.input.buffer();
-    auto* dst_buffer = output.buffer();
-
-    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_src0, *src_buffer_a);
-    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_output, *dst_buffer);
+std::vector<tt::tt_metal::DynamicRuntimeArg> SliceDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Height-sharded RM factory is CB-bound: addresses ride on the sharded CBs, so re-apply reader arg0
+    // (num source cores, from the same per-core walk create_descriptor uses) on core 0 to trip the
+    // fast-path and let the framework re-patch the CB addresses instead of rebuilding. (#48928)
+    if (!std::holds_alternative<SliceRmShardedProgramFactory>(select_program_factory(args, tensor_args))) {
+        return {};
+    }
+    const auto& input = tensor_args.input;
+    const auto sp_padded = input.shard_spec().value();
+    const auto sp_unpadded = output.shard_spec().value();
+    const auto bbox_p = sp_padded.grid.bounding_box();
+    const auto bbox_u = sp_unpadded.grid.bounding_box();
+    // Build only core 0 (num_cores=1); its reader arg0 == what create_descriptor bakes for core 0.
+    const auto core0 = ttnn::operations::data_movement::get_slice_runtime_args_rm_sharded(
+        input,
+        output,
+        args.slice_start,
+        /*num_cores_unpadded=*/1,
+        sp_unpadded.orientation == ShardOrientation::ROW_MAJOR,
+        bbox_u.end_coord.x + 1,
+        bbox_u.end_coord.y + 1,
+        sp_unpadded.shape[0],
+        sp_padded.shape[0],
+        bbox_p.end_coord.x + 1,
+        bbox_p.end_coord.y + 1);
+    return {tt::tt_metal::DynamicRuntimeArg{0, corerange_to_cores(sp_unpadded.grid).front(), 0, core0[0].first[0]}};
 }
 
 }  // namespace ttnn::prim

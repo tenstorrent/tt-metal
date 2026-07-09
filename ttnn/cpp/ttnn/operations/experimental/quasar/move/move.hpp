@@ -1,0 +1,14 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <optional>
+#include "ttnn/types.hpp"
+
+namespace ttnn::operations::experimental::quasar {
+
+Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+
+}  // namespace ttnn::operations::experimental::quasar

@@ -69,6 +69,8 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
             ttsl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
+        case tt::tt_metal::DataType::FP8_E4M3:
+            TT_THROW("Flatbuffer load for DataType::FP8_E4M3 is not supported during tensor deserialization.");
         case tt::tt_metal::DataType::UINT8: {
             ttsl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
@@ -284,7 +286,7 @@ Tensor from_flatbuffer(
         fb_topology != nullptr ? from_flatbuffer(fb_topology)
                                : tt::tt_metal::TensorTopology::create_fully_replicated_tensor_topology(ttnn_mesh_shape);
 
-    return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), spec, std::move(topology)));
+    return Tensor(tt::tt_metal::HostTensor::from_buffer(std::move(distributed_buffer), spec, std::move(topology)));
 }
 
 }  // namespace ttnn

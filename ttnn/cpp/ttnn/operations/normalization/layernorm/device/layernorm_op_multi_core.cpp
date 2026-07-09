@@ -128,7 +128,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     //////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                Circular Buffer Data Format Setup
@@ -184,10 +183,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
 
-    auto a_addr = a.buffer()->address();
-    auto b_dram_addr = b ? b.value().buffer()->address() : 0;
-    auto gamma_dram_addr = gamma.has_value() ? gamma.value().buffer()->address() : 0;
-    auto beta_dram_addr = beta.has_value() ? beta.value().buffer()->address() : 0;
+    // Optional residual/gamma/beta: bind the Buffer* when present, else nullptr (framework emits 0u).
+    Buffer* b_buffer = b ? b.value().buffer() : nullptr;
+    Buffer* gamma_buffer = gamma.has_value() ? gamma.value().buffer() : nullptr;
+    Buffer* beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
 
     uint32_t num_tile_rows = NC * Ht;
 
@@ -420,6 +419,30 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         }
     }
 
+    // For Float32 input on the Welford path: expose the input tile data under two CB indices
+    // backed by the same SRAM (multi-buffer-index CB pattern). cb_x retains the
+    // default unpack_dst_format so post-welford FPU binary ops keep reading via SrcA; the
+    // welford-alias index gets unpack_to_dest_mode=UnpackToDestFp32 so welford's
+    // transpose_tile reads full fp32 into DEST.
+    //
+    // We deliberately disable the alias for the fused-pre-add + large_tensor combination:
+    // cb_x = c_23 there holds the post-add result, which already lost precision through the
+    // FPU add (SrcA Tf32), so an fp32-preserving unpack on the welford side would not recover
+    // any real information, but would require the SFPU replay buffer recovery
+    // (welford_init<WelfordInitMode::PreserveStats>()) after every transpose_tile.
+    const bool welford_fp32_alias = use_welford_and_not_rms_norm && in_data_format == tt::DataFormat::Float32 &&
+                                    !(fuse_pre_add && large_tensor_needed);
+
+    // Separate alias on cb_ex (c_18) and cb_ex2 (c_19) for the mean / M2 sliding-window
+    // accumulators in layernorm_large_tensor_welford.cpp::welford_fuse_pre_add. That function
+    // spills LREG4/5 to cb_ex / cb_ex2 between blocks and restores them via copy_tile at the
+    // top of the next block. With cb_ex / cb_ex2 in Default unpack mode, copy_tile would take
+    // the SrcA path and silently truncate FP32 to TF32 on every restore. Exposing the same
+    // under an alias with UnpackToDestFp32 lets copy_tile take the FP32 path, while the original
+    // c_18 / c_19 indices stay in Default mode for the SrcA/SrcB consumers.
+    const bool welford_state_fp32_alias = use_welford_and_not_rms_norm && fuse_pre_add && large_tensor_needed &&
+                                          cb_data_format == tt::DataFormat::Float32;
+
     // Named compile-time args for CB indices - enables kernel chaining/fusion
     KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
         {"cb_in", tt::CBIndex::c_0},
@@ -440,6 +463,20 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         {"cb_accumulate", tt::CBIndex::c_26},
         {"cb_in_rm", tt::CBIndex::c_27},
         {"cb_out_rm", tt::CBIndex::c_28},
+        // cb_x_welford: alias of cb_x backed by the same SRAM. When the alias is active,
+        // it has its own buffer index (c_29) with UnpackToDestFp32. Otherwise it falls back
+        // to whatever cb_x is on this path: c_0 for non-fused (cb_x=cb_in),
+        // c_23 for fused pre-add (cb_x is the post-add intermediate).
+        {"cb_x_welford",
+         welford_fp32_alias ? tt::CBIndex::c_29 : (fuse_pre_add ? tt::CBIndex::c_23 : tt::CBIndex::c_0)},
+        {"welford_fp32_alias", static_cast<uint8_t>(welford_fp32_alias ? 1 : 0)},
+        // Mean / M2 spill aliases. When welford_state_fp32_alias is active these point to
+        // c_30 / c_31 (separate buffer indices, same SRAM as c_18 / c_19) configured
+        // for UnpackToDestFp32. When inactive, cb_ex_welford == c_18 and cb_ex2_welford == c_19
+        // so the kernel's copy_tile calls fall through the SrcA TF32 path.
+        {"cb_ex_welford", welford_state_fp32_alias ? tt::CBIndex::c_30 : tt::CBIndex::c_18},
+        {"cb_ex2_welford", welford_state_fp32_alias ? tt::CBIndex::c_31 : tt::CBIndex::c_19},
+        {"welford_state_fp32_alias", static_cast<uint8_t>(welford_state_fp32_alias ? 1 : 0)},
     };
 
     // Select reader kernel path
@@ -480,6 +517,22 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (float32_reduction) {
         unpack_to_dest_mode[large_tensor_acc_cb] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
+    // Welford mean / M2 spill aliases (c_30 / c_31) configured as UnpackToDestFp32 so the
+    // per-block copy_tile reload of LREG4/5 in
+    // layernorm_large_tensor_welford.cpp::welford_fuse_pre_add preserves FP32 precision across
+    // the spill/restore cycle.
+    if (welford_state_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_30)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    // Welford input alias index (c_29): shares SRAM with cb_x but has UnpackToDestFp32 mode so
+    // the welford section's transpose_tile reads full FP32 into DEST.
+    if (welford_fp32_alias) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_29)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     // Select compute kernel path.
     // For input_is_row_major: TILIZE_IN define handles in-flight tilization; large_tensor kernel allowed.
@@ -499,13 +552,15 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     auto bfloat_one_value = bfloat16(1);
     uint32_t packed_one_value = pack_two_bfloat16_into_uint32({bfloat_one_value, bfloat_one_value});
 
-    KernelDescriptor::RuntimeArgs reader_runtime_args;
-    KernelDescriptor::RuntimeArgs writer_runtime_args;
-    KernelDescriptor::RuntimeArgs compute_runtime_args;
+    // Buffer base addresses are bound via emplace_runtime_args() so the framework
+    // patches them on cache hits.
+    KernelDescriptor reader_kernel_desc;
+    KernelDescriptor writer_kernel_desc;
+    KernelDescriptor compute_kernel_desc;
 
-    reader_runtime_args.reserve(num_cores);
-    writer_runtime_args.reserve(num_cores);
-    compute_runtime_args.reserve(num_cores);
+    reader_kernel_desc.runtime_args.reserve(num_cores);
+    writer_kernel_desc.runtime_args.reserve(num_cores);
+    compute_kernel_desc.runtime_args.reserve(num_cores);
 
     // Iterate over active cores
     auto all_core_coords = corerange_to_cores(all_cores, num_cores, true);
@@ -529,30 +584,34 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             (use_welford_and_not_rms_norm && large_tensor_needed) || (use_row_major_kernel && !input_is_row_major);
         const uint32_t reader_start = using_legacy_tile_reader ? tile_offset : curr_row;
 
-        std::vector<uint32_t> reader_args = {
-            a_addr,
-            num_tile_rows_per_core,
-            Wt,
-            reader_start,
-            packed_one_value,
-            std::bit_cast<uint32_t>(eps),
-            gamma_dram_addr,
-            beta_dram_addr,
-            b_dram_addr};
+        KernelDescriptor::RTArgList reader_args;
+        reader_args.push_back(a.buffer());
+        reader_args.push_back(num_tile_rows_per_core);
+        reader_args.push_back(Wt);
+        reader_args.push_back(reader_start);
+        reader_args.push_back(packed_one_value);
+        reader_args.push_back(std::bit_cast<uint32_t>(eps));
+        reader_args.push_back(gamma_buffer);
+        reader_args.push_back(beta_buffer);
+        reader_args.push_back(b_buffer);
         if (input_is_row_major) {
             reader_args.push_back(H_logical);
         }
 
-        reader_runtime_args.emplace_back(core, std::move(reader_args));
+        reader_kernel_desc.emplace_runtime_args(core, reader_args);
         // For the RM output writer arg[3] is start_tile_row (starting tile-row index for this core),
         // not the flat tile offset, because the RM writer computes row addresses directly.
         const uint32_t writer_start = input_is_row_major ? curr_row : tile_offset;
-        std::vector<uint32_t> writer_args = {dst_addr, Wt, num_tile_rows_per_core, writer_start};
+        KernelDescriptor::RTArgList writer_args;
+        writer_args.push_back(output.buffer());
+        writer_args.push_back(Wt);
+        writer_args.push_back(num_tile_rows_per_core);
+        writer_args.push_back(writer_start);
         if (input_is_row_major) {
             writer_args.push_back(H_logical);  // arg[4]
         }
-        writer_runtime_args.emplace_back(core, std::move(writer_args));
-        compute_runtime_args.emplace_back(core, std::vector<uint32_t>{num_tile_rows_per_core});
+        writer_kernel_desc.emplace_runtime_args(core, writer_args);
+        compute_kernel_desc.emplace_runtime_args(core, {num_tile_rows_per_core});
 
         curr_row += num_tile_rows_per_core;
     }
@@ -563,19 +622,16 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     ProgramDescriptor program_descriptor;
 
     // Build KernelDescriptor for reader kernel
-    KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source = reader_kernel_path;
     reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = all_cores;
     reader_kernel_desc.compile_time_args = reader_compile_time_args;
     reader_kernel_desc.named_compile_time_args = cb_named_args;
     reader_kernel_desc.defines = reader_defines;
-    reader_kernel_desc.runtime_args = std::move(reader_runtime_args);
     reader_kernel_desc.config = ReaderConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(reader_kernel_desc));
 
     // Build KernelDescriptor for writer kernel
-    KernelDescriptor writer_kernel_desc;
     writer_kernel_desc.kernel_source = input_is_row_major
                                            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                              "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
@@ -585,19 +641,16 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     writer_kernel_desc.core_ranges = all_cores;
     writer_kernel_desc.compile_time_args = writer_compile_time_args;
     writer_kernel_desc.named_compile_time_args = cb_named_args;
-    writer_kernel_desc.runtime_args = std::move(writer_runtime_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
     program_descriptor.kernels.push_back(std::move(writer_kernel_desc));
 
     // Build KernelDescriptor for compute kernel
-    KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel_path;
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = compute_args;
     compute_kernel_desc.named_compile_time_args = cb_named_args;
     compute_kernel_desc.defines = compute_defines;
-    compute_kernel_desc.runtime_args = std::move(compute_runtime_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -625,18 +678,40 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         return cb_desc;
     };
 
-    // CB 0: Input buffer
-    program_descriptor.cbs.push_back(
-        make_cb_descriptor(in0_t * in_single_tile_size, tt::CBIndex::c_0, in_data_format, in_single_tile_size));
+    // CB 0: Input buffer (non-fused: also serves as cb_x for welford and post-welford eltwise)
+    {
+        auto cb0_desc =
+            make_cb_descriptor(in0_t * in_single_tile_size, tt::CBIndex::c_0, in_data_format, in_single_tile_size);
+        // Non-fused welford-fp32: register c_29 as a second buffer index backed by the same
+        // SRAM so Welford can read via UnpackToDestFp32 while eltwise reads via SrcA.
+        if (welford_fp32_alias && !fuse_pre_add) {
+            cb0_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                .data_format = in_data_format,
+                .page_size = in_single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb0_desc));
+    }
 
     // CB 16: Output buffer
     program_descriptor.cbs.push_back(
         make_cb_descriptor(out0_t * out_single_tile_size, tt::CBIndex::c_16, out_data_format, out_single_tile_size));
 
-    // CB 18: Intermediate 1 (if not rms_norm)
+    // CB 18: Intermediate 1 (if not rms_norm). c_18 holds the running E[x] (mean) spilled
+    // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. When
+    // welford_state_fp32_alias is active, register c_30 as a second buffer index on the same
+    // SRAM with UnpackToDestFp32 mode so copy_tile preserves FP32 precision across the
+    // spill/restore cycle.
     if (!rms_norm) {
-        program_descriptor.cbs.push_back(
-            make_cb_descriptor(im1_t * single_tile_size, tt::CBIndex::c_18, cb_data_format, single_tile_size));
+        auto cb18_desc =
+            make_cb_descriptor(im1_t * single_tile_size, tt::CBIndex::c_18, cb_data_format, single_tile_size);
+        if (welford_state_fp32_alias) {
+            cb18_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb18_desc));
     }
 
     // CB 2: Scaler for reduce (if not use_welford)
@@ -649,9 +724,20 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     program_descriptor.cbs.push_back(make_cb_descriptor(
         in3_t * bfloat16_tile_size, tt::CBIndex::c_3, tt::DataFormat::Float16_b, bfloat16_tile_size));
 
-    // CB 19: Intermediate 2
-    program_descriptor.cbs.push_back(
-        make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size));
+    // CB 19: Intermediate 2. c_19 holds the running M2 (sum of squared deviations) spilled
+    // between blocks in layernorm_large_tensor_welford.cpp's fused welford path. Same
+    // aliasing rationale as CB 18 above.
+    {
+        auto cb19_desc =
+            make_cb_descriptor(im2_t * single_tile_size, tt::CBIndex::c_19, cb_data_format, single_tile_size);
+        if (welford_state_fp32_alias) {
+            cb19_desc.format_descriptors.push_back(CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
+                .data_format = cb_data_format,
+                .page_size = single_tile_size});
+        }
+        program_descriptor.cbs.push_back(std::move(cb19_desc));
+    }
 
     // CB 24: Intermediate 0
     if (!rms_norm || fuse_pre_add || large_tensor_needed) {
@@ -712,10 +798,21 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
 
     // CB 23 and CB 1 (if b - fused pre-add)
     if (b) {
-        // CB 23: Intermediate 6 (if not rms_norm)
+        // CB 23: Intermediate 6 (if not rms_norm). Fused: x = a + b. Compute writes the
+        // post-add result here, then the welford intake reads it via transpose_tile.
+        // When welford_fp32_alias is active, register c_29 as a second buffer index on the
+        // same SRAM with UnpackToDestFp32 mode so transpose_tile preserves full FP32 into
+        // DEST.
         if (!rms_norm) {
-            program_descriptor.cbs.push_back(
-                make_cb_descriptor(im6_t * single_tile_size, tt::CBIndex::c_23, cb_data_format, single_tile_size));
+            auto cb23_desc =
+                make_cb_descriptor(im6_t * single_tile_size, tt::CBIndex::c_23, cb_data_format, single_tile_size);
+            if (welford_fp32_alias) {
+                cb23_desc.format_descriptors.push_back(CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+                    .data_format = cb_data_format,
+                    .page_size = single_tile_size});
+            }
+            program_descriptor.cbs.push_back(std::move(cb23_desc));
         }
         // CB 1: Input buffer for b
         program_descriptor.cbs.push_back(

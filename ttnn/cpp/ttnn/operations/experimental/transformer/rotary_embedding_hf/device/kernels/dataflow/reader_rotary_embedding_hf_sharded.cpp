@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Minimal BRISC reader for the sharded decode RoPE path.
 // The compute kernel (rotary_embedding_hf_sharded.cpp) relies on a scalar CB that
@@ -16,9 +20,11 @@ void kernel_main() {
     // bfloat16 representation of -1.0f, passed as uint32 from the factory.
     constexpr uint16_t scalar_value = (uint16_t)get_compile_time_arg_val(1);
 
-    cb_reserve_back(scalar_cb_id, 1);
-    uint32_t l1_write_addr = get_write_ptr(scalar_cb_id);
+    CircularBuffer cb_scalar(scalar_cb_id);
+
+    cb_scalar.reserve_back(1);
+    uint32_t l1_write_addr = cb_scalar.get_write_ptr();
     volatile tt_l1_ptr uint16_t* scalar_buf = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
     scalar_buf[0] = scalar_value;
-    cb_push_back(scalar_cb_id, 1);
+    cb_scalar.push_back(1);
 }

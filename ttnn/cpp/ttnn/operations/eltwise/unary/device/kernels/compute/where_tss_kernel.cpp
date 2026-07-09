@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/fill.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,8 +22,8 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    experimental::CircularBuffer cb_in(cb_input);
-    experimental::CircularBuffer cb_out(cb_output);
+    CircularBuffer cb_in(cb_input);
+    CircularBuffer cb_out(cb_output);
 
     init_sfpu(cb_input, cb_output);
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -34,9 +34,13 @@ void kernel_main() {
         copy_tile(cb_input, 0, 0);
 
         fill_tile_init();
-#if defined(INP_INT32) || defined(INP_UINT32)
+#if defined(INP_INT32)
         fill_tile_int<DataFormat::Int32>(1, packed_scalar1);
         fill_tile_int<DataFormat::Int32>(2, packed_scalar2);
+#endif
+#if defined(INP_UINT32)
+        fill_tile_int<DataFormat::UInt32>(1, packed_scalar1);
+        fill_tile_int<DataFormat::UInt32>(2, packed_scalar2);
 #endif
 #if defined(INP_FLOAT) || defined(INP_FLOAT32)
         fill_tile(1, *true_value);

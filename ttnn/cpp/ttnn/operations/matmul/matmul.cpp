@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 
@@ -515,7 +516,12 @@ Tensor addmm(
     }
 
     if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+        // The matmul output dtype can differ from input_tensor's dtype when `dtype` overrides it.
+        // binary_ng's in-place add requires both operands to share a dtype
+        if (add_tensor.dtype() != out_tensor.dtype()) {
+            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+        }
         add_(out_tensor, add_tensor);
     }
 

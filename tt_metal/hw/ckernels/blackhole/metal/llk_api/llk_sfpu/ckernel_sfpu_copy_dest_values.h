@@ -17,7 +17,7 @@ namespace sfpu {
 // Generalized copy_dest_value that works with any DataFormat
 template <DataFormat DATA_FORMAT, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 void copy_dest_value(const uint dst_index_in, const uint dst_index_out, const uint /* unused */) {
-    constexpr uint8_t instr_mod_index = GetSfpLoadStoreInstrMod<DATA_FORMAT>();
+    constexpr InstrModLoadStore instr_mod_index = GetSfpLoadStoreInstrMod<DATA_FORMAT>();
     // size of each tile in Dest is 64 rows
     constexpr uint dst_tile_size = 64;
     for (int d = 0; d < ITERATIONS; d++) {

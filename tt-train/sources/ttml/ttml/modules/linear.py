@@ -121,12 +121,13 @@ class ColumnParallelLinear(AbstractModuleBase):
             bias_init = ttml.init.uniform(-k, k)
 
         weight_shape = (1, 1, out_features, in_features)
-        weight_mapper = ttml.mesh().axis_mapper(axis_name, tdim=2)
+        mesh = ttml.mesh()
+        weight_mapper = mesh.axis_mapper(axis_name, tdim=2)
         self.weight = Parameter(weight_init(weight_shape, mapper=weight_mapper))
 
         if has_bias:
             bias_shape = (1, 1, 1, out_features)
-            bias_mapper = ttml.mesh().axis_mapper(axis_name, tdim=3)
+            bias_mapper = mesh.axis_mapper(axis_name, tdim=3)
             self.bias = Parameter(bias_init(bias_shape, mapper=bias_mapper))
         else:
             self.bias = None

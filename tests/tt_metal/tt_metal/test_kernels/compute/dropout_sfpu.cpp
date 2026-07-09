@@ -7,7 +7,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
@@ -16,15 +16,15 @@ void kernel_main() {
     uint32_t int_probability = get_compile_time_arg_val(3);
     uint32_t int_scale_factor = get_compile_time_arg_val(4);
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_16);
     dropout_kernel_init(seed);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb16.reserve_back(per_core_block_dim);
         for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            acquire_dst();
+            tile_regs_acquire();
 
             // Pop tile after tile, copy to DST and pack
             cb0.wait_front(1);
@@ -33,11 +33,14 @@ void kernel_main() {
 
             dropout_tile(0, int_probability, int_scale_factor);
 
+            tile_regs_commit();
+            tile_regs_wait();
+
             pack_tile(0, tt::CBIndex::c_16);
 
             cb0.pop_front(1);
 
-            release_dst();
+            tile_regs_release();
         }
         cb16.push_back(per_core_block_dim);
     }

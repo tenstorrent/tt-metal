@@ -12,7 +12,7 @@ FORCE_INLINE void write_to_dram(
     ReadCBGuard read_guard{cb, num_tiles};
 
     uint32_t l1_read_addr{get_read_ptr(cb)};
-    noc_async_write_tile(write_tile_id, addr_gtor, l1_read_addr);
+    noc_async_write_page(write_tile_id, addr_gtor, l1_read_addr);
     noc_async_write_barrier();
 }
 
@@ -22,7 +22,7 @@ FORCE_INLINE void load_from_dram(
     WriteCBGuard write_guard{cb, num_tiles};
 
     uint32_t l1_write_addr{get_write_ptr(cb)};
-    noc_async_read_tile(read_tile_id, addr_gtor, l1_write_addr);
+    noc_async_read_page(read_tile_id, addr_gtor, l1_write_addr);
     noc_async_read_barrier();
 }
 

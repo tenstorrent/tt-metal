@@ -19,7 +19,7 @@ from models.common.utility_functions import (
     run_for_wormhole_b0,
 )
 from loguru import logger
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
+from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, roundup32
 
 
 # TODO (7735): Switch to new interleaved_to_sharded with sharded_mem_config input and re-enable BLOCK sharded tests

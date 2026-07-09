@@ -30,8 +30,13 @@ inline void fill_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words,
     }
 }
 
-inline bool check_packet_data(tt_l1_ptr uint32_t* start_addr, uint32_t num_words, uint32_t start_val,
-                              uint32_t& mismatch_addr, uint32_t& mismatch_val, uint32_t& expected_val) {
+inline bool check_packet_data(
+    tt_l1_ptr uint32_t* start_addr,
+    uint32_t num_words,
+    uint32_t start_val,
+    uint32_t& mismatch_addr,
+    uint32_t& mismatch_val,
+    uint32_t& expected_val) {
     constexpr uint32_t packet_word_stride_words = tt::tt_fabric::PACKET_WORD_SIZE_BYTES / sizeof(uint32_t);
     tt_l1_ptr uint32_t* addr = start_addr + (packet_word_stride_words - 1);
     invalidate_l1_cache();

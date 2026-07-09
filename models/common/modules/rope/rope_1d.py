@@ -432,7 +432,7 @@ def _resolve_rope_config(config: Rope1DConfig) -> Rope1DConfig:
     )
 
     assert config._prefill_trans_mat is None, "_prefill_trans_mat is internal and should not be set by the user"
-    prefill_trans_mat_source = get_rot_transformation_mat(dhead=head_dim)
+    prefill_trans_mat_source = get_rot_transformation_mat(dhead=TILE_SIZE)
     to_set["_prefill_trans_mat"] = LazyWeight(
         source=prefill_trans_mat_source,
         device=device,

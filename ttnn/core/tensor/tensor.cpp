@@ -15,6 +15,7 @@
 
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_buffer.hpp>
@@ -77,7 +78,7 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(HostTensor(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
+    Tensor(HostTensor::from_buffer(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
 
 Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
@@ -87,12 +88,8 @@ Tensor::Tensor(MeshTensor tensor) : Tensor::Tensor(DeviceStorage(std::move(tenso
 
 Tensor::Tensor(DeviceStorage storage) :
     tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {
-    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // Use get_device_bypass_deallocate_check() to preserve mesh_device_ even when the
-    // buffer is deallocated. This prevents nullptr device propagation when operations
-    // like reshape create new tensors from existing DeviceStorage.
-    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
-        mesh_device_ = device;
+    if (device_storage().is_allocated()) {
+        mesh_device_ = &device_storage().get_mesh_tensor().mutable_device();
     }
 }
 
@@ -374,6 +371,7 @@ uint32_t Tensor::element_size() const {
         case DataType::INT32: return sizeof(int32_t);
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
         case DataType::UINT8: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);

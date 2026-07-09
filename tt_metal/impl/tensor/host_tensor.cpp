@@ -9,26 +9,22 @@
 namespace tt::tt_metal {
 
 
-HostTensor::HostTensor() = default;
-
 HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) :
     impl_(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
-    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
-    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
-    return distributed_buffer;
+HostTensor HostTensor::from_buffer(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
 }
-};  // namespace CMAKE_UNIQUE_NAMESPACE
-};  // namespace
 
-HostTensor::HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-    impl_(std::make_unique<HostTensorImpl>(
-        CMAKE_UNIQUE_NAMESPACE::create_unit_distributed_host_buffer(std::move(buffer)),
-        std::move(spec),
-        std::move(topology))) {}
+HostTensor HostTensor::from_buffer(HostBuffer buffer, TensorSpec spec, TensorTopology topology) {
+    auto distributed_buffer = DistributedHostBuffer::create(
+        distributed::MeshShape(1, 1),
+        distributed::MeshShape(1, 1),
+        distributed::MeshCoordinate(0, 0),
+        /*context=*/nullptr);
+    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+    return HostTensor(std::move(distributed_buffer), std::move(spec), std::move(topology));
+}
 
 HostTensor::HostTensor(const HostTensor& other) :
     impl_(other.impl_ ? std::make_unique<HostTensorImpl>(*other.impl_) : nullptr) {}
@@ -51,29 +47,22 @@ HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
 HostTensor::~HostTensor() = default;
 
 HostTensorImpl& HostTensor::impl() {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return *impl_;
 }
 
 const HostTensorImpl& HostTensor::impl() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
+    TT_FATAL(impl_ != nullptr, "HostTensor is in a moved-from state.");
     return *impl_;
 }
 
-const TensorSpec& HostTensor::tensor_spec() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
-    return impl_->spec();
-}
+const TensorSpec& HostTensor::tensor_spec() const { return impl().spec(); }
 
-const TensorTopology& HostTensor::tensor_topology() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
-    return impl_->topology();
-}
+const TensorTopology& HostTensor::tensor_topology() const { return impl().topology(); }
 
-const DistributedHostBuffer& HostTensor::buffer() const {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
-    return impl_->buffer();
-}
+bool HostTensor::is_valueless_after_move() const { return impl_ == nullptr; }
+
+const DistributedHostBuffer& HostTensor::buffer() const { return impl().buffer(); }
 
 DataType HostTensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
 
@@ -118,8 +107,7 @@ HostTensor HostTensor::transform(const std::function<HostBuffer(const HostBuffer
 }
 
 void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_FATAL(impl_ != nullptr, "HostTensor is in default constructed state.");
-    impl_->update_topology(std::move(tensor_topology));
+    impl().update_topology(std::move(tensor_topology));
 }
 
 }  // namespace tt::tt_metal

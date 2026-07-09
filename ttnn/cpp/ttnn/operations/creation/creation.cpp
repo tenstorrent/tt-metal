@@ -201,6 +201,10 @@ Tensor full_impl(
             }
             return output;
         }
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "full/zeros/ones: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill combine and dispatch ops; host-side construction via fill is not supported.");
         default: TT_THROW("Unsupported DataType!");
     }
 }
@@ -221,11 +225,13 @@ Tensor full_like_impl(
         optional_output_tensor.has_value() ? optional_output_tensor.value().dtype() : dtype.value_or(tensor.dtype());
     const bool is_tile_layout = (tensor.layout() == Layout::TILE) && (layout_value == Layout::TILE);
     if (tt::tt_metal::is_device_tensor(tensor)) {
-        // requires reference tensor to be in TILE for device operation fill - this will be changed later
+        // Fast on-device fill via SFPU kernel: only valid when the output dtype matches the input
+        // tensor's dtype. If the caller requested a dtype override, fall through to the host-side
+        // full_impl so that dtype conversion is applied correctly.
         if (is_tile_layout &&
             (dtype_value == DataType::BFLOAT8_B || dtype_value == DataType::BFLOAT16 ||
              dtype_value == DataType::FLOAT32) &&
-            tensor.storage_type() == StorageType::DEVICE) {
+            tensor.storage_type() == StorageType::DEVICE && dtype_value == tensor.dtype()) {
             return ttnn::fill(tensor, fill_value, memory_config, optional_output_tensor);
         }
         return full_impl(
@@ -404,6 +410,10 @@ Tensor arange(
         case DataType::UINT16: return concrete_arange.template operator()<uint16_t>();
         case DataType::UINT32: return concrete_arange.template operator()<uint32_t>();
         case DataType::INT32: return concrete_arange.template operator()<int32_t>();
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "arange: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill combine and dispatch ops; host-side construction via arange is not supported.");
         default: TT_THROW("Unsupported dtype");
     }
 }

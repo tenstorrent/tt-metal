@@ -249,9 +249,21 @@ protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
 };
 
+// Single-device mesh. Useful for tests of APIs that only support a single-device mesh,
+// e.g. the uniform enqueue_write_tensor / enqueue_read_tensor data-movement path.
+class MeshDevice1x1Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice1x1Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 1}}) {}
+};
+
 class MeshDevice1x2Fixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice1x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{1, 2}}) {}
+};
+
+class MeshDevice2x2Fixture : public MeshDeviceFixtureBase {
+protected:
+    MeshDevice2x2Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 2}}) {}
 };
 
 // Fixtures that specify the mesh device type explicitly.

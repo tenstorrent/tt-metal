@@ -78,25 +78,26 @@ void PrintTo(const MuonTestCase& tc, std::ostream* os) {
 }
 
 class MuonCorrectnessTest : public ::testing::TestWithParam<MuonTestCase> {
-protected:
-    void SetUp() override {
+public:
+    static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
-        ttml::autograd::ctx().set_seed(42);
+    }
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
     }
 
+protected:
+    void SetUp() override {
+        ttml::autograd::ctx().set_seed(42);
+    }
     void TearDown() override {
         ttml::autograd::ctx().reset_graph();
-        ttml::autograd::ctx().close_device();
     }
 };
 
 TEST_P(MuonCorrectnessTest, DeviceMatchesCPU) {
     using namespace ttml;
     const auto& tc = GetParam();
-
-    if (tc.name == "Square_3_step" && autograd::ctx().get_device().arch() == tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Skipped on WORMHOLE_B0 due to https://github.com/tenstorrent/tt-metal/issues/43861";
-    }
 
     xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 42U);
     xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 43U);

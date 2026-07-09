@@ -23,19 +23,24 @@
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/isclose.h"
 #include "api/compute/atan2.h"
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
     constexpr auto cb_out = tt::CBIndex::c_2;
-    experimental::CircularBuffer exp_cb_out(cb_out);
+    CircularBuffer exp_cb_out(cb_out);
 
 #if SRC_BCAST
     constexpr auto cb_bcast = tt::CBIndex::c_0;
@@ -54,14 +59,14 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
-    experimental::CircularBuffer exp_cb_bcast(cb_bcast);
-    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
-    experimental::CircularBuffer exp_cb_post_lhs(cb_post_lhs);
-    experimental::CircularBuffer exp_cb_post_rhs(cb_post_rhs);
+    CircularBuffer exp_cb_bcast(cb_bcast);
+    CircularBuffer exp_cb_llk_post(cb_llk_post);
+    CircularBuffer exp_cb_post_lhs(cb_post_lhs);
+    CircularBuffer exp_cb_post_rhs(cb_post_rhs);
 
     unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+    PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
@@ -71,6 +76,7 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -84,14 +90,12 @@ void kernel_main() {
         exp_cb_bcast.pop_front(num_tiles_per_cycle);
         // unary_bcast_uninit<BroadcastType::ROW>(cb_bcast);
         pack_reconfig_data_format(cb_llk_post, cb_out);
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(cb_out)));
-#endif
 
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
+        PREPROCESS(LHS, CircularBuffer(cb_pre_lhs), exp_cb_post_lhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_lhs.wait_front(num_tiles_per_cycle);
 
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
+        PREPROCESS(RHS, CircularBuffer(cb_pre_rhs), exp_cb_post_rhs, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_rhs.wait_front(num_tiles_per_cycle);
 
         exp_cb_out.reserve_back(num_tiles_per_cycle);
@@ -110,7 +114,11 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
+#if ISCLOSE_OP
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();
