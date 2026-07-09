@@ -15,7 +15,6 @@ import os
 
 import torch
 
-import models.demos.blackhole.qwen36.tt.gdn._experimental_path  # noqa: F401  (puts experimental backend on sys.path)
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
