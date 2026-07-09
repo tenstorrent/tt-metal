@@ -299,7 +299,7 @@ class TtPrefillTransformer(LightweightModule):
         actual_start: Optional[int] = None,
         actual_end: Optional[int] = None,
         cache_user_id: int = 0,
-        index_kv_cache: Optional[list] = None,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
         Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
@@ -389,7 +389,7 @@ class TtPrefillTransformer(LightweightModule):
                 padding_side=self.padding_side,
                 indexer_indices=inject,
                 return_indexer_indices=reuse,
-                index_kv_cache=index_kv_cache[i] if index_kv_cache is not None else None,
+                index_kv_cache=index_kv_cache,
             )
             if reuse:
                 h, _, new_idx = ret
