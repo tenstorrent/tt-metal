@@ -43,7 +43,8 @@ void bind_fold_operation(nb::module_& mod) {
         nb::arg("output_shape") = nb::none(),
         nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
         nb::arg("grid_size") = nb::none(),
-        nb::arg("override_memory_config") = nb::none());
+        nb::arg("override_memory_config") = nb::none(),
+        nb::arg("input_is_nhwc") = false);
 }
 
 }  // namespace ttnn::operations::experimental::quasar::detail

@@ -192,13 +192,27 @@ def test_quasar_fold(mesh_device, batch_size, use_transpose_as_fold):
     exc = None
     try:
         _dbg("STAGE from_torch: begin")
-        tt_input = ttnn.from_torch(
-            torch_input,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=input_mem_config,
-        )
+        if use_transpose_as_fold:
+            # NCHW, ROW_MAJOR, HEIGHT_SHARDED (the historical fold input).
+            tt_input = ttnn.from_torch(
+                torch_input,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=input_mem_config,
+            )
+        else:
+            # Quasar direct path: upload CHANNELS-LAST [N,H,W,C] interleaved L1 so fold skips the on-device
+            # NCHW->NHWC transpose (which has no Quasar kernel -> DataMovementKernel FATAL). input_is_nhwc
+            # tells fold C is already last; grid_size supplies the fold shard grid.
+            torch_input_nhwc = torch_input.permute(0, 2, 3, 1).contiguous()
+            tt_input = ttnn.from_torch(
+                torch_input_nhwc,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         _dbg("STAGE from_torch: done")
 
         _dbg(f"STAGE fold: begin (use_transpose_as_fold={use_transpose_as_fold})")
@@ -209,6 +223,7 @@ def test_quasar_fold(mesh_device, batch_size, use_transpose_as_fold):
             use_transpose_as_fold=use_transpose_as_fold,
             padding=[pad_h, pad_h, pad_w, pad_w, 0, pad_c],
             grid_size=shard_grid,
+            input_is_nhwc=not use_transpose_as_fold,
         )
         _dbg(
             f"STAGE fold: done; tt_out spec shape={list(tt_out.shape)} layout={tt_out.layout} "
