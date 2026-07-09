@@ -7,6 +7,7 @@ from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.github.utils import (
     get_job_failure_signature_,
     _card_type_from_job_labels,
+    _generic_runner_labels,
     _load_sku_config_skus,
 )
 from infra.data_collection.pydantic_models import JobStatus
@@ -320,15 +321,26 @@ def test_non_checkout_git_failure_stays_generic():
 
 @pytest.fixture(autouse=True)
 def clear_sku_config_cache():
-    from infra.data_collection.github.utils import _root_sku_for, _sku_config_sku_names
+    from infra.data_collection.github.utils import _generic_runner_labels, _root_sku_for, _sku_config_sku_names
 
     _load_sku_config_skus.cache_clear()
     _sku_config_sku_names.cache_clear()
+    _generic_runner_labels.cache_clear()
     _root_sku_for.cache_clear()
     yield
     _load_sku_config_skus.cache_clear()
     _sku_config_sku_names.cache_clear()
+    _generic_runner_labels.cache_clear()
     _root_sku_for.cache_clear()
+
+
+def test_generic_runner_labels_derived_from_sim_skus():
+    expected_labels: set[str] = set()
+    for sku_name, sku_entry in _load_sku_config_skus().items():
+        if sku_name.startswith("sim_"):
+            expected_labels.update(sku_entry.get("runs_on") or [])
+
+    assert _generic_runner_labels() == frozenset(expected_labels)
 
 
 @pytest.mark.parametrize(

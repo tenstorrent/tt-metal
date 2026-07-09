@@ -371,14 +371,19 @@ def _is_sku_name_prefix(prefix: str, sku_name: str) -> bool:
     return sku_name[len(prefix)] in "_-"
 
 
-# CPU runner pools shared with sim_* SKUs in sku_config.yaml (sim_wormhole_b0 /
-# sim_blackhole → ubuntu-latest; galaxy sim SKUs → tt-ubuntu-2204-large-stable).
-_GENERIC_RUNNER_LABELS: frozenset[str] = frozenset(
-    {
-        "ubuntu-latest",
-        "tt-ubuntu-2204-large-stable",
-    }
-)
+@functools.lru_cache(maxsize=1)
+def _generic_runner_labels() -> frozenset[str]:
+    """
+    Runner labels from sim_* runs_on entries in sku_config.yaml.
+
+    These are shared CPU pools where strict sku_config matching cannot distinguish
+    sim tests from other jobs on the same label; card_type stores the label itself.
+    """
+    labels: set[str] = set()
+    for sku_name, sku_entry in _load_sku_config_skus().items():
+        if sku_name.startswith("sim_"):
+            labels.update(sku_entry.get("runs_on") or [])
+    return frozenset(labels)
 
 # Longest-first suffixes stripped when promoting a variant SKU to its root name.
 _CARD_TYPE_ROOT_SUFFIXES: tuple[str, ...] = (
@@ -397,17 +402,15 @@ _CARD_TYPE_ROOT_SUFFIXES: tuple[str, ...] = (
 
 
 def _uses_generic_runner_labels(label_set: set[str]) -> bool:
-    return bool(label_set) and label_set <= _GENERIC_RUNNER_LABELS
+    return bool(label_set) and label_set <= _generic_runner_labels()
 
 
 def _card_type_from_generic_runner_labels(label_set: set[str]) -> Optional[str]:
     """
     Map sim_* shared CPU pools back to their runner label for card_type.
 
-    sim_* SKUs run on ubuntu-latest or tt-ubuntu-2204-large-stable; strict
-    sku_config matching cannot distinguish sim tests from other CPU jobs on those
-    pools. When labels are only these pools, return the CPU runner label itself
-    rather than a sim_* SKU name.
+    When job labels are only pools listed on sim_* SKUs in sku_config.yaml, return
+    the CPU runner label itself rather than a sim_* SKU name.
     """
     if not _uses_generic_runner_labels(label_set):
         return None
