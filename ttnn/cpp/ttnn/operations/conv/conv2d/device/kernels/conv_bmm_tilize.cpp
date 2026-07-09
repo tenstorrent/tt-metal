@@ -642,7 +642,6 @@ void kernel_main() {
                 MatmulPostFn,
                 PreKBlockFn,
                 compute_kernel_lib::NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
                 compute_kernel_lib::NoKBlockInnerDimFn,
                 compute_kernel_lib::NoIn0Source,
                 compute_kernel_lib::NoIn1BaseOffset>(

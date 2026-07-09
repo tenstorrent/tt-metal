@@ -419,7 +419,6 @@ void kernel_main() {
                     NoPostCompute,
                     NoPreKBlock,
                     NoPostKBlock,
-                    /*untilize_block_ct_dim=*/0,
                     NoKBlockInnerDimFn,
                     NoIn0Source,
                     NoIn1BaseOffset>(
@@ -448,7 +447,6 @@ void kernel_main() {
                     NoPostCompute,
                     NoPreKBlock,
                     NoPostKBlock,
-                    /*untilize_block_ct_dim=*/0,
                     NoKBlockInnerDimFn,
                     NoIn0Source,
                     NoIn1BaseOffset>(

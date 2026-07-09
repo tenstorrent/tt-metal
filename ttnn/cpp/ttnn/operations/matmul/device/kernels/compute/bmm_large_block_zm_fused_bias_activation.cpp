@@ -344,7 +344,6 @@ void kernel_main() {
                         NoPostCompute,                     // PostComputeFn (math-thread; unused)
                         decltype(xpose),                   // PreKBlockFn
                         NoPostKBlock,                      // PostKBlockFn
-                        0,                                 // untilize_block_ct_dim
                         NoKBlockInnerDimFn,                // KBlockInnerDimFn
                         NoIn0Source,                       // In0SourceFn
                         NoIn1BaseOffset,                   // In1BaseOffsetFn
@@ -362,7 +361,6 @@ void kernel_main() {
                         NoPostCompute,
                         NoPreKBlock,
                         NoPostKBlock,
-                        0,
                         NoKBlockInnerDimFn,
                         NoIn0Source,
                         NoIn1BaseOffset,

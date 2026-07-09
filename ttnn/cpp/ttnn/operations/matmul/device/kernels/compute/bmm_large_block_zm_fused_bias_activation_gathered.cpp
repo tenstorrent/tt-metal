@@ -180,8 +180,8 @@ constexpr std::array<uint32_t, N> fill_named_cb_array(const char* const* names) 
 // Per-K-block PreKBlockFn. Three responsibilities, all gated by compile-time switches:
 //   block-0 self-prime → reserve_back + push_back on the local in0 CB on block 0.
 //   ENABLE_GLOBAL_CB   → compute the next in1 ring rd_ptr (UNPACK-only side effect).
-//   PACK_RELU + untilize_out → enable ZERO_RELU on the last K-block (the helper's
-//      OutWithUntilize target doesn't auto-enable relu the way OutWithRelu does).
+//   PACK_RELU + untilize_out → enable ZERO_RELU on the last K-block (the untilize
+//      path via the Interm target doesn't auto-enable relu the way OutWithRelu does).
 template <
     bool EnableGlobalCb,
     bool EnableReluOnLast,
@@ -200,8 +200,8 @@ struct GatheredPreKBlock {
 
     ALWI void operator()(uint32_t block, uint32_t /*num_k_blocks*/, bool last_out) const {
         // Block-0 self-prime: the production gathered factory expects compute to
-        // self-prime its local in0 CB for the first ring step. The pre-migration
-        // kernel did this inline at the top of the K-loop body when `block == 0`.
+        // self-prime its local in0 CB for the first ring step, so on block 0 this
+        // PreKBlockFn reserves+pushes one in0 block before the matmul consumes it.
         if (block == 0) {
             CircularBuffer in0_cb(In0CbId);
             in0_cb.reserve_back(In0BlockNumTiles);
@@ -259,22 +259,21 @@ struct GatheredInnerDimFn {
     }
 };
 
-// Per-K-block In0SourceFn. The pre-migration kernel selected the active in0 CB
-// per K-block: `block == 0 ? in0_cb_id : in2_cb_id`. Block 0 reads from the
-// self-primed local CB; blocks 1..N read from the remote/mcast in2 CB. The two
-// CBs MUST share the same dataformat (asserted in the helper docstring).
+// In0SourceFn hook — the helper calls this once per K-block (before the matmul) to
+// pick which in0 CB to unpack. Block 0 reads the self-primed local in0 CB; blocks
+// 1..N read the remote/mcast in2 CB, as the gather streams the remaining K-slabs in
+// over the ring. The two CBs MUST share a dataformat — the unpacker is configured
+// once for in0_cb_id (see the helper's In0SourceFn contract).
 template <uint32_t In2CbId>
 struct GatheredIn0Source {
     ALWI uint32_t operator()(uint32_t block, uint32_t in0_cb_id) const { return block == 0 ? in0_cb_id : In2CbId; }
 };
 
-// Per-K-block In1BaseOffsetFn. Mirrors the pre-migration kernel's
-// `in1_index_subblock_offset` formula:
-//   ENABLE_GLOBAL_CB    → 0
-//   in1_is_dram         → 0
-//   else (Case 4)       → in1_block_num_tiles * curr_ring_idx
-// (Production gathered uses `(ring_idx + block) % ring_size` for curr_ring_idx —
-// note the `+`, distinct from the llama variant's `-`.)
+// In1BaseOffsetFn hook — the helper calls this once per K-block to shift the in1
+// read base within the fronted region. Zero when in1 is a single fronted block
+// (ENABLE_GLOBAL_CB receiver or DRAM in1); otherwise steps one in1 block per ring
+// position — In1BlockNumTiles * curr_ring_idx, with curr_ring_idx = (ring_idx +
+// block) % RingSize — to index the K-slab for the active ring position.
 template <bool NeedsOffset, uint32_t In1BlockNumTiles, uint32_t RingSize>
 struct GatheredIn1BaseOffsetFn {
     uint32_t ring_idx;
@@ -380,14 +379,13 @@ void kernel_main() {
         untilize_out ? LastBlockTarget::Interm
                      : (pack_relu_defined ? LastBlockTarget::OutWithRelu : LastBlockTarget::Out);
 
-    // With the Interm-target untilize path, relu (if any) is applied on the interm block by the
-    // matmul's own pack stage — but LastBlockTarget::Interm does NOT auto-enable relu, and the
-    // downstream reblock does not apply activation. Keep the PreKBlockFn relu-on-last for the
-    // untilize path so relu still runs before untilize (matches the pre-migration behavior).
+    // On the Interm-target untilize path, LastBlockTarget::Interm does NOT auto-enable relu and the
+    // downstream reblock does not apply activation, so the PreKBlockFn enables relu-on-last for the
+    // untilize path — relu still runs (at the matmul's pack stage) before untilize.
     constexpr bool enable_relu_on_last_via_pre_k = pack_relu_defined && untilize_out;
 
-    // in1_policy mirrors the original kernel's `if constexpr (in1_is_dram)`
-    // gates on the per-K-block cb_wait_front/cb_pop_front.
+    // in1_policy: DRAM in1 is produced per-K-block (wait/pop each block); a fronted / global-CB in1
+    // is caller-managed, so the helper neither waits nor pops it.
     constexpr InputPolicy in1_policy_const = in1_is_dram ? InputPolicy::WaitAndPopPerKBlock : InputPolicy::NoWaitNoPop;
 
     // The per-K-block in1 base offset is non-zero only on the
@@ -511,10 +509,9 @@ void kernel_main() {
             NoPostCompute,                     // PostComputeFn (math-thread; unused)
             PreFn,                             // PreKBlockFn
             PostFnRing,                        // PostKBlockFn
-            /*untilize_block_ct_dim=*/out_subblock_num_tiles,
-            InnerDimFn,   // KBlockInnerDimFn
-            In0SrcFn,     // In0SourceFn
-            In1OffsetFn,  // In1BaseOffsetFn
+            InnerDimFn,                        // KBlockInnerDimFn
+            In0SrcFn,                          // In0SourceFn
+            In1OffsetFn,                       // In1BaseOffsetFn
             ActivationOp<activation_type, activation_param0, activation_param1, activation_param2>>(
             in0_buf,
             in1_buf,

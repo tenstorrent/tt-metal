@@ -166,8 +166,6 @@ template <
     typename PostComputeFn,
     typename PreKBlockFn,
     typename PostKBlockFn,
-    uint32_t untilize_block_ct_dim,  // UNUSED (retained for caller ABI): untilize is now a downstream
-                                     // reblock_and_untilize phase, not a fused matmul_block target.
     typename KBlockInnerDimFn,
     typename In0SourceFn,
     typename In1BaseOffsetFn,

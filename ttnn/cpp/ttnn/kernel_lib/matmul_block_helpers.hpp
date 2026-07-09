@@ -335,8 +335,6 @@ struct NoIn1BaseOffset {
  *   PostComputeFn      per-subblock hook on the MATH thread, last K-block, before pack.
  *   PreKBlockFn        per-K-block hook before the input waits (see the restore contract).
  *   PostKBlockFn       per-K-block hook after the input pops and the L1_ACC drain.
- *   untilize_block_ct_dim  UNUSED — retained for caller ABI compatibility. Untilize is now a
- *                          downstream reblock_and_untilize phase, not a matmul_block target.
  *   KBlockInnerDimFn   per-K-block FMA step count (for unpadded/partial K-blocks).
  *   In0SourceFn        per-K-block in0 CB selector (alternates must share in0's dataformat).
  *   In1BaseOffsetFn    per-K-block in1 base-offset shift within the fronted region.
@@ -390,7 +388,6 @@ template <
     typename PostComputeFn = NoPostCompute,
     typename PreKBlockFn = NoPreKBlock,
     typename PostKBlockFn = NoPostKBlock,
-    uint32_t untilize_block_ct_dim = 0,
     typename KBlockInnerDimFn = NoKBlockInnerDimFn,
     typename In0SourceFn = NoIn0Source,
     typename In1BaseOffsetFn = NoIn1BaseOffset,

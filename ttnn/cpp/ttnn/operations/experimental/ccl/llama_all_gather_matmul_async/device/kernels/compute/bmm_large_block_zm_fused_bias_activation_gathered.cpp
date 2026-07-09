@@ -406,7 +406,6 @@ void kernel_main() {
             PostComputeFnT,
             PreFn,
             PostFnRing,
-            /*untilize_block_ct_dim=*/out_subblock_num_tiles,
             NoKBlockInnerDimFn,
             NoIn0Source,
             In1OffsetFn>(
