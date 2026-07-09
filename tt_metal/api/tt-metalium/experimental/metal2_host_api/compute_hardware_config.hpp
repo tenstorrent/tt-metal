@@ -134,7 +134,7 @@ struct ComputeGen2Config {
     // applied regardless of data format — it is NOT inferred from this per-DFB mode the way
     // it is on Gen1. Do NOT rely on a Gen1 reading of this field here.
     //
-    // Tracked in issue #40980.
+    // Tracked in issue #49445.
     ComputeUnpackToDestModes unpack_to_dest_mode;
     ///////////////////////////////////////////////////////////////////////////////////////////////
 };
