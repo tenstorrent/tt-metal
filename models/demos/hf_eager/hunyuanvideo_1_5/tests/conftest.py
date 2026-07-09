@@ -21,6 +21,8 @@ This override is a strict superset of the root behavior and is GUARDED: when the
 system mesh already equals the requested size (a real 4-chip QB2), it opens
 directly exactly as before -- so it changes nothing on the original target.
 """
+import os
+
 import pytest
 
 from tests.scripts.common import get_updated_device_params
@@ -87,10 +89,23 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*parent_shape), **updated_device_params)
     submesh_device = None
+    # Stash the VAE submesh on the vae_decoder MODULE (not this conftest): pytest
+    # loads conftest under a private name, so a conftest global isn't visible to the
+    # test via the package path, but the module below is imported identically by both.
+    from models.demos.hf_eager.hunyuanvideo_1_5.tt import vae_decoder as _vd
+
+    _vd.HY_VAE_SUBMESH = None
     if req_shape != parent_shape:
         # Fabric is live on the FULL parent; the submesh is just a device-subset
         # view over already-trained links.
         submesh_device = parent_device.create_submesh(ttnn.MeshShape(*req_shape))
+        # On-device VAE: carve a SECOND same-shape submesh on the next block of
+        # physical chips (offset by req rows) so the VAE decode runs on separate
+        # chips from the resident DiT -- no DRAM co-residence, no deallocation.
+        if os.environ.get("HY_TT_VAE", "0") == "1" and req_shape[0] * 2 <= parent_shape[0]:
+            _vd.HY_VAE_SUBMESH = parent_device.create_submesh(
+                ttnn.MeshShape(*req_shape), offset=ttnn.MeshCoordinate(req_shape[0], 0)
+            )
     yielded = submesh_device if submesh_device is not None else parent_device
     from loguru import logger
 
@@ -101,6 +116,7 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     yield yielded
 
+    _vd.HY_VAE_SUBMESH = None
     if submesh_device is not None:
         ttnn.close_mesh_device(submesh_device)
     for sm in parent_device.get_submeshes():

@@ -43,6 +43,13 @@ register_conv3d_configs(
 )
 
 
+# Shared holder for the on-device-VAE submesh (set by the test's mesh_device
+# fixture, read by the gen path). Lives here because pytest imports conftest.py
+# under a private module name, so a conftest-level global isn't visible to the
+# test via the package path -- but this module IS imported identically by both.
+HY_VAE_SUBMESH = None
+
+
 def replicate_pad_bthwc(x, t_front, hpad, wpad):
     """Replicate-pad a (B,T,H,W,C) ROW_MAJOR tensor: T front-only, H/W both sides.
 

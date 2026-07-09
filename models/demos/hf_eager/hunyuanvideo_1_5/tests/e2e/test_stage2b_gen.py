@@ -194,10 +194,14 @@ def _run_stage2b_gen(device, *, height, width, frames, steps, trunc, outdir, lab
     # AutoencoderKLHunyuanVideo15.decode with the ttnn port, replicated across the
     # mesh. See tt/vae_decoder.py.
     if os.environ.get("HY_TT_VAE", "0") == "1":
-        from models.demos.hf_eager.hunyuanvideo_1_5.tt.vae_decoder import TTVAEDecodeAdapter
+        from models.demos.hf_eager.hunyuanvideo_1_5.tt import vae_decoder as _vd
 
-        pipe.vae = TTVAEDecodeAdapter(pipe.vae, device)
-        print(f"[{label}] VAE decode: ON DEVICE (ttnn)", flush=True)
+        # Prefer a SEPARATE submesh (carved by the fixture on different chips) so the
+        # VAE decode has its own DRAM and doesn't co-reside with the resident DiT.
+        vae_dev = _vd.HY_VAE_SUBMESH or device
+        pipe.vae = _vd.TTVAEDecodeAdapter(pipe.vae, vae_dev)
+        placement = "separate chips" if vae_dev is not device else "shared with DiT"
+        print(f"[{label}] VAE decode: ON DEVICE (ttnn) on {list(vae_dev.get_device_ids())} ({placement})", flush=True)
 
     out = pipe(
         prompt="A cat walks on the grass, realistic",
