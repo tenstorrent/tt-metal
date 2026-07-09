@@ -219,7 +219,7 @@ void run_borrowed_memory_dfb_program(
     // -----------------------------------------------------------------------
     // Build and apply run params
     // -----------------------------------------------------------------------
-    const KernelRunArgs::RuntimeArgs dm_rtas{
+    const KernelRunArgs::RuntimeArgValues dm_rtas{
         {"chunk_offset", {{node, 0u}}}, {"entries_per_core", {{node, entries_per_core}}}};
 
     ProgramRunArgs params;
@@ -383,7 +383,7 @@ void run_update_address_test(
     ASSERT_NE(ring_tensor_a.address(), ring_tensor_b.address())
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
-    const KernelRunArgs::RuntimeArgs dm_rtas{
+    const KernelRunArgs::RuntimeArgValues dm_rtas{
         {"chunk_offset", {{node, 0u}}}, {"entries_per_core", {{node, num_entries}}}};
 
     // --- Run 1: ring at ring_tensor_a ---
@@ -431,7 +431,7 @@ void run_update_address_test(
         // Combined re-bind + resize in ONE SetProgramRunArgs: point the borrowed ring at a different
         // L1 tensor AND override num_entries together (the sharded program-cache-hit analog). The
         // per-bank fit check in AttachBorrowedDFBBuffers validates the new size against ring_tensor_b.
-        const KernelRunArgs::RuntimeArgs dm_rtas2{
+        const KernelRunArgs::RuntimeArgValues dm_rtas2{
             {"chunk_offset", {{node, 0u}}}, {"entries_per_core", {{node, num_entries}}}};
         ProgramRunArgs params2;
         params2.kernel_run_args = {

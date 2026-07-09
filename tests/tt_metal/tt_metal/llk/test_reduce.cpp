@@ -494,7 +494,7 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    experimental::KernelRunArgs::RuntimeArgs reader_rta;
+    experimental::KernelRunArgs::RuntimeArgValues reader_rta;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_rta = {

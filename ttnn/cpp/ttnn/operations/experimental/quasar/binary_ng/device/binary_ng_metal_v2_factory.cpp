@@ -298,7 +298,7 @@ ProgramArtifacts create_sharded_artifacts(
     // -----------------------------------------------------------------------------------------
     // Per-core runtime args (num_tiles per shard) + tensor bindings.
     // -----------------------------------------------------------------------------------------
-    m2::KernelRunArgs::RuntimeArgs reader_args, writer_args, compute_args;
+    m2::KernelRunArgs::RuntimeArgValues reader_args, writer_args, compute_args;
     for (const auto& core : cores) {
         const m2::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
         const uint32_t n = c_shard_tiles;

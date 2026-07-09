@@ -52,7 +52,7 @@ struct ProgramRunArgs {
 
         // A set of runtime argument values unique across nodes.
         // (argument name, node -> value)
-        using RuntimeArgs = Table<std::string, Table<NodeCoord, uint32_t>>;
+        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
 
         // Per-node runtime argument values, keyed by argument name and then by node:
         // runtime_arg_values[name][node] = value.
@@ -62,7 +62,7 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
-        RuntimeArgs runtime_arg_values;
+        RuntimeArgValues runtime_arg_values;
 
         // A set of common runtime argument values (argument name -> value).
         using CommonRuntimeArgValues = Table<std::string, uint32_t>;
