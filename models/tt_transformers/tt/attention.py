@@ -438,19 +438,10 @@ class Attention(LightweightModule):
 
     @staticmethod
     def _inplace_copy(src: ttnn.Tensor, dst: ttnn.Tensor, target_dtype) -> None:
-        """Run the ``Embedding.update`` conversion pipeline against an
-        arbitrary destination buffer.
-
-        Conversion steps (each skipped when already matching):
-
-        1. ``ttnn.to_layout``        -> ``dst.layout``
-        2. ``ttnn.typecast``         -> ``target_dtype``
-        3. ``ttnn.reshape``          -> ``dst.shape``
-        4. ``ttnn.to_memory_config`` -> ``dst.memory_config()``
-        5. ``ttnn.copy(input_a=converted, input_b=dst)``
-           -- in-place. ``dst``'s device buffer is preserved (no
-           reallocation) so any captured trace, and the DRAM prefetcher's
-           recorded buffer addresses, remain valid.
+        """Convert ``src`` to ``dst``'s layout/dtype/shape/memcfg, then
+        ``ttnn.copy`` into ``dst``. ``dst``'s device buffer is preserved (no
+        reallocation) so any captured trace and the DRAM prefetcher's recorded
+        buffer addresses remain valid.
         """
         converted = src
 
@@ -469,23 +460,16 @@ class Attention(LightweightModule):
         ttnn.copy(input_a=converted, input_b=dst)
 
     def _update_wqkv(self, tensor: ttnn.Tensor) -> None:
-        """In-place replace ``self.wqkv`` via ``ttnn.copy``.
-
-        The caller must provide a tensor shaped and sharded the same way
-        the constructor builds ``self.wqkv``: shape
-        ``(1, 1, H, qkv_size_per_device)``, ``ttnn.TILE_LAYOUT``,
-        ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
-        Reproduce the constructor's chunk-transpose-concat flow before
-        calling.
+        """In-place replace ``self.wqkv`` via ``ttnn.copy``. Caller must match
+        the constructor's ``self.wqkv``: shape ``(1, 1, H, qkv_size_per_device)``,
+        TILE, ``ShardTensor2dMesh(dims=(2, 3))`` (or ``(3, 2)`` on TG).
         """
         self._inplace_copy(tensor, self.wqkv, self.wqkv_dtype)
 
     def _update_wo(self, tensor: ttnn.Tensor) -> None:
-        """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when
-        the prefetcher is enabled) via ``ttnn.copy``.
-
-        Both buffers must be kept in sync because the decode forward path
-        reads from ``wo_sharded_ring`` instead of ``wo`` whenever
+        """In-place replace ``self.wo`` (and ``self.wo_sharded_ring`` when the
+        prefetcher is enabled) via ``ttnn.copy``. Both must stay in sync: the
+        decode path reads ``wo_sharded_ring`` instead of ``wo`` when
         ``self.prefetcher is not None``.
         """
         self._inplace_copy(tensor, self.wo, self.wo_dtype)
@@ -499,27 +483,17 @@ class Attention(LightweightModule):
         k_proj_bias: ttnn.Tensor,
         v_proj_bias: ttnn.Tensor,
     ) -> None:
-        """In-place replace ``self.wqkv_bias_prefill`` and every entry of
-        ``self.wqkv_bias_decode`` from separate HF Q/K/V biases.
-
-        The constructor concatenates per-device chunks of each bias and
-        broadcasts the decode variant across the tile-padded batch
-        dimension; reproducing that on device requires a per-device
-        slice + concat across both the batch and width dims for the
-        decode list, plus a separate concat for prefill. Not yet
-        implemented.
+        """In-place replace ``self.wqkv_bias_prefill`` and ``self.wqkv_bias_decode``
+        from separate HF Q/K/V biases. Not yet implemented (needs the
+        constructor's per-device slice+concat and decode batch broadcast).
         """
         raise NotImplementedError("wqkv_bias update is not yet implemented")
 
     def _update_qk_norm(self, which: str, weight: ttnn.Tensor) -> None:
-        """In-place replace the gamma weight of the optional Q-/K-RMSNorm.
-
-        ``self.q_norm`` and ``self.k_norm`` are currently lambdas wrapping
-        an internal ``RMSNorm`` (``fn_q_norm`` / ``fn_k_norm``) captured
-        in a closure; the underlying ``RMSNorm`` is not exposed on
-        ``self``, so we cannot delegate to ``RMSNorm.update`` without a
-        small refactor (e.g. storing ``self._q_norm_inner = fn_q_norm``).
-        Until then, this remains a TODO.
+        """In-place replace the optional Q-/K-RMSNorm gamma. Not yet implemented:
+        ``self.q_norm``/``self.k_norm`` are lambdas closing over an internal
+        ``RMSNorm`` not exposed on ``self``, so we can't delegate to
+        ``RMSNorm.update`` without a small refactor.
         """
         raise NotImplementedError(f"{which} update is not yet implemented")
 
@@ -539,59 +513,26 @@ class Attention(LightweightModule):
     ) -> None:
         """In-place replace the on-device attention weights via ``ttnn.copy``.
 
-        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``):
+        HF-format input contract (see ``LLAMA_WEIGHT_TRANSFER.md``): required
+        ``self_attn.{q,k,v,o}_proj.weight`` plus optional biases/QK-norm gammas,
+        as HF Linear shapes wrapped in two leading unit dims, bf16, TILE,
+        DRAM-interleaved, replicated.
 
-        * keys (required) -- HF ``self_attn.{q,k,v,o}_proj.weight``.
-        * keys (optional) -- HF ``self_attn.{q,k,v}_proj.bias``;
-                             HF ``self_attn.{q,k}_norm.weight``.
-        * shapes -- HF Linear weights wrapped in two leading unit dims:
-                    ``q_proj``: ``(1, 1, n_heads * head_dim, H)``,
-                    ``k_proj``, ``v_proj``: ``(1, 1, n_kv_heads * head_dim, H)``,
-                    ``o_proj``: ``(1, 1, H, n_heads * head_dim)``.
-                    Biases (if present): ``(1, 1, 1, out_features)``.
-                    QK-norm gammas (if present): ``(1, 1, 1, head_dim)``.
-        * dtype  -- ``ttnn.bfloat16``.
-        * layout -- ``ttnn.TILE_LAYOUT``.
-        * memcfg -- ``ttnn.DRAM_MEMORY_CONFIG`` (interleaved).
-        * mesh   -- replicated (``ttnn.ReplicateTensorToMesh``).
+        ``hf_rope`` (default ``False``): whether Q/K rows are in HF split-half
+        rotary order or already in this model's convention. ``False`` is right
+        for the ttml -> tt-transformers transfer (both store Meta-permuted Q/K
+        for Llama-3.2-1B-Instruct). When it disagrees with ``self.use_hf_rope``
+        an HF<->Meta row permutation is required; not implemented (raises).
 
-        ``hf_rope`` (default ``False``): whether Q/K rows are in
-        HF split-half rotary order or already in this model's RoPE
-        convention. ``False`` is the right default for the immediate
-        ttml -> tt-transformers transfer (both engines store
-        Meta-permuted Q/K for Llama-3.2-1B-Instruct), so no row
-        permutation is needed. When ``hf_rope`` doesn't match
-        ``self.use_hf_rope`` (i.e. the caller and the model disagree on
-        row order), an HF<->Meta row permutation is required; that path
-        is not yet implemented and currently raises
-        ``NotImplementedError``.
+        Conversion (single-device only): transpose each proj (mirrors the
+        constructor's ``torch.transpose``), concat Q/K/V along the output dim,
+        then ``_update_wqkv``/``_update_wo`` ``ttnn.copy`` into existing buffers,
+        preserving buffer addresses (so captured traces and the prefetcher's
+        recorded addresses stay valid). The multi-device per-device
+        chunk-transpose-concat is not yet implemented.
 
-        Internal conversion (single-device path):
-
-        1. Transpose each of ``q_proj``, ``k_proj``, ``v_proj``,
-           ``o_proj`` swapping the last two dims (mirrors the
-           constructor's ``torch.transpose``).
-        2. ``ttnn.concat([q_t, k_t, v_t], dim=-1)`` to fuse Q/K/V along
-           the output dim, matching the constructor's per-device
-           chunk-transpose-concat (which is trivial on a 1-device mesh).
-           Multi-device: the constructor splits each of Q/K/V into
-           ``num_devices_per_group`` chunks along axis 0 and concatenates
-           ``[Q_i | K_i | V_i]`` per device, then mesh-shards along
-           axis 3. Reproducing that on device requires per-device
-           ``ttnn.slice`` + ``ttnn.concat`` and is not yet implemented.
-        3. ``_update_wqkv`` / ``_update_wo`` ``ttnn.copy`` the fused /
-           transposed tensors into the existing buffers. Buffer
-           addresses are preserved across the update.
-
-        Buffer-address preservation: every physical buffer's device
-        allocation is preserved, so any captured trace -- and the DRAM
-        prefetcher's recorded buffer addresses (``self.wo_sharded_ring``
-        when ``prefetcher is not None``) -- remain valid across an
-        update.
-
-        Raises ``ValueError`` when optional inputs don't match
-        construction-time presence (e.g. caller passes biases but the
-        module was built without a QKV bias).
+        Raises ``ValueError`` when optional inputs don't match construction-time
+        presence (e.g. biases passed but the module has no QKV bias).
         """
         if hf_rope != self.use_hf_rope:
             raise NotImplementedError(
