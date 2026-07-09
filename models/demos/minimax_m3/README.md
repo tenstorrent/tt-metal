@@ -35,7 +35,7 @@ Verified on a Blackhole Galaxy against the torch golden KV-cache, per-layer, **r
 | 5k one-shot | 0.96289 / 0.87884 / 0.97573 |
 | 10k chunked (2×5120, cache-read path) | 0.96380 / 0.88037 / 0.97607 |
 
-**Known open:** very long contexts (≈50k+) hit a DRAM-layout-triggered NoC hang (under investigation); decode is not part of this bring-up.
+**Known open:** long-context chunked prefill (>2 chunks, i.e. gathered prefix ≳15k tokens) hangs in `ring_joint_scaled_dot_product_attention` (dense GQA cache-read). Root cause **found**: on a program-cache hit the op re-patches `logical_n`-derived scalars (`active_ring_iter_mask`, …) on working cores but *skips idle cores*; in the GQA row-wide-multicast path those idle cores are padded mcast receivers, so when `logical_n` grows across successive chunk calls they keep a stale mask, skip a ring iter the injector still multicasts to, and the injector deadlocks (workers DONE, all-gather eth reads undrained). It is GQA-specific (DS/MLA never enters that path). Fix (patch **every** core on cache hit) is in **`skrstic/fix-ring-joint-sdpa-cross-call-hang`**; verified locally on this model at 56320 (11 chunks, no hang, min PCC K=0.967 / V=0.885 / index_k=0.978). **Remove this note once that fix lands on `main`.** Decode is not part of this bring-up.
 
 ## Run
 
