@@ -141,6 +141,8 @@ class Gemma4Attention:
         sequential_kv_write=False,
         rope_presliced=False,
         packed=None,
+        chunk_start_idx=None,
+        chunk_page_table=None,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -206,7 +208,13 @@ class Gemma4Attention:
                 rope_presliced=rope_presliced,
             )
         else:
-            tt_out, kept_kv = prefill_forward(
+            # Sliding-window layers under generator-level chunked prefill carry a
+            # rolling K/V window tail across chunks (stored on this per-layer
+            # instance). Reset it at the start of a prefill (single-chunk, or the
+            # first generator chunk with chunk_start_idx==0).
+            if chunk_start_idx is None or int(chunk_start_idx) == 0:
+                self._release_sliding_prefill_tail()
+            tt_out, kept_kv, sliding_tail_out = prefill_forward(
                 hidden_states=hidden_states,
                 cos_cache=cos_cache,
                 sin_cache=sin_cache,
@@ -222,6 +230,22 @@ class Gemma4Attention:
                 batch_size=batch_size,
                 user_id=user_id,
                 valid_seq_len=valid_seq_len,
+                chunk_start_idx=chunk_start_idx,
+                chunk_page_table=chunk_page_table,
+                sliding_tail_in=getattr(self, "_sliding_prefill_tail", None),
             )
+            # prefill_forward consumed (deallocated) the incoming tail; stash the
+            # new one for the next chunk.
+            self._sliding_prefill_tail = sliding_tail_out
             self._last_kv = kept_kv
             return tt_out
+
+    def _release_sliding_prefill_tail(self):
+        tail = getattr(self, "_sliding_prefill_tail", None)
+        if tail is not None:
+            for t in tail:
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+        self._sliding_prefill_tail = None
