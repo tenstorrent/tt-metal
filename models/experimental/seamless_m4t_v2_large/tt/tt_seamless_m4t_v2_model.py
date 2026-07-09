@@ -16,7 +16,6 @@ Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache
 
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple, Union
@@ -238,11 +237,6 @@ class TextDecoderKvDecodeRuntime:
     # only when the winner is a prior token).
     tok_tt: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None
     tok_tt_by_cache_seq_len: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = field(default_factory=dict)
-    # Optional fully-on-device variant: the cross-chunk/cross-shard combine (ttnn.argmax + ttnn.gather)
-    # is also fused into the trace, so the trace outputs the final global token id ``[1,1]`` directly and
-    # the loop reads back a single scalar (no host torch.argmax). Enabled via ``_use_ondevice_argmax_combine``.
-    tok_id_tt: Optional[ttnn.Tensor] = None
-    tok_id_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
     tok_li_host: Optional[ttnn.Tensor] = None
     tok_cm_host: Optional[ttnn.Tensor] = None
     trace_cache_seq_len: Optional[int] = None
@@ -551,11 +545,6 @@ class TTSeamlessM4Tv2Model:
         self.hidden_size = hidden_size
         # TP degree: number of devices in the tensor-parallel group (4 on BH QB 1×4 mesh).
         self._tp = get_tp(device)
-        # Combine the trace-fused chunk argmax purely on device (ttnn.argmax + ttnn.gather via
-        # _ondevice_global_argmax_from_chunks, fused into the decode trace) — default on. Set
-        # SEAMLESS_ONDEVICE_ARGMAX_COMBINE=0 to fall back to the host torch.argmax over the ~64 chunk
-        # scalars. Output is bit-identical between the two paths (parity-tested).
-        self._use_ondevice_argmax_combine = os.environ.get("SEAMLESS_ONDEVICE_ARGMAX_COMBINE", "1") == "1"
         self.pad_token_id = pad_token_id
         self.decoder_start_token_id = decoder_start_token_id
         self.vocab_size = vocab_size
@@ -1197,40 +1186,6 @@ class TTSeamlessM4Tv2Model:
                 host[0, ids] = penalized
         return int(host[0].argmax().item())
 
-    def _ondevice_chunk_argmax_combine(
-        self,
-        logits: ttnn.Tensor,
-        dec_len: int,
-        *,
-        repetition_penalty: float = 1.0,
-        prev_token_ids: Optional["Collection[int]"] = None,
-    ) -> int:
-        """Read the trace-fused on-device token id (``ttnn.argmax`` + ``ttnn.gather`` combine).
-
-        The cross-chunk/cross-shard combine is captured *inside* the decode trace (see
-        :meth:`capture_text_decoder_decode_trace`), so the trace already produced the global token id
-        in ``rt.tok_id_tt``; here we only read back that single scalar — no host ``torch.argmax`` and no
-        eager device ops on trace-backed buffers (which the active trace would corrupt). Rep-penalty ties
-        still fall back to the full-row host argmax.
-        """
-        import torch as _torch
-
-        rt = self._kv_decode_rt
-        if rt is None or rt.tok_id_tt is None:
-            raise RuntimeError("On-device argmax combine requires the trace-fused token id (tok_id_tt).")
-        token = _read_int_scalar(rt.tok_id_tt)
-        if not (repetition_penalty > 1.0 and prev_token_ids and token in prev_token_ids):
-            return token
-        host = self._logits_row_to_host(logits, dec_len, sharded=True)
-        ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
-        vocab_w = int(host.shape[-1])
-        ids = ids[(ids >= 0) & (ids < vocab_w)]
-        if ids.numel() > 0:
-            scores = host[0, ids]
-            penalized = _torch.where(scores < 0, scores * float(repetition_penalty), scores / float(repetition_penalty))
-            host[0, ids] = penalized
-        return int(host[0].argmax().item())
-
     def _greedy_token_after_traced_step(
         self,
         logits: ttnn.Tensor,
@@ -1245,13 +1200,6 @@ class TTSeamlessM4Tv2Model:
         rt = self._kv_decode_rt
         tok_tt = rt.tok_tt if rt is not None else None
         if tok_tt is not None:
-            if self._use_ondevice_argmax_combine:
-                return self._ondevice_chunk_argmax_combine(
-                    logits,
-                    dec_len,
-                    repetition_penalty=repetition_penalty,
-                    prev_token_ids=prev_token_ids,
-                )
             if d2h_event is not None:
                 ttnn.event_synchronize(d2h_event)
             elif read_cq_id:
@@ -1481,9 +1429,6 @@ class TTSeamlessM4Tv2Model:
         if old_tok is not None:
             for _t in old_tok:
                 ttnn.deallocate(_t)
-        old_tokid = rt.tok_id_tt_by_cache_seq_len.pop(bucket, None)
-        if old_tokid is not None:
-            ttnn.deallocate(old_tokid)
         if rt.trace_cache_seq_len == bucket:
             rt.trace_id = None
             rt.trace_cache_seq_len = None
@@ -1491,8 +1436,6 @@ class TTSeamlessM4Tv2Model:
             rt.logits_tt = None
         if rt.tok_tt is old_tok:
             rt.tok_tt = None
-        if rt.tok_id_tt is old_tokid:
-            rt.tok_id_tt = None
 
     def release_text_decoder_decode_trace(self) -> None:
         """Release captured decode traces and trace output tensors (keeps H2D staging buffers)."""
@@ -1511,11 +1454,6 @@ class TTSeamlessM4Tv2Model:
                 ttnn.deallocate(_t)
         rt.tok_tt_by_cache_seq_len.clear()
         rt.tok_tt = None
-        for tokid in rt.tok_id_tt_by_cache_seq_len.values():
-            if tokid is not None:
-                ttnn.deallocate(tokid)
-        rt.tok_id_tt_by_cache_seq_len.clear()
-        rt.tok_id_tt = None
         self._free_kv_host_readback_buffers(rt)
         rt.trace_id = None
         rt.trace_cache_seq_len = None
@@ -1698,7 +1636,6 @@ class TTSeamlessM4Tv2Model:
         rt.trace_cache_seq_len = cache_len
         rt.logits_tt = rt.logits_tt_by_cache_seq_len.get(cache_len)
         rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_len)
-        rt.tok_id_tt = rt.tok_id_tt_by_cache_seq_len.get(cache_len)
         return trace_id
 
     def _decode_step_kv_lm(
@@ -1765,13 +1702,6 @@ class TTSeamlessM4Tv2Model:
         )
         # Pre-compile the fused argmax too — else it JITs during capture → "Writes not supported".
         compile_tok = self._decode_argmax_token(compile_logits)
-        # When combining on device, pre-compile the combine too (builds/caches the offset table and
-        # tie-break bias via host→device writes now, so capture only replays cached tensors + CCL).
-        if self._use_ondevice_argmax_combine:
-            _compile_tokid = self._ondevice_global_argmax_from_chunks(
-                compile_tok[0], compile_tok[1], int(compile_logits.shape[-1]), dealloc_inputs=False
-            )
-            ttnn.deallocate(_compile_tokid)
         ttnn.synchronize_device(self.device)
         for _t in compile_tok:
             ttnn.deallocate(_t)
@@ -1784,10 +1714,9 @@ class TTSeamlessM4Tv2Model:
 
         capture_logits: Optional[ttnn.Tensor] = None
         capture_tok: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None
-        capture_tokid: Optional[ttnn.Tensor] = None
 
         def traced_step_capture() -> None:
-            nonlocal capture_logits, capture_tok, capture_tokid
+            nonlocal capture_logits, capture_tok
             capture_logits = self._decode_step_kv_lm(
                 rt,
                 encoder_hidden,
@@ -1797,12 +1726,6 @@ class TTSeamlessM4Tv2Model:
                 cache_seq_len=config_cache_len,
             )
             capture_tok = self._decode_argmax_token(capture_logits)
-            if self._use_ondevice_argmax_combine:
-                # Fuse the cross-chunk/cross-shard combine into the trace so it outputs the token id.
-                # tok_tt are kept (dealloc_inputs=False) for the rep-penalty host fallback.
-                capture_tokid = self._ondevice_global_argmax_from_chunks(
-                    capture_tok[0], capture_tok[1], int(capture_logits.shape[-1]), dealloc_inputs=False
-                )
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         traced_step_capture()
@@ -1813,8 +1736,6 @@ class TTSeamlessM4Tv2Model:
         rt.logits_tt = capture_logits
         rt.tok_tt_by_cache_seq_len[config_cache_len] = capture_tok
         rt.tok_tt = capture_tok
-        rt.tok_id_tt_by_cache_seq_len[config_cache_len] = capture_tokid
-        rt.tok_id_tt = capture_tokid
         self._free_kv_host_readback_buffers(rt)
         self._ensure_tok_host_readback_buffers(rt, capture_tok)
         rt.trace_ids_by_cache_seq_len[config_cache_len] = trace_id
@@ -1840,7 +1761,6 @@ class TTSeamlessM4Tv2Model:
             raise RuntimeError("Decode trace logits buffer missing; re-capture the trace.")
         rt.logits_tt = logits_tt
         rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(bucket)
-        rt.tok_id_tt = rt.tok_id_tt_by_cache_seq_len.get(bucket)
         ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
         return logits_tt
 
