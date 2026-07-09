@@ -156,20 +156,11 @@ CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt
 
 # gtest filter -> test name table. Names match deployment_tests_dram_glx (outlogix).
 # eth_bandwidth uses a trailing wildcard so it picks up BandwidthBidir automatically
-# if/when it gets added to sources.cmake. Today the build only registers Bandwidth.
 TESTS = {
-    # ETH tests are temporarily disabled; they will be re-enabled once the ETH
-    # tests are updated.
-    # "eth_link_up": "*TensixDeploymentEthernetLinkUp",
-    # "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
+    "eth_link_up": "*TensixDeploymentEthernetLinkUp",
+    "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
     "gddr_fast": "*DramDeployment_PersistentOptimalWorkersAllDramBanks",
     "gddr_full": "*DramDeployment_*",
-    # Source files for these tests exist in the branch but are NOT in
-    # tests/tt_metal/tt_metal/deployment/sources.cmake, so they never get
-    # compiled into unit_tests_deployment. Uncomment + add to TIER_TESTS once
-    # outlogix lands the CMake change.
-    # "eth_bandwidth_bidir":  "*TensixDeploymentEthernetBandwidthBidir",
-    # "eth_data_integrity":   "*TensixDeploymentEthernetDataIntegrityDram",
 }
 
 TIER_TESTS = {
