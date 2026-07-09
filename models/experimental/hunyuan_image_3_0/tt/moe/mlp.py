@@ -69,10 +69,12 @@ class HunyuanTtMLP(LightweightModule):
             cache_file_name=cache_file(weight_cache_path, f"{prefix}.down_proj.weight"),
         )
 
+        # bf16/bf8 weights don't need HiFi4's 4 math passes or fp32 dest accumulation;
+        # HiFi2 + bf16 accumulation roughly halves compute-bound matmul time. PCC-gated.
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
