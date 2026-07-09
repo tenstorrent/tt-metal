@@ -132,6 +132,7 @@ enum class EnvVarID {
     TT_METAL_PROFILER_MID_RUN_DUMP,                // Force mid-run profiler dumps
     TT_METAL_PROFILER_CPP_POST_PROCESS,            // Enable C++ post-processing for profiler
     TT_METAL_PROFILER_SUM,                         // Enable sum profiling
+    TT_METAL_PROFILER_ACCUMULATE,                  // Accumulate multiple kernels in L1 before DRAM push
     TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT,       // Maximum number of programs supported by the profiler
     TT_METAL_TRACY_MID_RUN_PUSH,                   // Force Tracy mid-run pushes
     TT_METAL_PROFILER_DISABLE_DUMP_TO_FILES,       // Disable dumping collected device data to files
@@ -949,6 +950,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILER_SUM: {
             if (this->profiler_enabled && is_env_enabled(value)) {
                 this->profiler_sum = true;
+            }
+            break;
+        }
+
+        // TT_METAL_PROFILER_ACCUMULATE
+        // Accumulate kernel invocations in per-RISC L1 (main zones use the growing index), flush to DRAM when nearly
+        // full, read residual via DRAM_AND_L1. Default: false Usage: export TT_METAL_PROFILER_ACCUMULATE=1
+        case EnvVarID::TT_METAL_PROFILER_ACCUMULATE: {
+            if (this->profiler_enabled && is_env_enabled(value)) {
+                this->profiler_accumulate = true;
             }
             break;
         }
