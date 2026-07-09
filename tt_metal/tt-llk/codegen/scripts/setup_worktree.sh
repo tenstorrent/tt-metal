@@ -1,24 +1,23 @@
 #!/bin/bash
-# Worktree setup for codegen agents. Creates a branch from origin/main + a
-# worktree with the codegen infra (agents/scripts/references/config/.claude)
-# symlinked in, so agents read their playbooks while the fix stays based on a
-# clean main.
+# Worktree setup for codegen agents. Creates a branch from origin/main
 #
 # Usage (sourced):
+#   worktree-name example: issue-123
 #   source codegen/scripts/setup_worktree.sh
-#   setup_worktree issue-123     # create; exports WORKTREE_DIR / WORKTREE_BRANCH
-#   cleanup_worktree issue-123   # remove this run's worktree (default)
-#   prune_worktrees 14           # GC leftover worktrees older than 14d
+#   setup_worktree {worktree-name}     # create; exports WORKTREE_DIR / WORKTREE_BRANCH
+#   cleanup_worktree {worktree-name}   # remove this run's worktree (default)
+#   prune_worktrees 14                 # GC leftover worktrees older than 14d
 # Standalone:
 #   ./codegen/scripts/setup_worktree.sh {create|cleanup|prune|list} [ARG]
 #
 # Env:
-#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: $HOME/.codegen/worktrees)
+#   CODEGEN_WORKTREE_ROOT  — worktree parent dir (default: /proj_sw/user_dev/llk-codegen-worktrees)
 #   CODEGEN_KEEP_WORKTREE  — "false" (default) removes the worktree after the run;
 #                            "true" keeps the live checkout
 # Exports: WORKTREE_BRANCH, WORKTREE_DIR
 
-set -euo pipefail
+# Strict mode: Avoid strict mode if user sourced the script
+[[ "${BASH_SOURCE[0]}" == "$0" ]] && set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # tt-llk root (parent of codegen/)
@@ -30,12 +29,12 @@ LLK_REL="${LLK_ROOT#"$REPO_ROOT/"}"
 
 GIT_USER="llk_code_gen"
 
-# Durable parent dir (not /tmp, which reboots/tmpwatch wipe); dir is versioned
-# per run so concurrent runs never collide.
-CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-$HOME/.codegen/worktrees}"
-# Serialises version-reserve + branch-create + worktree-add across concurrent
-# runs. On the LOCAL .git — flock is unreliable on NFS ($HOME).
-CODEGEN_SETUP_LOCK="${REPO_ROOT}/.git/codegen-worktree-setup.lock"
+# Prepare paths
+CODEGEN_WORKTREE_ROOT="${CODEGEN_WORKTREE_ROOT:-/proj_sw/user_dev/llk-codegen-worktrees}"
+CODEGEN_GIT_DIR="$(git -C "$REPO_ROOT" rev-parse --path-format=absolute --git-dir)"
+
+CODEGEN_SETUP_LOCK="${CODEGEN_GIT_DIR}/codegen-worktree-setup.lock"
+
 # Remove the worktree after the run (the fix survives as the branch commit +
 # generated.patch); "true" keeps it for inspection. `prune` GCs crashed runs.
 CODEGEN_KEEP_WORKTREE="${CODEGEN_KEEP_WORKTREE:-false}"
@@ -73,6 +72,7 @@ codegen_worktree_dirs() {
 # Args: task_id — a slug like "issue-123" or "generate-gelu-quasar"
 # Sets: WORKTREE_BRANCH, WORKTREE_DIR
 setup_worktree() {
+  local -; set -euo pipefail
   local task_id="$1"
 
   mkdir -p "$CODEGEN_WORKTREE_ROOT"
@@ -108,15 +108,14 @@ setup_worktree() {
   exec {lock_fd}>&-
 
   # ── Symlink codegen infrastructure ──
-  # The codegen/ directory doesn't exist on main — symlink read-only parts
-  # from the source branch so agents can read their playbooks.
+
+  # tt-llk worktree path
   local wt_llk="${WORKTREE_DIR}/${LLK_REL}"
 
   echo "[worktree] Symlinking codegen infrastructure into worktree"
   mkdir -p "${wt_llk}/codegen"
 
-  # Read-only: agent playbooks, references, scripts, config, hooks
-  # Use -snf so symlinks replace any existing dirs/files from main
+  # Read-only symlink: agent playbooks, references, scripts, config, hooks...
   ln -snf "${LLK_ROOT}/codegen/agents"     "${wt_llk}/codegen/agents"
   ln -snf "${LLK_ROOT}/codegen/references" "${wt_llk}/codegen/references"
   ln -snf "${LLK_ROOT}/codegen/scripts"    "${wt_llk}/codegen/scripts"
@@ -124,28 +123,25 @@ setup_worktree() {
   ln -snf "${LLK_ROOT}/codegen/hooks"      "${wt_llk}/codegen/hooks"
   ln -snf "${LLK_ROOT}/codegen/skills"     "${wt_llk}/codegen/skills"
   ln -sf  "${LLK_ROOT}/codegen/CLAUDE.md"  "${wt_llk}/codegen/CLAUDE.md"
-  # __init__.py is required so `import codegen.config.settings` (Step -1 env
-  # validation, agent_tools imports) works inside the worktree.
   ln -sf  "${LLK_ROOT}/codegen/__init__.py" "${wt_llk}/codegen/__init__.py"
 
   # Writable: artifacts dir is per-worktree (no cross-contamination)
   mkdir -p "${wt_llk}/codegen/artifacts"
 
-  # Gitignored test artifacts: symlink venv + SFPI compiler from the source
-  # branch so settings.validate() passes without running setup scripts again.
-  # These are not tracked in git so the worktree checkout leaves them absent.
-  [[ -d "${LLK_ROOT}/tests/.venv" ]] && ln -snf "${LLK_ROOT}/tests/.venv" "${wt_llk}/tests/.venv"
-  [[ -d "${LLK_ROOT}/tests/sfpi"  ]] && ln -snf "${LLK_ROOT}/tests/sfpi"  "${wt_llk}/tests/sfpi"
+  echo "[worktree] Building test environment (venv + SFPI) in worktree"
+  (
+    cd "${wt_llk}/tests"
+    if [[ ! -e /dev/tenstorrent ]]; then
+      # No real device on this host (e.g. used for emulation) — export explicitly
+      # rather than relying on a prefix assignment surviving `source`.
+      export CHIP_ARCH=quasar
+    fi
 
-  # Top-level config files (use -sf to overwrite any that exist on main)
-  ln -sf "${LLK_ROOT}/CLAUDE.md"    "${wt_llk}/CLAUDE.md"
-  ln -sf "${LLK_ROOT}/.mcp.json"   "${wt_llk}/.mcp.json"
-  [[ -d "${LLK_ROOT}/.claude" ]] && ln -snf "${LLK_ROOT}/.claude" "${wt_llk}/.claude"
+    # Clear source params (this will avoid misuse of script)
+    set --
+    source ./setup_external_testing_env.sh
+  )
 
-  # ── Hide symlinked-over files from git ──
-  # First, make the symlink artifacts invisible via .gitignore. This only helps for
-  # the genuinely untracked symlinks (codegen/, .claude/, and CLAUDE.md when the
-  # base commit does not track it).
   cat >> "${wt_llk}/.gitignore" <<'GITIGNORE'
 
 # Codegen infrastructure (symlinked from feature branch, do not commit)
@@ -174,11 +170,9 @@ GITIGNORE
   export WORKTREE_DIR
 }
 
-# Remove this run's worktree after the run (default). The fix is already on
-# WORKTREE_BRANCH + archived as generated.patch, so nothing is lost. Only ever
-# removes THIS run's $WORKTREE_DIR (never a concurrent sibling); keeps the branch
-# unless delete_branch=true.
+# Remove this run's worktree after the run (default).
 cleanup_worktree() {
+  local -; set -euo pipefail
   local task_id="$1"
   local delete_branch="${2:-false}"
 
@@ -220,6 +214,7 @@ cleanup_worktree() {
 
 # GC worktree dirs older than N days (default 14); branches are left intact.
 prune_worktrees() {
+  local -; set -euo pipefail
   local days="${1:-14}"
   mkdir -p "$CODEGEN_WORKTREE_ROOT"
   cd "$REPO_ROOT"
@@ -279,7 +274,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
       echo "  issue-123                  — for issue solving"
       echo "  generate-gelu-quasar       — for kernel generation"
       echo ""
-      echo "Env: CODEGEN_WORKTREE_ROOT (default \$HOME/.codegen/worktrees),"
+      echo "Env: CODEGEN_WORKTREE_ROOT (default /proj_sw/user_dev/llk-codegen-worktrees),"
       echo "     CODEGEN_KEEP_WORKTREE (default false)"
       [[ -z "$cmd" ]] && exit 1 || { [[ "$cmd" == "--help" || "$cmd" == "-h" ]] && exit 0 || exit 1; }
       ;;
