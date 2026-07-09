@@ -49,11 +49,15 @@ class TtLatentUpsampler(LightweightModule):
         matrix = self._resample_matrix(length_in)  # [L_out, T]
 
         x = ttnn.to_layout(x_blc, ttnn.TILE_LAYOUT)
+        ttnn.deallocate(x_blc)  # caller's latents temp, not reused after
         x = ttnn.reshape(x, [length_in, channels])  # drop batch for the 2D matmul
         y = ttnn.matmul(matrix, x)  # [L_out, C]
+        ttnn.deallocate(x)
         length_out = matrix.shape[0]
-        y = ttnn.reshape(y, [1, length_out, channels])
-        return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+        y2 = ttnn.reshape(y, [1, length_out, channels])
+        out = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(y2)
+        return out
 
 
 class TtHifiDecoder(LightweightModule):

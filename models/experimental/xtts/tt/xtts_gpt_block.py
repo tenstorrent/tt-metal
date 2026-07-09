@@ -88,46 +88,88 @@ class TtXttsGptBlock(LightweightModule):
         return self._split_heads(q), self._split_heads(k), self._split_heads(v)
 
     def _attn_out(self, attn):  # [b, heads, s, head_dim] -> [b, s, hidden]
-        out = self._merge_heads(attn)
-        return ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias)
+        out = self._merge_heads(attn)  # permute copies -> attn buffer now free
+        ttnn.deallocate(attn)
+        proj = ttnn.linear(out, self.attn_c_proj_weight, bias=self.attn_c_proj_bias)
+        ttnn.deallocate(out)
+        return proj
 
     def _attention(self, x):
+        """Non-cached causal attention (full-sequence path). Consumes ``x``."""
         q, k, v = self._qkv(x)
+        ttnn.deallocate(x)
         attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
         return self._attn_out(attn)
 
     def _mlp(self, x):
+        """c_fc -> gelu -> c_proj. Consumes ``x``."""
         h = ttnn.linear(x, self.mlp_c_fc_weight, bias=self.mlp_c_fc_bias)
-        h = ttnn.gelu(h)  # tanh-approx GELU ~= GPT-2 "gelu_new" (validated by PCC)
-        return ttnn.linear(h, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias)
+        ttnn.deallocate(x)
+        g = ttnn.gelu(h)  # tanh-approx GELU ~= GPT-2 "gelu_new" (validated by PCC)
+        ttnn.deallocate(h)
+        out = ttnn.linear(g, self.mlp_c_proj_weight, bias=self.mlp_c_proj_bias)
+        ttnn.deallocate(g)
+        return out
+
+    def _residual_ffn(self, x):
+        """Shared post-attention half: ``x + mlp(ln_2(x))``. Consumes and replaces ``x``."""
+        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS)
+        m = self._mlp(h)  # consumes h
+        y = ttnn.add(x, m)
+        ttnn.deallocate(x)
+        ttnn.deallocate(m)
+        return y
 
     def forward(self, x):
-        """Run one XTTS GPT decoder block. ``x`` is ``[batch, seq, hidden]`` on device."""
+        """Run one XTTS GPT decoder block. ``x`` is ``[batch, seq, hidden]`` on device.
+
+        Intermediates are freed as soon as they are consumed so at most one residual
+        tensor and the current op's output coexist — this lowers the transient
+        high-water mark (weights stay resident in DRAM; only activations churn)."""
         h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
-        x = ttnn.add(x, self._attention(h))
-        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS)
-        return ttnn.add(x, self._mlp(h))
+        a = self._attention(h)  # consumes h
+        xa = ttnn.add(x, a)
+        ttnn.deallocate(x)
+        ttnn.deallocate(a)
+        return self._residual_ffn(xa)
 
     def forward_prefill(self, x):
         """Prefill: full causal attention over the prompt, plus the per-layer K, V
-        (each ``[b, heads, seq, head_dim]``) used to seed the decode KV cache."""
+        (each ``[b, heads, seq, head_dim]``) used to seed the decode KV cache. K/V are
+        kept (returned for the cache); every other intermediate is deallocated."""
         h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
         q, k, v = self._qkv(h)
+        ttnn.deallocate(h)
         attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=True)
-        x = ttnn.add(x, self._attn_out(attn))
-        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS)
-        return ttnn.add(x, self._mlp(h)), k, v
+        ttnn.deallocate(q)  # k, v kept for the cache
+        ao = self._attn_out(attn)
+        xa = ttnn.add(x, ao)
+        ttnn.deallocate(x)
+        ttnn.deallocate(ao)
+        return self._residual_ffn(xa), k, v
 
     def forward_decode(self, x, k_cache, v_cache):
         """Decode one token. ``x`` is ``[b, 1, hidden]``; ``k_cache``/``v_cache`` are
         ``[b, heads, cur_len, head_dim]``. Appends this token's K, V to the cache and
         attends the single query against the whole cache (all cached positions are
-        causal-valid), so no mask is needed. Returns the updated cache."""
+        causal-valid), so no mask is needed. Returns the grown cache; the previous
+        cache buffers are freed once concatenated into the new ones."""
         h = ttnn.layer_norm(x, weight=self.ln_1_weight, bias=self.ln_1_bias, epsilon=LAYER_NORM_EPS)
         q, k, v = self._qkv(h)  # each [b, heads, 1, head_dim]
-        k_cache = ttnn.concat([k_cache, k], dim=2)
-        v_cache = ttnn.concat([v_cache, v], dim=2)
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k_cache, v_cache, is_causal=False)
-        x = ttnn.add(x, self._attn_out(attn))
-        h = ttnn.layer_norm(x, weight=self.ln_2_weight, bias=self.ln_2_bias, epsilon=LAYER_NORM_EPS)
-        return ttnn.add(x, self._mlp(h)), k_cache, v_cache
+        ttnn.deallocate(h)
+        new_k = ttnn.concat([k_cache, k], dim=2)
+        new_v = ttnn.concat([v_cache, v], dim=2)
+        ttnn.deallocate(k_cache)
+        ttnn.deallocate(v_cache)
+        ttnn.deallocate(k)
+        ttnn.deallocate(v)
+        attn = ttnn.transformer.scaled_dot_product_attention(q, new_k, new_v, is_causal=False)
+        ttnn.deallocate(q)
+        ao = self._attn_out(attn)
+        xa = ttnn.add(x, ao)
+        ttnn.deallocate(x)
+        ttnn.deallocate(ao)
+        return self._residual_ffn(xa), new_k, new_v
