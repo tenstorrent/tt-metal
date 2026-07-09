@@ -4686,22 +4686,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), expected_fabric_nodes);
 
     std::set<std::string> hosts_spanning_blitz_mapped;
-    std::map<std::string, std::set<std::uint32_t>> host_to_logical_meshes;
     for (const auto& [fabric_node, asic_id] : mapping_result.fabric_node_to_asic) {
-        const auto host = psd.get_host_name_for_asic(asic_id);
-        hosts_spanning_blitz_mapped.insert(host);
-        host_to_logical_meshes[host].insert(*fabric_node.mesh_id);
+        hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_EQ(hosts_spanning_blitz_mapped.size(), 8u) << "Mapped Blitz pipeline: should span exactly 8 hosts";
-    if (hosts_spanning_blitz_mapped.size() != 8u) {
-        for (const auto& [host, meshes] : host_to_logical_meshes) {
-            std::cout << host << " <-";
-            for (const auto m : meshes) {
-                std::cout << " " << m;
-            }
-            std::cout << std::endl;
-        }
-    }
 }
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx_BHGalaxy4x4Z) {
