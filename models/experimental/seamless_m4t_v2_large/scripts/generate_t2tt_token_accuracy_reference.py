@@ -48,22 +48,17 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers i
     make_speech_e2e_inputs,
     resolve_preamble_wav_for_tests,
 )
-from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_helpers import (
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_task_config import (
+    DEFAULT_MAX_DECODE_STEPS,
     SPEECH_INPUT_TASKS,
     TASK_TGT_LANG,
     TEXT_INPUT_TASKS,
     TEXT_OUTPUT_TASKS,
-    T2TT_REF_SOURCE_TEXT,
-    T2TT_REF_TGT_LANG,
     default_refpt_path,
+    sweep_refpt_path,
 )
 
-_DEFAULT_MAX_STEPS = 128
-_SWEEP_REF_DIR = Path(__file__).resolve().parent.parent / "tests" / "teacher_forced_sweep_outputs" / "references"
-
-
-def sweep_refpt_path(task: str, seq_len: int, max_decode_steps: int = _DEFAULT_MAX_STEPS) -> Path:
-    return _SWEEP_REF_DIR / f"seamless_m4t_v2_{task}_len{seq_len}_eval{max_decode_steps}.refpt"
+_DEFAULT_MAX_STEPS = DEFAULT_MAX_DECODE_STEPS
 
 
 def _hf_teacher_forced_top5_reference(
@@ -128,14 +123,16 @@ def generate_t2tt_reference(
     weights_dir: str,
     output_file: Path,
     task: str = "t2tt",
-    src_text: str = T2TT_REF_SOURCE_TEXT,
+    src_text: str | None = None,
     src_lang: str = DEFAULT_SRC_LANG,
-    tgt_lang: str = T2TT_REF_TGT_LANG,
+    tgt_lang: str | None = None,
     max_decode_steps: int = _DEFAULT_MAX_STEPS,
 ) -> None:
     model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
 
-    src_ids, src_mask = tokenize_source_text(processor, src_text, src_lang)
+    story_text = src_text if src_text is not None else ensure_long_story()
+    tgt_lang = tgt_lang or TASK_TGT_LANG[task]
+    src_ids, src_mask = tokenize_source_text(processor, story_text, src_lang)
     encoder_hidden = _hf_text_encoder_hidden(model, src_ids, src_mask)
     enc_mask = src_mask.to(device=encoder_hidden.device, dtype=torch.long)
     seed_ids = decoder_seed_ids(model, tgt_lang)
@@ -158,7 +155,7 @@ def generate_t2tt_reference(
         "top5_tokens": torch.stack(top5_rows, dim=0),
         "src_lang": src_lang,
         "tgt_lang": tgt_lang,
-        "src_text": src_text,
+        "src_text": story_text,
         "max_decode_steps": max_decode_steps,
     }
     torch.save(payload, output_file)

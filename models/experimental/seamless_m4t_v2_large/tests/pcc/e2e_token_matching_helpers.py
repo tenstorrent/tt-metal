@@ -27,6 +27,11 @@ from models.experimental.seamless_m4t_v2_large.scripts.demo_perf_sweep import (
 from models.experimental.seamless_m4t_v2_large.scripts.generate_t2tt_token_accuracy_reference import (
     generate_speech_sweep_reference,
     generate_text_sweep_reference,
+)
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_task_config import (
+    SPEECH_INPUT_TASKS,
+    TEXT_INPUT_TASKS,
+    TEXT_OUTPUT_TASKS,
     sweep_refpt_path,
 )
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import TextDecoderPccInputs
@@ -48,14 +53,6 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
 from models.experimental.seamless_m4t_v2_large.tt.tt_seamless_m4t_v2_model import _ttnn_ids_from_list
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import init_text_decoder_kv_cache
 
-# Same long English source as ``test_seamless_m4t_v2_model.py`` (yields ~100+ Hindi decode steps).
-T2TT_REF_SOURCE_TEXT = """Maya lived in a small coastal town where every morning began with the sound of fishing boats leaving the harbor. She worked at her grandfather's old bookstore, a narrow shop filled with dusty shelves, handwritten notes, and the smell of paper that had aged for decades. Most customers came looking for schoolbooks or travel guides, but Maya loved recommending forgotten stories hidden in the back corners of the store.
-
-One rainy evening, while organizing a stack of returned books, she discovered a small blue journal tucked between two novels. The cover had no title, only a silver compass symbol that shimmered faintly under the light. Curious, she opened it and found detailed sketches of places around the town along with cryptic messages about a hidden lighthouse path that only appeared during storms.
-
-At first, Maya thought someone was playing a prank. But the next night, as heavy clouds gathered over the sea, she noticed something unusual from the bookstore window. A narrow trail of lantern lights stretched along the cliffs where no road existed before. Holding the journal tightly, she followed the glowing path through the rain until she reached an abandoned lighthouse overlooking the crashing waves."""
-
-T2TT_REF_TGT_LANG = "hin"
 T2TT_TOP1_THRESHOLD = 0.95
 T2TT_TOP5_THRESHOLD = 0.99
 SPEECH_TOP1_THRESHOLD = 0.87  # S2TT ~88% top-1 with live speech encoder on BH 1×4; ASR ~90%+
@@ -72,31 +69,6 @@ S2ST_MIN_TOKEN_REF_STEPS = 1
 # on top-5 only (which still catches genuine divergence — a garbage encoder tanks top-5 too).
 # Longer points (e.g. the len1024 speech-encoder bug at 68 steps) keep the full top-1 gate.
 MIN_TOP1_GATE_STEPS = 8
-
-
-_REF_DIR = Path(__file__).resolve().parent.parent / "reference_outputs"
-_REFPT_NAMES = {
-    "t2tt": "seamless_m4t_v2_t2tt_eng_hin.refpt",
-    "t2st": "seamless_m4t_v2_t2st.refpt",
-    "s2tt": "seamless_m4t_v2_s2tt.refpt",
-    "s2st": "seamless_m4t_v2_s2st.refpt",
-    "asr": "seamless_m4t_v2_asr.refpt",
-}
-
-TEXT_OUTPUT_TASKS = ("t2tt", "s2tt", "asr")
-TASK_TGT_LANG = {
-    "t2tt": "hin",
-    "t2st": "hin",
-    "s2tt": "eng",
-    "s2st": "spa",
-    "asr": "eng",
-}
-TEXT_INPUT_TASKS = frozenset({"t2tt", "t2st"})
-SPEECH_INPUT_TASKS = frozenset({"s2tt", "s2st", "asr"})
-
-
-def default_refpt_path(task: str) -> Path:
-    return _REF_DIR / _REFPT_NAMES[task]
 
 
 @dataclass(frozen=True)
