@@ -181,7 +181,14 @@ class _Transformer:
             )
         wt, bt = self._lin[key]
         return ttnn.linear(
-            x, wt, bias=bt, transpose_b=True, memory_config=DRAM, dtype=self.wdtype, compute_kernel_config=self._ck()
+            x,
+            wt,
+            bias=bt,
+            transpose_b=True,
+            memory_config=DRAM,
+            dtype=self.wdtype,
+            compute_kernel_config=self._ck(),
+            core_grid=ttnn.CoreGrid(y=8, x=8),  # [Tier-3 exp] moderate 64-core grid (full 130-core hurt PCC)
         )
 
     def _rms_weight(self, norm):
