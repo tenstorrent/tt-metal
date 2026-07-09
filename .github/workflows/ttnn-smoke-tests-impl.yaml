@@ -127,14 +127,14 @@ jobs:
       - name: Download wormhole_b0 ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
-          repository: tenstorrent/ttsim
+          repository: spacelike-ai/ttsim
           tag: ${{ steps.ttsim-version.outputs.version }}
           fileName: libttsim_wh.so
           out-file-path: /tmp/ttsim
       - name: Download blackhole ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
-          repository: tenstorrent/ttsim
+          repository: spacelike-ai/ttsim
           tag: ${{ steps.ttsim-version.outputs.version }}
           fileName: libttsim_bh.so
           out-file-path: /tmp/ttsim
