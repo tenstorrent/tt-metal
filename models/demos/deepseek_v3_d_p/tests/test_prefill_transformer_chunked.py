@@ -497,8 +497,11 @@ def run_chunked_transformer(
     # top-k within bf16 noise). Dense (non-sparse) variants get None (natural-path / dense MLA use no cache).
     tt_index_kv_cache = None
     if resolve_has_indexer(config):
+        # A sparse config must carry index_head_dim; assert rather than silently defaulting so a
+        # misconfigured (missing-field) sparse setup fails loudly with a clear message.
+        assert getattr(config, "index_head_dim", None) is not None, "sparse config must provide index_head_dim"
         tt_index_kv_cache = init_kvpe_cache(
-            kvpe_cache_head_dim=getattr(config, "index_head_dim", 128),
+            kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh_device,
             seq_len=SEQ_CACHE,
             mesh_shape=mesh_shape,
