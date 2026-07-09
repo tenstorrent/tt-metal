@@ -23,6 +23,19 @@ resolves the ambiguous points). Condensed here so the skill is self-contained.
 9. Self-sufficient — present evidence, copy the reports in.
 10. Commit number, branch name, and bullet-point key changes / what the experiment is about.
 11. Hardware details — box (LoudBox/QuietBox/Galaxy), Blackhole/Wormhole, card name, mesh.
+12. Provenance — every dump carries a `run_manifest.json` (commit/branch/device/fabric/build.so_mtime/
+    reproducer); the report's metadata comes from it, not hand-typed. Tree committed before profiling
+    (manifest trusts the commit — no dirty flag).
+13. Measured baseline — compare the branch against the merge-base with origin/main (or a named baseline
+    branch), so the report shows the branch's actual before→after effect, not one code state.
+14. Iteration trajectory (multi-run) — keep branch iterations as history and show a per-scenario trend
+    (totals per iteration, baseline + current emphasized), so perf movement across the branch is visible.
+
+## Variant axis (deepseek_v32 + glm_5_1)
+The harness sweeps variant × scenario × mode. Reports are within-variant (a variant selector; no
+cross-variant ms comparison — different model dims). The sparse graph differs per variant in s2/s3/s8
+(GLM: interleaved rope → no rope-perm matmul; 16 heads/chip → s8 thin-head transpose); dense is shared.
+Model dims come from `reference/{deepseek_v3_2,glm_5_1}_config.py`.
 
 ## Decisions settled while building (this session)
 - **Graph nodes = semantic blocks authored from code**, each node's time = its constituent ops' real

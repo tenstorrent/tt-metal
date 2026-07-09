@@ -5,6 +5,22 @@ import json, os, html
 SP = os.path.dirname(os.path.abspath(__file__))
 DATA = json.load(open(SP + "/perf_data.json"))
 
+# Fold parse_percall's per-call attribution into DATA as the JS expects it (build_data.py does NOT add
+# these — without this merge bt() is undefined and the graph is blank):
+#   data.block_timing[mode][scen] = {total_ns, nodes:{block_id: ns}}   (semantic-node real durations)
+#   data.expanded[mode][scen]     = {block_id: [ordered op nodes]}      (intra-block dataflow)
+PERCALL = json.load(open(SP + "/percall.json"))
+DATA["block_timing"], DATA["expanded"] = {}, {}
+for _mode in PERCALL["blocks"]:
+    DATA["block_timing"][_mode], DATA["expanded"][_mode] = {}, {}
+    for _scen, _blk in PERCALL["blocks"][_mode].items():
+        _tot = (DATA["modes"].get(_mode, {}).get(_scen) or {}).get("total_ns") or sum(_blk.values())
+        DATA["block_timing"][_mode][_scen] = {"total_ns": _tot, "nodes": _blk}
+        _exp = {}
+        for _n in sorted(PERCALL["nodes"][_mode][_scen], key=lambda x: x["order"]):
+            _exp.setdefault(_n["block"], []).append(_n)
+        DATA["expanded"][_mode][_scen] = _exp
+
 # ------------------------------------------------------------------ block metadata
 # Authored from the two code-verified trace specs. file:line + snippet feed the
 # appendix (req 8.1); col/row drive the graph layout; ops list is the audit trail

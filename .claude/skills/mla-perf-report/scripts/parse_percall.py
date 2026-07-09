@@ -158,12 +158,20 @@ def walk_forward(calls, tmpl):
     anch = anchor_map(tmpl)
     order = {}
     oi = 0
+    # Node ids consumed by the anchor branch (pinned by code, label-only). ptr must auto-skip them,
+    # else it stalls on score/topk/mul and the in-order tail falls through to composites.
+    anchor_nids = {tmpl[i][1] for i in anch.values()}
 
     def rec(nid, dur):
         nonlocal oi
         node.setdefault(nid, []).append(dur)
         order.setdefault(nid, oi)
         oi += 1
+
+    def skip_anchors(p):
+        while p < N and tmpl[p][1] in anchor_nids:
+            p += 1
+        return p
 
     for code, dur in calls:
         if code in anch:  # pin structural anchor to its node — LABEL ONLY, do not advance ptr.
@@ -172,26 +180,31 @@ def walk_forward(calls, tmpl):
             idx = anch[code]
             rec(tmpl[idx][1], dur)
             continue
+        ptr = skip_anchors(ptr)
         if ptr >= N:
             nid = f"{tmpl[-1][0]}.misc:{code.replace('DeviceOperation','').replace('Operation','')}"
             rec(nid, dur)
             continue
         cur = tmpl[ptr][0]
-        # candidate 1: earliest unconsumed node in the current block
-        j1 = None
+        # candidate 1: STRICT — only the (non-anchor) node exactly at ptr. Scanning ahead within the
+        # block (the old behaviour) let an unmodeled composite whose code equals a LATER named node
+        # (a rope-internal MeshPartition matching a later mesh_partition node; an RS-internal Concat
+        # matching a later concat node) jump the pointer and orphan everything between — block sums
+        # stay exact and anchors still match, so the asserts PASS while the distribution silently
+        # scrambles. Strict-at-ptr keeps composites in-block; ptr only advances on a real in-order
+        # match. ASSUMES the template lists every emitted node in program order (re-derive it against
+        # the actual dump, per the skill). ALWAYS eyeball the per-block node distribution, not just
+        # block-sum==total.
+        if code in tmpl[ptr][3]:
+            rec(tmpl[ptr][1], dur)
+            ptr += 1
+            continue
+        # candidate 2: transition ONLY if the call matches the ENTRY op of the immediate next block
+        # (rare safety for a genuinely-absent node); skip that block's leading anchors too.
         k = ptr
         while k < N and tmpl[k][0] == cur:
-            if code in tmpl[k][3]:
-                j1 = k
-                break
             k += 1
-        if j1 is not None:
-            rec(tmpl[j1][1], dur)
-            ptr = j1 + 1
-            continue
-        # candidate 2: transition ONLY if the call matches the ENTRY op of the immediate next
-        # block (k now points at that entry). This prevents in-block composites (stray
-        # slice/untilize/permute) from being pulled into a later block.
+        k = skip_anchors(k)
         if k < N and code in tmpl[k][3]:
             rec(tmpl[k][1], dur)
             ptr = k + 1

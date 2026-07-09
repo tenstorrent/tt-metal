@@ -15,8 +15,20 @@ the top-level CSVs may be apples-to-oranges.
   matched run usually still exists in an older `reports/<timestamp>/`; re-derive its summary (see
   `scripts/recover_cold.py`) instead of re-running the board.
 
-**Dumps must postdate the last code change.** `git log` the last commit touching `tt/mla/` and the perf
-test; compare to dump dir mtimes. HEAD being newer is fine if it doesn't touch MLA. Otherwise re-run tracy.
+**Trust a dump via its `run_manifest.json`, not mtimes — committed HEAD ≠ what ran.** The perf-test driver
+writes a lean `run_manifest.json` into each `reports/<ts>/` (commit, branch, device/mesh/fabric,
+build.so_mtime, reproducer command). Require `manifest.commit == <the commit you mean to report>`. An
+mtime/git-log freshness check is **blind to a dirty working tree**: this session's first dumps were an
+*uncommitted* SP×TP working tree while committed HEAD was the TP-head-sharded parent, so "before"≈"after"
+and the real win was invisible. The manifest has **no dirty flag by design** — it trusts the commit, so
+**COMMIT before profiling** (the skill's run step enforces `git status --porcelain` empty). Swapping between
+two Python-only code states (branch vs baseline: `tt/mla/*.py` + tests) needs no rebuild — the same
+`_ttnn.so` serves both; only rebuild when C++ changed.
+
+**A report needs a measured BASELINE.** Compare the branch against the **merge-base with `origin/main`**
+(`git merge-base HEAD origin/main`), or an explicit baseline branch. Without it, a "before" can silently be
+another build of the same change. Measure the baseline once, cache it keyed by commit, re-measure only when
+the merge-base moves (prompt first — baseline sweeps are expensive).
 
 **Device-collapse with `merge_device_rows`, never by hand.** Multi-chip rows are one-per-(op×chip);
 summing over-counts wall-clock ~8×. The convention (compute=max = critical path, collectives=avg) lives in
@@ -38,6 +50,22 @@ the trailing in-order ops (and the whole tail: gather, sdpa, o_proj) race into t
 - *Symptom:* the 7 ms `AllBroadcast` gather lands in the sdpa block; a stray `Matmul` lands in the cache
   block. Block sums still equal the total (every call counted once) but the **distribution is wrong**.
 - *Validate:* block sums == scenario total to the ns AND unique anchors == summary op totals to the cent.
+
+**Strict-at-ptr walk, not scan-ahead — repeated op codes cause a greedy jump.** If the block template
+has an op code that appears BOTH as a named node and as an (unmodeled) composite earlier in the stream
+(e.g. the SP×TP indexer's rope-internal `MeshPartition` vs the later `mesh_partition(wts)` node; an
+RS-internal `Concat` vs the index-gather `Concat`), a "scan the whole block for a match" walk grabs the
+later named node and orphans everything between. *Symptom:* block sums STILL equal the total and anchors
+STILL match (the asserts pass), but the distribution is scrambled (a block collapses to ~10% of its real
+time). *Fix (in `parse_percall.py`):* match ONLY the node at `ptr`, auto-skipping anchor nodes (they're
+pinned label-only); everything else is an in-block composite. This assumes the template lists every emitted
+node in program order — re-derive it from the actual dump. **ALWAYS eyeball the per-block node distribution
+(dump the s3/s4 nodes), never trust block-sum==total alone.**
+
+**`build_html.py` needs the percall→DATA merge — `build_data.py` doesn't add it.** The JS reads
+`data.block_timing[M][S]` = `{total_ns, nodes:{block:ns}}` and `data.expanded[M][S]` = `{block:[ordered
+op nodes]}`. Fold `percall.json` into DATA at the top of `build_html.py` (loop over `PERCALL["blocks"]`
+/ `PERCALL["nodes"]`), else `bt()` is undefined and the graph renders blank.
 
 **Composites/relabels have real time but inferred wiring.** `MeshPartition`, `Copy`, `FillPad`,
 `TilizeWithValPadding`, `UntilizeWithUnpadding`, extra `Slice`/`Concat`/`Permute` come from
