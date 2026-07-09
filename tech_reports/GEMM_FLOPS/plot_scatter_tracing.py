@@ -2,27 +2,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
+Trace comparison plot: traced vs non-traced TFLOPs per device.
+
 Usage:
-1. Generate performance data using manually selected GEMM configurations
-2. Rename output files to n150-manual.csv and p150-manual.csv
-3. Place the CSV files in tech_reports/GEMM_FLOPS/
-4. Run this script from the tt-metal root directory
+1. Run the benchmark via run_bench.sh on both devices
+2. CSVs are placed in tech_reports/GEMM_FLOPS/data/{wh,bh}.csv
+3. Run this script from the tt-metal root directory
 """
 
-import os
+from pathlib import Path
 
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 
+DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
+IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
 
-def safe_read_csv(path):
-    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
-    if os.path.exists(path):
-        return pd.read_csv(path)
-    print(f"WARNING: {path} not found — skipping that device.")
-    return pd.DataFrame()
+DEVICE_FILES = {
+    "n150": DATA_DIR / "wh.csv",
+    "p150": DATA_DIR / "bh.csv",
+}
 
+DEVICE_LABELS = {
+    "n150": "N150 (Wormhole)",
+    "p150": "P150 (Blackhole)",
+}
 
 dtype_configs = [
     ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#2ca02c"),  # Green
@@ -30,42 +35,53 @@ dtype_configs = [
     ("BFLOAT16_HiFi4", "BFLOAT16 (HiFi4)", "#1f77b4"),  # Blue
 ]
 
-df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-if not df_n150.empty:
-    df_n150["source"] = "n150"
-df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-if not df_p150.empty:
-    df_p150["source"] = "p150"
 
-for _df in [df_n150, df_p150]:
-    if not _df.empty:
-        if "TFLOPs (avg)" in _df.columns:
-            _df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-        _df["tflops"] = pd.to_numeric(_df["tflops"], errors="coerce")
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if path.exists():
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
 
-df = pd.concat([df_n150, df_p150], ignore_index=True)
 
-if df.empty:
+def load_and_prepare(path, source):
+    """Load CSV and prepare derived columns."""
+    df = safe_read_csv(path)
+    if df.empty:
+        return df
+    df["source"] = source
+    # Use best performance across all tuned modes (exclude OOB for peak comparison)
+    if "mode" in df.columns:
+        df = df[df["mode"] != "oob"].copy()
+    if "TFLOPs (avg)" in df.columns:
+        df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+    df["tflops"] = pd.to_numeric(df["tflops"], errors="coerce")
+    df["dtype_fidelity"] = (
+        df["dtype"].astype(str).str.replace("DataType.", "")
+        + "_"
+        + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
+    )
+    df["matrix_elements"] = df["m"] * df["k"] * df["n"]
+    if df["use_trace"].dtype == object:
+        df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
+    return df
+
+
+frames = []
+for source, path in DEVICE_FILES.items():
+    loaded = load_and_prepare(path, source)
+    if not loaded.empty:
+        frames.append(loaded)
+
+if not frames:
     print("ERROR: No data available for any device. Exiting.")
     raise SystemExit(1)
 
-df["dtype_fidelity"] = (
-    df["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
-df["matrix_elements"] = df["m"] * df["k"] * df["n"]
+df = pd.concat(frames, ignore_index=True)
 
-if df["use_trace"].dtype == object:
-    df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
+IMG_DIR.mkdir(parents=True, exist_ok=True)
 
-# Filter out the 416×320×320 base shape (square) to avoid dips in trace comparison
-# N150: 3328×2560×2560, P150: 4160×4160×4160
-# Keep this shape only in aspect_ratio plot for 1:1:1 comparison
-df = df[~((df["m"] == 3328) & (df["k"] == 2560) & (df["n"] == 2560))].copy()  # N150 square
-df = df[~((df["m"] == 4160) & (df["k"] == 4160) & (df["n"] == 4160))].copy()  # P150 square
-
-available_sources = [s for s in ["n150", "p150"] if s in df["source"].values]
+available_sources = [s for s in DEVICE_FILES if s in df["source"].values]
 for source in available_sources:
     fig, ax = plt.subplots(figsize=(16, 10))
     device_data = df[df["source"] == source].copy()
@@ -160,7 +176,7 @@ for source in available_sources:
     )
     ax.set_ylabel("Performance (TFLOPs)", fontsize=14, fontweight="bold", labelpad=10)
 
-    device_name = "N150 (Wormhole)" if source == "n150" else "P150 (Blackhole)"
+    device_name = DEVICE_LABELS.get(source, source)
     fig.suptitle(f"Performance Comparison: {device_name}", fontsize=18, fontweight="bold", y=0.98)
     ax.set_title(
         "Traced vs Non-Traced Execution Performance (All Matrix Sizes)", fontsize=14, pad=10, fontweight="bold"
@@ -231,9 +247,9 @@ for source in available_sources:
     )
 
     plt.tight_layout()
-    plt.savefig(f"tech_reports/GEMM_FLOPS/images/trace_comparison_{source}.png", dpi=300, bbox_inches="tight")
+    plt.savefig(IMG_DIR / f"trace_comparison_{source}.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"✅ Saved: trace_comparison_{source}.png")
+    print(f"Saved: trace_comparison_{source}.png")
 
-print("\n✅ Tracing comparison plots complete!")
+print("\nTracing comparison plots complete!")

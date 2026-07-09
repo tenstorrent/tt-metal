@@ -6,27 +6,25 @@
 Utilization Scatter Plot - Device-based utilization comparison between N150 and P150
 
 Usage:
-1. Generate performance data using manually selected GEMM configurations
-2. Rename output files to n150-manual.csv and p150-manual.csv
-3. Place the CSV files in tech_reports/GEMM_FLOPS/
-4. Run this script from the tt-metal root directory
+1. Run the benchmark via run_bench.sh on both devices
+2. CSVs are placed in tech_reports/GEMM_FLOPS/data/{wh,bh}.csv
+3. Run this script from the tt-metal root directory
 """
 
-import os
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.lines import Line2D
 
+DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
+IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
 
-def safe_read_csv(path):
-    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
-    if os.path.exists(path):
-        return pd.read_csv(path)
-    print(f"WARNING: {path} not found — skipping that device.")
-    return pd.DataFrame()
-
+DEVICE_FILES = {
+    "N150": DATA_DIR / "wh.csv",
+    "P150": DATA_DIR / "bh.csv",
+}
 
 # Configuration
 dtype_configs = [
@@ -40,15 +38,38 @@ device_configs = [
     ("N150", "v", "--"),  # Downward triangle, dashed line
 ]
 
-# Load data
-df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
 
-# Add device column
-if not df_n150.empty:
-    df_n150["device"] = "N150"
-if not df_p150.empty:
-    df_p150["device"] = "P150"
+def safe_read_csv(path):
+    """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
+    if path.exists():
+        return pd.read_csv(path)
+    print(f"WARNING: {path} not found — skipping that device.")
+    return pd.DataFrame()
+
+
+def find_device_util_col(df):
+    """Find the 'Device based utilization[%] (vs user selected grid ...)' column."""
+    for col in df.columns:
+        if col.startswith("Device based utilization") and "user selected grid" in col:
+            return col
+    return None
+
+
+def load_device_data(path, device_name):
+    """Load and preprocess a device CSV."""
+    df = safe_read_csv(path)
+    if df.empty:
+        return df
+    df["device"] = device_name
+    # Filter to tuned_2d_l1 mode (equivalent to old sharded benchmark data)
+    if "mode" in df.columns:
+        df = df[df["mode"] == "tuned_2d_l1"].copy()
+    return df
+
+
+# Load data
+df_n150 = load_device_data(DEVICE_FILES["N150"], "N150")
+df_p150 = load_device_data(DEVICE_FILES["P150"], "P150")
 
 # Combine data
 df = pd.concat([df_n150, df_p150], ignore_index=True)
@@ -58,10 +79,9 @@ if df.empty:
     raise SystemExit(1)
 
 # Filter: only non-traced data for clarity
+if df["use_trace"].dtype == object:
+    df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
 df = df[df["use_trace"] == False]
-
-df = df[~((df["m"] == 3328) & (df["k"] == 2560) & (df["n"] == 2560))].copy()
-df = df[~((df["m"] == 4160) & (df["k"] == 4160) & (df["n"] == 4160))].copy()
 
 
 # Create dtype-fidelity labels
@@ -76,21 +96,20 @@ df["dtype_label"] = df.apply(get_dtype_label, axis=1)
 # Calculate total matrix elements
 df["matrix_elements"] = df["m"] * df["k"] * df["n"]
 
+# Find the device utilization column dynamically
+device_util_col = find_device_util_col(df)
+if device_util_col is None:
+    print("WARNING: No device-based utilization column found. Using host-based.")
+    for col in df.columns:
+        if col.startswith("Host based utilization") and "user selected grid" in col:
+            device_util_col = col
+            break
 
-# Extract device utilization - handle different grid size column names
-def get_device_utilization(row):
-    if row["device"] == "N150":
-        col_name = "Device based utilization[%] (vs user selected grid 8x8)"
-    else:  # P150
-        col_name = "Device based utilization[%] (vs user selected grid 13x10)"
+if device_util_col is None:
+    print("ERROR: No utilization column found at all. Exiting.")
+    raise SystemExit(1)
 
-    if col_name in row.index:
-        return row[col_name]
-    else:
-        return np.nan
-
-
-df["device_utilization"] = df.apply(get_device_utilization, axis=1)
+df["device_utilization"] = pd.to_numeric(df[device_util_col], errors="coerce")
 
 # Create plot
 fig, ax = plt.subplots(figsize=(14, 8))
@@ -221,7 +240,8 @@ for text in legend.get_texts():
     if text.get_text() in header_labels:
         text.set_weight("bold")
 
+IMG_DIR.mkdir(parents=True, exist_ok=True)
 plt.tight_layout()
-plt.savefig("tech_reports/GEMM_FLOPS/images/utilization_comparison.png", dpi=300, bbox_inches="tight")
+plt.savefig(IMG_DIR / "utilization_comparison.png", dpi=300, bbox_inches="tight")
 print("✓ Utilization scatter plot saved: tech_reports/GEMM_FLOPS/images/utilization_comparison.png")
 plt.close()

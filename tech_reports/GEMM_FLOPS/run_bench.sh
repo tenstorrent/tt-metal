@@ -16,11 +16,9 @@ mkdir -p generated
 BENCH=tests/ttnn/unit_tests/benchmarks/test_benchmark.py
 
 pytest "${BENCH}::test_matmul_2d_host_perf" -xvs --timeout=7200
-pytest "${BENCH}::test_matmul_2d_host_perf_out_of_box" -xvs --timeout=7200
 
 ARCH=$(python -c "from models.common.utility_functions import is_blackhole; print('bh' if is_blackhole() else 'wh')")
 mkdir -p tech_reports/GEMM_FLOPS/data
-cp generated/matmul_2d_host_perf_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}-tuned.csv"
-cp generated/matmul_2d_host_perf_out_of_box_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}-oob.csv"
+cp generated/matmul_benchmark_report.csv "tech_reports/GEMM_FLOPS/data/${ARCH}.csv"
 
 python tech_reports/GEMM_FLOPS/plot_util_grid.py

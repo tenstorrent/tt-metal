@@ -2,25 +2,39 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
+Aspect ratio comparison: TFLOPs by matrix shape aspect ratio per device.
+
 Usage:
-1. Generate performance data using manually selected GEMM configurations
-2. Rename output files to n150-manual.csv and p150-manual.csv
-3. Place the CSV files in tech_reports/GEMM_FLOPS/
-4. Run this script from the tt-metal root directory
+1. Run the benchmark via run_bench.sh on both devices
+2. CSVs are placed in tech_reports/GEMM_FLOPS/data/{wh,bh}.csv
+3. Run this script from the tt-metal root directory
 """
 
-import os
+from pathlib import Path
+from functools import reduce
+from math import gcd
 
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
-from math import gcd
-from functools import reduce
+
+DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
+IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
+
+DEVICE_FILES = {
+    "N150": DATA_DIR / "wh.csv",
+    "P150": DATA_DIR / "bh.csv",
+}
+
+DEVICE_LABELS = {
+    "N150": "N150 (Wormhole)",
+    "P150": "P150 (Blackhole)",
+}
 
 
 def safe_read_csv(path):
     """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
-    if os.path.exists(path):
+    if path.exists():
         return pd.read_csv(path)
     print(f"WARNING: {path} not found — skipping that device.")
     return pd.DataFrame()
@@ -53,45 +67,47 @@ def extract_grid_dims(df):
     return parts[0], parts[1]
 
 
-# Load N150 and P150 data
-df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-if not df_n150.empty:
-    df_n150["source"] = "N150"
-    gx, gy = extract_grid_dims(df_n150)
-    df_n150["grid_x"] = gx
-    df_n150["grid_y"] = gy
-    print(f"N150 grid: {gx}x{gy}")
-
-df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-if not df_p150.empty:
-    df_p150["source"] = "P150"
-    gx, gy = extract_grid_dims(df_p150)
-    df_p150["grid_x"] = gx
-    df_p150["grid_y"] = gy
-    print(f"P150 grid: {gx}x{gy}")
-
-# Standardize column names and derive computed columns per device
-print("Calculating aspect ratios...")
-for _df in [df_n150, df_p150]:
-    if _df.empty:
-        continue
-    if "TFLOPs (avg)" in _df.columns:
-        _df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-    _df["tflops"] = pd.to_numeric(_df["tflops"], errors="coerce")
-    _df["dtype_fidelity"] = (
-        _df["dtype"].astype(str).str.replace("DataType.", "")
+def load_and_prepare(path, source):
+    """Load CSV and prepare derived columns."""
+    df = safe_read_csv(path)
+    if df.empty:
+        return df
+    df["source"] = source
+    # Use best performance across all tuned modes
+    if "mode" in df.columns:
+        df = df[df["mode"] != "oob"].copy()
+    if "TFLOPs (avg)" in df.columns:
+        df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+    df["tflops"] = pd.to_numeric(df["tflops"], errors="coerce")
+    df["dtype_fidelity"] = (
+        df["dtype"].astype(str).str.replace("DataType.", "")
         + "_"
-        + _df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
+        + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
     )
-    _df["aspect_ratio"] = _df.apply(
+
+    gx, gy = extract_grid_dims(df)
+    df["grid_x"] = gx
+    df["grid_y"] = gy
+    print(f"{source} grid: {gx}x{gy}")
+
+    df["aspect_ratio"] = df.apply(
         lambda row: calculate_aspect_ratio(row["m"], row["k"], row["n"], row["grid_x"], row["grid_y"]), axis=1
     )
+    return df
 
-df = pd.concat([df_n150, df_p150], ignore_index=True)
 
-if df.empty:
+# Load data
+frames = []
+for source, path in DEVICE_FILES.items():
+    loaded = load_and_prepare(path, source)
+    if not loaded.empty:
+        frames.append(loaded)
+
+if not frames:
     print("ERROR: No data available for any device. Exiting.")
     raise SystemExit(1)
+
+df = pd.concat(frames, ignore_index=True)
 
 # Define dtype-fidelity pairs and aspect ratios (colors match scatter/bar plots)
 dtype_configs = [
@@ -104,28 +120,29 @@ aspect_ratios = ["1:1:1", "1:2:4"]
 aspect_labels = {"1:1:1": "Square\n(1:1:1)", "1:2:4": "Rectangular\n(1:2:4)"}
 
 # Create plot for each device that has data
-available_sources = [s for s in ["N150", "P150"] if s in df["source"].values]
+IMG_DIR.mkdir(parents=True, exist_ok=True)
+print("Calculating aspect ratios...")
+
+available_sources = [s for s in DEVICE_FILES if s in df["source"].values]
 for source in available_sources:
     device_data = df[df["source"] == source].copy()
 
     if device_data.empty:
-        print(f"\n❌ No data for {source}")
+        print(f"\nNo data for {source}")
         continue
 
     # Collect data: for each aspect ratio, get all 3 dtypes
-    # Use balanced sampling: select top N matrix sizes for fair comparison
-    TOP_N_SIZES = 3  # Use the 3 largest matrix sizes from each aspect ratio
+    TOP_N_SIZES = 3
     summary_data = []
 
     for aspect_ratio in aspect_ratios:
         for dtype_fidelity, dtype_label, color in dtype_configs:
-            # Filter for this specific dtype and aspect ratio
             filtered = device_data[
                 (device_data["dtype_fidelity"] == dtype_fidelity) & (device_data["aspect_ratio"] == aspect_ratio)
             ]
 
             if filtered.empty:
-                print(f"  ⚠️  No data for {source} {dtype_fidelity} with aspect {aspect_ratio}")
+                print(f"  No data for {source} {dtype_fidelity} with aspect {aspect_ratio}")
                 summary_data.append(
                     {
                         "aspect_ratio": aspect_ratio,
@@ -164,24 +181,22 @@ for source in available_sources:
             )
 
             print(
-                f"  ✓ {source} {dtype_fidelity} ({aspect_ratio}): {avg_tflops:.1f} TFLOPs (avg of top {len(top_n_tflops)} sizes out of {len(size_tflops)} total)"
+                f"  {source} {dtype_fidelity} ({aspect_ratio}): {avg_tflops:.1f} TFLOPs "
+                f"(avg of top {len(top_n_tflops)} sizes out of {len(size_tflops)} total)"
             )
 
     # Create grouped bar chart
     fig, ax = plt.subplots(figsize=(16, 8))
 
-    # Set up positions: 3 aspect ratios, each with 3 dtypes
     n_dtypes = len(dtype_configs)
     bar_width = 0.22
-    group_gap = 0.5  # Larger gap between aspect ratio groups
+    group_gap = 0.5
 
     aspect_positions = []
     current_pos = 0
 
     for aspect_idx, aspect_ratio in enumerate(aspect_ratios):
-        # Plot 3 bars for this aspect ratio (one per dtype)
         for dtype_idx, (dtype_fidelity, dtype_label, color) in enumerate(dtype_configs):
-            # Find the data for this combination
             data_point = next(
                 (
                     d
@@ -204,17 +219,14 @@ for source in available_sources:
                     edgecolor="black",
                     linewidth=1.3,
                     label=dtype_label if aspect_idx == 0 else "",
-                )  # Only label once
+                )
 
-                # Add value label
                 if value > 0:
                     ax.text(bar_pos, value, f"{value:.1f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-        # Store center position for this aspect ratio group
         aspect_center = current_pos + (n_dtypes * bar_width) / 2 - bar_width / 2
         aspect_positions.append(aspect_center)
 
-        # Move to next group
         current_pos += n_dtypes * bar_width + group_gap
 
     ax.set_ylabel("Average TFLOPs", fontsize=14, fontweight="bold", labelpad=10)
@@ -224,7 +236,6 @@ for source in available_sources:
         fontweight="bold",
         labelpad=10,
     )
-    # Add explanation below x-axis (smaller, non-bold)
     ax.text(
         0.5,
         -0.12,
@@ -235,16 +246,13 @@ for source in available_sources:
         fontsize=10,
     )
 
-    # Title matching our other plots
-    device_name = "N150 (Wormhole)" if source == "N150" else "P150 (Blackhole)"
+    device_name = DEVICE_LABELS.get(source, source)
     fig.suptitle(f"Performance Comparison: {device_name}", fontsize=18, fontweight="bold", y=0.98)
     ax.set_title("TFLOPs by Matrix Aspect Ratio and Data Type", fontsize=14, pad=10, fontweight="bold")
 
-    # Set x-axis labels for aspect ratios
     ax.set_xticks(aspect_positions)
     ax.set_xticklabels([aspect_labels[r] for r in aspect_ratios], fontsize=12)
 
-    # Add legend for dtypes - position to avoid overlap with bars
     ax.legend(
         fontsize=11,
         loc="upper right",
@@ -260,11 +268,9 @@ for source in available_sources:
     ax.set_ylim(bottom=0)
 
     plt.tight_layout()
-    plt.savefig(
-        f"tech_reports/GEMM_FLOPS/images/aspect_ratio_by_dtype_{source.lower()}.png", dpi=300, bbox_inches="tight"
-    )
+    plt.savefig(IMG_DIR / f"aspect_ratio_by_dtype_{source.lower()}.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"\n✅ Saved: aspect_ratio_by_dtype_{source.lower()}.png")
+    print(f"\nSaved: aspect_ratio_by_dtype_{source.lower()}.png")
 
-print("\n✅ Aspect ratio by dtype comparison complete!")
+print("\nAspect ratio by dtype comparison complete!")

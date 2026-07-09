@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-Generate per-dtype 2x2 utilization grid plots.
+Generate per-dtype 2x2 utilization grid plots from a single benchmark CSV.
 
 One PNG per (device, dtype) combination.  Each PNG has 4 subplots:
   {host, device} x {no-trace, trace}.
 
 Encoding:
-  Line color -> memory config:
-                 DRAM=blue, L1=red, OOB=black
+  Line color -> mode:
+                 DRAM (tuned_2d_dram) = blue
+                 L1 (tuned_2d_l1) = red
+                 OOB = black
+  Line style -> tuned modes use solid (DRAM) / dashed (L1); OOB is solid
   Marker     -> math fidelity (fixed across all plots):
                  HiFi4=square, HiFi3=diamond, HiFi2=circle, LoFi=triangle
 
-OOB lines are per-fidelity (one black line per fidelity level).
-
-Reads CSVs from tech_reports/GEMM_FLOPS/data/:
-  {bh,wh}-tuned.csv  -- from test_matmul_2d_host_perf
-  {bh,wh}-oob.csv    -- from test_matmul_2d_host_perf_out_of_box
+Reads a single CSV from tech_reports/GEMM_FLOPS/data/:
+  {bh,wh}.csv  -- from test_matmul_2d_host_perf (unified benchmark)
 """
 
 from pathlib import Path
@@ -45,10 +45,22 @@ DTYPE_DISPLAY = {
     "bf4_b": "BFloat4_B",
 }
 
-MEM_COLORS = {
-    "DRAM": "#1f77b4",
-    "L1": "#d62728",
-    "OOB": "black",
+MODE_COLORS = {
+    "tuned_2d_dram": "#1f77b4",
+    "tuned_2d_l1": "#d62728",
+    "oob": "black",
+}
+
+MODE_LINESTYLES = {
+    "tuned_2d_dram": "-",
+    "tuned_2d_l1": "--",
+    "oob": "-",
+}
+
+MODE_DISPLAY = {
+    "tuned_2d_dram": "DRAM (tuned)",
+    "tuned_2d_l1": "L1 (tuned)",
+    "oob": "OOB (auto)",
 }
 
 FIDELITY_MARKERS = {
@@ -86,27 +98,13 @@ def _find_util_col(df, kind, grid_keyword="user selected grid"):
     return None
 
 
-def _load_tuned(path):
+def _load_csv(path):
     df = _read_csv(path)
     if df.empty:
         return df
     df["dtype_short"] = df["dtype"].apply(_parse_dtype)
     df["fidelity"] = df["math_fidelity"].apply(_parse_fidelity)
-    df["mem"] = df["in0_sharded"].apply(lambda x: "L1" if x else "DRAM")
     df["matrix_elements"] = df["m"] * df["k"] * df["n"]
-    df["source"] = "tuned"
-    return df
-
-
-def _load_oob(path):
-    df = _read_csv(path)
-    if df.empty:
-        return df
-    df["dtype_short"] = df["dtype"].apply(_parse_dtype)
-    df["fidelity"] = df["math_fidelity"].apply(_parse_fidelity)
-    df["mem"] = "OOB"
-    df["matrix_elements"] = df["m"] * df["k"] * df["n"]
-    df["source"] = "oob"
     return df
 
 
@@ -130,6 +128,7 @@ def _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label):
     ]
 
     all_fidelities = [f for f in FIDELITY_ORDER if f in df["fidelity"].unique()]
+    all_modes = [m for m in MODE_COLORS if m in df["mode"].unique()]
 
     for row, col_idx, util_kind, use_trace, util_col_name in panel_defs:
         ax = axes[row][col_idx]
@@ -153,12 +152,11 @@ def _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label):
         for fidelity in all_fidelities:
             marker = FIDELITY_MARKERS.get(fidelity, "x")
 
-            for mem in ["DRAM", "L1"]:
-                color = MEM_COLORS[mem]
-                linestyle = "-" if mem == "DRAM" else "--"
-                line_data = subset[
-                    (subset["mem"] == mem) & (subset["fidelity"] == fidelity) & (subset["source"] == "tuned")
-                ]
+            for mode in all_modes:
+                color = MODE_COLORS[mode]
+                linestyle = MODE_LINESTYLES[mode]
+
+                line_data = subset[(subset["mode"] == mode) & (subset["fidelity"] == fidelity)]
                 if line_data.empty:
                     continue
                 line_data = line_data.sort_values("matrix_elements")
@@ -174,24 +172,6 @@ def _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label):
                     markeredgewidth=1,
                     linewidth=2,
                     alpha=0.85,
-                )
-
-            oob_data = subset[(subset["source"] == "oob") & (subset["fidelity"] == fidelity)]
-            if not oob_data.empty:
-                oob_color = MEM_COLORS["OOB"]
-                oob_data = oob_data.sort_values("matrix_elements")
-                ax.plot(
-                    oob_data["matrix_elements"],
-                    oob_data[util_col_name],
-                    marker=marker,
-                    linestyle="-",
-                    color=oob_color,
-                    markersize=7,
-                    markerfacecolor=oob_color,
-                    markeredgecolor=oob_color,
-                    markeredgewidth=1,
-                    linewidth=2,
-                    alpha=0.9,
                 )
 
         trace_label = "With Trace" if use_trace else "Without Trace"
@@ -213,20 +193,17 @@ def _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label):
         y=0.98,
     )
 
+    # Legend
     legend_elements = []
 
-    legend_elements.append(Line2D([0], [0], color="none", marker="none", label="Memory"))
-    legend_elements.append(
-        Line2D(
-            [0], [0], color=MEM_COLORS["DRAM"], linewidth=2.5, linestyle="-", marker="none", label="DRAM (interleaved)"
+    legend_elements.append(Line2D([0], [0], color="none", marker="none", label="Mode"))
+    for mode in all_modes:
+        color = MODE_COLORS[mode]
+        linestyle = MODE_LINESTYLES[mode]
+        display = MODE_DISPLAY.get(mode, mode)
+        legend_elements.append(
+            Line2D([0], [0], color=color, linewidth=2.5, linestyle=linestyle, marker="none", label=display)
         )
-    )
-    legend_elements.append(
-        Line2D([0], [0], color=MEM_COLORS["L1"], linewidth=2.5, linestyle="--", marker="none", label="L1 (sharded)")
-    )
-    legend_elements.append(
-        Line2D([0], [0], color=MEM_COLORS["OOB"], linewidth=2.5, linestyle="-", marker="none", label="OOB (auto)")
-    )
 
     legend_elements.append(Line2D([0], [0], color="none", marker="none", label=""))
     legend_elements.append(Line2D([0], [0], color="none", marker="none", label="Fidelity"))
@@ -268,22 +245,17 @@ def main():
     IMG_DIR.mkdir(parents=True, exist_ok=True)
 
     for device_prefix, device_label in DEVICE_MAP.items():
-        tuned_path = DATA_DIR / f"{device_prefix}-tuned.csv"
-        oob_path = DATA_DIR / f"{device_prefix}-oob.csv"
+        csv_path = DATA_DIR / f"{device_prefix}.csv"
+        df = _load_csv(csv_path)
 
-        df_tuned = _load_tuned(tuned_path)
-        df_oob = _load_oob(oob_path)
-
-        if df_tuned.empty and df_oob.empty:
-            print(f"No data for {device_label} — skipping.")
+        if df.empty:
+            print(f"No data for {device_label} ({csv_path}) — skipping.")
             continue
 
-        df_all = pd.concat([df_tuned, df_oob], ignore_index=True)
         print(f"{device_label}:")
-
-        all_dtypes = sorted(df_all["dtype_short"].unique())
+        all_dtypes = sorted(df["dtype_short"].unique())
         for dtype_short in all_dtypes:
-            _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label)
+            _plot_dtype_grid(df, dtype_short, device_prefix, device_label)
 
 
 if __name__ == "__main__":

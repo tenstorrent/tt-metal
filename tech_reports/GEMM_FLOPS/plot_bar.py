@@ -2,69 +2,74 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
+Bar chart: paired N150 vs P150 TFLOPs comparison for square-ish matrices.
+
 Usage:
-1. Generate performance data using manually selected GEMM configurations
-2. Rename output files to n150-manual.csv and p150-manual.csv
-3. Place the CSV files in tech_reports/GEMM_FLOPS/
-4. Run this script from the tt-metal root directory
+1. Run the benchmark via run_bench.sh on both devices
+2. CSVs are placed in tech_reports/GEMM_FLOPS/data/{wh,bh}.csv
+3. Run this script from the tt-metal root directory
 """
 
-import os
+from pathlib import Path
 
+import matplotlib.colors as mcolors
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.colors as mcolors
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
+
+DATA_DIR = Path("tech_reports/GEMM_FLOPS/data")
+IMG_DIR = Path("tech_reports/GEMM_FLOPS/images")
+
+DEVICE_FILES = {
+    "N150": DATA_DIR / "wh.csv",
+    "P150": DATA_DIR / "bh.csv",
+}
 
 
 def safe_read_csv(path):
     """Return the CSV as a DataFrame, or an empty DataFrame if the file is missing."""
-    if os.path.exists(path):
+    if path.exists():
         return pd.read_csv(path)
     print(f"WARNING: {path} not found — skipping that device.")
     return pd.DataFrame()
 
 
-# Load N150 and P150 data
-df_n150 = safe_read_csv("tech_reports/GEMM_FLOPS/n150-manual.csv")
-if not df_n150.empty:
-    df_n150["source"] = "N150"
+def load_and_prepare(path, source):
+    """Load CSV and prepare derived columns."""
+    df = safe_read_csv(path)
+    if df.empty:
+        return df
+    df["source"] = source
+    # Use best performance across all tuned modes
+    if "mode" in df.columns:
+        df = df[df["mode"] != "oob"].copy()
+    if "TFLOPs (avg)" in df.columns:
+        df.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
+    df["tflops"] = pd.to_numeric(df["tflops"], errors="coerce")
+    df["dtype_fidelity"] = (
+        df["dtype"].astype(str).str.replace("DataType.", "")
+        + "_"
+        + df["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
+    )
+    return df
 
-df_p150 = safe_read_csv("tech_reports/GEMM_FLOPS/p150-manual.csv")
-if not df_p150.empty:
-    df_p150["source"] = "P150"
+
+# Load data
+df_n150 = load_and_prepare(DEVICE_FILES["N150"], "N150")
+df_p150 = load_and_prepare(DEVICE_FILES["P150"], "P150")
 
 if df_n150.empty or df_p150.empty:
     missing = []
     if df_n150.empty:
-        missing.append("n150-manual.csv")
+        missing.append("wh.csv")
     if df_p150.empty:
-        missing.append("p150-manual.csv")
+        missing.append("bh.csv")
     print(
         f"NOTE: plot_bar.py produces a paired N150/P150 comparison chart and "
         f"requires both device CSVs. Missing: {', '.join(missing)}. Skipping."
     )
     raise SystemExit(0)
-
-# Standardize column names
-if "TFLOPs (avg)" in df_n150.columns:
-    df_n150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-if "TFLOPs (avg)" in df_p150.columns:
-    df_p150.rename(columns={"TFLOPs (avg)": "tflops"}, inplace=True)
-
-df_n150["tflops"] = pd.to_numeric(df_n150["tflops"], errors="coerce")
-df_p150["tflops"] = pd.to_numeric(df_p150["tflops"], errors="coerce")
-
-# Create dtype_fidelity column
-df_n150["dtype_fidelity"] = (
-    df_n150["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df_n150["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
-df_p150["dtype_fidelity"] = (
-    df_p150["dtype"].astype(str).str.replace("DataType.", "")
-    + "_"
-    + df_p150["math_fidelity"].astype(str).str.replace("MathFidelity.", "")
-)
 
 df = pd.concat([df_n150, df_p150], ignore_index=True)
 
@@ -197,10 +202,7 @@ ax.grid(True, axis="y", linestyle="--", alpha=0.4)
 ax.set_axisbelow(True)
 ax.set_ylim(0, max_height * 1.2)
 
-# Legend - cleaner format like scatter plots
-from matplotlib.patches import Rectangle
-from matplotlib.lines import Line2D
-
+# Legend
 legend_elements = []
 
 # Dtype section header
@@ -237,9 +239,10 @@ ax.legend(
     handlelength=3.5,
 )
 
+IMG_DIR.mkdir(parents=True, exist_ok=True)
 plt.subplots_adjust(left=0.03, right=0.97, bottom=0.12, top=0.93)
 plt.xlim(min(positions) - bar_width * 2, max(positions) + bar_width * 2)
-plt.savefig("tech_reports/GEMM_FLOPS/images/flops_by_matrix_size_and_type_sorted.png", dpi=300, bbox_inches="tight")
+plt.savefig(IMG_DIR / "flops_by_matrix_size_and_type_sorted.png", dpi=300, bbox_inches="tight")
 plt.close()
 
 print(f"✓ Bar chart saved!")
