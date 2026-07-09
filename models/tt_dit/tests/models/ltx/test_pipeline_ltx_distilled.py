@@ -109,6 +109,17 @@ def test_pipeline_distilled(
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
 
+    # Conditioning image (I2V). Its mere presence drives image_conditioning: with a path the
+    # transformer builds the per-token video-timestep (I2V) modulation; without one pure T2V keeps
+    # the fast scalar-AdaLN path. Resolved before create_pipeline so the bool can gate the build.
+    image_path = os.environ.get("LTX_I2V_IMAGE")
+    images = None
+    if image_path:
+        if not os.path.exists(image_path):
+            pytest.skip(f"LTX_I2V_IMAGE set but file not found: {image_path}")
+        strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
+        images = [(image_path, 0, strength)]
+
     pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
@@ -124,17 +135,10 @@ def test_pipeline_distilled(
         num_frames=num_frames,
         height=height,
         width=width,
+        image_conditioning=bool(image_path),
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
-
-    image_path = os.environ.get("LTX_I2V_IMAGE")
-    images = None
-    if image_path:
-        if not os.path.exists(image_path):
-            pytest.skip(f"LTX_I2V_IMAGE set but file not found: {image_path}")
-        strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
-        images = [(image_path, 0, strength)]
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -412,6 +416,9 @@ def test_pipeline_distilled_i2v(
         num_frames=num_frames,
         height=height,
         width=width,
+        # This test conditions on a frame produced in-process (t2v last frame), so there's no
+        # conditioning-image path in hand at construction — force the I2V path on explicitly.
+        image_conditioning=True,
     )
 
     if int(ttnn.distributed_context_get_rank()) != 0:

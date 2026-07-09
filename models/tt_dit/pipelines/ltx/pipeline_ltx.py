@@ -222,6 +222,7 @@ class LTXPipeline:
         run_warmup: bool = False,
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
+        image_conditioning: bool | None = None,
     ):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
@@ -284,6 +285,13 @@ class LTXPipeline:
         self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
         self.upsampler: LTXLatentUpsampler | None = None
         self._audio_adapter: LTXAudioDecoderAdapter | None = None
+
+        # Whether the transformer is built for the per-token video-timestep (I2V) modulation path.
+        # Driven purely by whether the caller has a conditioning image: it passes
+        # ``image_conditioning=bool(image_path)`` so the presence of a path turns on the dense-
+        # modulation path, while pure T2V (no image) keeps the fast scalar-AdaLN path. Defaults to
+        # T2V when unset. Resolved before ``_instantiate_modules``.
+        self._image_conditioning: bool = bool(image_conditioning)
 
         if self.checkpoint_name is not None:
             self._instantiate_modules(extra_transformer_variants or [])
@@ -481,8 +489,11 @@ class LTXPipeline:
             parallel_config=self.parallel_config,
             is_fsdp=self.is_fsdp,
             has_audio=self.mode == "av",
-            # I2V-capable whenever the checkpoint's VAE has an encoder; the image triggers it.
-            image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks),
+            # I2V-capable requires the VAE encoder, but only *activate* the heavier per-token
+            # modulation when a conditioning image is actually passed in (``self._image_conditioning``,
+            # auto-detected from the conditioning-image path or forced by the caller). Pure T2V keeps
+            # the fast scalar-AdaLN path — no separate on/off flag.
+            image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
         )
 
     def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
