@@ -149,6 +149,30 @@ def _build_device_map(mesh_device, mesh_shape) -> list[tuple[int, int, int]]:
     return device_map
 
 
+def serialize_device_map(mesh_device, path: str) -> str:
+    """Write a JSON {"<mesh_id>:<chip_id>": <asic_unique_id>} device map so a device-less consumer
+    (the prefill_producer) can resolve a table's FabricNodeIds to the ASIC unique_id that
+    read_dram_umd / the migration worker key device reads on. Reuses _enumerate_devices (which calls
+    ttnn.cluster.get_chip_unique_id_from_fabric_node_id). Pairs with the mock KV chunk table."""
+    import json
+    import os
+
+    enumerated = _enumerate_devices(mesh_device)
+    device_map = {f"{mesh}:{chip}": unique_id for (unique_id, mesh, chip) in enumerated}
+    if len(device_map) != len(enumerated):
+        raise RuntimeError(
+            f"[migration] device-map fabric-node collision: {len(enumerated)} chips but only "
+            f"{len(device_map)} unique (mesh_id, chip_id) keys"
+        )
+    # Atomic publish: write a temp file then rename, so a concurrent reader never sees partial JSON.
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as mp:
+        json.dump(device_map, mp)
+    os.replace(tmp, path)
+    logger.info(f"[migration] device map ({len(device_map)} chips) serialized to {path}")
+    return path
+
+
 def publish_table_and_wait_ready(
     *, mesh_device, mesh_shape, table_path: str, wait_ready_timeout_ms: int = 120_000
 ) -> None:
