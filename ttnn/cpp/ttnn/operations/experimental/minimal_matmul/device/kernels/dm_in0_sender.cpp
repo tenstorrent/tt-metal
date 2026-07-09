@@ -10,6 +10,7 @@
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -318,34 +319,38 @@ void kernel_main() {
                     const uint8_t k_dir = fused_op_receiver.streamed_dir;
                     if (n_block_iter == 0 && k_dir != 2) {
                         const uint32_t total_rows = m_tile_end - m_tile;
-                        const uint32_t band_rows = (total_rows + IN0_SUB_CHUNKS - 1) / IN0_SUB_CHUNKS;
                         for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
-                            const uint32_t band_start = m_tile + sub * band_rows;
-                            if (band_start >= m_tile_end) {
-                                break;
+                            uint32_t band_lo, band_h;
+                            balanced_band(total_rows, IN0_SUB_CHUNKS, sub, band_lo, band_h);
+                            if (band_h == 0) {
+                                break;  // empty trailing band, only when IN0_SUB_CHUNKS > total_rows
                             }
+                            const uint32_t band_start = m_tile + band_lo;
                             if (sub > 0) {
+                                DeviceZoneScopedN("IN0-BAND-WAIT");  // per-band; multiplies zone count with SUB
                                 fused_op_receiver.wait_for_dir(k_dir);
                             }
-                            const uint32_t band_end =
-                                (band_start + band_rows < m_tile_end) ? (band_start + band_rows) : m_tile_end;
-                            read_in0_block_sync<M_block_tiles, K_block_tiles>(
-                                in0_reader,
-                                in0_shape,
-                                cb_in0_id,
-                                in0_tile_size,
+                            const uint32_t band_end = band_start + band_h;
+                            {
+                                DeviceZoneScopedN("IN0-READ-ISSUE");  // per-band; multiplies zone count with SUB
+                                read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                                    in0_reader,
+                                    in0_shape,
+                                    cb_in0_id,
+                                    in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
-                                in3_reader,
-                                fused_op_receiver.local_k_start,
-                                fused_op_receiver.local_k_end,
-                                fused_op_receiver.input_tensor_Wt,
+                                    in3_reader,
+                                    fused_op_receiver.local_k_start,
+                                    fused_op_receiver.local_k_end,
+                                    fused_op_receiver.input_tensor_Wt,
 #endif
-                                band_start,
-                                band_end,
-                                k_block * K_block_tiles,
-                                (k_block + 1) * K_block_tiles,
-                                /*issue_barrier=*/false,
-                                /*write_tile_offset=*/sub * band_rows * K_block_tiles);
+                                    band_start,
+                                    band_end,
+                                    k_block * K_block_tiles,
+                                    (k_block + 1) * K_block_tiles,
+                                    /*issue_barrier=*/false,
+                                    /*write_tile_offset=*/band_lo * K_block_tiles);
+                            }
                         }
                         noc_async_read_barrier();  // one barrier: every band's reads stayed in flight
                     } else
