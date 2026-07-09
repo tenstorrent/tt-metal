@@ -433,6 +433,77 @@ class Qwen36Model:
                 break
         return out
 
+    def generate_tp_batched_continuous(self, prompts, max_new_tokens=20, eos_id=None):
+        """Continuous-batching generation: N prompts through B = max_batch_size decode slots.
+
+        Fills the B slots with the first B prompts, decodes all lanes in lockstep, and as each
+        slot's sequence completes (max_new_tokens or EOS) reseeds that slot in place with the
+        next queued prompt (reseed_slot_tp) — the running lanes are never perturbed (Step 3).
+        Returns list[list[int]] of the N sequences' generated ids, in prompt order.
+
+        This is the model-level demonstration of continuous batching; the vLLM plugin
+        (qwen36_vllm.py) drives the same primitives from the serving scheduler.
+        """
+        import math as _math
+
+        B = self.args.max_batch_size
+        N = len(prompts)
+        assert N >= 1
+
+        def _seed(prompt_ids):
+            T = len(prompt_ids)
+            T_pad = max(128, _math.ceil(T / 128) * 128)
+            padded = list(prompt_ids) + [0] * (T_pad - T)
+            return padded, T
+
+        self.reset_tp()
+        outputs = [[] for _ in range(N)]
+        slot_pidx = [i if i < N else -1 for i in range(B)]  # prompt in each slot; -1 = filler/idle
+        cur = [0] * B
+        positions = [0] * B
+        produced = [0] * B
+        # Initial fill: prompts 0..B-1 (a filler prompt occupies any extra slots when N<B).
+        for s in range(B):
+            padded, T = _seed(prompts[slot_pidx[s]] if slot_pidx[s] >= 0 else prompts[0])
+            lg = self.prefill_seed_tp(torch.tensor([padded], dtype=torch.long), valid_len=T, batch_slot=s)
+            cur[s] = int(torch.argmax(lg).item())
+            positions[s] = T
+            if slot_pidx[s] >= 0:
+                outputs[slot_pidx[s]].append(cur[s])
+                produced[s] = 1
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                layer.attention.finalize_seed(B)
+
+        next_prompt = B  # next queued prompt index
+        active = sum(1 for s in slot_pidx if s >= 0)
+        while active > 0:
+            logits = self.decode_tp_batched(cur, positions)  # [B, vocab]
+            nxt = [int(torch.argmax(logits[s]).item()) for s in range(B)]
+            for s in range(B):
+                if slot_pidx[s] < 0:
+                    continue
+                pidx = slot_pidx[s]
+                outputs[pidx].append(nxt[s])
+                produced[s] += 1
+                cur[s] = nxt[s]
+                positions[s] += 1
+                finished = produced[s] >= max_new_tokens or (eos_id is not None and nxt[s] == eos_id)
+                if finished:
+                    if next_prompt < N:
+                        # Continuous-batching join: reuse this slot for the next queued prompt.
+                        tok, newpos = self.reseed_slot_tp(prompts[next_prompt], slot=s)
+                        slot_pidx[s] = next_prompt
+                        cur[s] = tok
+                        positions[s] = newpos
+                        produced[s] = 1
+                        outputs[next_prompt].append(tok)
+                        next_prompt += 1
+                    else:
+                        slot_pidx[s] = -1
+                        active -= 1
+        return outputs
+
     def _generate_tp_batched_traced(self, cur, positions, max_new_tokens, eos_id, B):
         """Captured-trace batched decode replay (B lanes, supports per-user positions).
 

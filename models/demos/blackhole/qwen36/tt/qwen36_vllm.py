@@ -76,16 +76,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         max_num_seqs: int | None = None,
         **kwargs,
     ) -> int:
-        """All-user KV-cache token capacity = served context length (B=1).
+        """All-user KV-cache token capacity = served context length × max_num_seqs.
 
-        Qwen3.5/3.6 serve one sequence at a time (max_concurrency=1), so the whole
-        paged KV cache belongs to a single user and its capacity is exactly the
-        served context length — max_model_len, i.e. the catalog's max_context.
-        Deriving from max_model_len, instead of the inherited 131072 fallback, lets
-        these models serve at the full requested ISL (e.g. 256K = 262144): the
-        chunk-outer prefill and the full-KV page-table sizing in
-        warmup_model_prefill already scale to whatever KV cache vLLM allocates.
-        The * max_num_seqs keeps the all-user semantics correct if B ever grows.
+        Per-user capacity is the served context length — max_model_len, i.e. the catalog's
+        max_context. Deriving from max_model_len, instead of the inherited 131072 fallback,
+        lets these models serve at the full requested ISL (e.g. 256K = 262144): the
+        chunk-outer prefill and the full-KV page-table sizing in warmup_model_prefill already
+        scale to whatever KV cache vLLM allocates. The × max_num_seqs gives the all-user total
+        for continuous batching (max_num_seqs decode slots; B=1 → single-sequence serving).
         """
         if max_model_len is not None:
             return int(max_model_len) * int(max_num_seqs or 1)
@@ -125,8 +123,14 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return cls([model], [args], mesh_device)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
-        """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs."""
-        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
+        """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs.
+
+        Sized to args.max_batch_size (= vLLM's max_num_seqs, threaded through
+        initialize_vllm_model → create_tt_model). At max_batch_size=1 this is the original
+        single-sequence serving; >1 allocates B-wide KV + GDN state for continuous batching
+        (the model-level loop is model.generate_tp_batched_continuous; the batched decode /
+        per-slot reseed primitives it uses are on-device validated)."""
+        return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=self.model[0].args.max_batch_size)
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
