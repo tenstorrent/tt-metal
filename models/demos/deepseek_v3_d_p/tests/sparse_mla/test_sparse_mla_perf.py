@@ -583,9 +583,10 @@ def test_mla_chunked_perf(variant, scenario, attn_mode):
     by_op.reset_index().to_csv(csv_out, index=False)
     logger.info(f"per-op CSV written to {os.path.abspath(csv_out)}")
 
-    # Provenance: drop run_manifest.json next to the raw report so every dump self-documents the code,
-    # command, device, config and measured total that produced it. The reports/<ts>/ dir is never
-    # clobbered, so this survives across subsequent runs (unlike the summary CSV).
+    # Provenance: drop run_manifest.json next to the raw report so every dump self-documents the commit,
+    # command, and device/mesh/fabric that produced it (config and per-op measurements are deliberately
+    # omitted — recoverable from git + reference config + the co-located ops CSV). The reports/<ts>/ dir
+    # is never clobbered, so this survives across subsequent runs (unlike the summary CSV).
     try:
         from tracy.process_model_log import get_latest_ops_log_filename
 
