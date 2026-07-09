@@ -4,7 +4,6 @@
 
 #include "untilize_with_unpadding_multi_core_sharded_program_factory.hpp"
 
-#include <algorithm>
 #include <cmath>
 
 #include "ttnn/operations/cb_utils.hpp"
@@ -156,6 +155,17 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
                   "writer_unary_unpad_batch_rows_sharded.cpp";
         writer_desc.compile_time_args = std::move(writer_ct_args);
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // Height-sharded -> interleaved uses a dedicated writer that walks each core's absolute rows
+        // and drops both interior (row) and column padding per matrix. It handles any alignment of
+        // matrices to core boundaries (whole matrices per core, a single matrix split across cores,
+        // or a batch whose matrices straddle cores), so there is no unbatched restriction.
+        std::vector<uint32_t> writer_ct_args;
+        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
+            "writer_unary_unpad_sharded_to_interleaved.cpp";
+        writer_desc.compile_time_args = std::move(writer_ct_args);
     } else {
         std::vector<uint32_t> writer_ct_args = {
             (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
@@ -234,18 +244,36 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
         for (const auto& core : all_core_coords) {
             writer_desc.runtime_args.emplace_back(core, writer_rt_args);
         }
-    } else {
-        // Batched height-sharded -> interleaved: each core holds `batch` whole [H_padded, W]
-        // matrices. Untilize strips every matrix's interior tile-pad rows, so the writer must land
-        // each matrix at its own logical row offset in the interleaved output and advance by the
-        // logical matrix height per matrix — it cannot treat the shard as one contiguous block the
-        // way the single-matrix (batch==1) path does. Anything else (WIDTH/BLOCK sharded, or a
-        // single matrix row-split across cores) keeps the original per-core block arithmetic.
-        const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-        const bool batched_interleaved = height_sharded && global_batch > 1;
+    } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // General height-sharded -> interleaved. Each core owns the absolute padded rows
+        // [i * shard_h, (i + 1) * shard_h) of the flattened [global_batch * H_padded, W_padded] row
+        // space (enumerated in shard/core order). The kernel maps every row to its (matrix,
+        // row-in-matrix) and writes the real rows to their logical interleaved page, dropping both
+        // interior (row) and column padding. This is correct for any alignment of matrices to core
+        // boundaries, so there is no unbatched restriction.
         const uint32_t matrix_h_padded = a.padded_shape()[-2];
         const uint32_t matrix_h_logical = output.logical_shape()[-2];
+        const uint32_t shard_height = shard_spec.shape[0];
+        const uint32_t cb_row_size = shard_spec.shape[1] * output.element_size();  // CB row stride (padded width)
+        const uint32_t row_size_unpadded =
+            output.logical_shape()[-1] * output.element_size();  // bytes written per row (logical width)
 
+        writer_desc.runtime_args.reserve(all_core_coords.size());
+        for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
+            const CoreCoord& core = all_core_coords[i];
+            const uint32_t start_padded_row = i * shard_height;
+            writer_desc.emplace_runtime_args(
+                core,
+                {dst_buffer,  // dst_addr
+                 start_padded_row,
+                 shard_height,
+                 matrix_h_padded,
+                 matrix_h_logical,
+                 cb_row_size,
+                 row_size_unpadded,
+                 ntiles_per_block});
+        }
+    } else {
         writer_desc.runtime_args.reserve(all_core_coords.size());
         for (uint32_t i = 0; i < all_core_coords.size(); ++i) {
             CoreCoord core = all_core_coords[i];
@@ -255,11 +283,6 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             uint32_t block_start_row_id_offset;
             uint32_t row_size_unpadded = block_row_size;
             uint32_t num_rows_unpadded = num_rows_block;
-            // Per-matrix block height and matrix count seen by the writer. Defaults reproduce the
-            // legacy single-block behaviour (one matrix per core, all of it real data).
-            uint32_t writer_num_rows_block = num_rows_block;
-            uint32_t writer_batch = 1;
-            uint32_t writer_num_real_batches = 1;
             if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
                 block_start_row_offset = i * block_row_size;
                 block_start_row_id_offset = 0;
@@ -269,33 +292,6 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 } else {
                     num_rows_unpadded = num_output_rows_unpadded;
                     if (i == last_idx) {
-                        row_size_unpadded = last_block_row_size_unpadded;
-                    }
-                }
-            } else if (height_sharded) {
-                if (batched_interleaved) {
-                    // One writer "block" == one padded matrix; `batch` of them are drained per core.
-                    writer_num_rows_block = matrix_h_padded;
-                    writer_batch = batch;
-                    block_start_row_offset = 0;
-                    block_start_row_id_offset = i * batch * matrix_h_logical;  // this core's first matrix
-                    row_size_unpadded = last_block_row_size_unpadded;          // unpadded width in bytes
-                    num_rows_unpadded = matrix_h_logical;                      // data rows written per matrix
-                    // Tail cores may hold whole padding matrices past the real batch; those are
-                    // popped but not written.
-                    const uint32_t first_matrix = i * batch;
-                    writer_num_real_batches =
-                        first_matrix >= global_batch ? 0u : std::min(batch, global_batch - first_matrix);
-                } else {
-                    block_start_row_offset = 0;
-                    block_start_row_id_offset = i * num_rows_block;
-                    if (i > last_idx) {
-                        row_size_unpadded = 0;
-                        num_rows_unpadded = 0;
-                    } else {
-                        if (i == last_idx) {
-                            num_rows_unpadded = num_output_rows_unpadded;
-                        }
                         row_size_unpadded = last_block_row_size_unpadded;
                     }
                 }
@@ -328,16 +324,15 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             writer_desc.emplace_runtime_args(
                 core,
                 {dst_buffer,  // dst_addr
-                 writer_num_rows_block,
+                 num_rows_block,
                  block_row_size,
-                 writer_batch,
+                 std::uint32_t{1},
                  std::uint32_t{1},
                  std::uint32_t{1},
                  row_size_unpadded,
                  num_rows_unpadded,
                  block_start_row_id_offset,
-                 block_start_row_offset,
-                 writer_num_real_batches});
+                 block_start_row_offset});
         }
     }
 
