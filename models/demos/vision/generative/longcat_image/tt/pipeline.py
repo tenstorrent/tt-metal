@@ -30,13 +30,14 @@ run, then their device buffers freed BEFORE the next stage's stub is built
 
 from __future__ import annotations
 
+import contextlib
 import gc
 import importlib
+import os
+import time
 
 import numpy as np
 import torch
-
-import ttnn
 
 # HF setup-only imports (NOT the forward path): timestep schedule + packing helpers
 from diffusers.pipelines.longcat_image.pipeline_longcat_image import (
@@ -45,6 +46,8 @@ from diffusers.pipelines.longcat_image.pipeline_longcat_image import (
     retrieve_timesteps,
     split_quotation,
 )
+
+import ttnn
 
 PIPELINE_STAGES = ["text_encode", "denoise", "vae_decode"]
 
@@ -116,6 +119,38 @@ def _detect_num_cqs(device):
         except Exception:
             pass
     return 1
+
+
+class _StageTimer:
+    """Per-stage wall-clock profiler, active only when enabled (LONGCAT_PROFILE=1 or
+    LongCatImagePipelineTT(..., profile=True)). Every stage boundary in this pipeline
+    already ends with a `_to_torch(..., device)` readback, which calls
+    `ttnn.synchronize_device` before returning — so elapsed time measured between a
+    `track()` block's entry and exit reflects real device-completion time, not just
+    host dispatch, with no extra synchronization needed here."""
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.timings = {}
+
+    def reset(self):
+        """Clear accumulated timings. Call at the top of each top-level run_*() so a
+        long-lived (warm-server) pipeline instance reports THIS request's breakdown,
+        not a running sum across every request served so far."""
+        self.timings = {}
+
+    @contextlib.contextmanager
+    def track(self, label):
+        if not self.enabled:
+            yield
+            return
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            dt = time.perf_counter() - t0
+            self.timings[label] = self.timings.get(label, 0.0) + dt
+            print(f"[longcat-profile] {label}: {dt * 1000:.1f} ms", flush=True)
 
 
 def _to_torch(t, device=None):
@@ -215,8 +250,11 @@ def build_edit_text_input_ids(editpipe, prompt, image):
     if len(all_tokens) > editpipe.tokenizer_max_length:
         all_tokens = all_tokens[: editpipe.tokenizer_max_length]
     padded = tok.pad(
-        {"input_ids": [all_tokens]}, max_length=editpipe.tokenizer_max_length,
-        padding="max_length", return_attention_mask=True, return_tensors="pt",
+        {"input_ids": [all_tokens]},
+        max_length=editpipe.tokenizer_max_length,
+        padding="max_length",
+        return_attention_mask=True,
+        return_tensors="pt",
     )
 
     text = editpipe.prompt_template_encode_prefix
@@ -243,10 +281,14 @@ def build_edit_text_input_ids(editpipe, prompt, image):
     img_start = input_ids[0].tolist().index(image_pad_id)  # first <|image_pad|> = start of the vision block
     img_len = int(image_grid_thw.prod() // merge_length)
     return {
-        "input_ids": input_ids, "attention_mask": attention_mask,
-        "pixel_values": pixel_values, "image_grid_thw": image_grid_thw,
-        "prefix_len": prefix_len, "suffix_len": suffix_len,
-        "img_start": img_start, "img_len": img_len,
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "pixel_values": pixel_values,
+        "image_grid_thw": image_grid_thw,
+        "prefix_len": prefix_len,
+        "suffix_len": suffix_len,
+        "img_start": img_start,
+        "img_len": img_len,
     }
 
 
@@ -272,29 +314,103 @@ class LongCatImagePipelineTT:
 
     PIPELINE_STAGES = PIPELINE_STAGES
 
-    def __init__(self, device, pipe, num_cqs=None):
+    def __init__(self, device, pipe, num_cqs=None, profile=None, text_encoder_device=None):
         self.device = device
         self.pipe = pipe
         self.vae_scale_factor = pipe.vae_scale_factor
         self.num_channels_latents = 16
         self.invoked = set()  # graduated stub modules actually built + called (Gate 2)
+        # Text-encode (Call 1's qwen2_v_l_model, ~26-28GB fp32) can optionally run on a SEPARATE
+        # device from the DiT/VAE (self.device). Measured on real hardware: a resident (warm) DiT
+        # (~12.5GB) plus a full text-encoder pass do NOT fit together in one chip's ~34GB DRAM
+        # (confirmed OOM, not a close call — ~26MB free with the encoder still partially loaded).
+        # So a genuinely warm DiT (see warmup()) requires text-encode to happen elsewhere. This
+        # needs no CCL/mesh machinery: _tt_text_encode already hands off a plain HOST tensor to
+        # the denoise stage (see its `_to_torch` below), so routing it to a second plain
+        # ttnn.Device is a drop-in change. Defaults to self.device (today's single-device
+        # behavior, unchanged) when not given.
+        self.text_encoder_device = text_encoder_device if text_encoder_device is not None else device
         # How many command queues the device was opened with. The trace+2CQ denoise path
         # (stage per-step inputs on CQ1 while CQ0 runs the trace) needs >=2. The device object
         # does not reliably expose the count in this ttnn build, so callers that opened a 2-CQ
         # device pass num_cqs=2 (the demo's `--cq 2`). Defaults to the single-CQ traced path.
         self.num_cqs = int(num_cqs) if num_cqs is not None else _detect_num_cqs(device)
+        # Per-stage wall-clock profiling (text-encode / denoise / vae-decode / total), off by
+        # default. Enable via profile=True or LONGCAT_PROFILE=1 (env checked only if `profile`
+        # is left as None, so an explicit True/False always wins). See _StageTimer.
+        prof_enabled = bool(profile) if profile is not None else os.environ.get("LONGCAT_PROFILE", "0") != "0"
+        self.profile = _StageTimer(prof_enabled)
+        # Warm/resident state populated by warmup() (Phase 0 of the QB2 porting plan): when set,
+        # _tt_denoise/_tt_vae_decode reuse an already-built stub (+, for the DiT, an already-
+        # captured Tracer) instead of building and freeing one per request. None until warmup()
+        # is called; callers that never call warmup() get today's exact per-request behavior.
+        self._warm_denoise = None
+        self._warm_vae = None
+        # Resident text encoder (tier 2). The Qwen encoder is ~26-28GB fp32; it may stay resident
+        # on its chip ONLY when it has its own chip (text_encoder_device is a DIFFERENT device
+        # than self.device — the mesh/2-chip case). On a single shared device, keeping it resident
+        # would collide with the DiT (the original OOM this whole 2-chip split exists to avoid), so
+        # there we still reuse ONE stub for a request's pos+neg branches (tier 1) but free it before
+        # denoise. Lazily built on first _acquire_text_encoder(); released by close().
+        self._resident_text_encoder = None
+        self._text_encoder_resident = self.text_encoder_device is not self.device
 
     # ── stage 1: text encode (qwen2_v_l_model stub) ──────────────────────────
-    def _tt_text_encode(self, input_ids, attention_mask, prefix_len, suffix_len):
-        stub_mod = _load_stub("qwen2_v_l_model")
-        stub = stub_mod.build(self.device, self.pipe.text_encoder.model)
+    def _acquire_text_encoder(self):
+        """Return (stub, owned) for this request's text encode(s).
+
+        Resident mode (text encoder has its OWN chip — the mesh/2-chip case): lazily build the
+        qwen2_v_l_model stub ONCE and keep it resident, reusing it for every request's pos+neg
+        branches AND across all requests (owned=False — the caller must NOT free it; close()
+        does). The stub's ~26-28GB fp32 weights upload lazily on the first forward and then stay
+        resident, so only the first request pays the upload; every later request reuses the cached
+        device weights (the _TextEncoder caches them keyed by id(torch_module) — see
+        qwen2_v_l_for_conditional_generation.py). This is the text-encoder analogue of the DiT's
+        warmup()/resident trace, and it's the same peak device memory as today's build+free path
+        (weights + one request's activations), just not thrown away between requests — so it can't
+        newly OOM if the per-request path already succeeds.
+
+        Non-resident mode (single shared device, or resident build failed): build ONE per-request
+        stub reused across this request's pos+neg branches (tier 1 — was two independent
+        build+upload+free cycles before) and freed by the caller (owned=True). A resident-build
+        failure degrades permanently to this path for the rest of the instance's life."""
+        if self._text_encoder_resident:
+            if self._resident_text_encoder is None:
+                try:
+                    self._resident_text_encoder = _load_stub("qwen2_v_l_model").build(
+                        self.text_encoder_device, self.pipe.text_encoder.model
+                    )
+                except Exception as _e:  # noqa: BLE001
+                    print(
+                        f"[text_encode] resident encoder build failed ({type(_e).__name__}: "
+                        f"{str(_e)[:200]}); falling back to per-request build+free",
+                        flush=True,
+                    )
+                    self._resident_text_encoder = None
+                    self._text_encoder_resident = False
+            if self._resident_text_encoder is not None:
+                return self._resident_text_encoder, False
+        return _load_stub("qwen2_v_l_model").build(self.text_encoder_device, self.pipe.text_encoder.model), True
+
+    def _tt_text_encode(self, input_ids, attention_mask, prefix_len, suffix_len, stub=None):
+        """Run the Qwen text encoder for one (pos or neg) branch. `stub`: a qwen2_v_l_model stub
+        to reuse (from _acquire_text_encoder — resident, or a per-request stub shared across this
+        request's pos+neg); when None (legacy one-shot callers / the image-edit path's own
+        encoders), build and free a stub for this single call, i.e. today's behavior."""
+        own = stub is None
+        if own:
+            stub = _load_stub("qwen2_v_l_model").build(self.text_encoder_device, self.pipe.text_encoder.model)
         self.invoked.add("qwen2_v_l_model")
         self.invoked.add("qwen2_v_l_for_conditional_generation")  # _TextEncoder body reused
         try:
             hidden = stub(input_ids=input_ids, attention_mask=attention_mask)[0]  # [1,S,3584] fp32 ttnn
-            hidden = _to_torch(hidden, self.device)  # bring to host so the encoder can be freed before the DiT
+            # bring to host so the DiT (on self.device, possibly a different physical chip than
+            # text_encoder_device) can read it — a plain host torch.Tensor handoff, no cross-chip
+            # transfer machinery needed. The readback also lets a per-request stub be freed here.
+            hidden = _to_torch(hidden, self.text_encoder_device)
         finally:
-            _free_stub(stub)
+            if own:
+                _free_stub(stub)
         # pipeline slices off the prefix/suffix template tokens
         return hidden[:, prefix_len : hidden.shape[1] - suffix_len, :]
 
@@ -303,6 +419,58 @@ class LongCatImagePipelineTT:
         sq = ttnn.mul(x, x)
         s = ttnn.sum(sq, dim=-1, keepdim=True)
         return ttnn.sqrt(s)
+
+    def _apply_cfg_renorm(self, noise, cond_norm, cfg_renorm_min):
+        """Shared cfg-renorm math (L2-norm rescale + clamp): `noise *= clamp(cond_norm /
+        (||noise|| + eps), cfg_renorm_min, 1.0)`. `cond_norm` is the caller's already-computed
+        `_l2_norm_lastdim` of the cond/text branch's noise prediction. Factored out so every
+        denoise-path variant (eager, traced, traced+2CQ, and any future variant) shares one
+        copy of this formula instead of three independently-maintained inline copies."""
+        noise_norm = self._l2_norm_lastdim(noise)
+        scale = ttnn.clamp(ttnn.mul(cond_norm, ttnn.reciprocal(ttnn.add(noise_norm, 1e-8))), cfg_renorm_min, 1.0)
+        return ttnn.mul(noise, scale)
+
+    def _make_dit_step_fn(
+        self, stub, cos, sin, img_lat, image_seq_len, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg
+    ):
+        """Build the traced per-step DiT function: both CFG forwards + guidance combine +
+        cfg_renorm + the FlowMatch Euler update, exactly as originally captured inline in
+        `_tt_denoise_traced`/`_tt_denoise_traced_2cq`. `cos`/`sin`/`img_lat` are fixed across
+        all steps of one denoise call (RoPE tables and, for image-edit, the input image's fixed
+        latents) and are closed over rather than passed as Tracer inputs. `guidance_scale`,
+        `enable_cfg_renorm`, and `cfg_renorm_min` are ALSO closed over as plain Python values —
+        they become part of the captured trace's structure/constants, not refreshable tensor
+        inputs, so a trace built from this function is only valid for requests using the exact
+        same values (see `warmup()`, which checks this before reusing a resident trace)."""
+        gs = float(guidance_scale)
+
+        def _dit(lat, temb, enc):
+            model_in = ttnn.concat([lat, img_lat], dim=1) if img_lat is not None else lat
+            hid = stub._linear(model_in, stub.tf.x_embedder)
+            for blk in stub.tf.transformer_blocks:
+                enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
+            for blk in stub.tf.single_transformer_blocks:
+                enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
+            scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
+            out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
+            out = stub._linear(out, stub.tf.proj_out)
+            if img_lat is not None:  # keep only the noise-latent tokens
+                out = ttnn.slice(out, [0, 0, 0], [1, image_seq_len, out.shape[2]], [1, 1, 1])
+            return out
+
+        def _step_cfg(lat, temb, dt_t, enc_p, enc_n):  # BOTH forwards + guidance + Euler, all traced
+            nt = ttnn.typecast(_dit(lat, temb, enc_p), F32)
+            nu = ttnn.typecast(_dit(lat, temb, enc_n), F32)
+            noise = ttnn.add(nu, ttnn.mul(ttnn.sub(nt, nu), gs))
+            if enable_cfg_renorm:
+                noise = self._apply_cfg_renorm(noise, self._l2_norm_lastdim(nt), cfg_renorm_min)
+            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+
+        def _step_nocfg(lat, temb, dt_t, enc_p):
+            noise = ttnn.typecast(_dit(lat, temb, enc_p), F32)
+            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+
+        return _step_cfg if do_cfg else _step_nocfg
 
     def _tt_denoise(
         self,
@@ -320,6 +488,37 @@ class LongCatImagePipelineTT:
         image_latents_packed=None,  # Call 2: appended along seq for the transformer input
     ):
         do_cfg = guidance_scale > 1 and prompt_embeds_neg is not None
+        _warm_match = self._warm_denoise is not None and self._denoise_request_matches_warm(
+            prompt_embeds_pos,
+            image_seq_len,
+            do_cfg,
+            guidance_scale,
+            enable_cfg_renorm,
+            cfg_renorm_min,
+            image_latents_packed,
+            txt_ids,
+            img_ids,
+        )
+        if self.profile.enabled:
+            print(f"[denoise] warm_match={_warm_match} (warm_denoise_set={self._warm_denoise is not None})", flush=True)
+        if _warm_match:
+            try:
+                return self._tt_denoise_warm(
+                    latents_packed,
+                    prompt_embeds_pos,
+                    prompt_embeds_neg,
+                    timesteps,
+                    sigmas,
+                    do_cfg,
+                )
+            except Exception as _we:
+                # Degrade to the cold per-request path on any error, same as the 2CQ->traced->eager
+                # ladder below — a transient warm-replay failure shouldn't take the whole request down.
+                print(
+                    f"[denoise] warm path failed ({type(_we).__name__}: {str(_we)[:200]}); "
+                    "falling back to cold per-request path",
+                    flush=True,
+                )
         stub_mod = _load_stub("long_cat_image_transformer2_d_model")
         stub = stub_mod.build(self.device, self.pipe.transformer)
         # Run the DiT in fp32 (weights ~25 GB, fit the 32 GB card). Classifier-free
@@ -348,17 +547,42 @@ class LongCatImagePipelineTT:
             if getattr(self, "num_cqs", 1) >= 2:
                 try:
                     return self._tt_denoise_traced_2cq(
-                        stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
-                        txt_ids, img_ids, timesteps, sigmas, guidance_scale,
-                        enable_cfg_renorm, cfg_renorm_min, do_cfg, image_latents_packed, image_seq_len,
+                        stub,
+                        latents_packed,
+                        prompt_embeds_pos,
+                        prompt_embeds_neg,
+                        txt_ids,
+                        img_ids,
+                        timesteps,
+                        sigmas,
+                        guidance_scale,
+                        enable_cfg_renorm,
+                        cfg_renorm_min,
+                        do_cfg,
+                        image_latents_packed,
+                        image_seq_len,
                     )
                 except Exception as _te:
-                    print(f"[denoise] traced+2cq path failed ({type(_te).__name__}: {str(_te)[:200]}); trying traced+1cq", flush=True)
+                    print(
+                        f"[denoise] traced+2cq path failed ({type(_te).__name__}: {str(_te)[:200]}); trying traced+1cq",
+                        flush=True,
+                    )
             try:
                 return self._tt_denoise_traced(
-                    stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
-                    txt_ids, img_ids, timesteps, sigmas, guidance_scale,
-                    enable_cfg_renorm, cfg_renorm_min, do_cfg, image_latents_packed, image_seq_len,
+                    stub,
+                    latents_packed,
+                    prompt_embeds_pos,
+                    prompt_embeds_neg,
+                    txt_ids,
+                    img_ids,
+                    timesteps,
+                    sigmas,
+                    guidance_scale,
+                    enable_cfg_renorm,
+                    cfg_renorm_min,
+                    do_cfg,
+                    image_latents_packed,
+                    image_seq_len,
                 )
             except Exception as _te:
                 print(f"[denoise] traced path failed ({type(_te).__name__}: {str(_te)[:200]}); using eager", flush=True)
@@ -368,7 +592,11 @@ class LongCatImagePipelineTT:
             img_lat = None
             if image_latents_packed is not None:
                 img_lat = ttnn.from_torch(
-                    image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
+                    image_latents_packed.to(torch.float32),
+                    dtype=F32,
+                    layout=TILE,
+                    device=self.device,
+                    memory_config=DRAM,
                 )
             for i, t in enumerate(timesteps):
                 tval = float(t) / 1000.0
@@ -388,9 +616,7 @@ class LongCatImagePipelineTT:
                 )[0]
                 noise_text = ttnn.typecast(noise_text, F32)
                 if noise_text.shape[1] != image_seq_len:
-                    noise_text = ttnn.slice(
-                        noise_text, [0, 0, 0], [1, image_seq_len, noise_text.shape[2]], [1, 1, 1]
-                    )
+                    noise_text = ttnn.slice(noise_text, [0, 0, 0], [1, image_seq_len, noise_text.shape[2]], [1, 1, 1])
                 if do_cfg:
                     noise_uncond = stub(
                         hidden_states=model_in,
@@ -408,11 +634,7 @@ class LongCatImagePipelineTT:
                     diff = ttnn.sub(noise_text, noise_uncond)
                     noise = ttnn.add(noise_uncond, ttnn.mul(diff, float(guidance_scale)))
                     if enable_cfg_renorm:
-                        cond_norm = self._l2_norm_lastdim(noise_text)
-                        noise_norm = self._l2_norm_lastdim(noise)
-                        scale = ttnn.mul(cond_norm, ttnn.reciprocal(ttnn.add(noise_norm, 1e-8)))
-                        scale = ttnn.clamp(scale, cfg_renorm_min, 1.0)
-                        noise = ttnn.mul(noise, scale)
+                        noise = self._apply_cfg_renorm(noise, self._l2_norm_lastdim(noise_text), cfg_renorm_min)
                 else:
                     noise = noise_text
                 # FlowMatch Euler step: latents = latents + (sigma_next - sigma) * noise
@@ -423,10 +645,41 @@ class LongCatImagePipelineTT:
             _free_stub(stub)
         return latent_out
 
+    def _run_traced_steps(self, stub, tracer, latents, enc_pos, enc_neg, timesteps, sigmas, do_cfg):
+        """Drive an already-captured `tracer` through one denoise call's timesteps, building the
+        per-step temb/dt inputs and replaying. Shared by _tt_denoise_traced (a trace just captured
+        for this call) and _tt_denoise_warm (a resident trace captured once by warmup()) — the
+        step-driving loop is identical either way, only how the tracer/stub were obtained differs."""
+        for i, t in enumerate(timesteps):
+            ts = torch.tensor([float(t) / 1000.0], dtype=torch.float32)
+            temb = stub._time_embed(ts * 1000.0)
+            dt = float(sigmas[i + 1]) - float(sigmas[i])
+            dt_t = ttnn.from_torch(
+                torch.full((1, 1, 1), dt, dtype=torch.float32),
+                dtype=F32,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+            )
+            latents = tracer(latents, temb, dt_t, enc_pos, enc_neg) if do_cfg else tracer(latents, temb, dt_t, enc_pos)
+        return _to_torch(latents, self.device)
+
     def _tt_denoise_traced(
-        self, stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
-        txt_ids, img_ids, timesteps, sigmas, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg,
-        image_latents_packed=None, image_seq_len=None,
+        self,
+        stub,
+        latents_packed,
+        prompt_embeds_pos,
+        prompt_embeds_neg,
+        txt_ids,
+        img_ids,
+        timesteps,
+        sigmas,
+        guidance_scale,
+        enable_cfg_renorm,
+        cfg_renorm_min,
+        do_cfg,
+        image_latents_packed=None,
+        image_seq_len=None,
     ):
         """Traced denoise loop (text->image OR image-edit). Captures the WHOLE per-step DiT compute
         (both CFG forwards + guidance combine + cfg_renorm) as ONE trace via the tt_dit Tracer, then
@@ -440,70 +693,45 @@ class LongCatImagePipelineTT:
 
         cos, sin = stub._rope_tables(txt_ids, img_ids)  # fixed positions
         enc_pos = stub._linear(stub._to_ttnn(prompt_embeds_pos), stub.tf.context_embedder)  # fixed
-        enc_neg = (
-            stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
-        )
+        enc_neg = stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
         latents = ttnn.from_torch(
             latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
         )
         # edit: the input image's latents are FIXED across steps -> a trace constant
         img_lat = (
-            ttnn.from_torch(image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM)
-            if image_latents_packed is not None else None
+            ttnn.from_torch(
+                image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
+            )
+            if image_latents_packed is not None
+            else None
         )
-        gs = float(guidance_scale)
-
-        def _dit(lat, temb, enc):  # one DiT forward, mirrors denoise_trace_step
-            model_in = ttnn.concat([lat, img_lat], dim=1) if img_lat is not None else lat
-            hid = stub._linear(model_in, stub.tf.x_embedder)
-            for blk in stub.tf.transformer_blocks:
-                enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
-            for blk in stub.tf.single_transformer_blocks:
-                enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
-            scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
-            out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
-            out = stub._linear(out, stub.tf.proj_out)
-            if img_lat is not None:  # keep only the noise-latent tokens
-                out = ttnn.slice(out, [0, 0, 0], [1, image_seq_len, out.shape[2]], [1, 1, 1])
-            return out
-
         # The FlowMatch Euler step runs INSIDE the trace and the traced fn returns the NEW
         # latents. dt varies per step, so it is a (refreshable) tensor input. The output feeds
         # back as the next call's latents input — the Tracer copies it into the captured input
         # buffer before the next execute_trace, so nothing clobberable is read eagerly.
-        def _step_cfg(lat, temb, dt_t, enc_p, enc_n):  # BOTH forwards + guidance + Euler, all traced
-            nt = ttnn.typecast(_dit(lat, temb, enc_p), F32)
-            nu = ttnn.typecast(_dit(lat, temb, enc_n), F32)
-            noise = ttnn.add(nu, ttnn.mul(ttnn.sub(nt, nu), gs))
-            if enable_cfg_renorm:
-                cn = self._l2_norm_lastdim(nt)
-                nn_ = self._l2_norm_lastdim(noise)
-                sc = ttnn.clamp(ttnn.mul(cn, ttnn.reciprocal(ttnn.add(nn_, 1e-8))), cfg_renorm_min, 1.0)
-                noise = ttnn.mul(noise, sc)
-            return ttnn.add(lat, ttnn.mul(noise, dt_t))
+        step_fn = self._make_dit_step_fn(
+            stub, cos, sin, img_lat, image_seq_len, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg
+        )
 
-        def _step_nocfg(lat, temb, dt_t, enc_p):
-            noise = ttnn.typecast(_dit(lat, temb, enc_p), F32)
-            return ttnn.add(lat, ttnn.mul(noise, dt_t))
-
-        tracer = Tracer(_step_cfg if do_cfg else _step_nocfg, device=self.device)
-        for i, t in enumerate(timesteps):
-            ts = torch.tensor([float(t) / 1000.0], dtype=torch.float32)
-            temb = stub._time_embed(ts * 1000.0)
-            dt = float(sigmas[i + 1]) - float(sigmas[i])
-            dt_t = ttnn.from_torch(
-                torch.full((1, 1, 1), dt, dtype=torch.float32),
-                dtype=F32, layout=TILE, device=self.device, memory_config=DRAM,
-            )
-            latents = (
-                tracer(latents, temb, dt_t, enc_pos, enc_neg) if do_cfg else tracer(latents, temb, dt_t, enc_pos)
-            )
-        return _to_torch(latents, self.device)
+        tracer = Tracer(step_fn, device=self.device)
+        return self._run_traced_steps(stub, tracer, latents, enc_pos, enc_neg, timesteps, sigmas, do_cfg)
 
     def _tt_denoise_traced_2cq(
-        self, stub, latents_packed, prompt_embeds_pos, prompt_embeds_neg,
-        txt_ids, img_ids, timesteps, sigmas, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg,
-        image_latents_packed=None, image_seq_len=None,
+        self,
+        stub,
+        latents_packed,
+        prompt_embeds_pos,
+        prompt_embeds_neg,
+        txt_ids,
+        img_ids,
+        timesteps,
+        sigmas,
+        guidance_scale,
+        enable_cfg_renorm,
+        cfg_renorm_min,
+        do_cfg,
+        image_latents_packed=None,
+        image_seq_len=None,
     ):
         """Trace + TWO command queues. Captures the SAME whole per-step DiT compute as
         _tt_denoise_traced (both CFG forwards + guidance + cfg_renorm + Euler) as ONE trace on
@@ -522,44 +750,34 @@ class LongCatImagePipelineTT:
         device = self.device
         cos, sin = stub._rope_tables(txt_ids, img_ids)  # fixed positions
         enc_pos = stub._linear(stub._to_ttnn(prompt_embeds_pos), stub.tf.context_embedder)  # fixed
-        enc_neg = (
-            stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
-        )
+        enc_neg = stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
         img_lat = (
-            ttnn.from_torch(image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=device, memory_config=DRAM)
-            if image_latents_packed is not None else None
+            ttnn.from_torch(
+                image_latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=device, memory_config=DRAM
+            )
+            if image_latents_packed is not None
+            else None
         )
-        gs = float(guidance_scale)
+        step_fn = self._make_dit_step_fn(
+            stub, cos, sin, img_lat, image_seq_len, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg
+        )
+        latents_buf = ttnn.from_torch(
+            latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=device, memory_config=DRAM
+        )
+        tracer = Tracer(step_fn, device=device)
+        return self._run_traced_steps_2cq(stub, tracer, latents_buf, enc_pos, enc_neg, timesteps, sigmas, do_cfg)
 
-        def _dit(lat, temb, enc):  # one DiT forward (identical to _tt_denoise_traced._dit)
-            model_in = ttnn.concat([lat, img_lat], dim=1) if img_lat is not None else lat
-            hid = stub._linear(model_in, stub.tf.x_embedder)
-            for blk in stub.tf.transformer_blocks:
-                enc, hid = stub._double_block(blk, hid, enc, temb, cos, sin)
-            for blk in stub.tf.single_transformer_blocks:
-                enc, hid = stub._single_block(blk, hid, enc, temb, cos, sin)
-            scale, shift = stub._ada_mod_cont(temb, stub.tf.norm_out.linear)
-            out = ttnn.add(ttnn.mul(stub._layernorm(hid), ttnn.add(scale, 1.0)), shift)
-            out = stub._linear(out, stub.tf.proj_out)
-            if img_lat is not None:
-                out = ttnn.slice(out, [0, 0, 0], [1, image_seq_len, out.shape[2]], [1, 1, 1])
-            return out
-
-        def _step_cfg(lat, temb, dt_t, enc_p, enc_n):
-            nt = ttnn.typecast(_dit(lat, temb, enc_p), F32)
-            nu = ttnn.typecast(_dit(lat, temb, enc_n), F32)
-            noise = ttnn.add(nu, ttnn.mul(ttnn.sub(nt, nu), gs))
-            if enable_cfg_renorm:
-                cn = self._l2_norm_lastdim(nt)
-                nn_ = self._l2_norm_lastdim(noise)
-                sc = ttnn.clamp(ttnn.mul(cn, ttnn.reciprocal(ttnn.add(nn_, 1e-8))), cfg_renorm_min, 1.0)
-                noise = ttnn.mul(noise, sc)
-            return ttnn.add(lat, ttnn.mul(noise, dt_t))
-
-        def _step_nocfg(lat, temb, dt_t, enc_p):
-            noise = ttnn.typecast(_dit(lat, temb, enc_p), F32)
-            return ttnn.add(lat, ttnn.mul(noise, dt_t))
-
+    def _run_traced_steps_2cq(self, stub, tracer, latents, enc_pos, enc_neg, timesteps, sigmas, do_cfg):
+        """Trace+2CQ counterpart of _run_traced_steps: drives `tracer` through timesteps' steps,
+        staging each step's temb/dt on CQ1 while CQ0 runs the trace — see _tt_denoise_traced_2cq's
+        docstring for the full queue-orchestration rationale and its honest ~0-win-over-1CQ caveat
+        (applies here too). Shared by _tt_denoise_traced_2cq (tracer freshly built for this call,
+        so the first call below CAPTURES) and _tt_denoise_warm's num_cqs>=2 branch (tracer already
+        captured by warmup(), so the first call below just EXECUTES with this request's fresh
+        inputs) — Tracer.__call__ supports both transparently (captures iff its trace_ids is still
+        None), so this one loop is correct either way, mirroring how _run_traced_steps is already
+        shared across the same two callers for the 1CQ case."""
+        device = self.device
         # CQ1 may only issue DMA (host<->device), never programs — tt-metal's sub-device program
         # ownership belongs to the compute queue (CQ0). So temb/dt are staged as HOST-tensor DMAs
         # on CQ1: precompute the whole schedule once (they are latents-independent + known ahead)
@@ -580,13 +798,9 @@ class LongCatImagePipelineTT:
             if i == 0:
                 dt_buf = ttnn.from_torch(dt_torch, dtype=F32, layout=TILE, device=device, memory_config=DRAM)
 
-        latents_buf = ttnn.from_torch(
-            latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=device, memory_config=DRAM
-        )
-
-        tracer = Tracer(_step_cfg if do_cfg else _step_nocfg, device=device)
-        cap = (latents_buf, temb_buf, dt_buf, enc_pos, enc_neg) if do_cfg else (latents_buf, temb_buf, dt_buf, enc_pos)
-        # First call captures the trace on CQ0 and computes step 0.
+        cap = (latents, temb_buf, dt_buf, enc_pos, enc_neg) if do_cfg else (latents, temb_buf, dt_buf, enc_pos)
+        # First call captures the trace (cold path) or executes the resident one (warm path) on
+        # CQ0 and computes step 0.
         out = tracer(*cap, tracer_cq_id=0, tracer_blocking_execution=False)
         ttnn.synchronize_device(device)
         inp = tracer.inputs  # captured input buffers (same objects as `cap`)
@@ -612,8 +826,225 @@ class LongCatImagePipelineTT:
         ttnn.synchronize_device(device)
         return _to_torch(out, device)
 
+    # ── warm/resident pipeline (Phase 0 of the QB2 porting plan) ─────────────────
+    # Measured: for a 1-step/256px request, `denoise` (build DiT stub + capture its trace) took
+    # ~44s while the DiT itself only replays at ~60-70ms/step (README) — almost all of that 44s
+    # is one-time setup that recurs on EVERY request today because nothing survives across calls
+    # to run_text_to_image(). warmup() below builds the DiT (+ VAE) stub(s) and captures the DiT's
+    # trace ONCE; later requests that match its fixed shape/config replay through _tt_denoise_warm
+    # instead of rebuilding. Text-to-image (Call 1) only for now — image-edit (Call 2) can reuse
+    # the same mechanism once its geometry (image_latents_packed) is validated warm too.
+    def _denoise_request_matches_warm(
+        self,
+        prompt_embeds_pos,
+        image_seq_len,
+        do_cfg,
+        guidance_scale,
+        enable_cfg_renorm,
+        cfg_renorm_min,
+        image_latents_packed,
+        txt_ids,
+        img_ids,
+    ):
+        """True iff a request can safely replay the resident trace built by warmup(). Checks the
+        Python-level values baked into the trace as constants (guidance_scale, enable_cfg_renorm,
+        cfg_renorm_min, do_cfg, image_seq_len — a wrong guidance_scale would silently use the
+        WARMED-UP value, not the request's, since it isn't a refreshable tensor input; see
+        _make_dit_step_fn) AND, by direct tensor equality, that this request's txt_ids/img_ids
+        are the exact ones the resident RoPE tables (also trace constants) were built from — a
+        cheap check on small integer tensors that avoids relying on any indirect proxy (e.g.
+        matching sequence lengths alone does not guarantee matching position offsets)."""
+        w = self._warm_denoise
+        sig = (
+            int(prompt_embeds_pos.shape[1]),
+            int(image_seq_len),
+            bool(do_cfg),
+            float(guidance_scale),
+            bool(enable_cfg_renorm),
+            float(cfg_renorm_min),
+            image_latents_packed is not None,
+        )
+        return sig == w["signature"] and torch.equal(txt_ids, w["txt_ids"]) and torch.equal(img_ids, w["img_ids"])
+
+    def warmup(
+        self, max_length=512, height=512, width=512, guidance_scale=4.5, enable_cfg_renorm=True, cfg_renorm_min=0.0
+    ):
+        """Build the DiT + VAE stubs ONCE and capture the DiT's per-step trace ONCE, so later
+        run_text_to_image() calls whose shape/config match replay through the resident trace
+        instead of rebuilding + re-capturing (today's per-request default). Call once, right
+        after opening the device, before serving any requests (see demo/demo_server.py).
+
+        max_length/height/width fix the token/image-sequence lengths the resident trace is
+        captured for — MUST match what real requests will pass (same max_length/height/width,
+        and self.pipe.tokenizer_max_length set the same way), since txt_ids/img_ids are baked
+        into the trace as position constants (see _denoise_request_matches_warm). The dummy
+        text length here comes from the SAME _denoise_geometry helper run_text_to_image uses
+        (`max_length`, exactly — _tt_text_encode always returns max_length tokens regardless
+        of prompt content, since the prefix/suffix template tokens it slices off were added on
+        top of a max_length-padded prompt) so this matches a real request's shape exactly —
+        using a throwaway prompt only for that shape, not running the actual (~27s) text
+        encoder. guidance_scale/enable_cfg_renorm/cfg_renorm_min are baked into the trace as
+        Python-level constants, not refreshable tensor inputs (see _make_dit_step_fn), so a
+        later request must match ALL of these exactly to replay warm — anything else
+        transparently falls back to the cold per-request path (_tt_denoise's dispatch check),
+        so correctness never depends on the caller remembering warmup()'s arguments, only the
+        throughput win does. Building the DiT+VAE stubs and capturing the trace is treated as
+        one atomic step: any failure partway through frees whatever was already built and
+        leaves this instance exactly as it was before warmup() was called, so a caller may
+        retry without leaking device memory or tripping the already-called guard below."""
+        if self._warm_denoise is not None or self._warm_vae is not None:
+            raise RuntimeError("warmup() already called on this pipeline instance")
+        print(
+            f"[warmup] starting: max_length={max_length} height={height} width={width} "
+            f"guidance_scale={guidance_scale} enable_cfg_renorm={enable_cfg_renorm}",
+            flush=True,
+        )
+
+        do_cfg = guidance_scale > 1
+        # Shared with run_text_to_image via _denoise_geometry so this resident trace's shapes
+        # can never silently drift from what a real request derives (see that method's docstring).
+        lh, lw, image_seq_len, txt_ids, img_ids = self._denoise_geometry(max_length, height, width)
+        dummy_prompt_embeds = torch.randn(
+            1, max_length, self.pipe.transformer.config.joint_attention_dim, dtype=torch.float32
+        )
+        dummy_latents_packed = torch.randn(1, image_seq_len, 64, dtype=torch.float32)  # 64 == in_channels
+
+        dit_stub = None
+        tracer = None
+        vae_stub = None
+        try:
+            _t0 = time.perf_counter()
+            stub_mod = _load_stub("long_cat_image_transformer2_d_model")
+            dit_stub = stub_mod.build(self.device, self.pipe.transformer)
+            dit_stub.wdtype = BF16
+            print(f"[warmup] DiT stub build (weight upload): {time.perf_counter() - _t0:.1f}s", flush=True)
+
+            _t0 = time.perf_counter()
+            cos, sin = dit_stub._rope_tables(txt_ids, img_ids)
+            enc_pos = dit_stub._linear(dit_stub._to_ttnn(dummy_prompt_embeds), dit_stub.tf.context_embedder)
+            enc_neg = (
+                dit_stub._linear(dit_stub._to_ttnn(dummy_prompt_embeds), dit_stub.tf.context_embedder)
+                if do_cfg
+                else None
+            )
+            latents0 = ttnn.from_torch(
+                dummy_latents_packed,
+                dtype=F32,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+            )
+            temb0 = dit_stub._time_embed(torch.tensor([1000.0], dtype=torch.float32))
+            dt0 = ttnn.from_torch(
+                torch.zeros((1, 1, 1), dtype=torch.float32),
+                dtype=F32,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+            )
+            print(f"[warmup] dummy input construction: {time.perf_counter() - _t0:.1f}s", flush=True)
+
+            step_fn = self._make_dit_step_fn(
+                dit_stub, cos, sin, None, image_seq_len, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg
+            )
+            from models.tt_dit.utils.tracing import Tracer
+
+            _t0 = time.perf_counter()
+            tracer = Tracer(step_fn, device=self.device)
+            if do_cfg:
+                tracer(latents0, temb0, dt0, enc_pos, enc_neg)
+            else:
+                tracer(latents0, temb0, dt0, enc_pos)
+            ttnn.synchronize_device(self.device)
+            print(f"[warmup] DiT trace capture + first execute: {time.perf_counter() - _t0:.1f}s", flush=True)
+
+            _t0 = time.perf_counter()
+            vae_stub_mod = _load_stub("autoencoder_k_l")
+            vae_stub = vae_stub_mod.build(self.device, self.pipe.vae)
+            print(f"[warmup] VAE stub build: {time.perf_counter() - _t0:.1f}s", flush=True)
+        except Exception:
+            if tracer is not None:
+                tracer.release_trace()
+            if dit_stub is not None:
+                _free_stub(dit_stub)
+            if vae_stub is not None:
+                _free_stub(vae_stub)
+            raise
+
+        self.invoked.add("long_cat_image_transformer2_d_model")
+        self.invoked.add("autoencoder_k_l")
+        self._warm_denoise = {
+            "stub": dit_stub,
+            "tracer": tracer,
+            "signature": (
+                max_length,
+                image_seq_len,
+                do_cfg,
+                float(guidance_scale),
+                bool(enable_cfg_renorm),
+                float(cfg_renorm_min),
+                False,
+            ),
+            "txt_ids": txt_ids,
+            "img_ids": img_ids,
+        }
+        self._warm_vae = {"stub": vae_stub}
+
+    def _tt_denoise_warm(self, latents_packed, prompt_embeds_pos, prompt_embeds_neg, timesteps, sigmas, do_cfg):
+        """Replay path for a request that _denoise_request_matches_warm() approved. RoPE tables
+        (cos/sin) are NOT recomputed here — they're already baked into the resident trace as
+        constants, and the txt_ids/img_ids equality check in _denoise_request_matches_warm
+        guarantees they're the exact values those constants were built from. Only the per-request
+        pieces are rebuilt: the projected encoder-hidden-states (new prompt) and the initial
+        latents (new seed) — cheap host->device work against the SAME resident stub. Driving the
+        SAME Tracer instance across steps replays the captured trace; Tracer._update_input copies
+        each step's fresh tensors into the trace's buffers in place (see
+        models/tt_dit/utils/tracing.py), so no stub rebuild or re-capture happens here.
+
+        On a device opened with num_command_queues>=2 (self.num_cqs), replay via the same
+        trace+2CQ queue orchestration _tt_denoise_traced_2cq uses (_run_traced_steps_2cq), so the
+        warm/resident path gets the same CQ1-staged-inputs treatment as the cold path — with an
+        honest ~0 win over warm+1CQ for the same reason noted there (only temb/dt are prefetchable,
+        and the cross-step latents dependency never leaves the device). Falls back to warm+1CQ
+        (_run_traced_steps) on any 2CQ-path error, same fallback philosophy as _tt_denoise's ladder."""
+        stub = self._warm_denoise["stub"]
+        tracer = self._warm_denoise["tracer"]
+        enc_pos = stub._linear(stub._to_ttnn(prompt_embeds_pos), stub.tf.context_embedder)
+        enc_neg = stub._linear(stub._to_ttnn(prompt_embeds_neg), stub.tf.context_embedder) if do_cfg else None
+        latents = ttnn.from_torch(
+            latents_packed.to(torch.float32), dtype=F32, layout=TILE, device=self.device, memory_config=DRAM
+        )
+        if getattr(self, "num_cqs", 1) >= 2:
+            try:
+                return self._run_traced_steps_2cq(stub, tracer, latents, enc_pos, enc_neg, timesteps, sigmas, do_cfg)
+            except Exception as _we:
+                print(
+                    f"[denoise] warm+2cq path failed ({type(_we).__name__}: {str(_we)[:200]}); "
+                    "falling back to warm+1cq",
+                    flush=True,
+                )
+        return self._run_traced_steps(stub, tracer, latents, enc_pos, enc_neg, timesteps, sigmas, do_cfg)
+
+    def close(self):
+        """Release resident (warm) resources built by warmup(). Call once, on shutdown (see
+        demo/demo_server.py); a pipeline that never called warmup() has nothing to release."""
+        if self._warm_denoise is not None:
+            self._warm_denoise["tracer"].release_trace()
+            _free_stub(self._warm_denoise["stub"])
+            self._warm_denoise = None
+        if self._warm_vae is not None:
+            _free_stub(self._warm_vae["stub"])
+            self._warm_vae = None
+        if self._resident_text_encoder is not None:
+            _free_stub(self._resident_text_encoder)
+            self._resident_text_encoder = None
+
     # ── stage 3: VAE decode (autoencoder_k_l stub) ───────────────────────────
     def _tt_vae_decode(self, latents_nchw):
+        if self._warm_vae is not None:
+            self.invoked.add("autoencoder_k_l")
+            image = self._vae_decode(self._warm_vae["stub"], latents_nchw)
+            return _to_torch(image, self.device)
         stub_mod = _load_stub("autoencoder_k_l")
         stub = stub_mod.build(self.device, self.pipe.vae)
         self.invoked.add("autoencoder_k_l")
@@ -636,7 +1067,10 @@ class LongCatImagePipelineTT:
             lat = stub.latent_channels
             x_cf = ttnn.from_torch(
                 image_nchw.to(torch.float32).permute(0, 2, 3, 1).reshape(1, 1, H * W, C).contiguous(),
-                dtype=F32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, memory_config=DRAM,
+                dtype=F32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=DRAM,
             )
             moments, hb, wb = stub._encode(x_cf, H, W)  # [1,1,hb*wb, 2*lat] (hb,wb independent)
             mom = ttnn.reshape(moments, [1, 1, hb * wb, 2 * lat])
@@ -666,6 +1100,30 @@ class LongCatImagePipelineTT:
             nhwc = ttnn.to_layout(nhwc, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.permute(nhwc, [0, 3, 1, 2])  # [1,3,Hf,Wf]
 
+    def _denoise_geometry(self, max_length, height, width):
+        """Text/image sequence lengths + RoPE position ids for the Call-1 denoise stage.
+        Depends ONLY on max_length/height/width/self.pipe.tokenizer_max_length, never on
+        prompt content: _tt_text_encode always returns exactly `max_length` tokens (the
+        prefix/suffix template tokens build_text_input_ids wraps around the max_length-
+        padded prompt are sliced back off before the tensor is returned — see
+        _tt_text_encode's final line). Shared by run_text_to_image (real request) and
+        warmup() (dummy request) so the two can never derive different txt_ids/img_ids
+        for the same config — _denoise_request_matches_warm relies on exact equality of
+        these to decide whether a request may replay the resident warm trace."""
+        vsf = self.vae_scale_factor
+        lh = 2 * (int(height) // (vsf * 2))
+        lw = 2 * (int(width) // (vsf * 2))
+        image_seq_len = (lh // 2) * (lw // 2)
+        txt_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=max_length)
+        img_ids = prepare_pos_ids(
+            modality_id=1,
+            type="image",
+            start=(self.pipe.tokenizer_max_length, self.pipe.tokenizer_max_length),
+            height=lh // 2,
+            width=lw // 2,
+        )
+        return lh, lw, image_seq_len, txt_ids, img_ids
+
     # ── Call 1: text -> image ────────────────────────────────────────────────
     def run_text_to_image(
         self,
@@ -684,66 +1142,76 @@ class LongCatImagePipelineTT:
         pipe = self.pipe
         vsf = self.vae_scale_factor
 
-        # 1) text inputs (identical to the golden pipeline's tokenization)
-        ids_pos, mask_pos, pre, suf = build_text_input_ids(pipe, prompt, max_length)
-        prompt_embeds_pos = self._tt_text_encode(ids_pos, mask_pos, pre, suf)
-        do_cfg = guidance_scale > 1
-        prompt_embeds_neg = None
-        if do_cfg:
-            ids_neg, mask_neg, pre_n, suf_n = build_text_input_ids(pipe, negative_prompt, max_length)
-            prompt_embeds_neg = self._tt_text_encode(ids_neg, mask_neg, pre_n, suf_n)
+        self.profile.reset()
+        with self.profile.track("run_text_to_image.total"):
+            # 1) text inputs (identical to the golden pipeline's tokenization). ONE text-encoder
+            # stub serves BOTH the pos and neg (CFG) branches (tier 1), and — when it has its own
+            # chip — stays resident across requests (tier 2); see _acquire_text_encoder. Previously
+            # each branch built + uploaded (~27GB fp32) + freed its own stub, so the encoder weights
+            # were re-uploaded twice per request and never survived a request.
+            ids_pos, mask_pos, pre, suf = build_text_input_ids(pipe, prompt, max_length)
+            do_cfg = guidance_scale > 1
+            ids_neg = mask_neg = pre_n = suf_n = None
+            if do_cfg:
+                ids_neg, mask_neg, pre_n, suf_n = build_text_input_ids(pipe, negative_prompt, max_length)
+            te_stub, te_owned = self._acquire_text_encoder()
+            try:
+                with self.profile.track("text_encode_pos"):
+                    prompt_embeds_pos = self._tt_text_encode(ids_pos, mask_pos, pre, suf, stub=te_stub)
+                prompt_embeds_neg = None
+                if do_cfg:
+                    with self.profile.track("text_encode_neg"):
+                        prompt_embeds_neg = self._tt_text_encode(ids_neg, mask_neg, pre_n, suf_n, stub=te_stub)
+            finally:
+                if te_owned:
+                    _free_stub(te_stub)
 
-        # 2) text_ids / img_ids / latents (host shape ops, seeded like the pipeline)
-        text_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=prompt_embeds_pos.shape[1])
-        lh = 2 * (int(height) // (vsf * 2))
-        lw = 2 * (int(width) // (vsf * 2))
-        latent_image_ids = prepare_pos_ids(
-            modality_id=1,
-            type="image",
-            start=(pipe.tokenizer_max_length, pipe.tokenizer_max_length),
-            height=lh // 2,
-            width=lw // 2,
-        )
-        if latents_packed is None:
-            gen = torch.Generator("cpu").manual_seed(seed)
-            raw = torch.randn(1, self.num_channels_latents, lh, lw, generator=gen, dtype=torch.float32)
-            latents_packed = _pack_latents(raw, 1, self.num_channels_latents, lh, lw)
+            # 2) text_ids / img_ids / latents (host shape ops, seeded like the pipeline). Shared
+            # with warmup() via _denoise_geometry so a resident warm trace's baked-in txt_ids/
+            # img_ids can never silently drift from what a real request derives here.
+            lh, lw, _, text_ids, latent_image_ids = self._denoise_geometry(max_length, height, width)
+            if latents_packed is None:
+                gen = torch.Generator("cpu").manual_seed(seed)
+                raw = torch.randn(1, self.num_channels_latents, lh, lw, generator=gen, dtype=torch.float32)
+                latents_packed = _pack_latents(raw, 1, self.num_channels_latents, lh, lw)
 
-        # 3) timesteps / sigmas from the scheduler with the pipeline's mu shift
-        sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
-        image_seq_len = latents_packed.shape[1]
-        mu = calculate_shift(
-            image_seq_len,
-            pipe.scheduler.config.get("base_image_seq_len", 256),
-            pipe.scheduler.config.get("max_image_seq_len", 4096),
-            pipe.scheduler.config.get("base_shift", 0.5),
-            pipe.scheduler.config.get("max_shift", 1.15),
-        )
-        timesteps, num_inference_steps = retrieve_timesteps(
-            pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
-        )
-        sigmas = pipe.scheduler.sigmas.detach().cpu().tolist()
+            # 3) timesteps / sigmas from the scheduler with the pipeline's mu shift
+            sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
+            image_seq_len = latents_packed.shape[1]
+            mu = calculate_shift(
+                image_seq_len,
+                pipe.scheduler.config.get("base_image_seq_len", 256),
+                pipe.scheduler.config.get("max_image_seq_len", 4096),
+                pipe.scheduler.config.get("base_shift", 0.5),
+                pipe.scheduler.config.get("max_shift", 1.15),
+            )
+            timesteps, num_inference_steps = retrieve_timesteps(
+                pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
+            )
+            sigmas = pipe.scheduler.sigmas.detach().cpu().tolist()
 
-        # 4) denoise (on device)
-        final_latent_packed = self._tt_denoise(
-            latents_packed,
-            prompt_embeds_pos,
-            prompt_embeds_neg,
-            text_ids,
-            latent_image_ids,
-            timesteps,
-            sigmas,
-            guidance_scale,
-            image_seq_len,
-            enable_cfg_renorm,
-            cfg_renorm_min,
-        )
+            # 4) denoise (on device)
+            with self.profile.track("denoise"):
+                final_latent_packed = self._tt_denoise(
+                    latents_packed,
+                    prompt_embeds_pos,
+                    prompt_embeds_neg,
+                    text_ids,
+                    latent_image_ids,
+                    timesteps,
+                    sigmas,
+                    guidance_scale,
+                    image_seq_len,
+                    enable_cfg_renorm,
+                    cfg_renorm_min,
+                )
 
-        # 5) unpack + scale, then VAE decode
-        latents_nchw = _unpack_latents(final_latent_packed, height, width, vsf)
-        latents_nchw = (latents_nchw / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
-        image = self._tt_vae_decode(latents_nchw)
-        image = image.clamp(-1, 1)
+            # 5) unpack + scale, then VAE decode
+            latents_nchw = _unpack_latents(final_latent_packed, height, width, vsf)
+            latents_nchw = (latents_nchw / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+            with self.profile.track("vae_decode"):
+                image = self._tt_vae_decode(latents_nchw)
+            image = image.clamp(-1, 1)
 
         return {
             "image": image,  # [1,3,H,W] raw decode (pre-denormalize), fp32
@@ -779,87 +1247,128 @@ class LongCatImagePipelineTT:
         pipe = self.pipe
         vsf = self.vae_scale_factor
         editpipe = LongCatImageEditPipeline(
-            scheduler=pipe.scheduler, vae=pipe.vae, text_encoder=pipe.text_encoder,
-            tokenizer=pipe.tokenizer, text_processor=pipe.text_processor, transformer=pipe.transformer,
+            scheduler=pipe.scheduler,
+            vae=pipe.vae,
+            text_encoder=pipe.text_encoder,
+            tokenizer=pipe.tokenizer,
+            text_processor=pipe.text_processor,
+            transformer=pipe.transformer,
         )
 
-        # 1) dimensions from the image aspect ratio, preprocess (full-res for VAE, half-res for vision)
-        iw, ih = image.size
-        calc_w, calc_h = calculate_dimensions(target_area, iw * 1.0 / ih)
-        image_full = editpipe.image_processor.resize(image, calc_h, calc_w)
-        prompt_image = editpipe.image_processor.resize(image_full, calc_h // 2, calc_w // 2)
-        vae_in = editpipe.image_processor.preprocess(image_full, calc_h, calc_w)  # [1,3,H,W] in [-1,1]
+        self.profile.reset()
+        with self.profile.track("run_image_edit.total"):
+            # 1) dimensions from the image aspect ratio, preprocess (full-res for VAE, half-res for vision)
+            iw, ih = image.size
+            calc_w, calc_h = calculate_dimensions(target_area, iw * 1.0 / ih)
+            image_full = editpipe.image_processor.resize(image, calc_h, calc_w)
+            prompt_image = editpipe.image_processor.resize(image_full, calc_h // 2, calc_w // 2)
+            vae_in = editpipe.image_processor.preprocess(image_full, calc_h, calc_w)  # [1,3,H,W] in [-1,1]
 
-        # 2) multimodal text-encode (image-conditioned) for pos (+ neg for CFG)
-        def _encode(prompt_text):
-            t = build_edit_text_input_ids(editpipe, prompt_text, prompt_image)
-            img_embeds = self._tt_vision_encode(t["pixel_values"], t["image_grid_thw"])
-            cos_c, sin_c = self._edit_position_embeddings(
-                t["input_ids"], t["attention_mask"], t["image_grid_thw"], t["pixel_values"]
+            # 2) multimodal text-encode (image-conditioned) for pos (+ neg for CFG). The vision
+            # tower's input (pixel_values/image_grid_thw) comes only from the fixed input image,
+            # not the prompt text (see build_edit_text_input_ids), so it's run ONCE here and its
+            # embeds are reused for both the positive and negative encode calls below — previously
+            # each call independently reran the full 32-block windowed-attention vision tower on
+            # the same image.
+            t_pos = build_edit_text_input_ids(editpipe, prompt, prompt_image)
+            with self.profile.track("vision_encode"):
+                img_embeds = self._tt_vision_encode(t_pos["pixel_values"], t_pos["image_grid_thw"])
+
+            def _encode(t):
+                cos_c, sin_c = self._edit_position_embeddings(
+                    t["input_ids"], t["attention_mask"], t["image_grid_thw"], t["pixel_values"]
+                )
+                return self._tt_edit_text_encode(
+                    t["input_ids"],
+                    t["attention_mask"],
+                    img_embeds,
+                    t["img_start"],
+                    t["img_len"],
+                    cos_c,
+                    sin_c,
+                    t["prefix_len"],
+                    t["suffix_len"],
+                )
+
+            with self.profile.track("edit_encode_pos"):
+                prompt_embeds_pos = _encode(t_pos)
+            do_cfg = guidance_scale > 1
+            prompt_embeds_neg = None
+            if do_cfg:
+                t_neg = build_edit_text_input_ids(editpipe, negative_prompt or "", prompt_image)
+                with self.profile.track("edit_encode_neg"):
+                    prompt_embeds_neg = _encode(t_neg)
+
+            # 3) VAE-encode the image -> image latents -> normalize -> pack
+            lh = 2 * (int(calc_h) // (vsf * 2))
+            lw = 2 * (int(calc_w) // (vsf * 2))
+            with self.profile.track("vae_encode"):
+                z = self._tt_vae_encode(vae_in)  # [1,16,lh,lw] posterior mean
+            z = (z - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
+            image_latents_packed = _pack_latents(z, 1, self.num_channels_latents, lh, lw)
+
+            # 4) ids: text + noise-latent (mod 1) + image-latent (mod 2); img_ids = concat (matches model_in)
+            txt_len = prompt_embeds_pos.shape[1]
+            text_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=txt_len)
+            latents_ids = prepare_pos_ids(
+                modality_id=1, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2
             )
-            return self._tt_edit_text_encode(
-                t["input_ids"], t["attention_mask"], img_embeds, t["img_start"], t["img_len"],
-                cos_c, sin_c, t["prefix_len"], t["suffix_len"],
+            image_latents_ids = prepare_pos_ids(
+                modality_id=2, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2
             )
+            latent_image_ids = torch.cat([latents_ids, image_latents_ids], dim=0)
 
-        prompt_embeds_pos = _encode(prompt)
-        do_cfg = guidance_scale > 1
-        prompt_embeds_neg = _encode(negative_prompt or "") if do_cfg else None
+            # 5) init noise latents (seeded like the reference)
+            if latents_packed is None:
+                gen = torch.Generator("cpu").manual_seed(seed)
+                raw = torch.randn(1, self.num_channels_latents, lh, lw, generator=gen, dtype=torch.float32)
+                latents_packed = _pack_latents(raw, 1, self.num_channels_latents, lh, lw)
 
-        # 3) VAE-encode the image -> image latents -> normalize -> pack
-        lh = 2 * (int(calc_h) // (vsf * 2))
-        lw = 2 * (int(calc_w) // (vsf * 2))
-        z = self._tt_vae_encode(vae_in)  # [1,16,lh,lw] posterior mean
-        z = (z - pipe.vae.config.shift_factor) * pipe.vae.config.scaling_factor
-        image_latents_packed = _pack_latents(z, 1, self.num_channels_latents, lh, lw)
+            # 6) timesteps/sigmas (mu from the NOISE-latent seq len only, per the reference)
+            sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
+            image_seq_len = latents_packed.shape[1]
+            mu = calculate_shift(
+                image_seq_len,
+                pipe.scheduler.config.get("base_image_seq_len", 256),
+                pipe.scheduler.config.get("max_image_seq_len", 4096),
+                pipe.scheduler.config.get("base_shift", 0.5),
+                pipe.scheduler.config.get("max_shift", 1.15),
+            )
+            timesteps, num_inference_steps = retrieve_timesteps(
+                pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
+            )
+            sigmas = pipe.scheduler.sigmas.detach().cpu().tolist()
 
-        # 4) ids: text + noise-latent (mod 1) + image-latent (mod 2); img_ids = concat (matches model_in)
-        txt_len = prompt_embeds_pos.shape[1]
-        text_ids = prepare_pos_ids(modality_id=0, type="text", start=(0, 0), num_token=txt_len)
-        latents_ids = prepare_pos_ids(modality_id=1, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
-        image_latents_ids = prepare_pos_ids(modality_id=2, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
-        latent_image_ids = torch.cat([latents_ids, image_latents_ids], dim=0)
+            # 7) denoise with the image latents concatenated (edit path; img_ids covers both blocks)
+            with self.profile.track("denoise"):
+                final_latent_packed = self._tt_denoise(
+                    latents_packed,
+                    prompt_embeds_pos,
+                    prompt_embeds_neg,
+                    text_ids,
+                    latent_image_ids,
+                    timesteps,
+                    sigmas,
+                    guidance_scale,
+                    image_seq_len,
+                    enable_cfg_renorm,
+                    cfg_renorm_min,
+                    image_latents_packed=image_latents_packed,
+                )
 
-        # 5) init noise latents (seeded like the reference)
-        if latents_packed is None:
-            gen = torch.Generator("cpu").manual_seed(seed)
-            raw = torch.randn(1, self.num_channels_latents, lh, lw, generator=gen, dtype=torch.float32)
-            latents_packed = _pack_latents(raw, 1, self.num_channels_latents, lh, lw)
-
-        # 6) timesteps/sigmas (mu from the NOISE-latent seq len only, per the reference)
-        sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
-        image_seq_len = latents_packed.shape[1]
-        mu = calculate_shift(
-            image_seq_len,
-            pipe.scheduler.config.get("base_image_seq_len", 256),
-            pipe.scheduler.config.get("max_image_seq_len", 4096),
-            pipe.scheduler.config.get("base_shift", 0.5),
-            pipe.scheduler.config.get("max_shift", 1.15),
-        )
-        timesteps, num_inference_steps = retrieve_timesteps(
-            pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
-        )
-        sigmas = pipe.scheduler.sigmas.detach().cpu().tolist()
-
-        # 7) denoise with the image latents concatenated (edit path; img_ids covers both blocks)
-        final_latent_packed = self._tt_denoise(
-            latents_packed, prompt_embeds_pos, prompt_embeds_neg, text_ids, latent_image_ids,
-            timesteps, sigmas, guidance_scale, image_seq_len, enable_cfg_renorm, cfg_renorm_min,
-            image_latents_packed=image_latents_packed,
-        )
-
-        # 8) unpack + scale, VAE decode
-        latents_nchw = _unpack_latents(final_latent_packed, calc_h, calc_w, vsf)
-        latents_nchw = (latents_nchw / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
-        image_out = self._tt_vae_decode(latents_nchw).clamp(-1, 1)
+            # 8) unpack + scale, VAE decode
+            latents_nchw = _unpack_latents(final_latent_packed, calc_h, calc_w, vsf)
+            latents_nchw = (latents_nchw / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+            with self.profile.track("vae_decode"):
+                image_out = self._tt_vae_decode(latents_nchw).clamp(-1, 1)
         return {
             "image": image_out,
             "image_denorm": (image_out / 2 + 0.5).clamp(0, 1),
             "final_latent_packed": final_latent_packed,
-            "height": int(calc_h), "width": int(calc_w),
+            "height": int(calc_h),
+            "width": int(calc_w),
             "invoked": set(self.invoked),
         }
-
 
     # ══════════════════ Command 3: trace + 2CQ + host-op contract ══════════════
     # Each PIPELINE_STAGE exposes <stage>_trace_setup / _trace_step / _write_inputs.
@@ -913,10 +1422,19 @@ class LongCatImagePipelineTT:
         latents = stub._to_ttnn(inputs["latents_packed"])  # mutable input buffer
         # image-edit geometry: the fixed image latents concatenated onto the noise latents (a
         # constant), with the noise-latent output sliced back to image_seq_len.
-        img_lat = stub._to_ttnn(inputs["image_latents_packed"]) if inputs.get("image_latents_packed") is not None else None
+        img_lat = (
+            stub._to_ttnn(inputs["image_latents_packed"]) if inputs.get("image_latents_packed") is not None else None
+        )
         self._trace_ctx = {
-            "stub": stub, "enc": enc, "cos": cos, "sin": sin, "temb": temb, "latents": latents,
-            "img_lat": img_lat, "image_seq_len": int(inputs["latents_packed"].shape[1]), "stage": "denoise",
+            "stub": stub,
+            "enc": enc,
+            "cos": cos,
+            "sin": sin,
+            "temb": temb,
+            "latents": latents,
+            "img_lat": img_lat,
+            "image_seq_len": int(inputs["latents_packed"].shape[1]),
+            "stage": "denoise",
         }
         return self._trace_ctx
 
@@ -971,6 +1489,7 @@ class LongCatImagePipelineTT:
         LONGCAT_PERF_EDIT=1 (or self._perf_edit) uses the image-edit geometry (image latents
         concatenated onto the noise latents) so the perf test measures the edit denoise step."""
         import os as _os
+
         edit = bool(getattr(self, "_perf_edit", False)) or _os.environ.get("LONGCAT_PERF_EDIT", "0") != "0"
         inputs = self._stage_inputs("denoise", max_length=32, size=128, edit=edit)
         self.denoise_trace_setup(inputs)
@@ -997,7 +1516,10 @@ class LongCatImagePipelineTT:
         B, C, H, W = latents_nchw.shape
         z = ttnn.from_torch(
             latents_nchw.to(torch.float32).permute(0, 2, 3, 1).reshape(1, 1, H * W, C).contiguous(),
-            dtype=F32, layout=TILE, device=self.device, memory_config=DRAM,
+            dtype=F32,
+            layout=TILE,
+            device=self.device,
+            memory_config=DRAM,
         )
         self._trace_ctx = {"stub": stub, "z": z, "H": H, "W": W, "stage": "vae_decode"}
         return self._trace_ctx
@@ -1036,8 +1558,11 @@ class LongCatImagePipelineTT:
                 modality_id=1, type="image", start=(max_length, max_length), height=lh // 2, width=lh // 2
             )
             out = {
-                "latents_packed": latents, "prompt_embeds": prompt_embeds,
-                "txt_ids": text_ids, "img_ids": img_ids, "timestep": 1.0,
+                "latents_packed": latents,
+                "prompt_embeds": prompt_embeds,
+                "txt_ids": text_ids,
+                "img_ids": img_ids,
+                "timestep": 1.0,
             }
             if edit:
                 # image-edit geometry: fixed image latents concatenated onto the noise latents
@@ -1090,8 +1615,11 @@ class LongCatImagePipelineTT:
                 v = verdict(list(ops))
                 per_stage[stage] = v
                 all_ops.extend(ops)
-                print(f"[host_op_selftest] {stage}: on_device={v['on_device']} n_host_ops={v['n_host_ops']}"
-                      + ("" if v["on_device"] else f" -> {v['host_ops'][:8]}"), flush=True)
+                print(
+                    f"[host_op_selftest] {stage}: on_device={v['on_device']} n_host_ops={v['n_host_ops']}"
+                    + ("" if v["on_device"] else f" -> {v['host_ops'][:8]}"),
+                    flush=True,
+                )
             finally:
                 _free_stub(ctx["stub"])
         combined = verdict(all_ops)
@@ -1133,17 +1661,21 @@ class LongCatImagePipelineTT:
                     host_free = True
                     ok = bool(pcc > 0.99)
                     ok_all = ok_all and ok
-                    print(f"[trace_capture_selftest] {stage}: CAPTURED host-free, trace-vs-eager PCC={pcc} ok={ok}",
-                          flush=True)
+                    print(
+                        f"[trace_capture_selftest] {stage}: CAPTURED host-free, trace-vs-eager PCC={pcc} ok={ok}",
+                        flush=True,
+                    )
                 except Exception as exc:  # overflow / unsupported -> degrade, do not silently drop
                     ok_all = False
-                    print(f"[trace_capture_selftest] {stage}: FALLBACK to single-CQ (trace capture failed: "
-                          f"{type(exc).__name__}: {exc}). Stage runs un-traced.", flush=True)
+                    print(
+                        f"[trace_capture_selftest] {stage}: FALLBACK to single-CQ (trace capture failed: "
+                        f"{type(exc).__name__}: {exc}). Stage runs un-traced.",
+                        flush=True,
+                    )
             finally:
                 _free_stub(ctx["stub"])
         print(f"[trace_capture_selftest] ALL_STAGES_TRACED={ok_all}", flush=True)
         return ok_all
-
 
     # ══════════════════ Call 2: image edit (fires vision tower + VAE encoder) ═══
     # Reuses Call 1's DiT denoise + VAE decode; adds VAE ENCODE (input image ->
@@ -1157,16 +1689,22 @@ class LongCatImagePipelineTT:
         [n_img, 3584]. blocks(window order) -> merger -> reverse-window."""
         import torch as _t
 
+        # Runs on text_encoder_device, not self.device: same OOM-avoidance reasoning as
+        # _tt_text_encode (see __init__'s text_encoder_device comment) — this vision tower and
+        # the Qwen text model it feeds are both large enough that they must not share a chip
+        # with a resident (warmup()'d) DiT.
         vstub = _load_stub("qwen2_vision_transformer_pretrained_model").build(
-            self.device, self.pipe.text_encoder.model.visual
+            self.text_encoder_device, self.pipe.text_encoder.model.visual
         )
         self.invoked.add("qwen2_vision_transformer_pretrained_model")
         self.invoked.add("qwen2_v_l_vision_block")  # composed x32 by the vision model stub
         blocks_out = vstub(hidden_states=pixel_values, grid_thw=image_grid_thw)  # [S, embed] window order
-        mstub = _load_stub("qwen2_v_l_patch_merger").build(self.device, self.pipe.text_encoder.model.visual.merger)
+        mstub = _load_stub("qwen2_v_l_patch_merger").build(
+            self.text_encoder_device, self.pipe.text_encoder.model.visual.merger
+        )
         self.invoked.add("qwen2_v_l_patch_merger")
         merged = mstub(hidden_states=blocks_out)  # [n_img, 3584] window order
-        merged_t = _to_torch(merged, self.device)
+        merged_t = _to_torch(merged, self.text_encoder_device)
         _free_stub(mstub)
         _free_stub(vstub)
         # reverse the spatial-merge-group window permutation (host index bookkeeping)
@@ -1188,13 +1726,14 @@ class LongCatImagePipelineTT:
         position constants — NOT the TT forward path). Returns combined [1,1,S,hd]
         cos/sin ready for the TT layers (apply_multimodal_rotary_pos_emb collapse)."""
         import torch as _t
-        from transformers.models.qwen2_5_vl import modeling_qwen2_5_vl as _M
 
         model = self.pipe.text_encoder
         lm = model.model.language_model
         mrope_section = None
         for obj in (getattr(model.config, "text_config", None), model.config):
-            rp = getattr(obj, "rope_scaling", None) or getattr(obj, "rope_parameters", None) if obj is not None else None
+            rp = (
+                getattr(obj, "rope_scaling", None) or getattr(obj, "rope_parameters", None) if obj is not None else None
+            )
             if isinstance(rp, dict) and rp.get("mrope_section"):
                 mrope_section = list(rp["mrope_section"])
                 break
@@ -1214,8 +1753,11 @@ class LongCatImagePipelineTT:
         try:
             with _t.no_grad():
                 model(
-                    input_ids=input_ids, attention_mask=attention_mask,
-                    pixel_values=pixel_values, image_grid_thw=image_grid_thw, output_hidden_states=False,
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    pixel_values=pixel_values,
+                    image_grid_thw=image_grid_thw,
+                    output_hidden_states=False,
                 )
         except _StopCapture:
             pass
@@ -1239,8 +1781,13 @@ class LongCatImagePipelineTT:
     def _tt_edit_text_encode(self, input_ids, attention_mask, image_embeds, img_start, img_len, cos_c, sin_c, pre, suf):
         """Language pass (TT) over inputs_embeds = text embeds with the TT vision
         embeds spliced into the contiguous image-token block, using the reference
-        M-RoPE cos/sin. Returns prompt_embeds[:, pre:-suf]."""
-        stub = _load_stub("qwen2_v_l_model").build(self.device, self.pipe.text_encoder.model)
+        M-RoPE cos/sin. Returns prompt_embeds[:, pre:-suf]. Runs on text_encoder_device
+        (same as _tt_vision_encode/_tt_text_encode) so the image-edit encoder stages never
+        share a chip with a resident (warmup()'d) DiT — see __init__'s text_encoder_device
+        comment. `image_embeds` is already a plain host tensor (from _tt_vision_encode), so
+        uploading it here via stub._to_ttnn (built on text_encoder_device) is the normal
+        host->device handoff, no cross-chip transfer machinery needed."""
+        stub = _load_stub("qwen2_v_l_model").build(self.text_encoder_device, self.pipe.text_encoder.model)
         self.invoked.add("qwen2_v_l_model")
         self.invoked.add("qwen2_v_l_for_conditional_generation")
         try:
@@ -1262,7 +1809,7 @@ class LongCatImagePipelineTT:
             for blk in stub.lm.layers:
                 x = stub._layer(blk, x, cos, sin, mask, S)
             x = stub._rmsnorm(x, stub.lm.norm)
-            hidden = _to_torch(x, self.device)
+            hidden = _to_torch(x, self.text_encoder_device)
         finally:
             _free_stub(stub)
         return hidden[:, pre : hidden.shape[1] - suf, :]
@@ -1309,8 +1856,11 @@ def hf_reference_text_to_image(
     lh = 2 * (int(height) // (vsf * 2))
     lw = 2 * (int(width) // (vsf * 2))
     latent_image_ids = prepare_pos_ids(
-        modality_id=1, type="image", start=(pipe.tokenizer_max_length, pipe.tokenizer_max_length),
-        height=lh // 2, width=lw // 2,
+        modality_id=1,
+        type="image",
+        start=(pipe.tokenizer_max_length, pipe.tokenizer_max_length),
+        height=lh // 2,
+        width=lw // 2,
     )
     latents = latents_packed.float().clone()
     sigmas_np = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps)
@@ -1322,7 +1872,9 @@ def hf_reference_text_to_image(
         pipe.scheduler.config.get("base_shift", 0.5),
         pipe.scheduler.config.get("max_shift", 1.15),
     )
-    timesteps, num_inference_steps = retrieve_timesteps(pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu)
+    timesteps, num_inference_steps = retrieve_timesteps(
+        pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
+    )
 
     # 3) fp32 golden denoise — EXPLICIT replication of LongCatImagePipeline.__call__'s
     #    denoise math (CFG combine + cfg_renorm + scheduler.step) with an fp32
@@ -1337,13 +1889,22 @@ def hf_reference_text_to_image(
             for t in timesteps:
                 timestep = t.expand(latents.shape[0]).to(torch.float32)
                 noise_text = pipe.transformer(
-                    hidden_states=latents, timestep=timestep / 1000, guidance=None,
-                    encoder_hidden_states=pe_pos, txt_ids=text_ids, img_ids=latent_image_ids, return_dict=False,
+                    hidden_states=latents,
+                    timestep=timestep / 1000,
+                    guidance=None,
+                    encoder_hidden_states=pe_pos,
+                    txt_ids=text_ids,
+                    img_ids=latent_image_ids,
+                    return_dict=False,
                 )[0]
                 if do_cfg:
                     noise_uncond = pipe.transformer(
-                        hidden_states=latents, timestep=timestep / 1000,
-                        encoder_hidden_states=pe_neg, txt_ids=neg_text_ids, img_ids=latent_image_ids, return_dict=False,
+                        hidden_states=latents,
+                        timestep=timestep / 1000,
+                        encoder_hidden_states=pe_neg,
+                        txt_ids=neg_text_ids,
+                        img_ids=latent_image_ids,
+                        return_dict=False,
                     )[0]
                     noise = noise_uncond + guidance_scale * (noise_text - noise_uncond)
                     cond_norm = torch.norm(noise_text, dim=-1, keepdim=True)
@@ -1387,16 +1948,17 @@ def hf_reference_image_edit(
     transformer + fp32 VAE for the denoise/decode. Uses PLAIN CFG (the edit pipeline has no
     cfg_renorm) and concatenates image latents onto the noise latents each step."""
     from diffusers import LongCatImageEditPipeline
-    from diffusers.pipelines.longcat_image.pipeline_longcat_image_edit import (
-        calculate_dimensions,
-        retrieve_latents,
-    )
+    from diffusers.pipelines.longcat_image.pipeline_longcat_image_edit import calculate_dimensions, retrieve_latents
 
     vsf = pipe.vae_scale_factor
     do_cfg = guidance_scale > 1
     editpipe = LongCatImageEditPipeline(
-        scheduler=pipe.scheduler, vae=pipe.vae, text_encoder=pipe.text_encoder,
-        tokenizer=pipe.tokenizer, text_processor=pipe.text_processor, transformer=pipe.transformer,
+        scheduler=pipe.scheduler,
+        vae=pipe.vae,
+        text_encoder=pipe.text_encoder,
+        tokenizer=pipe.tokenizer,
+        text_processor=pipe.text_processor,
+        transformer=pipe.transformer,
     )
 
     iw, ih = image.size
@@ -1431,7 +1993,9 @@ def hf_reference_image_edit(
     # 3) ids (encode_prompt already returns the text ids; add image-latent ids and concat)
     txt_len = pe_pos.shape[1]
     latents_ids = prepare_pos_ids(modality_id=1, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
-    image_latents_ids = prepare_pos_ids(modality_id=2, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2)
+    image_latents_ids = prepare_pos_ids(
+        modality_id=2, type="image", start=(txt_len, txt_len), height=lh // 2, width=lw // 2
+    )
     latent_image_ids = torch.cat([latents_ids, image_latents_ids], dim=0)
 
     if latents_packed is None:
@@ -1449,7 +2013,9 @@ def hf_reference_image_edit(
         pipe.scheduler.config.get("base_shift", 0.5),
         pipe.scheduler.config.get("max_shift", 1.15),
     )
-    timesteps, num_inference_steps = retrieve_timesteps(pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu)
+    timesteps, num_inference_steps = retrieve_timesteps(
+        pipe.scheduler, num_inference_steps, "cpu", sigmas=sigmas_np, mu=mu
+    )
 
     # 4) fp32 golden edit denoise (plain CFG, image latents concatenated), fp32 VAE decode
     pipe.transformer = pipe.transformer.float()
@@ -1460,13 +2026,22 @@ def hf_reference_image_edit(
                 timestep = t.expand(latents.shape[0]).to(torch.float32)
                 model_in = torch.cat([latents, image_latents], dim=1)
                 noise_text = pipe.transformer(
-                    hidden_states=model_in, timestep=timestep / 1000, guidance=None,
-                    encoder_hidden_states=pe_pos, txt_ids=text_ids, img_ids=latent_image_ids, return_dict=False,
+                    hidden_states=model_in,
+                    timestep=timestep / 1000,
+                    guidance=None,
+                    encoder_hidden_states=pe_pos,
+                    txt_ids=text_ids,
+                    img_ids=latent_image_ids,
+                    return_dict=False,
                 )[0][:, :image_seq_len]
                 if do_cfg:
                     noise_uncond = pipe.transformer(
-                        hidden_states=model_in, timestep=timestep / 1000,
-                        encoder_hidden_states=pe_neg, txt_ids=neg_text_ids, img_ids=latent_image_ids, return_dict=False,
+                        hidden_states=model_in,
+                        timestep=timestep / 1000,
+                        encoder_hidden_states=pe_neg,
+                        txt_ids=neg_text_ids,
+                        img_ids=latent_image_ids,
+                        return_dict=False,
                     )[0][:, :image_seq_len]
                     noise = noise_uncond + guidance_scale * (noise_text - noise_uncond)
                 else:
@@ -1485,5 +2060,6 @@ def hf_reference_image_edit(
         "image_denorm": (img / 2 + 0.5).clamp(0, 1),
         "final_latent_packed": final_latent.float(),
         "prompt_embeds": pe_pos.float(),
-        "height": int(calc_h), "width": int(calc_w),
+        "height": int(calc_h),
+        "width": int(calc_w),
     }

@@ -22,22 +22,10 @@ import torch
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.vision.generative.longcat_image.demo._demo_common import save_png as _save_png
 from models.demos.vision.generative.longcat_image.tt import pipeline as P
 
 HF_MODEL_ID = "meituan-longcat/LongCat-Image"
-
-
-def _save_png(img_denorm, path):
-    # img_denorm: [1,3,H,W] in [0,1]
-    try:
-        from PIL import Image
-
-        arr = (img_denorm[0].permute(1, 2, 0).clamp(0, 1) * 255).round().to(torch.uint8).cpu().numpy()
-        Image.fromarray(arr).save(path)
-        print(f"[demo] wrote {path}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[demo] could not write PNG ({exc}); saving tensor instead")
-        torch.save(img_denorm, path + ".pt")
 
 
 def main():
@@ -52,8 +40,18 @@ def main():
     ap.add_argument("--out", default="longcat_image_t2i.png")
     ap.add_argument("--compare_golden", action="store_true", help="also run the HF golden and print e2e PCC")
     ap.add_argument(
-        "--cq", type=int, default=1, choices=[1, 2],
+        "--cq",
+        type=int,
+        default=1,
+        choices=[1, 2],
         help="command queues; 2 enables the trace+2CQ denoise overlap (per-step input staging on CQ1)",
+    )
+    ap.add_argument(
+        "--profile",
+        action="store_true",
+        default=None,
+        help="print per-stage wall-clock timing (text-encode/denoise/vae-decode/total); "
+        "if omitted, falls back to LONGCAT_PROFILE=1",
     )
     args = ap.parse_args()
 
@@ -80,7 +78,7 @@ def main():
         raw = torch.randn(1, 16, lh, lh, generator=gen, dtype=torch.float32)
         latents_packed = P._pack_latents(raw, 1, 16, lh, lh)
 
-        ttp = P.LongCatImagePipelineTT(device, pipe, num_cqs=args.cq)
+        ttp = P.LongCatImagePipelineTT(device, pipe, num_cqs=args.cq, profile=args.profile)
         result = ttp.run_text_to_image(
             prompt=args.prompt,
             negative_prompt=args.negative_prompt,
@@ -94,6 +92,8 @@ def main():
         )
         print(f"[demo] invoked graduated stubs: {sorted(result['invoked'])}")
         _save_png(result["image_denorm"], args.out)
+        if ttp.profile.enabled:
+            print(f"[demo] stage timings (s): {ttp.profile.timings}")
 
         if args.compare_golden:
             golden = P.hf_reference_text_to_image(

@@ -16,6 +16,7 @@ longcat_image/
   demo/              runnable per-task entrypoints (argparse + __main__)
     demo_text_to_image.py     Call 1: text -> image
     demo_image_edit.py        Call 2: image + text -> image (fires vision tower + VAE encoder)
+    demo_server.py            interactive warm-server REPL (see "Warm server" below)
   tests/e2e/         end-to-end PCC + gate tests
     test_text_to_image_e2e.py     Gate 1/2/3 for Call 1
     test_image_edit_e2e.py        Gate 1/2/3 for Call 2
@@ -79,10 +80,12 @@ just to print an accuracy PCC; omit it for a normal ~2–3 min run.
     --size 512 --steps 24 --guidance 4.5 --out my_image.png
 #   add --cq 2            to run the denoise loop under trace + 2 command queues
 #   add --compare_golden  to also print e2e PCC vs the HF reference (slow)
+#   add --profile         to print per-stage wall-clock timing (text-encode/denoise/vae-decode/total)
 
 # Call 2: image + text -> image
 ./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_image_edit \
     --image <path.jpg> --prompt "change the cat to a dog" --compare_golden
+#   add --profile         to print per-stage wall-clock timing (edit-encode/vae-encode/denoise/vae-decode/total)
 
 # e2e gates (on device)
 ./python_env/bin/python -m pytest models/demos/vision/generative/longcat_image/tests/e2e/ -s
@@ -109,6 +112,62 @@ DMA while queue 0 runs the trace. Note: CQ1 may only issue DMA, never a program/
 device→device copies stay on CQ0. The 2CQ path is numerically identical to 1CQ (image
 PCC 1.0) but ~parity in speed here, since the step is compute-bound with a tiny
 prefetchable input.
+
+## Warm server (Phase 0 of the QB2 porting plan)
+
+`demo_text_to_image.py`/`demo_image_edit.py` are one-shot-per-process: every
+invocation pays ~44s of stub-build + trace-capture before the first image, on
+top of the ~60-70ms/step DiT replay cost. `LongCatImagePipelineTT.warmup()`
+does that setup ONCE — it builds the DiT + VAE stubs and captures the DiT's
+per-step trace with dummy shape-matched inputs — so later `run_text_to_image()`
+calls whose `max_length`/`height`/`width`/`guidance_scale`/`enable_cfg_renorm`/
+`cfg_renorm_min` match replay the resident trace instead of rebuilding. A
+request that doesn't match falls back transparently to today's cold per-request
+path, so correctness never depends on the caller remembering `warmup()`'s exact
+arguments — only the throughput win does. Call `close()` on shutdown to release
+the resident trace/stubs. Text-to-image (Call 1) only for now; image-edit
+(Call 2) can reuse the same mechanism once its image-latents geometry is
+validated warm too.
+
+A resident (warm) DiT is ~12.5GB; a full Qwen text-encoder pass is another
+~26-28GB (fp32) — measured on real hardware, the two do **not** fit together in
+one chip's ~34GB DRAM. So a genuinely warm DiT needs the text encoder on its own
+chip: `LongCatImagePipelineTT(..., text_encoder_device=<a second device>)` routes
+it there. On its own chip the encoder ALSO stays resident across requests
+(`_acquire_text_encoder`): one stub is built once, reused for a request's pos AND
+neg branch, and kept alive between requests, so the ~26-28GB fp32 weights upload
+**once** (on the first request) instead of build+upload+free per branch per
+request. Measured effect: text-encode dropped from ~23s/branch to ~0.78s/branch
+after the first request (it was upload/layout-bound, not compute-bound). On a
+single shared device this resident mode is disabled (it would collide with the
+DiT — the OOM above); there the one-stub-per-request reuse (pos+neg) still applies.
+No mesh/CCL machinery is needed for the split — the encoder hands off a plain host
+tensor to the denoise stage.
+
+`demo/demo_server.py` puts this together as an interactive REPL. On a QB2
+(fabric-connected multi-chip Blackhole) box it opens the two chips as ONE 1x2
+`ttnn.MeshDevice` and carves it into two 1x1 submeshes (`create_submesh`), one
+per role — chip 0 keeps DiT + VAE resident/warm, chip 1 holds the resident text
+encoder. (Opening the two chips as independent `ttnn.open_device()` calls was
+observed to hang on QB2 — tt-metal flags opening a subset of fabric-connected
+mmio chips one at a time; the mesh open does it coherently.) **Needs two chips.**
+
+```bash
+./python_env/bin/python -m models.demos.vision.generative.longcat_image.demo.demo_server \
+    --steps 24 --size 512 --max_length 512
+#   --device_id / --text_encoder_device_id  pick which chip is which (must differ)
+#   --cq 2                                   run the resident DiT trace under trace+2CQ
+```
+
+Per-stage timing is always on for the server (`profile=True`); pass `--profile`
+to the other two demos, or set `LONGCAT_PROFILE=1`, to get the same
+`[longcat-profile] <stage>: <ms>` breakdown from `LongCatImagePipelineTT`.
+
+Measured steady-state on QB2 (1x2 mesh, 512px, `--cq 2`), after the first
+(weights-upload) request: **~5.5 s end-to-end at 4 steps** (text-encode ~0.78 s
+×2, denoise ~3.67 s, VAE ~0.31 s); the first request additionally pays the
+one-time ~23 s encoder upload + ~47 s DiT warmup. The denoise (~0.9 s/step for the
+full model, warm trace replay) now dominates a many-step run.
 
 ## Performance
 
