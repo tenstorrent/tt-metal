@@ -62,7 +62,7 @@ class _TttCompleter:
     @functools.cached_property
     def tokenizer(self) -> Any:
         # Reuse the ModelArgs tokenizer if already loaded; else load on demand.
-        tok = getattr(self._worker.model_args, "tokenizer", None)
+        tok = getattr(self._worker.model_args[0], "tokenizer", None)
         if tok is not None:
             return tok
         from transformers import AutoTokenizer

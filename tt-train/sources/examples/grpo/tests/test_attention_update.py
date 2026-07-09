@@ -19,7 +19,8 @@ WO_CONST_2 = 0.0625
 @pytest.fixture(scope="module")
 def attn():
     with open_completer(dummy_weights=True) as completer:
-        yield completer.model.layers[0].attention
+        model = completer.models[0]
+        yield model.layers[0].attention
 
 
 def _push_constants(attn, wqkv_const: float, wo_const: float) -> None:

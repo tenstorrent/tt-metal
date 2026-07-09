@@ -62,13 +62,14 @@ def _generate(completer, prompt_ids):
 
 def test_mlp_update_round_trip(completer):
     """Snapshot -> overwrite -> restore must reproduce the original tokens."""
+    model = completer.models[0]
     prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
 
     tokens_A = _generate(completer, prompt_ids)
 
-    snapshots = [_snapshot_mlp_hf(layer.feed_forward) for layer in completer.model.layers]
+    snapshots = [_snapshot_mlp_hf(layer.feed_forward) for layer in model.layers]
 
-    for layer in completer.model.layers:
+    for layer in model.layers:
         _overwrite_mlp(layer.feed_forward, OVERWRITE_VALUE)
     tokens_broken = _generate(completer, prompt_ids)
     assert tokens_broken != tokens_A, (
@@ -76,7 +77,7 @@ def test_mlp_update_round_trip(completer):
         "the overwrite step was a no-op, so the rest of the test is meaningless"
     )
 
-    for layer, snap in zip(completer.model.layers, snapshots):
+    for layer, snap in zip(model.layers, snapshots):
         _restore_mlp(layer.feed_forward, snap)
     tokens_B = _generate(completer, prompt_ids)
     assert tokens_B == tokens_A, (
