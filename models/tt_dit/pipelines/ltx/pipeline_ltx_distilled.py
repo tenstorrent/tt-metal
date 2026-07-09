@@ -827,12 +827,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 lat_idx = pixel_to_latent_frame(img[1], num_frames)
                 s1s = img[2] if len(img) > 2 else 1.0
                 s2s = img[3] if len(img) > 3 else s1s
-                if nonzero_kf and lat_idx != 0:
-                    # Soften the interior pin's COARSE (s1) hold at every tier — a full-strength s1 pin
-                    # is a hard wall its generated neighbors can't reconcile, so they flicker
-                    # (frame-to-frame luma/colour jumps) even at high's 8-step s1. s2 re-locks identity
-                    # at full strength, so pin fidelity is unchanged (device: PCC 0.947 either way).
-                    s1s = min(s1s, _keyframe_s1_strength(s1_height))
+                if kf_fix and lat_idx != 0:
+                    s1s = min(s1s, _keyframe_s1_strength(s1_height))  # soften non-frame-0 pin; s2 re-locks
                 by_slot[lat_idx] = (img[0], s1s, s2s)
             # The conditioning latent depends only on (image, resolution), so encode once and memoize.
             # This skips re-running the eager VAE encoder on later gens (e.g. the traced steady-state
