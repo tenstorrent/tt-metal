@@ -124,6 +124,7 @@ TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
     // non-death LaunchProgram would poison the EXPECT_DEATH fork (see the
     // per-process split notes in the regression runner).
     if (ringbuffer_size <= window_size + 2 * kOverBy) {
+        ::unsetenv("TT_METAL_EMULE_ASAN");
         GTEST_SKIP() << "KERNEL_CONFIG window (" << window_size << ") >= the finalize ring buffer (" << ringbuffer_size
                      << ") on this arch: check_program_metadata_size is dominated by the "
                         "finalize TT_FATAL and is not independently reachable via a real program.";
@@ -133,6 +134,7 @@ TEST_F(MeshDeviceFixture, Metadata_KernelConfigWindow_Overflow_SanityCheck) {
     // ring buffer exceeds the window — none today.)
     uint32_t n_args = (window_size + kOverBy) / static_cast<uint32_t>(sizeof(uint32_t));
     if (n_args > kMaxArgs) {
+        ::unsetenv("TT_METAL_EMULE_ASAN");
         GTEST_SKIP() << "window (" << window_size << ") needs " << n_args
                      << " runtime args to overflow, above the TENSIX rt-arg ceiling; not reachable with this lever.";
     }

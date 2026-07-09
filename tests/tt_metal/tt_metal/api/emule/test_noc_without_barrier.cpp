@@ -12,6 +12,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "device_fixture.hpp"
 
 using namespace tt;
@@ -63,12 +64,12 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_SanityCheck) {
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
-// Addrgen read path. The missing-barrier check must also fire when the pending
-// counter is incremented via the InterleavedAddrGen read path
-// (noc_async_read_page / noc_async_read_tile), not just the raw noc_async_read.
+// Page-accessor read path. The missing-barrier check must also fire when the
+// pending counter is incremented via the page-accessor read (noc_async_read_page
+// / noc_async_read_tile with a TensorAccessor), not just the raw noc_async_read.
 // This is the increment site real reader kernels overwhelmingly use, and it is a
 // distinct source line from the raw read — a refactor that moved/dropped it would
-// leave a genuine missing-barrier bug on the addrgen path uncaught otherwise.
+// leave a genuine missing-barrier bug on the page-accessor path uncaught otherwise.
 // (Kept before the non-death controls below so its EXPECT_DEATH forks from a
 // still-single-threaded parent — see the ordering note in the regression runner.)
 TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
@@ -83,18 +84,23 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
         CircularBufferConfig(2048, {{cb_id, tt::DataFormat::Float16_b}}).set_page_size(cb_id, 1024);
     CreateCircularBuffer(program, logical_core, cb_config);
 
-    // DRAM source for the addrgen read + a real L1 destination (so the tensor/OOB
-    // check doesn't pre-empt the pop-time race check).
+    // DRAM source for the page-accessor read + a real L1 destination (so the
+    // tensor/OOB check doesn't pre-empt the pop-time race check).
     auto src_buf = Buffer::create(device, 1024, 1024, BufferType::DRAM);
     auto dst_buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+
+    // The TensorAccessor reads its bank layout from compile-time args.
+    std::vector<uint32_t> reader_ct_args;
+    TensorAccessorArgs(src_buf).append_to(reader_ct_args);
 
     std::string kernel_src = R"(
         #include "api/dataflow/dataflow_api.h"
         void kernel_main() {
             uint32_t dram_base = get_arg_val<uint32_t>(0);
             uint32_t dst       = get_arg_val<uint32_t>(1);
-            // Addrgen read increments __emule_pending_noc_reads via the page path.
-            InterleavedAddrGen<true> s = {.bank_base_address = dram_base, .page_size = 1024};
+            // Page-accessor read increments __emule_pending_noc_reads via the page path.
+            constexpr auto args = TensorAccessorArgs<0>();
+            auto s = TensorAccessor(args, dram_base, 1024);
             noc_async_read_page(0, s, dst);
             // MISSING: noc_async_read_barrier();
             cb_pop_front(0, 1);
@@ -105,7 +111,8 @@ TEST_F(MeshDeviceFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
         program,
         kernel_src,
         logical_core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
     SetRuntimeArgs(program, kernel, logical_core, {src_buf->address(), dst_buf->address()});
 
     EXPECT_DEATH(
