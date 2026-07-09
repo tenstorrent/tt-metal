@@ -718,6 +718,31 @@ static void apply_x86_rewrites(std::string& src) {
     static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*(:::\s*"memory"\s*)?\)\s*;)");
     src = emule_line_preserving_replace(src, fence_re, "__sync_synchronize();");
 
+    // ---- L1 offset model: translate a 0-based L1 offset to a host pointer at
+    // the raw-deref site (docs/l1-emulation.md). get_write_ptr / get_read_ptr /
+    // get_semaphore / get_arg_val now return offsets, so a cast to an L1 pointer
+    // must rebase onto this fiber's bridge_l1. Rules are ordered so each site is
+    // wrapped exactly once: P1 handles tt_l1_ptr casts and runs BEFORE the
+    // get_arg_val/get_arg rules (so their output is not re-wrapped); P2 handles
+    // attribute-less get_*_ptr casts, partitioned from P1 by a negative lookahead
+    // on tt_l1_ptr. A missed site derefs a small offset → immediate SIGSEGV at
+    // the real kernel line, surfaced for a targeted rule. ----
+
+    // P1: cast to a tt_l1_ptr-attributed pointer (covers one- and two-step —
+    // the deref cast re-adds the attribute). Operand allows one nested-paren level.
+    // The `(?!\s*&)` skips an address-of operand — a `reinterpret_cast<tt_l1_ptr
+    // T*>(&scalar)` re-interprets the bytes of a *stack* local (e.g. a pad value),
+    // whose address is a host pointer, NOT a 0-based L1 offset; translating it would
+    // corrupt it. (A bitwise `base & mask` operand does not start with & and still
+    // matches.) The `get_(common_)?arg_addr` exclusion skips the rt-args accessors,
+    // which return a host pointer (`&__emule_self->rt_args[i]`), not an L1 offset —
+    // translating one would rebase a valid host pointer into garbage.
+    static const std::regex l1_ptr_cast_re(
+        R"(reinterpret_cast<\s*([^>]*\btt_l1_ptr\b[^>]*\*)\s*>\s*\(\s*(?!\s*&)(?!\s*get_(?:common_)?arg_addr\b)((?:[^()]|\([^()]*\))*?)\s*\))");
+    src = emule_line_preserving_replace(
+        src, l1_ptr_cast_re,
+        "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
+
     static const std::regex l1_arg_ptr_re(
         R"(reinterpret_cast<([^>]+\*)>\s*\(\s*get_arg_val<uint32_t>\s*(\([^)]*\))\s*\))");
     src = emule_line_preserving_replace(
@@ -731,35 +756,134 @@ static void apply_x86_rewrites(std::string& src) {
         l1_named_arg_ptr_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
 
-    // Persistent / compile-time L1 addresses dereferenced directly:
-    // `reinterpret_cast<volatile tt_l1_ptr T*>(<bare identifier>)` where the operand
-    // is a ct-arg/constexpr L1 offset (e.g. dm1::metadata_persistent_addr,
-    // core::q_arrival_sem_addr, dm0::indices_addr — from a tensor buffer_address()).
-    // Silicon derefs that raw L1 offset directly; on the host the offset is an
-    // unmapped address → SIGSEGV (or, when it happens to land in a mapped page, a
-    // stale read → downstream CB deadlock). Route it through the __emule_local_l1_to_ptr
-    // chokepoint like the get_arg forms above.
-    //
-    // The operand is restricted to a bare (optionally ::-qualified) identifier ON
-    // PURPOSE: it must NOT match `&cb_config[...]` (a real host pointer — translating
-    // it would corrupt the address) or `get_write_ptr(cb)` (already an absolute host
-    // address). A bare identifier is either a ct-arg constant (an offset, needs
-    // translation) or a local holding a get_*_ptr result (absolute → __emule_l1_translate
-    // returns it unchanged, so the wrap is a no-op). Both are safe.
-    static const std::regex l1_ptr_cast_re(
-        R"(reinterpret_cast<([^>;]*tt_l1_ptr[^>;]*\*)>\s*\(\s*([A-Za-z_][A-Za-z0-9_:]*)\s*\))");
+    // P2: an attribute-less cast (the negative lookahead excludes tt_l1_ptr,
+    // which P1 already handled) whose operand is an L1 address from
+    // get_write_ptr / get_read_ptr / get_semaphore — including the CircularBuffer
+    // method form cb.get_write_ptr(). Operand is the call itself (one arg-paren
+    // level); trailing arithmetic / nested args fall to the SIGSEGV net.
+    static const std::regex l1_getptr_cast_re(
+        R"(reinterpret_cast<\s*((?![^>]*\btt_l1_ptr\b)[^>]*\*)\s*>\s*\(\s*((?:[A-Za-z_]\w*\s*\.\s*)?(?:get_write_ptr|get_read_ptr|get_semaphore|get_tile_address)\s*(?:<[^>]*>)?\s*\([^()]*\))\s*\))");
     src = emule_line_preserving_replace(
-        src, l1_ptr_cast_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>($2)))");
+        src, l1_getptr_cast_re,
+        "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
 
-    // reinterpret_cast<uint32_t>(ptr): an L1 pointer collapsed to its 32-bit
-    // device address (no-op on silicon, "cast loses information" on the host).
-    // emule L1 addresses are the low 32 bits of host pointers, so truncate via
-    // uintptr_t. Arg allows one nested-paren level; requiring '>' after uint32_t
-    // skips the pointer-typed reinterpret_cast<T*> forms handled above.
+    // P3: local L1<->L1 `memmove((void*)(dst), (void*)(src), n)` / memcpy — used by
+    // tt::data_movement::common::tt_memmove. Both operands are 0-based L1 offsets
+    // cast to void*; rebase each onto this fiber's L1. Narrowly anchored on the
+    // memmove/memcpy call with two void*-cast args, so it never touches an unrelated
+    // (void*) cast — a non-memmove L1 void* deref, if any, SIGSEGVs loudly and gets
+    // its own targeted rule. One nested-paren level per operand.
+    static const std::regex l1_mem_move_copy_re(
+        R"(\b(memmove|memcpy)\s*\(\s*\(\s*void\s*\*\s*\)\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\)\s*,\s*\(\s*void\s*\*\s*\)\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\)\s*,)");
+    src = emule_line_preserving_replace(
+        src, l1_mem_move_copy_re,
+        "$1((void*)__emule_local_l1_to_ptr((uint32_t)($2)), (void*)__emule_local_l1_to_ptr((uint32_t)($3)),");
+
+    // P4 (precise, set-gated closure): translate casts of L1-address variables the
+    // inline rules miss because the cast is attribute-less (P1 misses), not a
+    // get_*_ptr call (P2 misses), C-style, over an arithmetic operand, or through a
+    // #define'd pointer type. Two passes:
+    //   (A) collect the L1-address variable set — vars assigned DIRECTLY from a
+    //       producer (get_write_ptr / get_read_ptr / get_semaphore / get_tile_address,
+    //       free or cb.-method form), then the transitive closure over
+    //       `w = <collected-var> [+/- expr]` (e.g. vars_addr = means_addr + n).
+    //   (B) per collected var v, translate a cast whose operand is v (optionally
+    //       `v + arith`), in either the reinterpret_cast form (a non-tt_l1_ptr pointer
+    //       target, or a `_l1_ptr`-suffixed macro type P1 can't see pre-macro) or the
+    //       C-style `(T*)(...)` form.
+    // Gating on the collected set is what keeps this from over-matching arbitrary casts:
+    // a var not assigned from get_*_ptr is never collected, tt_l1_ptr reinterpret_casts
+    // stay with P1 (negative lookahead), and get_arg_addr host pointers are never
+    // collected. A collected var later reassigned to a non-L1 value is the only residual
+    // risk — it fails loudly (SIGSEGV / the __emule_l1_translate OOB assert).
+    {
+        static const std::regex l1_addr_var_re(
+            R"RE(\b(?:uint32_t|auto)\s+([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\s*\.\s*)?(?:get_write_ptr|get_read_ptr|get_semaphore|get_tile_address)\s*(?:<[^>]*>)?\s*\()RE");
+        std::set<std::string> l1_addr_vars;
+        for (std::sregex_iterator it(src.begin(), src.end(), l1_addr_var_re), end; it != end; ++it) {
+            l1_addr_vars.insert((*it)[1].str());
+        }
+        // (A) transitive closure: `w = <collected-var> [+/- ...]` is itself an L1 address.
+        bool grew = true;
+        while (grew) {
+            grew = false;
+            for (const auto& c : std::vector<std::string>(l1_addr_vars.begin(), l1_addr_vars.end())) {
+                const std::regex derived_re(
+                    R"RE(\b(?:uint32_t|auto)\s+([A-Za-z_]\w*)\s*=\s*)RE" + c + R"RE(\b)RE");
+                for (std::sregex_iterator it(src.begin(), src.end(), derived_re), end; it != end; ++it) {
+                    if (l1_addr_vars.insert((*it)[1].str()).second) {
+                        grew = true;
+                    }
+                }
+            }
+        }
+        // (B) translate the collected vars' casts (operand = v, optionally v + arith
+        // with one nested-paren level).
+        for (const auto& v : l1_addr_vars) {
+            // reinterpret_cast form: non-tt_l1_ptr pointer target (P1 owns tt_l1_ptr)
+            // OR a `_l1_ptr`-suffixed macro type (opaque pre-macro, so P1 can't see it).
+            const std::regex ric_re(
+                R"RE(reinterpret_cast<\s*((?![^>]*\btt_l1_ptr\b)(?:[^>]*\*|\w*_l1_ptr))\s*>\s*\(\s*()RE" +
+                v + R"RE(\b(?:[^()]|\([^()]*\))*?)\s*\))RE");
+            src = emule_line_preserving_replace(
+                src, ric_re,
+                "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
+            // C-style form `(<type>*)(v [+ arith])`. P1 never touches C-style casts, so
+            // no tt_l1_ptr partition is needed. Runs after the reinterpret_cast form,
+            // whose output ((uint32_t)(...) — no '*') this pattern cannot re-match.
+            const std::regex cstyle_re(
+                R"RE(\(\s*([\w:][\w:\s]*\*)\s*\)\s*\(\s*()RE" +
+                v + R"RE(\b(?:[^()]|\([^()]*\))*?)\s*\))RE");
+            src = emule_line_preserving_replace(
+                src, cstyle_re,
+                "($1)((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
+            // C-style form with a bare (unparenthesised) operand `(<type>*)v` — e.g.
+            // `patch_data = (volatile uint16_t*)intermed_l1_scratch`. Disjoint from the
+            // parenthesised form above (which requires `(` after the cast) and from the
+            // reinterpret_cast output.
+            const std::regex cstyle_bare_re(
+                R"RE(\(\s*([\w:][\w:\s]*\*)\s*\)\s*()RE" + v + R"RE()\b)RE");
+            src = emule_line_preserving_replace(
+                src, cstyle_bare_re,
+                "($1)((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
+        }
+    }
+
+    // P5 (per-site, interprocedural param-cast): two kernel helpers take a uint32_t
+    // L1 address THROUGH a function parameter and reinterpret_cast<T*> it, so the
+    // address is neither a tt_l1_ptr cast (P1) nor a locally get_*_ptr-assigned var
+    // (P2/P4) — the value flows from cb.get_write_ptr() across a helper-call boundary
+    // the intra-TU passes above can't follow. Each rule is anchored on the exact cast
+    // (target type + the helper's documented L1-address operand) so it matches only
+    // that one site; the translation happens at the cast, leaving the variable a
+    // 0-based offset for its other uses (e.g. the sibling CoreLocalMem read path).
+    // The full-suite run is the over-match gate.
+    //   1) ttnn kernel_helper_functions/pad_tile.hpp fill_pad_tile(uint32_t l1_tile_ptr)
+    //      — matmul in0/in1 padding readers (pad_last_ktile / pad_last_transposed_ktile).
+    static const std::regex l1_pad_tile_re(
+        R"(reinterpret_cast<\s*T\s*\*\s*>\s*\(\s*l1_tile_ptr\s*\))");
+    src = emule_line_preserving_replace(
+        src, l1_pad_tile_re,
+        "reinterpret_cast<T*>((uintptr_t)__emule_local_l1_to_ptr((uint32_t)(l1_tile_ptr)))");
+    //   2) pad reader_pad_dims_rm_interleaved.cpp fill_with_val_async: curr_addr starts
+    //      at the begin_addr param (= cb.get_write_ptr()) and is bumped per 2-byte store.
+    static const std::regex l1_curr_addr_re(
+        R"(reinterpret_cast<\s*uint16_t\s*\*\s*>\s*\(\s*curr_addr\s*\))");
+    src = emule_line_preserving_replace(
+        src, l1_curr_addr_re,
+        "reinterpret_cast<uint16_t*>((uintptr_t)__emule_local_l1_to_ptr((uint32_t)(curr_addr)))");
+
+    // reinterpret_cast<uint32_t>(ptr): the REVERSE direction — an L1 host pointer
+    // narrowed to its device address. L1 offset model: the device address is the
+    // 0-based offset, so subtract this fiber's bridge_l1 (was a bare truncation
+    // under the old host-pointer-aliasing model). Arg allows one nested-paren
+    // level; requiring '>' after uint32_t skips the pointer-typed
+    // reinterpret_cast<T*> forms handled above.
     static const std::regex ptr_to_l1_addr_re(
         R"(reinterpret_cast<\s*(?:std::)?uint32_t\s*>\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\))");
     src = std::regex_replace(
-        src, ptr_to_l1_addr_re, "static_cast<uint32_t>(reinterpret_cast<uintptr_t>($1))");
+        src, ptr_to_l1_addr_re,
+        "static_cast<uint32_t>(reinterpret_cast<uintptr_t>($1) - reinterpret_cast<uintptr_t>(__emule_self->bridge_l1))");
 
     // tt-metal's sharded-layernorm dataflow util declares
     // `using RemoteNocCoords = RemoteNocCoord[N];`. The two-stage reduce path
@@ -776,10 +900,15 @@ static void apply_x86_rewrites(std::string& src) {
         R"((using\s+RemoteNocCoords\s*=\s*RemoteNocCoord\s*\[)\s*N\s*(\]))");
     src = std::regex_replace(src, zero_len_noc_coords_re, "$1(N) == 0 ? 1 : (N)$2");
 
-    // Note: C-style `(uint32_t)ptr` truncation casts (common in fabric/CCL kernels, e.g.
-    // `(uint32_t)sem_header_ptr`) are handled globally by the -fms-extensions JIT flag, which
-    // downgrades pointer→smaller-int casts from a hard error to a warning. The MAP_32BIT window keeps
-    // those addresses in the low 2 GB so the truncation is value-preserving.
+    // L1 offset model gap (R2): C-style `(uint32_t)ptr` truncation casts
+    // (fabric/CCL, e.g. `(uint32_t)sem_header_ptr`) are still downgraded to a
+    // warning by -fms-extensions, but the truncation is NO LONGER value-
+    // preserving — the device address is now the 0-based offset (ptr - bridge_l1),
+    // not the low bits of the host pointer. A missed site feeds a wrong offset to
+    // a NOC/atomic op; __emule_l1_translate's debug assert (offset >= l1_size)
+    // catches it loudly. Add a name-constrained rewrite here when a real failing
+    // kernel surfaces — a blanket (uint32_t)EXPR rule would mistranslate
+    // non-pointer int casts.
 }
 
 // Patch `src_path` into `out_path`, then recurse into the quoted project headers
@@ -793,6 +922,8 @@ static void preprocess_tu_recursive(
     const std::string& src_path,
     const std::string& out_path,
     const std::string& out_dir,
+    const std::vector<std::string>& kernel_inc_roots,
+    const std::vector<std::string>& emule_inc_roots,
     std::set<std::string>& done) {
     std::ifstream in(src_path);
     if (!in) {
@@ -807,99 +938,94 @@ static void preprocess_tu_recursive(
     const std::filesystem::path src_dir = std::filesystem::path(src_path).parent_path();
     const std::filesystem::path out_dir_canon = std::filesystem::weakly_canonical(out_dir);
 
+    // Include directives to rewrite in `src` after the scan (a deep `../…` include
+    // that escapes out_dir is remapped to an include-root-relative name so its
+    // patched copy can live in out_dir). Applied post-loop to avoid invalidating the
+    // iterator below.
+    std::vector<std::pair<std::string, std::string>> inc_rewrites;
     static const std::regex include_re(R"RE(#[ \t]*include[ \t]*"([^"]+)")RE");
-    // Directive rewrites for includes patched into a mirror path (see the escaping
-    // branch below): applied to `src` after the loop, back-to-front so offsets stay valid.
-    struct IncDirectiveRewrite {
-        size_t pos;
-        size_t len;
-        std::string text;
-    };
-    std::vector<IncDirectiveRewrite> directive_rewrites;
     for (std::sregex_iterator it(src.begin(), src.end(), include_re), end; it != end; ++it) {
-        const std::smatch& m = *it;
-        const std::string inc_name = m[1].str();
+        const std::string inc_name = (*it)[1].str();
         std::error_code ec;
-        const std::filesystem::path candidate = src_dir / inc_name;  // absolute inc_name → itself
+        std::filesystem::path candidate = src_dir / inc_name;
         if (!std::filesystem::exists(candidate, ec)) {
-            // Resolved via a -I path (emule api/, system headers, repo-rooted kernel-common). Not ours
-            // to patch — pointer-truncation idioms there are handled by -fms-extensions (see the JIT
-            // compile flags), which downgrades pointer→uint32 casts to warnings.
-            continue;
+            // Not a same-directory (quote-relative) include. If an emule shadow
+            // header exists for this name (jit_hw / emule include), the compiler
+            // resolves it there via -I order and it is already offset-correct — do
+            // NOT patch or shadow it (a patched copy in out_dir would wrongly win
+            // via quote-relative resolution). Otherwise resolve against the kernel
+            // include roots (ttnn/, tt_metal/): a shared kernel helper in another
+            // directory (e.g. ttnn/cpp/ttnn/kernel_lib/*.inl) carries the same raw
+            // L1-deref idioms and must be patched too — same-dir recursion can't
+            // reach it and the header itself must stay pristine.
+            bool has_emule_shadow = false;
+            for (const auto& er : emule_inc_roots) {
+                if (std::filesystem::exists(std::filesystem::path(er) / inc_name, ec)) {
+                    has_emule_shadow = true;
+                    break;
+                }
+            }
+            if (has_emule_shadow) {
+                continue;
+            }
+            std::filesystem::path resolved;
+            for (const auto& kr : kernel_inc_roots) {
+                std::filesystem::path c2 = std::filesystem::path(kr) / inc_name;
+                if (std::filesystem::exists(c2, ec)) {
+                    resolved = c2;
+                    break;
+                }
+            }
+            if (resolved.empty()) {
+                // System header, or unresolved — left to -fms-extensions.
+                continue;
+            }
+            candidate = resolved;
         }
         const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
-        if (canon.empty()) {
-            continue;
+        if (canon.empty() || !done.insert(canon).second) {
+            continue;  // cycle / already patched
         }
-        const std::filesystem::path out_inc =
-            std::filesystem::weakly_canonical(std::filesystem::path(out_dir) / inc_name);
-        const std::string out_inc_str = out_inc.string();
-        const std::string& out_dir_str = out_dir_canon.string();
-        // Path-boundary-aware containment: a bare string-prefix compare would treat
-        // /tmp/dir2/x as under /tmp/dir, so require the match to end on a separator.
-        const bool under_out_dir = out_inc_str.size() > out_dir_str.size() &&
-                                   out_inc_str.compare(0, out_dir_str.size(), out_dir_str) == 0 &&
-                                   out_inc_str[out_dir_str.size()] == '/';
-        if (under_out_dir) {
-            // Maps cleanly UNDER out_dir (relative include): write the shadow copy and
-            // let `-I out_dir` make the compiler find it before the original. Directive
-            // stays as-is.
-            if (!done.insert(canon).second) {
-                continue;  // cycle / already patched
-            }
-            std::filesystem::create_directories(out_inc.parent_path(), ec);
-            preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
-        } else {
-            // ESCAPES out_dir — an absolute include (kernel codegen can emit
-            // `#include "/abs/.../op.hpp"`) or a ".." path. The compiler resolves the
-            // absolute directive directly, bypassing `-I out_dir`, so a shadow copy
-            // can't redirect it. Mirror the real file under out_dir and REPOINT the
-            // #include directive at the patched mirror — otherwise op headers keep
-            // their raw `reinterpret_cast<tt_l1_ptr T*>(<persistent L1 addr>)` derefs,
-            // which segfault on the host. The mirror's `#line` still names the real
-            // file, so DWARF / ASAN backtraces are unaffected.
-            if (!std::filesystem::path(canon).is_absolute()) {
-                continue;  // only mirror real absolute paths
-            }
-            // Only mirror an escaping include that the L1 rewrite above will actually
-            // change — i.e. one carrying a bare-identifier `reinterpret_cast<tt_l1_ptr
-            // T*>(ident)` persistent-address deref (an op header). Mirroring a shared
-            // header reached elsewhere via -I (whose only tt_l1_ptr cast takes `&buf[i]`
-            // and is deliberately NOT rewritten) would create a second copy that
-            // `#pragma once` can't dedupe against the original → redefinition errors.
-            // Probe with the SAME operand constraint as l1_ptr_cast_re so the two stay
-            // in lockstep. The file exists (checked above); if it cannot be read here,
-            // do NOT silently skip — that would leave a persistent-L1 deref unpatched
-            // and reintroduce the segfault — so fail loudly instead.
-            {
-                std::ifstream probe(canon);
-                if (!probe) {
-                    throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + canon);
-                }
-                std::stringstream pss;
-                pss << probe.rdbuf();
-                const std::string content = pss.str();
-                static const std::regex l1cast_probe(
-                    R"(reinterpret_cast<[^>;]*tt_l1_ptr[^>;]*\*>\s*\(\s*[A-Za-z_][A-Za-z0-9_:]*\s*\))");
-                if (!std::regex_search(content, l1cast_probe)) {
-                    continue;  // no translatable L1 cast — leave the directive; shared original used
+        std::filesystem::path out_inc = std::filesystem::weakly_canonical(
+            std::filesystem::path(out_dir) / inc_name);
+        std::string out_inc_str = out_inc.string();
+        // A deep `../…` include (e.g. the softmax writer's
+        // `../../../../../../kernel_helper_functions/pad_tile.hpp`) mirrors to a path
+        // that escapes out_dir. Rather than leave it unpatched, remap it to an
+        // include-root-relative name that stays inside out_dir, and rewrite the
+        // directive in `src` so the compiler finds the patched copy (via -I out_dir)
+        // instead of the pristine original.
+        if (out_inc_str.compare(0, out_dir_canon.string().size(), out_dir_canon.string()) != 0) {
+            std::string norm_name;
+            for (const auto& kr : kernel_inc_roots) {
+                const std::string krc = std::filesystem::weakly_canonical(kr, ec).string();
+                if (!krc.empty() && canon.size() > krc.size() + 1 &&
+                    canon.compare(0, krc.size(), krc) == 0 && canon[krc.size()] == '/') {
+                    norm_name = canon.substr(krc.size() + 1);
+                    break;
                 }
             }
-            const std::filesystem::path mirror = std::filesystem::path(out_dir) / "_patched_inc" / canon.substr(1);
-            const std::string mirror_str = mirror.string();
-            directive_rewrites.push_back(
-                {static_cast<size_t>(m.position(0)),
-                 static_cast<size_t>(m.length(0)),
-                 "#include \"" + mirror_str + "\""});
-            if (!done.insert(canon).second) {
-                continue;  // already patched via another includer; directive repointed above
+            if (norm_name.empty()) {
+                done.erase(canon);
+                continue;  // unresolvable escape — leave it to -fms-extensions
             }
-            std::filesystem::create_directories(mirror.parent_path(), ec);
-            preprocess_tu_recursive(canon, mirror_str, out_dir, done);
+            inc_rewrites.emplace_back(inc_name, norm_name);
+            out_inc = std::filesystem::weakly_canonical(std::filesystem::path(out_dir) / norm_name);
+            out_inc_str = out_inc.string();
         }
+        std::filesystem::create_directories(out_inc.parent_path(), ec);
+        preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, kernel_inc_roots, emule_inc_roots, done);
     }
-    for (auto rit = directive_rewrites.rbegin(); rit != directive_rewrites.rend(); ++rit) {
-        src.replace(rit->pos, rit->len, rit->text);
+    // Apply the escaping-include remaps to `src` before it is written out. Plain
+    // string replace of the quoted path (it contains regex-special chars); the path
+    // stays on its original line, so line-count is preserved.
+    for (const auto& [from, to] : inc_rewrites) {
+        const std::string needle = "\"" + from + "\"";
+        const std::string repl = "\"" + to + "\"";
+        for (std::string::size_type pos = src.find(needle); pos != std::string::npos;
+             pos = src.find(needle, pos + repl.size())) {
+            src.replace(pos, needle.size(), repl);
+        }
     }
 
     std::ofstream out(out_path);
@@ -915,10 +1041,13 @@ static void preprocess_tu_recursive(
     out << src;
 }
 
-static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
+static void preprocess_kernel_source_for_x86(
+    const std::string& src_path, const std::string& out_path,
+    const std::vector<std::string>& kernel_inc_roots,
+    const std::vector<std::string>& emule_inc_roots) {
     const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
     std::set<std::string> done;
-    preprocess_tu_recursive(src_path, out_path, out_dir, done);
+    preprocess_tu_recursive(src_path, out_path, out_dir, kernel_inc_roots, emule_inc_roots, done);
 }
 
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
@@ -1111,7 +1240,20 @@ static std::function<void()> jit_compile_kernel(
           << "#include \"api/dataflow/dataflow_api.h\"\n"
           << "void kernel_main() {}\n";
     } else {
-        preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path);
+        // Kernel include roots (ttnn/, tt_metal/) parsed from the JIT -I flags so
+        // preprocess_tu_recursive can reach + patch shared kernel helpers that live
+        // in another directory (the raw-L1-deref idioms in e.g. kernel_lib/*.inl).
+        // The emule shadow roots are checked first, so jit_hw headers are never patched.
+        std::vector<std::string> kernel_inc_roots;
+        {
+            static const std::regex inc_flag_re(R"RE(-I"([^"]+)")RE");
+            for (std::sregex_iterator it(extra_include_flags.begin(), extra_include_flags.end(), inc_flag_re), end;
+                 it != end; ++it) {
+                kernel_inc_roots.push_back((*it)[1].str());
+            }
+        }
+        const std::vector<std::string> emule_inc_roots = {jit_inc, parent_inc};
+        preprocess_kernel_source_for_x86(abs_kernel, patched_kernel_path, kernel_inc_roots, emule_inc_roots);
     }
 
     // 3. Write wrapper.cpp
@@ -1191,6 +1333,11 @@ static std::function<void()> jit_compile_kernel(
     // low 2 GB, so the truncation is value-preserving. (opt_flags = -O2, + ASAN debug info when enabled.)
     cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared" << opt_flags
         << " -Wno-c++11-narrowing -fms-extensions"
+        // out_dir first: patched copies of shared kernel headers (written under
+        // out_dir/<include-name> by preprocess_tu_recursive) must shadow the
+        // originals for full-path includes at any nesting depth. out_dir never
+        // contains emule (jit_hw) headers — those are skipped — so it can't shadow them.
+        << " -I\"" << dir << "\""
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
@@ -2770,26 +2917,28 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         uint64_t dim_key = (static_cast<uint64_t>(cfg.entry_size) << 32) | cfg.num_entries;
         bool compute_is_consumer = (cfg.consumer_risc_mask & TENSIX_MASK) != 0;
         bool compute_is_producer = (cfg.producer_risc_mask & TENSIX_MASK) != 0;
-        // Prefer the finalize-allocated L1 address (so host/test verification
-        // hits the same offset); fall back to bump-alloc when absent.
+        // Prefer the finalize-allocated L1 offset (so host/test verification
+        // hits the same offset); fall back to bump-alloc when absent. L1 offset
+        // model: base_addr is a 0-based L1 offset (finalize supplies the offset
+        // directly; l1_alloc returns one too). Use a found-flag, not addr != 0,
+        // as the "has finalize" test — offset 0 is a valid L1 address.
         auto cl = dfb_impl->core_lookup_.find(logical_core);
-        uint32_t finalize_addr = (cl != dfb_impl->core_lookup_.end()) ? core->l1_base_addr() + cl->second.second : 0;
+        bool has_finalize = (cl != dfb_impl->core_lookup_.end());
+        uint32_t finalize_addr = has_finalize ? cl->second.second : 0;  // 0-based L1 offset
         uint32_t base_addr;
         if (compute_is_producer && !compute_is_consumer) {
             auto it = bridge_consumer_alloc.find(dim_key);
             base_addr = (it != bridge_consumer_alloc.end()) ? it->second
-                                                            : (finalize_addr ? finalize_addr : core->l1_alloc(total));
+                                                            : (has_finalize ? finalize_addr : core->l1_alloc(total));
         } else {
-            base_addr = finalize_addr ? finalize_addr : core->l1_alloc(total);
+            base_addr = has_finalize ? finalize_addr : core->l1_alloc(total);
             if (compute_is_consumer && !compute_is_producer) {
                 bridge_consumer_alloc.emplace(dim_key, base_addr);
             }
         }
-        // `base_addr` is already a host pointer truncated to uint32_t — the L1 pool
-        // is mmap'd with MAP_32BIT so every L1 address fits in the low 32 bits.
-        // Reconstructing the host pointer is a widening cast, not a new allocation.
-        // See docs/QUASAR_EMULATION.md §4.1 and IMPLEMENTATION_REPORT.md "Address Translation".
-        uint8_t* base = reinterpret_cast<uint8_t*>(static_cast<uintptr_t>(base_addr));
+        // base_addr is a 0-based L1 offset (L1 offset model); rebase onto this
+        // core's L1 to get the host pointer the DFB/CB sync state stores.
+        uint8_t* base = core->l1_data() + base_addr;
         // STRIDED: M = max(P, C); ALL: M = P.
         bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
         uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
@@ -3242,6 +3391,7 @@ static void launch_cores(
                 ? reinterpret_cast<uint32_t*>(core->l1_ptr(ki.kernel_config_base + ki.crta_offset_in_kc))
                 : nullptr;
             ctx->bridge_l1 = l1_data;
+            ctx->l1_size = static_cast<uint32_t>(core->l1_size());
             ctx->bridge_dram = dram_data;
             ctx->cbs = cb_array;
             ctx->dfbs = dfb_array;
