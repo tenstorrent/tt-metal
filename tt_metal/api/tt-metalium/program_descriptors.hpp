@@ -22,6 +22,7 @@
 #include <filesystem>
 #include <optional>
 #include <utility>
+#include <initializer_list>
 #include <variant>
 #include <vector>
 
@@ -168,15 +169,35 @@ struct KernelDescriptor {
     // auto-register as buffer bindings; uint32_t entries embed their value.
     // The variant type is hidden — callers push typed values directly.
     struct RTArgList {
+        RTArgList() = default;
+        // Build directly from a brace list of uint32_t / Buffer* entries, e.g. {buffer, 0u, 0u}.
+        RTArgList(std::initializer_list<std::variant<uint32_t, Buffer*>> init) {
+            items_.reserve(init.size());
+            for (const auto& v : init) {
+                std::visit([this](auto&& x) { items_.emplace_back(x); }, v);
+            }
+        }
         void push_back(uint32_t v) { items_.emplace_back(v); }
         void push_back(Buffer* b) { items_.emplace_back(b); }
         void push_back(const MeshTensor& t) { items_.emplace_back(t); }
         void reserve(size_t n) { items_.reserve(n); }
+        size_t size() const { return items_.size(); }
         // Append a plain uint32_t range (e.g. from fused-op signaler helpers).
         void append(const std::vector<uint32_t>& v) {
             for (uint32_t x : v) {
                 items_.emplace_back(x);
             }
+        }
+        // Append any iterator range of uint32_t-convertible values.
+        template <typename It>
+        void append(It first, It last) {
+            for (; first != last; ++first) {
+                items_.emplace_back(static_cast<uint32_t>(*first));
+            }
+        }
+        // Mutable access to an existing slot (e.g. to update per-core scalar args in place).
+        std::variant<uint32_t, Buffer*, std::reference_wrapper<const MeshTensor>>& operator[](size_t i) {
+            return items_[i];
         }
 
     private:

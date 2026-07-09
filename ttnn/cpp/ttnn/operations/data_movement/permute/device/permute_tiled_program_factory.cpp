@@ -206,13 +206,13 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileInvariant::
     // we also need the inverse permutation to map back to input tensor
     auto inv_perm = detail::get_inverse_permutation(operation_attributes.dims);
 
-    std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args = {src_buffer, 0u, 0u};
+    KernelDescriptor::RTArgList reader_runtime_args = {src_buffer, 0u, 0u};
 
-    reader_runtime_args.insert(reader_runtime_args.end(), output_shape_view.begin(), output_shape_view.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), inv_perm.begin(), inv_perm.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), input_tile_strides.begin(), input_tile_strides.end());
+    reader_runtime_args.append(output_shape_view.begin(), output_shape_view.end());
+    reader_runtime_args.append(inv_perm.begin(), inv_perm.end());
+    reader_runtime_args.append(input_tile_strides.begin(), input_tile_strides.end());
 
-    std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args = {dst_buffer, 0u, 0u};
+    KernelDescriptor::RTArgList writer_runtime_args = {dst_buffer, 0u, 0u};
 
     std::vector<uint32_t> compute_runtime_args = {0};
 
@@ -482,11 +482,11 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTileRowInvarian
 
     auto input_shape_view = input_shape.view();
 
-    std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args = {src_buffer, 0u, 0u};
+    KernelDescriptor::RTArgList reader_runtime_args = {src_buffer, 0u, 0u};
 
-    std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args = {dst_buffer, 0u, 0u, 0u, 0u};
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), dims.begin(), dims.end());
+    KernelDescriptor::RTArgList writer_runtime_args = {dst_buffer, 0u, 0u, 0u, 0u};
+    writer_runtime_args.append(input_shape_view.begin(), input_shape_view.end());
+    writer_runtime_args.append(dims.begin(), dims.end());
 
     std::vector<uint32_t> compute_runtime_args = {0};
 
@@ -858,15 +858,15 @@ tt::tt_metal::ProgramDescriptor PermuteDeviceOperation::MultiCoreTiledGeneric::c
 
     auto input_shape_view = input_shape.view();
 
-    std::vector<std::variant<uint32_t, Buffer*>> reader_runtime_args = {src_buffer, 0u, 0u};
-    reader_runtime_args.insert(reader_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    reader_runtime_args.insert(reader_runtime_args.end(), dims.begin(), dims.end());
+    KernelDescriptor::RTArgList reader_runtime_args = {src_buffer, 0u, 0u};
+    reader_runtime_args.append(input_shape_view.begin(), input_shape_view.end());
+    reader_runtime_args.append(dims.begin(), dims.end());
 
     std::vector<uint32_t> compute_runtime_args = {0, 0};
 
-    std::vector<std::variant<uint32_t, Buffer*>> writer_runtime_args = {dst_buffer, 0u, 0u, 0u, 0u};
-    writer_runtime_args.insert(writer_runtime_args.end(), input_shape_view.begin(), input_shape_view.end());
-    writer_runtime_args.insert(writer_runtime_args.end(), dims.begin(), dims.end());
+    KernelDescriptor::RTArgList writer_runtime_args = {dst_buffer, 0u, 0u, 0u, 0u};
+    writer_runtime_args.append(input_shape_view.begin(), input_shape_view.end());
+    writer_runtime_args.append(dims.begin(), dims.end());
 
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     uint32_t start_block = 0;

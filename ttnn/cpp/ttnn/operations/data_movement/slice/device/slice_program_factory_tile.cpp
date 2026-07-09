@@ -6,6 +6,7 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile.hpp"
 
 #include <optional>
+#include <span>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -75,8 +76,9 @@ tt::tt_metal::ProgramDescriptor SliceTileProgramFactory::create_descriptor(
 
     // src0 buffer binding is registered separately below; this vector holds only the per-dim values.
     std::vector<uint32_t> reader_common_dims(num_dims * 2);
-    uint32_t* num_unpadded_tiles_per_dim = reader_common_dims.data();
-    uint32_t* num_padded_tiles_per_dim = num_unpadded_tiles_per_dim + num_dims;
+    std::span<uint32_t> reader_common_dims_view{reader_common_dims};
+    auto num_unpadded_tiles_per_dim = reader_common_dims_view.subspan(0, num_dims);
+    auto num_padded_tiles_per_dim = reader_common_dims_view.subspan(num_dims, num_dims);
     num_unpadded_tiles_per_dim[0] = num_unpadded_Xt;
     num_unpadded_tiles_per_dim[1] = num_unpadded_Yt;
     num_padded_tiles_per_dim[0] = num_padded_Xt;
