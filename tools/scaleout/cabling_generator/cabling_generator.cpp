@@ -846,12 +846,9 @@ void CablingGenerator::initialize_cluster(
     validate_host_id_uniqueness();
 
     if (!include_paths_.empty() || !exclude_paths_.empty()) {
-        // Opt-in sub-cluster extraction: prune to the selected instance paths, drop connections
-        // that cross out of the selection, and re-index survivors to a dense 0..M-1 host_id space.
-        // apply_instance_filter() populates host_id_to_node_ itself, so we skip reassign_host_ids_dfs.
+        // Filtering also assigns dense host_ids and populates host_id_to_node_.
         apply_instance_filter();
     } else {
-        // Populate the host_id_to_node_ map
         populate_host_id_to_node();
         reassign_host_ids_dfs();
     }
@@ -2550,10 +2547,10 @@ void CablingGenerator::apply_instance_filter() {
     std::vector<bool> include_used(includes.size(), false);
     std::vector<bool> exclude_used(excludes.size(), false);
 
-    // Walk every instance. A filter matches an instance when it is a suffix of that instance's path;
-    // matching an instance selects/excludes its whole subtree, which we propagate downward via
-    // `included_by_ancestor` / `excluded_by_ancestor`. A leaf is kept iff it is in the base set
-    // (all nodes if no include filter, else matched by include) and not excluded.
+    // A filter matches an instance when it is a suffix of that instance's path, and applies to the
+    // whole subtree beneath it (carried down via included_by_ancestor / excluded_by_ancestor). A leaf
+    // is kept iff it is in the base set (all nodes if no include filter, else include-matched) and
+    // not excluded.
     auto walk = [&](auto& self,
                     const ResolvedGraphInstance& graph,
                     std::vector<std::string>& prefix,
@@ -2590,8 +2587,7 @@ void CablingGenerator::apply_instance_filter() {
     std::vector<std::string> prefix;
     walk(walk, *root_instance_, prefix, false, false);
 
-    // Fail loudly on filter paths that matched no instance (typo / wrong level) rather than
-    // silently emitting the wrong topology.
+    // A filter path that matched no instance (typo / wrong level) is an error.
     std::vector<std::string> unmatched;
     for (size_t i = 0; i < includes.size(); ++i) {
         if (!include_used[i]) {
@@ -2656,8 +2652,7 @@ void CablingGenerator::apply_instance_filter() {
     };
     prune_connections(prune_connections, *root_instance_);
 
-    // Build dense remap raw -> 0..M-1 in DFS (template children_order) order over the pruned graph,
-    // matching the non-filtered reassign_host_ids_dfs() path so both produce the same numbering.
+    // Dense remap raw -> 0..M-1 in DFS (children_order) order over the pruned graph.
     std::map<HostId, HostId> remap;
     filtered_source_host_ids_.clear();
     filtered_source_host_ids_.reserve(kept_host_ids.size());
