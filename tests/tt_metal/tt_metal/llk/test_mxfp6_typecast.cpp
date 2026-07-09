@@ -138,10 +138,8 @@ static vector<uint32_t> run_mxfp6_typecast(
              }},
         .compile_time_args = {{"per_core_tile_cnt", num_tiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
-                experimental::ComputeGen2Config{
-                    .fp32_dest_acc_en = fp32_dest_acc_en,
-                },
+            experimental::ComputeGen2Config{
+                .fp32_dest_acc_en = fp32_dest_acc_en,
             },
     };
 

@@ -235,7 +235,7 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
         compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
-    auto make_compute_hw = [&]() {
+    auto make_compute_hw = [&]() -> ComputeHardwareConfig {
         ttnn::ComputeKernelConfig cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         if (fp32_dest_acc_en) {
