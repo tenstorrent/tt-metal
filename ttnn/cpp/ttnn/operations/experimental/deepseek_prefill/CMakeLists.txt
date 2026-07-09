@@ -1,5 +1,5 @@
-# Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for this
-# domain here without touching ttnn/CMakeLists.txt.
+# Owned by @tenstorrent/metalium-developers-ds-prefill. Add/remove ops for
+# this domain here without touching ttnn/CMakeLists.txt.
 add_subdirectory(combine)
 add_subdirectory(dispatch)
 add_subdirectory(extract)
@@ -16,3 +16,29 @@ add_subdirectory(post_combine_reduce)
 add_subdirectory(rotary_embedding_indexed)
 add_subdirectory(update_padded_kv_cache)
 add_subdirectory(zero_padded_kv_cache)
+
+# Domain-level umbrella target: ttnncpp links this one target instead of
+# enumerating this team's individual op libraries. Add/remove entries here
+# when adding/removing a module — never in ttnn/CMakeLists.txt.
+add_library(ttnn_op_deepseek_prefill INTERFACE)
+add_library(TTNN::Ops::Experimental::DeepSeekPrefill ALIAS ttnn_op_deepseek_prefill)
+target_link_libraries(
+    ttnn_op_deepseek_prefill
+    INTERFACE
+        TTNN::Ops::Experimental::DeepSeekPrefill::Combine
+        TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
+        TTNN::Ops::Experimental::DeepSeekPrefill::Extract
+        TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill::Insert
+        TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
+        TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
+        TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
+        TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
+        TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
+        TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
+        TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
+        TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
+)

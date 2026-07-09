@@ -268,13 +268,12 @@ target_link_libraries(
         TTNN::Ops::Experimental::Copy
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Dropout
-        TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
+        TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
-        TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
         TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
@@ -283,20 +282,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::MoEGPT
-        TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
-        TTNN::Ops::Experimental::DeepSeekPrefill::Combine
-        TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
-        TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
-        TTNN::Ops::Experimental::DeepSeekPrefill::D2dSocketSync
-        TTNN::Ops::Experimental::DeepSeekPrefill::Extract
-        TTNN::Ops::Experimental::DeepSeekPrefill::Insert
-        TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
-        TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
-        TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
-        TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
-        TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
-        TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastToFp8
-        TTNN::Ops::Experimental::DeepSeekPrefill::PerTokenCastBack
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Quasar
