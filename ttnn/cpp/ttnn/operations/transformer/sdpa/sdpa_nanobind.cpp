@@ -52,7 +52,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    std::optional<uint32_t> kv_window) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -83,7 +84,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        kv_window);
     return outputs;
 }
 
@@ -610,7 +612,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("kv_window").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

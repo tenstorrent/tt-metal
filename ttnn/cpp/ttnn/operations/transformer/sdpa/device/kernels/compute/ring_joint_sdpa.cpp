@@ -200,6 +200,14 @@ void kernel_main() {
     // The first active iter starts with fresh accumulators; restoring would read stale staging.
     bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+#ifdef KV_WINDOW_ENABLED
+        // Banded gather (kv_window): only the real hops (1 local + fwd + bwd) carry writes; stop before
+        // waiting on writes the clamped all-gather never sends. Dense builds omit this define so the
+        // ring_size trip count stays a compile-time constant (loop stays unrolled, byte-identical base).
+        if (ring_iter >= 1 + forward_writes_expected + backward_writes_expected) {
+            break;
+        }
+#endif
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
         // still advances above so compute stays aligned with reader, writer, and all-gather.

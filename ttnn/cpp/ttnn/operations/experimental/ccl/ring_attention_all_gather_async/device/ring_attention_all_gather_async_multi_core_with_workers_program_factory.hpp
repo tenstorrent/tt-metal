@@ -88,6 +88,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // only the valid (e.g. logical_n-sized) prefix. Capped to the input height per gathered tensor.
     // std::nullopt => gather the full input (default). The fused ring_joint_sdpa path also re-patches
     // this per dispatch on cache hits (see apply_ring_joint_scalar_runtime_args).
-    std::optional<uint32_t> gather_valid_Ht = std::nullopt);
+    std::optional<uint32_t> gather_valid_Ht = std::nullopt,
+    // Banded ring gather: when set, cap each direction's hop count (num_targets_forward/backward) to
+    // this window radius W so a shard only reaches devices [ring_index-W, ring_index+W]. The fused
+    // consumer MUST clamp its ring loop bound to the same W. std::nullopt => full gather (default).
+    std::optional<uint32_t> kv_window = std::nullopt);
 
 }  // namespace ttnn

@@ -395,6 +395,7 @@ class LTXAttention(Module):
         skip_qk: bool = False,
         kv_replicated: bool = False,
         kv_logical_n: int | None = None,
+        kv_window: int | None = None,
     ) -> ttnn.Tensor:
         """Same interface as WanAttention.forward(); pass k_rope_cos/sin for separate K RoPE
         in A2V/V2A cross-attention."""
@@ -522,6 +523,9 @@ class LTXAttention(Module):
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                     use_column_major_ccl=True,
+                    # Per-block temporal KV-windowing: only tolerant blocks pass a radius (else None =>
+                    # full gather, byte-identical). Bands the ring K/V gather to +-kv_window hops.
+                    kv_window=kv_window,
                 )
             elif sp_factor > 1:
                 # Masked audio self-attn: gather K/V, keep Q sharded; gather+local SDPA beats ring-joint here.

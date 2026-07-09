@@ -1,0 +1,15 @@
+L4 temporal-window depth map — ltx-perf-tip base (Stage-2 attn1, block output-PCC windowed vs dense).
+Replicates the deffb9 finding: block-specific, non-monotonic, late blocks trend local. Gate PCC>=0.85.
+block | T=+-2f avg/min | T=+-3f avg/min | +-3f min>=0.85
+  4   | 0.808/0.144    | 0.821/0.188    | FAIL (early, attends globally)
+  8   | 0.886/0.725    | 0.896/0.740    | fail (marginal)
+ 12   | 0.952/0.918    | 0.966/0.937    | PASS
+ 16   | 0.877/0.539    | 0.890/0.555    | FAIL
+ 20   | 0.908/0.767    | 0.925/0.796    | fail (marginal)
+ 24   | 0.960/0.900    | 0.970/0.922    | PASS
+ 32   | 0.949/0.878    | 0.968/0.917    | PASS
+ 40   | 0.932/0.815    | 0.956/0.871    | PASS
+ 47   | 0.992/0.980    | 0.995/0.985    | PASS (near-local)
+Read: ~half the blocks (12/24/32/40/47) tolerate a +-3f temporal window; early (4/8/16/20) need dense
+or wider. Per-block mask-search required. Kernel = depth-adaptive temporal-banded K-skip ring SDPA,
+reuse MSA stack (indexer_score_msa PR#48205, FlashGQASparseDecode PR#1788). Est -0.3-0.5s e2e.

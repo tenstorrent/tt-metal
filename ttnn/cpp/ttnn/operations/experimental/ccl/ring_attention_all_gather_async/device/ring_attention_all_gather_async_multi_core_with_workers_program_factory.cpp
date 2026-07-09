@@ -125,7 +125,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const CoreCoord core_grid_offset,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> input_batch_slice_idx,
-    std::optional<uint32_t> gather_valid_Ht) {
+    std::optional<uint32_t> gather_valid_Ht,
+    std::optional<uint32_t> kv_window) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -166,6 +167,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         ttnn::ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
     if (topology == ttnn::ccl::Topology::Ring && ring_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
+    }
+    // Banded gather: cap the per-direction hop counts to window radius W. These drive the sender
+    // kernels' slice-forwarding loops, so clamping here is what actually cuts inter-device fabric bytes.
+    // The fused consumer clamps to the same W (ring_joint_sdpa build_ring_write_plan) so its ring loop
+    // bound and expected writes stay matched. std::nullopt => full gather (byte-identical).
+    if (kv_window.has_value() && *kv_window > 0) {
+        num_targets_forward = std::min<size_t>(num_targets_forward, static_cast<size_t>(*kv_window));
+        num_targets_backward = std::min<size_t>(num_targets_backward, static_cast<size_t>(*kv_window));
     }
     // Get worker cores
     // 2 sender (forward/backward, each with a reader/writer)

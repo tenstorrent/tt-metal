@@ -473,6 +473,14 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+#ifdef KV_WINDOW_ENABLED
+        // Banded gather (kv_window): seq.expected is [backward, forward]. Only these hops carry writes;
+        // stop before the reader waits on the fused all-gather semaphore for writes the clamped gather
+        // never sends (else it hangs). Dense builds omit this so ring_size stays a compile-time constant.
+        if (ring_iter >= 1 + fused_op_receiver.seq.expected[0] + fused_op_receiver.seq.expected[1]) {
+            break;
+        }
+#endif
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
         // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing

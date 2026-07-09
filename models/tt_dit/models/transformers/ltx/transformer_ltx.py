@@ -348,6 +348,7 @@ class LTXTransformerBlock(Module):
         audio_cross_pe_sin_full: ttnn.Tensor | None = None,
         skip_cross_attn: bool = False,
         skip_self_attn: bool = False,
+        kv_window: int | None = None,
         audio_attn_mask: ttnn.Tensor | None = None,
         audio_padding_mask: ttnn.Tensor | None = None,
         audio_padding_mask_full: ttnn.Tensor | None = None,
@@ -373,6 +374,7 @@ class LTXTransformerBlock(Module):
             addcmul_residual=video_1BND,
             addcmul_gate=v_gate_sa,
             skip_qk=skip_self_attn,
+            kv_window=kv_window,
         )
 
         # Video text cross-attention
@@ -956,6 +958,16 @@ class LTXTransformerModel(Module):
 
         skip_self_attn_set = frozenset(skip_self_attn_blocks) if skip_self_attn_blocks else frozenset()
 
+        # Per-block temporal KV-windowing (env-gated, byte-identical when unset). Only the depth-map-
+        # tolerant blocks band the video self-attn ring K/V gather to +-radius hops; all others stay
+        # dense. LTX_KV_WINDOW = radius W; LTX_KV_WINDOW_BLOCKS = comma-separated block indices.
+        kv_window_radius = int(os.environ.get("LTX_KV_WINDOW", "0") or "0")
+        kv_window_set = (
+            frozenset(int(b) for b in os.environ.get("LTX_KV_WINDOW_BLOCKS", "").split(",") if b.strip() != "")
+            if kv_window_radius > 0
+            else frozenset()
+        )
+
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
             result = block(
@@ -984,6 +996,7 @@ class LTXTransformerModel(Module):
                 audio_cross_pe_sin_full=audio_cross_pe_sin_full,
                 skip_cross_attn=skip_cross_attn,
                 skip_self_attn=block_idx in skip_self_attn_set,
+                kv_window=kv_window_radius if block_idx in kv_window_set else None,
                 audio_attn_mask=audio_attn_mask,
                 audio_padding_mask=audio_padding_mask,
                 audio_padding_mask_full=audio_padding_mask_full,

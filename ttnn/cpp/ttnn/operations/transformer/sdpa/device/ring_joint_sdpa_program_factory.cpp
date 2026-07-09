@@ -201,7 +201,12 @@ RingWorkPlan build_ring_work_plan_impl(
     // same ring-id sequence, so use a no-op callback.
     auto noop_sync = [](uint32_t, uint32_t) {};
 
-    for (uint32_t ring_iter = 0; ring_iter < derivation.ring_size; ++ring_iter) {
+    // Only the real ring hops (1 local + fwd + bwd) carry work. Equals ring_size for a full gather; the
+    // banded gather (kv_window) clamps fwd/bwd in build_ring_write_plan, so bounding the loop here keeps
+    // the masks aligned with the kernels' clamped loop bound and stops the sequencer over-running.
+    const uint32_t ring_iters_to_run =
+        1 + ring_write_plan.forward_writes_expected + ring_write_plan.backward_writes_expected;
+    for (uint32_t ring_iter = 0; ring_iter < ring_iters_to_run; ++ring_iter) {
         const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
         const bool joint_contributes =
             ring_id == derivation.ring_size - 1 && derivation.num_joint_k_chunks > 0 && derivation.joint_seq_len != 0;
@@ -317,6 +322,14 @@ RingWritePlan build_ring_write_plan(
         plan.device_index,
         args.all_gather_operation_attributes.topology);
     (void)dynamic_alternate;
+    // Per-op banded gather: cap this device's hop counts to window radius W. Symmetric across both
+    // directions (so the post-swap forward/backward writes-expected stay balanced), matching the fused
+    // all-gather's own clamp. nullopt/0 => untouched (byte-identical). The clamp lowers
+    // forward/backward_writes_expected, which the kernels use as their ring loop bound.
+    if (args.kv_window.has_value() && *args.kv_window > 0) {
+        num_targets_forward = std::min<size_t>(num_targets_forward, static_cast<size_t>(*args.kv_window));
+        num_targets_backward = std::min<size_t>(num_targets_backward, static_cast<size_t>(*args.kv_window));
+    }
     if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && plan.device_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
@@ -1360,6 +1373,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // Per-block banded gather: gate the kernels' ring-loop form at compile time. When windowed, the
+    // reader/writer/compute loops early-exit at the clamped hop count (1 + fwd + bwd). When unset (no
+    // define) the loops keep their original compile-time ring_size trip count, so they stay unrolled and
+    // byte-identical to the dense base. kv_window is in the op cache key, so the two build distinct programs.
+    if (args.kv_window.has_value() && *args.kv_window > 0) {
+        defines["KV_WINDOW_ENABLED"] = "1";
+    }
 
     // NOTE: CreateKernel calls are deferred until after chain construction so that
     // the mcast_enabled compile-time arg can be determined first.
@@ -2425,7 +2445,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
         // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
         // dispatch on cache hits in apply_ring_joint_scalar_runtime_args.
-        compute_gather_valid_Ht(args, tensor_args));
+        compute_gather_valid_Ht(args, tensor_args),
+        // Per-block banded gather: clamp the producer's hop counts to the same window W as the SDPA
+        // consumer above, so it sends only ~2W+1 slices and the consumer's clamped loop bound matches.
+        args.kv_window);
 
     return desc;
 }

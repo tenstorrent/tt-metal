@@ -727,7 +727,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
-    const std::optional<uint32_t> latent_v_head_dim) {
+    const std::optional<uint32_t> latent_v_head_dim,
+    const std::optional<uint32_t> kv_window) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -808,7 +809,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         ccl_core_grid_offset,
         kv_cache_batch_idx,
         kv_actual_isl,
-        latent_v_head_dim.value_or(0));
+        latent_v_head_dim.value_or(0),
+        kv_window);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
