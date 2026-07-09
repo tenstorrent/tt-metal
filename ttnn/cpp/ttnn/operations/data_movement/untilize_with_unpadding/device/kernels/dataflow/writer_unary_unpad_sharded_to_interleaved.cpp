@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 // Writer for HEIGHT_SHARDED (tiled) -> ROW_MAJOR INTERLEAVED untilize-with-unpadding.
 //
@@ -36,20 +40,27 @@ void kernel_main() {
     constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
 
     const auto s = TensorAccessor(dst_args, dst_addr);
+    Noc noc;
+    CircularBuffer cb_out0(cb_id_out0);
 
-    // Decompose this core's first padded row into (matrix index, row within matrix). guard against a
+    // Decompose this core's first padded row into (matrix index, row within matrix); guard against a
     // zero matrix height (should never happen) so the modulo/division below are well defined.
     uint32_t m = matrix_h_padded == 0 ? 0 : start_padded_row / matrix_h_padded;
     uint32_t rr = matrix_h_padded == 0 ? 0 : start_padded_row % matrix_h_padded;
 
     const uint32_t num_tile_rows = num_rows / TILE_HEIGHT;
     for (uint32_t t = 0; t < num_tile_rows; t++) {
-        cb_wait_front(cb_id_out0, ntiles_per_row);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(ntiles_per_row);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
             if (rr < matrix_h_logical) {
-                uint64_t dst_noc_addr = s.get_noc_addr(m * matrix_h_logical + rr, 0);
-                noc_async_write(l1_read_addr, dst_noc_addr, row_size_unpadded);
+                CoreLocalMem<uint32_t> src(l1_read_addr);
+                noc.async_write(
+                    src,
+                    s,
+                    row_size_unpadded,
+                    {.offset_bytes = 0},
+                    {.page_id = m * matrix_h_logical + rr, .offset_bytes = 0});
             }
             l1_read_addr += block_row_size;
             rr++;
@@ -58,7 +69,7 @@ void kernel_main() {
                 m++;
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, ntiles_per_row);
+        noc.async_write_barrier();
+        cb_out0.pop_front(ntiles_per_row);
     }
 }
