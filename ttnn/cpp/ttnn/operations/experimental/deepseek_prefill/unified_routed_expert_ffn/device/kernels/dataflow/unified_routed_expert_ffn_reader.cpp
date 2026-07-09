@@ -81,9 +81,6 @@ void kernel_main() {
     // up_done = up block landed in L1. Monotonic; gy=0 in1-sender cores only.
     const uint32_t up_go_sem_id = get_arg_val<uint32_t>(31);
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(32);
-    // D2.0 Semaphore wrappers for the UP_SPLIT local (same-core BRISC<->NCRISC)
-    // handshake. Monotonic counters: set() stores the sequence value, wait_min()
-    // blocks until the semaphore is at least that value.
     Semaphore<> up_go_sem(up_go_sem_id);
     Semaphore<> up_done_sem(up_done_sem_id);
 
