@@ -2644,27 +2644,13 @@ void CablingGenerator::apply_instance_filter(
     };
     prune_connections(prune_connections, *root_instance_);
 
-    // Dense remap old_id -> 0..M-1 in DFS (children_order) order over the pruned graph. survivor_old_ids
-    // records each survivor's pre-remap host_id (new dense id i -> old id) to rebuild deployment_hosts_.
+    // Dense remap old_id -> 0..M-1. Host_ids are already dense in DFS order (reassign_host_ids_dfs ran
+    // at construction), so ascending kept_host_ids iteration preserves it. survivor_old_ids[new] = old.
     std::map<HostId, HostId> remap;
-    std::vector<HostId> survivor_old_ids;
-    survivor_old_ids.reserve(kept_host_ids.size());
-    HostId next_id{0};
-    auto assign_dfs = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
-        for (const auto& [name, is_node] : graph.children_order) {
-            if (is_node) {
-                auto it = graph.nodes.find(name);
-                if (it != graph.nodes.end()) {
-                    remap[it->second.host_id] = next_id;
-                    survivor_old_ids.push_back(it->second.host_id);
-                    next_id = HostId(*next_id + 1);
-                }
-            } else if (auto sit = graph.subgraphs.find(name); sit != graph.subgraphs.end()) {
-                self(self, *sit->second);
-            }
-        }
-    };
-    assign_dfs(assign_dfs, *root_instance_);
+    std::vector<HostId> survivor_old_ids(kept_host_ids.begin(), kept_host_ids.end());
+    for (size_t new_id = 0; new_id < survivor_old_ids.size(); ++new_id) {
+        remap[survivor_old_ids[new_id]] = HostId(new_id);
+    }
 
     // Apply the remap to nodes and connections, then rebuild per-instance lookups.
     auto apply_remap = [&](auto& self, ResolvedGraphInstance& graph) -> void {
