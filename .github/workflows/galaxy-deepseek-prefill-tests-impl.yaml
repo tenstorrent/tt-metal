@@ -1,4 +1,4 @@
-name: "[internal] Galaxy DeepSeek Prefill tests impl"
+name: "[internal] Blaze Models Prefill impl"
 
 on:
   workflow_call:

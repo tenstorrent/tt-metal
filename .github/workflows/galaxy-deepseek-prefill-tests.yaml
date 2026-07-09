@@ -1,4 +1,4 @@
-name: "(Galaxy) DeepSeek Prefill tests"
+name: "Blaze Models Prefill"
 
 on:
   workflow_dispatch:
