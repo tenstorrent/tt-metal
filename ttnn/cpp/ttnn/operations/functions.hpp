@@ -89,7 +89,7 @@ static Tensor index_trilu(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
@@ -130,7 +130,7 @@ static Tensor index_width(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
@@ -171,7 +171,7 @@ static Tensor index_height(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
@@ -211,7 +211,7 @@ static Tensor index_all(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
@@ -275,7 +275,7 @@ static Tensor fill_first_val_into_tensor(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           input_tensor.logical_shape(),
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
                               MemoryConfig{},
@@ -310,7 +310,7 @@ static Tensor prod_result_computation_WH_B0(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           ttnn::Shape({}),
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type,
                               PageConfig(Layout::ROW_MAJOR),
                               MemoryConfig{},
@@ -356,7 +356,7 @@ static Tensor index_channel(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
@@ -396,7 +396,7 @@ static Tensor index_batch(
                       tt::tt_metal::HostBuffer(std::move(output_buffer)),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
@@ -423,7 +423,7 @@ static Tensor manual_insertion(
                       tt::tt_metal::host_buffer::get_host_buffer(input_cpu_tensor),
                       TensorSpec(
                           logical_shape,
-                          detail::legacy_tensor_layout_from_padded_shape(
+                          ttnn::detail::legacy_tensor_layout_from_padded_shape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
                       .to_layout(layout);
     if (device != nullptr) {
