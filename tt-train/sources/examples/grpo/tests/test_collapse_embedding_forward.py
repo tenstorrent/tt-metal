@@ -36,11 +36,12 @@ def _build_collapsed_embedding(completer):
     replaced by row TARGET_TOKEN_ID."""
     from _completer_utils import as_update_input, to_torch_2d
 
-    emb_hf_2d = to_torch_2d(completer.model.embd.weights)  # (V, H)
+    model = completer.models[0]
+    emb_hf_2d = to_torch_2d(model.embd.weights)  # (V, H)
     target_row = emb_hf_2d[TARGET_TOKEN_ID, :].clone()
     collapsed_hf = target_row.unsqueeze(0).expand(emb_hf_2d.shape[0], -1).contiguous()  # (V, H)
 
-    return as_update_input(collapsed_hf, completer.mesh_device)
+    return as_update_input(collapsed_hf, model.mesh_device)
 
 
 def _ids_to_ttnn(completer, ids: List[int]):
@@ -49,13 +50,14 @@ def _ids_to_ttnn(completer, ids: List[int]):
     import torch
     import ttnn
 
+    model = completer.models[0]
     tokens = torch.tensor(ids, dtype=torch.int32).reshape(1, 1, 1, -1)
     return ttnn.from_torch(
         tokens,
-        device=completer.mesh_device,
+        device=model.mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(completer.mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
     )
 
 
@@ -63,8 +65,9 @@ def _embed(completer, ids: List[int]):
     """Run only ``Embedding.forward()`` and return the result as a torch tensor."""
     import ttnn
 
+    model = completer.models[0]
     ids_ttnn = _ids_to_ttnn(completer, ids)
-    out = completer.model.embd(ids_ttnn)
+    out = model.embd(ids_ttnn)
     return ttnn.to_torch(out)
 
 
@@ -84,6 +87,7 @@ def main() -> None:
         max_seq_len=MAX_SEQ_LEN,
         model_source=MODEL_ID,
     ) as completer:
+        model = completer.models[0]
         prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
         all_16000_ids = [TARGET_TOKEN_ID] * len(prompt_ids)
         print(f">>> prompt_ids    = {prompt_ids}")
@@ -95,7 +99,7 @@ def main() -> None:
         target_str = completer.tokenizer.decode([TARGET_TOKEN_ID], skip_special_tokens=False)
         print(f">>> collapsing embedding table: every row -> row {TARGET_TOKEN_ID} ({target_str!r})")
         new_weights = _build_collapsed_embedding(completer)
-        completer.model.embd.update(embed_tokens=new_weights)
+        model.embd.update(embed_tokens=new_weights)
 
         print(">>> C: collapsed embeddings x  real prompt ids")
         c_coll_real = _embed(completer, prompt_ids)

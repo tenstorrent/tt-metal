@@ -23,7 +23,8 @@ SMALL_EPS = 1e-12
 @pytest.fixture(scope="module")
 def completer_and_norm():
     with open_completer(dummy_weights=True) as completer:
-        dn = completer.model.layers[0].attention_norm
+        model = completer.models[0]
+        dn = model.layers[0].attention_norm
         yield completer, dn, dn.norm
 
 
@@ -31,14 +32,15 @@ def _build_random_rms_input(completer):
     """Construct a synthetic ``(1, 1, SEQ_LEN, dim)`` RMSNorm input."""
     import ttnn
 
-    dim = completer.model_args.dim
+    model = completer.models[0]
+    dim = model.args.dim
     return ttnn.from_torch(
         torch.randn(1, 1, SEQ_LEN, dim, dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        device=completer.mesh_device,
+        device=model.mesh_device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(completer.mesh_device),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(model.mesh_device),
     )
 
 
@@ -50,9 +52,10 @@ def test_rmsnorm_forward_is_zero_when_gamma_is_zero(completer_and_norm):
     from models.tt_transformers.tt.common import Mode
 
     completer, distributed_norm, rms = completer_and_norm
+    model = completer.models[0]
 
-    gamma_hf = torch.zeros(completer.model_args.dim, dtype=torch.bfloat16)
-    distributed_norm.update(weight=as_update_input(gamma_hf, completer.mesh_device))
+    gamma_hf = torch.zeros(model.args.dim, dtype=torch.bfloat16)
+    distributed_norm.update(weight=as_update_input(gamma_hf, model.mesh_device))
     rms.eps = SMALL_EPS
 
     out = ttnn.to_torch(rms.forward(_build_random_rms_input(completer), Mode.PREFILL))

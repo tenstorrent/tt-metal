@@ -45,7 +45,8 @@ def _generate(completer, prompt_ids):
 
 def test_lm_head_update_round_trip(completer):
     """Snapshot -> overwrite -> restore must reproduce the original tokens."""
-    lm_head = completer.model.lm_head
+    model = completer.models[0]
+    lm_head = model.lm_head
     V = lm_head.vocab_size
     H = lm_head.args.dim
     prompt_ids = completer.tokenizer.encode(PROMPT, add_special_tokens=True)
@@ -54,7 +55,7 @@ def test_lm_head_update_round_trip(completer):
     snap_hf = _snapshot_lm_head_hf(lm_head)
 
     overwrite_hf = torch.full((V, H), float(OVERWRITE_VALUE), dtype=torch.bfloat16)
-    lm_head.update(weight=as_update_input(overwrite_hf, completer.mesh_device))
+    lm_head.update(weight=as_update_input(overwrite_hf, model.mesh_device))
 
     tokens_broken = _generate(completer, prompt_ids)
     assert tokens_broken != tokens_A, (
@@ -62,7 +63,7 @@ def test_lm_head_update_round_trip(completer):
         "the overwrite step was a no-op, so the rest of the test is meaningless"
     )
 
-    lm_head.update(weight=as_update_input(snap_hf, completer.mesh_device))
+    lm_head.update(weight=as_update_input(snap_hf, model.mesh_device))
     tokens_B = _generate(completer, prompt_ids)
     assert tokens_B == tokens_A, (
         "LMHead.update did not reproduce __init__-equivalent state: " f"tokens_A={tokens_A}, tokens_B={tokens_B}"
