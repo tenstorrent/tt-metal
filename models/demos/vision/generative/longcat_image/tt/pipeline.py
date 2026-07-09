@@ -944,6 +944,24 @@ class LongCatImagePipelineTT:
             )
             print(f"[warmup] dummy input construction: {time.perf_counter() - _t0:.1f}s", flush=True)
 
+            # Build AND warm the VAE decoder (populate its cached device weights via one dummy
+            # decode) BEFORE capturing the DiT trace. The VAE's weight / group-norm / core-grid
+            # caches are allocated lazily on the first decode; if that first allocation lands AFTER
+            # the trace is captured, those buffers can occupy addresses the trace's execution
+            # overwrites ("Allocating device buffers is unsafe due to the existence of an active
+            # trace. These buffers may be corrupted once a trace is executed." — allocator.cpp). The
+            # next request's denoise re-executes the resident trace and corrupts the resident VAE
+            # weights, so every post-first image decoded to a constant (solid black) even though the
+            # denoised latents were healthy. Warming pre-capture puts the VAE weights in the
+            # resident set the trace planner reserves around, so trace replay never touches them.
+            _t0 = time.perf_counter()
+            vae_stub_mod = _load_stub("autoencoder_k_l")
+            vae_stub = vae_stub_mod.build(self.device, self.pipe.vae)
+            dummy_nchw = _unpack_latents(dummy_latents_packed, height, width, self.vae_scale_factor)
+            self._vae_decode(vae_stub, dummy_nchw)  # populate _cw/_gn/_cg/_lin caches pre-capture
+            ttnn.synchronize_device(self.device)
+            print(f"[warmup] VAE stub build + warm decode: {time.perf_counter() - _t0:.1f}s", flush=True)
+
             step_fn = self._make_dit_step_fn(
                 dit_stub, cos, sin, None, image_seq_len, guidance_scale, enable_cfg_renorm, cfg_renorm_min, do_cfg
             )
@@ -957,11 +975,6 @@ class LongCatImagePipelineTT:
                 tracer(latents0, temb0, dt0, enc_pos)
             ttnn.synchronize_device(self.device)
             print(f"[warmup] DiT trace capture + first execute: {time.perf_counter() - _t0:.1f}s", flush=True)
-
-            _t0 = time.perf_counter()
-            vae_stub_mod = _load_stub("autoencoder_k_l")
-            vae_stub = vae_stub_mod.build(self.device, self.pipe.vae)
-            print(f"[warmup] VAE stub build: {time.perf_counter() - _t0:.1f}s", flush=True)
         except Exception:
             if tracer is not None:
                 tracer.release_trace()
@@ -1190,6 +1203,14 @@ class LongCatImagePipelineTT:
             )
             sigmas = pipe.scheduler.sigmas.detach().cpu().tolist()
 
+            if os.environ.get("LONGCAT_DEBUG_STATS"):
+                _pe = prompt_embeds_pos
+                print(
+                    f"[dbg] enc_pos mean={_pe.float().mean():.5f} std={_pe.float().std():.5f} "
+                    f"absmax={_pe.float().abs().max():.5f}",
+                    flush=True,
+                )
+
             # 4) denoise (on device)
             with self.profile.track("denoise"):
                 final_latent_packed = self._tt_denoise(
@@ -1205,6 +1226,12 @@ class LongCatImagePipelineTT:
                     enable_cfg_renorm,
                     cfg_renorm_min,
                 )
+            if os.environ.get("LONGCAT_DEBUG_STATS"):
+                _fl = final_latent_packed.float()
+                print(
+                    f"[dbg] denoise_out mean={_fl.mean():.5f} std={_fl.std():.5f} absmax={_fl.abs().max():.5f}",
+                    flush=True,
+                )
 
             # 5) unpack + scale, then VAE decode
             latents_nchw = _unpack_latents(final_latent_packed, height, width, vsf)
@@ -1212,6 +1239,12 @@ class LongCatImagePipelineTT:
             with self.profile.track("vae_decode"):
                 image = self._tt_vae_decode(latents_nchw)
             image = image.clamp(-1, 1)
+            if os.environ.get("LONGCAT_DEBUG_STATS"):
+                _im = image.float()
+                print(
+                    f"[dbg] vae_out mean={_im.mean():.5f} std={_im.std():.5f} absmax={_im.abs().max():.5f}",
+                    flush=True,
+                )
 
         return {
             "image": image,  # [1,3,H,W] raw decode (pre-denormalize), fp32
