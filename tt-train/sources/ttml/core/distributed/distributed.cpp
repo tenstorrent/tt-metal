@@ -60,8 +60,12 @@ ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector
     bool changed = false;
     for (uint32_t axis : reduced_mesh_axes) {
         const size_t idx = (placements.size() == 1) ? 0 : axis;
-        if (idx < placements.size() &&
-            !std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[idx])) {
+        TT_FATAL(
+            idx < placements.size(),
+            "force_replicate_axes: reduced axis {} out of range for placements (size={})",
+            axis,
+            placements.size());
+        if (!std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[idx])) {
             placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
             changed = true;
         }
