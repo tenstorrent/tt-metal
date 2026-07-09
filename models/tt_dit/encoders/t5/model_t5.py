@@ -188,6 +188,32 @@ class T5Stack(Module):
         return all_hidden_states
 
 
+def _t5_compute_kernel_config(mesh_device, config: T5Config):
+    """HiFi4 + fp32_dest_acc_en matmul precision, opt-in via `T5Config.dtype=ttnn.float32`
+    (mirrors `T5RMSNorm`'s own always-on config below). Returns None (== ttnn's own default,
+    HiFi2) for the default `ttnn.bfloat16`, so every caller that doesn't set `dtype` is
+    unaffected."""
+    if config.dtype != ttnn.float32:
+        return None
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def _t5_out_dtype(config: T5Config):
+    """Output-activation dtype override for the Linear family's own `dtype=` forward kwarg
+    (distinct from -- and in addition to -- their weight storage dtype, which stays whatever
+    they were constructed with). Opt-in via `T5Config.dtype=ttnn.float32`: keeps the residual
+    stream itself in fp32 between ops instead of re-rounding to bf16 after every matmul, without
+    touching weight memory. None (ttnn's own default) when `config.dtype` is the default
+    bfloat16, so every other caller is unaffected."""
+    return config.dtype if config.dtype == ttnn.float32 else None
+
+
 class T5RMSNorm(RMSNorm):
     def __init__(self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None):
         super().__init__(
@@ -283,6 +309,8 @@ class T5DenseGatedActDense(Module):
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=self.ccl_manager,
         )
+        self.compute_kernel_config = _t5_compute_kernel_config(mesh_device, config)
+        self.out_dtype = _t5_out_dtype(config)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "wi_0", "wi0")
@@ -290,10 +318,19 @@ class T5DenseGatedActDense(Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # TODO: Consider fusing the wi0 and wi1 calls with a single linear layer.
-        gelu = self.wi0(x)
-        linear = self.wi1(x)
+        gelu = self.wi0(x, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
+        linear = self.wi1(x, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
         x = gelu * linear
-        hidden_states = self.wo(x)
+        # Force bf16 output here (not self.out_dtype, and not None -- `x` itself is already fp32
+        # from wi0/wi1's out_dtype, and an unspecified output dtype follows the input's): the
+        # RowParallelLinear.forward reduce_scatter path (mesh_axis_size > 1) uses a fixed-dtype
+        # persistent ping-pong buffer (get_rs_ping_pong_buffer takes no dtype param, unlike the
+        # all_gather buffer's dtype=tensor.get_dtype()) -- feeding it an fp32 tensor TT_FATALs in
+        # reduce_scatter_validate_utils.cpp regardless of whether this call requests fp32
+        # explicitly or just inherits it. The HiFi4 + fp32_dest_acc_en accumulation from
+        # compute_kernel_config still applies; only the final rounding of this one op's output is
+        # pinned back to bf16 when sharded.
+        hidden_states = self.wo(x, compute_kernel_config=self.compute_kernel_config, dtype=ttnn.bfloat16)
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
@@ -397,6 +434,8 @@ class T5Attention(Module):
             if self.use_relative_position_bias
             else None
         )
+        self.compute_kernel_config = _t5_compute_kernel_config(mesh_device, config)
+        self.out_dtype = _t5_out_dtype(config)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         rename_substate(state, "SelfAttention.q", "q_proj")
@@ -414,9 +453,9 @@ class T5Attention(Module):
         hidden_states_ = hidden_states
         hidden_states = self.layer_norm(hidden_states)
 
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
+        q = self.q_proj(hidden_states, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
+        k = self.k_proj(hidden_states, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
+        v = self.v_proj(hidden_states, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
 
         qkv = ttnn.concat([q, k, v], dim=-1)
 
@@ -427,11 +466,13 @@ class T5Attention(Module):
             qkv, num_heads=num_local_heads, transpose_key=True
         )
 
-        scores = ttnn.matmul(q, k)
+        scores = ttnn.matmul(q, k, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
 
         scores = scores + position_bias
         attn_weights = ttnn.softmax(scores, dim=-1, compute_kernel_config=self.layer_norm.compute_kernel_config)
-        attn_output = ttnn.matmul(attn_weights, v)
+        attn_output = ttnn.matmul(
+            attn_weights, v, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype
+        )
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
         attn_output = ttnn.unsqueeze(attn_output, 0)  # unsqueeze for all gather
@@ -445,7 +486,7 @@ class T5Attention(Module):
                 use_persistent_buffer=True,
             )
 
-        dense_out = self.o_proj(attn_output)
+        dense_out = self.o_proj(attn_output, compute_kernel_config=self.compute_kernel_config, dtype=self.out_dtype)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = self.ccl_manager.all_gather(

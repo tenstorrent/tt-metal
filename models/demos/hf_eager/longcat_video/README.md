@@ -9,7 +9,7 @@ golden:
 
 | Stage (`PIPELINE_STAGES`) | TTNN forward | Golden (Source A) | Gate | Measured e2e PCC |
 |---|---|---|---|---|
-| `text_encode` | prompt → T5Tokenizer → UMT5-xxl encoder → caption embeds | `transformers.UMT5EncoderModel.last_hidden_state` | ≥ 0.99 | **0.9996** |
+| `text_encode` | prompt → T5Tokenizer → UMT5-xxl encoder → caption embeds | `transformers.UMT5EncoderModel.last_hidden_state` | ≥ 0.99 | **0.9967** |
 | `denoise` | (latent, timestep, embeds) → velocity/noise prediction | vendored `LongCatVideoTransformer3DModel` | ≥ 0.95 | **0.9885** |
 | `vae_decode` | video ↔ latent (encode.mode → decode) | `diffusers.AutoencoderKLWan` | ≥ 0.95 | **0.9910** |
 
