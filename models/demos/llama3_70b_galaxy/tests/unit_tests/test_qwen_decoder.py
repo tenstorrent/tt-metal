@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+# Single parametrized test. Wormhole runs the original (main) prefetcher path; Blackhole Galaxy runs
+# the no-prefetcher bring-up path. The architecture is detected once at import so the pytest
+# parameters (fabric config) and the in-body setup select the right path automatically.
+import os
 import torch
 import pytest
 from loguru import logger
@@ -21,13 +26,44 @@ from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetche
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 
 
+def _is_blackhole_galaxy():
+    # Optional explicit override (set to "blackhole"/"bh" or "wormhole"/"wh").
+    forced = os.environ.get("QWEN_TEST_FORCE_ARCH", "").lower()
+    if forced in ("blackhole", "bh"):
+        return True
+    if forced in ("wormhole", "wormhole_b0", "wh"):
+        return False
+    try:
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
+            return True
+        if cluster_type in (ttnn.cluster.ClusterType.GALAXY, ttnn.cluster.ClusterType.TG):
+            return False
+    except Exception:
+        pass
+    arch = os.environ.get("ARCH_NAME", "")
+    if not arch:
+        try:
+            arch = ttnn.get_arch_name()
+        except Exception:
+            arch = ""
+    return "blackhole" in arch.lower()
+
+
+_IS_BLACKHOLE = _is_blackhole_galaxy()
+# The 8x4 Blackhole Galaxy decode path runs column-axis (cluster_axis=1) and row-axis collectives on
+# device, which requires a 2D-torus fabric (FABRIC_1D / FABRIC_1D_RING throw `IndexError: map::at` on
+# the cross-column route). Wormhole keeps main's fabric_config=True.
+_FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if _IS_BLACKHOLE else True
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": True,
+            "fabric_config": _FABRIC_CONFIG,
         }
     ],
     indirect=True,
@@ -74,21 +110,29 @@ def test_llama_decoder_inference(
     dtype = ttnn.bfloat8_b
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
+    if _IS_BLACKHOLE:
+        # Blackhole bring-up runs the unit test without the runtime prefetcher.
+        model_args.use_prefetcher = False
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
 
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=5,
-        n_layers=model_args.n_layers,
-        is_qwen=True,
-    )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
+    if _IS_BLACKHOLE:
+        prefetcher_setup = None
+        worker_sub_device_id = None
+    else:
+        prefetcher_setup = TtLlamaPrefetcherSetup(
+            mesh_device,
+            n_tensors=5,
+            n_layers=model_args.n_layers,
+            is_qwen=True,
+        )
+        mesh_device.set_sub_device_stall_group(
+            [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
+        )
+        worker_sub_device_id = prefetcher_setup.worker_sub_device_id
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, is_qwen=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, worker_sub_device_id, is_qwen=True)
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
@@ -182,7 +226,8 @@ def test_llama_decoder_inference(
         ),
     )
     # Explicitly allocate global CB to avoid memory fragmentation
-    prefetcher_setup.create_global_cb()
+    if not _IS_BLACKHOLE:
+        prefetcher_setup.create_global_cb()
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
@@ -198,13 +243,14 @@ def test_llama_decoder_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rm_rot_mats(current_pos)
-        tt_pf = prefetcher_setup.get_input_tensors()
-        ttnn.dram_prefetcher(
-            tt_pf,
-            num_layers=1,
-            global_cb=prefetcher_setup.global_circular_buffer,
-        )
-        mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
+        if not _IS_BLACKHOLE:
+            tt_pf = prefetcher_setup.get_input_tensors()
+            ttnn.dram_prefetcher(
+                tt_pf,
+                num_layers=1,
+                global_cb=prefetcher_setup.global_circular_buffer,
+            )
+            mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
         # Run TT model
         res = None
