@@ -3111,12 +3111,24 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         pass
 
     def _right_shift(self, t1, t2):
+        # The kernel defines shift amounts outside [0, 31] as producing 0 (see
+        # ckernel_sfpu_shift.h). torch.bitwise_right_shift is an *arithmetic* shift,
+        # so for a negative value an out-of-range shift would sign-extend to -1 rather
+        # than 0; guard here so the golden matches the hardware contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         return torch.bitwise_right_shift(t1, t2).item()
 
     def _left_shift(self, t1, t2):
+        # Shift amounts outside [0, 31] produce 0 to match the kernel contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         return torch.bitwise_left_shift(t1, t2).item()
 
     def _logical_right_shift(self, t1, t2):
+        # Shift amounts outside [0, 31] produce 0 to match the kernel contract.
+        if int(t2) < 0 or int(t2) >= 32:
+            return 0
         # Perform logical right shift by treating t1 as unsigned 32-bit
         t1_uint = t1.to(torch.int64) & 0xFFFFFFFF
         result = (t1_uint >> t2).to(torch.int32)
