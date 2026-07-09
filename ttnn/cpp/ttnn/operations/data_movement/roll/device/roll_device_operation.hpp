@@ -4,12 +4,16 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
+#include <vector>
 
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/roll/device/roll_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/roll/device/roll_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -32,6 +36,16 @@ struct RollDeviceOperation {
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
+
+    // DRAM sharded roll bakes per-shard buffer addresses (base + shard offset) into the reader runtime
+    // args; those change every dispatch and cannot be plain Buffer* bindings, so they are re-emitted on
+    // every cache hit here (defined in roll_program_factory.cpp, reusing the shared plan builder so the
+    // emitted values and indices match create_descriptor exactly).
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
 
 // Single-dim native sharded roll. shift is normalized to [0, dim_size); dim is absolute.
