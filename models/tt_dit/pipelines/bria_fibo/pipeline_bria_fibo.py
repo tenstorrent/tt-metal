@@ -193,8 +193,13 @@ class BriaFiboPipeline:
 
         assert height % (_VAE_SCALE_FACTOR) == 0 and width % (_VAE_SCALE_FACTOR) == 0
 
+        # CFG is active only when guidance_scale > 1 (matches the diffusers reference). At gs <= 1 the
+        # uncond branch is mathematically dead (noise = uncond + 1*(cond - uncond) = cond), so we skip
+        # encoding and running it entirely -- a ~2x cheaper denoise on the gs <= 1 path.
+        do_cfg = guidance_scale > 1
+
         # 1-3. Encode, then build per-branch conditioning + schedule + latents.
-        encoded = self._encode(prompt, negative_prompt)
+        encoded = self._encode(prompt, negative_prompt, do_cfg=do_cfg)
         cond_branch, uncond_branch, timesteps, latent, spatial_sequence_length = self._prepare(
             encoded,
             height=height,
@@ -216,11 +221,18 @@ class BriaFiboPipeline:
             latent, height=height, width=width, output_type=output_type, force_device_decode=force_device_decode
         )
 
-    def _encode(self, prompt: str, negative_prompt: str) -> tuple:
-        """Encode positive and negative prompts SEPARATELY (per-branch, true token lengths)."""
+    def _encode(self, prompt: str, negative_prompt: str, *, do_cfg: bool = True) -> tuple:
+        """Encode the positive prompt (and, when CFG is active, the negative prompt) SEPARATELY.
+
+        When ``do_cfg`` is False (``guidance_scale <= 1``) the negative branch is unused, so it is not
+        encoded and the uncond entries are returned as ``None`` (the diffusers reference skips it too).
+        """
         logger.info("encoding prompts...")
         cond_embeds, cond_hidden_states = self._text_encoder.encode_prompt(prompt)
-        uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt)
+        if do_cfg:
+            uncond_embeds, uncond_hidden_states = self._text_encoder.encode_prompt(negative_prompt)
+        else:
+            uncond_embeds, uncond_hidden_states = None, None
         return cond_embeds, cond_hidden_states, uncond_embeds, uncond_hidden_states
 
     def _prepare(
@@ -247,9 +259,13 @@ class BriaFiboPipeline:
         spatial_sequence_length = latent_h * latent_w
 
         cond_layers = build_text_encoder_layers(cond_hidden_states, self._num_blocks)
-        uncond_layers = build_text_encoder_layers(uncond_hidden_states, self._num_blocks)
         cond_branch = self._prepare_branch(cond_embeds, cond_layers, latent_h, latent_w, sp_axis)
-        uncond_branch = self._prepare_branch(uncond_embeds, uncond_layers, latent_h, latent_w, sp_axis)
+
+        # uncond entries are None when CFG is off (guidance_scale <= 1); skip building that branch.
+        uncond_branch = None
+        if uncond_embeds is not None:
+            uncond_layers = build_text_encoder_layers(uncond_hidden_states, self._num_blocks)
+            uncond_branch = self._prepare_branch(uncond_embeds, uncond_layers, latent_h, latent_w, sp_axis)
 
         # Timesteps + solver schedule (dynamic shift on the image sequence length).
         logger.info("preparing timesteps...")
@@ -269,13 +285,19 @@ class BriaFiboPipeline:
     def _denoise(
         self,
         cond_branch: dict,
-        uncond_branch: dict,
+        uncond_branch: dict | None,
         timesteps,
         latent: ttnn.Tensor,
         spatial_sequence_length: int,
         guidance_scale: float,
     ) -> ttnn.Tensor:
-        """Denoise loop: two per-branch forwards per step, combined via CFG. Syncs per step."""
+        """Denoise loop, one Euler step per timestep. Syncs per step.
+
+        With CFG (``uncond_branch is not None``): two per-branch forwards per step, combined as
+        ``noise = uncond + guidance_scale * (cond - uncond)``. Without CFG (``guidance_scale <= 1`` ->
+        ``uncond_branch is None``): a single cond forward per step (``noise = cond``), skipping the dead
+        uncond forward + lerp.
+        """
         logger.info("denoising...")
         submesh = self._submesh
         for i, t in enumerate(tqdm.tqdm(timesteps)):
@@ -284,12 +306,14 @@ class BriaFiboPipeline:
             )
 
             v_cond = self._run_transformer(latent, cond_branch, timestep, spatial_sequence_length)
-            v_uncond = self._run_transformer(latent, uncond_branch, timestep, spatial_sequence_length)
-
-            # noise = uncond + guidance_scale * (cond - uncond)
-            velocity = ttnn.lerp(v_uncond, v_cond, guidance_scale)
-            ttnn.deallocate(v_cond)
-            ttnn.deallocate(v_uncond)
+            if uncond_branch is not None:
+                v_uncond = self._run_transformer(latent, uncond_branch, timestep, spatial_sequence_length)
+                # noise = uncond + guidance_scale * (cond - uncond)
+                velocity = ttnn.lerp(v_uncond, v_cond, guidance_scale)
+                ttnn.deallocate(v_cond)
+                ttnn.deallocate(v_uncond)
+            else:
+                velocity = v_cond  # gs <= 1: noise = cond directly (uncond term cancels)
             ttnn.deallocate(timestep)
 
             new_latent = self._solver.step(step=i, latent=latent, velocity_pred=velocity)

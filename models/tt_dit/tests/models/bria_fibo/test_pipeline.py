@@ -205,7 +205,8 @@ def test_fibo_pipeline_vae_decode_on_device(*, mesh_device):
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=["device_params"],
 )
-def test_fibo_pipeline_latent_pcc(*, mesh_device):
+@pytest.mark.parametrize("guidance_scale", [5.0, 1.0])
+def test_fibo_pipeline_latent_pcc(*, mesh_device, guidance_scale):
     """Core end-to-end gate: the tt ``BriaFiboPipeline`` reproduces the diffusers reference
     ``BriaFiboPipeline``'s pre-VAE latent trajectory (PCC-gated) on the 2x2 Blackhole mesh.
 
@@ -233,8 +234,9 @@ def test_fibo_pipeline_latent_pcc(*, mesh_device):
 
     ckpt = _fibo_local()
 
+    # guidance_scale is parametrized: 5.0 exercises CFG (both branches); 1.0 exercises the no-CFG
+    # gate (uncond branch skipped) -- both must reproduce the reference, which gates identically.
     steps = 4
-    guidance_scale = 5.0
     height = width = 512
     in_channels = 48
     latent_h = height // 16
