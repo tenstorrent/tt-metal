@@ -473,30 +473,38 @@ inline void encode_2d_unicast(
     const uint8_t ew_write = (ew_dir == 1) ? MeshFields::FORWARD_WEST : MeshFields::FORWARD_EAST;
     const uint8_t z_write = MeshFields::FORWARD_Z;
 
-    // Build the ordered hop-direction list following Z-first dimension ordering:
-    //   [ns]*z_before, [Z]?, [ns]*(ns_hops - z_before), [ew]*ew_hops
+    // Build the ordered hop-direction list. Cardinal hops follow dimension order (all NS, then all EW);
+    // the single optional Z (skip) hop is spliced in after z_before cardinal hops. Because z_before
+    // counts cardinal hops across BOTH axes, the skip can land inside the NS run (NS-axis skip) or inside
+    // the EW run (EW-axis skip, e.g. a wide 8x16 mesh whose skips ride the long EW axis):
+    //   cardinal = [ns]*ns_hops ++ [ew]*ew_hops
+    //   route    = cardinal[0 : z_before] ++ [Z]? ++ cardinal[z_before : ]
     // Each entry is (forward_cmd, write_cmd) for that hop's dimension.
     uint8_t fwd_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
     uint8_t wr_list[FabricHeaderConfig::MESH_ROUTE_BUFFER_SIZE];
     uint32_t num_hops = 0;
-    for (uint8_t i = 0; i < z_before; ++i) {
-        fwd_list[num_hops] = ns_fwd;
-        wr_list[num_hops] = ns_write;
+    const uint32_t total_cardinal = (uint32_t)ns_hops + (uint32_t)ew_hops;
+    for (uint32_t c = 0; c < total_cardinal; ++c) {
+        // Splice the Z hop in once exactly z_before cardinal hops have been emitted.
+        if (z_present && c == z_before) {
+            fwd_list[num_hops] = z_fwd;
+            wr_list[num_hops] = z_write;
+            ++num_hops;
+        }
+        if (c < ns_hops) {
+            fwd_list[num_hops] = ns_fwd;
+            wr_list[num_hops] = ns_write;
+        } else {
+            fwd_list[num_hops] = ew_fwd;
+            wr_list[num_hops] = ew_write;
+        }
         ++num_hops;
     }
-    if (z_present) {
+    // Skip at the tail of the route (z_before >= total_cardinal), which also covers the pure-Z route
+    // (no cardinal hops at all, e.g. a direct skip-endpoint-to-skip-endpoint unicast).
+    if (z_present && z_before >= total_cardinal) {
         fwd_list[num_hops] = z_fwd;
         wr_list[num_hops] = z_write;
-        ++num_hops;
-    }
-    for (uint8_t i = z_before; i < ns_hops; ++i) {
-        fwd_list[num_hops] = ns_fwd;
-        wr_list[num_hops] = ns_write;
-        ++num_hops;
-    }
-    for (uint8_t i = 0; i < ew_hops; ++i) {
-        fwd_list[num_hops] = ew_fwd;
-        wr_list[num_hops] = ew_write;
         ++num_hops;
     }
 

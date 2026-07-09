@@ -344,6 +344,11 @@ public:
 
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
     RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
+    // True if the fabric has any intra-mesh Z (sub-torus "skip link") edge, e.g. BH galaxy skip-link
+    // meshes. On such meshes the routing table can prefer a shorter wrap/skip route whose direction
+    // disagrees with the displacement-based hop map, so 2D unicast must derive direction from the
+    // control plane rather than the hop map.
+    bool has_intra_mesh_skip_links() const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const;
