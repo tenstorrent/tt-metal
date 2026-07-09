@@ -1790,11 +1790,13 @@ class LTXPipeline:
         # eager — T-shard=8 AllGather/halo dominates, audio decode does not scale with chips), so
         # set LTX_VOC_TRACE=0 there.
         self.tt_vocoder_with_bwe.use_trace = self._traced and os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        # BWE/VAE trace default OFF: device-compute-bound at real frame counts, trace-replay
-        # net-negative (mel-VAE 0.86x; BWE 1.74s traced vs 1.17s eager, bh 4x8). LTX_BWE_TRACE=1 /
-        # LTX_VAE_TRACE=1 to force on for short, host-dispatch-bound inputs.
-        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "0") == "1"
-        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "0") == "1"
+        # BWE/VAE trace default ON, gated on the transformer trace. At served frame counts
+        # (145f/1088x1920, bh 4x8) traced vocoder+BWE ~0.45s vs eager ~0.85s (full audio decode
+        # 0.50s vs 0.88s), so this is the default so a run can't silently miss it. The old
+        # default-OFF was measured on a pre-optimization audio path (BWE 1.74s traced); replay is
+        # bit-identical either way. LTX_BWE_TRACE=0 / LTX_VAE_TRACE=0 to force eager.
+        self.tt_vocoder_with_bwe.use_trace_bwe = self._traced and os.environ.get("LTX_BWE_TRACE", "1") != "0"
+        self.tt_audio_decoder.use_trace = self._traced and os.environ.get("LTX_VAE_TRACE", "1") != "0"
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:

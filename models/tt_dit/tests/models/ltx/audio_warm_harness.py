@@ -207,8 +207,8 @@ def test_warm_harness(
         # here), and the _stage_decode path never re-syncs it — so set it directly or the "traced"
         # reps silently run eager. Mirrors _new_audio_decoder's env gating.
         pipeline.tt_vocoder_with_bwe.use_trace = os.environ.get("LTX_VOC_TRACE", "1") != "0"
-        pipeline.tt_vocoder_with_bwe.use_trace_bwe = os.environ.get("LTX_BWE_TRACE", "0") == "1"
-        pipeline.tt_audio_decoder.use_trace = os.environ.get("LTX_VAE_TRACE", "0") == "1"
+        pipeline.tt_vocoder_with_bwe.use_trace_bwe = os.environ.get("LTX_BWE_TRACE", "1") != "0"
+        pipeline.tt_audio_decoder.use_trace = os.environ.get("LTX_VAE_TRACE", "1") != "0"
         traced_total, _ = _avg_leg(pipeline, latent, num_frames, traced_reps, max(warmups, 2), "TRACED")
         if probe:
             _probe_split(pipeline, latent, num_frames, max(traced_reps, 3), "TRACED")
