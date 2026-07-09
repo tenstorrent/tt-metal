@@ -115,7 +115,8 @@ Exports two variables, passed to the orchestrator in Step 3:
   "TARGET_ARCH": "{target_arch}",
   "SFPI_MODE": "{SFPI_MODE}",
   "WORKTREE_DIR": "{worktree_dir}",
-  "WORKTREE_BRANCH": "{worktree_branch}"
+  "WORKTREE_BRANCH": "{worktree_branch}",
+  "LOG_DIR_BASE": "/proj_sw/user_dev/llk_code_gen"
 }
 ```
 
@@ -140,7 +141,8 @@ Route by task type and by `len(TARGET_ARCHES)`:
   "TARGET_ARCH": "{target_arch}",         // single-arch path ONLY — omit if TARGET_ARCHES is present
   "TARGET_ARCHES": ["{arch}", "..."],     // multi-arch path ONLY — omit if TARGET_ARCH is present; never both
   "WORKTREE_DIR": "{worktree_dir}",       // multi-arch: shared — one fixer owns the combined change across every selected architecture
-  "WORKTREE_BRANCH": "{worktree_branch}"  // used for commits and PRs
+  "WORKTREE_BRANCH": "{worktree_branch}", // used for commits and PRs
+  "LOG_DIR_BASE": "/proj_sw/user_dev/llk_code_gen"  // fixed log root; orchestrator appends its own sub-path
 }
 ```
 
