@@ -13,6 +13,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PER_TOKEN_CAST_TO_FP8_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PER_TOKEN_CAST_TO_FP8_NANOBIND_SRCS
-    per_token_cast_to_fp8_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_PER_TOKEN_CAST_TO_FP8_NANOBIND_SRCS per_token_cast_to_fp8_nanobind.cpp)

@@ -19,6 +19,4 @@ set(TTNN_OP_SLIDING_WINDOW_API_HEADERS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_SLIDING_WINDOW_NANOBIND_SRCS
-    sliding_window_nanobind.cpp
-)
+set(TTNN_OP_SLIDING_WINDOW_NANOBIND_SRCS sliding_window_nanobind.cpp)

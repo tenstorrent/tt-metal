@@ -20,6 +20,4 @@ set(TTNN_OP_EXPERIMENTAL_INDEXER_SCORE_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_INDEXER_SCORE_NANOBIND_SRCS
-    indexer_score_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_INDEXER_SCORE_NANOBIND_SRCS indexer_score_nanobind.cpp)

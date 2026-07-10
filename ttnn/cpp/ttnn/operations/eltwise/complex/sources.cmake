@@ -10,6 +10,4 @@ set(TTNN_OP_ELTWISE_COMPLEX_API_HEADERS complex.hpp)
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_ELTWISE_COMPLEX_NANOBIND_SRCS
-    complex_nanobind.cpp
-)
+set(TTNN_OP_ELTWISE_COMPLEX_NANOBIND_SRCS complex_nanobind.cpp)

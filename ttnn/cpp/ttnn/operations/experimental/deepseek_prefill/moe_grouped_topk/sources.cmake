@@ -11,6 +11,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MOE_GROUPED_TOPK_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MOE_GROUPED_TOPK_NANOBIND_SRCS
-    moe_grouped_topk_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MOE_GROUPED_TOPK_NANOBIND_SRCS moe_grouped_topk_nanobind.cpp)

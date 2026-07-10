@@ -10,6 +10,4 @@ set(TTNN_OP_ELTWISE_TERNARY_BACKWARD_SRCS ternary_backward.cpp)
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_ELTWISE_TERNARY_BACKWARD_NANOBIND_SRCS
-    ternary_backward_nanobind.cpp
-)
+set(TTNN_OP_ELTWISE_TERNARY_BACKWARD_NANOBIND_SRCS ternary_backward_nanobind.cpp)

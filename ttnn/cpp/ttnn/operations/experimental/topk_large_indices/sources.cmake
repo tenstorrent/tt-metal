@@ -19,6 +19,4 @@ set(TTNN_OP_EXPERIMENTAL_TOPK_LARGE_INDICES_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_TOPK_LARGE_INDICES_NANOBIND_SRCS
-    topk_large_indices_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_TOPK_LARGE_INDICES_NANOBIND_SRCS topk_large_indices_nanobind.cpp)

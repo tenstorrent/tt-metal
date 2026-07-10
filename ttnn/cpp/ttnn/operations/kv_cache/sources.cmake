@@ -15,6 +15,4 @@ set(TTNN_OP_KV_CACHE_API_HEADERS kv_cache.hpp)
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_KV_CACHE_NANOBIND_SRCS
-    kv_cache_nanobind.cpp
-)
+set(TTNN_OP_KV_CACHE_NANOBIND_SRCS kv_cache_nanobind.cpp)

@@ -14,6 +14,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_NANOBIND_SRCS
-    post_combine_reduce_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_POST_COMBINE_REDUCE_NANOBIND_SRCS post_combine_reduce_nanobind.cpp)

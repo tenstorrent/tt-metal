@@ -13,6 +13,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MOE_MOE_GATE_MM_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MOE_MOE_GATE_MM_NANOBIND_SRCS
-    moe_gate_mm_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_MOE_MOE_GATE_MM_NANOBIND_SRCS moe_gate_mm_nanobind.cpp)

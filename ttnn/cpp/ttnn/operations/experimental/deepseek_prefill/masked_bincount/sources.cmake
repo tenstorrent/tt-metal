@@ -14,6 +14,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MASKED_BINCOUNT_SRCS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MASKED_BINCOUNT_NANOBIND_SRCS
-    masked_bincount_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_MASKED_BINCOUNT_NANOBIND_SRCS masked_bincount_nanobind.cpp)

@@ -30,6 +30,4 @@ set(TTNN_OP_MATMUL_API_HEADERS
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_MATMUL_NANOBIND_SRCS
-    matmul_nanobind.cpp
-)
+set(TTNN_OP_MATMUL_NANOBIND_SRCS matmul_nanobind.cpp)

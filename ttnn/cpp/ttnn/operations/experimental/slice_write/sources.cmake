@@ -16,6 +16,4 @@ set(TTNN_OP_EXPERIMENTAL_SLICE_WRITE_API_HEADERS slice_write.hpp)
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_SLICE_WRITE_NANOBIND_SRCS
-    slice_write_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_SLICE_WRITE_NANOBIND_SRCS slice_write_nanobind.cpp)

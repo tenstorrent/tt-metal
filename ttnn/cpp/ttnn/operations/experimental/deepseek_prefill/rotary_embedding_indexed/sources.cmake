@@ -8,6 +8,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_ROTARY_EMBEDDING_INDEXED_API_HEADERS r
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_ROTARY_EMBEDDING_INDEXED_NANOBIND_SRCS
-    rotary_embedding_indexed_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_ROTARY_EMBEDDING_INDEXED_NANOBIND_SRCS rotary_embedding_indexed_nanobind.cpp)

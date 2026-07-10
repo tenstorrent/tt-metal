@@ -14,6 +14,4 @@ set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_H2D_SOCKET_SYNC_API_HEADERS inbound_so
 # Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
-set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_H2D_SOCKET_SYNC_NANOBIND_SRCS
-    inbound_socket_service_sync_nanobind.cpp
-)
+set(TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_H2D_SOCKET_SYNC_NANOBIND_SRCS inbound_socket_service_sync_nanobind.cpp)
