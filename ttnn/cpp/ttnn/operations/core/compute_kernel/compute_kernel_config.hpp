@@ -65,7 +65,7 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 // config.unpack_to_dest_mode is copied through to the result's per-DFB unpack_to_dest_mode.
 // (bfp8_pack_precise is left default, as it is rarely to never set non-default.)
 //
-// Please note that the following fields are not set from this helper:
+// Please note that the following TEMPORARY fields are not set from this helper:
 // enable_2x_src_format, unpack_to_dest_en
 // If specialization is desired, use site should update them instead.
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
