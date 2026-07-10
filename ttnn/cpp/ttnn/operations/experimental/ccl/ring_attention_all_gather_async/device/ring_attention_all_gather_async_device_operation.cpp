@@ -235,7 +235,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> RingAttentionAllGatherAsyncDeviceOp
     // ROW_MAJOR. All inputs are hashed structural params (num_links, sub_device_id) or the device, so the
     // core set is stable across cache hits (no freeze hazard).
     auto* mesh_device = tensor_args.input_tensor[0].device();
-    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+    [[maybe_unused]] const auto& [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         operation_attributes.num_links,
         dyn::kNumSendersPerLink,
         mesh_device,
