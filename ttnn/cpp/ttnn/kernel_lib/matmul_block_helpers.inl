@@ -21,27 +21,30 @@
 namespace compute_kernel_lib {
 
 /**
- * Pack a (h × w) DST sub-block to absolute row-major positions in the output CB —
- * one pack_tile<true>(dst_idx, cb, abs_tile_idx) per tile, so the helper needs no
- * access to CB-interface internals.
- *   dst_start_idx   start in DST; DST[dst_start_idx .. +h*w-1] packed row-first.
- *   pack_target_id  output CB id.
- *   col_base        column offset within the row group (tiles).
- *   row_stride      row stride in tiles (= out_row_width).
- * PRECONDITION: caller reserved >= h * row_stride tiles in pack_target_id (one
- * M-row-group) and is responsible for the matching cb_push_back.
+ * Pack a (subblock_height × subblock_width) DST sub-block to absolute row-major
+ * positions in the output CB — one pack_tile<true>(dst_idx, cb, abs_tile_idx) per
+ * tile, so the helper needs no access to CB-interface internals.
+ *   dst_start_idx    start in DST; DST[dst_start_idx .. +subblock_height*subblock_width-1]
+ *                    packed row-first.
+ *   pack_target_id   output CB id.
+ *   col_base         column offset within the row group (tiles).
+ *   row_stride       row stride in tiles (= out_row_width).
+ *   subblock_height  sub-block height in tiles.
+ *   subblock_width   sub-block width in tiles.
+ * PRECONDITION: caller reserved >= subblock_height * row_stride tiles in pack_target_id
+ * (one M-row-group) and is responsible for the matching cb_push_back.
  */
 ALWI void pack_subblock_row_strided(
     uint32_t dst_start_idx,
     uint32_t pack_target_id,
     uint32_t col_base,
     uint32_t row_stride,
-    uint32_t h,
-    uint32_t w) {
-    for (uint32_t r = 0; r < h; r++) {
+    uint32_t subblock_height,
+    uint32_t subblock_width) {
+    for (uint32_t r = 0; r < subblock_height; r++) {
         const uint32_t row_base = r * row_stride + col_base;
-        for (uint32_t c = 0; c < w; c++) {
-            pack_tile<true>(dst_start_idx + r * w + c, pack_target_id, row_base + c);
+        for (uint32_t c = 0; c < subblock_width; c++) {
+            pack_tile<true>(dst_start_idx + r * subblock_width + c, pack_target_id, row_base + c);
         }
     }
 }
@@ -62,23 +65,24 @@ ALWI void pack_subblock_at_offset(uint32_t dst_start_idx, uint32_t pack_target_i
 }
 
 /**
- * Read mirror of pack_subblock_row_strided: reload a row-strided-spilled (h × w) sub-block
- * into CONTIGUOUS DST. Each row's w tiles sit at source offset (r * row_stride + col_base)
- * from fifo_rd_ptr and land at DST[r * w], so the matmul/pack sees the same row-major
- * layout the contiguous (SubblockMajor) reload produces.
+ * Read mirror of pack_subblock_row_strided: reload a row-strided-spilled
+ * (subblock_height × subblock_width) sub-block into CONTIGUOUS DST. Each row's
+ * subblock_width tiles sit at source offset (r * row_stride + col_base) from fifo_rd_ptr
+ * and land at DST[r * subblock_width], so the matmul/pack sees the same row-major layout
+ * the contiguous (SubblockMajor) reload produces.
  *
  * One copy_block_matmul_partials per row (reads at fifo_rd_ptr + src_base; does NOT advance
- * it). Caller waits the whole fronted row group (col_base + (h-1)*row_stride + w tiles) and
- * pops it when done. col_base / row_stride match the spill.
+ * it). Caller waits the whole fronted row group (col_base + (subblock_height-1)*row_stride +
+ * subblock_width tiles) and pops it when done. col_base / row_stride match the spill.
  */
 ALWI void copy_subblock_row_strided(
     uint32_t src_cb_id,
     uint32_t col_base,
     uint32_t row_stride,
-    uint32_t h,
-    uint32_t w) {
-    for (uint32_t r = 0; r < h; r++) {
-        copy_block_matmul_partials(src_cb_id, r * row_stride + col_base, r * w, w);
+    uint32_t subblock_height,
+    uint32_t subblock_width) {
+    for (uint32_t r = 0; r < subblock_height; r++) {
+        copy_block_matmul_partials(src_cb_id, r * row_stride + col_base, r * subblock_width, subblock_width);
     }
 }
 
@@ -324,6 +328,14 @@ ALWI void matmul_block(
     ASSERT(in0_cb_id != out_cb_id);
     ASSERT(in1_cb_id != out_cb_id);
     ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
+    // Unsupported (PR #47724): TileRowMajor + software-reload (non-l1_acc) with interm aliased
+    // onto out. A multi-K reload re-reserves a row-group in the SAME headroom-free CB it is
+    // reloading from → reserve-before-pop deadlock. TRM software-reload needs interm as its OWN
+    // region; packer_l1_acc TRM may alias (its single reserve does no reload). num_k_blocks == 1
+    // has no reload, so passing out_buf as the interm placeholder is fine there.
+    if constexpr (tile_order == OutputCBLayout::TileRowMajor && !packer_l1_acc) {
+        ASSERT(shape.num_k_blocks == 1 || interm_cb_id != out_cb_id);
+    }
 
     // Reconfig and init are independent compile-time gates (see the InitMode /
     // DataFormatReconfig enums). The pack reconfig targets interm_cb_id (where non-last

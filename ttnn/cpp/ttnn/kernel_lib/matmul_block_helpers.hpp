@@ -15,38 +15,49 @@
 namespace compute_kernel_lib {
 
 /**
- * matmul_block — ACCUMULATE the output block, then FINALIZE only if needed.
+ * matmul_block — one tiled matmul output block, C = A × B.
  *
- * Support matrix (every cell supported, no caveats):
- *   tile_order {SubblockMajor, TileRowMajor} × packer_l1_acc {on, off}
- *     × last_block_target {Out, OutWithRelu, Interm}
- * Untilized (row-major) output is NOT a matmul_block target: accumulate to Interm, then untilize
- * in the kernel via reblock_and_untilize (SubblockMajor) or the standard untilize helper
- * (TileRowMajor).
+ * ── The operation ────────────────────────────────────────────────────────────
+ *   [M × K] × [K × N] = [M × N],  with M, K, N counted in TILES.
+ * One call produces one [M × N]-tile output block (times `batch`, if the kernel
+ * batches). In the shape params: M = in0_num_subblocks · out_subblock_h,
+ * N = in1_num_subblocks · out_subblock_w, K = num_k_blocks · in0_block_k (tiles).
  *
- * ── Phase 1: ACCUMULATE the whole output block ──────────────────────────────
- *   packer_l1_acc ON  → in place: ONE reserve_back over the whole block before the K-loop — no
- *     per-K-block reserve/push/drain. Each K-block packs to absolute offsets in that fixed region and
- *     packer_l1_acc adds in place. Layout-agnostic: TileRowMajor row-strided, SubblockMajor contiguous.
- *     Published (internal, per batch) as ONE push_back after the K-loop, EXCEPT the zero-copy alias-
- *     into-out SubblockMajor case (Phase 2), which packs directly into out and push_backs per subblock
- *     on the last K-block so the output writer overlaps the remaining subblocks' compute. Otherwise
- *     lands in interm (l1_acc format).
- *   packer_l1_acc OFF → FIFO spill + software reload: per-K-block reserve/push/pop, last block
- *     reloads the accumulated partials into DST.
+ * ── Subblock: the unit of compute ────────────────────────────────────────────
+ * The [M × N] output is computed one SUBBLOCK at a time — out_subblock_h ×
+ * out_subblock_w tiles — because a subblock is the largest chunk that fits the DST
+ * register (out_subblock_h · out_subblock_w ≤ DST capacity). in0_num_subblocks ×
+ * in1_num_subblocks subblocks tile the block along M and N.
  *
- * ── Phase 2: FINALIZE — runs only when the accumulated block isn't already the output ──
- *   Interm target                     → a downstream in-kernel op consumes interm → NO finalize.
- *   Out / OutWithRelu, packer_l1_acc  → materialize interm→out: copy + dtype-convert + relu
- *     (OutWithRelu) + Activation. ZERO-COPY SKIP when interm is aliased onto out (same CB → already
- *     the correct dtype / layout / tile).
- *   Out / OutWithRelu, non-l1_acc     → the software-reload last block is the finished sum in DST,
- *     so it packs STRAIGHT TO OUT (relu / Activation applied on that pack) → NO finalize.
+ * ── K-blocking: the reduction loop ───────────────────────────────────────────
+ * K is split into num_k_blocks slabs of in0_block_k tiles; the helper loops over
+ * them, accumulating into the output block. For each K-block the caller streams
+ *   in0 = [M × in0_block_k]  and  in1 = [in0_block_k × N]  tiles
+ * (A sliced into in0_block_k-wide column-slabs, B into in0_block_k-high row-slabs).
  *
- * Callers pass NO path-selection flag — the helper derives the path from packer_l1_acc +
- * last_block_target + tile_order + whether interm aliases out. Every restriction is legible from
- * these: e.g. non-l1_acc Out goes straight to out because there is no in-place block to finalize;
- * a lower-precision or row-major output needs the finalize because accumulation is fp32/fp16_b tile.
+ * ── Accumulate → finalize (how the block is built, then published) ───────────
+ * Phase 1 ACCUMULATE the whole block over the K-loop:
+ *   packer_l1_acc ON  → in place: ONE reserve_back over the block before the K-loop;
+ *     each K-block packs to absolute offsets and packer_l1_acc adds in place
+ *     (TileRowMajor row-strided / SubblockMajor contiguous). Published as one
+ *     push_back after the loop — except the zero-copy alias-into-out SubblockMajor
+ *     case, which packs straight to out and push_backs per subblock so the output
+ *     writer overlaps the remaining subblocks' compute.
+ *   packer_l1_acc OFF → FIFO spill + software reload: per-K-block reserve/push/pop;
+ *     the last block reloads the accumulated partials into DST.
+ * Phase 2 FINALIZE (only when the accumulated block isn't already the output):
+ *   Interm target            → a downstream in-kernel op consumes interm → no finalize.
+ *   Out/OutWithRelu, l1_acc  → copy interm→out (+ dtype-convert / relu / Activation);
+ *     ZERO-COPY SKIP when interm is aliased onto out.
+ *   Out/OutWithRelu, non-l1_acc → the reload's last block IS the sum in DST, packed
+ *     straight to out (relu / Activation on that pack) → no finalize.
+ * Callers pass NO path-selection flag — the helper derives the path from packer_l1_acc
+ * + last_block_target + tile_order + whether interm aliases out.
+ *
+ * Support: all of tile_order {SubblockMajor, TileRowMajor} × packer_l1_acc {on, off} ×
+ * last_block_target {Out, OutWithRelu, Interm}. Row-major (untilized) output is NOT a
+ * target — accumulate to Interm, then reblock_and_untilize (SubblockMajor) / the
+ * standard untilize helper (TileRowMajor) downstream in the kernel.
  */
 
 /**
@@ -305,13 +316,11 @@ struct NoIn1BaseOffset {
  * software spill/reload via interm; true = hardware L1 accumulation). See OutputCBLayout
  * and the parameters below.
  *
- * ── Precision (host-side ComputeConfig; the helper sets no fidelity/DEST) ─────
- *   bf16 inputs, Kt == 1 : LoFi or HiFi2.
- *   bf16 inputs, Kt  > 1 : HiFi2 + fp32_dest_acc_en (else the K-accumulation rounds to
- *                          bf16 each step; max-abs error grows ~O(sqrt(K))).
- *   fp32 inputs          : HiFi4 + fp32_dest_acc_en (the only correct combination).
- *   AVOID HiFi4 + fp32_dest_acc_en with bf16 inputs — silent K-accumulator corruption on
- *   Wormhole B0 (issue #38306); use HiFi2/HiFi3.
+ * ── Precision ────────────────────────────────────────────────────────────────
+ *   Math fidelity and fp32_dest_acc_en are the caller's host-side ComputeConfig —
+ *   the helper sets neither. The one kernel-relevant trap: do NOT pair HiFi4 +
+ *   fp32_dest_acc_en with bf16 inputs (silent K-accumulator corruption on Wormhole
+ *   B0, issue #38306; use HiFi2/HiFi3).
  *
  * Init/reconfig: by default (init_mode=Short, reconfig=InputAndOutput) the helper issues
  * the data-format reconfig + matmul_block_init itself, so callers only do the one
@@ -362,15 +371,21 @@ struct NoIn1BaseOffset {
  *                      MatmulBlockShape field docs.
  *   post_compute, ...  functor instances for the template hooks above.
  *
- * @example  // Single K-block, all defaults. Boot with compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0,
- *           // cb_in1, cb_out) then matmul_block_init(cb_in0, cb_in1, transpose=0, ct_dim=1,
- *           // rt_dim=1, kt_dim=Kt). Pass out_buf as the
- *           // interm placeholder (unused when num_k_blocks == 1).
+ * @example  // Single K-block, all defaults (SubblockMajor, no l1_acc, Out).
+ *   //   INPUT : in0 = [Mt × Kt] tiles, in1 = [Kt × Nt] tiles, streamed as ONE K-block.
+ *   //   OUTPUT: out = [Mt × Nt] tiles, published once, subblock-major (here 1×1 subblocks).
+ *   // Boot: compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out) then
+ *   //   matmul_block_init(cb_in0, cb_in1, transpose=0, ct_dim=1, rt_dim=1, kt_dim=Kt).
+ *   //   Pass out_buf as the interm placeholder (unused when num_k_blocks == 1).
  *   CircularBuffer in0_buf(cb_in0), in1_buf(cb_in1), out_buf(cb_out);
  *   matmul_block<>(in0_buf, in1_buf, out_buf, out_buf,
  *       MatmulBlockShape::of(Mt, Nt, 1, 1, Kt, 1));  // in0_sb, in1_sb, sb_h, sb_w, k, num_k
  *
  * @example  // K-blocked, packer-L1 accumulation, TileRowMajor output.
+ *   //   INPUT : per K-block the caller streams in0 = [M × in0_block_k] and
+ *   //           in1 = [in0_block_k × N] tiles; num_k_blocks such blocks accumulate in place.
+ *   //   OUTPUT: out = [M × N] tiles, published tile-row-major (each M-row-group written
+ *   //           contiguously across the full N width) for a writer that reads full rows.
  *   // Template order: transpose, packer_l1_acc, last_block_target, tile_order.
  *   matmul_block<false, true, LastBlockTarget::Out, OutputCBLayout::TileRowMajor>(
  *       in0_buf, in1_buf, out_buf, interm_buf,
