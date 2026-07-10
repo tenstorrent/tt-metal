@@ -54,8 +54,9 @@ Debug/retry invocation:
 - all initial inputs
 - `${LOG_DIR}/agent_tester.md` or exact tester output
 - changed files
-- failure class: `COMPILE_FAILED`, `TESTS_FAILED`, `PERF_REGRESSION`, or `PERF_NOT_IMPROVED`
+- failure class: `COMPILE_FAILED`, `TESTS_FAILED`, `PERF_REGRESSION`, `PERF_NOT_IMPROVED`, or `REVIEW_FINDINGS`
 - for perf failure classes: the `perf` evidence and the `perf_baseline_*`/`perf_current_*` CSV paths in `LOG_DIR` (from `agent_perf_tester.md`). A perf fix must keep every functional test green — the tester re-runs after your change.
+- for `REVIEW_FINDINGS`: the `${LOG_DIR}/review_result.json` path (senior-review findings on your diff). A review fix must keep every functional test green — the tester re-runs after your change.
 
 ## Mandatory Pre-Flight
 
@@ -110,6 +111,7 @@ Do not revert unrelated work.
    | `ENV_ERROR` | missing venv, missing sim, lock/env issue | stop; not a code bug |
    | `PERF_REGRESSION` | fix got slower than baseline (perf-tester `perf` evidence) | **Localize first, then fix.** (1) `git diff` your own change — the regression is almost always something you just added. (2) Read `perf_result.json` `worst_variant.thread_breakdown` (and the `*_ISOLATE` columns in the `perf_current_*`/`perf_baseline_*` CSVs) to see which thread grew: `MATH_ISOLATE` ⇒ extra SFPU/FPU instructions in the kernel; `PACK_ISOLATE`/`UNPACK_ISOLATE` ⇒ extra pack/unpack work or a reconfig. (3) Recover the cycles without breaking correctness: redundant/extra instructions, a lost replay buffer or MOP, init/uninit moved into the hot tile loop, or a slower format/`dest_acc` path. If the slowdown is intrinsic to the correctness fix, return `HYPOTHESIS_REFUTED` with the breakdown as evidence. |
    | `PERF_NOT_IMPROVED` | optimization issue, fix did not get faster | The optimization goal is unmet. Use the same `thread_breakdown` to find the hot thread, then apply the intended fast path on it — replay buffers / MOP for `ITERATIONS` loops, fewer instructions, a cheaper format path — without breaking correctness. Return `HYPOTHESIS_REFUTED` if no further speedup is available. |
+   | `REVIEW_FINDINGS` | senior-review findings on your diff (`review_result.json`) | Address each **blocking** finding (`blocking: true` — correctness/hazard/propagation) with the smallest fix; read its `comment` for the precise concern and use `.claude/references/metal-integration.md` for propagation gaps. Advisory findings (`blocking: false`) are recorded only — do not act on them. If a blocking finding genuinely cannot be resolved without breaking correctness, return `HYPOTHESIS_REFUTED` with that evidence so the orchestrator stops looping. |
 
 2. Check `.claude/references/common-errors.md`.
 3. When `TEST_BACKEND=local` and inspecting generated assembly or resolving a crash address is helpful:
