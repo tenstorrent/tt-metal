@@ -110,8 +110,9 @@ void kernel_main() {
     // host appends via FabricMuxV2Config::append_client_connection_rt_args. No worker-side
     // termination protocol: the mux self-drains once every client closes.
     // build_from_args takes size_t&; bridge through a size_t since arg_idx is uint32_t here.
+#define EAGER_STAGING true
     size_t mux_arg_idx = arg_idx;
-    auto mux_connection = tt::tt_fabric::FabricMuxV2Sender<>::build_from_args(mux_arg_idx);
+    auto mux_connection = tt::tt_fabric::FabricMuxV2Sender<EAGER_STAGING>::build_from_args(mux_arg_idx);
     arg_idx = static_cast<uint32_t>(mux_arg_idx);
 #else
     uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
