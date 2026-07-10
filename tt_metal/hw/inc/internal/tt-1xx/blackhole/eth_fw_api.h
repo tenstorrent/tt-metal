@@ -427,6 +427,19 @@ inline void fabric_dbg_inc_tx_pkt_count() {
     *p = *p + 1;
 #endif
 }
+
+// [RX-COUNT] Free-running 32-bit count of packets received off the eth link and delivered to the local
+// chip, stored in word[2] of the debug slot (MEM_AERISC_RESUME_PHASE_BASE + 8). Compare against a peer
+// core's TX count (MEM_AERISC_TX_PKT_COUNT_ADDR) to detect drops: sender_tx > receiver_rx => packets
+// lost on that link. Pinned to ERISC1: the receiver channel is serviced by ERISC1 only (the sender/TX
+// counter runs on ERISC0), so this is a single writer on the receiver's own RISC.
+constexpr uint32_t MEM_AERISC_RX_PKT_COUNT_ADDR = MEM_AERISC_RESUME_PHASE_BASE + 8;
+inline void fabric_dbg_inc_rx_pkt_count() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 1)
+    volatile uint32_t* p = reinterpret_cast<volatile uint32_t*>(MEM_AERISC_RX_PKT_COUNT_ADDR);
+    *p = *p + 1;
+#endif
+}
 // Push the current TX packet count into the watcher ring buffer. Called on every context switch so the
 // per-core ring buffer becomes a time series of the counter -- if the values keep changing across
 // dumps, TX is advancing; if they flatline, TX has stalled. Replaces the old recovery/link-status

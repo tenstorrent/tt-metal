@@ -297,6 +297,7 @@ FORCE_INLINE bool run_receiver_channel_step_speedy(
         // post-retrain TX has happened, mark the first post-retrain RX (traffic resumed both ways).
 #if defined(ARCH_BLACKHOLE)
         fabric_dbg_advance_resume_phase(RESUME_PHASE_FIRST_TX, RESUME_PHASE_FIRST_RX);
+        fabric_dbg_inc_rx_pkt_count();  // [RX-COUNT] one packet received off eth + delivered locally
 #endif
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(packet_header, local_fabric_telemetry);
