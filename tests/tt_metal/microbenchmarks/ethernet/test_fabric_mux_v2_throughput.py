@@ -18,8 +18,7 @@ FAMILY_SORT_ORDER = {
     "payload_sweep": 1,
     "sender_sweep": 2,
     "trid_sweep": 3,
-    "service_sweep": 4,
-    "drainer_sweep": 5,
+    "drainer_sweep": 4,
 }
 
 SUMMARY_HEADERS = [
@@ -29,7 +28,6 @@ SUMMARY_HEADERS = [
     "Num packets",
     "Buffers per channel",
     "Forwarder NOC",
-    "Service burst size",
     "TRID ring capacity",
     "Target payload bytes",
     "Aggregate bytes",
@@ -48,7 +46,6 @@ GOLDEN_HEADERS = [
     "Num packets",
     "Buffers per channel",
     "Forwarder NOC",
-    "Service burst size",
     "TRID ring capacity",
     "Target payload bytes",
     "Bytes per cycle",
@@ -128,7 +125,6 @@ def normalize_benchmark_row(benchmark: dict) -> dict:
         "Num packets": num_packets,
         "Buffers per channel": as_int(benchmark["buffers_per_channel"]),
         "Forwarder NOC": infer_forwarder_noc(case_name),
-        "Service burst size": as_int(benchmark["service_burst_size"]),
         "TRID ring capacity": as_int(benchmark["trid_ring_capacity"]),
         "Target payload bytes": as_int(benchmark["target_payload_bytes"]),
         "Aggregate bytes": as_int(benchmark["aggregate_case_bytes"]),
@@ -163,8 +159,6 @@ def get_family_axis_sort_value(row: dict) -> int:
         return row["Senders"]
     if case_name.startswith("trid_sweep"):
         return row["TRID ring capacity"]
-    if case_name.startswith("service_sweep"):
-        return row["Service burst size"]
     if case_name.startswith("drainer_sweep"):
         return row.get("Drainer buffers", 0)
     return 0
@@ -298,7 +292,6 @@ def format_text_table(rows: list[dict], geomean_speedup: float) -> str:
         "Payload",
         "Bufs",
         "NOC",
-        "SB",
         "TRID",
         "B/c",
         "Cyc/pkt",
@@ -315,7 +308,6 @@ def format_text_table(rows: list[dict], geomean_speedup: float) -> str:
                 str(row["Payload bytes"]),
                 str(row["Buffers per channel"]),
                 "r1" if row["Forwarder NOC"] == "RISCV_1_default" else "r0",
-                str(row["Service burst size"]),
                 str(row["TRID ring capacity"]),
                 f"{row['Bytes per cycle']:.3f}",
                 f"{row['Cycles per packet']:.2f}",

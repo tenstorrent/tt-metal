@@ -160,7 +160,7 @@ inline void run_manager() {
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
-    // Phase 1: Steady state — service clients + opportunistic TRID retirement.
+    // Steady state: service clients + opportunistic TRID retirement.
     while (true) {
         for (uint32_t logical_channel_id = 0; logical_channel_id < ct_args::num_channels; ++logical_channel_id) {
             retire_published_ring_entries(
@@ -175,7 +175,7 @@ inline void run_manager() {
         }
     }
 
-    // Phase 2: Drain — retire TRIDs until forwarder done, skip all client servicing.
+    // Drain: retire TRIDs until forwarder done; skip all client servicing.
     // Once drain is initiated, clients are finalized and no future traffic can arrive.
     while (shared_control_ptr->forwarder_done == 0) {
         if (shared_control_ptr->forwarder_stop_tracking == 0) {

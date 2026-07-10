@@ -43,15 +43,14 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
     constexpr std::array<uint32_t, 5> kPayloadSweep = {64, 1024, 2048, 4096, 0};
     constexpr std::array<uint32_t, 6> kSenderSweep = {1, 2, 4, 8, 16, 32};
     constexpr std::array<uint32_t, 2> kHighSenderSweep = {48, 64};
-    constexpr std::array<uint32_t, 4> kTridRingCapacitySweep = {1, 2, 4, 8};
-    constexpr std::array<uint32_t, 5> kServiceBurstSweep = {1, 2, 4, 8, 16};
+    constexpr std::array<uint32_t, 5> kTridRingCapacitySweep = {1, 2, 4, 8, 16};
     constexpr std::array<uint32_t, 6> kDrainerSlotsSweep = {1, 2, 4, 8, 16, 32};
 
     std::vector<MuxV2ThroughputCase> cases;
     cases.reserve(
         kForwarderNocSweep.size() *
         (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() + kHighSenderSweep.size() +
-         kTridRingCapacitySweep.size() + kServiceBurstSweep.size() + kDrainerSlotsSweep.size()));
+         kTridRingCapacitySweep.size() + kDrainerSlotsSweep.size()));
 
     for (const auto& noc_config : kForwarderNocSweep) {
         for (const auto buffer_count : kBufferSweep) {
@@ -105,17 +104,6 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
             });
         }
 
-        for (const auto service_burst_size : kServiceBurstSweep) {
-            cases.push_back(MuxV2ThroughputCase{
-                .name_suffix = "service_sweep_8s_max_buf8_" + std::string(noc_config.name) + "_sb" +
-                               std::to_string(service_burst_size) + "_trid8",
-                .num_senders = kTuningSenderCount,
-                .num_buffers_per_channel = kDefaultBufferCount,
-                .forwarder_noc = noc_config.noc,
-                .service_burst_size = service_burst_size,
-            });
-        }
-
         for (const auto num_drainer_buffers : kDrainerSlotsSweep) {
             cases.push_back(MuxV2ThroughputCase{
                 .name_suffix = "drainer_sweep_8s_max_buf8_" + std::string(noc_config.name) + "_sb8_trid8_dr" +
@@ -142,7 +130,6 @@ void BM_StandaloneMuxV2Throughput(
     state.counters["num_packets"] = benchmark::Counter(static_cast<double>(num_packets));
     state.counters["buffers_per_channel"] =
         benchmark::Counter(static_cast<double>(benchmark_case.num_buffers_per_channel));
-    state.counters["service_burst_size"] = benchmark::Counter(static_cast<double>(benchmark_case.service_burst_size));
     state.counters["trid_ring_capacity"] = benchmark::Counter(static_cast<double>(benchmark_case.trid_ring_capacity));
     state.counters["drainer_buffers"] = benchmark::Counter(static_cast<double>(benchmark_case.num_drainer_buffers));
     state.counters["target_payload_bytes"] =

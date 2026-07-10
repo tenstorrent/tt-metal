@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -298,9 +298,22 @@ private:
     size_t memory_map_end_address_;
 };
 
+/*
+ * Transient dual-RISC fabric mux (forwarder on RISCV_0, manager on RISCV_1).
+ * Auto-terminates after all clients disconnect. Supports up to 64 logical
+ * channels. TRID ring capacity must be a power of two in
+ * [1, kMaxTridRingCapacity] (default kDefaultTridRingCapacity).
+ *
+ * Host surface is intentionally narrow so callers wire through
+ * append_client_connection_rt_args + add_fabric_mux_v2_to_program and the
+ * device-side FabricMuxV2Sender, rather than reconstructing V1-style per-field
+ * address getters. get_memory_map_end_address() is for L1 budgeting only.
+ */
 class FabricMuxV2Config {
 public:
     static constexpr uint32_t kDefaultTridRingCapacity = 8;
+    // WH/BH expose 16 NOC transaction IDs (NOC_MAX_TRANSACTION_ID + 1).
+    static constexpr uint32_t kMaxTridRingCapacity = 16;
 
     struct ClientSemaphores {
         uint32_t flow_control_sem_id = 0;
@@ -320,8 +333,8 @@ public:
         const ClientSemaphores& client_semaphores,
         std::vector<uint32_t>& worker_args) const;
 
+    // Exclusive end of the mux L1 map (for host-side L1 budgeting / placement).
     size_t get_memory_map_end_address() const;
-    void set_forwarder_service_burst_size(uint32_t service_burst_size);
 
 private:
     friend void add_fabric_mux_v2_to_program(
@@ -352,7 +365,6 @@ private:
 
         size_t get_address(size_t offset = 0) const;
         size_t get_end_address() const;
-        size_t get_total_size() const;
     };
 
     size_t noc_aligned_address_size_bytes_ = 0;
@@ -369,8 +381,6 @@ private:
     MemoryRegion shared_ring_region_{};
     MemoryRegion channel_region_{};
     MemoryRegion shared_control_region_{};
-    // Per-channel L1 scratch for BH spoofed posted credit notifies with flush disabled.
-    // Unused on Wormhole (flush is a no-op there) but allocated on both for a uniform map.
     MemoryRegion credit_notify_scratch_region_{};
 
     size_t memory_map_end_address_ = 0;

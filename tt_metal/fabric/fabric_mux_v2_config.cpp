@@ -16,7 +16,8 @@ namespace tt::tt_fabric {
 namespace {
 
 constexpr uint32_t kTensixWorkerStreamRegisterCount = 64;
-constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
+// Internal forwarder scheduling knob; not exposed on FabricMuxV2Config.
+constexpr uint32_t kForwarderServiceBurstSize = 8;
 constexpr const char* kFabricMuxV2KernelPath = "tt_metal/fabric/impl/kernels/tt_fabric_mux_v2.cpp";
 
 size_t align_up(size_t value, size_t alignment) {
@@ -88,14 +89,12 @@ void validate_forwarder_service_burst_size(uint32_t service_burst_size) {
 void validate_trid_ring_capacity(uint32_t trid_ring_capacity) {
     TT_FATAL(trid_ring_capacity > 0, "FabricMuxV2 TRID ring capacity must be greater than zero");
     TT_FATAL(is_power_of_two(trid_ring_capacity), "FabricMuxV2 TRID ring capacity must be a power of two");
-    // NOC_MAX_TRANSACTION_ID is 15 on WH/BH, giving 16 available transaction IDs.
-    // The device-side ct_args header enforces the same limit against the actual hardware constant.
-    constexpr uint32_t kMaxNocTransactionIds = 16;
+    // Matches NOC_MAX_TRANSACTION_ID + 1 on WH/BH; device ct_args assert the same bound.
     TT_FATAL(
-        trid_ring_capacity <= kMaxNocTransactionIds,
+        trid_ring_capacity <= FabricMuxV2Config::kMaxTridRingCapacity,
         "FabricMuxV2 TRID ring capacity {} exceeds available transaction IDs {}",
         trid_ring_capacity,
-        kMaxNocTransactionIds);
+        FabricMuxV2Config::kMaxTridRingCapacity);
 }
 
 }  // namespace
@@ -115,8 +114,6 @@ size_t FabricMuxV2Config::MemoryRegion::get_address(size_t offset) const {
 
 size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_address + (unit_size * num_units); }
 
-size_t FabricMuxV2Config::MemoryRegion::get_total_size() const { return unit_size * num_units; }
-
 FabricMuxV2Config::FabricMuxV2Config(
     uint8_t num_channels,
     uint8_t num_buffers_per_channel,
@@ -126,12 +123,16 @@ FabricMuxV2Config::FabricMuxV2Config(
     num_channels_(num_channels),
     num_buffers_per_channel_(num_buffers_per_channel),
     channel_buffer_size_bytes_(channel_buffer_size_bytes),
-    forwarder_service_burst_size_(kDefaultForwarderServiceBurstSize),
+    forwarder_service_burst_size_(kForwarderServiceBurstSize),
     trid_ring_capacity_(trid_ring_capacity) {
     TT_FATAL(num_channels_ > 0, "FabricMuxV2Config requires at least one logical channel");
     TT_FATAL(num_buffers_per_channel_ > 0, "FabricMuxV2Config requires at least one buffer per channel");
     validate_forwarder_service_burst_size(forwarder_service_burst_size_);
     validate_trid_ring_capacity(trid_ring_capacity_);
+
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    per_channel_scalar_region_stride_bytes_ = noc_aligned_address_size_bytes_;
 
     const size_t max_channel_buffer_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     TT_FATAL(
@@ -139,19 +140,19 @@ FabricMuxV2Config::FabricMuxV2Config(
         "FabricMuxV2 channel buffer size must be <= {}, got {}",
         max_channel_buffer_size_bytes,
         channel_buffer_size_bytes_);
+    TT_FATAL(
+        channel_buffer_size_bytes_ % noc_aligned_address_size_bytes_ == 0,
+        "FabricMuxV2 channel buffer size must be L1-aligned ({}), got {}",
+        noc_aligned_address_size_bytes_,
+        channel_buffer_size_bytes_);
 
-    // Phase 1 uses one stream register per logical channel for forwarder-visible
-    // backlog tracking and does not reserve extra queue-credit stream registers.
+    // One stream register per logical channel for forwarder-visible backlog tracking.
     const uint32_t total_reserved_stream_ids = static_cast<uint32_t>(num_channels_);
     TT_FATAL(
         total_reserved_stream_ids <= kTensixWorkerStreamRegisterCount,
         "FabricMuxV2 requires num_channels ({}) <= {}",
         static_cast<uint32_t>(num_channels_),
         kTensixWorkerStreamRegisterCount);
-
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);
-    per_channel_scalar_region_stride_bytes_ = noc_aligned_address_size_bytes_;
 
     size_t current_address = align_up(base_l1_address, noc_aligned_address_size_bytes_);
 
@@ -183,6 +184,8 @@ FabricMuxV2Config::FabricMuxV2Config(
     shared_control_region_ = MemoryRegion(current_address, sizeof(FabricMuxV2SharedControlBlock), 1);
     current_address = shared_control_region_.get_end_address();
 
+    // Per-channel L1 scratch for BH spoofed posted credit notifies with flush disabled.
+    // Unused on Wormhole (flush is a no-op there) but allocated on both for a uniform map.
     current_address = align_up(current_address, noc_aligned_address_size_bytes_);
     credit_notify_scratch_region_ =
         MemoryRegion(current_address, per_channel_scalar_region_stride_bytes_, num_channels_);
@@ -307,11 +310,6 @@ void add_fabric_mux_v2_to_program(
 }
 
 size_t FabricMuxV2Config::get_memory_map_end_address() const { return memory_map_end_address_; }
-
-void FabricMuxV2Config::set_forwarder_service_burst_size(uint32_t service_burst_size) {
-    validate_forwarder_service_burst_size(service_burst_size);
-    forwarder_service_burst_size_ = service_burst_size;
-}
 
 void FabricMuxV2Config::validate_logical_channel_id(uint8_t logical_channel_id) const {
     TT_FATAL(

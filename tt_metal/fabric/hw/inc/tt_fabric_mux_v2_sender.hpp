@@ -24,39 +24,31 @@ enum class FabricMuxV2SenderState : uint8_t {
 static constexpr uint8_t kInvalidStatusReadTrid = 0xFF;
 
 /*
- * FabricMuxV2Sender: worker-facing client adapter for the transient self-poll Mux V2.
+ * Worker client for transient Mux V2.
  *
- * This is a fresh, V2-owned adapter (it does not embed/inherit the V1
- * WorkerToFabricEdmSenderBase). It reuses only the low-level NOC/stream-register
- * primitives; the connection state machine is V2-specific and tuned for the
- * single-use transient lifecycle (cheap open/close, no buffer-index
- * read-back/write-back).
+ * Mux-core roles:
+ *  - Forwarder: data path. Worker signals a pending packet by decrementing the
+ *    per-channel stream reg (id == logical_channel_id); forwarder increments after send.
+ *  - Manager: open/close handshake, publishes monotonic read counter for flow control,
+ *    and acks teardown on close.
  *
- * Roles it talks to on the mux core:
- *  - Forwarder (RISCV_0): owns the downstream send path. The worker signals a
- *    pending packet by decrementing the forwarder's per-channel credit stream
- *    register (stream id == logical_channel_id). The forwarder increments it
- *    back after forwarding.
- *  - Manager  (RISCV_1): owns the upstream control path. It reads the worker
- *    location info on `open`, publishes a monotonic read counter to the worker's
- *    flow-control word as packets retire downstream, and acks teardown on
- *    `close` by incrementing the worker's teardown word.
+ * Flow control: free_slots = num_buffers - (write_counter - published_read_counter).
  *
- * Flow control is counter-based (mirrors the V1 worker path): free slots =
- * num_buffers - (local_write_counter - published_read_counter).
+ * States: Disconnected -> (optional Staging if EAGER_STAGING) -> Connected -> close.
  *
- * Runtime-arg layout (must match FabricMuxV2Config::append_client_connection_rt_args):
- *   0  mux_x
- *   1  mux_y
- *   2  logical_channel_id
- *   3  num_buffers_per_channel
- *   4  channel_buffer_size_bytes
- *   5  channel_base_address           (mux L1 base of this channel's slot ring)
- *   6  connection_info_address        (mux EDMChannelWorkerLocationInfo)
- *   7  connection_handshake_address   (mux per-channel handshake scalar)
- *   8  flow_control_sem_id            (local: manager publishes read counter here)
- *   9  teardown_sem_id                (local: teardown ack; also status scratch)
- *   10 mux_status_address             (mux-global status word)
+ * Usage:
+ *  - Default (EAGER_STAGING=false): open() -> send* -> close(). flush() is unused.
+ *  - Eager staging: open() enters Staging and may fill slots without signaling the
+ *    forwarder. Transition to Connected with flush() (blocking or poll), or let
+ *    ring-full / close() do it. After Connected, send* commits normally.
+ *  - flush<false>() overlaps READY polls with local work; flush<true>() (or close())
+ *    when you must be Connected before continuing.
+ *  - status_trid on open() is only for non-blocking READY polls during Staging;
+ *    omit / kInvalidStatusReadTrid if you only use blocking flush / close.
+ *
+ * Runtime args (FabricMuxV2Config::append_client_connection_rt_args):
+ *   mux_x, mux_y, logical_channel_id, num_buffers, channel_buffer_size_bytes,
+ *   channel_base, connection_info, handshake, flow_control_sem, teardown_sem, mux_status
  */
 template <bool EAGER_STAGING = false, uint8_t NUM_BUFFERS = 0>
 class FabricMuxV2Sender {
@@ -89,17 +81,9 @@ public:
         return sender;
     }
 
-    // ---------------------------------------------------------------------
-    // Lifecycle
-    // ---------------------------------------------------------------------
-
-    // Gate on the mux being ready, then open the transient connection. Cheap by
-    // design: no buffer-index read-back and no blocking on the manager's
-    // establish (free slots start full, and the manager only reads location info
-    // after observing the open value, which is written last in program order).
-    // No write barrier here: the inline handshake writes are non-posted and the
-    // manager polls for them; first-send correctness does not depend on them
-    // having landed (mirrors WorkerToFabricEdmSenderBase::open).
+    // Wait for READY (unless EAGER_STAGING), publish location info, request open.
+    // With EAGER_STAGING: enter Staging immediately; optional status_trid enables
+    // non-blocking READY polls during staging.
     void open(uint8_t status_trid = kInvalidStatusReadTrid) {
         if constexpr (EAGER_STAGING) {
             open_staging(status_trid);
@@ -108,10 +92,9 @@ public:
         }
     }
 
-    // Force the Staging -> Connected transition if READY has been observed.
-    // Blocking: blocks until READY, then transitions. Always returns true.
-    // Non-blocking: returns true if READY observed (or already Connected),
-    //   false if still Staging.
+    // Staging -> Connected when READY. No-op if already Connected.
+    // Blocking: wait for READY, then transition (always returns true).
+    // Non-blocking: return true if Connected / READY observed, else false.
     template <bool Blocking = true>
     bool flush() {
         if (state != FabricMuxV2SenderState::Staging) {
@@ -144,8 +127,7 @@ public:
         }
     }
 
-    // Request teardown and wait for the manager's ack. Valid even with zero
-    // packets sent; the mux drains any staged packets before retiring credit.
+    // From Staging, flush first. Request teardown and block on manager ack.
     void close() {
         if constexpr (EAGER_STAGING) {
             flush<true>();
@@ -165,9 +147,7 @@ public:
         *teardown_ptr = 0;
     }
 
-    // ---------------------------------------------------------------------
-    // Data plane: generic fabric-helper contract (implemented natively)
-    // ---------------------------------------------------------------------
+    // --- Non-stateful send lane (generic fabric helpers) ---
 
     FORCE_INLINE uint32_t get_num_free_write_slots() const {
         invalidate_l1_cache();
@@ -186,8 +166,7 @@ public:
         WAYPOINT("MWSD");
     }
 
-    // Stage the payload into the current slot, after the packet header region.
-    // Does not commit (no credit/pointer advance); the matching flush commits.
+    // Write payload after the header region; does not commit (pair with flush below).
     FORCE_INLINE void send_payload_without_header_non_blocking_from_address(
         uint32_t source_address, size_t size_bytes) {
         const uint64_t slot_noc_addr = this->current_slot_noc_addr();
@@ -195,8 +174,7 @@ public:
             source_address, 1, size_bytes, slot_noc_addr + sizeof(PACKET_HEADER_TYPE));
     }
 
-    // Write `size_bytes` (the packet header, possibly with a co-located payload)
-    // to the start of the current slot, then commit the slot.
+    // Write header (+ optional co-located payload) at slot start, then commit.
     FORCE_INLINE void send_payload_flush_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         ASSERT(size_bytes <= channel_buffer_size_bytes);
         ASSERT(tt::tt_fabric::is_valid(
@@ -210,20 +188,11 @@ public:
         }
     }
 
-    // ---------------------------------------------------------------------
-    // Data plane: stateful perf lane
-    // ---------------------------------------------------------------------
-
-    // Program stateful command buffers for the stateful send lane.
-    // DATA cmd buf (write_reg_cmd_buf): programmed with mux core destination address.
-    // SYNC cmd buf (write_at_cmd_buf): programmed with credit stream reg address and -1 packed value.
-    //
-    // IMPORTANT: The SYNC cmd buf state can be clobbered by any noc_inline_dw_write or
-    // noc_semaphore_inc that uses write_at_cmd_buf internally. In staging mode, open_finish()
-    // calls signal_pending_non_stateful() which clobbers SYNC; open_finish() reprograms it
-    // automatically if stateful_setup_done is true. Callers must avoid using noc_semaphore_inc
-    // or other write_at_cmd_buf-consuming NOC ops between stateful sends, as those will
-    // clobber the SYNC state without automatic restoration.
+    // --- Stateful send lane ---
+    // DATA cmd buf: mux slot destination. SYNC cmd buf: credit stream reg (-1).
+    // SYNC state is clobbered by noc_inline_dw_write / noc_semaphore_inc on write_at_cmd_buf.
+    // open_finish() reprograms SYNC after batched credit notify if setup was done; do not
+    // use write_at_cmd_buf ops between stateful sends without re-setup.
     template <bool posted = false>
     FORCE_INLINE void setup_stateful_send_cmd_bufs(uint8_t noc = noc_index) {
         this->data_noc_cmd_buf = write_reg_cmd_buf;
@@ -345,9 +314,7 @@ private:
             noc_inline_dw_write_with_state</*posted=*/false, /*update=*/true, false, false, false, InlineWriteDst::REG>(
                 0, 0, this->sync_noc_cmd_buf, noc);
         } else {
-            // Batched flush: use inline write (non-stateful) for the -count value.
-            // This only happens once in open_finish(); the sync cmd-buf state is
-            // programmed immediately after for steady-state -1 sends.
+            // Batched credit notify (open_finish); SYNC is reprogrammed afterward if needed.
             signal_pending_non_stateful(count);
         }
     }
@@ -366,10 +333,6 @@ private:
         signal_pending_stateful(1, noc);
         advance_local_cursor();
     }
-
-    // -----------------------------------------------------------------
-    // Staging helpers (only compiled when EAGER_STAGING = true)
-    // -----------------------------------------------------------------
 
     void open_blocking() {
         wait_until_ready_blocking();
@@ -516,9 +479,7 @@ private:
     uint32_t mux_status_address = 0;
     uint32_t credit_stream_reg_write_addr = 0;
 
-    // Local L1 words (2 semaphores). flow_control receives the manager-published
-    // read counter; teardown receives the teardown ack and doubles as the
-    // ready-status readback scratch during connect.
+    // flow_control: manager-published read counter. teardown: close ack; also READY scratch.
     volatile tt_l1_ptr uint32_t* flow_control_ptr = nullptr;
     volatile tt_l1_ptr uint32_t* teardown_ptr = nullptr;
 

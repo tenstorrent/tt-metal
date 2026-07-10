@@ -38,8 +38,8 @@ constexpr char kReceiverKernelSrc[] =
 
 constexpr uint32_t kTestResultsSizeBytes = 128;
 constexpr uint32_t kSeedStride = 0x9E3779B9u;
-constexpr uint32_t kDefaultForwarderServiceBurstSize = 8;
 constexpr uint32_t kDefaultTridRingCapacity = tt::tt_fabric::FabricMuxV2Config::kDefaultTridRingCapacity;
+constexpr uint32_t kMaxTridRingCapacity = tt::tt_fabric::FabricMuxV2Config::kMaxTridRingCapacity;
 constexpr uint32_t kShortPacketCount = 1'000;
 constexpr uint32_t kMediumPacketCount = 10'000;
 constexpr uint32_t kLongPacketCount = 100'000;
@@ -76,7 +76,6 @@ struct TestCaseConfig {
     uint32_t packet_payload_size_bytes = 0;
     uint8_t num_buffers_per_channel = 1;
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
-    uint32_t service_burst_size = kDefaultForwarderServiceBurstSize;
     uint32_t trid_ring_capacity = kDefaultTridRingCapacity;
     ChannelBufferSizeKind channel_buffer_size_kind = ChannelBufferSizeKind::ExactFitAligned;
     bool eager_staging = false;
@@ -517,7 +516,6 @@ std::optional<MuxDeployment> create_mux_deployment(
         channel_buffer_size_bytes,
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         test_case.trid_ring_capacity);
-    mux_config->set_forwarder_service_burst_size(test_case.service_burst_size);
 
     tt::tt_fabric::add_fabric_mux_v2_to_program(
         *program,
@@ -850,7 +848,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 32> kTestCases = {{
+constexpr std::array<TestCaseConfig, 33> kTestCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -882,6 +880,14 @@ constexpr std::array<TestCaseConfig, 32> kTestCases = {{
         .num_packets = kShortPacketCount,
         .packet_payload_size_bytes = 128,
         .num_buffers_per_channel = 1,
+    },
+    TestCaseConfig{
+        .name = "TridRingCapacity_Max",
+        .num_senders = 4,
+        .num_packets = kMediumPacketCount,
+        .packet_payload_size_bytes = 128,
+        .num_buffers_per_channel = 4,
+        .trid_ring_capacity = kMaxTridRingCapacity,
     },
     // Non-pow2 buffer counts exercise the forwarder generic slot-wrap path
     // (num_buffers_per_channel_is_pow2 == false). bufs=3 is covered by the
