@@ -32,8 +32,6 @@ uint32_t to_uint32_checked(size_t value, const char* field_name) {
     return static_cast<uint32_t>(value);
 }
 
-bool is_power_of_two(uint32_t value) { return value != 0 && (value & (value - 1)) == 0; }
-
 bool is_supported_mux_v2_worker_noc(tt::tt_metal::NOC noc) {
     return noc == tt::tt_metal::NOC::RISCV_0_default || noc == tt::tt_metal::NOC::RISCV_1_default;
 }
@@ -86,17 +84,6 @@ void validate_forwarder_service_burst_size(uint32_t service_burst_size) {
     TT_FATAL(service_burst_size > 0, "FabricMuxV2 forwarder service burst size must be greater than zero");
 }
 
-void validate_trid_ring_capacity(uint32_t trid_ring_capacity) {
-    TT_FATAL(trid_ring_capacity > 0, "FabricMuxV2 TRID ring capacity must be greater than zero");
-    TT_FATAL(is_power_of_two(trid_ring_capacity), "FabricMuxV2 TRID ring capacity must be a power of two");
-    // Matches NOC_MAX_TRANSACTION_ID + 1 on WH/BH; device ct_args assert the same bound.
-    TT_FATAL(
-        trid_ring_capacity <= FabricMuxV2Config::kMaxTridRingCapacity,
-        "FabricMuxV2 TRID ring capacity {} exceeds available transaction IDs {}",
-        trid_ring_capacity,
-        FabricMuxV2Config::kMaxTridRingCapacity);
-}
-
 }  // namespace
 
 FabricMuxV2Config::MemoryRegion::MemoryRegion(size_t base, size_t unit_sz, size_t count) :
@@ -115,20 +102,15 @@ size_t FabricMuxV2Config::MemoryRegion::get_address(size_t offset) const {
 size_t FabricMuxV2Config::MemoryRegion::get_end_address() const { return base_address + (unit_size * num_units); }
 
 FabricMuxV2Config::FabricMuxV2Config(
-    uint8_t num_channels,
-    uint8_t num_buffers_per_channel,
-    size_t channel_buffer_size_bytes,
-    size_t base_l1_address,
-    uint32_t trid_ring_capacity) :
+    uint8_t num_channels, uint8_t num_buffers_per_channel, size_t channel_buffer_size_bytes, size_t base_l1_address) :
     num_channels_(num_channels),
     num_buffers_per_channel_(num_buffers_per_channel),
     channel_buffer_size_bytes_(channel_buffer_size_bytes),
     forwarder_service_burst_size_(kForwarderServiceBurstSize),
-    trid_ring_capacity_(trid_ring_capacity) {
+    trid_ring_capacity_(kTridRingCapacity) {
     TT_FATAL(num_channels_ > 0, "FabricMuxV2Config requires at least one logical channel");
     TT_FATAL(num_buffers_per_channel_ > 0, "FabricMuxV2Config requires at least one buffer per channel");
     validate_forwarder_service_burst_size(forwarder_service_burst_size_);
-    validate_trid_ring_capacity(trid_ring_capacity_);
 
     auto& hal = tt::tt_metal::MetalContext::instance().hal();
     noc_aligned_address_size_bytes_ = hal.get_alignment(tt::tt_metal::HalMemType::L1);

@@ -301,8 +301,8 @@ private:
 /*
  * Transient dual-RISC fabric mux (forwarder on RISCV_0, manager on RISCV_1).
  * Auto-terminates after all clients disconnect. Supports up to 64 logical
- * channels. TRID ring capacity must be a power of two in
- * [1, kMaxTridRingCapacity] (default kDefaultTridRingCapacity).
+ * channels. Uses the full WH/BH NOC transaction-ID pool for the shared TRID
+ * ring (kTridRingCapacity).
  *
  * Host surface is intentionally narrow so callers wire through
  * append_client_connection_rt_args + add_fabric_mux_v2_to_program and the
@@ -311,9 +311,8 @@ private:
  */
 class FabricMuxV2Config {
 public:
-    static constexpr uint32_t kDefaultTridRingCapacity = 8;
-    // WH/BH expose 16 NOC transaction IDs (NOC_MAX_TRANSACTION_ID + 1).
-    static constexpr uint32_t kMaxTridRingCapacity = 16;
+    // Fixed to the full WH/BH NOC transaction ID pool (NOC_MAX_TRANSACTION_ID + 1).
+    static constexpr uint32_t kTridRingCapacity = 16;
 
     struct ClientSemaphores {
         uint32_t flow_control_sem_id = 0;
@@ -324,8 +323,7 @@ public:
         uint8_t num_channels,
         uint8_t num_buffers_per_channel,
         size_t channel_buffer_size_bytes,
-        size_t base_l1_address,
-        uint32_t trid_ring_capacity = kDefaultTridRingCapacity);
+        size_t base_l1_address);
 
     void append_client_connection_rt_args(
         const CoreCoord& mux_virtual_core,
