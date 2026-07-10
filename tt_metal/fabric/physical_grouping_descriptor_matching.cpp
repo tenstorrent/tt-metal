@@ -855,7 +855,7 @@ std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>> 
 
 // Returns the number of required constraints added (one per MGD node that resolved to >=1 PGD node). May be
 // 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in this grouping); the
-// caller must then supply its own anchor so the solve does not run unconstrained.
+// caller skips that PGD variant when pinnings were required.
 std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     MappingConstraints<uint32_t, uint32_t>& constraints,
     const GroupingInfo& pgd_grouping,
@@ -1093,14 +1093,20 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
 
                 MappingConstraints<uint32_t, uint32_t> constraints;
-                std::size_t pinning_constraints_added = 0;
                 if (applicable_pinnings.has_value()) {
-                    pinning_constraints_added = add_mgd_to_pgd_asic_position_pinning_constraints(
+                    const std::size_t pinning_constraints_added = add_mgd_to_pgd_asic_position_pinning_constraints(
                         constraints, grouping_info, *applicable_pinnings);
-                }
-                if (pinning_constraints_added == 0) {
-                    // No pinning (or the pinning helper matched no PGD nodes): keep the (0,0) anchor so the
-                    // solve stays constrained instead of running unconstrained.
+                    if (pinning_constraints_added == 0) {
+                        log_debug(
+                            tt::LogFabric,
+                            "Skipping {} for {}: pinning constraints could not be applied to this PGD variant",
+                            name,
+                            mgd_grouping_info.name);
+                        continue;
+                    }
+                } else {
+                    // No pinning for this MGD instance: keep the (0,0) anchor so the solve stays constrained
+                    // instead of running unconstrained.
                     constraints.add_required_constraint(0, 0);
                 }
                 auto mapping_result = solve_topology_mapping<uint32_t, uint32_t>(
@@ -1965,11 +1971,12 @@ std::vector<PsdPlacement> PhysicalGroupingDescriptor::find_all_in_psd(
             for (const auto& result : it->second) {
                 if (result.success) {
                     PsdPlacement placement;
-                    placement.grouping = grouping;
-                    // result.target_to_global is this grouping's node id -> AsicID.
-                    const std::map<uint32_t, tt::tt_metal::AsicID> grouping_node_to_asic(
-                        result.target_to_global.begin(), result.target_to_global.end());
-                    for (const auto& [grouping_node, asic_id] : grouping_node_to_asic) {
+                    // Downstream only needs the pinning map, so copy just that (not the whole GroupingInfo,
+                    // which would deep-copy items + adjacency_graph per placement).
+                    placement.mesh_node_to_asic_position = grouping.mesh_node_to_asic_position;
+                    // result.target_to_global is this grouping's node id -> AsicID; collect just the ASICs
+                    // for the placement footprint (order unused, so iterate it directly).
+                    for (const auto& [grouping_node, asic_id] : result.target_to_global) {
                         placement.asics.insert(asic_id);
                     }
                     placements.push_back(std::move(placement));

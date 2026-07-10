@@ -623,7 +623,7 @@ mesh_groupings_and_pinnings_from_psd_placements(const std::vector<::tt::tt_fabri
     out.second.reserve(placements.size());
     for (const auto& placement : placements) {
         out.first.push_back(placement.asics);
-        out.second.push_back(placement.grouping.mesh_node_to_asic_position);
+        out.second.push_back(placement.mesh_node_to_asic_position);
     }
     return out;
 }
@@ -1302,8 +1302,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             const auto& placement = placements[physical_mesh_id.get()];
             auto& combined = combined_placements[logical_mesh_id.get()];
             combined.asics.insert(placement.asics.begin(), placement.asics.end());
-            for (const auto& [chip_id, asic_position] : placement.grouping.mesh_node_to_asic_position) {
-                combined.grouping.mesh_node_to_asic_position[chip_id] = asic_position;
+            for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
+                combined.mesh_node_to_asic_position[chip_id] = asic_position;
             }
         }
     }

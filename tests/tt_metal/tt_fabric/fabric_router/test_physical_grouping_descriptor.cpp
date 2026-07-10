@@ -2564,14 +2564,11 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_SinglePod4x4LineLi
         EXPECT_EQ(count_distinct_hosts_for_asics(psd, placement.asics), 1u)
             << "Set-packing should prefer single-host placements when host_topology is [1,1]";
 
-        // find_all_in_psd reports the grouping that matched.
-        EXPECT_EQ(placement.grouping.name.empty(), false) << "Placement should name the grouping that matched";
-
-        // Pinning is on the committed grouping; placement.grouping is a copy that preserves it.
-        EXPECT_EQ(placement.grouping.mesh_node_to_asic_position.size(), 16u)
+        // find_all_in_psd copies the matched grouping's pinning onto the placement.
+        EXPECT_EQ(placement.mesh_node_to_asic_position.size(), 16u)
             << "Composed pinning should cover all 16 logical chips";
         std::set<tt::tt_metal::ASICPosition> composed_positions;
-        for (const auto& [chip_id, asic_position] : placement.grouping.mesh_node_to_asic_position) {
+        for (const auto& [chip_id, asic_position] : placement.mesh_node_to_asic_position) {
             composed_positions.insert(asic_position);
         }
         std::set<tt::tt_metal::ASICPosition> footprint_positions;

@@ -92,11 +92,13 @@ struct GroupingInfo {
     GroupingInfo& operator=(GroupingInfo&&) noexcept;
 };
 
-// One disjoint placement produced by find_all_in_psd: which grouping matched and the ASIC footprint it covers.
-// The mesh-local (row-major) chip id -> ASIC position pinning is carried on grouping.mesh_node_to_asic_position.
+// One disjoint placement produced by find_all_in_psd: the ASIC footprint it covers, plus the mesh-local
+// (row-major) chip id -> ASIC position pinning (copied from the matched grouping's mesh_node_to_asic_position;
+// empty when the grouping had no MGD pairing, where callers assume row-major identity). Only the pinning map is
+// retained, not the full GroupingInfo, to avoid deep-copying its items + adjacency_graph per placement.
 struct PsdPlacement {
-    GroupingInfo grouping;
     std::unordered_set<tt::tt_metal::AsicID> asics;
+    std::map<LogicalChipId, tt::tt_metal::ASICPosition> mesh_node_to_asic_position;
 };
 
 // Type aliases for valid groupings map structure
@@ -172,13 +174,12 @@ public:
         std::vector<std::string>& errors_out) const;
 
     // Find one maximal disjoint packing of the input `groupings` on the physical system descriptor.
-    // Returns one PsdPlacement per placement: the grouping that matched and its ASIC footprint. The
-    // mesh-local (row-major, 0..N-1) chip id -> ASIC position pinning is carried on
-    // grouping.mesh_node_to_asic_position (populated at PGD<->MGD match commit time; empty for groupings
-    // that did not originate from a PGD match, where callers assume row-major identity). No two placements
-    // share an ASIC. When multiple PGD grouping variants are provided, the variant with the highest total
-    // ASIC coverage is chosen; alternatives are not mixed in the same packing. Returns an empty vector if no
-    // valid packing exists.
+    // Returns one PsdPlacement per placement: its ASIC footprint and the mesh-local (row-major, 0..N-1)
+    // chip id -> ASIC position pinning, PsdPlacement::mesh_node_to_asic_position (copied from the matched
+    // grouping at PGD<->MGD match commit time; empty for groupings that did not originate from a PGD match,
+    // where callers assume row-major identity). No two placements share an ASIC. When multiple PGD grouping
+    // variants are provided, the variant with the highest total ASIC coverage is chosen; alternatives are not
+    // mixed in the same packing. Returns an empty vector if no valid packing exists.
     std::vector<PsdPlacement> find_all_in_psd(
         const std::vector<GroupingInfo>& groupings,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;

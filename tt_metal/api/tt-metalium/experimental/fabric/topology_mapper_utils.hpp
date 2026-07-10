@@ -457,7 +457,7 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
  * @brief Build hierarchical multi-mesh graph from PSD placements
  *
  * Each placement's ASIC footprint (placement index -> MeshId) drives the hierarchical split; pinning is read from
- * placement.grouping.mesh_node_to_asic_position.
+ * placement.mesh_node_to_asic_position.
  */
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
     const AdjacencyGraph<tt::tt_metal::AsicID>& flat_adjacency_graph,
