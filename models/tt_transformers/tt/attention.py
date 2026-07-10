@@ -265,7 +265,7 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        # One copy: recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded. Both
+        # One copy: recv-contig (ND_SHARDED) for the Tensor Prefetcher backend, else width-sharded. Both
         # prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor reads
         # ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
         wqkv_mem_config = wqkv_width_sharded_mem_config
@@ -407,7 +407,7 @@ class Attention(LightweightModule):
                 self.prefetcher.insert_tensor(self.wo_sharded_ring, program_config=pc_wo)
 
             # Each backend owns the timing: the worker prefetcher defers to prefetch-time,
-            # the DRAM-core prefetcher runs it immediately (its register_callback is run-now).
+            # the Tensor Prefetcher runs it immediately (its register_callback is run-now).
             self.prefetcher.register_callback(register_weights)
 
     def init_kv_cache(self, configuration, weight_cache_path):

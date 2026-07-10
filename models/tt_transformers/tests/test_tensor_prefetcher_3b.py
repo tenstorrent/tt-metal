@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DRAM-core prefetcher variant of ``test_mlp.py`` for Llama-3.2-3B on Blackhole.
+"""Tensor Prefetcher variant of ``test_mlp.py`` for Llama-3.2-3B on Blackhole.
 
 This is a near-copy of ``test_mlp_inference`` from ``test_mlp.py`` with one change:
 
-  ``Prefetcher`` is replaced with ``make_prefetcher``, which selects ``DramCorePrefetcher``
-  when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` and the device firmware supports
-  programmable DRAM cores.
+  ``Prefetcher`` is replaced with ``make_prefetcher``, which automatically selects
+  ``TensorPrefetcher`` when the model, mesh, and firmware support programmable DRAM cores.
 
-``num_receiver_cores`` is left to ``DramCorePrefetcher``'s auto-pick: the divisibility +
-L1 budget check in ``is_dram_core_prefetcher_supported`` rules out ring sizes that don't
+``num_receiver_cores`` is left to ``TensorPrefetcher``'s auto-pick: the divisibility +
+L1 budget check in ``is_tensor_prefetcher_config_supported`` rules out ring sizes that don't
 fit. For 3B on Blackhole the only supported rings are ring=32 (1-card) and ring=16 (2-card).
 
 Requires HF weights for ``meta-llama/Llama-3.2-3B`` (or a compatible variant). Skips if
@@ -37,11 +36,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.prefetcher import make_prefetcher
 
 pytestmark = [
-    run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") != "1",
-        reason="TT_METAL_USE_DRAM_CORE_PREFETCHER not set",
-    ),
+    run_for_blackhole("Tensor Prefetcher requires Blackhole"),
     pytest.mark.skipif(
         "Llama-3.2-3B" not in os.environ.get("HF_MODEL", ""),
         reason="HF_MODEL must point to Llama-3.2-3B for this test",
@@ -75,16 +70,16 @@ def _require_tensor_prefetcher(mesh_device):
 )
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-def test_mlp_inference_dram_core_prefetcher(batch_size, mode, seq_len, mesh_device, reset_seeds, ensure_gc):
+def test_mlp_inference_tensor_prefetcher(batch_size, mode, seq_len, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
-    # FF1/FF3/FF2 are the prefetched MLP weights. Let DramCorePrefetcher auto-pick
-    # the ring size from is_dram_core_prefetcher_supported's divisibility + L1 budget.
+    # FF1/FF3/FF2 are the prefetched MLP weights. Let TensorPrefetcher auto-pick
+    # the ring size from is_tensor_prefetcher_config_supported's divisibility + L1 budget.
     num_tensors = 3
     prefetcher = make_prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1)
     assert (
-        prefetcher.__class__.__name__ == "DramCorePrefetcher"
-    ), f"Expected DramCorePrefetcher but got {prefetcher.__class__.__name__}; check env flags."
+        prefetcher.__class__.__name__ == "TensorPrefetcher"
+    ), f"Expected TensorPrefetcher but got {prefetcher.__class__.__name__}; check model/device support."
     model_args = ModelArgs(
         mesh_device,
         max_batch_size=batch_size,
@@ -133,7 +128,7 @@ def test_mlp_inference_dram_core_prefetcher(batch_size, mode, seq_len, mesh_devi
         memory_config=model_args.get_mlp_input_mem_config(mode, prefetcher),
         layout=ttnn.TILE_LAYOUT,
     )
-    logger.info(f"Run MLP through DRAM-core prefetcher: ring={prefetcher.ring_size}")
+    logger.info(f"Run MLP through Tensor Prefetcher: ring={prefetcher.ring_size}")
     tt_output = tt_model(tt_input, mode)
 
     tt_output_torch = ttnn.to_torch(

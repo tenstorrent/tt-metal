@@ -52,7 +52,7 @@ class MLP(LightweightModule):
         w1_w3_width_sharded = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_width_sharded = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
-        # The prefetcher picks the decode/prefetch weight layout: the DRAM-core backend returns its
+        # The prefetcher picks the decode/prefetch weight layout: the Tensor Prefetcher backend returns its
         # receiver-contiguous layout, the worker-core backend returns the width-sharded default
         # above (and galaxy/TG always keeps the default).
         w1_w3_mem_config = w1_w3_width_sharded
@@ -112,7 +112,7 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
-        # One copy per weight. recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded;
+        # One copy per weight. recv-contig (ND_SHARDED) for the Tensor Prefetcher backend, else width-sharded;
         # both prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor
         # handles ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
         self.w1 = as_sharded_tensor(
@@ -136,7 +136,7 @@ class MLP(LightweightModule):
                 self.prefetcher.insert_tensor(self.w2, program_config=pc_ff2)
 
             # Each backend owns the timing: the worker prefetcher defers to prefetch-time,
-            # the DRAM-core prefetcher runs it immediately (its register_callback is run-now).
+            # the Tensor Prefetcher runs it immediately (its register_callback is run-now).
             self.prefetcher.register_callback(register_weights)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:

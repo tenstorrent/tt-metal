@@ -29,7 +29,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
-from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
+from models.tt_transformers.tt.prefetcher import is_prefetcher_supported, is_tensor_prefetcher_supported
 
 # Issue: https://github.com/tenstorrent/tt-metal/issues/34763
 models_not_supported_for_device_sampling = ["Mistral-7B"]
@@ -936,18 +936,14 @@ def test_demo_text(
     if use_prefetcher and not is_blackhole():
         logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
         use_prefetcher = False
-    # The worker-core prefetcher's is_prefetcher_supported() gate rejects 8B on <4 cards
-    # (ring=16 weight > L1 budget). The DRAM-core backend uses a higher ring (its own gate,
-    # is_dram_core_prefetcher_supported, runs in the DramCorePrefetcher ctor), so when it's
-    # selected bypass the worker gate and let that backend self-validate.
-    use_dram_core_prefetcher = os.getenv(
-        "TT_METAL_USE_DRAM_CORE_PREFETCHER", "0"
-    ) == "1" and ttnn.experimental.is_tensor_prefetcher_supported(mesh_device)
+    # Prefer the Tensor Prefetcher whenever its model/mesh geometry is supported, including
+    # configurations such as 8B on fewer than four cards where the worker backend cannot fit.
+    tensor_prefetcher_supported = is_tensor_prefetcher_supported(mesh_device, hf_dir)
     use_prefetcher = (
         use_prefetcher
         and "Llama" in hf_dir
         and "8B" in hf_dir
-        and (use_dram_core_prefetcher or is_prefetcher_supported(hf_dir, num_devices))
+        and (tensor_prefetcher_supported or is_prefetcher_supported(hf_dir, num_devices))
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
     use_hf_rope = request.config.getoption("--use_hf_rope")

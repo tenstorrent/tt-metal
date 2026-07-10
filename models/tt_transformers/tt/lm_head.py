@@ -36,7 +36,7 @@ class LMHead(LightweightModule):
         self.num_devices = args.num_devices
         self.prefetcher = prefetcher
         # Only the worker-core backend co-locates the LM head on its ring (ring-mm path); the
-        # DRAM-core backend uses the default DRAM-sharded LM head.
+        # Tensor Prefetcher backend uses the default DRAM-sharded LM head.
         self.use_lm_head_prefetcher = colocating_prefetcher(prefetcher) is not None
 
         size_per_device = self.padded_vocab_size // self.num_devices
