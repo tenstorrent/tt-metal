@@ -699,7 +699,10 @@ template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<Fp
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<SfpuBinaryOp>, std::optional<DataType>);
 
 tt::tt_metal::ShardSpec adjust_to_shape(
-    const tt::tt_metal::ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+    const tt::tt_metal::ShardSpec& shard_spec,
+    const ttnn::Shape& from_shape,
+    const ttnn::Shape& to_shape,
+    const tt::tt_metal::Tile& tile) {
     auto ret = shard_spec;
 
     // Calculate volume of all dimensions EXCEPT the last (width)
@@ -722,11 +725,11 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     uint32_t from_width = from_shape[-1];
     uint32_t to_width = to_shape[-1];
 
-    // Adjust shard shape based on full volume ratios
+    // Adjust shard shape based on full volume ratios; clamp to the actual tile geometry.
     TT_FATAL(from_volume_except_width > 0, "Invalid from_shape: volume is zero");
     TT_FATAL(from_width > 0, "Invalid from_shape: width dimension is zero");
-    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, 32u);
-    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, 32u);
+    ret.shape[0] = std::max((ret.shape[0] * to_volume_except_width) / from_volume_except_width, tile.get_height());
+    ret.shape[1] = std::max((ret.shape[1] * to_width) / from_width, tile.get_width());
     return ret;
 }
 
@@ -878,7 +881,10 @@ MemoryConfig compute_mem_config_actual(const ttnn::Tensor& input_tensor_a, const
     const auto& padded_out_shape = input_tensor_a.tensor_spec().tensor_layout().compute_padded_shape(logical_out_shape);
 
     auto adjusted_shard_spec = ttnn::operations::binary_ng::adjust_to_shape(
-        *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+        *input_tensor_a.memory_config().shard_spec(),
+        padded_a_shape,
+        padded_out_shape,
+        input_tensor_a.tensor_spec().tile());
 
     return MemoryConfig(
         input_tensor_a.memory_config().memory_layout(),
