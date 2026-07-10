@@ -54,7 +54,7 @@
 - **Golden baseline**: 520 / 571 supported cells passing (per verifier CLI). 51 supported_fail = 24 OOM (large head_dim) + 27 numerical-precision (extreme-length translated tests); both queued below / documented.
 - **Precision**: PCC ≥ 0.99999 across 4 shapes (`test_scaled_dot_product_attention_precision_baseline.py`)
 
-### [ ] Refinement 1 — Numerical configurability expansion (dtype)
+### [x] Refinement 1 — Numerical configurability expansion (dtype)
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`. The
 entry point already exposes `compute_kernel_config`; wire dtype-driven CB formats

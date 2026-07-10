@@ -31,3 +31,39 @@
   test_scaled_dot_product_attention_debug.py pre-existed; all 38 pass).
 - **Refinement queue**: R1 dtype (float32 + bfloat8_b), R2 alignment (w/h non-aligned),
   R3 causal mask, R4 L1 budget fit for large head_dim. See op_requirements.md.
+
+## Refinement 1 — Numerical configurability expansion (dtype)
+- **Date**: 2026-07-10
+- **What was done**: Added `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`.
+  The program descriptor already derives streaming CB tile formats from `query.dtype`
+  (`ttnn.tile_size`) and the compute kernel is fully helper-based, so no compute-kernel
+  change was needed for the dtype additions themselves. One targeted descriptor fix for
+  bf8b: the softmax-path score intermediates (`cb_scores` / `cb_masked` / `cb_probs`) are
+  now promoted to bf16 for bf8b input (`score_dtype`). Root cause: the additive `-inf`
+  custom mask writes into `cb_masked`; bf8b's shared-per-16-element exponent let one `-inf`
+  corrupt the valid scores in its block (PCC ~0.9 on ALL bf8b custom-mask cells). bf16 has
+  a per-element exponent so `-inf` stays local. Q/K/V/output stay in the caller's dtype;
+  only the internal score path is promoted (no-op for bf16/fp32). The existing
+  `{float32, fp32_dest_acc_en=False}` EXCLUSION is retained. `UnpackToDestFp32` does not
+  apply — every fp32 running-state CB feeds an FPU binary, so none qualify for the
+  copy_tile-only tag.
+- **Accuracy achieved**: fp32 PCC=0.999999 (max_abs 0.0045), bf8b PCC=0.9997–0.9999
+  (rel_rms ~0.014), bf16 PCC=0.99999, on shapes (1,1,128,64)…(2,4,256,128). bf8b+custom-mask
+  fixed from PCC ~0.9 → 0.9999.
+- **Golden test progress**: 991/1099 supported-cell tests passing (was 791 before the
+  bf8b mask fix). Per-dtype (test_golden.py): bf16 400/424, bf8b 400/424, fp32 162/212;
+  combined refinement (fp32+bf8b) cells 562/636 = 88%. Remaining 108 failures: 98 are
+  large-head_dim (D≥128 fp32/bf8b, D≥256 bf16) **OOM** — the L1 budget boundary owned by
+  Refinement 4 (bf16 OOMs identically; NOT excluded per OOM policy), and 10 are
+  **pre-existing** bf16 regression-precision cells (test_regression large_magnitude /
+  negative / uniform — verified byte-identical at the Phase-0 commit). 0 new bf8b/fp32
+  precision failures. No hang (suite completes in ~118s). No regression on prior-passing
+  bf16 cells.
+- **Issues encountered**: bf8b + custom (-inf) mask precision — diagnosed via probe (mask
+  round-trips cleanly in bf8b; corruption is in-kernel block-exponent contamination in
+  `cb_masked`), fixed by promoting the score-path intermediates to bf16. fp32 doubles CB
+  bytes so D=128 OOMs (in addition to the pre-existing D≥256 bf16 OOM) — left failing for
+  Refinement 4 per the OOM policy (no EXCLUSIONS, no shape_size tagger).
+- **Tests added**: test_scaled_dot_product_attention_precision_matrix.py
+  (dtype × math_fidelity × fp32_dest_acc_en × input-distribution cross-product;
+  240 passed / 48 skipped for the {fp32, bf16_acc} EXCLUSION).
