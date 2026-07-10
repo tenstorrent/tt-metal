@@ -186,9 +186,9 @@ class LTXCausalConv3d(Module):
         self._needs_halo = (self.external_padding[1] > 0 and self.parallel_config.height_parallel.factor > 1) or (
             self.external_padding[2] > 0 and self.parallel_config.width_parallel.factor > 1
         )
-        self._use_fused = (
-            use_fused and self._needs_halo and (self.conv_config.halo_last or self.conv_config.force_spatial_parallel)
-        )
+        # Fused neighbor_pad_conv3d is disabled: halo shapes route through neighbor_pad_halo +
+        # halo_scatter into a standalone conv3d, never the fused op.
+        self._use_fused = False
         # Halo-aware two-dispatch (neighbor_pad_halo -> conv3d halo mode): for the NP-light shapes that skip
         # the fused op, avoid the full-pad interior copy by feeding conv3d the compact halo buffer directly.
         # Valid only when ALL spatial padding is external (halo-exchanged) — i.e. both spatial axes' internal
