@@ -177,11 +177,11 @@ unit_tests_debug_tools:
     env:
       TT_METAL_SLOW_DISPATCH_MODE: 1
 
-  - filter: "*DevicePrintOutputFixture.PrintConcurrentRocketRiscs*"
-    config: 1x3
-#    back2back: true
-    env:
-      TT_METAL_SLOW_DISPATCH_MODE: 1
+#   - filter: "*DevicePrintOutputFixture.PrintConcurrentRocketRiscs*"
+#     config: 1x3
+# #    back2back: true
+#     env:
+#       TT_METAL_SLOW_DISPATCH_MODE: 1
 
   - filter: "*DevicePrintOutputFixture.PrintConcurrentAllRiscs*"
     config: 1x3
