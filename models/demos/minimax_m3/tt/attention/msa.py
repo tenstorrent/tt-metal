@@ -261,12 +261,9 @@ def msa_sp_attention(
     device = ccl_manager.mesh_device
     sp = device.shape[sp_axis]
 
-    # KNOWN BUG (chunked-only): this device gather mis-orders the context (index_k PCC ~0.517 vs golden)
-    # because to_memory_config does not delinearize the NdShard ("slab") cache to logical order, AND a
-    # host-reorder workaround (from_torch) makes the indexer/sparse TensorAccessor read an invalid DRAM
-    # bank (TT_FATAL "core 8-0"). PROPER FIX is a slab-aware kernel cache-read (see KERNEL TODO in msa
-    # docstring / memory): make sparse_sdpa_msa + indexer_score_msa read the NdShard cache directly via
-    # kv_cache_batch_idx/actual_isl like ring_joint. Until then the chunked MSA path is not correct.
+    # AllGather this slot's SP-sharded block-cyclic context across the SP rows, then reorder to natural
+    # token order so the indexer's block-pool + causal offset see true positions. (Input is already
+    # de-slabbed + slot-sliced by prefill.py; a slab-aware in-kernel cache read would later avoid this.)
     def gather_natural(t):
         t = ttnn.to_memory_config(t, ttnn.DRAM_MEMORY_CONFIG)
         full_bc = mesh_config.allgather(t, ccl_manager, axis=sp_axis, dim=2)
