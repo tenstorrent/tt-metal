@@ -46,7 +46,8 @@ def golden_maxpool2d(
     return output_tensor
 
 
-ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
+if hasattr(ttnn, "max_pool2d"):  # nuked for agent evaluation
+    ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
 def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
@@ -253,7 +254,8 @@ def golden_avg_pool2d(
     return pool_output_to_flat_nhwc(output_tensor)
 
 
-ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
+if hasattr(ttnn, "avg_pool2d"):  # nuked for agent evaluation
+    ttnn.attach_golden_function(ttnn.avg_pool2d, golden_avg_pool2d)
 
 
 def golden_adaptive_avg_pool2d(
@@ -324,37 +326,6 @@ def golden_adaptive_max_pool2d(
 
 if hasattr(ttnn, "adaptive_max_pool2d"):
     ttnn.attach_golden_function(ttnn.adaptive_max_pool2d, golden_adaptive_max_pool2d)
-
-
-def golden_upsample(
-    input_tensor: ttnn.Tensor,
-    scale_factor,
-    mode: str = "nearest",
-    **_,
-):
-    """
-    Golden function for upsample operation using torch.nn.functional.interpolate.
-
-    Args:
-        input_tensor: Input tensor in (N, H, W, C) format
-        scale_factor: Upsampling scale factor - int, float, [int, int], or [float, float]
-        mode: Interpolation mode ("nearest" or "bilinear")
-
-    Returns:
-        Output tensor in (N, H, W, C) format
-    """
-    import torch
-
-    # Normalize scale_factor to a tuple
-    if isinstance(scale_factor, (int, float)):
-        scale_factor = (scale_factor, scale_factor)
-
-    input_nchw = input_tensor.permute(0, 3, 1, 2)
-    output_nchw = torch.nn.functional.interpolate(input_nchw, scale_factor=scale_factor, mode=mode)
-    return output_nchw.permute(0, 2, 3, 1)
-
-
-ttnn.attach_golden_function(ttnn.upsample, golden_upsample)
 
 
 def golden_grid_sample(

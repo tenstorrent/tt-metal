@@ -13,12 +13,7 @@ set_target_properties(
             api
 )
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(
-    GLOB_RECURSE kernels
-    sdpa/device/kernels/*
-    sdpa_decode/device/kernels/*
-    gated_delta_attn/device/kernels/*
-)
+file(GLOB_RECURSE kernels gated_delta_attn/device/kernels/*)
 target_sources(
     ttnn_op_transformer
     PUBLIC
@@ -27,12 +22,7 @@ target_sources(
         BASE_DIRS ${FixmeOpAPIDir}
         FILES
             sdpa_config.hpp
-            attention_softmax/attention_softmax.hpp
             concatenate_heads/concatenate_heads.hpp
-            sdpa/sdpa.hpp
-            sdpa/sparse_sdpa.hpp
-            sdpa/sparse_sdpa_msa.hpp
-            sdpa_decode/sdpa_decode.hpp
             split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp
         FILE_SET kernels
         TYPE HEADERS
