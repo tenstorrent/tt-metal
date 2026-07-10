@@ -165,7 +165,13 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     // Reader kernel: produces the resident input shard into the borrowed INPUT DFB (fake-push).
     KernelSpec reader{
         .unique_id = S2I_READER,
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // Quasar: the kernel does explicit push_back/pop_front AND implicit sync's ISR increments the
+        // same tile counter -> double-count -> 16-bit posted/acked overflow -> TILE_COUNTERS error bit.
+        // Disable implicit sync so only the explicit increments count. See ~/implicit_sync.md.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
     reader.source =
         "ttnn/cpp/ttnn/operations/experimental/quasar/sharded_to_interleaved/device/kernels/dataflow/"
@@ -177,7 +183,10 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
     KernelSpec writer{
         .unique_id = S2I_WRITER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = S2I_OUTPUT, .accessor_name = "dst"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
     writer.dfb_bindings = {ConsumerOf(writer_in_dfb, "out")};
     if (is_tile) {
