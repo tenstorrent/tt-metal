@@ -1176,6 +1176,7 @@ class TracedLlama32_1BExecutor:
         mesh_device: ttnn.MeshDevice,
         model_args=None,
         ondevice_decode_loop: bool = False,
+        fast_prefill_last_token: bool = False,
     ):
         if model_args is not None:
             model.model_args = model_args
@@ -1184,6 +1185,7 @@ class TracedLlama32_1BExecutor:
             mesh_device,
             iter_named_modules=_iter_llama_executor_named_modules,
             ondevice_decode_loop=ondevice_decode_loop,
+            fast_prefill_last_token=fast_prefill_last_token,
         )
 
     @property

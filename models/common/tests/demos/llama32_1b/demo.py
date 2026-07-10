@@ -879,7 +879,12 @@ def _run_perf_benchmark(
     # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
     # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active). This is the
     # #49282 T3K batch-1 decode-gap fix — it must be active on the perf path for the T3K b1 gate.
-    traced_executor = TracedLlama32_1BExecutor(model, mesh_device, ondevice_decode_loop=sampling_params is not None)
+    # fast_prefill_last_token: slice the single consumed last-token row on device before readback so the
+    # batch-1 host concat/readback moves one row instead of the full [1,1,32,vocab] tile — closes most of
+    # the residual T3K batch-1 PREFILL TTFT gap vs TTTv1 (which reads back only tokens). Inert for batch>1.
+    traced_executor = TracedLlama32_1BExecutor(
+        model, mesh_device, ondevice_decode_loop=sampling_params is not None, fast_prefill_last_token=True
+    )
     try:
         ma = model.model_args
         assert ma is not None

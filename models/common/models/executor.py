@@ -1269,6 +1269,7 @@ class TracedLLMExecutor:
         mesh_device: ttnn.MeshDevice,
         iter_named_modules=None,
         ondevice_decode_loop: bool = False,
+        fast_prefill_last_token: bool = False,
     ) -> None:
         """Initialize traced executor engine.
 
@@ -1277,6 +1278,16 @@ class TracedLLMExecutor:
             mesh_device: TT mesh device for execution.
             iter_named_modules: Optional callable yielding the model's named modules for config
                 validation (model-specific; defaults to the generic walk in the eager engine).
+            fast_prefill_last_token: Opt-in, default OFF. In the single-user (batch_size==1) sequential
+                prefill path only the last-token ROW of the [1,1,32,vocab] logits tile is ever consumed
+                (the assembly picks ``full[0,0,last%32,:]``). When True, that one row is sliced on device
+                BEFORE the host readback, so the PCIe transfer + host ``torch.cat`` of the 8 device shards
+                move [1,1,1,vocab] instead of the full 32-row tile (~32x less host concat + readback — the
+                dominant non-forward term in the T3K batch-1 prefill TTFT gap vs TTTv1, which reads back
+                only tokens). Correctness-identical (same row, sliced on device instead of host). Purely
+                internal to prefill_forward (callers only ever see the row-reduced output_tensor), so it
+                generalizes to every model's single-user prefill; kept opt-in to bound the change to the
+                wired path. Inert for batched prefill (batch_size>1 shares a multi-row logits tile).
             ondevice_decode_loop: Opt-in, default OFF. When True, the captured decode trace advances
                 position/rope on device (in-place ``ttnn.plus_one``) and feeds the sampled token back
                 into the persistent token buffer (``ttnn.sampling(output_tensor=...)``), so steady-state
@@ -1291,6 +1302,7 @@ class TracedLLMExecutor:
         self._eager = EagerLLMExecutor(model, mesh_device, iter_named_modules=iter_named_modules)
         self._cleaned_up = False
         self.ondevice_decode_loop = ondevice_decode_loop
+        self.fast_prefill_last_token = fast_prefill_last_token
 
         # todo)) we cannot save many traces in memory! Gotta limit the number of traces! --> lru_cache?
         #        but the warmup_model_prefill() traces must be kept around forever!
@@ -1748,11 +1760,21 @@ class TracedLLMExecutor:
                 )
 
             logits = ttnn.untilize(logits, use_multicore=True)
+            # Single-user last-token slice ON DEVICE before readback (see fast_prefill_last_token):
+            # only row (last_token_idx - num_cached)%32 of this [1,1,32,vocab] tile is consumed by the
+            # assembly, so slicing it here shrinks the host readback + concat from the full tile to one
+            # row. row_override tells the assembly the row already sits at index 0.
+            row_override = None
+            if self.fast_prefill_last_token and batch_size == 1:
+                _row = (last_token_idx - num_cached_tokens) % 32
+                logits = ttnn.slice(logits, (0, 0, _row, 0), (1, 1, _row + 1, logits.shape[-1]))
+                row_override = 0
             prefill_results.append(
                 {
                     "idx": idx,
                     "last_token_idx": last_token_idx,
                     "logits": logits.cpu(blocking=False),
+                    "row_override": row_override,
                 }
             )
 
@@ -1777,7 +1799,8 @@ class TracedLLMExecutor:
                 full = _concat_host_output(res["logits"], cluster_shape)
                 _concat_cache[key] = full
             last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
-            output_tensor[res["idx"]] = full[0, 0, last_relative % 32, :vocab_size]
+            row = res.get("row_override")
+            output_tensor[res["idx"]] = full[0, 0, last_relative % 32 if row is None else row, :vocab_size]
 
         return output_tensor
 
