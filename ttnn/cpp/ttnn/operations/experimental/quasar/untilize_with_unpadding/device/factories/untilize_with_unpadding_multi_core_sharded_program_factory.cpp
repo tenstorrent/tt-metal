@@ -261,8 +261,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     const std::vector<CoreCoord> all_core_coords = corerange_to_cores(all_cores, std::nullopt, row_major);
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : all_core_coords) {
         const NodeCoord node = core;

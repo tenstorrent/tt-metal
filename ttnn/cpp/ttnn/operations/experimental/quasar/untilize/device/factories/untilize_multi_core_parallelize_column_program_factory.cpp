@@ -186,8 +186,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, row_major);
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : cores) {
         if (!full_cores.contains(core)) {

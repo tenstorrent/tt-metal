@@ -162,8 +162,8 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreSubCoreGridsProgramFac
     auto nsticks_per_core = ntiles_per_column * TILE_HEIGHT;
     uint32_t ntiles_per_core = ntiles_per_block * nblocks_per_core;
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     for (const auto& core : cores) {
         reader_node_args["num_pages"][core] = ntiles_per_core;

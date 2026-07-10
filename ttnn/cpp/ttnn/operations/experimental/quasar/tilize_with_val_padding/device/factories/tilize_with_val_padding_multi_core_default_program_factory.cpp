@@ -186,8 +186,8 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
     uint32_t start_page_id = 0;
     const auto cores = corerange_to_cores(available_grid);
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     Table<NodeCoord, AdvancedKernelRunArgs::Varargs> reader_varargs;
     uint32_t max_varargs = 0;
 

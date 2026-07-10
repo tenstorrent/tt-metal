@@ -171,8 +171,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     }
 
     // --- Per-core runtime args ---
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     uint32_t base_rows_per_core = total_output_rows / num_cores;
     uint32_t extra_rows = total_output_rows % num_cores;

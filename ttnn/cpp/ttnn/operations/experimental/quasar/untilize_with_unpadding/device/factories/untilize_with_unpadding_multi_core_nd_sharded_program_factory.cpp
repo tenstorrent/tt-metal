@@ -228,9 +228,9 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create_program_artifacts(
     // Per-core runtime args. start_shard_id is the core's index in ordered_cores_with_data; the
     // compute block count per core is derived from the page mapping (non-padding blocks).
     // ------------------------------------------------------------------------
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> compute_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_node_args;
 
     const auto& mapped_cores = page_mapping.all_cores;
     uint32_t start_shard_id = 0;

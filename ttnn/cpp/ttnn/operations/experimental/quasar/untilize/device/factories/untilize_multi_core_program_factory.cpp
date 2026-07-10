@@ -267,10 +267,10 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     }
 
     // ---- Per-core runtime args (mirrors legacy work-distribution loop verbatim) ----
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> compute_full_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> compute_cliff_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_full_node_args;
+    KernelRunArgs::RuntimeArgValues compute_cliff_node_args;
 
     uint32_t tile_start_index = 0;
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;

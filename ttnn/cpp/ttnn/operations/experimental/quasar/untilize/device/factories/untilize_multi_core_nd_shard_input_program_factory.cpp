@@ -197,9 +197,9 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreNDShardInputProgramFac
 
     // Per-core runtime args. Count non-padding blocks per core from the page mapping.
     const auto& mapped_cores = page_mapping.all_cores;
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> compute_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_node_args;
     uint32_t start_shard_id = 0;
     for (const auto& core : ordered_cores_with_data) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);

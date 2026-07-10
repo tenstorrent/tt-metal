@@ -306,8 +306,8 @@ UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_program_art
     // Per-node runtime args. Replicates the legacy per-core work-distribution loop verbatim; the
     // src/dst buffer-address RTAs are dropped (carried by the TensorAccessor bindings).
     // ------------------------------------------------------------------------
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
 
     const auto& cores = corerange_to_cores(available_grid);
     uint32_t start_row_id = 0;

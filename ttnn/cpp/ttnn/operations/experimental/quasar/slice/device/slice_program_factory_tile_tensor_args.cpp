@@ -149,8 +149,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 
     // --- Per-core runtime args ---
     constexpr uint32_t start_offset = 0;  // tensor-args path computes the start offset in-kernel
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     uint32_t num_tiles_written = 0;

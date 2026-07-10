@@ -180,8 +180,8 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
 
     const auto& cores = corerange_to_cores(available_grid);
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     Table<NodeCoord, AdvancedKernelRunArgs::Varargs> writer_varargs;
     uint32_t max_varargs = 0;
 

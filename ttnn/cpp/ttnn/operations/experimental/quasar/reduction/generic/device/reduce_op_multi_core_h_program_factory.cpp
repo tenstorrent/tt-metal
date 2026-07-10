@@ -211,8 +211,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         cores.size() == num_cores, "Resolved core list size {} must match split num_cores {}", cores.size(), num_cores);
     TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
 
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
         const CoreCoord& core = cores[i];
         uint32_t num_cols_per_core = 0;

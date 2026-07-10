@@ -324,8 +324,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
     };
 
     // --- Per-core runtime args ---
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     for (size_t i = 0; i < all_cores_vec.size(); ++i) {

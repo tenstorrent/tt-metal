@@ -141,9 +141,9 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     auto cores = corerange_to_cores(grid, std::nullopt, orientation == ShardOrientation::ROW_MAJOR);
     auto page_mapping = distribution_spec.compute_page_mapping();
     const auto& mapped_cores = page_mapping.all_cores;
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> compute_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
+    KernelRunArgs::RuntimeArgValues compute_node_args;
     for (const auto& core : cores) {
         auto core_it = std::find(mapped_cores.begin(), mapped_cores.end(), core);
         uint32_t num_blocks_to_process = 0;

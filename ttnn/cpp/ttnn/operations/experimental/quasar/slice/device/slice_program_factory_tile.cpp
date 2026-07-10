@@ -126,8 +126,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     // --- Per-core runtime args ---
     // Reader per-core: named (start_id, num_tiles) + id_per_dim runtime varargs.
     // Writer per-core: named (num_pages, start_id).
-    Table<std::string, Table<NodeCoord, uint32_t>> reader_node_args;
-    Table<std::string, Table<NodeCoord, uint32_t>> writer_node_args;
+    KernelRunArgs::RuntimeArgValues reader_node_args;
+    KernelRunArgs::RuntimeArgValues writer_node_args;
     AdvancedKernelRunArgs reader_run_advanced;
 
     uint32_t num_tiles_written = 0;
