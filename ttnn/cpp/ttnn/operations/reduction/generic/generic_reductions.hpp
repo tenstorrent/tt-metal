@@ -36,7 +36,10 @@ Tensor sum(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    // When false (default), fp32 sum reduces on the accurate SFPU path (full fp32); true selects the faster tf32 FPU
+    // path.
+    bool fast_and_approximate_mode = false);
 
 Tensor mean(
     const Tensor& input_tensor_arg,

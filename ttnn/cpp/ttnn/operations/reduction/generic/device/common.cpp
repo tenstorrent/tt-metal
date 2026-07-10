@@ -92,10 +92,16 @@ void validate_rm_preconditions(
 }
 
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim) {
+    const RmPlan& plan,
+    uint32_t scaler_bits,
+    const tt::tt_metal::MeshTensor& src,
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t num_h_slices,
+    uint32_t slice_Ht) {
     // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
-    // H_logical at slot 8; the W path omits it, so the source TensorAccessor args follow at slot 8 (W)
-    // or slot 9 (H). The kernel is templated on REDUCE_DIM so the unused slot is genuinely dropped.
+    // H_logical at slot 8 and the H-axis-split geometry (num_h_slices, slice_Ht) at slots 9-10; the
+    // W path omits all three, so the source TensorAccessor args follow at slot 8 (W) or slot 11 (H).
+    // The kernel is templated on REDUCE_DIM so the unused slots are genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
         scaler_bits,
@@ -109,6 +115,8 @@ std::vector<uint32_t> build_rm_reader_ct_args(
     };
     if (dim == tt::tt_metal::ReduceOpDim::H) {
         args.push_back(plan.H_logical);
+        args.push_back(num_h_slices);
+        args.push_back(slice_Ht == 0 ? plan.Ht_rm : slice_Ht);
     }
     tt::tt_metal::TensorAccessorArgs(src).append_to(args);
     return args;
@@ -133,7 +141,8 @@ std::vector<uint32_t> build_rm_writer_ct_args(
     return args;
 }
 
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits) {
+std::vector<uint32_t> build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce) {
     return {
         Ht_arg,
         plan.Wt,
@@ -141,6 +150,7 @@ std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_a
         post_mul_scaler_bits,
         plan.wt_tiles_per_chunk,
         plan.ht_tiles_per_chunk,
+        fp32_sfpu_reduce ? 1u : 0u,  // enable_fp32_sfpu: route Float32 SUM through the SFPU
     };
 }
 
