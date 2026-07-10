@@ -28,7 +28,11 @@ FLAG = "DG_PREFILL_MOE_TUNED"
 
 _HIDDEN_SIZE = 2816
 _INTERMEDIATE_PER_DEVICE = 192
-_MIN_GRID = (11, 4)
+_MOE_INTERMEDIATE_SIZE = 704
+_NUM_EXPERTS = 128
+_TOP_K = 8
+_MESH_SHAPE = (1, 4)
+_COMPUTE_GRID = (13, 10)
 
 _tuned_geometry_active: ContextVar[bool] = ContextVar("diffusion_gemma_tuned_prefill_moe", default=False)
 _builder_install_lock = Lock()
@@ -42,22 +46,49 @@ def tuned_prefill_moe_enabled() -> bool:
 
 
 def _find_supported_experts(model):
-    for layer in getattr(model, "layers", ()):
-        experts = getattr(getattr(layer, "moe", None), "experts", None)
-        if experts is None:
-            continue
+    """Return all experts only when every measured QB2 invariant matches."""
+
+    mesh_device = getattr(model, "mesh_device", None)
+    mesh_config = getattr(model, "mesh_config", None)
+    if mesh_device is None or mesh_config is None:
+        return None
+
+    try:
+        grid = mesh_device.compute_with_storage_grid_size()
+        prefill_config = mesh_config.prefill
+        supported_mesh = (
+            mesh_device.arch() == ttnn.device.Arch.BLACKHOLE
+            and tuple(mesh_device.shape) == _MESH_SHAPE
+            and mesh_device.get_num_devices() == 4
+            and tuple(mesh_config.mesh_shape) == _MESH_SHAPE
+            and mesh_config.tp_axis == 1
+            and (prefill_config.tp, prefill_config.ep, prefill_config.sp) == (4, 1, 1)
+            and (int(grid.x), int(grid.y)) == _COMPUTE_GRID
+        )
+    except (AttributeError, TypeError):
+        return None
+    if not supported_mesh or gemma4_prefill.PREFILL_CHUNK_SIZE != ttnn.TILE_SIZE:
+        return None
+
+    layers = tuple(getattr(model, "layers", ()))
+    experts_per_layer = tuple(getattr(getattr(layer, "moe", None), "experts", None) for layer in layers)
+    if not experts_per_layer or any(experts is None for experts in experts_per_layer):
+        return None
+
+    for experts in experts_per_layer:
         weights = experts.weights
         config = experts.config
-        grid = model.mesh_device.compute_with_storage_grid_size()
+        expert_weights = (weights.gate_proj, weights.up_proj, weights.down_proj)
         if (
-            config.hidden_size == _HIDDEN_SIZE
-            and weights.intermediate_size_per_device == _INTERMEDIATE_PER_DEVICE
-            and int(grid.x) >= _MIN_GRID[0]
-            and int(grid.y) >= _MIN_GRID[1]
+            config.hidden_size != _HIDDEN_SIZE
+            or config.moe_intermediate_size != _MOE_INTERMEDIATE_SIZE
+            or config.num_experts != _NUM_EXPERTS
+            or config.top_k != _TOP_K
+            or weights.intermediate_size_per_device != _INTERMEDIATE_PER_DEVICE
+            or any(weight.get_dtype() != ttnn.bfloat16 for weight in expert_weights)
         ):
-            return experts
-        return None
-    return None
+            return None
+    return experts_per_layer
 
 
 def _contextual_config_builder(m, n, in0_block_w=1):

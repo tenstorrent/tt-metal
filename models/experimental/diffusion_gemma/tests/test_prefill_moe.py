@@ -17,17 +17,60 @@ def test_tuned_prefill_moe_defaults_on_and_can_be_disabled(monkeypatch):
     assert not PM.tuned_prefill_moe_enabled()
 
 
-def _model(*, hidden_size=2816, intermediate_size=192, grid=(13, 10)):
-    experts = SimpleNamespace(
-        config=SimpleNamespace(hidden_size=hidden_size),
-        weights=SimpleNamespace(intermediate_size_per_device=intermediate_size),
-    )
+def _model(
+    *,
+    hidden_size=2816,
+    intermediate_size=192,
+    moe_intermediate_size=704,
+    num_experts=128,
+    top_k=8,
+    dtype="bf16",
+    arch="blackhole",
+    mesh_shape=(1, 4),
+    num_devices=4,
+    grid=(13, 10),
+    tp=4,
+    ep=1,
+    sp=1,
+    tp_axis=1,
+    mismatched_second_layer=False,
+):
+    def make_experts(layer_hidden_size):
+        weight = SimpleNamespace(get_dtype=lambda: dtype)
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                hidden_size=layer_hidden_size,
+                moe_intermediate_size=moe_intermediate_size,
+                num_experts=num_experts,
+                top_k=top_k,
+            ),
+            weights=SimpleNamespace(
+                intermediate_size_per_device=intermediate_size,
+                gate_proj=weight,
+                up_proj=weight,
+                down_proj=weight,
+            ),
+        )
+
     mesh = SimpleNamespace(
+        arch=lambda: arch,
+        shape=mesh_shape,
+        get_num_devices=lambda: num_devices,
         compute_with_storage_grid_size=lambda: SimpleNamespace(x=grid[0], y=grid[1]),
     )
+    mesh_config = SimpleNamespace(
+        mesh_shape=mesh_shape,
+        tp_axis=tp_axis,
+        prefill=SimpleNamespace(tp=tp, ep=ep, sp=sp),
+    )
+    layer_hidden_sizes = [hidden_size, 2048 if mismatched_second_layer else hidden_size]
     return SimpleNamespace(
         mesh_device=mesh,
-        layers=[SimpleNamespace(moe=SimpleNamespace(experts=experts))],
+        mesh_config=mesh_config,
+        layers=[
+            SimpleNamespace(moe=SimpleNamespace(experts=make_experts(layer_hidden_size)))
+            for layer_hidden_size in layer_hidden_sizes
+        ],
     )
 
 
@@ -35,6 +78,9 @@ def _model(*, hidden_size=2816, intermediate_size=192, grid=(13, 10)):
 def fake_ttnn(monkeypatch):
     fake = SimpleNamespace(
         TILE_SIZE=32,
+        bfloat16="bf16",
+        bfloat8_b="bfp8",
+        device=SimpleNamespace(Arch=SimpleNamespace(BLACKHOLE="blackhole")),
         CoreCoord=lambda x, y: (x, y),
         MatmulMultiCoreReuseMultiCast1DProgramConfig=lambda **kwargs: kwargs,
     )
@@ -77,7 +123,19 @@ def test_tuned_prefill_moe_uses_measured_qb2_geometry(monkeypatch, contextual_bu
     [
         _model(hidden_size=2048),
         _model(intermediate_size=256),
+        _model(moe_intermediate_size=768),
+        _model(num_experts=64),
+        _model(top_k=4),
+        _model(dtype="bfp8"),
+        _model(arch="wormhole"),
+        _model(mesh_shape=(2, 2)),
+        _model(num_devices=8),
+        _model(tp=2),
+        _model(ep=2),
+        _model(sp=2),
+        _model(tp_axis=0),
         _model(grid=(8, 8)),
+        _model(mismatched_second_layer=True),
         SimpleNamespace(layers=[]),
     ],
 )
@@ -85,6 +143,14 @@ def test_tuned_prefill_moe_leaves_unsupported_models_unchanged(monkeypatch, cont
     monkeypatch.setenv(PM.FLAG, "1")
 
     with PM.use_tuned_prefill_moe(model):
+        assert contextual_builder(32, 192) == ("original", 32, 192, 1)
+
+
+def test_tuned_prefill_moe_requires_measured_chunk_size(monkeypatch, contextual_builder):
+    monkeypatch.setenv(PM.FLAG, "1")
+    monkeypatch.setattr(PM.gemma4_prefill, "PREFILL_CHUNK_SIZE", 64)
+
+    with PM.use_tuned_prefill_moe(_model()):
         assert contextual_builder(32, 192) == ("original", 32, 192, 1)
 
 
