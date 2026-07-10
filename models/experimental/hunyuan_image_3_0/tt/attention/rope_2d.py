@@ -12,20 +12,24 @@
 #   1. Build cos/sin on CPU (ref build_batch_2d_rope — unchanged).
 #   2. Reshape to [1, 1, seq_len, head_dim] and upload to device with
 #      ttnn.from_torch() each prefill.
-#   3. Apply split-half RoPE on device via apply_rotary_pos_emb_vision_tt from
-#      tt_transformers (same rotate_half math as Hunyuan ref).
+#   3. Apply split-half ("HF-style") RoPE on device via the fused
+#      ttnn.experimental.rotary_embedding_hf kernel — same rotate_half math
+#      as Hunyuan ref (x*cos + rotate_half(x)*sin), computed in a single
+#      device op per tensor instead of the slice/mul/concat/add decomposition
+#      (previously via tt_transformers' apply_rotary_pos_emb_vision_tt).
+#      NOTE: this is NOT ttnn.experimental.rotary_embedding_llama, which uses
+#      an interleaved-pair rotation matrix (32x32 tile) — not equivalent for
+#      Hunyuan's first-half/second-half convention at head_dim=128.
 #
 # References
 # ----------
-#   models/tt_transformers/tt/multimodal/mistral_24b/vision_attention.py
+#   ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf
+#   tests/tt_eager/python_api_testing/unit_testing/misc/test_rotary_embedding_hf.py
 #   models/experimental/hunyuan_image_3_0/ref/attention/rope_2d.py
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.hunyuan_image_3_0.ref.attention.rope_2d import build_batch_2d_rope
-from models.tt_transformers.tt.multimodal.mistral_24b.vision_attention import (
-    apply_rotary_pos_emb_vision_tt,
-)
 
 
 class HunyuanTtRoPE2D(LightweightModule):
@@ -46,8 +50,9 @@ class HunyuanTtRoPE2D(LightweightModule):
     -----------------------------------
     Hunyuan uses split-half RoPE: rotate_half(x) = cat([-x[...,D/2:], x[...,:D/2]], dim=-1).
     ttnn.experimental.rotary_embedding_llama uses an interleaved-pair rotation matrix
-    (32×32 tile), which is not equivalent for head_dim=128. We reuse the split-half
-    apply path from tt_transformers Mistral vision attention instead.
+    (32×32 tile), which is not equivalent for head_dim=128. We use the fused
+    ttnn.experimental.rotary_embedding_hf op instead, which implements this exact
+    split-half convention (x*cos + rotate_half(x)*sin) as a single device op.
     """
 
     def __init__(self, device, head_dim: int = 128):
@@ -107,14 +112,6 @@ class HunyuanTtRoPE2D(LightweightModule):
             ttnn.slice(sin_tt, [0, 0, position, 0], [1, 1, position + 1, self.head_dim]),
         )
 
-    @staticmethod
-    def _cos_sin_for_vision_apply(cos_tt: ttnn.Tensor, sin_tt: ttnn.Tensor):
-        """Adapt [1, 1, S, D] tables to the [1, S, D] shape expected by vision RoPE."""
-        if len(cos_tt.shape) == 4 and cos_tt.shape[0] == 1 and cos_tt.shape[1] == 1:
-            cos_tt = ttnn.squeeze(cos_tt, 1)
-            sin_tt = ttnn.squeeze(sin_tt, 1)
-        return cos_tt, sin_tt
-
     def forward(
         self,
         q: ttnn.Tensor,
@@ -134,5 +131,6 @@ class HunyuanTtRoPE2D(LightweightModule):
         Returns:
             q_rot, k_rot — same shapes as inputs.
         """
-        cos_tt, sin_tt = self._cos_sin_for_vision_apply(cos_tt, sin_tt)
-        return apply_rotary_pos_emb_vision_tt(q, k, cos_tt, sin_tt)
+        q_rot = ttnn.experimental.rotary_embedding_hf(q, cos_tt, sin_tt, is_decode_mode=False)
+        k_rot = ttnn.experimental.rotary_embedding_hf(k, cos_tt, sin_tt, is_decode_mode=False)
+        return q_rot, k_rot
