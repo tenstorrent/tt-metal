@@ -16,14 +16,6 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     batch_norm/device/kernels/*.cpp
-    groupnorm/device/kernels/*.hpp
-    layernorm/device/kernels/*.cpp
-    layernorm/device/kernels/*.hpp
-    layernorm/device/kernels/*.h
-    layernorm_distributed/device/kernels/*.cpp
-    layernorm_distributed/device/kernels/*.hpp
-    rmsnorm_distributed/device/kernels/*.cpp
-    softmax/device/kernels/*.cpp
     kernel_util/compute/*.h
     kernel_util/generic/*.h
 )
