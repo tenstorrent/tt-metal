@@ -433,12 +433,12 @@ class Plotter:
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
     def plot_bandwidth_multicast(self, ax, data, riscv, noc_index):
-        x_key = "grid_dimensions"
+        x_key = "sub_grid_dimensions"
         y_key = "bandwidth"
         series_keys = ["multicast_scheme_number"]
 
-        title = "Grid Dimensions vs Bandwidth"
-        xlabel = "Grid Dimensions"
+        title = "Subordinate Grid Dimensions vs Bandwidth"
+        xlabel = "Subordinate Grid Dimensions"
         ylabel = "Bandwidth (bytes/cycle)"
 
         filtered_data = {

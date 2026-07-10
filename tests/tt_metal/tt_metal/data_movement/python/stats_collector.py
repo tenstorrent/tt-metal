@@ -262,11 +262,31 @@ class StatsCollector:
                                 agg_data[value] = value_mappings[key][raw_val]
                             else:
                                 agg_data[value] = raw_val
-                        # For multicast, create a grid dimension string
-                        if test_type == "multicast_schemes":
-                            grid_x = attributes.get("Subordinate Grid Size X", "N/A")
-                            grid_y = attributes.get("Subordinate Grid Size Y", "N/A")
-                            agg_data["grid_dimensions"] = f"{grid_x} x {grid_y}"
+
+                # Extract number of banks if stamped
+                num_banks = attributes.get("Number of Banks")
+                if num_banks is not None:
+                    agg_data["num_banks"] = int(num_banks)
+
+                # Extract loopback flag if stamped
+                loopback_val = attributes.get("Loopback")
+                if loopback_val is not None:
+                    agg_data["loopback"] = bool(int(loopback_val))
+
+                # Create grid dimension strings for any test that stamps grid sizes
+                sub_x = attributes.get("Subordinate Grid Size X")
+                sub_y = attributes.get("Subordinate Grid Size Y")
+                if sub_x is not None and sub_y is not None:
+                    agg_data["sub_grid_dimensions"] = f"{sub_x}x{sub_y}"
+                mst_x = attributes.get("Master Grid Size X")
+                mst_y = attributes.get("Master Grid Size Y")
+                if mst_x is not None and mst_y is not None:
+                    agg_data["mst_grid_dimensions"] = f"{mst_x}x{mst_y}"
+                # Single-grid tests (e.g. multi_interleaved) stamp "Grid Size X/Y"
+                grid_x = attributes.get("Grid Size X")
+                grid_y = attributes.get("Grid Size Y")
+                if grid_x is not None and grid_y is not None:
+                    agg_data["grid_dimensions"] = f"{grid_x}x{grid_y}"
 
                 agg[run_host_id] = agg_data
 

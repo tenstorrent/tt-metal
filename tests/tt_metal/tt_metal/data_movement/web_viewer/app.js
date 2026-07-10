@@ -32,17 +32,28 @@ const TEST_GROUPS = [
         directory: "one_from_all",
         tags: ["read", "unicast", "L1", "multi_core"],
         tests: [
-            { name: "Packet Sizes", csv: "One from All Packet Sizes.csv" },
-            { name: "Virtual Channels", csv: "One from All Virtual Channels.csv" },
+            { name: "Packet Sizes", csv: "One from All Packet Sizes 2.0.csv" },
+            { name: "Virtual Channels", csv: "One from All Virtual Channels 2.0.csv" },
         ],
     },
     {
         group: "One to All",
         directory: "one_to_all",
-        tags: ["write", "multicast", "L1", "multi_core"],
+        tags: ["write", "unicast", "multicast", "L1", "multi_core"],
         tests: [
+            { name: "Unicast Packet Sizes", csv: "One to All Unicast Packet Sizes 2.0.csv" },
+            { name: "Multicast Packet Sizes", csv: "One to All Multicast Packet Sizes 2.0.csv" },
             { name: "Multicast Linked Packet Sizes", csv: "One to All Multicast Linked Packet Sizes 2.0.csv" },
             { name: "Multicast Schemes (Loopback Disabled)", csv: "Multicast Schemes (Loopback Disabled).csv" },
+        ],
+    },
+    {
+        group: "One Packet",
+        directory: "one_packet",
+        tags: ["read", "write", "unicast", "L1", "single_core"],
+        tests: [
+            { name: "Read Sizes", csv: "One Packet Read Sizes 2.0.csv" },
+            { name: "Write Sizes", csv: "One Packet Write Sizes 2.0.csv" },
         ],
     },
     {
@@ -51,6 +62,7 @@ const TEST_GROUPS = [
         tags: ["write", "unicast", "L1", "multi_core"],
         tests: [
             { name: "Packet Sizes", csv: "All to All Packet Sizes 2.0.csv" },
+            { name: "Grid Sweep Packet Sizes", csv: "All to All Grid Sweep Packet Sizes 2.0.csv" },
         ],
     },
     {
@@ -59,14 +71,20 @@ const TEST_GROUPS = [
         tags: ["read", "unicast", "L1", "multi_core"],
         tests: [
             { name: "Packet Sizes", csv: "All from All Packet Sizes.csv" },
+            { name: "Grid Sweep Packet Sizes", csv: "All from All Grid Sweep Packet Sizes 2.0.csv" },
         ],
     },
     {
         group: "Multi Interleaved",
         directory: "multi_interleaved",
-        tags: ["read", "unicast", "DRAM", "multi_core"],
+        tags: ["read", "write", "unicast", "DRAM", "multi_core"],
         tests: [
             { name: "Sizes", csv: "Multi Interleaved Sizes.csv" },
+            { name: "Read Sizes", csv: "Multi Interleaved Read Sizes.csv" },
+            { name: "Write Sizes", csv: "Multi Interleaved Write Sizes.csv" },
+            { name: "Grid Sweep Sizes", csv: "Multi Interleaved Grid Sweep Sizes.csv" },
+            { name: "Grid Sweep Read Sizes", csv: "Multi Interleaved Read Grid Sweep Sizes.csv" },
+            { name: "Grid Sweep Write Sizes", csv: "Multi Interleaved Write Grid Sweep Sizes.csv" },
         ],
     },
     {
@@ -75,6 +93,137 @@ const TEST_GROUPS = [
         tags: ["write", "unicast", "L1", "multi_core", "atomics"],
         tests: [
             { name: "Adjacent Bandwidth Sweep", csv: "Atomic Semaphore Adjacent Bandwidth Sweep.csv" },
+            { name: "Non Adjacent Bandwidth Sweep", csv: "Atomic Semaphore Non Adjacent Bandwidth Sweep.csv" },
+        ],
+    },
+    {
+        group: "Core Bidirectional",
+        directory: "core_bidirectional",
+        tags: ["read", "write", "unicast", "L1", "single_core"],
+        tests: [
+            { name: "Packet Sizes (Same Kernel)", csv: "Core Bidirectional Packet Sizes Same Kernel.csv" },
+            { name: "Packet Sizes (Different Kernels)", csv: "Core Bidirectional Packet Sizes Different Kernels.csv" },
+        ],
+    },
+    {
+        group: "Direct Write",
+        directory: "direct_write",
+        tags: ["write", "unicast", "L1", "single_core"],
+        tests: [
+            { name: "Performance Comparison", csv: "Inline Direct Write Performance Comparison.csv" },
+            { name: "Address Pattern", csv: "Inline Direct Write Address Pattern.csv" },
+        ],
+    },
+    {
+        group: "DRAM Neighbour",
+        directory: "dram_neighbour",
+        tags: ["read", "unicast", "DRAM", "multi_core"],
+        tests: [
+            { name: "Pages Sweep (Closest)", csv: "Number of Pages Sweep for DRAM Closest Neighbour.csv" },
+            { name: "Banks Sweep (Closest)", csv: "Number of Banks Sweep for DRAM Closest Neighbour.csv" },
+            { name: "Pages Sweep (Single Row)", csv: "Number of Pages Sweep for Single Row DRAM.csv" },
+            { name: "Pages Sweep (One Hop)", csv: "Number of Pages Sweep for DRAM One Hop.csv" },
+            { name: "Pages Sweep (Loop Back)", csv: "Number of Pages Sweep for DRAM Loop Back.csv" },
+        ],
+    },
+    {
+        group: "DRAM Sharded Read",
+        directory: "dram_sharded",
+        tags: ["read", "unicast", "DRAM", "multi_core"],
+        tests: [
+            { name: "Tile Numbers", csv: "DRAM Sharded Read Tile Numbers 2.0.csv" },
+            { name: "Bank Numbers", csv: "DRAM Sharded Read Bank Numbers 2.0.csv" },
+        ],
+    },
+    {
+        group: "DRAM Unary",
+        directory: "dram_unary",
+        tags: ["read", "write", "unicast", "DRAM", "single_core"],
+        tests: [
+            { name: "Packet Sizes", csv: "DRAM Packet Sizes 2.0.csv" },
+            { name: "Channels", csv: "DRAM Channels 2.0.csv" },
+            { name: "Core Locations", csv: "DRAM Core Locations 2.0.csv" },
+        ],
+    },
+    {
+        group: "DRAM Interleaved",
+        directory: "interleaved",
+        tags: ["read", "write", "unicast", "DRAM", "multi_core"],
+        tests: [
+            { name: "Page Numbers", csv: "DRAM Interleaved Page Numbers.csv" },
+            { name: "Read Numbers", csv: "DRAM Interleaved Page Read Numbers.csv" },
+            { name: "Write Numbers", csv: "DRAM Interleaved Page Write Numbers.csv" },
+        ],
+    },
+    {
+        group: "L1 Interleaved",
+        directory: "interleaved",
+        tags: ["read", "write", "unicast", "L1", "multi_core"],
+        tests: [
+            { name: "Page Numbers", csv: "L1 Interleaved Page Numbers.csv" },
+            { name: "Read Numbers", csv: "L1 Interleaved Page Read Numbers.csv" },
+            { name: "Write Numbers", csv: "L1 Interleaved Page Write Numbers.csv" },
+        ],
+    },
+    {
+        group: "Loopback",
+        directory: "loopback",
+        tags: ["read", "write", "unicast", "L1", "single_core"],
+        tests: [
+            { name: "Packet Sizes", csv: "Loopback Packet Sizes.csv" },
+        ],
+    },
+    {
+        group: "Noc Estimator",
+        directory: "noc_estimator_tests",
+        tags: ["read", "write", "unicast", "multicast", "L1", "DRAM", "multi_core"],
+        tests: [
+            { name: "L1 One to One", csv: "Noc Estimator - L1 One to One.csv" },
+            { name: "L1 One from One", csv: "Noc Estimator - L1 One from One.csv" },
+            { name: "L1 One to All", csv: "Noc Estimator - L1 One to All.csv" },
+            { name: "L1 One from All", csv: "Noc Estimator - L1 One from All.csv" },
+            { name: "L1 All to All", csv: "Noc Estimator - L1 All to All.csv" },
+            { name: "L1 All from All", csv: "Noc Estimator - L1 All from All.csv" },
+            { name: "L1 One to Row", csv: "Noc Estimator - L1 One to Row.csv" },
+            { name: "L1 Row to Row", csv: "Noc Estimator - L1 Row to Row.csv" },
+            { name: "L1 One to Column", csv: "Noc Estimator - L1 One to Column.csv" },
+            { name: "L1 Column to Column", csv: "Noc Estimator - L1 Column to Column.csv" },
+            { name: "DRAM Sharded One from One", csv: "Noc Estimator - DRAM Sharded One from One.csv" },
+            { name: "DRAM Sharded All from All", csv: "Noc Estimator - DRAM Sharded All from All.csv" },
+            { name: "DRAM Interleaved One from All", csv: "Noc Estimator - DRAM Interleaved One from All.csv" },
+            { name: "DRAM Interleaved All from All", csv: "Noc Estimator - DRAM Interleaved All from All.csv" },
+            { name: "DRAM Sharded One to One", csv: "Noc Estimator - DRAM Sharded One to One.csv" },
+            { name: "DRAM Sharded All to All", csv: "Noc Estimator - DRAM Sharded All to All.csv" },
+            { name: "DRAM Interleaved One to All", csv: "Noc Estimator - DRAM Interleaved One to All.csv" },
+            { name: "DRAM Interleaved All to All", csv: "Noc Estimator - DRAM Interleaved All to All.csv" },
+        ],
+    },
+    {
+        group: "PCIe Read",
+        directory: "pcie_read_bw",
+        tags: ["read", "unicast", "DRAM", "single_core"],
+        tests: [
+            { name: "Bandwidth Sweep", csv: "PCIe Read Bandwidth Sweep.csv" },
+        ],
+    },
+    {
+        group: "PCIe Write",
+        directory: "pcie_write_bw",
+        tags: ["write", "unicast", "DRAM", "single_core"],
+        tests: [
+            { name: "Bandwidth Sweep", csv: "PCIe Write Bandwidth Sweep.csv" },
+        ],
+    },
+    {
+        group: "Transaction ID",
+        directory: "transaction_id",
+        tags: ["read", "write", "unicast", "L1", "single_core"],
+        tests: [
+            { name: "Read After Write", csv: "Transaction ID - Read After Write 2.0.csv" },
+            { name: "Read After Write (One Packet)", csv: "Transaction ID - Read After Write One Packet 2.0.csv" },
+            { name: "Read After Write (One Packet Stateful)", csv: "Transaction ID - Read After Write One Packet Stateful 2.0.csv" },
+            { name: "Write After Read", csv: "Transaction ID - Write After Read 2.0.csv" },
+            { name: "Write After Read (One Packet Stateful)", csv: "Transaction ID - Write After Read One Packet Stateful 2.0.csv" },
         ],
     },
 ];
@@ -82,8 +231,12 @@ const TEST_GROUPS = [
 const INTERNAL_COLUMNS = new Set([
     "Run Host ID",
     "Architecture",
+    "Grid Size X",
+    "Grid Size Y",
     "Subordinate Grid Size X",
     "Subordinate Grid Size Y",
+    "Master Grid Size X",
+    "Master Grid Size Y",
 ]);
 
 const X_AXIS_EXCLUDED = new Set([
@@ -103,6 +256,8 @@ const METRIC_COLUMNS = new Set([
 const X_AXIS_PRIORITY = [
     "Transaction Size (bytes)",
     "Grid Dimensions",
+    "Master Grid Dimensions",
+    "Subordinate Grid Dimensions",
 ];
 
 const SERIES_COLORS = [
@@ -253,6 +408,25 @@ function getFilteredGroups() {
 
 // ── Chart Rendering (Plotly) ───────────────────────────────────────
 
+function parseGridDimension(val) {
+    const m = String(val).match(/^(\d+)\s*x\s*(\d+)$/);
+    if (!m) return null;
+    return { w: Number(m[1]), h: Number(m[2]), total: Number(m[1]) * Number(m[2]) };
+}
+
+function compareAxisValues(a, b) {
+    const ga = parseGridDimension(a);
+    const gb = parseGridDimension(b);
+    if (ga && gb) {
+        if (ga.total !== gb.total) return ga.total - gb.total;
+        if (ga.w !== gb.w) return ga.w - gb.w;
+        return ga.h - gb.h;
+    }
+    const na = Number(a), nb = Number(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return String(a).localeCompare(String(b));
+}
+
 function formatBytes(value) {
     if (value >= 1024) {
         return value / 1024 + "K";
@@ -293,7 +467,7 @@ function getPlotData(rows, config) {
     }
 
     for (const s of series.values()) {
-        const indices = s.x.map((_, i) => i).sort((a, b) => s.x[a] - s.x[b]);
+        const indices = s.x.map((_, i) => i).sort((a, b) => compareAxisValues(s.x[a], s.x[b]));
         s.x = indices.map((i) => s.x[i]);
         s.y = indices.map((i) => s.y[i]);
     }
@@ -365,6 +539,10 @@ function renderChart(rows, config) {
         xaxis.ticktext = getBase2Ticks(traces).map(formatBytes);
     } else {
         xaxis.type = "category";
+        const allCatValues = [...new Set(traces.flatMap((t) => t.x))];
+        allCatValues.sort(compareAxisValues);
+        xaxis.categoryorder = "array";
+        xaxis.categoryarray = allCatValues;
     }
 
     const layout = {
@@ -565,11 +743,7 @@ function renderSweepFilters(config, rows) {
 
     for (const dim of config.groupers) {
         const values = [...new Set(rows.map((r) => r[dim]))]
-            .sort((a, b) => {
-                const na = Number(a), nb = Number(b);
-                if (!isNaN(na) && !isNaN(nb)) return na - nb;
-                return String(a).localeCompare(String(b));
-            });
+            .sort(compareAxisValues);
 
         state.visibleValues.set(dim, new Set(values.map(String)));
 
