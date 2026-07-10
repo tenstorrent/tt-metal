@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -199,15 +200,24 @@ def _zero_timesteps(batch: int) -> torch.Tensor:
     return torch.zeros(batch, dtype=torch.float32)
 
 
-def _pad_and_upload_bcthw(mesh_device, image, *, dtype=ttnn.bfloat16) -> ttnn.Tensor:
-    """Host cond image tensor -> padded BCTHW on device."""
+def _host_bcthw_for_vae_encode(image, *, dtype=ttnn.bfloat16) -> torch.Tensor:
+    """Host cond image tensor -> padded BCTHW (no device upload)."""
     import torch.nn.functional as F
 
     x = prepare_vae_encode_input(_vae_cond_as_tensor(image)).float()
     padded_c = aligned_channels(IN_CHANNELS)
     if x.shape[1] < padded_c:
         x = F.pad(x, (0, 0, 0, 0, 0, 0, 0, padded_c - x.shape[1]))
-    host = x.bfloat16() if dtype == ttnn.bfloat16 else x.float()
+    return x.bfloat16() if dtype == ttnn.bfloat16 else x.float()
+
+
+def _host_bthwc_for_vae_encode(image, *, dtype=ttnn.bfloat16) -> torch.Tensor:
+    return _host_bcthw_for_vae_encode(image, dtype=dtype).permute(0, 2, 3, 4, 1).contiguous()
+
+
+def _pad_and_upload_bcthw(mesh_device, image, *, dtype=ttnn.bfloat16) -> ttnn.Tensor:
+    """Host cond image tensor -> padded BCTHW on device."""
+    host = _host_bcthw_for_vae_encode(image, dtype=dtype)
     x_bcthw = ttnn.from_torch(
         host,
         dtype=dtype,
@@ -227,18 +237,42 @@ def vae_encode_image_tt(
     scaling_factor: float | None = None,
     shift_factor: float | None = None,
     seed: int | None = None,
+    cond_encode_trace: bool = True,
 ) -> tuple[torch.Tensor, ttnn.Tensor]:
     """Encode one cond image on device -> ``(timesteps, latents_bthwc)`` on device."""
+    from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
+
+    t0 = time.perf_counter()
     vae_encoder = _resolve_tt_vae_encoder(mesh_device, image, vae_encoder)
-    x_tt = _pad_and_upload_bcthw(mesh_device, image)
-    h_tt = vae_encoder(x_tt)
-    ttnn.deallocate(x_tt, force=False)
+    pixel_h, pixel_w = _vae_cond_spatial_hw(image)
+    traced = cond_encode_trace and cond_encode_trace_enabled()
+    if traced:
+        from models.experimental.hunyuan_image_3_0.tt.cond_encode_trace import run_vae_encode_traced
+
+        host_bthwc = _host_bthwc_for_vae_encode(image)
+        h_tt = run_vae_encode_traced(
+            mesh_device,
+            vae_encoder,
+            host_bthwc,
+            pixel_h=pixel_h,
+            pixel_w=pixel_w,
+        )
+    else:
+        x_tt = _pad_and_upload_bcthw(mesh_device, image)
+        h_tt = vae_encoder(x_tt)
+        ttnn.deallocate(x_tt, force=False)
     z_tt = diagonal_gaussian_sample_tt(h_tt, mesh_device=mesh_device, seed=seed)
     z_tt = squeeze_temporal_tt(z_tt)
     if scaling_factor is not None or shift_factor is not None:
         z_tt = apply_vae_latent_scaling_tt(z_tt, scaling_factor=scaling_factor, shift_factor=shift_factor)
     bsz = int(z_tt.shape[0])
     t_tt = _zero_timesteps(bsz)
+    ttnn.synchronize_device(mesh_device)
+    mode = "trace" if traced else "eager"
+    print(
+        f"[cond_encode] VAE encode ({pixel_h}x{pixel_w}) {mode} total={(time.perf_counter() - t0) * 1000:.1f} ms",
+        flush=True,
+    )
     return t_tt, z_tt
 
 
@@ -253,6 +287,7 @@ def encode_cond_images_tt(
     shift_factor: float | None = None,
     generator: torch.Generator | None = None,
     seed: int | None = None,
+    cond_encode_trace: bool = True,
 ) -> CondVaeEncodeTT:
     if batch_cond_images is None or len(batch_cond_images) == 0 or len(batch_cond_images[0]) == 0:
         return CondVaeEncodeTT(cond_vae_images=None, cond_timesteps=None)
@@ -282,6 +317,7 @@ def encode_cond_images_tt(
                 scaling_factor=scaling_factor,
                 shift_factor=shift_factor,
                 seed=seed,
+                cond_encode_trace=cond_encode_trace,
             )
             lat_list.append(z_i)
             t_list.append(t_i)
@@ -304,7 +340,7 @@ def encode_cond_images_tt(
     return CondVaeEncodeTT(cond_vae_images=cond_vae_images, cond_timesteps=cond_t)
 
 
-def _vit_tensor_to_vision_inputs(mesh_device, vit_tensor) -> Any:
+def _vit_host_tensors(vit_tensor) -> tuple[torch.Tensor, tuple[tuple[int, int], ...], torch.Tensor]:
     kwargs = vit_tensor.vision_encoder_kwargs
     pv = vit_tensor.unsqueeze(0) if vit_tensor.ndim == 2 else vit_tensor
     spatial = kwargs["spatial_shapes"]
@@ -315,7 +351,31 @@ def _vit_tensor_to_vision_inputs(mesh_device, vit_tensor) -> Any:
         hw = tuple((int(spatial[i][0]), int(spatial[i][1])) for i in range(spatial.shape[0]))
     if mask.ndim == 1:
         mask = mask.unsqueeze(0)
-    return to_vision_inputs(mesh_device, pv.float(), hw, mask)
+    return pv.float(), hw, mask
+
+
+def _vit_tensor_to_vision_inputs(mesh_device, vit_tensor) -> Any:
+    pv, hw, mask = _vit_host_tensors(vit_tensor)
+    return to_vision_inputs(mesh_device, pv, hw, mask)
+
+
+def _encode_vit_cond_image_tt(
+    mesh_device,
+    vision: HunyuanTtSiglip2Vision,
+    aligner: HunyuanTtLightProjector,
+    vit_tensor,
+    *,
+    cond_encode_trace: bool = True,
+) -> ttnn.Tensor:
+    from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
+
+    pv, hw, mask = _vit_host_tensors(vit_tensor)
+    if cond_encode_trace and cond_encode_trace_enabled():
+        from models.experimental.hunyuan_image_3_0.tt.cond_encode_trace import run_vit_encode_traced
+
+        return run_vit_encode_traced(mesh_device, vision, aligner, pv, mask, spatial_shapes_hw=hw)
+    vi = to_vision_inputs(mesh_device, pv, hw, mask)
+    return encode_cond_vision(vision, aligner, vi)
 
 
 def _encode_vit_batch_row_tt(
@@ -323,20 +383,33 @@ def _encode_vit_batch_row_tt(
     vision: HunyuanTtSiglip2Vision,
     aligner: HunyuanTtLightProjector,
     cond_images: list[Any],
+    *,
+    cond_encode_trace: bool = True,
 ) -> ttnn.Tensor:
+    from models.experimental.hunyuan_image_3_0.tt.trace_config import cond_encode_trace_enabled
+
+    t0 = time.perf_counter()
+    traced = cond_encode_trace and cond_encode_trace_enabled()
     chunks: list[ttnn.Tensor] = []
     for cond_image in cond_images:
         from models.experimental.hunyuan_image_3_0.ref.tokenizer.image_info import CondImage
 
         vit_t = cond_image.vit_image if isinstance(cond_image, CondImage) else cond_image
-        vi = _vit_tensor_to_vision_inputs(mesh_device, vit_t)
-        emb_tt = encode_cond_vision(vision, aligner, vi)
+        emb_tt = _encode_vit_cond_image_tt(mesh_device, vision, aligner, vit_t, cond_encode_trace=cond_encode_trace)
         chunks.append(emb_tt)
     if len(chunks) == 1:
-        return chunks[0]
-    out = ttnn.concat(chunks, dim=1)
-    for c in chunks[1:]:
-        ttnn.deallocate(c, force=False)
+        out = chunks[0]
+    else:
+        out = ttnn.concat(chunks, dim=1)
+        for c in chunks[1:]:
+            ttnn.deallocate(c, force=False)
+    ttnn.synchronize_device(mesh_device)
+    mode = "trace" if traced else "eager"
+    print(
+        f"[cond_encode] ViT encode ({len(cond_images)} image(s)) {mode} "
+        f"total={(time.perf_counter() - t0) * 1000:.1f} ms",
+        flush=True,
+    )
     return out
 
 
@@ -379,6 +452,7 @@ def build_i2i_inputs_embeds_tt(
     generator: torch.Generator | None = None,
     vae_scaling_factor: float | None = None,
     vae_shift_factor: float | None = None,
+    cond_encode_trace: bool = True,
 ) -> GenImageHostInputs:
     """TT cond VAE + ViT encode and inject — stays on device until bundle export."""
     if bundle.batch_cond_images is None or len(bundle.batch_cond_images[0]) == 0:
@@ -401,6 +475,7 @@ def build_i2i_inputs_embeds_tt(
         shift_factor=vae_shift_factor,
         generator=generator,
         seed=seed,
+        cond_encode_trace=cond_encode_trace,
     )
 
     hidden_tt = instantiate_vae_image_tokens_tt(
@@ -424,10 +499,18 @@ def build_i2i_inputs_embeds_tt(
     if bundle.vit_image_mask is not None and bool(bundle.vit_image_mask.any()):
         bsz = int(hidden_tt.shape[0])
         n_cond_rows = len(bundle.batch_cond_images)
+        vit_emb_cache: dict[int, ttnn.Tensor] = {}
         for row in range(bsz):
             # CFG duplicates token rows (cond + uncond) but cond images are stored once per prompt.
-            cond_images = bundle.batch_cond_images[row % n_cond_rows]
-            vit_row = _encode_vit_batch_row_tt(mesh_device, vision, aligner, cond_images)
+            cond_idx = row % n_cond_rows
+            cond_images = bundle.batch_cond_images[cond_idx]
+            if cond_idx not in vit_emb_cache:
+                vit_emb_cache[cond_idx] = _encode_vit_batch_row_tt(
+                    mesh_device, vision, aligner, cond_images, cond_encode_trace=cond_encode_trace
+                )
+            cached = vit_emb_cache[cond_idx]
+            vit_row = ttnn.allocate_tensor_on_device(cached.spec, cached.device())
+            ttnn.copy(cached, vit_row)
             img_slices = _vit_slices_for_row(bundle, row)
             if not img_slices:
                 continue
@@ -456,6 +539,8 @@ def build_i2i_inputs_embeds_tt(
                 ttnn.deallocate(row_out, force=False)
                 ttnn.deallocate(hidden_tt, force=False)
                 hidden_tt = new_hidden
+        for emb in vit_emb_cache.values():
+            ttnn.deallocate(emb, force=False)
 
     bundle.cond_vae_images = None
     bundle.cond_timesteps = None
@@ -505,6 +590,7 @@ def prepare_recaption_ar_bundle_tt(
             cond_time_embed=cond_time_embed,
             cond_timestep_emb=cond_timestep_emb,
             seed=seed,
+            cond_encode_trace=False,
         )
     else:
         hidden_tt = wte_tt.embed(bundle.input_ids)

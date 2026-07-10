@@ -30,7 +30,7 @@ from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import
 from models.experimental.hunyuan_image_3_0.ref.weights import ensure_base_weights
 
 PROMPT = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("HY_PROMPT", "a photo of a cat, studio lighting")
-STEPS = int(os.environ.get("HY_STEPS", "8"))
+STEPS = int(os.environ.get("HY_STEPS", "50"))
 NUM_LAYERS = int(os.environ.get("HY_NUM_LAYERS", "32"))
 GUIDANCE = float(os.environ.get("HY_GUIDANCE", "5.0"))
 SEED = int(os.environ.get("HY_SEED", "0"))
