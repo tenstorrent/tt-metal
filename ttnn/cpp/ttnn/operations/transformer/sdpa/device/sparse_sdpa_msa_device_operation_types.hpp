@@ -6,7 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared with sparse_sdpa)
+#include "block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <optional>
 
 namespace ttnn::prim {
