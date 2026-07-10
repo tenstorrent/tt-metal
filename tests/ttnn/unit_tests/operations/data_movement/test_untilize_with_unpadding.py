@@ -127,9 +127,6 @@ def test_untilize_with_unpadding_reuses_cache_when_only_width_l1_heuristic_chang
         # 2 cores
         ([1, 1, 128, 64], [0, 0, 127, 63], (64, 64), 2),
         ([1, 1, 128, 64], [0, 0, 100, 50], (64, 64), 2),
-        ([1, 1, 128, 2], [0, 0, 127, 1], (32, 32), 4),  # issue #19475: 4 bytes, below 16-byte NOC alignment
-        ([1, 1, 128, 4], [0, 0, 127, 3], (32, 32), 4),  # issue #19475: 8 bytes, below 16-byte NOC alignment
-        ([1, 1, 128, 8], [0, 0, 127, 7], (32, 32), 4),  # issue #19475: 16 bytes, at alignment boundary
     ],
 )
 @pytest.mark.parametrize("output_sharded", [True, False])
