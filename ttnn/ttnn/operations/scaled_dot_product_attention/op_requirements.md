@@ -94,7 +94,7 @@ bf16 alignment cells are independent and can be validated first. The design's
 Refinements section (`op_design.md` §198) has the partial-scaler recipe. This is the
 edge-padding case, not a structural reduction-shape change — no new INPUT_TAGGER.
 
-### [ ] Refinement 3 — Native causal masking (`is_causal=True`)
+### [x] Refinement 3 — Native causal masking (`is_causal=True`)
 
 **Goal**: add `"causal"` to `SUPPORTED["mask_mode"]`. Derive the triangular bias
 **on-device**, block-by-block — never materialize the full `S_q × S_kv` mask. Three

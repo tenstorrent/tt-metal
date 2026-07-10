@@ -116,3 +116,52 @@
 - **Tests added**: `test_scaled_dot_product_attention_alignment.py` — 120 cases
   (10 non-aligned shapes covering w/h/both, gqa/mqa/cross × bf16/fp32/bf8b ×
   none/custom mask × auto/explicit scale). All pass.
+
+## Refinement 3 — Native causal masking (`is_causal=True`)
+- **Date**: 2026-07-10
+- **What was done**: Added `"causal"` to `SUPPORTED["mask_mode"]` and declared
+  `EXCLUSION {mask_mode: causal, attention_kind: cross}` (native causal requires
+  S_q == S_kv). `validate()` already derived `mask_mode="causal"` and enforced the
+  `is_causal`+`attn_mask` mutual-exclusivity ValueError; the entry point now
+  threads `is_causal` into the program descriptor.
+  - **mask_mode is now 3-valued**: 0 none / 1 custom (additive tensor read from
+    DRAM) / 2 causal (triangular bias generated on-device). Causal reuses the
+    existing additive mask-add → online-softmax path (`cb_scores + cb_mask →
+    cb_masked`), so no new compute phase — just a new mask *source*.
+  - **On-device mask generation, no full S_q×S_kv materialization**: the reader
+    builds each `[q_cnt × kv_cnt]` mask block by direct L1 byte-writes (the
+    production SDPA `fill_*` pattern). Per mask tile, classified by global tile
+    indices: key-tile < query-tile → all-0, key-tile > query-tile → all-(-inf),
+    key-tile == query-tile → per-element upper-triangular (mask c>r). Mask is
+    emitted in `score_dtype` (bf16 for bf16/bf8b, fp32 for fp32) so the add stays
+    same-format; `mask_elem_bytes` (2/4) selects the byte layout.
+  - **Block-skipping (≈½ KV-work causal win)**: reader and compute both cap the
+    KV loop at the diagonal block for each Q-block
+    (`j_max = (q_row0 + q_cnt - 1) / kv_chunk_t`). Fully-future blocks are never
+    read/computed — this also guarantees no all-(-inf) softmax row (no NaN),
+    since every query row keeps its diagonal element valid.
+- **Accuracy achieved**: causal == reference within tolerance across bf16
+  (PCC≥0.995), fp32 (PCC≥0.999), bf8b (PCC≥0.99); MHA/GQA/MQA; auto/explicit
+  scale; single- and multi-KV-block; non-aligned S_q. `is_causal=True` matches
+  the explicit triangular additive-mask path to PCC≥0.999 (same math, different
+  mechanism). Shapes (1,1,32,32)…(2,4,256,128).
+- **Golden test progress**: `test_golden.py` 1654 passed / 146 failed / 468
+  xfailed / 1 skipped (129s, no hang). **0 xpassed (no drift), 0 numerical
+  (CheckOutputError) failures.** Causal cells: ~492 passed / 48 failed = ~91%
+  (majority). **All 146 failures are the large-head-dim L1 OOM boundary**
+  (D ∈ {96 fp32, 128, 256, 512, 1024}, `program.cpp:1684`), split none 48 /
+  custom 50 / causal 48. The 98 non-causal OOM failures are **byte-identical to
+  the Refinement-2 baseline (no regression)**; the 48 causal OOM cells are the
+  same boundary at the same shapes — owned by Refinement 4, left failing per the
+  OOM policy (no EXCLUSIONS, no shape_size tagger). The `{causal, cross}` cells
+  remain properly rejected via the new EXCLUSION (xfailed, not run).
+- **Issues encountered**: None numerical — the on-device mask + block-skip
+  algorithm was correct on the first device run across all dtypes/heads/scales.
+  (Free failures during bring-up: one leftover `has_mask` reference in the
+  descriptor CB list, and the `TensorAccessorArgs<15>`→`<16>` offset shift after
+  adding the `mask_elem_bytes` CT arg.)
+- **Tests added**: `test_scaled_dot_product_attention_causal.py` — 24 cases:
+  causal-vs-reference across bf16/fp32/bf8b × 5 shapes, MHA/GQA/MQA, explicit
+  scale, causal==explicit-triangular-mask equivalence, non-aligned S_q
+  (best-effort), `{causal, cross}` EXCLUSION refusal, and `is_causal`+`attn_mask`
+  ValueError. 23 pass, 1 skip (fp32 D≥128 OOM — R4 scope).
