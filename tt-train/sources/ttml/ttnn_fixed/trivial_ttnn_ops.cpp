@@ -19,7 +19,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
-#include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/rand/rand.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
@@ -61,12 +60,9 @@ ttnn::Tensor log_softmax(const ttnn::Tensor& t, int dim) {
 // Stable softmax implementation
 // ttnn::softmax also exists, but it is not stable (even after max subtraction optimization)
 ttnn::Tensor softmax(const ttnn::Tensor& t, int dim) {
-    return ttnn::softmax(
-        t,
-        /* dim */ dim,
-        /*memory_config */ std::nullopt,
-        ttml::core::ComputeKernelConfig::softmax(),
-        /*stable*/ true);
+    // TODO(nuked-op softmax): restore real ttnn::softmax call
+    static_cast<void>(dim);
+    return t;
 }
 
 ttnn::Tensor divide(const ttnn::Tensor& a, const ttnn::Tensor& b) {
