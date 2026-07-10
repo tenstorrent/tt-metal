@@ -78,3 +78,9 @@
 // stays on the full worker grid, which provides the y=3 worker core + init/exit GlobalSemaphore
 // coverage. Requires SENDERS_ONLY_MOCK=1. Set to 0 to keep both senders on y=2 (Stage 1 behavior).
 #define SENDER_ONE_TO_ROW_Y3 1
+
+// STAGE 4: route the sender->eth (writer_combine -> EDM) fabric traffic on NOC_0 instead of the default
+// NOC_1, to further reduce congestion. HOST-FACTORY change (writer_combine kernel .noc config): the
+// fabric worker send + connection handshake both follow noc_index, so the kernel's NoC selects the NoC
+// for all sender->eth traffic. Set to 0 to keep the default NOC_1.
+#define SENDER_ETH_ON_NOC0 1

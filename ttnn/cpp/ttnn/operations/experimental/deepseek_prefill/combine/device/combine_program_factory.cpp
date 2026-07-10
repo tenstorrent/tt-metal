@@ -1050,7 +1050,17 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     writer_kd.defines = {writer_defines.begin(), writer_defines.end()};
     writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+#if SENDER_ETH_ON_NOC0
+        // [experiment] Route sender->eth (writer_combine -> EDM) fabric traffic on NOC_0 instead of the
+        // default NOC_1 (preferred_noc_for_dram_write), to reduce congestion. The fabric worker send uses
+        // get_fabric_worker_noc() == noc_index (non-UDM), and the connection handshake defaults to
+        // noc_index too, so the kernel's .noc selects which NoC carries ALL of this sender's eth traffic
+        // (payload sends + START/END markers + init/exit handshake). In the senders-only mock the DRAM-read
+        // NoC (NOC_0) is otherwise idle (reader exits early), so this offloads sender->eth onto it.
+        .noc = tt::tt_metal::NOC::NOC_0,
+#else
         .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
+#endif
     };
     tt::tt_metal::KernelHandle writer_kernel_id = static_cast<tt::tt_metal::KernelHandle>(desc.kernels.size());
     desc.kernels.push_back(std::move(writer_kd));
