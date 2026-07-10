@@ -5946,7 +5946,8 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             m2::DataMovementHardwareConfig{
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     });
 
     const bool has_no_work_in_recv =
@@ -5976,7 +5977,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
     if (has_no_work_not_in_recv) {
@@ -6002,7 +6005,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -6040,7 +6045,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -6156,7 +6163,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -6893,7 +6902,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                          "last_block_h",
                          "sparsity_addr",
                      }},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .role = m2::DataMovementRoleHint::READER,
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -7004,7 +7017,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -7086,7 +7101,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -7167,7 +7184,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_NCRISC_KERNEL,
@@ -7176,7 +7195,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_NOOP_COMPUTE_KERNEL,

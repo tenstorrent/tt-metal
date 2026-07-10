@@ -3956,7 +3956,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
         // Block-sharded in0 sender reads num_x + num_y per-core mcast-coord varargs (in0_mcast_noc_x/y);
         // declare the count so the framework allocates the vararg slots (else get_vararg is OOB).
@@ -3988,7 +3990,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
         // Same varargs (in0_mcast_noc_x/y) as the work in0 sender (block-sharded only path).
         no_work_ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
@@ -4029,7 +4033,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
     };
     if (has_in0_receiver) {
@@ -4155,7 +4161,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         });
     }
 
@@ -4236,7 +4244,9 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 m2::DataMovementHardwareConfig{
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
-                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc},
+                    .gen2_config =
+                        m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
     };
     const bool has_in1_receiver = in1_receiver.num_cores() > 0;
