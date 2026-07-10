@@ -345,7 +345,8 @@ void kernel_main() {
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
-                ckernel::topk_local_sort(0, (int)!largest, end_phase);
+                // stable_sort=true: equal values keep ascending (lowest) index -> deterministic tie-break.
+                ckernel::topk_local_sort<true>(0, (int)!largest, end_phase);
 
                 // Pack sorted results: dest reg 0 -> result buffer, dest reg 1 -> secondary buffer
                 tile_regs_commit();
