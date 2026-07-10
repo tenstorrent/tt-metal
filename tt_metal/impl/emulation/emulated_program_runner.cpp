@@ -913,7 +913,7 @@ static void apply_x86_rewrites(std::string& src) {
     // `(uint32_t)EXPR` rule would hit ordinary int casts. An over-match of a non-pointer is loud, not silent
     // — reinterpret_cast<uintptr_t>(non_pointer) is ill-formed and fails the JIT compile.
     static const std::regex l1_fabric_hdr_narrow_re(
-        R"(\(\s*uint32_t\s*\)\s*([A-Za-z_]\w*(?:hdr|packet_header|header_ptr|header_addr)\w*))");
+        R"(\(\s*uint32_t\s*\)\s*(\w*(?:hdr|packet_header|header_ptr|header_addr)\w*))");
     src = std::regex_replace(
         src, l1_fabric_hdr_narrow_re,
         "(uint32_t)(reinterpret_cast<uintptr_t>($1) - reinterpret_cast<uintptr_t>(__emule_self->bridge_l1))");
@@ -2415,14 +2415,18 @@ struct EmuleRoute {
     uint32_t mux_x = 0xFFFF, mux_y = 0xFFFF;   // worker's mux NOC (TRANSLATED) coords (fabric MUX path)
 };
 static std::mutex g_route_meta_mu;
-// Keyed by (chip_id, header L1 offset). Post-offset-migration a packet header's L1 offset
-// is identical on every chip (chip-agnostic), so the key must be chip-qualified — the old
-// truncated-host-pointer key was chip-unique only because each chip's L1 sat at a distinct
-// low-4GB address, a property the >4GB galaxy no longer has. Both set (via the shim's
-// offset) and read (teleport, offset = ptr - bridge_l1) run on the same fiber → same key.
+// Keyed by the header's FULL host pointer (bridge_l1 + offset). Post-offset-migration a packet
+// header's L1 offset is both chip- AND core-agnostic — it is 0-based within each core's L1, so the
+// same offset recurs on every core of every chip. A (chip, offset) key would collide across cores
+// of one chip (one core's route overwriting another's → wrong-chip delivery → PCC fail / a fiber
+// waiting on an atomic-inc that lands elsewhere → quiescent deadlock). The baseline's key was the
+// header's host pointer, which is inherently unique per (chip, core, offset) because every core's
+// L1 is a distinct mapping; reconstruct that full (untruncated) pointer here — untruncated so it
+// stays unique above 4 GB, and host-side-only (a runner map key, never a kernel/L1 value). Both set
+// (shim offset) and read (teleport) run on the same fiber → same bridge_l1 → same key.
 static std::unordered_map<uint64_t, EmuleRoute> g_route_meta;
 static inline uint64_t emule_route_key(uint32_t hdr_off) {
-    return (static_cast<uint64_t>(__emule_self->chip_id) << 32) | hdr_off;
+    return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(__emule_self->bridge_l1 + hdr_off));
 }
 
 extern "C" void __emule_fabric_set_route(
