@@ -74,7 +74,7 @@ reuse the dtype-driven CB-format derivation introduced here. Unlocks 452 (bf8b) 
 Refinement 2's alignment path and stay excluded until then). Do **not** split bf8b
 into its own entry.
 
-### [ ] Refinement 2 — Non-tile-aligned sequence / head dim
+### [x] Refinement 2 — Non-tile-aligned sequence / head dim
 
 **Goal**: add `"w_non_aligned"` (D % 32 ≠ 0) and `"h_non_aligned"` (S_q % 32 ≠ 0, D
 aligned) to `SUPPORTED["alignment"]`, natively in the kernel — no `ttnn.tilize` /

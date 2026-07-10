@@ -67,3 +67,52 @@
 - **Tests added**: test_scaled_dot_product_attention_precision_matrix.py
   (dtype × math_fidelity × fp32_dest_acc_en × input-distribution cross-product;
   240 passed / 48 skipped for the {fp32, bf16_acc} EXCLUSION).
+
+## Refinement 2 — Non-tile-aligned sequence / head dim
+- **Date**: 2026-07-10
+- **What was done**: Added `w_non_aligned` (D % 32 != 0) and `h_non_aligned`
+  (D aligned, S_q % 32 != 0) to `SUPPORTED["alignment"]`, handled natively in
+  the kernel (no `ttnn.tilize` / `to_layout` wrapper). Root-caused the failure to
+  a single mechanism (probe measurements, not category-guessing): TILE tensors
+  zero-pad the physical last tile, so
+  - **D (head_dim) non-alignment needs NO handling** — padded Q/K/V columns are
+    zero, so QKᵀ and PV are exact (measured relRMS 0.003 out of the box).
+  - **S_kv non-alignment** was the only defect: padded key columns score 0
+    (Q·0) and leaked `exp(0 − row_max)` into the softmax row-sum, inflating `l`
+    and shrinking the output magnitude (relRMS 0.15–0.37, while PCC stayed
+    0.999 because the error is a per-row rescale). PV is unaffected (padded V
+    rows are zero) and the row-MAX is safe (an inflated running-max cancels in
+    the normalized softmax), so **only the row-SUM needed the padded columns
+    excluded**. Fix: a partial SUM reduce scaler applied to the last kv-tile of
+    the last KV block (`ReducePartialScaler::last_tile_at(1)`), gated on a new
+    `skv_non_aligned` compile-time flag. The reader emits the `[full, partial]`
+    SUM scaler tile pair (partial fills only `S_kv % 32` reduce-axis positions);
+    the SUM scaler CB is sized to 2 tiles when non-aligned.
+  - **Helper defect worked around**: the design's named convenience wrapper
+    `calculate_and_prepare_partial_reduce_scalers` is broken as shipped — it
+    forwards a 4th `compute_uses_reduce_tile` template arg to `prepare_reduce_scaler`,
+    which only declares 3 (`reduce_helpers_dataflow.inl:270`), so it fails to
+    compile for every instantiation. Built the same `[full, partial]` pair
+    directly from the working 3-arg `prepare_reduce_scaler` primitive (each call
+    reserves+fills+pushes one tile; `valid_reduce_dim_elements_in_tile` selects
+    full vs partial). Advisory deviation, noted in the reader.
+- **Accuracy achieved**: bf16 PCC≥0.999 relRMS≤0.004, fp32 relRMS≤0.004, bf8b
+  within (0.99, 0.12) — across w/h/both-non-aligned, self/cross, mha/gqa/mqa,
+  none/custom mask, auto/explicit scale (probe + `test_..._alignment.py`).
+  Aligned no-regression PCC 0.99999.
+- **Golden test progress**: `test_golden.py` 1162 passed / 98 failed / 1008
+  xfailed / 1 skipped (118s, no hang). **All 200 runnable non-aligned cells
+  pass** (80 bf16, 80 bf8b, 40 fp32 — fp32 halved by the `{fp32, acc=False}`
+  EXCLUSION); 0 non-aligned failures; 0 xpass-drift. The 98 failures are all
+  `alignment=tile_aligned` large-head_dim **OOM** (D∈{96 fp32,128,256,512,1024})
+  owned by Refinement 4 — the exact same set that failed at the R1 baseline.
+  `test_regression.py` 29 passed / 10 failed — the 10 are the pre-existing bf16
+  tile_aligned precision cases (large_magnitude / uniform / negative) documented
+  at R1; unchanged (the tile_aligned kernel path is byte-identical, gated on
+  `skv_non_aligned`).
+- **Issues encountered**: (1) broken partial-scaler convenience wrapper — worked
+  around via the 3-arg primitive (above). (2) None numerical — the single
+  partial-SUM-scaler lever fixed every non-aligned cell on the first correct try.
+- **Tests added**: `test_scaled_dot_product_attention_alignment.py` — 120 cases
+  (10 non-aligned shapes covering w/h/both, gqa/mqa/cross × bf16/fp32/bf8b ×
+  none/custom mask × auto/explicit scale). All pass.

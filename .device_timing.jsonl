@@ -66,3 +66,5 @@
 {"source":"tt-probe","pid":1695973,"started_at_ms":1783700647457,"wait_ms":228,"run_ms":42546,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"run_safe_pytest","pid":1698321,"started_at_ms":1783700747984,"wait_ms":2,"run_ms":20173,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
 {"source":"run_safe_pytest","pid":1699017,"started_at_ms":1783700809221,"wait_ms":2,"run_ms":30441,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_alignment.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1707217,"started_at_ms":1783700992674,"wait_ms":2,"run_ms":173148,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1709917,"started_at_ms":1783701247273,"wait_ms":2,"run_ms":10814,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_regression.py","exit_code":1}
