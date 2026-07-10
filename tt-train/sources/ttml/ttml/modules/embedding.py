@@ -75,6 +75,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         num_embeddings: int,
         embedding_dim: int,
         weight_init: Optional[Callable] = None,
+        sequence_parallel: bool = False,
         axis_name: str = "tp",
     ) -> None:
         super().__init__()
@@ -83,6 +84,7 @@ class VocabParallelEmbedding(AbstractModuleBase):
         self.axis_name = axis_name
         self.cluster_axis = mesh.axis_index(axis_name)
         self.tp_size = mesh.axis_size(axis_name)
+        self.sequence_parallel = sequence_parallel
 
         if num_embeddings % self.tp_size != 0:
             raise ValueError(
@@ -166,9 +168,17 @@ class VocabParallelEmbedding(AbstractModuleBase):
         mask = ttnn.transpose(in_range, 2, 3)
         emb = ttml.ops.binary.mul(emb, ttml.autograd.create_tensor(mask, requires_grad=False))
 
-        # Each token is nonzero on exactly one device; sum reconstructs the full
-        # embedding, replicated across TP. Input ids carry no grad, so backward
-        # simply passes the (already replicated) output grad through unchanged.
+        # Each token is nonzero on exactly one device. Sum across TP reconstructs
+        # the full embedding for every token.
+        if self.sequence_parallel:
+            # SP: fuse that sum with a shard along the sequence (dim 2), so the
+            # embedding enters the first block already sequence-sharded. Backward is
+            # all_gather(seq): the ids carry no grad, so it simply reconstructs the
+            # full-sequence output grad (replicated across TP) for the weight bw.
+            return ttml.ops.distributed.reduce_scatter(emb, 2, self.cluster_axis)
+        # Classic TP: sum reconstructs the full embedding, replicated across TP.
+        # Input ids carry no grad, so backward passes the (already replicated)
+        # output grad through unchanged.
         return ttml.ops.distributed.all_reduce(emb, noop_backward=True, cluster_axis=self.cluster_axis)
 
 
@@ -187,6 +197,11 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         num_embeddings: Vocabulary size (rows). Held in full on every device.
         embedding_dim: Embedding width. Sharded across ``tp_size``.
         weight_init: Initializer for the weight tensor. Defaults to normal(0, 0.02).
+        sequence_parallel: If ``True`` (Megatron sequence parallelism) the gathered
+            full-hidden embedding is additionally scattered along the sequence
+            across the TP axis, so the output is ``[batch, 1, seq/tp, embedding_dim]``
+            -- a sequence-sharded residual for the first block. Requires
+            ``gather_output=True`` (there is no hidden-sharded SP layout here).
         axis_name: Mesh axis used for tensor parallelism.
         gather_output: If ``True`` (default) an all-gather reconstructs the full
             TP-replicated embedding. If ``False`` the hidden-sharded slice
@@ -196,7 +211,8 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         The shard must be tile-width aligned: ``embedding_dim`` divisible by
         ``tp_size`` and ``embedding_dim // tp_size`` a multiple of 32 (the
         embedding kernel's last-dim requirement). Backward also needs ``seq_len``
-        tile-aligned.
+        tile-aligned; under ``sequence_parallel`` the sequence scatter additionally
+        needs ``seq_len`` divisible by ``32 * tp_size``.
     """
 
     def __init__(
@@ -204,6 +220,7 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         num_embeddings: int,
         embedding_dim: int,
         weight_init: Optional[Callable] = None,
+        sequence_parallel: bool = False,
         axis_name: str = "tp",
         gather_output: bool = True,
     ) -> None:
@@ -214,6 +231,13 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         self.cluster_axis = mesh.axis_index(axis_name)
         self.tp_size = mesh.axis_size(axis_name)
         self.gather_output = gather_output
+        self.sequence_parallel = sequence_parallel
+
+        if sequence_parallel and not gather_output:
+            # SP scatters the full-hidden embedding along the sequence; there is no
+            # meaningful "hidden-sharded + sequence-sharded" output for a consumer,
+            # so the two options are mutually exclusive.
+            raise ValueError("FeatureParallelEmbedding: sequence_parallel requires gather_output=True")
 
         if embedding_dim % self.tp_size != 0:
             raise ValueError(
@@ -261,7 +285,9 @@ class FeatureParallelEmbedding(AbstractModuleBase):
             x: Token indices ``[batch_size, 1, 1, seq_len]``, replicated across TP.
 
         Returns:
-            ``gather_output`` (default): full embedding
+            ``sequence_parallel``: the full embedding sharded along the sequence,
+            ``[batch_size, 1, seq_len/tp, embedding_dim]``.
+            ``gather_output`` (default, non-SP): full embedding
             ``[batch_size, 1, seq_len, embedding_dim]`` replicated across TP.
             Otherwise the hidden-sharded slice
             ``[batch_size, 1, seq_len, embedding_dim/tp]``.
@@ -279,9 +305,19 @@ class FeatureParallelEmbedding(AbstractModuleBase):
         # GradOutputType.REPLICATED divides the backward reduce_scatter by tp_size
         # (output is replicated, consumed replicated), matching
         # ColumnParallelLinear(gather_output=True).
-        return ttml.ops.distributed.all_gather(
+        emb = ttml.ops.distributed.all_gather(
             emb,
             3,
             self.cluster_axis,
             ttml.ops.distributed.GradOutputType.REPLICATED,
         )
+
+        if self.sequence_parallel:
+            # SP: shard the now-replicated full embedding along the sequence (dim 2)
+            # so the first block receives a sequence-sharded residual. `scatter` is a
+            # local per-rank partition of the replicated tensor; its backward is
+            # all_gather(seq), which reconstructs the full-sequence grad (replicated
+            # across TP) that the hidden all_gather backward above then partitions.
+            emb = ttml.ops.distributed.scatter(emb, 2, self.cluster_axis)
+
+        return emb

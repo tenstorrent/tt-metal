@@ -52,6 +52,7 @@ from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
 from formatting import HEADER_WIDTH, print_footer, print_header, shorten_home
 from model_builders import FLOPS_REGISTRY, Model, ModelConfig, instantiate_model_from_config, parse_model_config
+from ttml.parallel import TPStrategy
 from callbacks import (
     AverageLossCallback,
     MemoryTrackerCallback,
@@ -425,10 +426,13 @@ def run_training(
     if tokenizer is not None:
         model_cfg.vocab_size = tokenizer.vocab_size
 
+    # from_flags rejects enable_sp without enable_tp (sequence parallelism rides the tp axis).
+    tp_strategy = TPStrategy.from_flags(device_cfg.enable_tp, device_cfg.enable_sp)
+
     # Lazy alloc only helps when sharding, so default it on under FSDP (--no-lazy to disable).
     lazy_init = device_cfg.enable_fsdp and not args.no_lazy
     print("Building model...", flush=True)
-    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, use_tp=device_cfg.enable_tp)
+    model = instantiate_model_from_config(model_cfg, lazy_init=lazy_init, tp_strategy=tp_strategy)
 
     flops_per_token = 0
     flops_fn = FLOPS_REGISTRY.get(model_cfg.model_type)
@@ -528,6 +532,7 @@ def run_training(
         checkpoint_prefix=args.checkpoint_prefix,
         max_grad_norm=(training_cfg.clip_grad_norm_max_norm if training_cfg.use_clip_grad_norm else 0.0),
         disable_progress_bar=True,
+        sequence_parallel=tp_strategy.sequence_parallel,
     )
 
     def _causal_lm_loss(logits, batch):

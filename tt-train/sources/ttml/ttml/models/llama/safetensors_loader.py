@@ -155,7 +155,7 @@ def load_from_safetensors(
     used_params: set[str] = set()
     ignored_hf: set[str] = set()
 
-    use_tp = config.use_tp
+    use_tp = config.tp_strategy.tensor_parallel
     tp_size = ttml.mesh().axis_size("tp") if use_tp else 1
 
     num_heads = config.num_attention_heads

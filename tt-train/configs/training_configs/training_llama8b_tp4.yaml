@@ -22,6 +22,7 @@ training_config:
 
 device_config:
   enable_tp: true
+  enable_sp: true
   enable_ddp: false
   mesh_shape: [1, 4]  # mirrors MGD device_topology [1, 4]; axis 1 = tp (size 4)
 

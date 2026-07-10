@@ -22,6 +22,7 @@ from ttml.modules import (
 
 from .. import EmbeddingParallelType, RunnerType, WeightTyingType, memory_efficient_runner
 from .autograd_ops import SliceLastDim
+from ttml.parallel import TPStrategy
 from .transformer import LlamaBlock, RMSNormLayer, compute_swiglu_intermediate_size
 
 
@@ -39,15 +40,14 @@ class LlamaRopeScalingConfig:
 class LlamaConfig:
     """Llama model hyper-parameters.
 
-    When ``use_tp=True`` the mesh must already be open and the ``"tp"`` axis
-    size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
-    and ``intermediate_size`` — this is validated in ``__post_init__``.  The
-    vocab does *not* need to be TP-divisible: the embedding and LM-head
-    weights are padded internally to ``lcm(32, tp_size)``, exposed as
-    ``Llama.padded_vocab_size``.
+    When ``tp_strategy`` enables tensor parallelism the mesh must already be open and the
+    ``"tp"`` axis size must evenly divide ``num_attention_heads``, ``num_key_value_heads``,
+    and ``intermediate_size`` — this is validated in ``__post_init__``.  The vocab does
+    *not* need to be TP-divisible: the embedding and LM-head weights are padded internally
+    to ``lcm(32, tp_size)``, exposed as ``Llama.padded_vocab_size``.
 
-    ``embedding_parallel`` selects how the token-embedding table is sharded under
-    TP (see :class:`EmbeddingParallelType`); it is ignored when ``use_tp=False``.
+    ``embedding_parallel`` selects how the token-embedding table is sharded under TP (see
+    :class:`EmbeddingParallelType`); it is ignored when tensor parallelism is disabled.
     """
 
     hidden_size: int = 384
@@ -64,7 +64,10 @@ class LlamaConfig:
     runner_type: RunnerType = RunnerType.Default
     weight_tying: WeightTyingType = WeightTyingType.Disabled
     rope_scaling: LlamaRopeScalingConfig = field(default_factory=LlamaRopeScalingConfig)
-    use_tp: bool = False
+    # Tensor-parallel strategy: NONE / TENSOR / TENSOR_SEQUENCE (the latter adds Megatron
+    # sequence parallelism, sharding the residual stream along the sequence across the "tp"
+    # axis in the norm/dropout/residual regions).
+    tp_strategy: TPStrategy = TPStrategy.NONE
     embedding_parallel: EmbeddingParallelType = EmbeddingParallelType.FeatureParallel
 
     def __post_init__(self):
@@ -98,7 +101,7 @@ class LlamaConfig:
                 "Number of attention heads must be divisible by the number of key/value heads. "
                 f"Provided num_attention_heads={self.num_attention_heads}, num_key_value_heads={self.num_key_value_heads}"
             )
-        if self.use_tp:
+        if self.tp_strategy.tensor_parallel:
             if (
                 self.embedding_parallel == EmbeddingParallelType.FeatureParallel
                 and self.weight_tying == WeightTyingType.Enabled
@@ -129,6 +132,24 @@ class LlamaConfig:
                     f"intermediate_size={intermediate_size}, tp_size={tp_size}"
                 )
 
+        if self.tp_strategy.sequence_parallel:
+            # Dropout in the sequence-sharded regions would need per-TP-rank RNG
+            # (each rank holds different positions); not wired yet, so gate it off.
+            if self.attention_dropout > 0.0 or self.mlp_dropout > 0.0:
+                raise NotImplementedError(
+                    "sequence_parallel does not support dropout>0 yet "
+                    f"(attention_dropout={self.attention_dropout}, mlp_dropout={self.mlp_dropout})"
+                )
+            # Each TP rank owns S/tp_size sequence positions and the sequence
+            # reduce-scatter requires the per-shard tile count to divide the ring:
+            # (S/32) % tp_size == 0, i.e. S % (32*tp_size) == 0.
+            tp_size = ttml.mesh().axis_size("tp")
+            if self.max_position_embeddings % (32 * tp_size) != 0:
+                raise ValueError(
+                    "sequence_parallel requires max_position_embeddings divisible by 32*tp_size "
+                    f"(got max_position_embeddings={self.max_position_embeddings}, tp_size={tp_size})"
+                )
+
 
 class Llama(AbstractModuleBase):
     """Llama decoder-only transformer (Python implementation)."""
@@ -138,7 +159,7 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        if config.use_tp:
+        if config.tp_strategy.tensor_parallel:
             # Pad the vocab so the LM head's sharded output rows are
             # tile-aligned: ColumnParallelLinear shards dim 2 across TP, so
             # each shard needs to be divisible by 32.  The trailing padded
@@ -157,6 +178,11 @@ class Llama(AbstractModuleBase):
                 self.padded_vocab_size,
                 has_bias=False,
                 gather_output=False,
+                # Under SP the head input (ln_fc output) is sequence-sharded; the
+                # column-parallel gather restores the full sequence, yielding
+                # full-sequence vocab-sharded logits -- exactly what the classic-TP
+                # path produces, so vocab_parallel_cross_entropy_loss is unchanged.
+                sequence_parallel=config.tp_strategy.sequence_parallel,
                 axis_name="tp",
             )
             if config.embedding_parallel == EmbeddingParallelType.FeatureParallel:
@@ -164,20 +190,29 @@ class Llama(AbstractModuleBase):
                 # local lookup plus an all-gather, no id masking. Its layout does
                 # not match the vocab-parallel LM head, so weight tying is
                 # unavailable (validated in LlamaConfig.__post_init__).
+                #
+                # Under SP the gathered full-hidden embedding is additionally
+                # scattered along the sequence, so the first block receives a
+                # sequence-sharded residual.
                 self.tok_emb = FeatureParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
+                    sequence_parallel=config.tp_strategy.sequence_parallel,
                     axis_name="tp",
                 )
             else:
                 # Shard the embedding table on the vocab dim to mirror the LM head:
                 # each device keeps only its vocab slice instead of a full replicated
                 # table, and the matching layout allows a tied weight (below).
+                #
+                # Under SP the embedding output is reduce-scattered along the
+                # sequence so the first block receives a sequence-sharded residual.
                 self.tok_emb = VocabParallelEmbedding(
                     self.padded_vocab_size,
                     config.hidden_size,
                     weight_init=ttml.init.normal(0.0, 0.02),
+                    sequence_parallel=config.tp_strategy.sequence_parallel,
                     axis_name="tp",
                 )
         else:
@@ -224,7 +259,7 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
-                    use_tp=config.use_tp,
+                    tp_strategy=config.tp_strategy,
                 )
                 for _ in range(config.num_hidden_layers)
             ]
@@ -245,6 +280,18 @@ class Llama(AbstractModuleBase):
         input_shape = input.shape()
         actual_seq_len = input_shape[-1]
         padded_seq_len = ((actual_seq_len + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
+
+        if self.config.tp_strategy.sequence_parallel:
+            # SP shards the embedding output along the sequence, so the post-embedding
+            # unpad-slice (on the now-sharded sequence dim) is not expressible. Require
+            # the sequence to already be tile*tp aligned so no pad/slice is needed; the
+            # sequence reduce-scatter needs the same alignment anyway.
+            tp_size = ttml.mesh().axis_size("tp")
+            if actual_seq_len % (TILE_SIZE * tp_size) != 0:
+                raise ValueError(
+                    "sequence_parallel requires the input sequence length divisible by 32*tp_size "
+                    f"(got seq_len={actual_seq_len}, tp_size={tp_size})"
+                )
 
         input_padded = input
         if padded_seq_len != actual_seq_len:
@@ -282,7 +329,7 @@ class Llama(AbstractModuleBase):
         # padded columns are handled by vocab_parallel_cross_entropy_loss.
         # The non-TP path returns full-vocab logits, so we still need to drop
         # the tile-alignment padding before handing them off to the caller.
-        if not self.config.use_tp and self.padded_vocab_size != self.config.vocab_size:
+        if not self.config.tp_strategy.tensor_parallel and self.padded_vocab_size != self.config.vocab_size:
             logits = SliceLastDim.apply(logits, self.config.vocab_size)
         return logits
 
