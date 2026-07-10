@@ -931,12 +931,12 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             dev_msgs::AddressableCoreType::UNKNOWN);
     }
     int non_worker_cores_idx = 0;
-    // Skip the physical PCIE/DRAM/ETH addressable cores when this arch virtualizes them (they are set as
-    // virtual cores below). Gate on the HAL capability instead of a hard-coded arch: BLACKHOLE and QUASAR
-    // virtualize DRAM/PCIE, WORMHOLE_B0 does not. This mirrors the dram_is_virtualized check above and
-    // covers future arches automatically.
-    bool skip_physical = hal_.is_coordinate_virtualization_enabled() and
-                         hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM);
+    // Wormhole addresses its PCIE/DRAM non-worker cores physically; Blackhole and Quasar (and future
+    // arches) virtualize them and write them as virtual cores below. ETH is virtualized on every arch.
+    // GRAYSKULL is retired, so "not Wormhole" cleanly covers the virtualizing arches without enumerating
+    // each one, and picks up future arches automatically.
+    const bool virtualizes_non_worker_cores = cluster_.arch() != ARCH::WORMHOLE_B0;
+    bool skip_physical = hal_.is_coordinate_virtualization_enabled() and virtualizes_non_worker_cores;
     if (not skip_physical) {
         for (tt::umd::CoreCoord core : pcie_cores) {
             set_addressable_core(
@@ -955,12 +955,10 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
     if (hal_.is_coordinate_virtualization_enabled()) {
         // Guard the fixed-size virtual_non_worker_cores mailbox array (MAX_VIRTUAL_NON_WORKER_CORES,
         // hand-sized for Blackhole's topology). ETH is always written; PCIE/DRAM are written when this
-        // arch virtualizes DRAM. Fail loudly at config time rather than silently overrunning the array
-        // into adjacent mailbox fields on an arch whose core count exceeds the constant.
-        const bool dram_virtualized =
-            hal_.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM);
+        // arch virtualizes its non-worker cores. Fail loudly at config time rather than silently overrunning
+        // the array into adjacent mailbox fields on an arch whose core count exceeds the constant.
         const size_t num_virtual_non_worker_cores =
-            eth_cores.size() + (dram_virtualized ? pcie_cores.size() + dram_cores.size() : 0);
+            eth_cores.size() + (virtualizes_non_worker_cores ? pcie_cores.size() + dram_cores.size() : 0);
         TT_FATAL(
             num_virtual_non_worker_cores <= core_info.virtual_non_worker_cores().size(),
             "Virtual non-worker cores ({}) exceed the mailbox capacity ({}) for this architecture",
@@ -975,9 +973,9 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
                 dev_msgs::AddressableCoreType::ETH);
         }
 
-        // Set virtual PCIE/DRAM cores for arches that virtualize them (BLACKHOLE, QUASAR). ETH is handled
-        // for all virtualized arches above; WORMHOLE_B0 does not virtualize PCIE/DRAM.
-        if (dram_virtualized) {
+        // Set virtual PCIE/DRAM cores for arches that virtualize them (Blackhole, Quasar). ETH is handled
+        // for all virtualized arches above; Wormhole addresses PCIE/DRAM physically instead.
+        if (virtualizes_non_worker_cores) {
             for (const CoreCoord& core : pcie_cores) {
                 auto virtual_core =
                     cluster_.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y});
@@ -1020,10 +1018,11 @@ dev_msgs::core_info_msg_t RiscFirmwareInitializer::populate_core_info_msg(
             uint32_t end_virtual_grid;
             if (hal_.get_tensix_harvest_axis() == HalTensixHarvestAxis::ROW) {
                 end_virtual_grid = hal_.get_virtual_worker_start_y() + logical_grid_size.y;
-            } else if (cluster_.arch() == ARCH::BLACKHOLE || cluster_.arch() == ARCH::QUASAR) {
-                // Quasar shares Blackhole's COL harvest axis and virtual-grid layout
-                // (VIRTUAL_TENSIX_START_X/Y are identical), so a harvested column takes the same
-                // virtual coordinate as on Blackhole rather than the Wormhole-shaped fallback below.
+            } else if (cluster_.arch() != ARCH::WORMHOLE_B0) {
+                // COL-harvest arches (Blackhole, Quasar, and future arches) place a harvested column at
+                // this virtual coordinate. Wormhole is ROW-harvest and never reaches this COL branch, but
+                // keeping the guard as "not Wormhole" future-proofs new COL-harvest arches (GRAYSKULL is
+                // retired). The x-based fallback below remains for any arch that opts out.
                 end_virtual_grid = max_along_axis - 1;
             } else {
                 end_virtual_grid = hal_.get_virtual_worker_start_x() + logical_grid_size.x;
