@@ -152,7 +152,7 @@ def test_perf_eltwise_unary_sfpu(
     # If dest_acc is on, we unpack Float32 into 16-bit format in src registers
     # (later copied over in dest reg for SFPU op)
     unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
     configuration = PerfConfig(

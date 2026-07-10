@@ -15,13 +15,11 @@ import torch
 from helpers.accuracy_metrics import compute_pointwise_metrics
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
-    TILE_DIMENSIONS,
     UnarySFPUGolden,
     get_golden_generator,
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
     FastMode,
     MathOperation,
@@ -30,7 +28,6 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
 from helpers.perf import PerfConfig
 from helpers.sfpu_domains import for_op
 from helpers.stimuli_config import StimuliConfig
@@ -48,15 +45,12 @@ from helpers.test_variant_parameters import (
     ITERATIONS,
     LOOP_FACTOR,
     MATH_OP,
-    NUM_BLOCKS,
     NUM_FACES,
-    NUM_TILES_IN_BLOCK,
+    PERF_RUN_TYPE,
     STABLE_SORT,
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
-    DestSync,
-    generate_input_dim,
 )
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -368,12 +362,13 @@ def run_case(
 ) -> Optional[Path]:
     """Run one (op, format, config) variant in the requested *run_mode*.
 
-    RunMode.ACCURACY (default) reproduces the accuracy sweep exactly:
-    the functional kernel runs, the result is compared to the torch golden, and
-    a shard CSV is written.
-    RunMode.PERF runs the perf kernel for timings only.
-    RunMode.BOTH runs the perf kernel once in L1_TO_L1 and captures both the timings
-    and the accuracy shard.
+    All three modes run the same merged kernel (eltwise_unary_sfpu_perf.cpp).
+    RunMode.ACCURACY (default) runs it through a plain TestConfig — no profiler
+    build, no perf_report — checks the result against the torch golden, and writes
+    a shard CSV.
+    RunMode.PERF runs it through PerfConfig for timings only.
+    RunMode.BOTH runs it through PerfConfig once in L1_TO_L1 and captures both the
+    timings and the accuracy shard.
 
     The pipeline for the accuracy-producing modes (ACCURACY, BOTH):
       1. build the input sweep for this op (deterministic RAMP by default;
@@ -420,30 +415,29 @@ def run_case(
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
 
+    _, _, faces_to_generate = calculate_tile_and_face_counts(
+        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
+    )
+
     if run_mode == RunMode.ACCURACY:
-        # ── Functional-kernel path ─────────────────────────────────────────────
-        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-            DestSync.Half,
-            dest_acc,
-            formats,
-            input_dimensions,
-            TILE_DIMENSIONS,
-            BlocksCalculationAlgorithm.Standard,
-        )
         configuration = TestConfig(
-            "sources/eltwise_unary_sfpu_test.cpp",
+            "sources/eltwise_unary_sfpu_perf.cpp",
             formats,
             templates=[
-                generate_input_dim(input_dimensions, input_dimensions),
-                APPROX_MODE(approx_mode),
-                FAST_MODE(fast_mode),
-                CLAMP_NEGATIVE(True),
+                PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
                 MATH_OP(mathop=op),
+                APPROX_MODE(approx_mode),
+                ITERATIONS(iterations),
+                FAST_MODE(fast_mode),
+                STABLE_SORT(StableSort.No),
+                CLAMP_NEGATIVE(True),
             ],
             runtimes=[
                 TILE_COUNT(tile_cnt_A),
-                NUM_BLOCKS(num_blocks),
-                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                LOOP_FACTOR(1),
+                NUM_FACES(num_faces=faces_to_generate),
+                UNPACK_TRANS_FACES(Transpose.No),
+                UNPACK_TRANS_WITHIN_FACE(Transpose.No),
             ],
             variant_stimuli=variant_stimuli,
             dest_acc=dest_acc,
@@ -451,10 +445,6 @@ def run_case(
         )
         res_from_L1 = configuration.run().result
     else:
-        # ── Perf-kernel path ───────────────────────────────────────────────────
-        _, _, faces_to_generate = calculate_tile_and_face_counts(
-            input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-        )
         run_types = (
             _ACCURACY_CAPABLE_RUN_TYPES
             if run_mode == RunMode.BOTH
@@ -470,9 +460,6 @@ def run_case(
                 ITERATIONS(iterations),
                 FAST_MODE(fast_mode),
                 STABLE_SORT(StableSort.No),
-                # CLAMP_NEGATIVE must match the functional kernel: for approx exp
-                # it selects the clamped branch in sfpu_operations (omitting it
-                # defaults to false -> a different path -> mismatch).
                 CLAMP_NEGATIVE(True),
             ],
             runtimes=[
