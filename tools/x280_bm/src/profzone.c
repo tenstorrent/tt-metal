@@ -110,7 +110,7 @@ int main(uint64_t hartid) {
     fence_();
     w64(RES(0x38), 0x5E70ULL); /* heartbeat: setup complete, entering drain loop */
 
-    uint64_t total_zones = 0, loops = 0, stalls = 0;
+    uint64_t total_zones = 0, loops = 0, stalls = 0, dropped = 0;
     for (;;) {
         uint64_t progressed = 0;
         for (uint64_t cc = 0; cc < num_cores; cc++) {
@@ -124,15 +124,24 @@ int main(uint64_t hartid) {
                     continue;
                 }
                 progressed = 1;
+                // SAFETY lap guard: the lossless producer blocks so tail-head <= RING_CAP. If it ever
+                // exceeds (blocking failed / stale cross-run state), the ring lapped and part of it was
+                // overwritten; clamp forward so we never re-read the physical ring (runaway duplication).
+                // Counted as a drop. Under correct blocking this never triggers.
+                if ((uint32_t)(tail - head) > RING_CAP) {
+                    dropped += (uint32_t)(tail - head) - RING_CAP;
+                    w64(RES(0x28), dropped);
+                    head = tail - RING_CAP;
+                }
                 uint64_t ring_base = rbufs + (uint64_t)r * 2048;
                 uint32_t h = head;
                 while (h != tail) {
+                    // Blocking (tail-head<=RING_CAP) => every slot in [head,tail) is this-lap, and the
+                    // producer's fence-before-publish makes its 2 words visible over the (uncached) NoC
+                    // read. So read DIRECTLY -- no 0x80000000 skip. The old skip dropped a not-yet-visible
+                    // marker and advanced past it => a lost ZONE_START surfaced as an orphan ZONE_END.
                     uint32_t w0 = r32(ring_base + (uint64_t)(h % RING_CAP) * 4);
                     uint32_t w1 = r32(ring_base + (uint64_t)((h + 1) % RING_CAP) * 4);
-                    h += 2;
-                    if ((w0 & 0x80000000u) == 0) {
-                        continue;
-                    }
                     /* Raw-marker relay: one page per marker, in ring order (== emission order
                      * == correct nest order per lane). timer_id keeps the packet-type bits
                      * ((id>>16)&0x7: 0=ZONE_START, 1=ZONE_END) and the 16-bit name hash
@@ -180,6 +189,7 @@ int main(uint64_t hartid) {
                     w32(wbase + bsent_off, bytes_sent);
                     total_zones++;
                     w64(RES(0x00), total_zones); /* live counter: markers relayed */
+                    h += 2; /* advance after a successful relay (moved from before the removed skip) */
                 }
                 w32(cbase + CTRL_HEAD(r) * 4, h); /* advance head so producers unblock */
             }
