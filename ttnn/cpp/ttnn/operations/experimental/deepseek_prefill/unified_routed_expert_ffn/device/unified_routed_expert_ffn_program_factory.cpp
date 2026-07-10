@@ -50,6 +50,9 @@ constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
 // page in direct-write mode. Allocated unconditionally (negligible L1) so
 // the CB-index layout is stable across both write modes.
 constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
+// Reader's own `start` scratch, used when read_x_at_offset (x is a shared
+// buffer). Separate from the writer's so the two RISCs don't share one L1 page.
+constexpr uint32_t CB_START_SCRATCH_READER = tt::CBIndex::c_15;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -62,7 +65,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const auto& gate_shape = t.gate_proj.padded_shape();
     const auto& down_shape = t.down_proj.padded_shape();
 
-    const uint32_t M_tiles_full = x_shape[-2] / TILE;
+    // This expert's M (not x's allocated M): x may be a shared buffer wider
+    // than one expert's region. K still comes from x's last dim (emb).
+    const uint32_t M_tiles_full = op.m_tiles;
     const uint32_t K_gate_tiles = x_shape[-1] / TILE;            // = N_gate K = emb / TILE
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;    // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
@@ -584,6 +589,12 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH, tt::DataFormat::UInt32}})
             .set_page_size(CB_START_SCRATCH, start_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_cb_cfg);
+    // Reader's `start` scratch (read_x_at_offset). Same sizing; separate CB so
+    // reader (BRISC) and writer (NCRISC) never share one scratch page.
+    tt::tt_metal::CircularBufferConfig start_reader_cb_cfg =
+        tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH_READER, tt::DataFormat::UInt32}})
+            .set_page_size(CB_START_SCRATCH_READER, start_scratch_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_reader_cb_cfg);
 
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
@@ -622,6 +633,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         static_cast<uint32_t>(reader_reads_up),
         // reader_mcasts_up — 1 in LEGACY and UP_SPLIT (reader NoC-0 mcasts up).
         static_cast<uint32_t>(reader_mcasts_up),
+        // read_x_at_offset — 1 => x is a shared buffer, offset x reads by this
+        // expert's region start; 0 => x is per-expert, reads start at row 0.
+        static_cast<uint32_t>(op.read_x_at_offset),
+        // CB_START_SCRATCH_READER — L1 page holding the fetched `start` vector.
+        CB_START_SCRATCH_READER,
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -629,6 +645,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(counts_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(idx_buffer).append_to(reader_ct_args);
+    // `start` accessor — appended last, matching the reader's accessor stream.
+    // Points at expert_region_offsets in direct/offset mode, else out_buffer
+    // (unread when read_x_at_offset is 0), keeping the CT-arg layout stable.
+    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -850,7 +870,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //  19..28: in0 multicast args
         //  29: act_ready_sem_id  30: act_valid_sem_id
         //  31: up_go_sem_id  32: up_done_sem_id
-        //  33+: M-row NoC coord table (GRID_X pairs of x, y)
+        //  33..33+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
+        //  33+2*GRID_X: start_addr (expert_region_offsets; read only when
+        //     read_x_at_offset, else points at out_buffer and is unread)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             gate_buffer->address(),
@@ -896,6 +918,9 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
+        // start_addr — last reader arg (see layout comment). Same buffer the
+        // writer gets; read by the reader only when read_x_at_offset.
+        reader_args.push_back(start_buffer->address());
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_args);
 
         // Writer runtime arg layout (must match unified_routed_expert_ffn_writer.cpp):
@@ -955,6 +980,8 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         reader_args[3] = down_addr;
         reader_args[4] = counts_addr;
         reader_args[5] = idx_addr;
+        // start_addr is the last reader arg (after the M-row NoC table).
+        reader_args[reader_args.size() - 1] = start_addr;
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
