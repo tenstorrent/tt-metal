@@ -82,6 +82,10 @@ struct TestConfig {
     // controlled with this flag:
     bool fp32_dest_acc_en = false;
     bool fast_tilize = false;
+    // UNPACK_A tilize only: tilize the whole block with a nonzero input_tile_index per tile-row
+    // (via tilize_across_tile_rows.cpp) so the cross-tile-row stride in llk_unpack_tilize_block is
+    // exercised, instead of the default tilize.cpp which uses input_tile_index=0 + pop_front.
+    bool tilize_cross_tile_rows = false;
     std::uint32_t input_single_tile_size;
     std::uint32_t output_single_tile_size;
     // Block height in tiles:
@@ -246,9 +250,10 @@ void run_single_core_tilize_program(
             tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
     } else if (
         test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A &&
-        test_config.num_faces_per_tile != 4) {
-        // Tiny-tile tilize (e.g. 16x32): the unpack/pack LLKs read the tile's face geometry from the
-        // CB metadata, so tag both the input and output buffers with it.
+        (test_config.num_faces_per_tile != 4 || test_config.face_r_dim != 16)) {
+        // Tiny/shortened-face tilize (e.g. 16x32, or face_r_dim < 16): the unpack/pack LLKs read the
+        // tile's face geometry from the CB metadata, so tag both the input and output buffers with it.
+        // Gate on either fewer faces or a shorter face row dim so shortened four-face tiles are caught too.
         const auto fg = tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
         input_dfb_spec.unpack_face_geometry_metadata = fg;
         output_dfb_spec.unpack_face_geometry_metadata = fg;
@@ -319,7 +324,9 @@ void run_single_core_tilize_program(
         });
         compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/" + untilize_type + "_untilize.cpp";
     } else if (is_unpack_a_tilize) {
-        compute_kernel = "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
+        compute_kernel = test_config.tilize_cross_tile_rows
+                             ? "tests/tt_metal/tt_metal/test_kernels/compute/tilize_across_tile_rows.cpp"
+                             : "tests/tt_metal/tt_metal/test_kernels/compute/tilize.cpp";
     } else {
         log_fatal(tt::LogTest, "run_single_core_tilize_program: unsupported config (UNPACK_A_B uses dedicated helper)");
     }
@@ -857,19 +864,12 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
     }
 }
 
-// Exercises llk_unpack_tilize_block (via tilize_block in tilize.cpp) with a 16x32 tiny tile.
-//
-// A 16x32 tile has num_faces=2, face_r_dim=16 (half the rows of a 32x32 tile). The block variant
-// llk_unpack_tilize_block (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h)
-// computes the cross-tile-row L1 stride from the operand's tile_r_dim; it previously used the
-// compile-time TILE_R_DIM (32), wrong for a 16-row tile. We use num_tiles_r >= 2 so the cross-tile-row
-// stride is exercised (with num_tiles_r == 1 the offending term is multiplied by 0 and never hit).
-// The tiny-tile face geometry is tagged onto the input/output DFBs in run_single_core_tilize_program.
+// Exercises llk_unpack_tilize_block with a 16x32 tiny tile across multiple tile-rows, using a
+// nonzero input_tile_index (tilize_across_tile_rows.cpp) so the cross-tile-row stride is hit.
 TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
     constexpr std::uint32_t face_r_dim = 16;
     constexpr std::uint32_t face_c_dim = 16;
     constexpr std::uint32_t num_faces = 2;  // 16x32 = two 16x16 faces laid horizontally
-    // bf16 16x32 tile = 2 faces * 16 * 16 * 2 bytes = 1024 bytes.
     constexpr std::uint32_t tile_bytes = num_faces * face_r_dim * face_c_dim * sizeof(std::uint16_t);
     // num_tiles_r >= 2 so the cross-tile-row stride in llk_unpack_tilize_block is exercised.
     vector<vector<std::uint32_t>> num_tiles = {{2, 1}, {2, 2}, {4, 1}};
@@ -877,6 +877,7 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
         for (bool dst_full_sync_en : {false, true}) {
             unit_tests::compute::tilize::TestConfig test_config = {
                 .dst_full_sync_en = dst_full_sync_en,
+                .tilize_cross_tile_rows = true,
                 .input_single_tile_size = tile_bytes,
                 .output_single_tile_size = tile_bytes,
                 .num_tiles_r = num_tile[0],

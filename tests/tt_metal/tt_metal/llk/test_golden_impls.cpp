@@ -87,10 +87,10 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
         for (int y = 0; y < num_cols; y += 2 * half_face_w) {
             int start = (x * num_cols) + y;
 
-            // Top faces
+            // Top faces (face_r_dim rows each, not a hardcoded 16, so shortened faces work)
             for (int j = 0; j < 2; j++) {
                 int start_ = start + (half_face_w * j);
-                for (int k = 0; k < 16; k++) {
+                for (int k = 0; k < config.face_r_dim; k++) {
                     for (int i = 0; i < half_face_w; i++) {
                         int idx = start_ + (num_cols * k) + i;
                         dst_vec.push_back(src_vec.at(idx));
@@ -100,10 +100,10 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
 
             if (config.num_faces > 2) {
                 // Bottom faces
-                start += 16 * num_cols;
+                start += config.face_r_dim * num_cols;
                 for (int j = 0; j < 2; j++) {
                     int start_ = start + (half_face_w * j);
-                    for (int k = 0; k < 16; k++) {
+                    for (int k = 0; k < config.face_r_dim; k++) {
                         for (int i = 0; i < half_face_w; i++) {
                             int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));
