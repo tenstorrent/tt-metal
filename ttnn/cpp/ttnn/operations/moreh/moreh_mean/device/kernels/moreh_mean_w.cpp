@@ -56,19 +56,19 @@ void kernel_main() {
                 tile_regs_acquire();
 
                 for (uint32_t wt = 0; wt < Wt - 1; ++wt) {
-                    CircularBuffer(cb_input).wait_front(onetile);
+                    DataflowBuffer(cb_input).wait_front(onetile);
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
                     matmul_init(cb_input, cb_scaler, false);
                     matmul_tiles(cb_input, cb_scaler, 0, 0, reduce_dst_idx);
-                    CircularBuffer(cb_input).pop_front(onetile);
+                    DataflowBuffer(cb_input).pop_front(onetile);
                 }
                 tile_regs_commit();
 
                 cb_accum_dst_obj.reserve_back(onetile);
                 tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, CircularBuffer(cb_accum_dst));
+                pack_tile_with_dt(reduce_dst_idx, DataflowBuffer(cb_accum_dst));
                 tile_regs_release();
                 cb_accum_dst_obj.push_back(onetile);
             }
@@ -87,11 +87,11 @@ void kernel_main() {
             }
 
             tile_regs_acquire();
-            CircularBuffer(cb_input).wait_front(onetile);
+            DataflowBuffer(cb_input).wait_front(onetile);
             if (!is_w_single_tile) {
                 cb_accum_dst_obj.wait_front(onetile);
 
-                copy_tile_init_with_dt(CircularBuffer(cb_accum_dst));
+                copy_tile_init_with_dt(DataflowBuffer(cb_accum_dst));
                 copy_tile(cb_accum_dst, 0, reduce_dst_idx);
             }
 
@@ -104,11 +104,11 @@ void kernel_main() {
 
             cb_out_obj.reserve_back(onetile);
             tile_regs_wait();
-            pack_tile_with_dt(reduce_dst_idx, CircularBuffer(cb_out));
+            pack_tile_with_dt(reduce_dst_idx, DataflowBuffer(cb_out));
             tile_regs_release();
             cb_out_obj.push_back(onetile);
 
-            CircularBuffer(cb_input).pop_front(onetile);
+            DataflowBuffer(cb_input).pop_front(onetile);
             if (!is_w_single_tile) {
                 cb_accum_dst_obj.pop_front(onetile);
             }

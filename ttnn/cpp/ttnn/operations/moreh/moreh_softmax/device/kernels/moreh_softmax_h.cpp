@@ -53,7 +53,7 @@ void kernel_main() {
         // find max value
         if (Ht == 1) {
             mask_tile_to_cb(
-                CircularBuffer(cb_in0), CircularBuffer(cb_mask), CircularBuffer(cb_tmp), 0, 0, /*pop0=*/0, /*popm=*/0);
+                DataflowBuffer(cb_in0), DataflowBuffer(cb_mask), DataflowBuffer(cb_tmp), 0, 0, /*pop0=*/0, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
                 ckl::ReduceInputBlockShape::single());
@@ -67,9 +67,9 @@ void kernel_main() {
                 ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_cb(
-                CircularBuffer(cb_in0),
-                CircularBuffer(cb_mask),
-                CircularBuffer(cb_tmp),
+                DataflowBuffer(cb_in0),
+                DataflowBuffer(cb_mask),
+                DataflowBuffer(cb_tmp),
                 Ht - 1,
                 0,
                 /*pop0=*/0,
