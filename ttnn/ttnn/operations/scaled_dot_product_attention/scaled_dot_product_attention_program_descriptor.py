@@ -128,6 +128,15 @@ def create_program_descriptor(
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=psize)],
         )
 
+    # fp32 accumulation path: the running output/sum are updated over up to
+    # num_kv_blocks (long context => dozens) online-softmax steps; bf16 storage
+    # loses precision there. The matmul/reduce already accumulate in fp32 DEST.
+    fp32 = ttnn.float32
+    fp32_bytes = ttnn.tile_size(ttnn.float32)
+
+    def cbf(idx, pages):
+        return cb(idx, pages, fmt=fp32, psize=fp32_bytes)
+
     cbs = [
         cb(CB_Q, qcb * Dt),
         cb(CB_QS, qcb * Dt),
@@ -136,21 +145,21 @@ def create_program_descriptor(
         cb(CB_MASK, 2 * block_pages if has_mask else 1),
         cb(CB_SCALER_MAX, 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
         cb(CB_SCALER_SUM, 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
-        cb(CB_L_NEW, 2 * qcb),
-        cb(CB_PV, 2 * o_pages),
-        cb(CB_O_RUN, 2 * o_pages),
-        cb(CB_O_NEW, 2 * o_pages),
-        cb(CB_L_INV, 2 * qcb),
+        cbf(CB_L_NEW, 2 * qcb),
+        cbf(CB_PV, 2 * o_pages),
+        cbf(CB_O_RUN, 2 * o_pages),
+        cbf(CB_O_NEW, 2 * o_pages),
+        cbf(CB_L_INV, 2 * qcb),
         cb(CB_MASKED, 2 * block_pages if has_mask else 1),
         cb(CB_OUT, 2 * o_pages),
         cb(CB_SCORES, 2 * block_pages),
         cb(CB_PROBS, 2 * block_pages),
-        cb(CB_M_CUR, 2 * qcb),
-        cb(CB_M_RUN, 2 * qcb),
-        cb(CB_M_NEW, 2 * qcb),
-        cb(CB_CORR, 2 * qcb),
-        cb(CB_L_CUR, 2 * qcb),
-        cb(CB_L_RUN, 2 * qcb),
+        cbf(CB_M_CUR, 2 * qcb),
+        cbf(CB_M_RUN, 2 * qcb),
+        cbf(CB_M_NEW, 2 * qcb),
+        cbf(CB_CORR, 2 * qcb),
+        cbf(CB_L_CUR, 2 * qcb),
+        cbf(CB_L_RUN, 2 * qcb),
     ]
 
     # --- Reader ---

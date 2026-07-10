@@ -66,6 +66,31 @@ def test_multi_kv_block(device, shape):
     assert pcc >= 0.99, f"PCC {pcc:.5f} for shape {shape}"
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 4, 4096, 64),  # 128 Q-blocks over ~64 cores => 2 Q-blocks/core
+        (1, 8, 4096, 128),
+        (1, 12, 512, 64),  # 12 heads * many chunks => multiple Q-blocks/core
+    ],
+)
+def test_multi_qblock_per_core(device, shape):
+    """Regression: running-max CB (m_run) must be drained between Q-blocks handled
+    by the same core, else the second Q-block inherits stale running state."""
+    torch.manual_seed(3)
+    B, H, S, D = shape
+    Q = torch.randn(B, H, S, D, dtype=torch.bfloat16)
+    K = torch.randn(B, H, S, D, dtype=torch.bfloat16)
+    V = torch.randn(B, H, S, D, dtype=torch.bfloat16)
+    expected = _reference(Q, K, V)
+    to_dev = lambda t: ttnn.from_torch(
+        t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out = ttnn.to_torch(scaled_dot_product_attention(to_dev(Q), to_dev(K), to_dev(V))).float()
+    pcc = _pcc(expected, out)
+    assert pcc >= 0.995, f"PCC {pcc:.5f} for shape {shape}"
+
+
 def test_all_ones_multi_kv(device):
     """All-ones: softmax is uniform -> output = mean(V) = 1.0 everywhere."""
     B, H, S_q, S_kv, D = 1, 1, 64, 256, 64

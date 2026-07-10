@@ -322,5 +322,9 @@ void kernel_main() {
 
         // Release the retained scaled-Q block for this Q-block.
         cb_pop_front(cb_qs, q_cnt * Dt);
+        // Drain the running-max CB: normalize consumed l_run (recip) and o_run
+        // (final mul), but NOT m_run — without this pop it leaks into the next
+        // Q-block handled by this same core (multi-Q-block-per-core corruption).
+        cb_pop_front(cb_m_run, q_cnt);
     }
 }
