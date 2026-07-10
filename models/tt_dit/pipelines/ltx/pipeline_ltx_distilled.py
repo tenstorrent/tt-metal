@@ -186,6 +186,11 @@ class LTXDistilledPipeline(LTXPipeline):
             # Compile VAE decode at full-res (only s2 feeds decode in generate).
             self._warmup_decode(num_frames, height, width)
 
+            # Programs are now compiled; let the first real decode capture a ttnn trace of
+            # decode_device and later decodes replay it (removes host-dispatch overhead).
+            if self._traced and self.vae_decoder is not None:
+                self.vae_decoder._vae_traced = True
+
             # Warm the on-device audio decode eagerly at the real latent shape: compiles kernels,
             # initializes lazy device state, and frees back to a deterministic allocator free-list,
             # so the first real (traced) decode captures cleanly on warm state.

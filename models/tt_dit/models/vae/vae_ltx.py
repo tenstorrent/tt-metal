@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from typing import TYPE_CHECKING, Sequence
 
 import torch
@@ -18,7 +19,6 @@ from safetensors import safe_open
 from safetensors.torch import load_file
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
@@ -38,6 +38,7 @@ from ...utils.conv3d import (
 )
 from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
+from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
 
 if TYPE_CHECKING:
@@ -877,6 +878,9 @@ class LTXVideoDecoder(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Set True by the pipeline after warmup so the first real decode captures a ttnn trace of
+        # decode_device and later decodes replay it (removing host-dispatch overhead).
+        self._vae_traced = False
         out_channels_with_patch = out_channels * patch_size**2  # 3 * 16 = 48
 
         feature_channels = base_channels * 8  # 1024
@@ -1009,10 +1013,13 @@ class LTXVideoDecoder(Module):
         for k in keys_to_remove:
             del state[k]
 
+    @traced_function(device=lambda self: self.mesh_device, prep_run=True, clone_prep_inputs=True)
     def decode_device(self, sample_tt, logical_h: int, logical_w: int):
         """Device-only decode: denorm → conv_in → up_blocks → norm_out → conv_out, on an already-sharded
         input, returning the device output before the host gather. Split out from forward() so it can be
-        captured as a single ttnn trace (the host upload/gather must stay outside the trace)."""
+        captured as a single ttnn trace (the host upload/gather must stay outside the trace).
+
+        Pass ``traced=True`` (plus a stable ``tracer_trace_key``) to capture/replay it as a ttnn trace."""
         # Denormalize: x = x * std + mean (per-channel stats replicated on the mesh).
         mean = self.per_channel_mean.data
         std = self.per_channel_std.data
@@ -1057,7 +1064,20 @@ class LTXVideoDecoder(Module):
             dtype=ttnn.bfloat16,
         )
 
-        sample_tt, logical_h, logical_w = self.decode_device(sample_tt, logical_h, logical_w)
+        _time = os.environ.get("LTX_VAE_TIME")
+        if _time:
+            ttnn.synchronize_device(self.mesh_device)
+            _t0 = time.time()
+        sample_tt, logical_h, logical_w = self.decode_device(
+            sample_tt,
+            logical_h,
+            logical_w,
+            traced=self._vae_traced,
+            tracer_trace_key=(tuple(sample_tt.shape), int(logical_h), int(logical_w)),
+        )
+        if _time:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_dec = time.time()
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
         # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).
@@ -1066,6 +1086,12 @@ class LTXVideoDecoder(Module):
         sample_tt = ttnn.reshape(sample_tt, (B_, T_, H4, W4, 3, p, r, q))
         sample_tt = ttnn.permute(sample_tt, (0, 4, 1, 5, 2, 7, 3, 6))
         sample_tt = ttnn.reshape(sample_tt, (B_, 3, T_ * p, H4 * q, W4 * r))  # (B, 3, T, H, W)
+        if _time:
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(
+                f"VAE_TIME decode_device(traced={self._vae_traced})={(_t_dec - _t0) * 1000:.1f}ms "
+                f"d2s={(time.time() - _t_dec) * 1000:.1f}ms"
+            )
 
         if output_type == "yuv":
             # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8, shape (T, planar_bytes).
