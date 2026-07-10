@@ -92,9 +92,7 @@ class LMHead(LightweightModule):
                 combined_split = torch.cat(device_splits, dim=-1)
 
                 prefetcher_cache_suffix = (
-                    self.prefetcher.weight_cache_suffix()
-                    if mode == 1 and self.use_lm_head_prefetcher and hasattr(self.prefetcher, "weight_cache_suffix")
-                    else ""
+                    self.prefetcher.weight_cache_suffix() if mode == 1 and self.use_lm_head_prefetcher else ""
                 )
                 cache_file_name = (
                     None

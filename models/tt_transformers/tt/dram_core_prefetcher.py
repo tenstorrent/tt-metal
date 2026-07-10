@@ -136,6 +136,9 @@ class DramCorePrefetcher(LightweightModule):
         num_layers: int,
         num_receiver_cores: Optional[int] = None,
     ):
+        # Lazy import to avoid the import cycle (this module is imported from prefetcher.py).
+        from models.tt_transformers.tt.prefetcher import full_grid_core_range_set
+
         self.mesh_device: ttnn.MeshDevice = mesh_device
         self.num_tensors: int = num_tensors
         self.num_layers: int = num_layers
@@ -175,10 +178,7 @@ class DramCorePrefetcher(LightweightModule):
         # (and any other compute op) must be inside this sub-device, so we do NOT
         # subtract the receiver rectangle — only the worker-side Prefetcher does that to
         # carve out *worker-grid* sender columns (0/7), which we don't have here.
-        grid = self.mesh_device.compute_with_storage_grid_size()
-        self.all_worker_cores_range_set: ttnn.CoreRangeSet = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-        )
+        self.all_worker_cores_range_set: ttnn.CoreRangeSet = full_grid_core_range_set(self.mesh_device)
 
         # Per-bank receivers as a list aligned with bank indices. Bank b feeds the contiguous ring
         # arc [b*num_receiver_cores, (b+1)*num_receiver_cores), matching the CONTIGUOUS_1D
@@ -260,6 +260,23 @@ class DramCorePrefetcher(LightweightModule):
             self.teardown()
         except Exception:
             pass
+
+    def register_callback(self, callback) -> None:
+        """Run ``callback`` now. The DRAM-core backend has no deferred prefetch phase, so weight
+        registration happens immediately (the worker backend defers this to prefetch-time)."""
+        callback()
+
+    # The DRAM-core backend has no separate prefetch/run/stop phase — each matmul queues its own
+    # request via ``prefetch_and_linear``. These no-ops let the model driver call the prefetcher
+    # lifecycle uniformly (matching ``Prefetcher.prefetch``/``run``/``stop``) without branching.
+    def prefetch(self) -> None:
+        pass
+
+    def run(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
 
     # ---- Helpers expected by model_config.py and the model code ----
 

@@ -13,7 +13,7 @@ from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
-from models.tt_transformers.tt.prefetcher import colocating_prefetcher, uses_tensor_prefetcher
+from models.tt_transformers.tt.prefetcher import colocating_prefetcher, prefetcher_linear
 
 
 class Attention(LightweightModule):
@@ -351,13 +351,6 @@ class Attention(LightweightModule):
                 )
             return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
 
-        def get_wo_ring_mesh_mapper():
-            return ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=(2, 3),
-                mesh_shape=configuration.cluster_shape,
-            )
-
         if self.prefetcher is not None:
             # The prefetcher picks the WO ring-weight layout: DRAM-core returns receiver-contiguous,
             # worker-core (and galaxy/TG) keeps the width-sharded ring config.
@@ -373,7 +366,9 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=wo_ring_mem_config,
-                mesh_mapper=get_wo_ring_mesh_mapper(),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(2, 3), mesh_shape=configuration.cluster_shape
+                ),
                 cache_file_name=(cache_name("wo_sharded_ring_2d" + prefetcher_cache_suffix)),
             )
 
@@ -411,10 +406,9 @@ class Attention(LightweightModule):
                 self.prefetcher.insert_tensor(self.wqkv, program_config=pc_qkv)
                 self.prefetcher.insert_tensor(self.wo_sharded_ring, program_config=pc_wo)
 
-            if uses_tensor_prefetcher(self.prefetcher):
-                register_weights()
-            else:
-                self.prefetcher.register_callback(register_weights)
+            # Each backend owns the timing: the worker prefetcher defers to prefetch-time,
+            # the DRAM-core prefetcher runs it immediately (its register_callback is run-now).
+            self.prefetcher.register_callback(register_weights)
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -628,28 +622,16 @@ class Attention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
         qkv_program_config = self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher)
-        if uses_tensor_prefetcher(self.prefetcher):
-            xqkv_fused_sharded = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-                x,
-                self.wqkv,
-                global_cb=self.prefetcher.global_cb,
-                program_config=qkv_program_config,
-                cq_id=0,
-                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-            )
-        else:
-            xqkv_fused_sharded = ttnn.linear(
-                x,
-                self.wqkv,
-                memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
-                program_config=qkv_program_config,
-                compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
-                dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-            )
+        xqkv_fused_sharded = prefetcher_linear(
+            self.prefetcher,
+            x,
+            self.wqkv,
+            mode=Mode.DECODE,
+            program_config=qkv_program_config,
+            memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher),
+            compute_kernel_config=self.li_qkv_decode_compute_kernel_cfg,
+            dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
+        )
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -840,26 +822,15 @@ class Attention(LightweightModule):
                 )
                 wo_weight = self.wo_sharded_ring if self.prefetcher is not None else self.wo
                 wo_program_config = self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, self.prefetcher)
-                if uses_tensor_prefetcher(self.prefetcher):
-                    dense_out_sharded = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-                        all_gather_output,
-                        wo_weight,
-                        global_cb=self.prefetcher.global_cb,
-                        program_config=wo_program_config,
-                        cq_id=0,
-                        memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
-                        compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                    )
-                else:
-                    dense_out_sharded = ttnn.linear(
-                        all_gather_output,
-                        wo_weight,
-                        memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
-                        program_config=wo_program_config,
-                        compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                        global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
-                        sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-                    )
+                dense_out_sharded = prefetcher_linear(
+                    self.prefetcher,
+                    all_gather_output,
+                    wo_weight,
+                    mode=Mode.DECODE,
+                    program_config=wo_program_config,
+                    memory_config=self.args.get_attn_dense_output_mem_config(Mode.DECODE, self.prefetcher),
+                    compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                )
                 ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(

@@ -1288,7 +1288,7 @@ class ModelArgs:
                         self.hidden_dim // self.cluster_shape[1],  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
-                        stream_in1=getattr(prefetcher, "stream_in1", False),
+                        stream_in1=prefetcher.stream_in1,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1340,7 +1340,7 @@ class ModelArgs:
                         self.dim,  # Use padded N
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
-                        stream_in1=getattr(prefetcher, "stream_in1", False),
+                        stream_in1=prefetcher.stream_in1,
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1640,7 +1640,7 @@ class ModelArgs:
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
                     untilize_out=True,
-                    stream_in1=getattr(prefetcher, "stream_in1", False),
+                    stream_in1=prefetcher.stream_in1,
                 )
             else:
                 return self.dram_matmul_config(
@@ -1906,7 +1906,7 @@ class ModelArgs:
                     n_wo,
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
-                    stream_in1=getattr(prefetcher, "stream_in1", False),
+                    stream_in1=prefetcher.stream_in1,
                 )
             else:
                 if self.use_fused_all_gather_matmul:
@@ -1968,7 +1968,7 @@ class ModelArgs:
                     n_wo,
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
-                    stream_in1=getattr(prefetcher, "stream_in1", False),
+                    stream_in1=prefetcher.stream_in1,
                 )
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
