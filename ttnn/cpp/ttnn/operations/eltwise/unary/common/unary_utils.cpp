@@ -200,20 +200,23 @@ tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
         tensor_height *= padded_out_shape[i];
     }
     uint32_t tensor_width = padded_out_shape[-1];
+    const auto& tile = input_tensor.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
 
     std::array<uint32_t, 2> shard_shape = {0, 0};
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
+        auto height_padded = tt::round_up(tensor_height, num_cores * tile_height);
+        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tile_height);
         shard_shape = {shard_height, tensor_width};
     } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
+        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tile_width);
         shard_shape = {tensor_height, shard_width};
     } else {
         CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
+        auto height_padded = tt::round_up(tensor_height, grid_size.y * tile_height);
+        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tile_height);
+        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tile_width);
         shard_shape = {shard_height, shard_width};
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec using all {} worker cores", num_cores);

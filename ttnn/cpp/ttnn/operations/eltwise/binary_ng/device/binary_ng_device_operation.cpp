@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "binary_ng_device_operation.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
@@ -86,21 +87,26 @@ ShardSpec generate_shard_spec_all_cores(
     }
     uint32_t tensor_width = padded_out_shape[-1];
 
+    // Align shards to the tensor's tile geometry (supports tiny tile heights).
+    const auto& tile = input_tensor_a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+
     // Calculate shard shape based on memory layout (must be tile-aligned for TILE layout)
     std::array<uint32_t, 2> shard_shape = {0, 0};
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
+        auto height_padded = tt::round_up(tensor_height, num_cores * tile_height);
+        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tile_height);
         shard_shape = {shard_height, tensor_width};
     } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
+        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tile_width);
         shard_shape = {tensor_height, shard_width};
     } else {
         // BLOCK_SHARDED
         CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
+        auto height_padded = tt::round_up(tensor_height, grid_size.y * tile_height);
+        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tile_height);
+        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tile_width);
         shard_shape = {shard_height, shard_width};
     }
     log_debug(tt::LogOp, "BinaryNgDeviceOperation: Generated shard spec using all {} worker cores", num_cores);
@@ -356,6 +362,47 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
                 "RHS operand must be either sharded or interleaved");
         }
     }
+
+    auto validate_tile = [&](const Tensor& tensor, std::string_view name) {
+        if (tensor.layout() != Layout::TILE) {
+            return;
+        }
+        const auto& tile = tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_width() == tt::constants::TILE_WIDTH,
+            "binary_ng {} requires tile width {}, got {}",
+            name,
+            tt::constants::TILE_WIDTH,
+            tile.get_width());
+        const bool tiny_height = tile.get_height() < tt::constants::TILE_HEIGHT;
+        const bool blocked_dtype = tensor.dtype() == DataType::BFLOAT8_B || tensor.dtype() == DataType::BFLOAT4_B ||
+                                   attributes.get_dtype() == DataType::BFLOAT8_B ||
+                                   attributes.get_dtype() == DataType::BFLOAT4_B;
+        TT_FATAL(
+            !(tiny_height && blocked_dtype),
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+    };
+    validate_tile(input_tensor_a, "input A");
+    if (input_tensor_b.has_value()) {
+        validate_tile(*input_tensor_b, "input B");
+        if (input_tensor_a.layout() == Layout::TILE && input_tensor_b->layout() == Layout::TILE) {
+            TT_FATAL(
+                input_tensor_a.tensor_spec().tile().get_tile_shape() ==
+                    input_tensor_b->tensor_spec().tile().get_tile_shape(),
+                "binary_ng requires matching tile shapes for TILE inputs, got {}x{} and {}x{}",
+                input_tensor_a.tensor_spec().tile().get_height(),
+                input_tensor_a.tensor_spec().tile().get_width(),
+                input_tensor_b->tensor_spec().tile().get_height(),
+                input_tensor_b->tensor_spec().tile().get_width());
+        }
+    }
+    if (output_tensor.has_value() && output_tensor->layout() == Layout::TILE &&
+        input_tensor_a.layout() == Layout::TILE) {
+        TT_FATAL(
+            input_tensor_a.tensor_spec().tile().get_tile_shape() ==
+                output_tensor->tensor_spec().tile().get_tile_shape(),
+            "binary_ng requires matching tile shapes for TILE input and preallocated output");
+    }
 }
 
 void BinaryNgDeviceOperation::validate_on_program_cache_hit(
@@ -463,6 +510,21 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
         return output_tensor->tensor_spec();
     }
 
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
+    // When the resolved output layout differs from input A (e.g. TILE vs ROW_MAJOR), keep the tile
+    // geometry from a TILE input when available.
+    PageConfig page_config = input_tensor_a.tensor_spec().page_config();
+    if (attributes.output_layout != input_tensor_a.layout()) {
+        if (attributes.output_layout == Layout::TILE) {
+            const auto& tile_src =
+                (tensor_b.has_value() && tensor_b->layout() == Layout::TILE) ? *tensor_b : input_tensor_a;
+            page_config = PageConfig(attributes.output_layout, tile_src.tensor_spec().tile());
+        } else {
+            page_config = PageConfig(attributes.output_layout);
+        }
+    }
+
     if (attributes.memory_config.is_sharded()) {
         const auto& memory_layout = attributes.memory_config.memory_layout();
         const auto& buffer_type = attributes.memory_config.buffer_type();
@@ -477,12 +539,18 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 const auto& padded_a_shape = input_tensor_a.padded_shape();
 
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
-                    *input_tensor_a.memory_config().shard_spec(), padded_a_shape, padded_out_shape);
+                    *input_tensor_a.memory_config().shard_spec(),
+                    padded_a_shape,
+                    padded_out_shape,
+                    input_tensor_a.tensor_spec().tile());
             } else if (tensor_b.has_value() && tensor_b->is_sharded()) {
                 // Adjust shard spec from input B to match output shape
                 const auto& padded_b_shape = tensor_b->padded_shape();
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
-                    *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
+                    *tensor_b->memory_config().shard_spec(),
+                    padded_b_shape,
+                    padded_out_shape,
+                    tensor_b->tensor_spec().tile());
             } else {
                 shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
             }
@@ -490,15 +558,11 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
 
         return TensorSpec(
             output_shape,
-            TensorLayout(
-                output_dtype,
-                PageConfig(attributes.output_layout),
-                MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
+            TensorLayout(output_dtype, page_config, MemoryConfig(memory_layout, buffer_type, shard_spec_opt)));
     }
 
     // If not sharded, use the memory config from input a that is interleaved
-    return TensorSpec(
-        output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
+    return TensorSpec(output_shape, TensorLayout(output_dtype, page_config, attributes.memory_config));
 }
 
 BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_output_tensors(
@@ -516,11 +580,14 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile_a = input_tensor_a.tensor_spec().tile();
 
     TT_FATAL(is_device_tensor(input_tensor_a), "Unexpected Tensor type {}", input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
         TT_FATAL(is_device_tensor(*input_tensor_b), "Unexpected Tensor type {}", input_tensor_b->storage_type());
+        const auto& tile_b = input_tensor_b->tensor_spec().tile();
 
         const auto shard_volumes = get_shard_volumes(
             input_tensor_a.tensor_spec(), input_tensor_b->tensor_spec(), compute_output_specs(attributes, tensor_args));
@@ -531,11 +598,15 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
             input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
             input_tensor_b->memory_config(),
-            shard_volumes);
+            shard_volumes,
+            tile_a.get_height(),
+            tile_a.get_width(),
+            tile_b.get_height(),
+            tile_b.get_width());
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
+        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config(), tile_a.get_height(), tile_a.get_width());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
