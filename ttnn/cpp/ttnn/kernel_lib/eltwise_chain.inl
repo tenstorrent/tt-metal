@@ -176,15 +176,16 @@ ALWI uint32_t tile_base_value([[maybe_unused]] uint32_t stored) noexcept {
 // CRTP bases — UnaryOp / BinaryOp / TernaryOp
 // =============================================================================
 //
-// Single dispatch contract: every element exposes `void exec(uint32_t) const`. The bases
-// default-forward to a static `exec_impl()` supplied by the derived op; runtime-param ops
-// (Power, Hardtanh, …) override `exec` directly to capture instance state. Defining
+// Dispatch contract: the DEST-only op bases expose `void exec(uint32_t i, uint32_t slot_offset) const`
+// and forward to a static `exec_impl(uint32_t slot_offset)` supplied by the derived op; runtime-param
+// ops (Power, Hardtanh, …) override `exec` directly to capture instance state. (CB elements — CopyTile /
+// BinaryFpu — define a wider exec: (i_flat, ht, wt, slot_offset) or the per-side form.) Defining
 // neither is a compile error (no silent fallthrough).
 //
 //   template <Approx A = Approx::Exact, Approx F = Approx::Fast, Dst Slot = Dst::D0>
 //   struct Exp : UnaryOp<Exp<A, F, Slot>, Slot> {
-//       static void init()       { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
-//       static void exec_impl()  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot)); }
+//       static void init()                        { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
+//       static void exec_impl(uint32_t slot_off)  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot) + slot_off); }
 //   };
 
 template <class Derived, Dst Slot>
@@ -351,17 +352,15 @@ struct count_v_helper : std::integral_constant<size_t, (size_t{Pred<Es>::value} 
 // =============================================================================
 // B. Static cb-id / dst-slot extraction predicates per element
 //
-// Every CB-reader element must expose:
-//   static constexpr uint32_t dfb_a_id();             // primary CB
-//   static constexpr uint32_t dfb_b_id();             // secondary CB or 0 if N/A
-//   static constexpr InputLifecycle a_policy();
-//   static constexpr InputLifecycle b_policy();
+// Every CB-reader element exposes dfb_a_id() (primary CB) + a_policy(). Binary readers also expose
+// dfb_b_id() (secondary CB) + b_policy(); unary readers omit them — the defaults below supply
+// dfb_b = INVALID_DFB (0xFFFFFFFF, "no CB"; not 0, which is a real CB) and b_policy = CallerManaged.
 // (default impls below cover non-CB-reader elements.)
 //
 // Every CB-writer element must expose:
 //   static constexpr uint32_t pack_dfb_id();
-//   static constexpr Dst pack_dst_slot();
-//   static constexpr uint32_t pack_output_index();   // runtime fallback OK; used only for index mode FirstTile/Pinned k
+//   static constexpr Dst pack_dst_slot;
+// (output addressing derives from the walk + TileOffset, not a pack_output_index accessor.)
 // =============================================================================
 
 template <class T, class = void> struct has_dfb_a    : std::false_type {};
@@ -688,8 +687,9 @@ struct PackTile : OutputStream<Cb, Policy, Offset>, PackTileTag {
         // Retained empty so trait-dispatch stays uniform.
     }
 
-    // Pack exec — walk the reserved output window (base + i_flat) for OutputLifecycle::Bulk, or stay pinned
-    // at base for per-tile/chunk policies whose CB front already advanced. TileOffset adds base.
+    // Pack exec — walk the reserved output window (base + i_flat) for the upfront-reserve outputs
+    // (Bulk / ReserveAllPushPerTile / ReserveAllPushPerChunk), or stay pinned at base for the
+    // front-advancing policies (Streaming / Chunked) whose CB front already advanced. TileOffset adds base.
     //
     // OOO gating: the LLK's sequential pack path (out_of_order_output=false) derives its write
     // address from an internal running `fifo_wr_tile_ptr` and IGNORES `out_idx` entirely. That is
@@ -868,7 +868,7 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The canonical
-    // bcast walk is A=BlockIter (walks the tile range) + B=FirstTile (pins the
+    // bcast walk is A=Block (walks the tile range) + B=Scalar (pins the
     // scaler/vector operand at tile 0). OffsetA / OffsetB add a runtime or
     // compile-time base offset to the per-iter index. The 3-arg overload accepts a
     // chunk-local index (`i_local`) and an absolute index (`i_abs`); each side
@@ -1137,10 +1137,10 @@ struct EltwiseChain {
 // 9. Chain-shape trait predicates
 // =============================================================================
 
-// chain_lane_width — N-element fold. Max of per-element `lane_width`. Bounds
-// the legal BlockSize at the chain call site via the static_assert
-// `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`. Each element writes to
-// DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
+// chain_lane_width — N-element fold. Max of per-element `lane_width`. The chain clamps block_size
+// at runtime so `block_size * chain_lane_width <= DEST_AUTO_LIMIT` (block_size is a runtime
+// EltwiseShape field, so this is a clamp, not a static_assert). Each element writes to
+// DEST[dst_slot + j * chain_lane_width] for lane j in [0, block_size).
 //
 // SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
 // chain elements that inherit directly from `CopyTileTag` / `PackTileTag` / `DestOnlyTag`
@@ -1176,11 +1176,10 @@ inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
 template <class Chain>
 inline constexpr uint32_t chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width_v<Chain>;
 
-// chain_supports_block — N-element fold. True when every CB-reader element uses a
-// policy that stages a multi-tile DEST window (Upfront / Cumulative / NoWaitNoPop).
-// InputLifecycle::Streaming policies (WaitAndPop / WaitNoPop / InputLifecycle::NoWaitPop) consume ONE tile per iter
-// and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
-// outer iter). The chain `static_assert`s on this predicate when `BlockSize > 1`.
+// chain_supports_block — N-element fold. True when every CB-reader element uses a policy that
+// stages a multi-tile window per outer iter (an upfront Bulk-family policy or per-chunk Chunked).
+// Per-tile policies (Streaming / HeldStream) consume ONE tile per iter and can't do block_size > 1;
+// for such chains the chain clamps block_size to 1 at runtime (not a static_assert).
 namespace detail {
 template <class E> constexpr InputLifecycle b_policy_of();  // defined below (defaults to CallerManaged)
 
@@ -1738,11 +1737,11 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // held. Both are policy-guarded (no-op for upfront / no-pop / no-push policies).
 // =============================================================================
 
-// Boot-time hoist of compute-cohort init (math-MOP and/or SFPU), filtered
-// per element by which cohort it belongs to. The chain dispatcher computes
-// `HoistMath` from `chain_hoist_math_mop_v` and `HoistSfpu` from
-// `chain_hoist_sfpu_v`, then this walk emits the element's transitions +
-// init() only when the element's cohort is hoisted at this level.
+// Boot-time hoist of compute-cohort init (math-MOP and/or DEST-only ops). The chain dispatcher
+// computes `HoistMath` from `chain_hoist_math_mop_v` and `HoistSfpu` from `chain_hoist_sfpu_v`,
+// then this walk emits the element's transitions + init() only when its cohort is hoisted. The
+// HoistSfpu leg gates on `is_dest_only_op_v`, so Fill/Rand init() ride along (chain_hoist_sfpu_v
+// itself is decided from SFPU-op uniformity alone).
 //
 // PackTile is intentionally excluded from this walk — pack-side reconfig is
 // emitted unconditionally at boot via `pack_init_for_each` (PACK cohort is
@@ -1786,8 +1785,8 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
 //
 // Walks an (Ht, Wt) tile grid (Ht=1 expresses the 1D case). Inner loop blocks W
 // (block_size tiles per inner iter). Per-element index mode picks the tile index
-// for each CB-reader: BlockIter → flat (ht*Wt + wt), RowBcast → wt, ColBcast → ht,
-// FirstTile → 0.
+// for each CB-reader: Block → flat (ht*Wt + wt), Row → wt, Col → ht,
+// Scalar → 0.
 // =============================================================================
 
 namespace detail {
@@ -1802,7 +1801,7 @@ ALWI void elem_apply_compute(
     uint32_t chain_lane_width,
     uint32_t Ht,
     uint32_t Wt) {
-    // Per-block streaming: pass chunk-local index `j` to exec so BlockIter
+    // Per-block streaming: pass chunk-local index `j` to exec so Block
     // returns the local CB-front offset (the just-waited window).
     constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {

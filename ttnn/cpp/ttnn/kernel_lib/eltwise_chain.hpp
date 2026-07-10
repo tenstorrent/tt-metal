@@ -427,8 +427,8 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 /// CopyTile / BinaryFpu / PackTile.
 ///
 /// 2D-walk tile index per kind (Scalar→0, Block→ht*Wt+wt, Row→wt, Col→ht; upfront window
-/// 1 / Ht*Wt / Wt / Ht respectively). Row/Col are meaningful only in the 2D
-/// `EltwiseShape{Ht, Wt}` overload — the 1D `n_tiles` overload static_asserts them out.
+/// 1 / Ht*Wt / Wt / Ht respectively). Row/Col are meaningful only with a 2D
+/// `EltwiseShape::grid(Ht, Wt)` shape; there is no separate 1D overload.
 /// Tile offsets are layered on via `TileBase`, not separate index modes.
 ///
 /// Row/Col require a non-streaming policy (caller stages the whole Row/Col window — Wt or Ht
@@ -445,7 +445,7 @@ constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
 /// (canonical: a copy/identity/typecast kernel whose CBs are set once at boot). Keep it.
 enum class CopyTileReconfig : uint8_t {
     None,   // no reconfig (boot init already programmed this CB's format)
-    Input,  // copy_tile_to_dst_init_short_with_dt(old_cb, new_cb)
+    Input,  // reconfig_data_format_srca on entry (single-arg first-emit; two-arg _with_dt with prev)
 };
 
 /// FPU binary op selector.
@@ -502,7 +502,7 @@ enum class DestReuseReconfig : uint8_t {
 /// UnaryBcast reconfig.
 enum class UnaryBcastReconfig : uint8_t {
     None,
-    Input,  // reconfigure_unary_bcast(old_icb, new_icb, old_ocb, new_ocb)
+    Input,  // reconfig srca + srcb for the bcast input CB (no pack side — UnaryBcast never packs)
 };
 
 /// Pack-side dtype-reconfig.
@@ -526,14 +526,15 @@ enum class PackTileReconfig : uint8_t {
 // 7. Chain element types — declarations
 //
 //    Implementation lives in eltwise_chain.inl and the per-family headers.
-//    Every element has the following surface:
+//    Every element exposes:
 //
-//      static void init();                   // hardware init (per chain entry, or per tile)
-//      static void wait_inputs(uint32_t i);  // CB wait phase (CB readers only)
-//      static void exec(uint32_t i);         // body (always runs per tile)
-//      static void pop_inputs(uint32_t i);   // CB pop phase  (CB readers only)
-//      static void reserve_outputs(uint32_t i); // CB reserve  (CB writers only)
-//      static void push_outputs(uint32_t i);    // CB push     (CB writers only)
+//      init()          // per-op hw init (instance method; may read ctor args, e.g. seed/scalar)
+//      exec(...)       // body per tile — (i, slot_offset) for DEST-only ops; (i_flat, ht, wt,
+//                      //   slot_offset) for CB elements. slot_offset shifts the DEST lane for block>1.
+//      wait_per_tile / wait_per_block / wait_upfront / wait_per_row   // CB wait  (readers, per policy)
+//      pop_per_tile / pop_per_block / pop_upfront_end / pop_per_row   // CB pop   (readers, per policy)
+//      reserve_per_tile / reserve_per_block / reserve_upfront         // CB reserve (writers, per policy)
+//      push_per_tile / push_per_block / push_at_end                  // CB push    (writers, per policy)
 //
 //    Plus static-constexpr traits used by chain-shape predicates:
 //      is_upfront, lane_width, etc.

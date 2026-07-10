@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Negative compile test: two PackTile elements writing the same (CB, DEST slot) would race. The
-// chain static_asserts on the collision (writer_pair_collide).
+// chain static_asserts on the collision (chain_pack_writes_collide).
 // MUST fail to compile with "eltwise_chain: two PackTile elements collide on (dfb, dst_slot)".
 
 #include <cstdint>
