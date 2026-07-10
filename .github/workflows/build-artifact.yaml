@@ -398,7 +398,7 @@ jobs:
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
       CCACHE_S3_READONLY: "false"
-      CCACHE_S3_DEBUG: "true"
+      CCACHE_S3_DEBUG: "false"
     container:
       # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
       # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
