@@ -6,7 +6,7 @@
 |------|--------------|
 | `test_eltwise_binary.py` / `perf_eltwise_binary.py` | `broadcast_type` → C++ template; derive+assert `tile_count`; intentional geometry divergence |
 | `test_reduce.py` / `perf_reduce.py` | `math_fidelity` + `pool_type` wired; `is_reduce_to_one` pinned + documented (kernel has no reduce-to-one branch to bind); perf drops `tile_dimensions` sweep |
-| `test_unpack_tilize.py` / `perf_unpack_tilize.py` | single geometry axis `input_dimensions` (redundant `dimensions` axis removed); `num_faces` → `NUM_FACES`; derived + asserted |
+| `test_unpack_tilize.py` / `perf_unpack_tilize.py` | single geometry axis `input_dimensions` (redundant `dimensions` axis removed); single-option `num_faces` → `NUM_FACES` in `templates=`; derived + asserted |
 | `test_unpack_A.py` / `perf_unpack_A.py` | `cpp_source` axis; transpose runtimes; format skip matrix |
 | `test_pack_dest_bank.py` / `perf_pack_dest_bank.py` | `input_dimensions` derived from block geometry |
 | `perf_sfpu_unary.py` (with functional SFPU unary) | `math_op` threading; `approx_mode`/`fast_mode`/`dest_acc`; `iterations`/`loop_factor` ignored by comparison |
@@ -30,12 +30,13 @@
 - `MATH_OP(mathop=...)`, `MATH_FIDELITY(...)`, `BROADCAST_TYPE(...)`
 - `REDUCE_POOL_TYPE(...)`, `APPROX_MODE(...)`, `FAST_MODE(...)`
 - `DEST_SYNC(...)`, `STABLE_SORT(...)`, `TILE_DST_CT_OFFSET(...)`, `ACC_TO_DEST(...)`
+- `ITERATIONS(...)` (perf measurement only; compile-time template)
 
 **Runtimes** (per-variant struct fields, in `PerfConfig.runtimes`):
 
 - `TILE_COUNT(n)` (varies per variant / derived)
 - `UNPACK_TRANS_FACES(...)`, `UNPACK_TRANS_WITHIN_FACE(...)` (multi-option sweeps)
-- `LOOP_FACTOR(...)`, `ITERATIONS(...)` (perf measurement only)
+- `LOOP_FACTOR(...)` (perf measurement only)
 
 **Single-option axes belong in `templates`, not `runtimes`.** A `RuntimeParameter`
 (e.g. `NUM_FACES`, `TEST_FACE_DIMS`) can be placed in `templates=[...]` — it is

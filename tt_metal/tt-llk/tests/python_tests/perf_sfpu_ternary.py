@@ -125,6 +125,7 @@ def test_perf_sfpu_ternary(
     iterations,
     input_dimensions,
 ):
+    # Mirrors test_sfpu_ternary.py: Float32+dest_acc=No is not a supported ternary path.
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
         pytest.skip("Float32 inputs with dest_acc=No are not supported")
     if (

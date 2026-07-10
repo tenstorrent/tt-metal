@@ -103,12 +103,14 @@ def _perf_unpack_tilize(
             PerfRunType.PACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ],
-        templates=[],
+        templates=[
+            # Single-option axis -> compile-time template (also SPEED_OF_LIGHT-safe).
+            NUM_FACES(num_faces),
+        ],
         runtimes=[
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(4),
-            NUM_FACES(num_faces),
         ],
         variant_stimuli=StimuliConfig(
             None,

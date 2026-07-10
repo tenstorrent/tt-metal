@@ -22,6 +22,8 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATH_OP,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
 )
 
 
@@ -73,6 +75,9 @@ def test_perf_eltwise_binary(
             BROADCAST_TYPE(broadcast_type),
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=math_op),
+            # Single-option axes -> compile-time templates (also SPEED_OF_LIGHT-safe).
+            UNPACK_TRANS_FACES(transpose_srca),
+            UNPACK_TRANS_WITHIN_FACE(transpose_srca),
         ],
         runtimes=[TILE_COUNT(tile_count)],
         variant_stimuli=StimuliConfig(
