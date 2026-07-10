@@ -65,6 +65,8 @@ void kernel_main() {
     const auto q_acc = TensorAccessor(q_args, q_addr, tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, tile_bytes);
     const auto v_acc = TensorAccessor(v_args, v_addr, tile_bytes);
+    // Mask accessor is loop-invariant; build once (only meaningful when has_mask).
+    const auto mask_acc = TensorAccessor(mask_args, mask_addr, tile_bytes);
 
     for (uint32_t qi = 0; qi < num_qb; ++qi) {
         const uint32_t qb = start_qb + qi;
@@ -142,7 +144,6 @@ void kernel_main() {
 
             // --- Mask block (custom only): for st(q): for kv ---
             if constexpr (has_mask) {
-                const auto mask_acc = TensorAccessor(mask_args, mask_addr, tile_bytes);
                 cb_reserve_back(cb_mask, q_cnt * kv_cnt);
                 uint32_t w = get_write_ptr(cb_mask);
                 uint32_t idx = 0;
