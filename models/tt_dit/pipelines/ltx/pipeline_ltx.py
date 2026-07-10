@@ -1177,7 +1177,12 @@ class LTXPipeline:
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
         with Watchdog("vae decode"):
-            video = self.vae_decoder(latent_spatial, output_type=output_type)
+            # LTX_VIDEO_VAE_TRACE=1 replays the device decode from a captured trace (amortized across
+            # generations); off by default since a single decode does not repay the capture. Distinct
+            # from LTX_VAE_TRACE, which gates the audio mel-VAE decoder.
+            video = self.vae_decoder(
+                latent_spatial, output_type=output_type, traced=os.environ.get("LTX_VIDEO_VAE_TRACE") == "1"
+            )
         if output_type != "float":
             return video.numpy()
         return video
