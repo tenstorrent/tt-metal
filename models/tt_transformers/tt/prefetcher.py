@@ -75,7 +75,6 @@ def prefetcher_linear(prefetcher, input_tensor_a, weight, *, mode, program_confi
             weight,
             global_cb=prefetcher.global_cb,
             program_config=program_config,
-            cq_id=0,
             **linear_kwargs,
         )
     use_gcb = prefetcher is not None and mode == Mode.DECODE

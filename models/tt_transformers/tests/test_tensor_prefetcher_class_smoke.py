@@ -151,7 +151,6 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
             tt_weight,
             global_cb=prefetcher.global_cb,
             program_config=program_config,
-            cq_id=0,
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=ttnn.bfloat16,

@@ -643,12 +643,12 @@ def test_tensor_prefetcher_recv_contig_smoke(device, num_tensors, num_layers):
 # ---------------------------------------------------------------------------
 # `queue_tensor_prefetcher_request` does not go through the command queue: it
 # serializes a request into socket pages and a host worker thread fans them out to
-# the DRAM sender cores over NOC. When called with a `cq_id` whose command queue is
-# mid trace-capture, the request must be *captured* (not sent) and re-sent on every
-# `execute_trace` of that trace, so a captured matmul that consumes the GCB is
-# refilled on each replay. This test captures a (queue request + consuming linear)
-# pair into a trace, replays it several times, and PCC-checks every replay.
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872}], indirect=True)
+# the DRAM sender cores over NOC. When the current command queue is mid trace-capture,
+# the request must be *captured* (not sent) and re-sent on every `execute_trace` of
+# that trace, so a captured matmul that consumes the GCB is refilled on each replay.
+# This test captures a (queue request + consuming linear) pair on non-default CQ 1,
+# replays it several times, and PCC-checks every replay.
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
 @pytest.mark.parametrize("replay_count", [1, 3])
 def test_tensor_prefetcher_trace_replay(device, replay_count):
     """Capture a (prefetcher-request + linear) pair into a trace and replay it
@@ -759,37 +759,37 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
             tt_weight,
             global_cb=gcb,
             program_config=program_config,
-            cq_id=0,
             memory_config=output_mem_config,
             compute_kernel_config=compute_kernel_config,
             dtype=dtype,
         )
 
     with tensor_prefetcher_session(device):
-        # ---- Warmup: compile kernels + balance the GCB before trace capture. The
-        # queue here is sent immediately (cq 0 not capturing) and consumed by the matmul. ----
-        logger.info("Warmup (compile) run")
-        tt_out = fill_and_matmul()
-        ttnn.synchronize_device(device)
-        warmup_torch = ttnn.to_torch(tt_out)
-        passing, msg = comp_pcc(expected, warmup_torch, 0.999)
-        assert passing, f"warmup PCC failed: {msg}"
+        with ttnn.command_queue(1):
+            # ---- Warmup: compile kernels + balance the GCB before trace capture. The
+            # queue here is sent immediately (CQ 1 not capturing) and consumed by the matmul. ----
+            logger.info("Warmup (compile) run")
+            tt_out = fill_and_matmul()
+            ttnn.synchronize_device(device)
+            warmup_torch = ttnn.to_torch(tt_out)
+            passing, msg = comp_pcc(expected, warmup_torch, 0.999)
+            assert passing, f"warmup PCC failed: {msg}"
 
-        # ---- Capture: the queue request is captured into the trace (cq 0 mid-capture),
-        # NOT sent now. The linear is captured too. ----
-        logger.info("Capturing trace")
-        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        tt_out = fill_and_matmul()
-        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+            # ---- Capture: both the request and linear select current CQ 1. The request
+            # is captured into the trace rather than sent immediately. ----
+            logger.info("Capturing trace")
+            trace_id = ttnn.begin_trace_capture(device)
+            tt_out = fill_and_matmul()
+            ttnn.end_trace_capture(device, trace_id)
 
-        # ---- Replay: each execute_trace must replay the captured prefetcher request
-        # (refilling the GCB) and the matmul. ----
-        for i in range(replay_count):
-            logger.info(f"Replay {i + 1}/{replay_count}")
-            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
-            out_torch = ttnn.to_torch(tt_out)
-            passing, msg = comp_pcc(expected, out_torch, 0.999)
-            assert passing, f"replay {i + 1} PCC failed: {msg}"
+            # ---- Replay: each execute_trace must replay the captured prefetcher request
+            # (refilling the GCB) and the matmul. ----
+            for i in range(replay_count):
+                logger.info(f"Replay {i + 1}/{replay_count}")
+                ttnn.execute_trace(device, trace_id, blocking=True)
+                out_torch = ttnn.to_torch(tt_out)
+                passing, msg = comp_pcc(expected, out_torch, 0.999)
+                assert passing, f"replay {i + 1} PCC failed: {msg}"
 
         ttnn.release_trace(device, trace_id)
 
