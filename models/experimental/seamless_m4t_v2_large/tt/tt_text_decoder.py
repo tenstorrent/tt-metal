@@ -756,19 +756,17 @@ class TTSeamlessM4Tv2Decoder:
             x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
             owns_x_inter = True
         if len(x_inter.shape) != 2:
-            reshaped = ttnn.reshape(x_inter, (m, k))
-            if reshaped is not x_inter:
-                if owns_x_inter:
-                    ttnn.deallocate(x_inter)
-                x_inter = reshaped
-                owns_x_inter = True
+            # ``ttnn.reshape`` may return a VIEW aliasing ``x`` / the interleaved copy — same
+            # caveat as ``_linear_block_sharded``. Never take ownership from reshape alone, or the
+            # DRAM spill below would free the caller's activation (e.g. reused encoder_hidden_states
+            # for cross-attn KV at M=4096).
+            x_inter = ttnn.reshape(x_inter, (m, k))
         if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
             x_dram = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
             if owns_x_inter:
                 ttnn.deallocate(x_inter)
-            elif x_dram is not x:
-                owns_x_inter = True
             x_inter = x_dram
+            owns_x_inter = True
 
         chunks: list[ttnn.Tensor] = []
         for i in range(num_chunks):
