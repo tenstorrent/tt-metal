@@ -21,7 +21,7 @@ from ...models.vae.vae_ltx import upsample_latent
 from ...utils.ltx import load_conditioning_image
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
-from ...utils.video import export_video_audio
+from ...utils.video import export_video_audio, export_video_audio_yuv
 from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, LTXTransformerState, latent_grid
 
 # Distilled sigma schedules for the two stages.
@@ -701,8 +701,12 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
+        # (the mp4 is yuv420p either way — this only moves the color conversion onto the device
+        # and shrinks the d2h ~8x). Off → the float RGB gather feeding host-side conversion.
+        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
-        decode_type = "float" if output_path is not None else output_type
+        decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
@@ -721,7 +725,10 @@ class LTXDistilledPipeline(LTXPipeline):
             return video_pixels, audio_obj
 
         t0 = time.time()
-        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
+        if yuv_export:
+            export_video_audio_yuv(video_pixels, output_path, fps=fps, audio=audio_obj)
+        else:
+            export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         return output_path

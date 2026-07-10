@@ -1094,15 +1094,19 @@ class LTXVideoDecoder(Module):
             )
 
         if output_type == "yuv":
-            # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8, shape (T, planar_bytes).
+            # On-device YUV 4:2:0 + fast d2h -> ffmpeg yuv420p planar uint8.
             # logical_h/logical_w crop the global-tail mesh padding post-gather in the host planar kernel.
-            return fast_device_to_host_yuv(
+            h_out, w_out = logical_h * q, logical_w * r
+            planar = fast_device_to_host_yuv(
                 sample_tt,
                 self.mesh_device,
                 ccl_manager=self.ccl_manager,
-                logical_h=logical_h * q,
-                logical_w=logical_w * r,
+                logical_h=h_out,
+                logical_w=w_out,
             )
+            # Reshape flat (T, H*W*3//2) -> self-describing (T, H*3//2, W) so the exporter can
+            # recover H/W from the array alone — this IS PyAV's yuv420p ndarray layout.
+            return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
 
         concat_dims = [None, None]
         concat_dims[self.parallel_config.height_parallel.mesh_axis] = 3
