@@ -16,10 +16,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: "ttsim examples"
-  # Build and run every tt-metalium example in one job (was one job per example).
-  # set -e aborts on the first build/run failure so a broken example fails the test.
   cmd: >-
-    set -e;
     for ex in
     add_2_integers_in_compute
     add_2_integers_in_riscv
@@ -28,10 +25,11 @@
     hello_world_compute_kernel
     hello_world_datamovement_kernel;
     do
-    build_dir=$(mktemp -d);
-    cmake -G Ninja -S "/usr/share/tt-metalium/examples/$ex" -B "$build_dir";
-    cmake --build "$build_dir";
-    find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so' -exec {} \; ;
+    build_dir=$(mktemp -d) || exit 1;
+    cmake -G Ninja -S "/usr/share/tt-metalium/examples/$ex" -B "$build_dir" || exit 1;
+    cmake --build "$build_dir" || exit 1;
+    for exe in $(find "$build_dir" -maxdepth 2 -type f -executable -not -name '*.so');
+    do "$exe" || exit 1; done;
     done
   skus:
     sim_wormhole_b0:
