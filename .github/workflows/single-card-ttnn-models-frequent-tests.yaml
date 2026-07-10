@@ -84,7 +84,7 @@ jobs:
       tracy: ${{ inputs.enable-ops-recording || false }}
   fd-nightly:
     needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
+    uses: ./.github/workflows/single-card-ttnn-models-frequent-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
