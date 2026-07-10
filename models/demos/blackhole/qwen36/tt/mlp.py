@@ -18,6 +18,7 @@ class MLPWeights:
     w1: ttnn.Tensor  # gate_proj  [in, out], bfloat4_b
     w2: ttnn.Tensor  # down_proj  [in, out], bfloat8_b
     w3: ttnn.Tensor  # up_proj    [in, out], bfloat4_b
+    w13: ttnn.Tensor = None  # TP-only fused [gate|up] = concat(w1,w3,dim=-1); one decode matmul
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None) -> MLPWeights:
@@ -36,32 +37,42 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
         # each device's shard INTERLEAVED in DRAM so a regular ttnn.linear serves
         # both decode (M=1) and prefill (M=seq_len). DRAM-width-sharding the
         # weights for a faster decode matmul is a later optimization.
-        return MLPWeights(
-            w1=tpc.shard_w(
-                state_dict["gate_proj.weight"],
-                mesh_device,
-                dim=-1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
-            ),
-            w3=tpc.shard_w(
-                state_dict["up_proj.weight"],
-                mesh_device,
-                dim=-1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
-            ),
-            w2=tpc.shard_w(
-                state_dict["down_proj.weight"],
-                mesh_device,
-                dim=0,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("down_proj"),
-                dtype=ttnn.bfloat8_b,
-            ),
+        w1 = tpc.shard_w(
+            state_dict["gate_proj.weight"],
+            mesh_device,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=cache("gate_proj"),
+            dtype=ttnn.bfloat4_b,
         )
+        w3 = tpc.shard_w(
+            state_dict["up_proj.weight"],
+            mesh_device,
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=cache("up_proj"),
+            dtype=ttnn.bfloat4_b,
+        )
+        w2 = tpc.shard_w(
+            state_dict["down_proj.weight"],
+            mesh_device,
+            dim=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=cache("down_proj"),
+            dtype=ttnn.bfloat8_b,
+        )
+        # Fused gate|up: concat each device's column-parallel shards along the output dim
+        # (per-device concat preserves each shard) → ONE decode matmul instead of two.
+        # Branch's mlp() uses a single fused gate/up matmul; saves ~64 dispatches/step.
+        # QWEN_SKIP_FUSED_WEIGHTS skips building it (DRAM-cost A/B measurement only; forward needs it).
+        if os.environ.get("QWEN_SKIP_FUSED_WEIGHTS") == "1":
+            return MLPWeights(w1=w1, w3=w3, w2=w2, w13=None)
+        w13 = ttnn.concat([w1, w3], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # TP _forward_tp uses ONLY w13 (both prefill and decode) — w1/w3 are dead once w13 exists.
+        # Free them so the fused weight replaces (not duplicates) the separate gate/up (~DRAM saved).
+        ttnn.deallocate(w1)
+        ttnn.deallocate(w3)
+        return MLPWeights(w1=None, w3=None, w2=w2, w13=w13)
 
     def load(name, dtype):
         t = state_dict[f"{name}.weight"].T.contiguous()  # [in, out] for ttnn.linear
@@ -133,10 +144,14 @@ class Qwen36MLP:
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
         # Interleaved weights → let ttnn auto-select the matmul program (serves
-        # both decode and prefill). SILU applied separately, then gate * up.
+        # both decode and prefill). Fused gate|up matmul (w13), then split + SwiGLU.
         mc = ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, memory_config=mc)
-        w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
+        gu = ttnn.linear(x, w.w13, compute_kernel_config=ckc, memory_config=mc)
+        Ip = gu.shape[-1] // 2  # per-device gate/up shard width
+        Bt = gu.shape[-2]
+        w1_out = ttnn.slice(gu, (0, 0, 0, 0), (1, 1, Bt, Ip))
+        w3_out = ttnn.slice(gu, (0, 0, 0, Ip), (1, 1, Bt, 2 * Ip))
+        ttnn.deallocate(gu)
         w1_act = ttnn.silu(w1_out, memory_config=mc)
         ttnn.deallocate(w1_out)
         hidden = ttnn.mul(w1_act, w3_out, memory_config=mc)
