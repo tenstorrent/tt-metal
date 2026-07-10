@@ -7,7 +7,6 @@
 #include "autograd/auto_context.hpp"
 #include "modules/distributed/linear.hpp"
 #include "ops/multi_head_utils.hpp"
-#include "ops/scaled_dot_product_attention.hpp"
 
 namespace ttml::modules::distributed {
 
@@ -44,7 +43,11 @@ ttml::autograd::TensorPtr DistributedMultiHeadAttention::operator()(
 
     auto [query_with_heads, key_with_heads, value_with_heads] = ops::heads_creation(qkv, m_local_num_heads);
 
-    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
+    // TODO(nuked-op sdpa): restore real call
+    auto attention = query_with_heads;
+    static_cast<void>(key_with_heads);
+    static_cast<void>(value_with_heads);
+    static_cast<void>(mask);
 
     attention = ops::heads_fusion(attention);
 

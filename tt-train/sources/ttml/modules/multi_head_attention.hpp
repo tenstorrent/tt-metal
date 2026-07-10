@@ -10,7 +10,6 @@
 #include "autograd/tensor.hpp"
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
-#include "ops/scaled_dot_product_attention.hpp"
 
 namespace ttml::modules {
 

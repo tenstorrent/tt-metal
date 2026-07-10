@@ -5,7 +5,6 @@
 #include "layer_norm_module.hpp"
 
 #include "core/tt_tensor_utils.hpp"
-#include "ops/layernorm_op.hpp"
 
 namespace ttml::modules {
 
@@ -23,10 +22,9 @@ LayerNormLayer::LayerNormLayer(uint32_t features, bool use_composite_op) : m_use
 }
 
 autograd::TensorPtr LayerNormLayer::operator()(const autograd::TensorPtr& tensor) {
-    if (m_use_composite_op) {
-        return ops::composite_layernorm(tensor, m_gamma, m_beta);
-    }
-    return ops::layernorm(tensor, m_gamma, m_beta);
+    // TODO(nuked-op layer_norm): restore real call (composite_layernorm / layernorm)
+    static_cast<void>(m_use_composite_op);
+    return tensor;
 }
 
 }  // namespace ttml::modules
