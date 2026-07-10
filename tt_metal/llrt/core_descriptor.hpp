@@ -19,19 +19,9 @@
 #include "common/core_coord.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "llrt/core_descriptor_types.hpp"
 
 namespace tt {
-
-struct core_descriptor_t {
-    tt::tt_metal::CoreCoord compute_grid_size;
-    std::vector<tt_metal::RelativeCoreCoord> relative_compute_cores;
-    std::vector<tt_metal::RelativeCoreCoord> relative_dispatch_cores;
-    std::vector<tt_metal::RelativeCoreCoord> relative_fabric_mux_cores;
-
-    std::vector<tt::tt_metal::CoreCoord> logical_compute_cores;
-    std::vector<tt::tt_metal::CoreCoord> logical_dispatch_cores;
-    std::vector<tt::tt_metal::CoreCoord> logical_fabric_mux_cores;
-};
 
 inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_on_axis) {
     const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
@@ -42,24 +32,12 @@ inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested
     return product_name.at(arch).at(num_harvested_on_axis);
 }
 
-const core_descriptor_t& get_core_descriptor_config(
-    tt::tt_metal::MetalEnvImpl& env,
-    ChipId device_id,
-    uint8_t num_hw_cqs,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config);
-
-const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
-    tt::tt_metal::MetalEnvImpl& env,
-    ChipId device_id,
-    uint8_t num_hw_cqs,
-    const tt_metal::DispatchCoreConfig& dispatch_core_config);
-
 inline const tt::tt_metal::CoreCoord& get_compute_grid_size(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
+    const core_descriptor_t& core_desc = env.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.compute_grid_size;
 }
 
@@ -68,7 +46,7 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_compute_cores(
     ChipId device_id,
     const uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
+    const core_descriptor_t& core_desc = env.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_compute_cores;
 }
 
@@ -80,7 +58,7 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_dispatch_cores(
     if (env.get_cluster().arch() == tt::ARCH::QUASAR) {
         return env.get_quasar_dispatch_cores(device_id, num_hw_cqs, dispatch_core_config);
     }
-    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
+    const core_descriptor_t& core_desc = env.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_dispatch_cores;
 }
 
@@ -89,9 +67,15 @@ inline const std::vector<tt::tt_metal::CoreCoord>& get_logical_fabric_mux_cores(
     ChipId device_id,
     const uint8_t num_hw_cqs,
     const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
+    const core_descriptor_t& core_desc = env.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_fabric_mux_cores;
 }
+
+const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 // When FabricTensix is DISABLED, wormhole_b0_80_arch.yaml omits fabric_mux_cores, but the same tensix
 // locations are still reserved for fabric mux on boards that use the fabric-mux descriptor layout.
