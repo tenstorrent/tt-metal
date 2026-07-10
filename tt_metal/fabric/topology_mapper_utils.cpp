@@ -611,14 +611,6 @@ PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
 // ============================================================================
 namespace {
 
-AsicPositionMap build_asic_position_map_from_psd(const tt::tt_metal::PhysicalSystemDescriptor& psd) {
-    AsicPositionMap asic_positions;
-    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
-    }
-    return asic_positions;
-}
-
 std::pair<
     std::vector<std::unordered_set<tt::tt_metal::AsicID>>,
     std::vector<std::map<LogicalChipId, tt::tt_metal::ASICPosition>>>
@@ -661,11 +653,6 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // hash-set intersection.
     // -------------------------------------------------------------------------
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
-
-    std::optional<AsicPositionMap> asic_positions_for_pinnings;
-    if (pinnings.has_value() && !pinnings->empty()) {
-        asic_positions_for_pinnings = build_asic_position_map_from_psd(physical_system_descriptor);
-    }
 
     std::unordered_map<tt::tt_metal::AsicID, std::uint32_t> asic_to_dense_index;
     {
