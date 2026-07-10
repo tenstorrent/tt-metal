@@ -135,9 +135,7 @@ class Model:
 
         self.ccl_manager = ccl_manager
 
-        # Use mode-aware MeshConfig (stores separate configs for prefill and decode)
-        # Decode: EP=rows for expert parallelism, SP=1
-        # Prefill: EP=1, SP=rows for sequence parallelism (auto-defaults)
+        # Prefill mesh parallelization: TP over the cols; SP and the EP MoE follow from the rows.
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
