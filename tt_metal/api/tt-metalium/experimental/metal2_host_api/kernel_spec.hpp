@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -118,12 +119,12 @@ struct KernelSpec {
     CompilerOptions compiler_options = {};
 
     ///////////////////////////////////////////////////////////////////
-    // Resource bindings (immutable Program parameters)
-    //////////////////////////////////////////////////////////////////
+    // Program-scope resource bindings
+    ///////////////////////////////////////////////////////////////////
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<accessor_name>)
+    // The kernel constructs the accessor via DataflowBuffer(dfb::<accessor_name>)
     struct DFBBinding {
         // Endpoint role this binding plays for the DFB.
         enum class EndpointType { PRODUCER, CONSUMER };
@@ -144,27 +145,39 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
+    // The kernel constructs the accessor via Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
+    // Scratchpad bindings
+    // Declares that this kernel uses a scratchpad resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via Scratchpad(scratch::<accessor_name>)
+    struct ScratchpadBinding {
+        ScratchpadSpecName scratchpad_spec_name;  // identify the scratchpad within the ProgramSpec
+        std::string accessor_name;                // scratchpad accessor name (used in the kernel source code)
+    };
+    Group<ScratchpadBinding> scratchpad_bindings;
+
+    ///////////////////////////////////////////////////////////////////
+    // Program parameter bindings (user-managed resources)
+    ///////////////////////////////////////////////////////////////////
+
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
     // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
-        TensorParamName tensor_parameter_name;      // identify the TensorParameter within the ProgramSpec
-        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+        TensorParamName tensor_parameter_name;  // identify the TensorParameter within the ProgramSpec
+        std::string accessor_name;              // tensor accessor name (used in the kernel source code)
     };
     Group<TensorBinding> tensor_bindings;
 
-    // Additional resource binding types:
-    //  - Scratchpad bindings (Program-local memory resource)
-    //  - Buffer bindings (User-managed memory resource)
-    //  - GlobalSemaphore bindings (User-managed resource)
-    //  - GlobalDataflowBuffer bindings (User-managed resource)
+    // Additional program parameter binding types (coming soon):
+    //  - GlobalSemaphore bindings
+    //  - GlobalDataflowBuffer bindings
+    //  - MeshBuffer bindings
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel arguments
@@ -218,6 +231,7 @@ using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
+using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 //------------------------------------------------
 // Convenience factories for DFBBinding

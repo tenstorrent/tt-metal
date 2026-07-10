@@ -165,14 +165,14 @@ bool resolve_hostname_uniqueness(
             if (rank != controller_rank) {
                 std::size_t peer_hostname_size = 0;
                 distributed_context->recv(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
                 std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
                 distributed_context->recv(
-                    tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
+                    ttsl::as_writable_bytes(
+                        ttsl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
 
@@ -184,7 +184,7 @@ bool resolve_hostname_uniqueness(
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
                 distributed_context->send(
-                    tt::stl::Span<std::byte>(
+                    ttsl::Span<std::byte>(
                         reinterpret_cast<std::byte*>(&all_hostnames_unique), sizeof(all_hostnames_unique)),
                     Rank{static_cast<int>(rank)},
                     Tag{0});
@@ -195,17 +195,17 @@ bool resolve_hostname_uniqueness(
         auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
         std::size_t serialized_hostname_size = serialized_hostname.size();
         distributed_context->send(
-            tt::stl::Span<std::byte>(
+            ttsl::Span<std::byte>(
                 reinterpret_cast<std::byte*>(&serialized_hostname_size), sizeof(serialized_hostname_size)),
             Rank{controller_rank},
             Tag{0});
         distributed_context->send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
+            ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
             Rank{controller_rank},
             Tag{0});
 
         distributed_context->recv(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&all_hostnames_unique), sizeof(all_hostnames_unique)),
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&all_hostnames_unique), sizeof(all_hostnames_unique)),
             Rank{controller_rank},
             Tag{0});
     }
@@ -548,12 +548,12 @@ void exchange_metadata(
 
         for (auto rank : receiver_ranks) {
             distributed_context->send(
-                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
+                ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
 
             distributed_context->send(
-                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
+                ttsl::as_writable_bytes(ttsl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
         }
@@ -561,14 +561,14 @@ void exchange_metadata(
         for (auto rank : sender_ranks) {
             std::size_t peer_descriptor_size = 0;
             distributed_context->recv(
-                tt::stl::Span<std::byte>(
+                ttsl::Span<std::byte>(
                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             std::vector<uint8_t> serialized_peer_desc(peer_descriptor_size);
             distributed_context->recv(
-                tt::stl::as_writable_bytes(
-                    tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
+                ttsl::as_writable_bytes(
+                    ttsl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);

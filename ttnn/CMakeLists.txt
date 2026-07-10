@@ -291,6 +291,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::Extract
         TTNN::Ops::Experimental::DeepSeekPrefill::Insert
         TTNN::Ops::Experimental::DeepSeekPrefill::MoeGroupedTopk
+        TTNN::Ops::Experimental::DeepSeekPrefill::MoeHashGate
         TTNN::Ops::Experimental::DeepSeekPrefill::UpdatePaddedKvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::ZeroPaddedKvCache
         TTNN::Ops::Experimental::DeepSeekPrefill::RotaryEmbeddingIndexed
@@ -560,6 +561,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/outbound_sock
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_hash_gate)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed)

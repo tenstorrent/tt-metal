@@ -114,7 +114,7 @@ inline Tensor transpose_(
         output_mem_constructed = output_mem_config.value();
     }
 
-    auto prim_permute = [&](const ttnn::Tensor& input, const ttnn::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
+    auto prim_permute = [&](const ttnn::Tensor& input, const ttsl::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
         return ttnn::prim::permute(input, dims, output_mem_constructed, std::nullopt, pad_value);
     };
 
@@ -122,26 +122,26 @@ inline Tensor transpose_(
     switch (transpose_dim) {
         case ttnn::prim::qsr::TransposeOpDim::HC:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>{0, 2, 1, 3});
+                return prim_permute(a, ttsl::SmallVector<uint32_t>{0, 2, 1, 3});
             }
             break;
         case ttnn::prim::qsr::TransposeOpDim::NH:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
         case ttnn::prim::qsr::TransposeOpDim::NW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({3, 1, 2, 0}), output_mem_config, pad_value);
         case ttnn::prim::qsr::TransposeOpDim::CW:
             return ttnn::permute(
-                (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
+                (const ttnn::Tensor)a, ttsl::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
         case ttnn::prim::qsr::TransposeOpDim::CN:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({1, 0, 2, 3}));
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({1, 0, 2, 3}));
             }
             break;
         case ttnn::prim::qsr::TransposeOpDim::WH:
             if (interleaved_rm) {
-                return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
+                return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
             if (a.layout() == Layout::ROW_MAJOR) {
                 // Only compute the RM WH CB-vs-L1 budget when actually on the RM WH path:
@@ -156,7 +156,7 @@ inline Tensor transpose_(
                 max_l1_space =
                     max_l1_space - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
                 if (cb_size_for_rm > max_l1_space) {
-                    return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
+                    return prim_permute(a, ttsl::SmallVector<uint32_t>({0, 1, 3, 2}));
                 }
             }
             break;
@@ -172,7 +172,7 @@ ttnn::Tensor transpose_nd(
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
     const auto rank = input_tensor.logical_shape().rank();
-    ttnn::SmallVector<int64_t> permutation;
+    ttsl::SmallVector<int64_t> permutation;
     permutation.reserve(rank);
     for (uint32_t i = 0; i < rank; ++i) {
         permutation.push_back(i);

@@ -111,6 +111,22 @@ void kernel_main() {
             data_cbuf.push_back(1);
         }
 
+        if constexpr (num_socket_pages == 0) {
+            // Metadata-only: no DRAM payload. Emit a single empty token page per transfer so the
+            // writer's metadata push stays gated behind this transfer's write_ack (the reader/writer
+            // split otherwise decouples the ack-wait from the socket push).
+            while (!data_cbuf.pages_reservable_at_back(1)) {
+                invalidate_l1_cache();
+                if (termination_semaphore[0] == 1) {
+                    terminated = true;
+                    break;
+                }
+            }
+            if (!terminated) {
+                data_cbuf.push_back(1);
+            }
+        }
+
         if (terminated) {
             break;
         }

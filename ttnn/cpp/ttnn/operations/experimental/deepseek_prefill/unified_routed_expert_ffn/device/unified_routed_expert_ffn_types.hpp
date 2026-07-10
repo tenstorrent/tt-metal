@@ -30,6 +30,16 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 // below and re-checking the per-core L1 budget.
 inline constexpr uint32_t MAX_GLOBAL_EXPERTS = tt::constants::TILE_HW;  // 1024
 
+// Per-expert FFN activation variant. Selected at the op boundary and baked into
+// the compute kernel via a compile-time define, so each variant caches as a
+// distinct program. For SwiGluOai the alpha/limit are baked to the M3/gpt-oss
+// values (1.702 / 7.0, SwiGLUConfigGPTOSS) in the kernel — no extra params.
+enum class RoutedExpertActivation : uint8_t {
+    Silu = 0,  // plain SiLU SwiGLU: silu(gate) * up                      (DeepSeek default)
+    SwiGluOai =
+        1,  // clamped swigluoai: (clamp(up,±L)+1)·clamp(gate,max=L)·σ(α·clamp(gate,max=L))  (MiniMax-M3 / gpt-oss)
+};
+
 // Attributes (the constants known at host time).
 struct UnifiedRoutedExpertFfnParams {
     // The compute kernel chunks the M axis into pieces of this many tiles so a
@@ -42,10 +52,15 @@ struct UnifiedRoutedExpertFfnParams {
     // counts[global_id]).
     uint32_t local_expert_id = 0;
 
+    // Activation variant (see RoutedExpertActivation). Default Silu = DeepSeek
+    // path, kernel unchanged. SwiGluOai drives the SWIGLU_OAI compile-time define
+    // in the compute kernel.
+    RoutedExpertActivation activation = RoutedExpertActivation::Silu;
+
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id); }
+    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "activation");
+    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, activation); }
 };
 
 // Tensors fed into the op.
