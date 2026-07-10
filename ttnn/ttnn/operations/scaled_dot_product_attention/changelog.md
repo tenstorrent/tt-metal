@@ -165,3 +165,65 @@
   scale, causal==explicit-triangular-mask equivalence, non-aligned S_q
   (best-effort), `{causal, cross}` EXCLUSION refusal, and `is_causal`+`attn_mask`
   ValueError. 23 pass, 1 skip (fp32 D≥128 OOM — R4 scope).
+
+## Refinement 4 — L1 budget fit for large head_dim
+- **Date**: 2026-07-10
+- **What was done**: Made the per-core L1 CB footprint fit the ~1.5 MB budget for
+  every tested head_dim (D <= 1024), so the op stops OOMing at program launch on
+  the head-dim-scaling cells `Q(1,1,128,{256,512,1024})` (and D=128 fp32/bf8b,
+  and D=128 multi-head/batch). **Host/descriptor-only change — no compute or
+  dataflow kernel edit** (the kernels were already fully parameterized by the
+  compile-time `q_chunk_t`/`kv_chunk_t` and never assumed a buffer count). Two
+  levers, per `/memory-budget-metal`:
+  - **Single-buffer every compute->compute CB** (`cb_pv`, `cb_o_run`, `cb_o_new`,
+    `cb_masked`, `cb_scores`, `cb_probs`, `cb_m_cur/m_run/m_new/corr/l_cur/l_run`,
+    `cb_l_new`, `cb_l_inv`). Producer and consumer are the one compute thread
+    running strictly sequentially, so the design's 2x buffering bought no
+    pipelining — it just doubled the Dt-scaling fp32 O-CBs (43% of the D=256
+    footprint). §4.2 of the skill: these are correctly sized at one block. Only
+    genuine cross-thread pipes stay double-buffered: `cb_k`/`cb_v`
+    (reader->compute prefetch) and `cb_out` (compute->writer). Verified
+    numerically inert (same helpers, same DEST accumulation order → byte-identical
+    values); the whole existing suite stayed green.
+  - **Host-adaptive chunk/buffer selection**: a `_project_footprint(qcb, kcb,
+    db_kv)` mirrors the CB list byte-for-byte; the descriptor picks the largest
+    chunk `C in {4..1}` (and drops the KV reader double-buffer to single only if
+    still tight) whose projected footprint <= `L1_BUDGET - 96 KB`. Large head_dim
+    -> smaller Q/KV chunks (more, smaller blocks); the online-softmax recurrence
+    is exact for any block count, so this is a pure work-granularity knob. Small-D
+    cells still select C=4/db=2 (unchanged). fp32 D=1024 lands at C=1/db=1
+    (~1.23 MB); bf16 D=1024 at C=1/db=2 (~0.96 MB).
+- **Bound on the fix**: CBs are bounded by the L1-budget target via the host block
+  knob (skill §5) for all `Dt <= ~32` (D <= 1024) across all three dtypes — the
+  entire golden universe (head_dim capped at 1024 per `feature_spec.py`). It is
+  not asymptotically constant in Dt: the running-output CB `cb_o_run` is inherently
+  `q_chunk_t*Dt` wide (all D columns of O must persist across the KV loop), so
+  D >= 2048 at C=1 would still exceed budget. Truly constant-in-Dt would require a
+  D-outer-loop O-accumulation restructure (recompute QK^T/softmax per output-D
+  block) — a large algorithm change with no tested cell that needs it. The
+  `for/else` floor leaves C=1 selected and lets program launch raise the honest
+  OOM past the envelope rather than hiding it.
+- **Accuracy achieved**: PCC >= 0.9999 for bf16/fp32 and >= 0.99 for bf8b across
+  D in {256,512,1024} x {none,custom,causal} x {auto,explicit}. Measured on the
+  head-dim-scaling shapes: bf16 D=1024 none PCC=0.999989, fp32 D=1024 PCC=0.999998,
+  bf16 D=1024 custom-mask PCC=0.999982, explicit scale PCC=0.99996.
+- **Golden test progress**: `test_golden.py` **1800 passed / 0 failed / 468
+  xfailed / 1 skipped** (132s, no hang) — **all 146 previously-OOM cells now
+  pass**, 0 xpass-drift. Full suite (test_golden + test_regression, excl.
+  test_translated) 1829 passed / 10 failed / 468 xfailed (127s, no hang). The 10
+  failures are all `test_regression.py` bf16 tile_aligned D=64 precision cases
+  (large_magnitude / uniform / negative) — 29 passed / 10 failed, **identical to
+  the R3 baseline**, numerically inert to the buffer-count change (D=64 keeps
+  C=4). Not head-dim related; documented pre-existing at R1/R2/R3.
+- **Issues encountered**: None. Single-buffering caused no corruption or deadlock
+  (the persistent m/l/O run CBs are emptied by their update-chain reads before the
+  commit copy reserves — 1x is exactly one block, which is what the sequential
+  producer/consumer needs). The fix landed correct on the first device run.
+- **SUPPORTED change**: none. Per the refinement goal, head_dim size is a resource
+  boundary, not a kernel branch — no axis added, no `shape_size` tagger (that would
+  only hide the gap). The previously-OOM cells were already `supported` (validate()
+  accepted them; they failed at program build), so they need no gate change — they
+  simply pass now.
+- **Tests added**: `test_scaled_dot_product_attention_large_head_dim.py` — 29
+  cases: (D=128..1024 x bf16/fp32/bf8b build+PCC), (D=256/512/1024 x
+  none/custom/causal), (D=1024 x auto/explicit scale). All pass.

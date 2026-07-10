@@ -93,3 +93,9 @@
 {"source":"tt-probe","pid":1774572,"started_at_ms":1783704300159,"wait_ms":181,"run_ms":16481,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"tt-probe","pid":1776273,"started_at_ms":1783704658372,"wait_ms":194,"run_ms":42482,"test_path":"scaled_dot_product_attention","exit_code":0}
 {"source":"run_safe_pytest","pid":1777286,"started_at_ms":1783704708562,"wait_ms":2,"run_ms":9713,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1778890,"started_at_ms":1783704749062,"wait_ms":2,"run_ms":25095,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/","exit_code":0}
+{"source":"run_safe_pytest","pid":1779763,"started_at_ms":1783704779799,"wait_ms":2,"run_ms":25178,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/","exit_code":0}
+{"source":"run_safe_pytest","pid":1780527,"started_at_ms":1783704814412,"wait_ms":2,"run_ms":120024,"test_path":"--ignore=eval/golden_tests/scaled_dot_product_attention/test_translated.py","exit_code":143}
+{"source":"run_safe_pytest","pid":1781859,"started_at_ms":1783704940497,"wait_ms":2,"run_ms":167712,"test_path":"--ignore=eval/golden_tests/scaled_dot_product_attention/test_translated.py","exit_code":1}
+{"source":"run_safe_pytest","pid":1783042,"started_at_ms":1783705133476,"wait_ms":2,"run_ms":163380,"test_path":"eval/golden_tests/scaled_dot_product_attention/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":1785236,"started_at_ms":1783705359742,"wait_ms":2,"run_ms":17315,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention_large_head_dim.py","exit_code":0}

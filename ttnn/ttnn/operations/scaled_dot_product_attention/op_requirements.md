@@ -117,7 +117,7 @@ path. Work from `op_design.md` §196 (Refinements & Rules → mask_mode=causal).
 **Done when**: the `mask_mode=causal` xfail cells for bf16 tile-aligned pass, and the
 `{causal, cross}` cells remain properly rejected (xfail via the new EXCLUSION).
 
-### [ ] Refinement 4 — L1 budget fit for large head_dim
+### [x] Refinement 4 — L1 budget fit for large head_dim
 
 **Goal**: rewrite the QKᵀ / PV data flow so the per-core L1 CB footprint is bounded
 regardless of `Dt` (head_dim tiles), so the op stops OOMing on the head-dim-scaling
