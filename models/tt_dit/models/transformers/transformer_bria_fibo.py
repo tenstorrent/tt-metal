@@ -19,6 +19,7 @@ from ...layers.linear import ColParallelLinear, Linear
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils import cache
+from ...utils.matmul import register_matmul_configs
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 from ...utils.tensor import bf16_tensor
@@ -29,6 +30,52 @@ if TYPE_CHECKING:
 
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
+
+
+# FIBO denoise matmul blockings tuned via models/tt_dit/utils/sweep_mm_block_sizes.py on the
+# 2x2 Blackhole mesh (sp=2/tp=2), 12x10 compute grid. Every FIBO block matmul takes the
+# non-AGMM minimal_matmul path, so a per-shape MinimalMatmulConfig replaces the generic (8,8,8)
+# fallback. Keyed by (M, K, N) under the runtime grid; additive (register_matmul_configs merges by
+# shape) so it cannot affect other models, whose (M, K, N) differ. Two (M, K, N) collide across use
+# cases (proj_mlp "plain" vs ff1 "plain_gelu"); the block is chosen to minimize the op-count-weighted
+# total (proj_mlp runs ~38x/forward vs ff1 ~8x). Regenerate with the bh_2x2 sweep if shapes change.
+_FIBO_MM_CONFIGS_REGISTERED = False
+
+
+def _register_fibo_matmul_configs() -> None:
+    global _FIBO_MM_CONFIGS_REGISTERED
+    if _FIBO_MM_CONFIGS_REGISTERED:
+        return
+    register_matmul_configs(
+        {
+            "12x10": {
+                # (M, K, N): (M_block, K_block, N_block, (subblock_h, subblock_w))
+                (2048, 7680, 3072): (4, 5, 14, (2, 2)),  # single proj_out spatial
+                (2048, 3072, 6144): (4, 4, 16, (2, 2)),  # ff1 (gelu) / proj_mlp spatial (weighted pick)
+                (2048, 6144, 3072): (4, 4, 10, (2, 2)),  # ff2 spatial
+                (2048, 3072, 4608): (4, 4, 15, (4, 1)),  # to_qkv spatial
+                (2048, 3072, 1536): (6, 3, 5, (3, 1)),  # attn to_out spatial
+                (2048, 3072, 64): (3, 8, 2, (3, 1)),  # final proj_out
+                (2048, 64, 1536): (16, 2, 5, (4, 1)),  # x_embedder
+                (128, 7680, 3072): (2, 8, 14, (2, 2)),  # single proj_out prompt
+                (128, 3072, 6144): (4, 3, 16, (2, 2)),  # proj_mlp / ff1 prompt (weighted pick)
+                (128, 6144, 3072): (2, 4, 8, (2, 2)),  # ff2 prompt
+                (128, 3072, 4608): (2, 3, 15, (1, 3)),  # to_qkv prompt
+                (128, 3072, 1536): (2, 8, 4, (2, 2)),  # attn to_add_out prompt
+                (128, 4096, 1536): (2, 8, 4, (2, 2)),  # context_embedder
+                (128, 2048, 1536): (2, 8, 4, (2, 2)),  # caption_projection
+                (32, 3072, 9216): (4, 4, 8, (2, 2)),  # norm1 modulation
+                (32, 3072, 6144): (2, 2, 16, (2, 2)),  # time_embed_out
+                (32, 3072, 4608): (2, 3, 14, (2, 2)),  # single time_embed
+                (32, 3072, 3072): (2, 4, 14, (2, 2)),  # timestep_embedder linear_2
+                (32, 256, 3072): (2, 2, 8, (2, 2)),  # timestep_embedder linear_1
+            },
+        }
+    )
+    _FIBO_MM_CONFIGS_REGISTERED = True
+
+
+_register_fibo_matmul_configs()
 
 
 class BriaFiboTextProjection(Module):
