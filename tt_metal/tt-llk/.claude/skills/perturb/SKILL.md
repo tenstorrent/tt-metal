@@ -86,7 +86,7 @@ Maintain a single report file recording, **per actor and per position**, the cou
 
 **Write it INCREMENTALLY — create the file when the first sweep starts and REWRITE it as soon as EACH actor finishes its full sweep, never only once at the very end.** The full `unpack → math → pack → reader → writer` sweep is long (an actor can take hours), and the user may stop early to start working from partial results — so after any actor completes, the file must already hold every result gathered so far. Mark which actors are done vs still pending each time you rewrite it, so a partial file is unambiguous.
 
-**File name & git:** use the canonical name `perturb_report.md` (or `perturb_report_<op>.md`). The report is a generated artifact and is **git-ignored** via the `perturb_report*.md` rule in the repo `.gitignore`, so it is never committed — keep the `perturb_report` prefix so the ignore rule matches.
+**File name & location:** use the canonical name `perturb_report.md` (or `perturb_report_<op>.md`). It is a generated artifact — write it **outside the tracked repo tree** (e.g. beside the checkout or in a scratch/tmp dir), not inside `tt-llk`, so it can't be committed by accident. There is **no `.gitignore` rule** for it (deliberately — we don't add report-file globs to the repo `.gitignore`); if you do place it inside the repo, do not `git add` it and do not add an ignore rule for it.
 
 **Then PROMPT the user**: ask whether to minimize the test around a chosen max-error scenario. **Do not auto-minimize.** Only minimize when the user asks, and keep iterating on the user's direction.
 
