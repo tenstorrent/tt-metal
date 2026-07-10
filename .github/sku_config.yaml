@@ -174,7 +174,7 @@ skus:
     runs_on:
       - BH-Quietbox-2
       - pipeline-perf
-      - in-service
+      - qb2-120-p03t04
     weights-cache-mode: yyz4-mnt-models
 
   bh_quietbox_2_iommu:
