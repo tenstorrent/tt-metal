@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-[DRAFT / WIP — gpt-oss] Single-device PCC *spec* test for **expert biases** in the fused
+[gpt-oss] Single-device PCC tests for **expert biases** in the fused
 ``unified_routed_expert_ffn`` op.
 
 gpt-oss MoE experts add a learned bias to the gate, up, AND down projections — unlike
-DeepSeek-V3 / MiniMax-M3, which are bias-free (so the fused op was never given bias support).
-Target behaviour (clamped SwiGLU-OAI, limit=7.0, alpha=1.702):
+DeepSeek-V3 / MiniMax-M3, which are bias-free. The fused kernel adds gate/up bias BEFORE the
+SwiGLU-OAI clamp and down bias AFTER the down matmul. Target behaviour (clamped SwiGLU-OAI,
+limit=7.0, alpha=1.702):
 
     gate = x @ gate_proj.T + gate_bias
     up   = x @ up_proj.T   + up_bias
@@ -17,10 +18,17 @@ Target behaviour (clamped SwiGLU-OAI, limit=7.0, alpha=1.702):
     act  = (up + 1) * gate * sigmoid(alpha * gate)
     out  = act @ down_proj.T + down_bias
 
-The fused op currently has NO bias support. The device test below *specifies* the target so
-the kernel work has a golden to hit; it is SKIPPED until bias fusion (and the ``TtRoutedExpert``
-bias API shown here) land — tracked in this PR. The host-only reference smoke test is NOT
-skipped, so the reference math (and the exact gpt-oss expert formula) is guarded meanwhile.
+Coverage (all single-chip; no multi-device mesh required):
+  - ``test_gptoss_bias_routed_expert``   — 1 expert, gate/up/down bias vs a torch reference.
+  - ``test_gptoss_bias_multi_expert``    — several experts on one chip, each with its own
+    weights+biases and a *different* token count, laid out ``max_tokens`` apart like the real
+    dispatch buffer. Exercises the per-expert bias-list wiring (``gate_biases[i]`` <-> expert i)
+    and the device-side per-expert count bounding.
+  - ``test_gptoss_bias_torch_reference_smoke`` — host-only; guards the reference math.
+
+Cross-device EP (mesh > 1) is intentionally not covered here (needs a Galaxy / multi-Blackhole
+box); the kernel is per-core / EP-agnostic and the bias mesh-distribution reuses the proven
+weight gather + mapper.
 """
 
 import pytest
@@ -132,6 +140,108 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
 def test_gptoss_bias_routed_expert(mesh_device, device_params, num_tokens):
     """gpt-oss expert biases (gate/up/down) + SwiGLU-OAI vs torch. SPEC — skipped until kernel support lands."""
     run_bias_routed_expert(mesh_device, num_tokens=num_tokens, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
+
+
+# Multiple experts on ONE chip. Different real token count per expert (all multiples of TILE=32,
+# all < max) so the device-side count bounding is exercised alongside the per-expert bias wiring.
+MULTI_EXPERT_PARAMS = [
+    pytest.param([128, 256, 64, 160], id="e4"),
+]
+
+
+def run_multi_expert_bias(mesh_device, counts, emb_dim, hidden_dim):
+    """N experts on 1 chip, each with its own weights+biases and token count.
+
+    Regions are laid out ``max_tokens`` apart (the production dispatch-buffer layout): expert e's
+    real tokens occupy the first ``counts[e]`` rows of its region, the rest is slack (random here,
+    to prove it is never read). The op mutates the shared buffer in place; each expert's output
+    lands back in ``[offset_e, offset_e + counts[e])`` and is compared to its own torch reference.
+    """
+    torch.manual_seed(123)
+    num_experts = len(counts)
+    max_tokens = max(counts)
+    offsets = [e * max_tokens for e in range(num_experts)]
+    total_rows = num_experts * max_tokens
+
+    weights_list, biases_list, inputs = [], [], []
+    for _ in range(num_experts):
+        weights_list.append(
+            {
+                "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.08,
+                "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.08,
+                "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.05,
+            }
+        )
+        biases_list.append(
+            {
+                "gate_proj_bias": torch.randn(hidden_dim, dtype=torch.float32) * 0.5,
+                "up_proj_bias": torch.randn(hidden_dim, dtype=torch.float32) * 0.5,
+                "down_proj_bias": torch.randn(emb_dim, dtype=torch.float32) * 0.5,
+            }
+        )
+
+    # Shared dispatched buffer: random slack (must be ignored) + each expert's input tokens.
+    buf = torch.randn(total_rows, emb_dim, dtype=torch.float32)
+    for e in range(num_experts):
+        x_e = torch.randn(counts[e], emb_dim, dtype=torch.float32)
+        inputs.append(x_e)
+        buf[offsets[e] : offsets[e] + counts[e]] = x_e
+
+    with torch.no_grad():
+        expected = [
+            _torch_swigluoai_expert_with_bias(inputs[e], weights_list[e], biases_list[e]) for e in range(num_experts)
+        ]
+
+    tt_buf = ttnn.from_torch(
+        buf,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+    )
+
+    def _idx(values):
+        return ttnn.from_torch(
+            torch.tensor(values, dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint32,
+        )
+
+    tt_expert = TtRoutedExpert(
+        mesh_device=mesh_device,
+        experts_per_chip=num_experts,
+        global_expert_idx_table=_idx(list(range(num_experts))),
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_tokens,
+        torch_weights=weights_list,
+        torch_biases=biases_list,
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+        activation=ttnn.RoutedExpertActivation.SwiGluOai,
+    )
+
+    tt_out = tt_expert(tt_buf, _idx(counts), _idx(offsets))
+    out_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    for e in range(num_experts):
+        region = out_torch[offsets[e] : offsets[e] + counts[e]]
+        passing, pcc = comp_pcc(expected[e], region, 0.97)
+        logger.info(f"multi-expert bias: expert {e} count={counts[e]} PCC={pcc}")
+        assert not torch.isnan(region).any(), f"expert {e} output contains NaN"
+        assert not torch.isinf(region).any(), f"expert {e} output contains Inf"
+        assert passing, f"expert {e} PCC below threshold: {pcc}"
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize("counts", MULTI_EXPERT_PARAMS)
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+def test_gptoss_bias_multi_expert(mesh_device, device_params, counts):
+    """Several experts on one chip (per-expert bias wiring + count bounding), gpt-oss dims."""
+    run_multi_expert_bias(mesh_device, counts=counts, emb_dim=GPT_OSS_EMB, hidden_dim=GPT_OSS_HIDDEN)
 
 
 def test_gptoss_bias_torch_reference_smoke():
