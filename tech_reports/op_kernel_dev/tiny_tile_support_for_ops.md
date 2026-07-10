@@ -11,6 +11,8 @@ This guide generalizes the changes made to enable non-standard (tiny) tiles in t
 
 ---
 
+
+
 ## What “tiny tile” means here
 
 - Standard tile: `32×32` (`tt::constants::TILE_HEIGHT` × `tt::constants::TILE_WIDTH`).
@@ -19,20 +21,28 @@ This guide generalizes the changes made to enable non-standard (tiny) tiles in t
 
 ---
 
+
+
 ## Failure modes if you skip a step
 
-| Mistake | Typical symptom |
-| --- | --- |
-| `PageConfig(layout)` instead of `tensor_spec().page_config()` | Output L1 bank / page size assumes 32×32; undersized vs CB sized from real tile → corruption or alloc failures |
-| `tt::tile_size(format)` instead of `tile.get_tile_size(format)` | Wrong page / unit size for tiny tiles |
-| Hardcoded `TILE_HEIGHT` / `TILE_WIDTH` / `TILE_HW` in unit counts | Wrong number of tiles per shard / row / height |
-| CB format descriptor without `.tile = TileDescriptor(...)` | JIT `get_tile_size(cb)` / unpack strides fall back to 32×32 → L1 stride corruption |
-| Program hash omits tile H/W | Cache hit reuses a 32×32 program for a tiny-tile tensor |
-| Validation still requires 32×32 height | Op rejects valid tiny-tile inputs before the factory runs |
+
+| Mistake                                                           | Typical symptom                                                                                                |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `PageConfig(layout)` instead of `tensor_spec().page_config()`     | Output L1 bank / page size assumes 32×32; undersized vs CB sized from real tile → corruption or alloc failures |
+| `tt::tile_size(format)` instead of `tile.get_tile_size(format)`   | Wrong page / unit size for tiny tiles                                                                          |
+| Hardcoded `TILE_HEIGHT` / `TILE_WIDTH` / `TILE_HW` in unit counts | Wrong number of tiles per shard / row / height                                                                 |
+| CB format descriptor without `.tile = TileDescriptor(...)`        | JIT `get_tile_size(cb)` / unpack strides fall back to 32×32 → L1 stride corruption                             |
+| Program hash omits tile H/W                                       | Cache hit reuses a 32×32 program for a tiny-tile tensor                                                        |
+| Validation still requires 32×32 height                            | Op rejects valid tiny-tile inputs before the factory runs                                                      |
+
 
 ---
 
+
+
 ## Checklist (apply in this order)
+
+
 
 ### 1. Validation: allow tiny height, keep width (and dtype) constraints
 
@@ -87,20 +97,24 @@ This is required for both sharded and interleaved outputs that should inherit th
 
 Replace every use of global tile constants with the tensor’s tile:
 
-| Old (32×32-only) | New (tile-aware) |
-| --- | --- |
-| `tt::tile_size(data_format)` | `tile.get_tile_size(data_format)` |
-| `shard_h / TILE_HEIGHT` | `shard_h / tile.get_height()` |
-| `shard_w / TILE_WIDTH` | `shard_w / tile.get_width()` |
-| `numel / TILE_HW` | `numel / tile.get_tile_hw()` |
-| `padded_w / TILE_WIDTH` | `padded_w / tile.get_width()` |
+
+| Old (32×32-only)                  | New (tile-aware)                        |
+| --------------------------------- | --------------------------------------- |
+| `tt::tile_size(data_format)`      | `tile.get_tile_size(data_format)`       |
+| `shard_h / TILE_HEIGHT`           | `shard_h / tile.get_height()`           |
+| `shard_w / TILE_WIDTH`            | `shard_w / tile.get_width()`            |
+| `numel / TILE_HW`                 | `numel / tile.get_tile_hw()`            |
+| `padded_w / TILE_WIDTH`           | `padded_w / tile.get_width()`           |
 | `volume / padded_w / TILE_HEIGHT` | `volume / padded_w / tile.get_height()` |
+
 
 Also:
 
 - Assert shard shape (or shard numel) is divisible by the **actual** tile dimensions.
 - Keep separate `input_tile` / `output_tile` when dtype conversion can change format but tile shape must still match.
 - Audit **shared helpers** used by the op (e.g. slice starting index from tile grid) the same way—any `TILE_HEIGHT` / `TILE_WIDTH` there will break multi-slice or partial paths.
+
+
 
 ### 4. Circular buffers: attach `TileDescriptor` on TILE-layout CBs
 
@@ -121,6 +135,8 @@ void push_cb(..., std::optional<Tile> tile = std::nullopt) {
 ```
 
 Pass the tile into **all** TILE-layout CBs for the op (input, output, and scratch CBs that carry tiled pages). ROW_MAJOR paths can leave `tile` as `nullopt`.
+
+Keep the changes to the existing code as minimal as possible. For example if format_desc is not explicitly instantiated in th original code, then keep it like that.
 
 ### 5. Program hash: include tile height and width
 
@@ -146,6 +162,8 @@ Still verify:
 - Compile-time args that encode tile geometry are either unused or updated from the host tile.
 - Compute kernels (pack/unpack, face layout, untilize/tilize) may need extra work; do not assume this checklist alone is sufficient for those ops.
 
+
+
 ### 7. Tests
 
 - Keep existing 32×32 coverage green.
@@ -154,6 +172,8 @@ Still verify:
 - Confirm blocked dtypes with tiny height fail validation with a clear message (if that restriction applies).
 
 ---
+
+
 
 ## Suggested search terms when auditing an op
 
@@ -174,6 +194,8 @@ Touch every hit in the op’s device operation, program factory(ies), and any sh
 
 ---
 
+
+
 ## Minimal change surface (typical data-movement op)
 
 1. `*_device_operation.cpp` / `*_op.cpp` — validate, `compute_output_specs`, `compute_program_hash`
@@ -184,6 +206,8 @@ Touch every hit in the op’s device operation, program factory(ies), and any sh
 Kernels often stay unchanged for copy-style ops once (1)–(3) are correct.
 
 ---
+
+
 
 ## Out of scope / follow-ups
 
