@@ -51,5 +51,5 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
  */
 template <PoolType type, ReduceDim dim, bool is_int_fpu_en = false>
 inline void llk_math_reduce(const std::uint32_t dst_index) {
-    _llk_math_reduce_<type, dim, is_int_fpu_en>(dst_index);
+    _llk_math_reduce_<type, dim, is_int_fpu_en>(dst_index, ckernel::DEFAULT_TENSOR_SHAPE);
 }
