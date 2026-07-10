@@ -132,6 +132,10 @@ def _mean(values):
 
 
 def run(*, seq_len, non_aligned_len, num_layers, max_seq_len, iters, output_json):
+    initial_environment = {
+        name: os.environ.get(name, "<unset>")
+        for name in (FLAG, "TT_METAL_WATCHER", "TT_METAL_WATCHER_DISABLE_ETH", "TT_METAL_WATCHER_APPEND")
+    }
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4))
     try:
@@ -230,6 +234,7 @@ def run(*, seq_len, non_aligned_len, num_layers, max_seq_len, iters, output_json
             "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
             "command": shlex.join(sys.argv),
             "checkpoint": CKPT,
+            "initial_environment": initial_environment,
             "hardware": {
                 "architecture": "Blackhole",
                 "system": "P150x4 QB2",
