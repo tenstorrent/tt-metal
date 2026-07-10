@@ -413,6 +413,8 @@ class TtPrefillBlock(LightweightModule):
         return_kv_intermediates: bool = False,
         actual_isl: Optional[int] = None,
         padding_side: str = "right",
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
         index_kv_cache: Optional[ttnn.Tensor] = None,
     ):
         """
@@ -452,11 +454,18 @@ class TtPrefillBlock(LightweightModule):
             actual_start=actual_start,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
+            indexer_indices=indexer_indices,
+            return_indexer_indices=return_indexer_indices,
             index_kv_cache=index_kv_cache,
         )
         kv_intermediates = None
-        if return_kv_intermediates:
+        mla_indices = None  # GLM-5.2 reuse: this layer's top-k indices (full layer) for downstream shared layers
+        if return_kv_intermediates and return_indexer_indices:
+            mla_out, kv_intermediates, mla_indices = mla_out
+        elif return_kv_intermediates:
             mla_out, kv_intermediates = mla_out
+        elif return_indexer_indices:
+            mla_out, mla_indices = mla_out
         ttnn.deallocate(attn_norm_out)
 
         # Chunked-prefill migration handoff. MLA's update_padded_kv_cache wrote this chunk as full
@@ -484,6 +493,8 @@ class TtPrefillBlock(LightweightModule):
             # KV cache filled (by MLA), migration callback fired. The block
             # output is unused (no FFN, no further layers). Return (None, None)
             # so the transformer can short-circuit.
+            if return_indexer_indices:
+                return None, None, None
             return None, None
 
         x = ttnn.add(x, mla_out)
@@ -513,9 +524,13 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(ffn_out)
 
         if return_kv_intermediates:
+            if return_indexer_indices:
+                return x, kv_intermediates, mla_indices
             return x, kv_intermediates
 
         kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
+        if return_indexer_indices:
+            return x, kv_cache, mla_indices
         return x, kv_cache
 
     def _moe_path(

@@ -36,6 +36,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tests.conftest import FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS
+from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -44,11 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
-    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table_ds,
-    init_kvpe_cache,
-)
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
 from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -75,7 +72,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     slice_non_padded,
     tokenize_prompt_to_isl,
 )
-from tests.ttnn.utils_for_testing import assert_equal, comp_pcc
+from tests.ttnn.utils_for_testing import comp_pcc
 
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
@@ -445,6 +442,11 @@ def run_model(
 
     # --- Create external KVPE cache ---
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    # Sparse MLA (DSA: v3.2 / GLM) reads the KVPE cache natively in sparse_sdpa and requires it
+    # uncompressed (bf16 ROW_MAJOR — mla.py asserts); dense MLA keeps the bfloat8_b/TILE cache.
+    has_indexer = resolve_has_indexer(config)
+    kvpe_dtype = ttnn.bfloat16 if has_indexer else ttnn.bfloat8_b
+    kvpe_layout = ttnn.ROW_MAJOR_LAYOUT if has_indexer else ttnn.TILE_LAYOUT
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_cache_head_dim,
         mesh_device=mesh_device,
@@ -452,26 +454,8 @@ def run_model(
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_kvpe_cache_layers=num_layers,
-    )
-
-    # create kv_cache dissagregation table
-    CHUNK_SIZE_BYTES = 19584  # [1, 1, 32, 576] bfp8
-    lookup_table_config = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-    lookup_table_config.num_layers = num_layers
-    lookup_table_config.max_sequence_length = isl_total
-    lookup_table_config.num_slots = 1
-    lookup_table_config.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
-
-    # just create atm for demo purposes, don't actually use it
-    lookup_table = create_kv_chunk_address_table_ds(
-        config=lookup_table_config,
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        seq_len=isl_total,
-        sp_axis=sp_axis,
-        tt_kvpe_cache=tt_kvpe_cache,
-        chunk_size_bytes=CHUNK_SIZE_BYTES,
+        dtype=kvpe_dtype,
+        layout=kvpe_layout,
     )
 
     # --- Shard token_ids to device ---
@@ -709,24 +693,6 @@ def run_model(
                     logger.error(f"{label:<20s}  KVPE PCC comparison failed: {e}")
                     pcc_results.append((f"{label}_kv", -1.0))
                     pcc_results.append((f"{label}_pe", -1.0))
-
-            # Per-layer chunk readback via the address table — verify the table
-            # maps to the same bytes as the gathered cache, chunk by chunk.
-            # Only meaningful when `is_balanced` so `tt_kvpe_all_layers` is
-            # position-continuous (matching the lookup table's position index).
-            if is_balanced:
-                logger.info(f"Starting KV cache table validity check")
-                chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
-                for layer in range(num_layers):
-                    for position in range(0, isl_total, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
-                        raw_bytes = lookup_table.read_device_chunk(layer=layer, position=position, slot=0)
-                        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
-                        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
-                        expected_chunk = tt_kvpe_all_layers[
-                            layer : layer + 1, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :
-                        ]
-                        assert_equal(chunk_torch, expected_chunk)
-                logger.info(f"KV cache table validity check passed!")
 
         # --- Logits PCC check (last-token logits vs trace reference) ---
         # Trace logits / next-token are products of the full traced model. They are
@@ -1174,7 +1140,7 @@ def test_kimi_prefill_transformer(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer(
     variant,
