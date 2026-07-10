@@ -5,6 +5,7 @@
 #include "unified_routed_expert_ffn_device_operation.hpp"
 
 #include <initializer_list>
+#include <tuple>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -219,6 +220,42 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                 out_shape[-2] == x_shape[-2], "optional_output M ({}) must match x M ({})", out_shape[-2], x_shape[-2]);
         }
     }
+
+    // Optional expert biases (gpt-oss). All-or-none: gate/up/down together or
+    // none. gate/up bias last dim == gate/up N (hidden); down bias last dim ==
+    // down N (emb). Same device / TILE / DRAM-interleaved contract as weights.
+    const int bias_count = static_cast<int>(t.gate_bias.has_value()) + static_cast<int>(t.up_bias.has_value()) +
+                           static_cast<int>(t.down_bias.has_value());
+    TT_FATAL(
+        bias_count == 0 || bias_count == 3,
+        "gate/up/down biases must all be provided together or all omitted (got {} of 3)",
+        bias_count);
+    if (bias_count == 3) {
+        for (const auto& [name, b, expected_n] :
+             std::initializer_list<std::tuple<const char*, const ttnn::Tensor&, uint32_t>>{
+                 {"gate_bias", *t.gate_bias, static_cast<uint32_t>(gate_shape[-1])},
+                 {"up_bias", *t.up_bias, static_cast<uint32_t>(up_shape[-1])},
+                 {"down_bias", *t.down_bias, static_cast<uint32_t>(down_shape[-1])}}) {
+            TT_FATAL(b.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+            TT_FATAL(b.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout", name);
+            TT_FATAL(is_dram_interleaved(b), "{} must be DRAM-interleaved", name);
+            TT_FATAL(
+                static_cast<uint32_t>(b.padded_shape()[-1]) == expected_n,
+                "{} last dim ({}) must match its projection N ({})",
+                name,
+                b.padded_shape()[-1],
+                expected_n);
+        }
+        // WIP (gpt-oss): the host plumbing (API/prim/inputs/cache-key/validation)
+        // is in place, but the fused kernel does not add biases yet — the
+        // program-factory bias CBs, reader bias reads, and the compute-kernel
+        // broadcast-add are the remaining work. Fail loudly rather than silently
+        // dropping the bias. Tracked in PR #49619.
+        TT_FATAL(
+            !op.fuse_bias,
+            "unified_routed_expert_ffn: expert-bias fusion is not implemented yet (gpt-oss WIP). Bias tensors are "
+            "accepted and validated, but the fused kernel does not add them — do not rely on this path yet.");
+    }
 }
 
 void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
@@ -264,7 +301,10 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
-    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation) {
+    ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation activation,
+    const std::optional<ttnn::Tensor>& gate_bias,
+    const std::optional<ttnn::Tensor>& up_bias,
+    const std::optional<ttnn::Tensor>& down_bias) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -275,6 +315,7 @@ ttnn::Tensor unified_routed_expert_ffn(
             .read_x_at_offset = read_x_at_offset,
             .x_is_row_major = x_is_row_major,
             .activation = activation,
+            .fuse_bias = gate_bias.has_value(),
             .compute_kernel_config = compute_kernel_config},
         OperationType::tensor_args_t{
             .x = x,
@@ -284,7 +325,10 @@ ttnn::Tensor unified_routed_expert_ffn(
             .counts = counts,
             .global_expert_idx_table = global_expert_idx_table,
             .optional_output = optional_output,
-            .expert_region_offsets = expert_region_offsets});
+            .expert_region_offsets = expert_region_offsets,
+            .gate_bias = gate_bias,
+            .up_bias = up_bias,
+            .down_bias = down_bias});
 }
 
 }  // namespace ttnn::prim

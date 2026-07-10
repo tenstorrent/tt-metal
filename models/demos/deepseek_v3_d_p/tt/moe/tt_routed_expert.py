@@ -196,6 +196,7 @@ class TtRoutedExpert(LightweightModule):
         hidden_dim: int = 2 * 1024,
         max_tokens: int = 1600,
         torch_weights: list[dict] = None,
+        torch_biases: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
@@ -255,6 +256,19 @@ class TtRoutedExpert(LightweightModule):
                 "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
             )
         self.activation = activation
+
+        # Optional per-expert projection biases (gpt-oss). WIP: the op accepts,
+        # validates, and caches bias inputs, but the fused kernel does not add
+        # them yet (program-factory CBs + reader reads + compute broadcast-add
+        # are the remaining work — PR #49619). Guard so a caller can't silently
+        # get bias-free results. Wire the conversion + forward pass-through once
+        # the kernel supports bias.
+        if torch_biases is not None:
+            raise NotImplementedError(
+                "TtRoutedExpert expert-bias support is WIP (gpt-oss): the fused kernel does not add gate/up/down "
+                "biases yet. Tracked in PR #49619."
+            )
+        self.torch_biases = None
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
