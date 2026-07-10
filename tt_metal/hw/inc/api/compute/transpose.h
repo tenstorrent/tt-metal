@@ -151,7 +151,7 @@ ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
  * acquired state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
  *
  * NOTE: The loop implementation is transitional. In the future this for-loop must be folded into a
- * hardware MOP / REPLAY buffer (as already done on Quasar) so the whole block issues as a single
+ * hardware MOP / REPLAY buffer (as is being done for Quasar) so the whole block issues as a single
  * packed op; the blocking then lives in llk-lib without changing this signature. Tracked under the
  * Compute API Split effort (tt-metal#35739); the per-op push-down lands in tt-metal#47483.
  *

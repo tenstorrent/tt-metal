@@ -126,7 +126,7 @@ ALWI void copy_tile(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile
  * available on the compute engine.
  *
  * NOTE: In the future the blocking must be folded further into a hardware MOP / REPLAY buffer (as
- * already done on Quasar) inside llk-lib, so the whole block issues as a single packed op, without
+ * is being done for Quasar) inside llk-lib, so the whole block issues as a single packed op, without
  * changing this signature. Tracked under the Compute API Split effort (tt-metal#35739); the per-op
  * push-down lands in tt-metal#47485.
  *

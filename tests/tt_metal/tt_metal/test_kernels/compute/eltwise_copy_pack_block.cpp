@@ -29,9 +29,9 @@ void kernel_main() {
         tile_regs_acquire();
         tile_regs_wait();
 
-        copy_block(dfb::in, 0, 0, num_single_transfer);
+        copy_block(dfb::in, /* start_in_tile_index */ 0, /* start_dst_tile_index */ 0, num_single_transfer);
 
-        pack_block(0, dfb::out, num_single_transfer);
+        pack_block(/* ifrom_dst */ 0, dfb::out, num_single_transfer);
 
         tile_regs_commit();
         tile_regs_release();
