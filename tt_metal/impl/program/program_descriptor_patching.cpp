@@ -57,23 +57,9 @@ ResolvedBindings resolve_bindings(
     //     mapping them to the one shared address is always correct.  Keep the fast path.
     //
     // tensor_buffers is ordered inputs-first; the first num_input_buffers entries are inputs.
-    //
-    // A within-inputs repeat is only the ambiguous matmul(X, X) hazard when the repeated buffer
-    // is NOT also an output. If it IS an output, the repeat is an in-place op that carries its
-    // output tensor(s) in tensor_args (e.g. moreh_adamw's optional param_out/exp_avg_out): the
-    // aliasing slots are the SAME buffer by construction on every dispatch, so mapping them all to
-    // the one shared address is always correct — keep the fast path. We therefore need to know the
-    // output-region buffers up front, hence the two passes below.
     {
-        std::unordered_set<Buffer*> output_buffers;  // buffers appearing in the output/workload region
-        for (size_t i = num_input_buffers; i < tensor_buffers.size(); ++i) {
-            if (tensor_buffers[i] != nullptr) {
-                output_buffers.insert(tensor_buffers[i]);
-            }
-        }
-
-        std::unordered_set<Buffer*> input_seen;   // buffers seen in the input region
-        std::unordered_set<Buffer*> output_seen;  // buffers seen in the output/workload region
+        std::unordered_set<Buffer*> input_buffers;   // buffers seen in the input region
+        std::unordered_set<Buffer*> output_buffers;  // buffers seen in the output/workload region
         for (size_t i = 0; i < tensor_buffers.size(); ++i) {
             Buffer* buf = tensor_buffers[i];
             if (!buf) {
@@ -81,17 +67,11 @@ ResolvedBindings resolve_bindings(
             }
             const bool is_input = i < num_input_buffers;
             // An output/workload buffer that aliases an input is the safe in-place case — skip it.
-            if (!is_input && input_seen.contains(buf)) {
-                continue;
-            }
-            // A within-inputs repeat that is also an output is the safe in-place case (input written
-            // back out); the buffer is identical across dispatches, so patching the shared slot is
-            // correct. Skip it instead of bailing.
-            if (is_input && input_seen.contains(buf) && output_buffers.contains(buf)) {
+            if (!is_input && input_buffers.contains(buf)) {
                 continue;
             }
             // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
-            auto& seen = is_input ? input_seen : output_seen;
+            auto& seen = is_input ? input_buffers : output_buffers;
             if (!seen.insert(buf).second) {
                 return ResolvedBindings{};
             }
