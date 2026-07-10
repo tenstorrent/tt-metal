@@ -217,21 +217,16 @@ def create_chunk_masks_seq(chunk_size, device):
 
 
 def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
-    """Compute L^{-1} for a batch of lower triangular matrices using Neumann doubling.
+    """Batch L^{-1} for lower triangular L = D(I+N), N strictly lower, N^C=0.
 
-    Decomposes L = D (I + N) where D = diag(L), N = D^{-1}(L - D) strictly lower triangular.
-    Since N is nilpotent (N^C = 0), the Neumann series is exact:
-      (I + N)^{-1} = sum_{k=0}^{C-1} (-N)^k
-    Computed in ceil(log2(C)) doubling steps, then refined with 2 Newton-Schulz steps.
+    DEFAULT: Horner Neumann R = I + (-N)R (forward-substitution; stable for large ||N||).
+    LEGACY (QWEN_GDN_INV_DOUBLING=1): Neumann doubling + Newton-Schulz — stable only with
+    caller's damped L_mat (small ||N||); unstable on undamped form (||N||~19 -> fp32 overflow).
 
-    Args:
-        L: [batch, C, C] float32 lower triangular, positive diagonal
-        eye_1cc: [1, C, C] float32 identity (pre-allocated, broadcast to batch)
-    Returns:
-        L_inv: [batch, C, C] float32
+    Args: L [batch,C,C], eye_1cc [1,C,C]. Returns L_inv [batch,C,C].
     """
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
@@ -242,13 +237,12 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     batch = L.shape[0]
 
     D_mat = ttnn.multiply(L, eye_1cc, memory_config=mc)  # [batch, C, C]
-    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=mc)  # [batch, C]
-    D_inv = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C] all in (0, 1]
+    # keepdim -> D_inv_row is [batch, C, 1] straight from the reduce (no reshape+clone; the
+    # [batch,C]->[batch,C,1] reshape is a TILE relayout). Col form still needs one reshape.
+    D_diag = ttnn.sum(D_mat, dim=-1, keepdim=True, memory_config=mc)  # [batch, C, 1]
+    D_inv_row = ttnn.reciprocal(D_diag, memory_config=mc)  # [batch, C, 1] all in (0, 1]
     ttnn.deallocate(D_diag)
-    # Clone after reshape: ttnn.reshape returns a view sharing D_inv's buffer.
-    D_inv_row = ttnn.clone(ttnn.reshape(D_inv, [batch, C, 1], memory_config=mc), memory_config=mc)
-    D_inv_col = ttnn.clone(ttnn.reshape(D_inv, [batch, 1, C], memory_config=mc), memory_config=mc)
-    ttnn.deallocate(D_inv)
+    D_inv_col = ttnn.clone(ttnn.reshape(D_inv_row, [batch, 1, C], memory_config=mc), memory_config=mc)
 
     # N = D^{-1} (L - D) via row scaling
     L_strict = ttnn.subtract(L, D_mat, memory_config=mc)
@@ -256,55 +250,81 @@ def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):
     N = ttnn.multiply(D_inv_row, L_strict, memory_config=mc)
     ttnn.deallocate(L_strict)
 
-    # Neumann doubling: f(2n) = f(n) @ (I + P), P = (-N)^n
-    P = ttnn.neg(N, memory_config=mc)  # P = -N
-    ttnn.deallocate(N)
-    R = ttnn.add(eye_1cc, P, memory_config=mc)  # R = I - N = f(2)
-    P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)  # P = N^2
-    ttnn.deallocate(P)
-    P = P_new
-
-    n_steps = _math.ceil(_math.log2(C)) if C > 1 else 0
-    for _ in range(n_steps - 1):
-        I_plus_P = ttnn.add(eye_1cc, P, memory_config=mc)
-        R_new = ttnn.matmul(R, I_plus_P, memory_config=mc, compute_kernel_config=_hifi_cfg)
-        ttnn.deallocate(I_plus_P)
-        ttnn.deallocate(R)
-        R = R_new
-        P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+    # Block inverse (I+N)^{-1}. DEFAULT=Horner; legacy doubling behind QWEN_GDN_INV_DOUBLING=1.
+    # Doubling overflows fp32 when ||N||~19 (N^16 ~1e9); Horner matches FLA forward-substitution.
+    if _os.environ.get("QWEN_GDN_INV_DOUBLING", "0") != "0":
+        # LEGACY: doubling + Newton-Schulz; paired with damped L_mat under same flag.
+        P = ttnn.neg(N, memory_config=mc)  # P = -N
+        ttnn.deallocate(N)
+        R = ttnn.add(eye_1cc, P, memory_config=mc)  # R = I - N = f(2)
+        P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)  # P = N^2
         ttnn.deallocate(P)
         P = P_new
 
-    ttnn.deallocate(P)
+        n_steps = _math.ceil(_math.log2(C)) if C > 1 else 0
+        for _ in range(n_steps - 1):
+            I_plus_P = ttnn.add(eye_1cc, P, memory_config=mc)
+            R_new = ttnn.matmul(R, I_plus_P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            ttnn.deallocate(I_plus_P)
+            ttnn.deallocate(R)
+            R = R_new
+            P_new = ttnn.matmul(P, P, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            ttnn.deallocate(P)
+            P = P_new
+
+        ttnn.deallocate(P)
+
+        # L_inv = (I+N)^{-1} @ D^{-1} via column scaling
+        L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)
+        ttnn.deallocate(R)
+        ttnn.deallocate(D_inv_row)
+        ttnn.deallocate(D_inv_col)
+
+        # Newton-Schulz: X <- X(2I - LX)
+        for _ in range(2):
+            LX = ttnn.matmul(L, L_inv, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            two_I_minus_LX = ttnn.subtract(ttnn.add(eye_1cc, eye_1cc, memory_config=mc), LX, memory_config=mc)
+            ttnn.deallocate(LX)
+            L_inv_new = ttnn.matmul(L_inv, two_I_minus_LX, memory_config=mc, compute_kernel_config=_hifi_cfg)
+            ttnn.deallocate(two_I_minus_LX)
+            ttnn.deallocate(L_inv)
+            L_inv = L_inv_new
+
+        return L_inv
+
+    # DEFAULT: Horner R = I + (-N)@R
+    neg_N = ttnn.neg(N, memory_config=mc)  # -N (strictly lower)
+    ttnn.deallocate(N)
+    # Pre-broadcast eye to [batch,C,C] when batch>1 (~-4% prefill; batch==1 unchanged).
+    _eye = eye_1cc
+    if batch > 1:
+        _eye = ttnn.repeat(eye_1cc, ttnn.Shape([batch, 1, 1]))
+    R = ttnn.add(_eye, neg_N, memory_config=mc)  # R_1 = I - N  ([batch,C,C])
+    for _ in range(C - 2):  # R_1 -> R_{C-1} = sum (-N)^j (exact: N^C=0)
+        NR = ttnn.matmul(neg_N, R, memory_config=mc, compute_kernel_config=_hifi_cfg)  # (-N) @ R
+        R_new = ttnn.add(_eye, NR, memory_config=mc)  # I + (-N) @ R
+        ttnn.deallocate(NR)
+        ttnn.deallocate(R)
+        R = R_new
+    ttnn.deallocate(neg_N)
+    if _eye is not eye_1cc:
+        ttnn.deallocate(_eye)
 
     # L_inv = (I+N)^{-1} @ D^{-1} via column scaling
     L_inv = ttnn.multiply(R, D_inv_col, memory_config=mc)
     ttnn.deallocate(R)
     ttnn.deallocate(D_inv_row)
     ttnn.deallocate(D_inv_col)
-
-    # Newton-Schulz refinement: X <- X(2I - LX). One step squares the residual.
-    for _ in range(2):
-        LX = ttnn.matmul(L, L_inv, memory_config=mc, compute_kernel_config=_hifi_cfg)
-        two_I_minus_LX = ttnn.subtract(ttnn.add(eye_1cc, eye_1cc, memory_config=mc), LX, memory_config=mc)
-        ttnn.deallocate(LX)
-        L_inv_new = ttnn.matmul(L_inv, two_I_minus_LX, memory_config=mc, compute_kernel_config=_hifi_cfg)
-        ttnn.deallocate(two_I_minus_LX)
-        ttnn.deallocate(L_inv)
-        L_inv = L_inv_new
-
     return L_inv
 
 
 def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None):
-    """Compute diagonal block inverses of L_mat using _solve_lower_triangular_ttnn.
+    """Diagonal block inverses of L_mat via _solve_lower_triangular_ttnn.
 
-    L_mat_4d: [BH, NC, C, C] float32 unit-diagonal lower-triangular
-    eye_32:   [1, 32, 32] float32 identity (pre-allocated; required for trace compat)
-    Returns:  [BH, NC, C, 32] float32 — Ct=C/32 diagonal block inverses stacked as [C, 32]
+    L_mat_4d [BH,NC,C,C]; eye_32 [1,32,32]. Returns [BH,NC,C,32] (Ct=C/32 blocks as [C,32]).
     """
     if eye_32 is None:
-        # Fallback for tests that don't pass cached_masks — not trace-compatible.
+        # Test fallback without cached_masks — not trace-compatible.
         eye_32 = ttnn.from_torch(
             torch.eye(32, dtype=torch.float32).unsqueeze(0),
             dtype=ttnn.float32,
@@ -317,23 +337,37 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     batch = BH * NC
     L_flat = ttnn.reshape(L_mat_4d, [batch, C, C], memory_config=_cmc)
 
-    inv_blocks = []
+    diagonal_blocks = []
     for b in range(Ct):
         row_start = b * 32
         col_start = b * 32
         block = ttnn.slice(
             L_flat, [0, row_start, col_start], [batch, row_start + 32, col_start + 32], memory_config=_cmc
         )
-        block_inv = _solve_lower_triangular_ttnn(block, eye_32, mesh_device)
+        diagonal_blocks.append(block)  # [batch, 32, 32]
+
+    # The diagonal 32x32 blocks are independent. Batch them together so the Horner
+    # inverse runs once over [Ct*batch, 32, 32] instead of Ct separate 30-step solves.
+    stacked_blocks = ttnn.concat(diagonal_blocks, dim=0, memory_config=_cmc)
+    for block in diagonal_blocks:
         ttnn.deallocate(block)
+
+    stacked_inv = _solve_lower_triangular_ttnn(stacked_blocks, eye_32, mesh_device)
+    ttnn.deallocate(stacked_blocks)
+
+    inv_blocks = []
+    for b in range(Ct):
+        block_start = b * batch
+        block_inv = ttnn.slice(stacked_inv, [block_start, 0, 0], [block_start + batch, 32, 32], memory_config=_cmc)
         inv_blocks.append(block_inv)  # [batch, 32, 32]
 
-    # Do NOT deallocate L_flat: it is a reshape (view) of L_mat_4d (== L_unit_4d kernel input).
+    # L_flat is a view of L_mat_4d — do not deallocate.
     L_inv_flat = ttnn.concat(inv_blocks, dim=1, memory_config=_cmc)
     for blk in inv_blocks:
         ttnn.deallocate(blk)
+    ttnn.deallocate(stacked_inv)
 
-    # Do NOT deallocate L_inv_flat — ttnn.reshape returns a view sharing the buffer.
+    # L_inv_flat is a view — do not deallocate.
     L_inv_4d = ttnn.reshape(L_inv_flat, [BH, NC, C, 32], memory_config=_cmc)
     return L_inv_4d
 
