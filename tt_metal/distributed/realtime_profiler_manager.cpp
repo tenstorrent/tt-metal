@@ -932,6 +932,10 @@ void RealtimeProfilerManager::boot_x280_drainer(
                 D2HSocket::ExternalConfigBuffer{.address = kX280ConfigAddr, .sender_is_l2cpu = true});
             dev_state.x280_socket->set_page_size(kX280PageSize);
 
+            // Reader/relay hart split: nread reader harts drain the L1 rings in parallel and stage
+            // WorkerZone pages in LIM; the last hart relays staged pages to the one D2H socket FIFO.
+            constexpr uint64_t kX280NRead = 2;   // reader harts (0..nread-1)
+            constexpr uint64_t kX280NHarts = 3;  // total active harts (nread readers + 1 relay)
             std::vector<uint8_t> params(64, 0), results(64, 0);
             auto pk = [&](size_t off, uint64_t val) { std::memcpy(params.data() + off, &val, 8); };
             pk(0x00, kX280ConfigAddr);
@@ -940,8 +944,14 @@ void RealtimeProfilerManager::boot_x280_drainer(
             pk(0x18, prof_l1);
             pk(0x20, num_cores);
             pk(0x28, 0);  // P_STOP = 0: run continuously until shutdown
+            pk(0x30, kX280NRead);
+            pk(0x38, kX280NHarts);
             zx.write_block(params.data(), (uint32_t)params.size(), kX280MboxParams);
             zx.write_block(results.data(), (uint32_t)results.size(), kX280MboxResults);
+            // Pre-zero the per-reader staging control (STAGECTL @ 0x08018000: PROD/CONS/RDONE per hart)
+            // so the LIM staging SPSC starts clean (no init race with the readers/relay).
+            std::vector<uint8_t> stagectl_zero(256, 0);
+            zx.write_block(stagectl_zero.data(), (uint32_t)stagectl_zero.size(), 0x08018000ull);
             dev_state.x280_params_addr = kX280MboxParams;
 
             zx.set_reset_vectors(profiler::X280_LIM_BASE);
@@ -1310,8 +1320,12 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
     if (!dev_state.x280_active || !dev_state.x280_socket) {
         return 0;
     }
+    ZoneNamedN(z_x280_draincall, "X280-DrainCall", true);  // every active visit; SockRead fires only when avail>0
     namespace exp = tt::tt_metal::experimental;
-    static constexpr uint32_t kX280BatchPages = 256;
+    // Drain a big batch per call so the host frees FIFO room fast enough to keep up with the
+    // multi-hart relay (256 was the limiter once the readers were parallelized -> the 1 MB FIFO
+    // filled and the relay reserve-stalled). 4096 pages = 256 KB/read.
+    static constexpr uint32_t kX280BatchPages = 4096;
     constexpr uint32_t page_words = RealtimeProfilerRuntimeSizes::page_size / sizeof(uint32_t);
 
     const uint32_t avail = dev_state.x280_socket->pages_available();
@@ -1321,9 +1335,13 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
     // BATCHED D2H drain: read up to kX280BatchPages in ONE read() and ack them ALL at once, so
     // FIFO room is freed in bulk and the X280 stops reserve-stalling. The per-page enrich+publish
     // below runs AFTER this bulk ack, so a slow Tracy push no longer gates the FIFO drain.
+    // Reused across calls (single receiver thread) -- avoids a per-call heap allocation.
+    static std::vector<uint32_t> x280_page_buf(static_cast<size_t>(kX280BatchPages) * page_words);
     const uint32_t n = std::min(avail, kX280BatchPages);
-    std::vector<uint32_t> x280_page_buf(static_cast<size_t>(kX280BatchPages) * page_words);
-    dev_state.x280_socket->read(x280_page_buf.data(), n);
+    {
+        ZoneScopedN("X280-SockRead");  // D2H FIFO read (clflush + memcpy) + ack that frees FIFO for the X280
+        dev_state.x280_socket->read(x280_page_buf.data(), n);
+    }
 
     // 16-bit-hash -> zone name/file/line, resolved the same way the DRAM profiler names zones.
     // Built lazily on the first packet (kernels have compiled + written the zone-source logs by
@@ -1341,6 +1359,7 @@ uint32_t RealtimeProfilerManager::drain_x280_device(DeviceState& dev_state) {
         log_debug(tt::LogMetal, "[Real-time profiler] X280 resolved {} zone-name hashes", x280_zone_names.size());
     }
 
+    ZoneScopedN("X280-EnrichBatch");  // per-page decode + virt->noc0 + name lookup + push (encloses HWZ-*)
     for (uint32_t pg = 0; pg < n; pg++) {
         const uint32_t* page = x280_page_buf.data() + static_cast<size_t>(pg) * page_words;
         const auto* header = reinterpret_cast<const exp::WirePacketHeader*>(page);
@@ -1421,7 +1440,10 @@ uint32_t RealtimeProfilerManager::drain_all_devices(
     uint32_t num_pages = 0;
     for (auto& dev_state : devices_) {
         try {
-            num_pages += drain_device_pages(dev_state, scan_sync_marker, page_buf, record_buf);
+            {
+                ZoneScopedN("ProgRecDrain");  // program-record path (yusuf) -- if this dominates, it starves X280
+                num_pages += drain_device_pages(dev_state, scan_sync_marker, page_buf, record_buf);
+            }
             // X280 kernel-zone drainer runs as a PARALLEL path: it pushes markers straight to
             // Tracy via the profiler-packet callbacks (not the broadcast ring), so its pages are
             // counted here only to keep the receiver's backoff/wake heuristics responsive.
@@ -1614,6 +1636,29 @@ void RealtimeProfilerManager::shutdown() {
             }
         }
     }
+    // Drain-to-quiescence for the X280 path: the readers finish their L1 rings, the relay flushes all
+    // LIM-staged pages into the D2H FIFO, and the (still-running) receiver thread drains them -- so no
+    // staged marker is dropped at teardown. The relay writes DONE_MAGIC to its results slot once its
+    // staging + the FIFO are empty; poll for it (bounded) before stopping the receiver / resetting.
+    for (auto& dev_state : devices_) {
+        if (!dev_state.x280_active || !dev_state.x280_driver) {
+            continue;
+        }
+        constexpr uint64_t kX280DoneMagic = 0x20E50FFEE1ull;
+        const uint64_t done_addr = dev_state.x280_params_addr + 0x40 + 0x18;  // RESULTS base + RES_DONE
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline) {
+            try {
+                if (dev_state.x280_driver->lim_rd_u64(done_addr) == kX280DoneMagic) {
+                    break;
+                }
+            } catch (const std::exception&) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    }
+
     if (!devices_.empty()) {
         std::this_thread::sleep_for(kShutdownKernelExitGrace);
     }
