@@ -413,6 +413,36 @@ jobs:
             matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model | contains(\"${{ inputs.model }}\"))]")
           fi
 
+          # For jobs that already launch with --data_parallel_size, run
+          # multiple benchmark-only experiments that vary client-side
+          # in-flight load. This keeps the benchmark result schema unchanged
+          # (same `vllm bench serve` output) while giving us several data
+          # points per DP job without needing per-experiment server restarts.
+          matrix=$(echo "$matrix" | jq -c '
+            map(
+              if ((.["additional-server-args"] // "") | contains("--data_parallel_size ")) then
+                . + {
+                  benchmark_step_timeout: (.["benchmark-timeout"] * 3),
+                  benchmark_experiments: [
+                    {
+                      "name": "mc8",
+                      "args": "--max-concurrency 8 --metadata experiment=mc8 max_concurrency=8"
+                    },
+                    {
+                      "name": "mc16",
+                      "args": "--max-concurrency 16 --metadata experiment=mc16 max_concurrency=16"
+                    },
+                    {
+                      "name": "mc32",
+                      "args": "--max-concurrency 32 --metadata experiment=mc32 max_concurrency=32"
+                    }
+                  ]
+                }
+              else
+                .
+              end
+            )')
+
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
 
   vllm-tests:
@@ -666,7 +696,7 @@ jobs:
           exit 1
 
       - name: 📐 Run benchmark
-        timeout-minutes: ${{ matrix.test-group.benchmark-timeout }}
+        timeout-minutes: ${{ matrix.test-group.benchmark_step_timeout || matrix.test-group.benchmark-timeout }}
         uses: ./docker-job/.github/actions/run-with-log
         with:
           log-file: ${{ env.FILE_BENCHMARK_LOG }}
@@ -678,38 +708,97 @@ jobs:
             fi
 
             BENCHMARK_NUM_PROMPTS=${{ matrix.test-group.benchmark-num-prompts || 32 }}
+            BENCHMARK_EXPERIMENTS_JSON='${{ toJson(matrix.test-group.benchmark_experiments) }}'
+            RESULT_MANIFEST="output/vllm_result_files.txt"
+            : > "$RESULT_MANIFEST"
 
-            vllm bench serve \
-              --backend vllm \
-              --model ${{ matrix.test-group.model }} \
-              --dataset-name random \
-              --random-input-len 100 \
-              --random-output-len 100 \
-              --num-prompts "$BENCHMARK_NUM_PROMPTS" \
-              --ignore-eos \
-              --percentile-metrics ttft,tpot,itl,e2el \
-              --save-result \
-              --result-filename output/vllm_result.json \
-              "${ADDITIONAL_BENCHMARK_ARGS[@]}"
+            run_benchmark_experiment() {
+              local experiment_name="$1"
+              local experiment_args_raw="$2"
+              local result_file="$3"
+              local experiment_num_prompts="$4"
+
+              if [ -n "$experiment_args_raw" ]; then
+                EXPERIMENT_ARGS=($experiment_args_raw)
+              else
+                EXPERIMENT_ARGS=()
+              fi
+
+              echo "Running benchmark experiment '$experiment_name' -> $result_file"
+
+              vllm bench serve \
+                --backend vllm \
+                --model ${{ matrix.test-group.model }} \
+                --dataset-name random \
+                --random-input-len 100 \
+                --random-output-len 100 \
+                --num-prompts "$experiment_num_prompts" \
+                --ignore-eos \
+                --percentile-metrics ttft,tpot,itl,e2el \
+                --save-result \
+                --result-filename "$result_file" \
+                "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
+                "${EXPERIMENT_ARGS[@]}"
+
+              echo "$result_file" >> "$RESULT_MANIFEST"
+            }
+
+            if [ "$BENCHMARK_EXPERIMENTS_JSON" = "null" ]; then
+              run_benchmark_experiment \
+                "baseline" \
+                "" \
+                "output/vllm_result.json" \
+                "$BENCHMARK_NUM_PROMPTS"
+            else
+              while IFS= read -r experiment; do
+                EXPERIMENT_NAME=$(jq -r '.name' <<<"$experiment")
+                EXPERIMENT_ARGS_RAW=$(jq -r '.args // ""' <<<"$experiment")
+                EXPERIMENT_NUM_PROMPTS=$(jq -r '.num_prompts // empty' <<<"$experiment")
+                if [ -z "$EXPERIMENT_NUM_PROMPTS" ]; then
+                  EXPERIMENT_NUM_PROMPTS="$BENCHMARK_NUM_PROMPTS"
+                fi
+
+                run_benchmark_experiment \
+                  "$EXPERIMENT_NAME" \
+                  "$EXPERIMENT_ARGS_RAW" \
+                  "output/vllm_result_${EXPERIMENT_NAME}.json" \
+                  "$EXPERIMENT_NUM_PROMPTS"
+              done < <(jq -c '.[]' <<<"$BENCHMARK_EXPERIMENTS_JSON")
+            fi
       - name: Verify benchmark
         run: |
           # `vllm bench serve` exits 0 even when individual requests fail (a crashed
           # engine surfaces as failed requests, not a non-zero exit). Gate on the saved result and
           # require EVERY request to complete successfully.
-          RESULT_JSON="output/vllm_result.json"
-          if [ ! -f "$RESULT_JSON" ]; then
-            echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
-            echo "Check out the server log in a step below."
+          RESULT_MANIFEST="output/vllm_result_files.txt"
+          if [ -f "$RESULT_MANIFEST" ]; then
+            mapfile -t RESULT_FILES < "$RESULT_MANIFEST"
+          else
+            RESULT_FILES=("output/vllm_result.json")
+          fi
+
+          if [ ${#RESULT_FILES[@]} -eq 0 ]; then
+            echo "❌ No benchmark result files were recorded"
             exit 1
           fi
-          completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
-          expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
-          if [ "$completed" != "$expected" ]; then
-            echo "❌ Only $completed/$expected requests completed successfully (require all)"
-            echo "Check out the server log in a step below."
-            exit 1
-          fi
-          echo "✅ All $expected requests completed successfully"
+
+          for RESULT_JSON in "${RESULT_FILES[@]}"; do
+            if [ ! -f "$RESULT_JSON" ]; then
+              echo "❌ Benchmark result file not found ($RESULT_JSON) — the benchmark did not complete"
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            completed=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['completed'])")
+            expected=$(python3 -c "import json; print(json.load(open('$RESULT_JSON'))['num_prompts'])")
+            if [ "$completed" != "$expected" ]; then
+              echo "❌ Only $completed/$expected requests completed successfully in $RESULT_JSON (require all)"
+              echo "Check out the server log in a step below."
+              exit 1
+            fi
+
+            echo "✅ All $expected requests completed successfully in $RESULT_JSON"
+          done
 
       - name: 🧠 Run coherence guard (verbatim echo)
         if: ${{ matrix.test-group.coherence-test }}
@@ -875,7 +964,17 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          cat output/vllm_result.json
+          RESULT_MANIFEST="output/vllm_result_files.txt"
+          if [ -f "$RESULT_MANIFEST" ]; then
+            while IFS= read -r result_file; do
+              if [ -f "$result_file" ]; then
+                echo "===== $result_file ====="
+                cat "$result_file"
+              fi
+            done < "$RESULT_MANIFEST"
+          elif [ -f output/vllm_result.json ]; then
+            cat output/vllm_result.json
+          fi
 
       - name: Show structured output report
         if: ${{ always() && matrix.test-group.structured-output }}
