@@ -102,6 +102,18 @@ def _spatial_sum(x: ttnn.Tensor, *, ncores: int = 110) -> ttnn.Tensor:
     return out
 
 
+def _gn_ones_gcg(norm, device, G: int, Cg: int) -> ttnn.Tensor:
+    """Cached [1,1,G,Cg] ones — ``ttnn.ones`` H2D is illegal during trace capture."""
+    cache = getattr(norm, "_gn_ones_gcg_cache", None)
+    if cache is None:
+        cache = {}
+        norm._gn_ones_gcg_cache = cache
+    key = (G, Cg)
+    if key not in cache:
+        cache[key] = ttnn.ones([1, 1, G, Cg], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    return cache[key]
+
+
 def _all_reduce_sum(ccl, t: ttnn.Tensor, *, mesh_axis: int) -> ttnn.Tensor:
     """Sum a small per-group stat tensor (or several stacked on dim1) across one mesh
     axis. all_gather concatenates each shard's value on dim0, then reduce — equal shard
@@ -199,10 +211,9 @@ def group_norm_distributed(norm, x_bthwc: ttnn.Tensor, ccl, *, h_mesh_axis=None,
 
     # Expand per-group mean/inv to per-channel [1,1,1,C] (broadcast each group over its
     # Cg channels), on tiny tensors. The [1,1,G,Cg] ones broadcaster is a constant that
-    # only depends on the channel config, so build it once per norm and reuse it.
-    if getattr(norm, "_gn_ones", None) is None:
-        norm._gn_ones = ttnn.ones([1, 1, G, Cg], dtype=x.dtype, layout=ttnn.TILE_LAYOUT, device=x.device())
-    ones_gcg = norm._gn_ones
+    # only depends on the channel config — cached per (G,Cg) and built before trace
+    # capture (ttnn.ones H2D is illegal during trace).
+    ones_gcg = _gn_ones_gcg(norm, x.device(), G, Cg)
     mean_c = ttnn.reshape(ttnn.multiply(mean, ones_gcg), [1, 1, 1, C])
     inv_c = ttnn.reshape(ttnn.multiply(inv, ones_gcg), [1, 1, 1, C])
     ttnn.deallocate(mean)
