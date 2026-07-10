@@ -107,13 +107,18 @@ def generate_int8_pool_type_and_math_fidelity_combinations():
         if formats.input_format == DataFormat.Int8
         else generate_pool_type_and_math_fidelity_combinations()
     ),
-    tile_dimensions=lambda formats: [
-        td
-        for td in SUPPORTED_TILE_SIZES
-        if not is_mx_unsupported_tile_dims(
-            formats.input_format, formats.output_format, td
-        )
-    ],
+    # Int8→Int32 FPU reduce is 32x32-only for now (no tiny-tile int path yet).
+    tile_dimensions=lambda formats: (
+        [(32, 32)]
+        if formats.input_format == DataFormat.Int8
+        else [
+            td
+            for td in SUPPORTED_TILE_SIZES
+            if not is_mx_unsupported_tile_dims(
+                formats.input_format, formats.output_format, td
+            )
+        ]
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
     implied_math_format=lambda formats: (

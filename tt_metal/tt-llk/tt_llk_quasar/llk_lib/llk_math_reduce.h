@@ -64,6 +64,7 @@ inline void _reduce_row_transpose_alu_cfg_exit_()
  *
  * Required whenever reading/writing int32 dest datums: each 32-bit value is split across
  * DEST_NORM (hi16) and DEST_32B_LOW (lo16). A single MOVD2B cannot see the full word.
+ *
  */
 inline void _reduce_row_transpose_fpu_()
 {
@@ -103,7 +104,6 @@ inline void _reduce_row_transpose_fpu_()
 /**
  * @brief Pool one pair of input faces (one output face row) into dest at an explicit row offset.
  *
- * Int32-dest reduce only (LoFi exact-integer accumulation; no fidelity multi-pass).
  */
 template <PoolType POOL_TYPE, std::uint8_t DST_ADDR>
 inline void _reduce_row_pool_face_pair_()
@@ -114,10 +114,17 @@ inline void _reduce_row_pool_face_pair_()
 
 /**
  * @brief Perform reduce-row at runtime for Int32 dest using FPU transpose.
+ *
+ * Full 32x32 tiles only — tiny tiles are not supported for Int8→Int32 reduce.
  */
 template <PoolType POOL_TYPE>
 inline void _llk_math_reduce_row_int32_fpu_(const TensorShape& tensor_shape)
 {
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim && tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
+            tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim && tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
+        "Int8 reduce-row: tiny tiles not supported (requires 32x32)");
+
     _reduce_row_pool_face_pair_<POOL_TYPE, 0>();
     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
     _reduce_row_transpose_fpu_();
@@ -140,10 +147,16 @@ inline void _llk_math_reduce_row_int32_fpu_(const TensorShape& tensor_shape)
  *
  * MAX: MOVD2B(transpose) -> MOVB2A -> GMPOOL (FPU path, Int8-range exact).
  * SUM/AVG: unsupported on FPU — first GAPOOL partials cannot reload into Src for the final GAPOOL; use SFPU.
+ * Full 32x32 tiles only — tiny tiles are not supported for Int8→Int32 reduce.
  */
 template <PoolType POOL_TYPE>
 inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
 {
+    LLK_ASSERT(
+        tensor_shape.face_r_dim == DEFAULT_TENSOR_SHAPE.face_r_dim && tensor_shape.face_c_dim == DEFAULT_TENSOR_SHAPE.face_c_dim &&
+            tensor_shape.num_faces_r_dim == DEFAULT_TENSOR_SHAPE.num_faces_r_dim && tensor_shape.num_faces_c_dim == DEFAULT_TENSOR_SHAPE.num_faces_c_dim,
+        "Int8 reduce-scalar: tiny tiles not supported (requires 32x32)");
+
     constexpr std::uint32_t scratch_dst_addr = 16;
 
     for (std::uint32_t face = 0; face < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face++)
@@ -569,7 +582,7 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, bool is_int_fpu_en = false>
 inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape)
 {
-
+    _set_dst_write_addr_by_rows_(tile_idx);
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {

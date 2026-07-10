@@ -4047,10 +4047,11 @@ class ReduceGapoolGolden(FidelityMasking):
     ):
         if tile_shape is None:
             tile_shape = construct_tile_shape()
-            
+
         # Integer reduce (e.g. Int8 -> Int32) is exact-integer accumulation.
         # Int8 reduce is LoFi-only: there is no mantissa multi-pass, so fidelity
         # masking does not apply, and the gapool matmul is an exact integer sum.
+        # Full 32x32 tiles only
         if input_format is not None and input_format.is_integer():
             return self._reduce_integer(
                 operand1, operand2, data_format, reduce_dim, tile_cnt, input_format
