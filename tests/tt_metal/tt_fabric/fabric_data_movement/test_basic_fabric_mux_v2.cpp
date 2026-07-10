@@ -377,7 +377,7 @@ std::optional<RoutingSelection> select_routing_selection(BaseFabricFixture& fixt
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     for (const auto& sender_device : fixture.get_devices()) {
         auto worker_cores = enumerate_worker_cores(sender_device);
-        if (worker_cores.size() < static_cast<std::size_t>(test_case.num_senders + 1)) {
+        if (worker_cores.size() < test_case.num_senders + 1) {
             continue;
         }
 
