@@ -225,6 +225,19 @@ class TTSampling(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._param_dims, mesh_shape=self.cluster_shape),
         )
+        # Persistent per-user ARGMAX mask [1,1,N,1] (1.0 where k==1), distributed like k_tensor. Used by
+        # _adjust_values_for_tiebreak to boost the lowest-index tied-max for greedy users only. Built
+        # host-side and kept in sync in reset_sampling_params (an on-device reshape of the [N] k_tensor
+        # to [1,1,N,1] is not sub-device-safe). float32 TILE so it broadcasts over the candidate width.
+        self._greedy_col = ttnn.from_torch(
+            (torch.as_tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.float32),
+            device=self.mesh_device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+            ),
+        )
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
@@ -577,9 +590,73 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
+            # Keep the greedy tie-break mask (1.0 where k==1) in sync with k, distributed like k_tensor.
+            self._greedy_col_new = ttnn.from_torch(
+                (torch.tensor(k).reshape(1, 1, -1, 1) == 1).to(torch.float32),
+                device=None,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=(
+                    ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+                    )
+                    if self._sampling_dp > 1
+                    else None
+                ),
+            )
+            ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
+
         self.log_probs_calculator.set_log_probs_mode(
             enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
         )
+
+    def _greedy_col_dims(self):
+        """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
+        mask's dims (batch on dim2), so self._greedy_col is distributed exactly like self.k_tensor."""
+        return tuple(2 if d == 0 else d for d in self._param_dims)
+
+    def _adjust_values_for_tiebreak(self, gathered_values, gathered_global_indices):
+        """Return gathered_values with, for ARGMAX users (k==1) ONLY, the single lowest-GLOBAL-INDEX
+        candidate among the tied maxima boosted by DELTA, so ttnn.sampling's argmax selects it
+        deterministically. This fixes ttnn.sampling's array-position tie-break (it breaks exact value
+        ties by all_gather/device order, which varies run-to-run/slot-to-slot and flips the greedy
+        token) by correcting the sampling INPUT in the TILE domain -- avoiding an in-place write into
+        the ROW_MAJOR output buffer, which NO ttnn op supports on a restricted sub-device. Random
+        users (k>1) get boost==0 => their values are bit-identical => their sampling is byte-for-byte
+        unchanged. All ops honor self.sub_core_grids.
+
+        is_winner = (value == rowmax) AND (global_index == lowest_index_among_maxima)  # exactly one candidate
+            lowest_index_among_maxima = min(global_index + (rowmax - value)*LARGE)     # == idx at maxima, huge else
+        Validated on a restricted active sub-device by
+        tests/ttnn/unit_tests/operations/reduce/test_tiebreak_input_adjust.py.
+        """
+        if getattr(self, "_greedy_col", None) is None:
+            return gathered_values
+        try:
+            scg = self.sub_core_grids
+            BIG = 1.0e9  # >> max vocab index; EXACT binary offset (no bf16 (maxv-value) magnitude dependence)
+            DELTA = 1.0  # >> bf16 tie granularity => the chosen tied-max becomes the strict argmax
+            maxv = ttnn.max(gathered_values, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] bf16
+            idx_f = ttnn.typecast(gathered_global_indices, ttnn.float32, sub_core_grids=scg)
+            is_max = ttnn.eq(gathered_values, maxv, sub_core_grids=scg)  # 1.0 at the (tied) maxima, exact
+            not_max = ttnn.lt(gathered_values, maxv, sub_core_grids=scg)  # 1.0 strictly below max
+            # lowest global index among the maxima: push non-maxima up by BIG (exact, robust), then min.
+            masked_idx = ttnn.add(idx_f, ttnn.multiply(not_max, BIG, sub_core_grids=scg), sub_core_grids=scg)
+            greedy_i = ttnn.min(masked_idx, dim=3, keepdim=True, sub_core_grids=scg)  # [1,1,B,1] f32
+            is_lowidx = ttnn.eq(idx_f, greedy_i, sub_core_grids=scg)  # broadcast over W
+            is_winner = ttnn.multiply(is_max, is_lowidx, sub_core_grids=scg)  # 1.0 at exactly one candidate
+            # gate by k==1 (self._greedy_col [1,1,B,1]); random users get boost 0 => values unchanged
+            boost = ttnn.multiply(
+                ttnn.multiply(is_winner, self._greedy_col, sub_core_grids=scg), DELTA, sub_core_grids=scg
+            )
+            return ttnn.add(
+                gathered_values, ttnn.typecast(boost, ttnn.bfloat16, sub_core_grids=scg), sub_core_grids=scg
+            )
+        except Exception as e:
+            if not getattr(self, "_tiebreak_logged", False):
+                self._tiebreak_logged = True
+                logger.error(f"[TIEBREAK_FIX] disabled (using original values) due to: {e}")
+            return gathered_values
 
     def forward(
         self,
@@ -780,9 +857,17 @@ class TTSampling(LightweightModule):
             user_ids=self.user_ids_tt_tensor,
             sub_core_grids=self._sampling_sub_core_grids,
         )
-        # Perform the actual sampling with top-k, top-p, and temperature
+        # Perform the actual sampling with top-k, top-p, and temperature.
+        # Fix ttnn.sampling's ARRAY-POSITION tie-break (it flips greedy tokens on exact bf16 value ties
+        # because the tie is broken by all_gather/device order): for argmax users (k==1) only, boost the
+        # single lowest-GLOBAL-INDEX tied-max in the sampling INPUT so argmax picks it deterministically.
+        # Random users are byte-for-byte unchanged. Correcting the INPUT (not the RM output buffer) is
+        # required: no ttnn op writes an interleaved ROW_MAJOR tensor in-place on a restricted sub-device.
+        sampling_values = self._adjust_values_for_tiebreak(
+            topk_values_gathered_bf16_interleaved, topk_global_indices_interleaved
+        )
         tt_out_tok = ttnn.sampling(
-            topk_values_gathered_bf16_interleaved,
+            sampling_values,
             topk_global_indices_interleaved_untilised,
             k=self.k_tensor,
             p=self.p_tensor,
@@ -806,6 +891,8 @@ class TTSampling(LightweightModule):
         else:
             self.tt_log_probs = None
 
+        if sampling_values is not topk_values_gathered_bf16_interleaved:
+            ttnn.deallocate(sampling_values)
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
