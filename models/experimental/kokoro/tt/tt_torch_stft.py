@@ -99,6 +99,11 @@ from loguru import logger
 import ttnn
 
 from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config
+from models.experimental.kokoro.tt.tt_trace_prep import (
+    prep_cache_get as _prep_cache_get,
+    prep_cache_set as _prep_cache_set,
+    trace_weight_prep_enabled as _trace_weight_prep_enabled,
+)
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
@@ -773,9 +778,19 @@ class TTTorchSTFT:
         logger.debug(
             f"TTTorchSTFT iSTFT fused conv_transpose OLA: n_frames={n_frames}, in_channels={in_channels}, 1 slice"
         )
-        y, out_hw = ttnn.conv_transpose2d(
+        # ``synth_combined`` is a host weight, so ``conv_transpose2d`` prepares + uploads it (and does
+        # host reads during prep) every call — illegal inside trace capture. Under trace weight prep,
+        # capture the op's prepared weight once (``return_weights_and_bias``) and reuse the device copy.
+        _wsig = (
+            (id(p.synth_combined), "ct_ola_w", int(n_frames), int(pad), str(mc))
+            if _trace_weight_prep_enabled()
+            else None
+        )
+        _w_cached = _prep_cache_get(_wsig) if _wsig is not None else None
+        _want_wb = _wsig is not None and _w_cached is None
+        _res = ttnn.conv_transpose2d(
             input_tensor=x_nhwc,
-            weight_tensor=p.synth_combined,
+            weight_tensor=(_w_cached if _w_cached is not None else p.synth_combined),
             device=self.device,
             in_channels=in_channels,
             out_channels=1,
@@ -794,13 +809,21 @@ class TTTorchSTFT:
             dram_slice_config=slice_cfg,
             mirror_kernel=True,
             return_output_dim=True,
+            return_weights_and_bias=_want_wb,
         )
+        if _want_wb:
+            y, _out_hw, _wb = _res
+            _prep_cache_set(_wsig, _wb[0])
+        else:
+            y, _out_hw = _res
         ttnn.deallocate(x_nhwc)
-        oh, ow = int(out_hw[0]), int(out_hw[1])
+        # Output length is static (avoid host ``int(out_hw)`` reads, illegal during trace capture):
+        # W_out == 1 (input_width 1), H_out == (n_frames-1)*hop + n_fft - 2*pad.
+        flat = (int(n_frames) - 1) * p.hop_length + p.filter_length - 2 * pad
         # y is in the conv_transpose2d internal layout; collapse straight to [B, L_out] (C_out==1,
         # output already trimmed by padding=(pad,0)) so the caller's COLA multiply needs no further
         # reshape — one ReshapeView instead of [B,L_out,1] then a second [B,L_out] reshape.
-        y_sum = ttnn.reshape(y, (y.shape[0], oh * ow), memory_config=mc)
+        y_sum = ttnn.reshape(y, (int(y.shape[0]), flat), memory_config=mc)
         if y_sum.layout != ttnn.TILE_LAYOUT:
             y_sum = ttnn.to_layout(y_sum, ttnn.TILE_LAYOUT, memory_config=mc)
         return y_sum

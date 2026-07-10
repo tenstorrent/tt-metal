@@ -19,6 +19,11 @@ import ttnn
 
 from .tt_conv import TTConv1dParams, tt_conv1d_nlc, tt_weight_norm_materialize
 from .tt_lstm import TTLSTMParams, build_fused_recurrent_weight, preprocess_tt_lstm_1layer, tt_bilstm_nlc
+from .tt_trace_prep import (
+    prep_cache_get as _prep_cache_get,
+    prep_cache_set as _prep_cache_set,
+    trace_weight_prep_enabled as _trace_weight_prep_enabled,
+)
 
 
 @dataclass(frozen=True)
@@ -410,14 +415,23 @@ class TTTextEncoder:
         # conv→LN→activation with no per-stage reshape (each ReshapeView is a ~5µs dispatch). The
         # only un-flatten ([1, 1, B*T, C] -> [B, T, C]) happens once, right before the LSTM.
         # (Embedding/CNN ops are per-(row, channel), so folding B into the length dim is exact.)
-        tt_ids = ttnn.from_torch(
-            input_ids.reshape(1, 1, B * T),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            # L1-resident indices — the second half of the embedding sweep's L1-input/L1-weight win.
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # ``ttnn.from_torch(device=...)`` is a host->device write, illegal inside trace capture. Under
+        # trace weight prep the id tensor (constant for a fixed input) is uploaded once and reused;
+        # ``own_ids`` then guards the deallocation below. Prep off = upload-and-free each call.
+        _ids_key = (id(self), "asr_te_ids", B, T, tuple(int(v) for v in input_ids.reshape(-1).tolist()))
+        _own_ids = not _trace_weight_prep_enabled()
+        tt_ids = _prep_cache_get(_ids_key) if _trace_weight_prep_enabled() else None
+        if tt_ids is None:
+            tt_ids = ttnn.from_torch(
+                input_ids.reshape(1, 1, B * T),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                # L1-resident indices — the second half of the embedding sweep's L1-input/L1-weight win.
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            if _trace_weight_prep_enabled():
+                _prep_cache_set(_ids_key, tt_ids)
         # Write the gather output to interleaved L1 (not DRAM). The embedding sweep
         # (perf/test_embedding_text_encoder_perf_sweep.py) found HEIGHT-sharding the output is the
         # fastest gather *in isolation* (N=512: 2.24µs vs 7.99µs DRAM), but block 0's ttnn.conv1d runs
@@ -429,7 +443,8 @@ class TTTextEncoder:
         x = ttnn.embedding(
             tt_ids, self.params.embedding_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
         )  # [1, 1, B*T, C]
-        ttnn.deallocate(tt_ids)
+        if _own_ids:
+            ttnn.deallocate(tt_ids)
 
         # When there's no padding the keep-mask is all-ones and every ``x * mask_keep`` is the
         # identity (matching the reference ``masked_fill_`` no-op). Detect that on the host and

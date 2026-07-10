@@ -34,19 +34,17 @@ import ttnn
 # graph trace-capturable.  Reusing the op's own prepared weights is byte-identical to the raw path
 # (verified PCC = 1.0 for both conv1d and conv_transpose2d), so this changes only *where* the weight
 # prep happens, never the math.  Default OFF: every existing (non-traced) caller is untouched.
-_TRACE_WEIGHT_PREP_ENABLED = False
-_TRACE_PREP_CACHE: dict = {}
-
-
-def set_trace_weight_prep(enabled: bool) -> None:
-    """Enable/disable conv prepared-weight caching (see module note). Off by default."""
-    global _TRACE_WEIGHT_PREP_ENABLED
-    _TRACE_WEIGHT_PREP_ENABLED = bool(enabled)
-
-
-def clear_trace_weight_prep_cache() -> None:
-    """Drop all cached prepared conv weights. Call before closing the owning device."""
-    _TRACE_PREP_CACHE.clear()
+#
+# The enable flag + cache are shared across Kokoro modules (see tt_trace_prep); re-exported here so
+# existing ``from tt_conv import set_trace_weight_prep`` call sites keep working.
+from .tt_trace_prep import (  # noqa: E402
+    clear_trace_weight_prep_cache,
+    prep_cache_get as _prep_cache_get,
+    prep_cache_set as _prep_cache_set,
+    set_trace_weight_prep,
+    trace_weight_prep_enabled as _trace_weight_prep_enabled,
+    traced_zeros as _traced_zeros,
+)
 
 
 def _prep_signature(x, out_dtype, extra) -> tuple:
@@ -68,7 +66,7 @@ def _weights_for_conv(params, sig):
     """
     if sig is None:
         return params.weight, params.bias, False
-    cached = _TRACE_PREP_CACHE.get((id(params), sig))
+    cached = _prep_cache_get((id(params.weight), sig))
     if cached is not None:
         return cached[0], cached[1], False
     return params.weight, params.bias, True
@@ -307,22 +305,22 @@ def _chunked_tt_conv1d_nlc(
         x_slice = ttnn.slice(x_nlc, [0, in_s, 0], [B, in_e + 1, C_in], [1, 1, 1], memory_config=memory_config)
 
         if left_pad > 0:
-            z_l = ttnn.zeros(
+            z_l = _traced_zeros(
                 [B, left_pad, C_in],
                 dtype=x_nlc.dtype,
-                layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=memory_config,
+                key=(id(params.weight), "chunk_conv1d_zl", B, left_pad, C_in, str(x_nlc.dtype), str(memory_config)),
             )
             x_slice = ttnn.concat([z_l, x_slice], dim=1, memory_config=memory_config)
             ttnn.deallocate(z_l)
         if right_pad > 0:
-            z_r = ttnn.zeros(
+            z_r = _traced_zeros(
                 [B, right_pad, C_in],
                 dtype=x_nlc.dtype,
-                layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=memory_config,
+                key=(id(params.weight), "chunk_conv1d_zr", B, right_pad, C_in, str(x_nlc.dtype), str(memory_config)),
             )
             x_slice = ttnn.concat([x_slice, z_r], dim=1, memory_config=memory_config)
             ttnn.deallocate(z_r)
@@ -627,7 +625,7 @@ def tt_conv1d_nlc(
             device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
         )
 
-    _sig = _prep_signature(x_nlc, out_dtype, extra=("conv1d", L)) if _TRACE_WEIGHT_PREP_ENABLED else None
+    _sig = _prep_signature(x_nlc, out_dtype, extra=("conv1d", L)) if _trace_weight_prep_enabled() else None
     _w, _b, _want_wb = _weights_for_conv(params, _sig)
     _res = ttnn.conv1d(
         input_tensor=x_nlc,
@@ -651,7 +649,7 @@ def tt_conv1d_nlc(
     )
     if _want_wb:
         y, out_len, _wb = _res
-        _TRACE_PREP_CACHE[(id(params), _sig)] = (_wb[0], _wb[1])
+        _prep_cache_set((id(params.weight), _sig), (_wb[0], _wb[1]))
     else:
         y, out_len = _res
     if len(y.shape) == 4 and y.shape[0] == 1:
@@ -697,34 +695,54 @@ def tt_conv1d_stride2_k3_1ch_nlc(
 
     dtype = x_nlc.dtype
 
-    # Upload kernel weights [1,1,3,1] → [1,1,3] on device (TILE, broadcast over B and T)
-    w_dev = ttnn.to_device(ttnn.reshape(params.weight, [1, 1, 3]), device, memory_config=memory_config)
-    w_tt = ttnn.to_layout(w_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
-    ttnn.deallocate(w_dev)
+    # Upload kernel weights [1,1,3,1] → [1,1,3] and bias to device (TILE, broadcast over B and T).
+    # ``ttnn.to_device`` of the host weight is a host->device write that trace capture forbids, so
+    # when trace weight prep is enabled we upload once and reuse the cached device tensors across
+    # calls (``_own_weights`` then stays False so the compute below does not free them). Prep off =
+    # the original upload-and-free-each-call behaviour, byte-identical.
+    _own_weights = not _trace_weight_prep_enabled()
+    _cache_key = (id(params.weight), "stride2_k3", str(memory_config))
+    _cached = _prep_cache_get(_cache_key) if _trace_weight_prep_enabled() else None
+    if _cached is not None:
+        w_tt, b_tt = _cached
+    else:
+        w_dev = ttnn.to_device(ttnn.reshape(params.weight, [1, 1, 3]), device, memory_config=memory_config)
+        w_tt = ttnn.to_layout(w_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
+        ttnn.deallocate(w_dev)
 
-    # Upload bias [1,1,1,1] → [1,1,1] on device if present
-    b_tt: Optional[ttnn.Tensor] = None
-    if params.bias is not None:
-        b_dev = ttnn.to_device(ttnn.reshape(params.bias, [1, 1, 1]), device, memory_config=memory_config)
-        b_tt = ttnn.to_layout(b_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
-        ttnn.deallocate(b_dev)
+        b_tt: Optional[ttnn.Tensor] = None
+        if params.bias is not None:
+            b_dev = ttnn.to_device(ttnn.reshape(params.bias, [1, 1, 1]), device, memory_config=memory_config)
+            b_tt = ttnn.to_layout(b_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
+            ttnn.deallocate(b_dev)
 
-    # Step 1: pad [B, T, 1] → [B, T+2, 1]
+        if _trace_weight_prep_enabled():
+            _prep_cache_set(_cache_key, (w_tt, b_tt))
+
+    # Step 1: pad [B, T, 1] → [B, T+2, 1]. The zero pad column is created with ttnn.zeros(device=...),
+    # a host->device write that trace capture forbids; under trace weight prep it is created once and
+    # reused (the same all-zeros [B,1,1] serves left/right/even pads — byte-identical either way).
     if x_nlc.layout != ttnn.TILE_LAYOUT:
         x_nlc = ttnn.to_layout(x_nlc, ttnn.TILE_LAYOUT, memory_config=memory_config)
-    z_l = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    z_r = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    x_padded = ttnn.concat([z_l, x_nlc, z_r], dim=1, memory_config=memory_config)
-    ttnn.deallocate(z_l)
-    ttnn.deallocate(z_r)
+    _zkey = (id(params.weight), "stride2_zeros", B, str(dtype), str(memory_config))
+    _zcached = _prep_cache_get(_zkey) if _trace_weight_prep_enabled() else None
+    if _zcached is not None:
+        z_pad = _zcached
+    else:
+        z_pad = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+        if _trace_weight_prep_enabled():
+            _prep_cache_set(_zkey, z_pad)
+    x_padded = ttnn.concat([z_pad, x_nlc, z_pad], dim=1, memory_config=memory_config)
 
     # Ensure T+2 is even for the reshape into (even, odd) pairs
     T_padded = T + 2
     if T_padded % 2 != 0:
-        z_x = ttnn.zeros([B, 1, 1], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-        x_padded = ttnn.concat([x_padded, z_x], dim=1, memory_config=memory_config)
-        ttnn.deallocate(z_x)
+        x_padded_even = ttnn.concat([x_padded, z_pad], dim=1, memory_config=memory_config)
+        ttnn.deallocate(x_padded)
+        x_padded = x_padded_even
         T_padded += 1
+    if _own_weights:
+        ttnn.deallocate(z_pad)
     half = T_padded // 2
 
     # Step 2: reshape [B, T_padded, 1] → [B, half, 2] in ROW_MAJOR (C-order)
@@ -770,12 +788,14 @@ def tt_conv1d_stride2_k3_1ch_nlc(
     ttnn.deallocate(s2)
     weighted = ttnn.multiply(s_all, w_tt, memory_config=memory_config)
     ttnn.deallocate(s_all)
-    ttnn.deallocate(w_tt)
+    if _own_weights:
+        ttnn.deallocate(w_tt)
     y = ttnn.sum(weighted, dim=2, keepdim=True, memory_config=memory_config)
     ttnn.deallocate(weighted)
     if b_tt is not None:
         y_b = ttnn.add(y, b_tt, memory_config=memory_config)
-        ttnn.deallocate(b_tt)
+        if _own_weights:
+            ttnn.deallocate(b_tt)
         ttnn.deallocate(y)
         y = y_b
     return y
@@ -825,6 +845,14 @@ def _chunked_tt_conv_transpose1d_height(
     trim boundary contributions that should only be trimmed at the *global* sequence edges.
     Internal chunks' inter-chunk overlap (K-S rows) is correctly accumulated via ``+=`` into
     the unpadded buffer; the global trim then reproduces the exact padded output.
+
+    The overlap-add runs **entirely on device** (no host download / re-upload), so the op is
+    metal-trace-capturable: each chunk output is zero-padded to full length at its global ``out_start``
+    offset and added into a float32 accumulator. TILE layout can't front-pad on device, so the
+    placement pad goes through ROW_MAJOR. Accumulation is float32 (matching the previous host
+    accumulation) and cast to ``out_dtype`` once at the end; the global ``padding`` trim and bias are
+    applied on device. Validated vs ``torch.conv_transpose1d`` at a chunking length: PCC 1.0 (bf16) /
+    0.999995 (fp32).
     """
     B = int(x_nlc.shape[0])
     L = int(x_nlc.shape[1])
@@ -843,8 +871,7 @@ def _chunked_tt_conv_transpose1d_height(
     # Per-chunk params: no padding (we trim globally), no bias (applied once at the end).
     chunk_params = _dc_replace(params, padding=0, output_padding=0, bias=None)
 
-    output_cpu = torch.zeros(B, out_H_unpadded, C_out, dtype=torch.float32)
-
+    acc: Optional[ttnn.Tensor] = None  # float32 device accumulator [B, out_H_unpadded, C_out]
     for chunk_start in range(0, L, chunk_size):
         chunk_end = min(chunk_start + chunk_size, L)
 
@@ -861,33 +888,72 @@ def _chunked_tt_conv_transpose1d_height(
         )
         ttnn.deallocate(x_chunk)
 
-        # Download and scatter-accumulate: out_start = chunk_start * S (unpadded global coords).
-        y_cpu = ttnn.to_torch(y).float()
-        ttnn.deallocate(y)
-        while y_cpu.dim() > 3:
-            y_cpu = y_cpu.squeeze(0)
+        # Upcast to fp32 for the overlap-add (matches the reference fp32 accumulation).
+        y_f = y if y.dtype == ttnn.float32 else ttnn.typecast(y, ttnn.float32, memory_config=memory_config)
+        if y_f is not y:
+            ttnn.deallocate(y)
 
+        # Place this chunk at unpadded global coords [out_start : out_start + chunk_out] (zeros else).
+        # TILE can't front-pad on device, so pad in ROW_MAJOR (which supports it), then back to TILE.
         out_start = chunk_start * S
-        output_cpu[:, out_start : out_start + int(y_cpu.shape[1]), :] += y_cpu
+        chunk_out = int(y_f.shape[1])
+        right = out_H_unpadded - out_start - chunk_out
+        if out_start == 0 and right == 0:
+            y_placed = y_f
+        else:
+            y_rm = ttnn.to_layout(y_f, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+            ttnn.deallocate(y_f)
+            y_pad_rm = ttnn.pad(
+                y_rm, padding=[(0, 0), (out_start, right), (0, 0)], value=0.0, memory_config=memory_config
+            )
+            ttnn.deallocate(y_rm)
+            y_placed = ttnn.to_layout(y_pad_rm, ttnn.TILE_LAYOUT, memory_config=memory_config)
+            ttnn.deallocate(y_pad_rm)
 
-    # Global trim: remove P elements from each end to apply the original padding.
-    trimmed = output_cpu[:, P : P + out_H, :].contiguous()
+        if acc is None:
+            acc = y_placed
+        else:
+            new_acc = ttnn.add(acc, y_placed, memory_config=memory_config)
+            ttnn.deallocate(acc)
+            ttnn.deallocate(y_placed)
+            acc = new_acc
 
-    # Apply bias once (bias was excluded from chunk_params).
+    # Global trim: remove P from each end. When P==0 and out_H==out_H_unpadded the trim is a no-op —
+    # a full-range ``ttnn.slice`` would *alias* acc and freeing acc would invalidate it — so return acc
+    # directly in that (generator ups) case.
+    if P == 0 and out_H == out_H_unpadded:
+        trimmed = acc
+    else:
+        trimmed = ttnn.slice(acc, [0, P, 0], [B, P + out_H, C_out], [1, 1, 1], memory_config=memory_config)
+        ttnn.deallocate(acc)
+
+    # Apply bias once on device (excluded from chunk_params); broadcast [1,1,C_out] over rows.
+    # ``params.bias`` is a host ROW_MAJOR tensor, so it must be uploaded — a host->device write. Under
+    # trace prep the uploaded fp32 device bias is cached (keyed by the stable host-bias id) and reused.
     if params.bias is not None:
-        bias_cpu = ttnn.to_torch(params.bias).float()
-        while bias_cpu.dim() > 1:
-            bias_cpu = bias_cpu.squeeze(0)
-        trimmed = trimmed + bias_cpu.reshape(1, 1, -1)
+        _bkey = (id(params.bias), "ct_ola_bias", C_out, str(memory_config))
+        _own_bias = not _trace_weight_prep_enabled()
+        bias_dev = _prep_cache_get(_bkey) if _trace_weight_prep_enabled() else None
+        if bias_dev is None:
+            bias_dev = ttnn.to_device(params.bias, device, memory_config=memory_config)
+            bias_dev = ttnn.to_layout(bias_dev, ttnn.TILE_LAYOUT, memory_config=memory_config)
+            bias_dev = ttnn.reshape(bias_dev, [1, 1, C_out], memory_config=memory_config)
+            if bias_dev.dtype != ttnn.float32:
+                bias_dev = ttnn.typecast(bias_dev, ttnn.float32, memory_config=memory_config)
+            if _trace_weight_prep_enabled():
+                _prep_cache_set(_bkey, bias_dev)
+        trimmed_b = ttnn.add(trimmed, bias_dev, memory_config=memory_config)
+        ttnn.deallocate(trimmed)
+        if _own_bias:
+            ttnn.deallocate(bias_dev)
+        trimmed = trimmed_b
 
     upload_dtype = out_dtype if out_dtype is not None else ttnn.bfloat16
-    return ttnn.from_torch(
-        trimmed,
-        dtype=upload_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=memory_config,
-    )
+    if trimmed.dtype != upload_dtype:
+        out = ttnn.typecast(trimmed, upload_dtype, memory_config=memory_config)
+        ttnn.deallocate(trimmed)
+        return out
+    return trimmed
 
 
 def tt_conv_transpose1d_nlc(
@@ -989,11 +1055,13 @@ def tt_conv_transpose1d_nlc(
             if _use_dram_slice
             else None
         )
-        # Prepared-weight reuse only on the non-DRAM-sliced path (the sliced path's weight prep is
-        # entangled with the slice config; the generator's ups never slice).
+        # Prepared-weight reuse on both the sliced and non-sliced height paths (the chunked generator
+        # ups take the DRAM-sliced path at real sequence lengths). ``seq`` and the slice flag are in
+        # the key so a given (seq, slice) reuses its prepared weight; the prepared format is a
+        # function of those, so reuse across forwards/chunks is safe.
         _sig = (
-            _prep_signature(x, out_dtype, extra=("ctH", seq))
-            if (_TRACE_WEIGHT_PREP_ENABLED and _height_slice_cfg is None)
+            _prep_signature(x, out_dtype, extra=("ctH", seq, _height_slice_cfg is not None))
+            if _trace_weight_prep_enabled()
             else None
         )
         _w, _b, _want_wb = _weights_for_conv(params, _sig)
@@ -1023,7 +1091,7 @@ def tt_conv_transpose1d_nlc(
         )
         if _want_wb:
             y, out_hw, _wb = _res
-            _TRACE_PREP_CACHE[(id(params), _sig)] = (_wb[0], _wb[1])
+            _prep_cache_set((id(params.weight), _sig), (_wb[0], _wb[1]))
         else:
             y, out_hw = _res
         oh, ow = int(out_hw[0]), int(out_hw[1])
@@ -1035,7 +1103,7 @@ def tt_conv_transpose1d_nlc(
             y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=memory_config)
         return y
 
-    _sig = _prep_signature(x, out_dtype, extra=("ctW", seq)) if _TRACE_WEIGHT_PREP_ENABLED else None
+    _sig = _prep_signature(x, out_dtype, extra=("ctW", seq)) if _trace_weight_prep_enabled() else None
     _w, _b, _want_wb = _weights_for_conv(params, _sig)
     _res = ttnn.conv_transpose2d(
         input_tensor=x,
@@ -1062,7 +1130,7 @@ def tt_conv_transpose1d_nlc(
     )
     if _want_wb:
         y, out_hw, _wb = _res
-        _TRACE_PREP_CACHE[(id(params), _sig)] = (_wb[0], _wb[1])
+        _prep_cache_set((id(params.weight), _sig), (_wb[0], _wb[1]))
     else:
         y, out_hw = _res
     y = ttnn.reshape(y, (y.shape[0], out_hw[1], y.shape[3]), memory_config=memory_config)

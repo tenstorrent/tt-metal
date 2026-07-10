@@ -34,5 +34,9 @@ def device(request):
         num_command_queues=num_command_queues,
         trace_region_size=trace_region_size,
     )
+    # Reuse compiled programs across identical-shape op calls (matches the demo). Cuts cold latency
+    # for the LSTM/resblock loops and is a precondition for clean trace capture (warmup populates the
+    # cache so ``begin_trace_capture`` sees only cached dispatches). Numerically identical.
+    dev.enable_program_cache()
     yield dev
     ttnn.close_device(dev)

@@ -82,6 +82,21 @@ def main() -> int:
             "decoder both run the on-device CustomSTFT port (conv2d/conv_transpose2d, no fallback)."
         ),
     )
+    parser.add_argument(
+        "--trace",
+        action="store_true",
+        help=(
+            "Metal-trace the decoder (asr/F0/N/s -> audio) — captured once per aligned length and "
+            "replayed on repeats (helps multi-chunk / repeat-length runs; a single chunk captures "
+            "but never replays). Reserves a DRAM trace region; forces the deterministic RNG path."
+        ),
+    )
+    parser.add_argument(
+        "--trace-region-size",
+        type=int,
+        default=200_000_000,
+        help="DRAM trace region bytes when --trace is set.",
+    )
     args = parser.parse_args()
 
     try:
@@ -103,7 +118,16 @@ def main() -> int:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    device = ttnn.open_device(device_id=0, l1_small_size=int(args.l1_small_size))
+    device = ttnn.open_device(
+        device_id=0,
+        l1_small_size=int(args.l1_small_size),
+        trace_region_size=int(args.trace_region_size) if args.trace else 0,
+    )
+    # Reuse compiled programs across identical-shape op calls (the prosody LSTM alone dispatches
+    # the same gate matmuls ~T_tokens times per direction). Without this every call rebuilds the
+    # program host-side — a large slice of cold latency. Safe/standard; identical numerics.
+    device.enable_program_cache()
+    model = None
     try:
         checkpoint = Path(args.checkpoint).expanduser() if args.checkpoint else _find_local_checkpoint()
         if args.checkpoint and (checkpoint is None or not checkpoint.is_file()):
@@ -133,7 +157,11 @@ def main() -> int:
             use_torch_phase_fallback=use_phase_fallback,
             activations_in_l1=activations_in_l1,
             disable_complex=args.disable_complex,
+            trace=bool(args.trace),
         )
+        # --trace decodes via captured metal traces, which require the deterministic RNG path.
+        if args.trace:
+            logger.info("--trace: decoder runs via metal trace (deterministic RNG forced)")
         logger.info(
             f"use_torch_stft_fallback={use_stft_fallback} use_torch_phase_fallback={use_phase_fallback} "
             f"activations_in_l1={activations_in_l1} disable_complex={args.disable_complex}"
@@ -200,8 +228,11 @@ def main() -> int:
         if not wave_chunks:
             logger.error("No audio produced from pipeline chunks.")
             return 3
+        logger.info(f"program cache entries: {device.num_program_cache_entries()}")
         audio = torch.cat(wave_chunks, dim=0).numpy()
     finally:
+        if model is not None:
+            model.release_traces()  # free captured traces + persistent buffers before device close
         ttnn.close_device(device)
 
     sf.write(str(out_path), audio, KokoroConfig.sample_rate_hz)

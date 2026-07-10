@@ -27,6 +27,11 @@ import ttnn
 
 from .tt_ada_layer_norm import TTAdaLayerNorm, TTAdaLayerNormParams, preprocess_tt_ada_layer_norm
 from .tt_lstm import TTLSTMParams, build_fused_recurrent_weight, preprocess_tt_lstm_1layer, tt_bilstm_nlc
+from .tt_trace_prep import (
+    prep_cache_get as _prep_cache_get,
+    prep_cache_set as _prep_cache_set,
+    trace_weight_prep_enabled as _trace_weight_prep_enabled,
+)
 
 
 def _cast_if_needed(x: ttnn.Tensor, dtype, *, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -50,6 +55,17 @@ def _upload_style_btl_nlc(
     if len(shape) == 3 and shape[0] == batch and shape[1] == seq_len and shape[2] == sty_dim:
         return _cast_if_needed(style_bs, wire_dtype, memory_config=memory_config)
 
+    # This expand does a host round-trip (to_torch + from_torch) — both illegal inside trace capture.
+    # The style vector is a constant per-utterance input, so under trace weight prep the expanded
+    # ``[B, T, sty_dim]`` tensor is built once (keyed by the persistent input's identity) and reused;
+    # the round-trip then runs only on the first (warmup) call. Returns own=False so the caller keeps
+    # the cached tensor alive. Prep off = build-and-free each call (original behaviour).
+    key = (id(style_bs), "dur_style_btl", batch, seq_len, sty_dim, str(wire_dtype), str(memory_config))
+    if _trace_weight_prep_enabled():
+        cached = _prep_cache_get(key)
+        if cached is not None:
+            return cached, False
+
     style_cpu = ttnn.to_torch(style_bs).float()
     while style_cpu.dim() > 2:
         style_cpu = style_cpu.squeeze(0)
@@ -64,6 +80,9 @@ def _upload_style_btl_nlc(
         device=style_bs.device(),
         memory_config=memory_config,
     )
+    if _trace_weight_prep_enabled():
+        _prep_cache_set(key, out)
+        return out, False
     return out, True
 
 

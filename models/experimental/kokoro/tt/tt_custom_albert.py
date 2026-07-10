@@ -32,6 +32,11 @@ import torch.nn as nn
 import ttnn
 
 from models.experimental.kokoro.tt.tt_matmul_memory import maybe_reshard_to_caller
+from models.experimental.kokoro.tt.tt_trace_prep import (
+    prep_cache_get as _prep_cache_get,
+    prep_cache_set as _prep_cache_set,
+    trace_weight_prep_enabled as _trace_weight_prep_enabled,
+)
 
 # --- params -----------------------------------------------------------------
 
@@ -813,20 +818,37 @@ def _build_extended_mask(
 
     When ``attention_mask`` is ``None`` (no padding), returns an all-zeros mask directly
     on device without any torch ops.
+
+    ``ttnn.zeros(device=...)`` / ``ttnn.from_torch(device=...)`` are host->device writes, illegal
+    inside trace capture. Under trace weight prep the mask (constant for a fixed input/length) is
+    built once and reused; the caller must then not free it (it guards the dealloc on the same flag).
     """
     if attention_mask is None:
-        return ttnn.zeros(
+        key = ("bert_extmask_none", id(device), B, T, str(dtype))
+    else:
+        key = ("bert_extmask", id(device), B, T, str(dtype), tuple(int(v) for v in attention_mask.reshape(-1).tolist()))
+    if _trace_weight_prep_enabled():
+        cached = _prep_cache_get(key)
+        if cached is not None:
+            return cached
+
+    if attention_mask is None:
+        mask = ttnn.zeros(
             [B, 1, 1, T], dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-    m = attention_mask.to(torch.float32)
-    extended = (1.0 - m).unsqueeze(1).unsqueeze(2) * -1.0e4
-    return ttnn.from_torch(
-        extended,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
+    else:
+        m = attention_mask.to(torch.float32)
+        extended = (1.0 - m).unsqueeze(1).unsqueeze(2) * -1.0e4
+        mask = ttnn.from_torch(
+            extended,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+    if _trace_weight_prep_enabled():
+        _prep_cache_set(key, mask)
+    return mask
 
 
 # --- modules ----------------------------------------------------------------
@@ -1089,6 +1111,31 @@ class TTCustomAlbert:
                 self._ln_cfg_cache[key] = _default_ln_program_config()
         return self._ln_cfg_cache[key]
 
+    def _upload_ids(self, key, torch_ids: torch.Tensor):
+        """Upload an int id tensor for ``ttnn.embedding``.
+
+        ``ttnn.from_torch(device=...)`` is a host->device write, illegal inside trace capture. Under
+        trace weight prep the id tensor (constant for a fixed input / sequence length) is uploaded
+        once and reused; the returned ``own`` flag is False so the caller keeps the cached copy
+        alive. Prep off = upload-and-free each call (original behaviour). Returns ``(tensor, own)``.
+        """
+        enabled = _trace_weight_prep_enabled()
+        if enabled:
+            cached = _prep_cache_get(key)
+            if cached is not None:
+                return cached, False
+        ids_tt = ttnn.from_torch(
+            torch_ids.to(torch.int32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if enabled:
+            _prep_cache_set(key, ids_tt)
+            return ids_tt, False
+        return ids_tt, True
+
     def _embed(
         self,
         input_ids: torch.LongTensor,
@@ -1097,36 +1144,23 @@ class TTCustomAlbert:
         """word + position + token-type embeddings followed by LayerNorm."""
         B, T = input_ids.shape
 
-        ids_tt = ttnn.from_torch(
-            input_ids.to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        word_key = (id(self), "bert_word", T, tuple(int(v) for v in input_ids.reshape(-1).tolist()))
+        ids_tt, own_i = self._upload_ids(word_key, input_ids)
         word_e = ttnn.embedding(ids_tt, self.params.word_emb, layout=ttnn.TILE_LAYOUT)
-        ttnn.deallocate(ids_tt)
+        if own_i:
+            ttnn.deallocate(ids_tt)
 
-        tids_tt = ttnn.from_torch(
-            token_type_ids.to(torch.int32),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        tok_key = (id(self), "bert_tok", T, tuple(int(v) for v in token_type_ids.reshape(-1).tolist()))
+        tids_tt, own_t = self._upload_ids(tok_key, token_type_ids)
         token_type_e = ttnn.embedding(tids_tt, self.params.token_type_emb, layout=ttnn.TILE_LAYOUT)
-        ttnn.deallocate(tids_tt)
+        if own_t:
+            ttnn.deallocate(tids_tt)
 
         position_ids = torch.arange(T, dtype=torch.int32).unsqueeze(0).expand(B, -1)
-        pids_tt = ttnn.from_torch(
-            position_ids,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        pids_tt, own_p = self._upload_ids((id(self), "bert_pos", T), position_ids)
         pos_e = ttnn.embedding(pids_tt, self.params.pos_emb, layout=ttnn.TILE_LAYOUT)
-        ttnn.deallocate(pids_tt)
+        if own_p:
+            ttnn.deallocate(pids_tt)
 
         emb = ttnn.add(word_e, token_type_e, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(word_e)
@@ -1206,7 +1240,8 @@ class TTCustomAlbert:
             ttnn.deallocate(hidden)
             hidden = new_hidden
 
-        ttnn.deallocate(ext_mask)
+        if not _trace_weight_prep_enabled():
+            ttnn.deallocate(ext_mask)
 
         while len(hidden.shape) > 3:
             hidden = ttnn.squeeze(hidden, 0)

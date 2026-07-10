@@ -21,6 +21,13 @@ import torch
 
 import ttnn
 
+from .tt_trace_prep import (
+    prep_cache_get as _prep_cache_get,
+    prep_cache_set as _prep_cache_set,
+    trace_weight_prep_enabled as _trace_weight_prep_enabled,
+    traced_zeros as _traced_zeros,
+)
+
 _TILE = 32
 # Per-step LSTM state/gate tensors are tiny at bring-up widths (H<=64); keep them in L1 when
 # tile-padded storage fits (gx precompute buffers stay on the caller's memory_config).
@@ -524,8 +531,20 @@ def tt_bilstm_nlc(
             memory_config=step_mc,
         )
 
-    h0 = ttnn.zeros([B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc)
-    c0 = ttnn.zeros([B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc)
+    h0 = _traced_zeros(
+        [B, H],
+        dtype=state_dtype,
+        device=x_nlc.device(),
+        memory_config=step_mc,
+        key=(id(fwd.w_h), "lstm_h0", B, H, str(state_dtype), str(step_mc)),
+    )
+    c0 = _traced_zeros(
+        [B, H],
+        dtype=state_dtype,
+        device=x_nlc.device(),
+        memory_config=step_mc,
+        key=(id(fwd.w_h), "lstm_c0", B, H, str(state_dtype), str(step_mc)),
+    )
 
     valid_all = None
     # Timesteps t < min(lengths) have every batch row valid, so the pack-padded blend
@@ -624,10 +643,19 @@ def tt_bilstm_nlc(
         # vocoder amplifies: full kmodel config-E PCC collapses 0.872 -> 0.451. HiFi2 is fine here
         # (config-E 0.872, unchanged) but saves only ~0.2 µs/reorder on these 3 µs one-shot ops — moot
         # on a dispatch-bound model — so there is no reason to deviate. Validated via test_tt_kmodel_pcc.py.
-        anti = torch.eye(L, dtype=torch.float32).flip(0).reshape(1, L, L).expand(B, L, L).contiguous()
-        anti_tt = ttnn.from_torch(
-            anti, dtype=x_nlc.dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=gx_mc
-        )
+        # The anti-identity reversal matrix is a constant (depends only on L); uploading it each call
+        # is a host->device write. Under trace weight prep, build+cache once and keep it alive
+        # (``_own_anti`` guards the deallocation below); prep off = build+free each call.
+        _anti_key = (id(fwd.w_h), "lstm_anti", B, L, str(x_nlc.dtype), str(gx_mc))
+        _own_anti = not _trace_weight_prep_enabled()
+        anti_tt = _prep_cache_get(_anti_key) if _trace_weight_prep_enabled() else None
+        if anti_tt is None:
+            anti = torch.eye(L, dtype=torch.float32).flip(0).reshape(1, L, L).expand(B, L, L).contiguous()
+            anti_tt = ttnn.from_torch(
+                anti, dtype=x_nlc.dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=gx_mc
+            )
+            if _trace_weight_prep_enabled():
+                _prep_cache_set(_anti_key, anti_tt)
         x_rev = ttnn.matmul(anti_tt, x_nlc, memory_config=gx_mc, compute_kernel_config=compute_kernel_config)
         # anti_tt is kept alive — reused to re-order the reverse-pass outputs back into natural time.
 
@@ -663,11 +691,19 @@ def tt_bilstm_nlc(
                 memory_config=step_mc,
             )
 
-        hc = ttnn.zeros(
-            [B, H2], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc
+        hc = _traced_zeros(
+            [B, H2],
+            dtype=state_dtype,
+            device=x_nlc.device(),
+            memory_config=step_mc,
+            key=(id(fwd.w_h), "lstm_hc", B, H2, str(state_dtype), str(step_mc)),
         )
-        cc = ttnn.zeros(
-            [B, H2], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=step_mc
+        cc = _traced_zeros(
+            [B, H2],
+            dtype=state_dtype,
+            device=x_nlc.device(),
+            memory_config=step_mc,
+            key=(id(fwd.w_h), "lstm_cc", B, H2, str(state_dtype), str(step_mc)),
         )
         ttnn.deallocate(h0)
         ttnn.deallocate(c0)
@@ -719,7 +755,8 @@ def tt_bilstm_nlc(
         # robust config transfers), this 3-6 µs one-shot op stays on the default config.
         hs_b = ttnn.matmul(anti_tt, hs_b_rev, memory_config=asm_mc, compute_kernel_config=compute_kernel_config)
         ttnn.deallocate(hs_b_rev)
-        ttnn.deallocate(anti_tt)
+        if _own_anti:
+            ttnn.deallocate(anti_tt)
         # Return in the caller's memory_config (preserve the DRAM contract; assembly stayed L1).
         out = ttnn.concat([hs_f, hs_b], dim=2, memory_config=out_memory_config or memory_config)
         for _w in l1_weights:  # free the transient L1 weight copies (no persistent L1 footprint)

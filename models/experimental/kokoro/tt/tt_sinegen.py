@@ -48,6 +48,8 @@ import torch
 
 import ttnn
 
+from .tt_trace_prep import traced_zeros as _traced_zeros
+
 # Above this full-resolution ``T_har`` the monolithic phase chain (permute entire ``rad`` to
 # ``[B, dim, T]``, strided downsample, cumsum, lerp concat) exceeds BH L1.  Process
 # ``rad_down`` in ``_SINEGEN_TD_CHUNK``-sized blocks instead; upsample/sin per block and
@@ -493,12 +495,14 @@ class TTSineGen:
         lerp_clamp, owns_lc = _to_fp32_if_needed(p.lerp_clamp_ones, memory_config)
         two_pi_scale, owns_tps = _to_fp32_if_needed(p.two_pi_times_scale, memory_config)
 
-        phase_carry = ttnn.zeros(
+        # Consumed zero carry state — via traced_zeros (clone of a cached template) so the initial
+        # ``ttnn.zeros(device=...)`` host write happens once (under trace prep) not every forward.
+        phase_carry = _traced_zeros(
             [B, 1, p.dim],
             dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
             device=self.device,
             memory_config=memory_config,
+            key=(id(self), "sinegen_phase_carry", B, int(p.dim), str(memory_config)),
         )
         sine_chunks: list[ttnn.Tensor] = []
 

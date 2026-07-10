@@ -6,11 +6,13 @@
 
 from __future__ import annotations
 
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -20,6 +22,7 @@ from .tt_lstm import tt_bilstm_nlc
 from .tt_matmul_memory import en_matmul_plan, maybe_reshard_to_caller
 from .tt_prosody_predictor import TTProsodyPredictor, TTProsodyPredictorParams, preprocess_tt_prosody_predictor
 from .tt_text_encoder import TTTextEncoder, TTTextEncoderParams, preprocess_tt_text_encoder
+from .tt_trace_manager import TraceManager
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +119,35 @@ def _zero_noise():
     finally:
         torch.rand = real_rand
         torch.randn_like = real_randn_like
+
+
+# Trace-decoder T_aligned bucketing: round the aligned mel-length up to a fixed grid so the decoder
+# trace (keyed by the bucketed length) could be REUSED across texts of similar length, not just exact
+# repeats. Padded frames are zeros at the tail (trimmed from the audio).
+#
+# DEFAULT 1 = exact keying (no padding/trim) — the proven, bit-identical capture/replay path. Coarser
+# steps are NOT yet usable: step 128 (T_aligned 131 -> 256) overflows L1 (a decoder conv's static CBs
+# clash with L1 buffers at the ~2x-padded length, independent of activations_in_l1); step 32 fits L1
+# but the replay then diverges from the capture (root cause TBD — the exact-key path is bit-identical,
+# so bucketing introduces the nondeterminism). Left at 1 until both are resolved; the pad/trim
+# machinery below is retained for that work. See docs/generator_perf_optimizations.md.
+_TRACE_ALIGN_STEP = 1
+
+
+def _bucket_t_aligned(t: int, step: int = _TRACE_ALIGN_STEP) -> int:
+    return ((int(t) + step - 1) // step) * step
+
+
+def _pad_len_dim1(x: "ttnn.Tensor", target: int, mc: "ttnn.MemoryConfig") -> "ttnn.Tensor":
+    """Zero-pad ``x`` along dim 1 (time) up to ``target`` (back padding, TILE). No-op if already >=."""
+    cur = int(x.shape[1])
+    if cur >= target:
+        return x
+    if x.layout != ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=mc)
+    padding = [(0, 0)] * len(x.shape)
+    padding[1] = (0, target - cur)
+    return ttnn.pad(x, padding=padding, value=0.0, memory_config=mc)
 
 
 def _build_alignment(pred_dur: torch.LongTensor) -> torch.Tensor:
@@ -236,6 +268,7 @@ class TTKModel:
         use_torch_phase_fallback: bool = False,
         activations_in_l1: bool = False,
         disable_complex: bool = False,
+        trace: bool = False,
     ) -> None:
         self.device = device
         self.vocab = ref.vocab
@@ -254,12 +287,20 @@ class TTKModel:
         # Decoder params cached per T_mel (STFT precomputation depends on sequence length).
         self._decoder_cache: dict[int, TTDecoder] = {}
 
+        # Optional metal-trace of the decoder (asr/F0/N/s -> audio, the bulk of device compute),
+        # captured once per T_aligned and replayed on repeat lengths. Requires ``trace_region_size``
+        # on the device and the checkpoint's deterministic RNG path. Upstream (BERT/prosody) stays
+        # eager — the duration readback splits the pipeline (see docs/generator_perf_optimizations.md).
+        self._trace = trace
+        self._trace_mgr = TraceManager(device) if trace else None
+
     # ------------------------------------------------------------------
     # Decoder cache
     # ------------------------------------------------------------------
 
     def _get_decoder(self, t_mel: int) -> TTDecoder:
         if t_mel not in self._decoder_cache:
+            _t0 = time.perf_counter()
             dec_params = preprocess_tt_decoder(
                 self._ref_decoder,
                 self.device,
@@ -273,6 +314,12 @@ class TTKModel:
                 use_torch_phase_fallback=self._use_phase_fallback,
                 activations_in_l1=self._activations_in_l1,
             )
+            logger.info(
+                f"_get_decoder MISS t_mel={t_mel} preprocess={time.perf_counter() - _t0:.3f}s "
+                f"(cache size now {len(self._decoder_cache)})"
+            )
+        else:
+            logger.info(f"_get_decoder HIT  t_mel={t_mel} (cache size {len(self._decoder_cache)})")
         return self._decoder_cache[t_mel]
 
     # ------------------------------------------------------------------
@@ -328,6 +375,11 @@ class TTKModel:
         return self.Output(audio=audio, pred_dur=pred_dur)
 
     __call__ = forward
+
+    def release_traces(self) -> None:
+        """Release captured metal traces + persistent buffers. Call before closing the device."""
+        if self._trace_mgr is not None:
+            self._trace_mgr.release()
 
     # ------------------------------------------------------------------
     # Internal on-device forward
@@ -527,8 +579,26 @@ class TTKModel:
         s_style_tt = ttnn.from_torch(
             s_style_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
         )
-        decoder = self._get_decoder(T_aligned)
+
+        # When tracing, run the decoder at a BUCKETED mel-length so the trace is keyed by (and reused
+        # across) the bucket, not the exact T_aligned. Inputs are zero-padded to the bucket and the
+        # audio is trimmed back. Eager (no trace) runs at the exact length (dec_len == t_mel), so the
+        # original path is byte-for-byte unchanged.
+        t_mel = int(T_aligned)
+        dec_len = _bucket_t_aligned(t_mel) if self._trace_mgr is not None else t_mel
+        decoder = self._get_decoder(dec_len)
         gen = decoder._generator
+
+        if dec_len != t_mel:
+            asr_in = _pad_len_dim1(asr_nlc, dec_len, mc)  # [B, dec_len, C]
+            F0_in = _pad_len_dim1(F0, 2 * dec_len, mc)  # T_f0 == 2 * T_mel
+            N_in = _pad_len_dim1(N, 2 * dec_len, mc)
+            ttnn.deallocate(asr_nlc)
+            ttnn.deallocate(F0)
+            ttnn.deallocate(N)
+        else:
+            asr_in, F0_in, N_in = asr_nlc, F0, N
+
         m_source_kwargs: dict = {}
         if deterministic:
             from models.experimental.kokoro.m_source_rng import (
@@ -537,8 +607,8 @@ class TTKModel:
                 upload_m_source_rng,
             )
 
-            B_dec = int(F0.shape[0])
-            T_har = int(F0.shape[1]) * int(gen.params.upsample_scale_full)
+            B_dec = int(F0_in.shape[0])
+            T_har = int(F0_in.shape[1]) * int(gen.params.upsample_scale_full)
             dim = int(gen.params.m_source.sinegen.dim)
             rng_cpu = make_zero_m_source_rng(B_dec, T_har, dim)
             rng_tt = upload_m_source_rng(rng_cpu, dev, memory_config=mc)
@@ -550,12 +620,53 @@ class TTKModel:
         else:
             rng_tt = None
 
-        audio = decoder(asr_nlc, F0, N, s_style_tt, memory_config=mc, **m_source_kwargs)
+        if self._trace_mgr is not None:
+            # Trace B (decoder): capture once per bucket, replay on repeats. Inputs are copied into the
+            # manager's persistent buffers; the graph clones them (the decoder consumes inputs).
+            inputs = {"asr": asr_in, "F0": F0_in, "N": N_in, "s_style": s_style_tt}
+            if deterministic:
+                inputs["rand_ini"] = rng_tt.rand_ini
+                inputs["sinegen_noise"] = rng_tt.sinegen_noise
+                inputs["source_noise"] = rng_tt.source_noise
+
+            def _decoder_fwd(p: dict) -> ttnn.Tensor:
+                kwargs: dict = {}
+                if deterministic:
+                    kwargs = {
+                        "sinegen_rand_ini": ttnn.clone(p["rand_ini"]),
+                        "sinegen_noise_raw": ttnn.clone(p["sinegen_noise"]),
+                        "source_noise_raw": ttnn.clone(p["source_noise"]),
+                    }
+                return decoder(
+                    ttnn.clone(p["asr"]),
+                    ttnn.clone(p["F0"]),
+                    ttnn.clone(p["N"]),
+                    ttnn.clone(p["s_style"]),
+                    memory_config=mc,
+                    **kwargs,
+                )
+
+            # Manager owns the persistent output; clone so the caller frees it independently.
+            audio_full = ttnn.clone(self._trace_mgr.run(dec_len, inputs, _decoder_fwd))
+            if dec_len != t_mel:
+                # Trim the bucket audio back to the real length (audio_len is ~linear in mel frames;
+                # the iSTFT's small constant offset leaves at most a few inaudible boundary samples).
+                bl = int(audio_full.shape[-1])
+                real_len = bl * t_mel // dec_len
+                audio = ttnn.slice(
+                    audio_full, [0, 0, 0], [int(audio_full.shape[0]), 1, real_len], [1, 1, 1], memory_config=mc
+                )
+                ttnn.deallocate(audio_full)
+            else:
+                audio = audio_full
+        else:
+            audio = decoder(asr_in, F0_in, N_in, s_style_tt, memory_config=mc, **m_source_kwargs)
+
         if deterministic:
             deallocate_m_source_rng_tt(rng_tt)
-        ttnn.deallocate(asr_nlc)
-        ttnn.deallocate(F0)
-        ttnn.deallocate(N)
+        ttnn.deallocate(asr_in)
+        ttnn.deallocate(F0_in)
+        ttnn.deallocate(N_in)
         ttnn.deallocate(s_style_tt)
 
         return audio, pred_dur_cpu
