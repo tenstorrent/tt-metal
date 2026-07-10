@@ -22,6 +22,7 @@ CB_Q = 0
 CB_K = 1
 CB_V = 2
 CB_MASK = 3
+CB_QS = 4
 CB_SCALER_MAX = 8
 CB_SCALER_SUM = 9
 CB_L_NEW = 10
@@ -129,6 +130,7 @@ def create_program_descriptor(
 
     cbs = [
         cb(CB_Q, qcb * Dt),
+        cb(CB_QS, qcb * Dt),
         cb(CB_K, 2 * kcb * Dt),
         cb(CB_V, 2 * kcb * Dt),
         cb(CB_MASK, 2 * block_pages if has_mask else 1),

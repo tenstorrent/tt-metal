@@ -18,6 +18,8 @@
 //     cb_mask -> cb_masked) to avoid an in-place block-alias 2x-size deadlock.
 //   * m_new merge uses the binary_sfpu convenience wrapper (BinaryMax) instead of
 //     a raw eltwise_chain; identical semantics.
+//   * Pre-scale Q is done NON-in-place (cb_q -> cb_qs) instead of transform_in_place:
+//     the in-place same-CB read+write deadlocks (reserve-before-pop on a full CB).
 
 #include <stdint.h>
 
@@ -56,6 +58,7 @@ void kernel_main() {
     constexpr uint32_t cb_k = 1;
     constexpr uint32_t cb_v = 2;
     constexpr uint32_t cb_mask = 3;
+    constexpr uint32_t cb_qs = 4;  // scaled Q (matmul in0)
     constexpr uint32_t cb_scaler_max = 8;
     constexpr uint32_t cb_scaler_sum = 9;
     constexpr uint32_t cb_l_new = 10;
@@ -78,12 +81,12 @@ void kernel_main() {
     constexpr uint32_t cb_sc = has_mask ? cb_masked : cb_scores;
 
     // CircularBuffer objects for the matmul helper.
-    CircularBuffer q_buf(cb_q), k_buf(cb_k), v_buf(cb_v);
+    CircularBuffer qs_buf(cb_qs), k_buf(cb_k), v_buf(cb_v);
     CircularBuffer scores_buf(cb_scores), probs_buf(cb_probs), pv_buf(cb_pv);
 
     // Boot: hw_configure (matmul source order) + one matmul-block init.
-    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q, cb_k, cb_scores);
-    mm_block_init(cb_q, cb_k, cb_scores, /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/Dt);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_qs, cb_k, cb_scores);
+    mm_block_init(cb_qs, cb_k, cb_scores, /*transpose=*/0, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/Dt);
 
     for (uint32_t qi = 0; qi < num_qb; ++qi) {
         const uint32_t qb = start_qb + qi;
@@ -95,8 +98,12 @@ void kernel_main() {
             q_cnt = Sq_t - q_row0;
         }
 
-        // Phase 0: pre-scale Q in place (Q *= scale).
-        ckl::transform_in_place<cb_q>(q_cnt * Dt, ckl::MulUnary<>{scale_bits});
+        // Phase 0: pre-scale Q (Q *= scale) into cb_qs (non-in-place; see header note).
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(q_cnt * Dt),
+            ckl::CopyTile<cb_q, ckl::Dst::D0, ckl::InputLifecycle::Streaming>{},
+            ckl::MulUnary<>{scale_bits},
+            ckl::PackTile<cb_qs, ckl::OutputLifecycle::Streaming>{});
 
         for (uint32_t j = 0; j < num_kv_blocks; ++j) {
             const uint32_t kv_row0 = j * kv_chunk_t;
@@ -115,7 +122,7 @@ void kernel_main() {
                 ckl::matmul_config::InitMode::Short,
                 ckl::InputPolicy::WaitAndRetainOnLastBlock,
                 ckl::InputPolicy::WaitAndPopPerKBlock>(
-                q_buf, k_buf, scores_buf, scores_buf, ckl::MatmulBlockShape::of(q_cnt, kv_cnt, 1, 1, Dt, 1));
+                qs_buf, k_buf, scores_buf, scores_buf, ckl::MatmulBlockShape::of(q_cnt, kv_cnt, 1, 1, Dt, 1));
 
             // Phase 2: mask add (custom only) -> cb_masked.
             if constexpr (has_mask) {
@@ -313,7 +320,7 @@ void kernel_main() {
                 ckl::OperandKind::Col>{},
             ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming>{});
 
-        // Release the retained Q block for this Q-block.
-        cb_pop_front(cb_q, q_cnt * Dt);
+        // Release the retained scaled-Q block for this Q-block.
+        cb_pop_front(cb_qs, q_cnt * Dt);
     }
 }
