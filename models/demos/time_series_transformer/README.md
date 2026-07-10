@@ -91,7 +91,7 @@ root-cause scripts (not acceptance tests — see `tests/diagnostics/README.md`)
 that would otherwise also be collected.
 
 ```bash
-cd /root/tt-metal/models/demos/time_series_transformer && PYTHONPATH=/root/tt-metal/ttnn:/root/tt-metal/tools:/root/tt-metal/build_Release/lib:. TT_METAL_HOME=/root/tt-metal ARCH_NAME=wormhole_b0 pytest tests/test_tst_pcc.py tests/test_tst_e2e.py tests/test_tst_perf.py -v -s --noconftest
+cd /root/tt-metal/models/demos/time_series_transformer && PYTHONPATH=/root/tt-metal/ttnn:/root/tt-metal/tools:/root/tt-metal/build_Release/lib:. TT_METAL_HOME=/root/tt-metal ARCH_NAME=wormhole_b0 pytest tests/test_tst_pcc.py tests/test_tst_e2e.py tests/test_tst_perf.py tests/test_tst_stage2.py -v -s
 ```
 
 This must be run as a single chained command (`cd ... &&` followed immediately by
@@ -105,56 +105,36 @@ persistence are not equivalent if anything in between changes directory, and
 in practice this was confirmed to fail when split apart. Replace
 `/root/tt-metal` with your actual tt-metal repo root if different.
 
-Confirmed on a full combined run of all 10 collected tests
-(`7 passed, 3 xfailed` in 62.73s — the mean-prediction MAE test below is now
-part of the same acceptance command, no longer a separate standalone run):
+Actual run on this HEAD, no xfail markers anywhere in test_tst_perf.py
+(test_tst_perf.py's own module docstring: a failing perf test right now is
+a correct, honest result, not a placeholder -- xfail was deliberately
+removed once the underlying S/B workload bug was fixed):
 
 | Test | Result |
 |------|--------|
 | `test_encoder_pcc` | PCC 0.9999925 ✓ |
 | `test_decoder_pcc` | PCC 0.9999812 ✓ |
-| `test_e2e_generate` | CRPS diff 1.35% (threshold 5%) ✓ |
-| `test_e2e_exact_nll` | NLL diff ~0.000% (threshold 5%) ✓ |
-| `test_e2e_mean_prediction_mae` | MAE diff 0.31% (threshold 5%) ✓ |
-| `test_single_sequence_latency` | median 249.8 ms — **XFAIL** (target <50 ms) |
-| `test_single_sequence_latency_2cq` | median 223.9 ms — **XFAIL** (target <50 ms) |
-| `test_throughput_seqs_per_second` | 22.0 seq/s — **XFAIL** (target ≥100 seq/s) |
-| `test_sample_generation_under_1s` | 223.5 ms (target <1000 ms) ✓ |
-| `test_2cq_matches_single_queue_output` | NaN/Inf-free, shape-correct, distributionally consistent ✓ |
+| `test_e2e_generate` | CRPS within threshold ✓ |
+| `test_e2e_exact_nll` | passes ✓ |
+| `test_e2e_mean_prediction_mae` | passes ✓ |
+| `test_sample_generation_under_1s` | passes ✓ |
+| `test_2cq_matches_single_queue_output` | passes ✓ |
+| `test_update_cache_v_matches_slice_write_ground_truth` | passes ✓ |
+| `test_update_cache_allocated_correctly_at_bs1` | passes ✓ |
+| `test_single_sequence_latency` | **115.0 ms** -- FAIL (target <50 ms) |
+| `test_single_sequence_latency_2cq` | **104.0 ms** -- FAIL (target <50 ms) |
+| `test_throughput_seqs_per_second` | **28.2 seq/s** -- FAIL (target ≥100 seq/s) |
 
-`test_e2e_mean_prediction_mae`: HF mean-prediction MAE = 1816.6854, TTNN
-mean-prediction MAE = 1822.2904, relative diff = 0.31% (threshold 5%) —
-**PASSED**. This closes the bounty Stage 1 criterion "mean prediction within
-5% MAE of reference," which is distinct from the NLL and CRPS checks above.
-
-**Note on `test_throughput_seqs_per_second`**: earlier in this project's
-history a stale README claimed 249–258 seq/s (passing); that figure was not
-reproducible and has since been replaced with real measurements. Throughput
-is consistently ~19–22 seq/s across repeated runs (this run: 22.0 seq/s,
-B=4, S=10, 40 real sequences in 1.82s), gated by the same ~5.9 ms/step
-`execute_trace` floor as the latency tests — not a separate bottleneck.
-Closing it requires the same Stage 2/3 work: sharding/fusion.
-
-At B=4/S=10, the per-step cost breakdown differs from the B=1/S=100 latency
-test in one notable way: `readback` (~73–74 ms) is nearly as expensive as
-`device_enqueue` (~63–67 ms), versus `device_enqueue` (~194 ms) dominating
-`readback` (~15 ms) in the single-sequence case. This suggests output
-readback (`ttnn.to_torch(ctx.traced_out)`) is a comparatively larger
-bottleneck at this batch shape and may be worth investigating independently
-of the sharded-FFN work already targeting the `execute_trace` floor.
-
-CRPS diff has varied across runs (0.09%, 0.88%, 1.35%, 2.19% observed so
-far), all comfortably under the 5% threshold but not identical run-to-run —
-consistent with sampling-based variance in `generate()`'s stochastic draws,
-not a correctness regression.
-
-10 tests total in the acceptance suite: 7 pass outright, 3 are
-`xfail(strict=False)` with reasons documented below.
+9 passed, 3 failed. These are hard `assert` failures, not `xfail` -- do not
+re-add xfail markers to hide them. Run-to-run hardware variance is real
+(a separate session measured 111.8ms/98ms-range steady state on the same
+code path), but the gap to the 50ms/100 seq/s targets is consistent and
+substantial across every run so far, not noise.
 
 ### 3. Additional Test Files (not part of the 3-file acceptance command above)
 
 ```bash
-ARCH_NAME=wormhole_b0 pytest tests/test_tst_distributions.py tests/test_tst_embedding_pcc.py tests/test_tst_e2e_traced.py -v -s --noconftest
+ARCH_NAME=wormhole_b0 pytest tests/test_tst_distributions.py tests/test_tst_embedding_pcc.py tests/test_tst_e2e_traced.py -v -s
 ```
 
 - `test_tst_distributions.py` — validates Student-T, Normal, and NegativeBinomial
@@ -165,90 +145,76 @@ ARCH_NAME=wormhole_b0 pytest tests/test_tst_distributions.py tests/test_tst_embe
   the earlier KV-cache-less traced path. Both tests pass; this path is not used
   for Stage 1 performance claims (see Overview).
 
-## Performance: Why Stage 1 Latency and Throughput Are XFAIL, and What 2CQ Did and Didn't Fix
+## Performance: Current Gap to Stage 1 Targets, and Why
 
-**Single-sequence latency target is <50 ms (B=1); measured medians ranged
-224.6–283.6 ms across repeated runs, with or without 2-command-queue (2CQ)
-mode — the two paths are not separable given this variance.**
+**Single-sequence latency target is <50 ms (B=1); measured 115.0 ms (1CQ)
+and 104.0 ms (2CQ) on the last full run. Throughput target is ≥100 seq/s;
+measured 28.2 seq/s.** These are hard test failures, not xfail -- see the
+table above and `tests/test_tst_perf.py`'s own docstring.
 
-**Throughput target is ≥100 seq/s; measured 19.5–21.5 seq/s (B=4, S=10) across
-repeated runs — gated by the same per-step cost as latency, not a distinct
-bottleneck.**
+Two separate causes contribute to the gap:
 
-Per-step breakdown (instrumented measurement, single command queue, steady state,
-B=1/S=100 unless noted):
+**1. Architecture: one trace per decoder layer, not one fused trace for
+the stack.** `generate_traced_cached()` originally captured a single fused
+trace for both decoder layers. That was a real correctness bug: layer 1's
+Q/K/V were projected from the raw input embedding instead of layer 0's
+real output, so layer 1 never attended over layer 0's content (PCC ~0.31-0.33
+against `generate()` when this was caught). The fix -- one trace per layer,
+chained through real device buffers -- is correct, but costs
+`num_decoder_layers` separate `execute_trace` calls per autoregressive step
+instead of 1. Per `tt/tst_model_cached_additions.py`'s own module docstring,
+this "works against the Stage 1 latency target and will need to be
+re-measured and possibly optimized" once correctness was confirmed. That
+re-optimization has not happened yet, and is likely the dominant remaining
+latency cost -- more than any individual op.
 
-| Component | avg/step | Share |
-|---|---|---|
-| `execute_trace` (device compute: attention + cross-attn + FFN) | ~5.9 ms | ~66% |
-| `kv_write` (per-layer QKV projection + cache slice_write) | ~2.1 ms | ~24% |
-| `mask_update` (causal mask host→device write) | ~0.5 ms | ~6% |
-| `host_copy` (step input host→device write) | ~0.35 ms | ~4% |
-
-24 steps × ~8.84 ms/step ≈ 212 ms device-side, plus host-side CPU embedding
-prep (~20 ms total), output readback (~13 ms total), and CPU-side sampling
-(~12 ms total) — all of which the bounty's plain wall-clock latency target
-legitimately includes — bringing measured latency to the 224.6–283.6 ms
-range observed across this session's runs (2 full-suite single-queue runs:
-231.6 ms, 254.8 ms, 228.5 ms, and 249.8 ms; 5 measurements of the 2CQ path:
-224.6 ms, 248.4 ms, 239.7 ms, 283.6 ms, and 223.9 ms). This spread (roughly
-±25% of the median at the extremes) is attributed to shared system-level
-variance, not a difference in the underlying floor.
-
-At the B=4/S=10 batch shape used for the throughput test, the balance shifts:
-`readback` (~75 ms) becomes nearly as large a share of the per-run total as
-`device_enqueue` (~80 ms), unlike the B=1/S=100 latency test where
-`device_enqueue` (~184 ms) dominates `readback` (~13 ms). This is a
-batch-shape-dependent cost and has not yet been separately investigated or
-optimized — see "On the Horizon" below.
+**2. Op-level cost inside `write_prep`**, confirmed via `_print_op_times()`:
+`slice_write_kv` ~20-22 ms, `qkv_linear` ~7 ms, `to_layout_kv` ~6 ms,
+`qkv_split` ~5 ms per step. Stage 2 Change 4 (KV-cache fused op) partially
+addresses this for V at BS==1 -- see "KV-Cache Fused Op for V" below.
 
 ### 2CQ Investigation
 
-A 2-command-queue (writer queue + compute queue, event-gated handoff per the
-tt-metal tech report "Advanced Performance Optimizations for Models") was
-implemented and **hardware-verified correct**:
+A 2-command-queue (writer queue + compute queue, event-gated handoff per
+the tt-metal tech report "Advanced Performance Optimizations for Models")
+was implemented and hardware-verified for **same-step** ordering:
 
-- `probe_2cq_event_ordering.py` — a targeted single-decoder-layer hardware
-  probe found exact (0.000000 max abs diff) agreement between the 2CQ and
-  single-queue paths across 8 steps with deliberately distinct per-step
-  marker values, confirming `ttnn.record_event` issued immediately after a
-  non-blocking `ttnn.execute_trace` correctly gates the writer queue on this
-  hardware/ttnn version — even though this exact pattern (event recorded
-  after `execute_trace` rather than after a separate untraced "consumer op")
-  is not shown verbatim in the tech report's own worked examples.
-- `test_2cq_matches_single_queue_output` (full model) confirmed the 2CQ
-  output is NaN/Inf-free, correctly shaped, and distributionally consistent
-  with the trusted single-queue baseline.
+- `probe_2cq_event_ordering.py` -- single-decoder-layer hardware probe,
+  exact (0.000000 max abs diff) agreement between 2CQ and single-queue
+  paths across 8 steps with deliberately distinct per-step marker values.
+- `test_2cq_matches_single_queue_output` (full model) -- passes: NaN/Inf-free,
+  correctly shaped, distributionally consistent with the single-queue
+  baseline.
 
-**However, 2CQ has not demonstrated a reproducible net latency benefit**:
-`test_single_sequence_latency_2cq` medians across five measurements (224.6 ms,
-248.4 ms, 239.7 ms, 283.6 ms, 223.9 ms) are not cleanly separable from the
-single-queue baseline's four measurements (231.6 ms, 254.8 ms, 228.5 ms,
-249.8 ms) — both paths fall
-within the same overall band, moving together rather than 2CQ showing a
-consistent edge. Working diagnosis (correctness-verified above, but this
-specific explanation is not yet separately instrumented/confirmed): step
-`k+1`'s CPU embedding prep depends on `future_samples_so_far`, which requires
-step `k`'s output to have already been read back and sampled — both blocking,
-both happening strictly after step `k`'s `execute_trace` completes. This
-creates a genuine autoregressive data dependency that serializes the host
-loop regardless of which command queue anything runs on; there is nothing for
-2CQ's overlap mechanism to act on in this specific loop structure,
-independent of whether the synchronization itself is implemented correctly.
+**Open item, not yet closed:** the module docstring in
+`tt/tst_model_cached_additions.py` flags that **cross-step** overlap
+(layer 0's write for step k+1 racing against the last layer's compute for
+step k) has NOT been separately verified -- only same-step ordering has.
+`test_throughput_seqs_per_second` and `test_sample_generation_under_1s`
+both run `use_2cq=True` across many sequential steps, which is exactly
+that unverified scenario. `use_2cq` defaults to `False` in
+`generate_traced_cached()` pending this.
 
-### What Would Actually Close the Gap to <50 ms / ≥100 seq/s (Stage 2/3, not yet implemented)
+2CQ has not demonstrated a reproducible net latency benefit even where
+ordering is confirmed correct: the autoregressive loop has a genuine data
+dependency (step k+1's CPU embedding prep needs step k's output already
+read back and sampled), which serializes the host loop regardless of which
+command queue anything runs on.
 
-- **Reducing the ~5.9 ms/step `execute_trace` floor itself** via sharding
-  (using more of the n300's 56 available cores per op) and/or op fusion
-  (e.g. fusing LayerNorm into the adjacent matmul — published Tensix-specific
-  research shows up to ~7.9% per-decoder-layer latency reduction from this
-  technique, not enough alone to close a ~4x gap, but a real contributor).
-- **Reducing host-side CPU prep/readback/sample overhead** (~45 ms total
-  across 24 steps at B=1, but a proportionally larger share at B=4/S=10 — see
-  the readback-time note above), e.g. by vectorizing or precomputing more of
-  the per-step embedding preparation.
-- 2CQ pipelining, on its own, is **not** expected to help further without
-  first addressing the autoregressive dependency described above.
+### What Would Actually Close the Gap (Stage 2/3, not yet implemented)
+
+- **Merge the per-layer traces back toward one fused trace per step**, or
+  find a write-free formulation that allows it -- flagged above as the
+  likely highest-leverage remaining item, but carries real regression risk
+  given the layer-threading bug already found here once.
+- **Distribution head fusion (Change 2)** -- not yet implemented; would
+  remove one `ttnn.to_torch()` full-tensor readback per step.
+- **L1 memory config (Change 3)** -- not started. `scripts/measure_weight_footprint.py`
+  confirms the full weight set fits comfortably in pooled L1
+  (247,234 bytes / 0.236 MB, 0.3% of the ~78.29 MB pooled ceiling on
+  this 8x7 grid), so footprint is not the blocker; real contention with
+  activations/KV-cache/trace buffers during decode has not yet been measured.
+- Reducing the ~5.9-7ms/step `execute_trace` floor via sharding or op fusion.
 
 ## On the Horizon
 
