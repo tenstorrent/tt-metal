@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Runner-side gate for the vLLM integration stage: served qualitative outputs
-# (greedy and sampled) must exist and must not be mechanically degenerate. A
-# serving path that doubles tokens or collapses to one token is a serving bug,
-# not a model-quality limitation. Scoped to this run's model.
+# Runner-side gate for stage 10 (optimized-vLLM): serving optimization (async
+# decode, trace reuse, on-device sampling) must not have introduced stale-input
+# or sampler degeneracy into served outputs. Scoped to this run's model.
 # Exit 0 pass, 1 advisory, 2 critical, 3 error.
 if [ -n "${MODEL_DIR:-}" ]; then
   scope_args=(--model-dir "$MODEL_DIR")
@@ -17,4 +16,4 @@ python models/common/readiness_check/check_degenerate_output.py \
 
 python .agents/scripts/check_context_contract.py \
   --model-dir "${MODEL_DIR:-}" --hf-model "${HF_MODEL:-}" \
-  --stage vllm --require-contract
+  --stage optimized-vllm --require-contract

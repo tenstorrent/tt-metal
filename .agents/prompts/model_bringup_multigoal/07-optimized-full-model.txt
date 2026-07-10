@@ -4,7 +4,7 @@ As the user, I explicitly authorize you to use subagents when a selected skill r
 
 This goal creates the optimized-full-model state. Start from the completed full model and optimize the complete model/generator path across the target mesh; do not begin vLLM integration work.
 
-Goal completion requirements:
+Stage 07 completion requirements:
 - Parallelize/optimize the full path, not just the decoder: embeddings, norms, LM head, logits, sampling, cache, trace replay, collectives, residual layouts, host boundaries, and generator orchestration.
 - Preserve canonical split-sampling token-out from $full-model/$tt-enable-tracing: sampler-ready logits, `tt_out_tok` feedback, device-side position/RoPE advance, changed-only page tables, and traced greedy plus top-k/top-p-capable sampling.
 - Preserve the serving-ready generator contract while making it fast: explicit cache/page-table/position/prompt-length/batch state, mixed prompts, fixed slots, and inactive rows still work.

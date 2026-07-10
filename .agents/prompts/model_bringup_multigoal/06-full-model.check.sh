@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Runner-side gate for the optimized-vLLM stage: serving optimization (async
-# decode, trace reuse, on-device sampling) must not have introduced stale-input
-# or sampler degeneracy into served outputs. Scoped to this run's model.
-# Exit 0 pass, 1 advisory, 2 critical, 3 error.
+# Runner-side gate for stage 06 (full-model): free-running TT generation must
+# exist and must not be mechanically degenerate (doubled tokens, single-token
+# collapse). Scoped to this run's model so stale artifacts from another model
+# can neither pass nor fail it. Exit 0 pass, 1 advisory, 2 critical, 3 error.
 if [ -n "${MODEL_DIR:-}" ]; then
   scope_args=(--model-dir "$MODEL_DIR")
 elif [ -n "${HF_MODEL:-}" ]; then
@@ -12,8 +12,8 @@ else
   exit 3
 fi
 python models/common/readiness_check/check_degenerate_output.py \
-  "${scope_args[@]}" --missing-artifacts critical --scope all || exit $?
+  "${scope_args[@]}" --missing-artifacts critical --scope autoregressive || exit $?
 
 python .agents/scripts/check_context_contract.py \
   --model-dir "${MODEL_DIR:-}" --hf-model "${HF_MODEL:-}" \
-  --stage optimized-vllm --require-contract
+  --stage full-model --require-contract

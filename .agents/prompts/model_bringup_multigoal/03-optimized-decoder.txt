@@ -1,20 +1,20 @@
-/goal Use $optimize and $tt-device-usage for the HF_MODEL functional decoder in the current tt-metal checkout.
+/goal Use $optimize and $tt-device-usage for the HF_MODEL fused decoder in the current tt-metal checkout.
 
 As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
 
-This goal creates the optimized-decoder state for the repo-local TTNN autoport pipeline. Start from the completed functional decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work in this goal.
+This goal creates the optimized-decoder state for the repo-local TTNN autoport pipeline. Start from the completed fused decoder and work only on models/autoports/<model>/tt/optimized_decoder.py plus its tests and docs; do not begin multichip-decoder, full-model, or vLLM work in this goal.
 
-Goal completion requirements:
+Stage 03 completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
-- The optimized decoder preserves the functional decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
-- The optimized decoder preserves the context contract from functional decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- Preserve the fused decoder's semantics, paged KV cache, determinism, and layer-kind coverage at the functional acceptance bar.
+- Preserve the fused decoder's context contract. If layout, sharding, or KV-cache dtype changes capacity, update doc/context_contract.json. Reduce advertised capability only for an evidenced hard device limit.
 - The optimized decoder preserves support for valid non-aligned logical sequence lengths; internal padding/chunking is fine, public `seq_len % chunk_size == 0` restrictions are not.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
-- Warmed prefill and traced warmed decode latency are reported before and after optimization.
+- Report warmed prefill and traced warmed decode before and after optimization, using the fused decoder as the baseline.
 - Final code must beat the best correct traced-decode baseline/candidates; fewer ops or cleaner topology is not enough.
 - If MLP/expert matmuls dominate decode, try BFP4/LoFi across material core/shard geometries; synthetic/random PCC cannot veto real-weight wins; perf rows must prove it.
 - tt-perf-report tables/CSV exist for prefill and decode. Try actionable advice; rejected advice has before/after evidence. A first TTNN/API error is not enough to reject a material op, reshard, layout, or host-fallback optimization.
-- The optimization pass starts with an operation-topology audit of the measured path: repeated same-input matmuls, avoidable reshard/layout conversions, candidate fused/packed projections, optimized composite ops, and lower-movement replacements. The README or work log records current ops, candidate replacements, action taken, and evidence.
+- Audit the fused decoder's measured topology for repeated matmuls, avoidable layout movement, remaining fusion/packing, composite ops, and lower-movement replacements. Record candidates, actions, and evidence without undoing proven fusion wins.
 - The optimization pass addresses model-applicable decoder opportunities now: canonical precision/fidelity policy, sharded layouts, fused or packed same-input projections, DRAM-sharded decode matmuls, large prefill program configs, SDPA/composite ops, memory/program/compute-kernel configs, runtime data movement, and MoE active-expert execution. Completed and rejected options have evidence. Keep packed/fused same-input projections only when they beat a well-tuned legal separate candidate or the separate candidate is invalid.
 - The final optimized runtime path has no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, or host fallback in measured prefill/decode.
 - Stress or repeated-run coverage and a watcher-clean optimized correctness run exist.

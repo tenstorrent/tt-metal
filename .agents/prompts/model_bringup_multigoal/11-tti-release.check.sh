@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runner-side gate for the TTI release stage: the customer-facing release report
+# Runner-side gate for stage 11 (TTI release): the customer-facing release report
 # and run notes must be copied into the target model's doc/tti_release directory.
 # Exit 0 pass, 1 advisory, 2 critical, 3 error.
 set -uo pipefail

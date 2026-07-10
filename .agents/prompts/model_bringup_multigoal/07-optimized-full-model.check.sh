@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runner-side gate for the optimized-full-model stage: optimization must not
+# Runner-side gate for stage 07 (optimized-full-model): optimization must not
 # have removed or degraded free-running TT generation evidence. Scoped to this
 # run's model. Exit 0 pass, 1 advisory, 2 critical, 3 error.
 if [ -n "${MODEL_DIR:-}" ]; then

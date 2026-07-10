@@ -4,7 +4,7 @@ As the user, I explicitly authorize you to use subagents when a selected skill r
 
 This goal creates the TTI release handoff state. Start only after optimized-vLLM has completed or any recoverable optimized-vLLM hardware blocker has been recovered.
 
-Goal completion requirements:
+Stage 11 completion requirements:
 - Optimized vLLM artifacts already exist under models/autoports/<model>/doc/optimized_vllm/.
 - The TTI release workflow evaluates the generated `models/autoports/<model>` implementation of HF_MODEL. Do not run stock `tt-transformers`, `models/demos`, or another packaged implementation. Such a report is invalid even if `run.py` exits 0.
 - Prefer TTI client-side workflows against the already-working autoport vLLM server from optimized-vLLM. Use Docker only as an explicit fallback after investigating why the external-server path cannot work.

@@ -8,7 +8,7 @@ It has three parts:
 
 ```text
 .agents/
-  prompts/model_bringup_multigoal/   # the ten stage goals, one prompt file each
+  prompts/model_bringup_multigoal/   # the eleven stage goals
   skills/                            # the knowledge the agent works from
   scripts/multigoal                  # the runner that chains the stages together
 ```
@@ -23,13 +23,16 @@ and authenticated, and the agent dependencies installed
 python .agents/scripts/multigoal \
   --replace HF_MODEL=org/Your-Model-Here \
   --replace MODEL_DIR=models/autoports/org_your_model_here \
-  .agents/prompts/model_bringup_multigoal/*.txt
+  .agents/prompts/model_bringup_multigoal/01-functional-decoder.txt \
+  .agents/prompts/model_bringup_multigoal/{02..11}-*.txt
 ```
 
-That runs all ten stages back to back. Expect a full bringup to take several
+That runs all eleven stages back to back. Expect a full bringup to take several
 hours of unattended work. Results land in `models/autoports/<model>/`, where
 `<model>` is the HF model id lowercased with non-alphanumerics replaced by
-underscores.
+underscores. When a compatible Forge emit already exists, substitute
+`01-forge-functional-decoder.txt` for `01-functional-decoder.txt`; the two
+stage-01 prompts are alternatives and must not be run together.
 
 ## How It Works
 
@@ -41,15 +44,16 @@ stages build on each other:
 | Stage | Delivers |
 |---|---|
 | 01 functional-decoder | A correct TTNN decoder layer, validated against the HF reference (PCC) |
-| 02 optimized-decoder | The same layer made fast on one chip: precision, sharding, program configs |
-| 03 multichip-decoder | The layer parallelized across the chip mesh |
-| 04 optimized-multichip-decoder | The multichip layer optimized: async collectives, fused ops |
-| 05 full-model | The whole model end to end: embeddings, layer stack, LM head, generation |
-| 06 optimized-full-model | The full model traced and optimized, with honest perf accounting |
-| 07 datatype-sweep | The fastest weight/activation/KV datatype config that still meets accuracy |
-| 08 vllm | The model serving real requests through the Tenstorrent vLLM plugin |
-| 09 optimized-vllm | The serving path optimized: async decode, trace reuse, on-device sampling |
-| 10 tti-release | The tt-inference-server release workflow run and customer-facing readiness report |
+| 02 fused-decoder | The functional layer graph fused into faster equivalent TTNN operations |
+| 03 optimized-decoder | The fused layer made fast on one chip: precision, sharding, program configs |
+| 04 multichip-decoder | The layer parallelized across the chip mesh |
+| 05 optimized-multichip-decoder | The multichip layer optimized: async collectives, fused ops |
+| 06 full-model | The whole model end to end: embeddings, layer stack, LM head, generation |
+| 07 optimized-full-model | The full model traced and optimized, with honest perf accounting |
+| 08 datatype-sweep | The fastest weight/activation/KV datatype config that still meets accuracy |
+| 09 vllm | The model serving real requests through the Tenstorrent vLLM plugin |
+| 10 optimized-vllm | The serving path optimized: async decode, trace reuse, on-device sampling |
+| 11 tti-release | The tt-inference-server release workflow run and customer-facing readiness report |
 
 The `$skill` references inside each prompt attach the matching skill from
 `.agents/skills/` — that is where the engineering knowledge lives (how to
@@ -80,9 +84,10 @@ models/autoports/<model>/doc/context_contract.json
 
 The artifact records the HF-advertised context, the current supported context,
 any DRAM limit, and the evidence behind it. Functional decoder bringup creates
-it. Multichip, full-model, optimized-full-model, datatype-sweep, vLLM, and
-release stages update or verify it because tensor parallelism, full-stack memory
-use, and KV-cache dtype can change the feasible context.
+it. Fused-decoder, optimized-decoder, multichip, full-model,
+optimized-full-model, datatype-sweep, vLLM, and release stages update or verify
+it because graph changes, tensor parallelism, full-stack memory use, and
+KV-cache dtype can change the feasible context.
 
 Each stage leaves its evidence under `models/autoports/<model>/doc/<stage>/`:
 a `README.md` with the results, a `work_log.md` with the journey, and the
@@ -92,8 +97,8 @@ artifacts (perf reports, accuracy logs, watcher output) that back them up.
 
 A stage README and work log are claims to inspect, not verification by
 themselves. After a stage's goal completes, the runner looks for a sibling
-check script (for example `05-full-model.check.sh` next to
-`05-full-model.txt`) and runs it. Check scripts are plain bash, readable by
+check script (for example `06-full-model.check.sh` next to
+`06-full-model.txt`) and runs it. Check scripts are plain bash, readable by
 anyone, and exit with:
 
 | Exit | Meaning | Runner response |

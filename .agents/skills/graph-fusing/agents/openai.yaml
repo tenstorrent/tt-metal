@@ -1,0 +1,7 @@
+interface:
+  display_name: "Graph Fusing"
+  short_description: "Fuse a TTNN op graph into a faster equivalent"
+  default_prompt: "Use $graph-fusing during the operation-topology audit to rewrite the measured TTNN op graph into a faster numerically-equivalent one: first replace primitive op sequences with dedicated tt-metal ops (explore the repo for existing ops), then simplify or merge structural ops, then fold adjacent bias, activation, scale, or transpose operations into existing ops. Verify each rewrite with an on-device PCC test comparing the original and fused paths; require PCC > 0.99."
+
+policy:
+  allow_implicit_invocation: true

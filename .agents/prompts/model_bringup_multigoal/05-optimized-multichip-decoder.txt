@@ -4,7 +4,7 @@ Subagents are authorized when a selected skill requests or recommends them.
 
 This creates optimized-multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed multichip decoder and optimize it in place; do not begin full-model or vLLM work.
 
-Goal completion requirements:
+Stage 05 completion requirements:
 - The measured path is the multichip decoder path on the target mesh. Single-chip or replicated fallback does not satisfy completion.
 - Multi-chip prefill and decode PCC remain at the accepted baseline for every meaningful layer kind.
 - Warmed prefill and traced warmed decode latency are reported before and after this multichip optimization pass.

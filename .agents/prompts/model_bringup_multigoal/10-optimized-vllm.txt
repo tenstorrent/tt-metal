@@ -4,7 +4,7 @@ Subagents are authorized when a selected skill requests or recommends them.
 
 Start from completed vLLM integration and the selected datatype-sweep config; optimize serving in place.
 
-Goal completion requirements:
+Stage 10 completion requirements:
 - The measured path is real vLLM TT plugin serving through models/autoports/<model>/tt/generator_vllm.py.
 - vLLM sampling tests, qualitative outputs, primary single-user benchmarks, and CI serving-burst benchmarks pass.
 - Warmed primary single-user TTFT, TPOT, ITL, aggregate throughput, and TPOT-derived decode t/s/u are measured before and after using the same run_vllm_server workload, generation mode, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.

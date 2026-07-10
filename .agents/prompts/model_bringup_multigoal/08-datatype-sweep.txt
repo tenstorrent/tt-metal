@@ -4,7 +4,7 @@ As the user, I explicitly authorize you to use subagents when a selected skill r
 
 This goal creates the datatype-sweep state for the repo-local TTNN autoport pipeline. Start from the completed optimized full model and choose the fastest weight, activation, CCL, and KV-cache datatype configuration that still satisfies the required full-model accuracy. Do not begin vLLM integration work in this goal.
 
-Goal completion requirements:
+Stage 08 completion requirements:
 - The baseline optimized full model accuracy and performance are refreshed using the main AIME24 chat-template readiness reference with 100 generated tokens.
 - Full-model candidate results are captured in models/autoports/<model>/doc/datatype_sweep/sweep_results.json and sweep_results.csv, including config id, dtype policy, compute-fidelity policy, top-1/top-5/top-100, TTFT, trace-verified teacher-forcing decode t/s/u, measurement regime, command, hardware, mesh, and pass/fail status.
 - The selected precision config is written to models/autoports/<model>/doc/datatype_sweep/selected_precision_config.json and is either the model default or a required config artifact that later full-model/vLLM construction paths actually consume by default. It must include weight groups, layer exceptions, compute fidelities, activation/residual dtype, CCL dtype, KV-cache dtype, and logits/sampling dtype assumptions. The stage evidence must prove these fields are consumed by the measured runtime path; a JSON field ignored by hard-coded model code does not satisfy this requirement.

@@ -4,7 +4,7 @@ As the user, I explicitly authorize you to use subagents when a selected skill r
 
 This goal creates the multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed optimized decoder and work only on models/autoports/<model>/tt/multichip_decoder.py plus its tests and docs; do not begin full-model or vLLM work in this goal. Your target is to make the best possible use of TT mesh available on this machine. Your code does not have to support multiple/smaller mesh configurations.
 
-Goal completion requirements:
+Stage 04 completion requirements:
 - models/autoports/<model>/tt/multichip_decoder.py exists and uses the optimized decoder as the single-chip baseline.
 - Implement a parallelization scheme for all tensors that matches the model to the hardware as well as possible. Load-time tensor padding is acceptable when it enables better parallelism.
 - Choose the target mesh/hardware strategy before coding the final path. Record the tensor, activation, KV-cache, collective, and MoE/expert strategy with calculated per-device shapes, shard specs, padding, and rejected alternatives.
