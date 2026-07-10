@@ -28,6 +28,22 @@ saturates its shared NoC links and stops scaling.
 you — pass **`row_wise=True`** to spread across the DRAM-facing axis. (Diagonal only beats row on
 asymmetric grids like Blackhole.)
 
+## ⭐⭐ T2 — [`double_buffer`](double_buffer/README.md)
+**Concept:** keeping bytes in flight on the NoC for a DRAM reader→compute→writer pipeline, via three
+levers — outstanding reads per barrier (`block`), double-buffered CBs, and transfer size (dtype).
+**Situation:** you wrote the reader the obvious way — *read one tile, barrier, push, repeat* — with
+one-tile CBs. It's correct but leaves the NoC mostly idle (latency-bound).
+**Measured win:** on **1 core** (bf16), trap (`block=1`, single-buffered: **6.5 GB/s**) →
+`block=4` + double-buffered = **2.78× (17.9 GB/s)** (Wormhole B0). The levers **compound**: batching
+alone buys ~2× but saturates ~13 GB/s (can't overlap read+write); double buffering lifts it to the
+single-core NoC limit. **Transfer size** sets the bandwidth ceiling: best GB/s scales ~linearly with
+tile bytes (bfp8 9.8 → bf16 17.9 → fp32 31.7), but a smaller dtype moves less data so it wins on
+wall time. **No gain once DRAM-bandwidth-bound** — 64 cores hit **190.8 GB/s** (≈DRAM peak) untuned.
+**Gist:** never `read-one / barrier` — issue a **block** (~4–8) of async reads then **one** barrier,
+and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–8); bigger wastes L1.
+Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
+cores) or compute-bound.
+
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
 **Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
