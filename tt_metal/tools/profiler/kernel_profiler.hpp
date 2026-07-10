@@ -66,6 +66,25 @@ extern uint32_t wIndex;  // producer tail (monotonic word count for this RISC's 
 extern uint32_t stackSize;
 extern uint32_t traceCount;
 
+// SPSC publish gate for the DeviceValidateProfiler filter. publish_tail() only advances the
+// consumer-visible ring tail while this is true. On "validator" RISCs (those whose FW loop calls
+// DeviceValidateProfiler(enables) to declare whether this launch ran a real kernel) it is set false
+// at init_profiler() so the FW zone's ZONE_START is held un-published until validity is resolved:
+// committed on a valid launch, rewound-and-never-published on an idle launch. This reproduces the
+// old DRAM backend's "don't push invalid cores to DRAM", so an idle core's FW-only zone (e.g.
+// BRISC-FW on a core that ran no kernel) never reaches the X280 drainer. Non-validator RISCs
+// (TRISC/NCRISC) only ever run on valid cores, so they leave this true and publish unconditionally.
+extern bool zoneValid;
+
+// The RISCs whose FW loop calls DeviceValidateProfiler(enables) (brisc/erisc/dm own the "<RISC>-FW"
+// main zone AND decide per-launch validity). Only these defer the FW ZONE_START publish.
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || \
+    defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
+inline constexpr bool PROFILER_VALIDATES_ZONE = true;
+#else
+inline constexpr bool PROFILER_VALIDATES_ZONE = false;
+#endif
+
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
@@ -179,7 +198,13 @@ inline __attribute__((always_inline)) void ring_write_word(uint32_t v) {
     wIndex++;
 }
 
-inline __attribute__((always_inline)) void publish_tail() { profiler_control_buffer[TAIL_INDEX] = wIndex; }
+inline __attribute__((always_inline)) void publish_tail() {
+    // Hold the tail while this launch is unvalidated/invalid: an idle core's FW zone is written into
+    // the ring but never made visible to the X280 drainer (see zoneValid).
+    if (zoneValid) {
+        profiler_control_buffer[TAIL_INDEX] = wIndex;
+    }
+}
 
 // Append one 2-word timing marker (timer_id + wall clock), blocking if full.
 inline __attribute__((always_inline)) void mark_time(uint32_t timer_id) {
@@ -223,7 +248,19 @@ inline __attribute__((always_inline)) void set_host_counter(uint32_t counterValu
 }
 
 inline __attribute__((always_inline)) void set_profiler_zone_valid(bool condition) {
-    profiler_control_buffer[PROFILER_DONE] = !condition;
+    profiler_control_buffer[PROFILER_DONE] = !condition;  // retained for host / DRAM-backend parity
+    zoneValid = condition;
+    if (condition) {
+        // Valid launch: commit the FW ZONE_START that init_profiler() held back, then stream normally
+        // for the rest of the launch (publish_tail() is now unblocked).
+        publish_tail();
+    } else {
+        // Idle launch (this core ran no kernel): discard the un-published FW ZONE_START by rewinding
+        // to the last committed tail. With zoneValid false, the matching ZONE_END and finish also
+        // stay unpublished, so nothing from this launch reaches the X280 drainer. The next launch's
+        // init_profiler() resets wIndex to this same tail and overwrites the stale words.
+        wIndex = profiler_control_buffer[TAIL_INDEX];
+    }
 }
 
 __attribute__((noinline)) void init_profiler(
@@ -252,6 +289,14 @@ __attribute__((noinline)) void init_profiler(
 #endif
     // Resume this RISC's monotonic tail from L1 (rings persist across launches).
     wIndex = profiler_control_buffer[TAIL_INDEX];
+
+    // On validator RISCs, defer publishing this launch until DeviceValidateProfiler() resolves it.
+    // The FW zone's ZONE_START (emitted right after this returns) is written into the ring but not
+    // made visible until set_profiler_zone_valid(true) commits it — or discarded if the launch is
+    // idle. if constexpr keeps this a no-op on TRISC/NCRISC, which always run on valid cores.
+    if constexpr (PROFILER_VALIDATES_ZONE) {
+        zoneValid = false;
+    }
 }
 
 // Append accumulated SUM zones (if any) and publish the tail. No DRAM.
