@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/float8.hpp>
 #include <tt-metalium/int8.hpp>
 #include <tt-metalium/uint8.hpp>
@@ -867,9 +868,10 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
 // Exercises llk_unpack_tilize_block with a 16x32 tiny tile across multiple tile-rows, using a
 // nonzero input_tile_index (tilize_across_tile_rows.cpp) so the cross-tile-row stride is hit.
 TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
-    constexpr std::uint32_t face_r_dim = 16;
-    constexpr std::uint32_t face_c_dim = 16;
-    constexpr std::uint32_t num_faces = 2;  // 16x32 = two 16x16 faces laid horizontally
+    constexpr std::uint32_t face_r_dim = tt::constants::FACE_HEIGHT;
+    constexpr std::uint32_t face_c_dim = tt::constants::FACE_WIDTH;
+    // 16x32 tiny tile = one face-row, TILE_WIDTH/FACE_WIDTH face-columns.
+    constexpr std::uint32_t num_faces = tt::constants::TILE_WIDTH / tt::constants::FACE_WIDTH;
     constexpr std::uint32_t tile_bytes = num_faces * face_r_dim * face_c_dim * sizeof(std::uint16_t);
     // num_tiles_r >= 2 so the cross-tile-row stride in llk_unpack_tilize_block is exercised.
     vector<vector<std::uint32_t>> num_tiles = {{2, 1}, {2, 2}, {4, 1}};
