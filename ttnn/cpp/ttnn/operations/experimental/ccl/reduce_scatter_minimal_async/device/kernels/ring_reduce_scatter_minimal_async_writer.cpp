@@ -150,9 +150,15 @@ void kernel_main() {
     auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
     auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
+    // Fused write + atomic-inc headers, used to fold a chunk's semaphore increment into its final
+    // data packet (unicast for a 1-tile tail, scatter for a 2-tile tail).
+    auto pkt_hdr_fused_unicast = PacketHeaderPool::allocate_header();
+    auto pkt_hdr_fused_scatter = PacketHeaderPool::allocate_header();
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_unicast_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_scatter_hdr, unicast_route_info);
     ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_unicast, unicast_route_info);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_fused_scatter, unicast_route_info);
 
 #ifdef USE_WORKER_MUX
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
@@ -214,6 +220,32 @@ void kernel_main() {
             0,                           // ignore
             static_cast<uint32_t>(1)});  // increment 1
 
+    // Fused-packet state: payload size, increment value (1) and flush are constant across the run;
+    // only the write and semaphore destination addresses are patched per packet via with_state.
+    fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
+        UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Val |
+        UnicastFusedAtomicIncUpdateMask::Flush>(
+        pkt_hdr_fused_unicast,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+            0,                          // write dst (patched per packet)
+            0,                          // semaphore dst (patched per packet)
+            static_cast<uint32_t>(1)},  // increment 1
+        page_size);
+
+    fabric_unicast_noc_fused_scatter_write_atomic_inc_set_state<
+        UnicastFusedScatterWriteAtomicIncUpdateMask::PayloadSize |
+        UnicastFusedScatterWriteAtomicIncUpdateMask::WriteChunkSizes |
+        UnicastFusedScatterWriteAtomicIncUpdateMask::Val | UnicastFusedScatterWriteAtomicIncUpdateMask::Flush>(
+        pkt_hdr_fused_scatter,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
+            {0, 0},                              // write dsts (patched per packet)
+            0,                                   // semaphore dst (patched per packet)
+            {static_cast<uint16_t>(page_size)},  // first chunk size (second is implicit)
+            static_cast<uint16_t>(1)},           // increment 1
+        static_cast<uint16_t>(page_size * 2));
+
     // Relevant for 2nd-last iter:
     // In 2nd-last iter we send the full tensor slice. But in preparation for the last iter where each dir
     // processes half tensor slice, in 2nd-last iter we send sem increments to both forward and backward workers.
@@ -223,6 +255,66 @@ void kernel_main() {
     uint64_t opposite_core_sem_noc_addr = safe_get_noc_addr(opposite_core_x, opposite_core_y, out_ready_sem, 0);
     uint64_t even_core_sem_noc_addr = direction ? this_core_sem_noc_addr : opposite_core_sem_noc_addr;
     uint64_t odd_core_sem_noc_addr = !direction ? this_core_sem_noc_addr : opposite_core_sem_noc_addr;
+
+    // ---- Fabric send helpers (capture the per-direction connection and pre-configured headers) ----
+
+    // Emit a standalone atomic increment to a remote worker's out_ready_sem.
+    auto send_seminc = [&](uint64_t sem_noc_addr) {
+        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+            fabric_direction_connection,
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sem_noc_addr, 0});
+        noc_async_writes_flushed();
+    };
+
+    // Write one packet worth of tiles (addresses staged in remote_noc_addrs) to the remote tensor.
+    // When fuse_seminc is set, this chunk's semaphore increment is folded onto the packet and the
+    // function returns true. The fused fabric ops carry at most a 2-tile scatter write plus the
+    // semaphore chunk, so packets wider than 2 tiles cannot fuse (caller falls back to send_seminc).
+    auto send_write_packet =
+        [&](size_t l1_read_addr, uint32_t num_tiles, bool fuse_seminc, uint64_t sem_noc_addr) -> bool {
+        if (fuse_seminc && num_tiles <= 2) {
+            if (num_tiles == 2) {
+                fabric_unicast_noc_fused_scatter_write_atomic_inc_with_state<
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::WriteDstAddrs |
+                    UnicastFusedScatterWriteAtomicIncUpdateMask::SemaphoreDstAddr>(
+                    fabric_direction_connection,
+                    pkt_hdr_fused_scatter,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
+                        {remote_noc_addrs[0], remote_noc_addrs[1]},
+                        sem_noc_addr,
+                        {static_cast<uint16_t>(page_size)},
+                        static_cast<uint16_t>(1)});
+            } else {
+                fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state<
+                    UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr>(
+                    fabric_direction_connection,
+                    pkt_hdr_fused_unicast,
+                    l1_read_addr,
+                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                        remote_noc_addrs[0], sem_noc_addr, static_cast<uint32_t>(1)});
+            }
+            return true;
+        }
+        if (num_tiles > 1) {
+            fabric_unicast_noc_scatter_write_with_state<
+                UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
+                UnicastScatterWriteUpdateMask::PayloadSize>(
+                fabric_direction_connection,
+                pkt_scatter_hdr,
+                l1_read_addr,
+                NocUnicastScatterCommandHeader(remote_noc_addrs, chunk_sizes, num_tiles),
+                page_size * num_tiles);
+        } else {
+            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                fabric_direction_connection,
+                pkt_unicast_hdr,
+                l1_read_addr,
+                NocUnicastCommandHeader{remote_noc_addrs[0]});
+        }
+        return false;
+    };
 
     for (uint32_t b = 0; b < input_tensor_B; ++b) {
         constexpr uint32_t ring_size_by_2 = ring_size / 2;
@@ -331,6 +423,21 @@ void kernel_main() {
                             reduce_interm ? cb_compute_output_id : cb_reader_output_id;  // from compute or reader
 
                         if (write_to_remote) {
+                            // Pick the semaphore this chunk signals and the counter that paces it. In
+                            // separate-sem mode even/odd chunks signal different workers; otherwise every
+                            // chunk signals this worker's peer. The counter is advanced after the writes, so
+                            // fuse_seminc predicts against counter + 1: true means this chunk's final packet
+                            // reaches chunks_per_sync and can carry the increment itself.
+                            uint32_t& sync_counter = separate_even_odd_sems
+                                                         ? (is_even_chunk ? even_chunk_count : odd_chunk_count)
+                                                         : chunk_count;
+                            const uint64_t sem_noc_addr =
+                                separate_even_odd_sems
+                                    ? (is_even_chunk ? even_core_sem_noc_addr : odd_core_sem_noc_addr)
+                                    : this_core_sem_noc_addr;
+                            const bool fuse_seminc = (sync_counter + 1 == chunks_per_sync);
+                            bool seminc_fused = false;
+
                             // Write tiles to remote tensor over Fabric
                             cb_wait_front(cb_out, tile_granularity);
                             size_t l1_read_addr = get_read_ptr(cb_out);
@@ -350,61 +457,24 @@ void kernel_main() {
                                     }
                                 }
 
-                                if (tiles_to_put_in_current_packet > 1) {
-                                    fabric_unicast_noc_scatter_write_with_state<
-                                        UnicastScatterWriteUpdateMask::DstAddrs |
-                                        UnicastScatterWriteUpdateMask::ChunkSizes |
-                                        UnicastScatterWriteUpdateMask::PayloadSize>(
-                                        fabric_direction_connection,
-                                        pkt_scatter_hdr,
-                                        l1_read_addr,
-                                        NocUnicastScatterCommandHeader(
-                                            remote_noc_addrs, chunk_sizes, tiles_to_put_in_current_packet),
-                                        page_size * tiles_to_put_in_current_packet);
-                                } else {
-                                    fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                        fabric_direction_connection,
-                                        pkt_unicast_hdr,
-                                        l1_read_addr,
-                                        NocUnicastCommandHeader{remote_noc_addrs[0]});
-                                }
+                                const bool last_packet = (j + num_tiles_to_write_per_packet >= tiles_to_read);
+                                seminc_fused |= send_write_packet(
+                                    l1_read_addr,
+                                    tiles_to_put_in_current_packet,
+                                    fuse_seminc && last_packet,
+                                    sem_noc_addr);
                                 noc_async_writes_flushed();
                                 l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                 tiles_read += tiles_to_put_in_current_packet;
                             }
                             cb_pop_front(cb_out, tile_granularity);
 
-                            // Send semaphore increment to remote worker core
-                            ++chunk_count;
-                            even_chunk_count += is_even_chunk;
-                            odd_chunk_count += !is_even_chunk;
-                            if (separate_even_odd_sems) {
-                                if (is_even_chunk && even_chunk_count == chunks_per_sync) {
-                                    even_chunk_count = 0;
-                                    fabric_unicast_noc_unicast_atomic_inc_with_state<
-                                        UnicastAtomicIncUpdateMask::DstAddr>(
-                                        fabric_direction_connection,
-                                        pkt_hdr_seminc,
-                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{even_core_sem_noc_addr, 0});
-                                    noc_async_writes_flushed();
-                                } else if (!is_even_chunk && odd_chunk_count == chunks_per_sync) {
-                                    odd_chunk_count = 0;
-                                    fabric_unicast_noc_unicast_atomic_inc_with_state<
-                                        UnicastAtomicIncUpdateMask::DstAddr>(
-                                        fabric_direction_connection,
-                                        pkt_hdr_seminc,
-                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{odd_core_sem_noc_addr, 0});
-                                    noc_async_writes_flushed();
-                                }
-                            } else {
-                                if (chunk_count == chunks_per_sync) {
-                                    chunk_count = 0;
-                                    fabric_unicast_noc_unicast_atomic_inc_with_state<
-                                        UnicastAtomicIncUpdateMask::DstAddr>(
-                                        fabric_direction_connection,
-                                        pkt_hdr_seminc,
-                                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{this_core_sem_noc_addr, 0});
-                                    noc_async_writes_flushed();
+                            // Advance this chunk's sync counter; emit the increment now unless it was already
+                            // fused onto the final data packet above.
+                            if (++sync_counter == chunks_per_sync) {
+                                sync_counter = 0;
+                                if (!seminc_fused) {
+                                    send_seminc(sem_noc_addr);
                                 }
                             }
                         } else {
@@ -434,31 +504,18 @@ void kernel_main() {
                 output_tile_id_start += output_channel_num_pages;
             }  // for slice_C
 
-            // Send semaphore increment to remote worker core (cleanup, when chunks_per_sync doesn't evenly divide
-            // total_tiles_to_read)
+            // Flush any residual chunks whose counter never reached chunks_per_sync inside the loop.
             if (write_to_remote) {
                 if (separate_even_odd_sems) {
                     if (even_chunks && even_chunk_count != 0) {
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_hdr_seminc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{even_core_sem_noc_addr, 0});
-                        noc_async_writes_flushed();
+                        send_seminc(even_core_sem_noc_addr);
                     }
                     if (odd_chunks && odd_chunk_count != 0) {
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_hdr_seminc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{odd_core_sem_noc_addr, 0});
-                        noc_async_writes_flushed();
+                        send_seminc(odd_core_sem_noc_addr);
                     }
                 } else {
                     if (chunk_count != 0) {
-                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-                            fabric_direction_connection,
-                            pkt_hdr_seminc,
-                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{this_core_sem_noc_addr, 0});
-                        noc_async_writes_flushed();
+                        send_seminc(this_core_sem_noc_addr);
                     }
                 }
             }
@@ -467,24 +524,31 @@ void kernel_main() {
             slice_idx = direction ? (slice_idx - 1) : (slice_idx + 1);
         }
 
-        // Batch ready semaphore - multicast to entire ring of workers for both this dir and opposite dir
-        uint64_t batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, batch_ready_sem, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_direction_connection,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-        noc_async_writes_flushed();
+        // Batch-ready barrier: a global all-workers sync so the next batch cannot clobber the reused
+        // intermediate scratch or out_ready_sem while this batch is still being consumed. Skipped on the
+        // final batch — there is no next batch to protect, and the reader gates receive-side completion.
+        // input_tensor_B is a compile-time constant, so this whole block compiles away for B == 1.
+        if (b + 1 < input_tensor_B) {
+            // multicast to entire ring of workers for both this dir and opposite dir
+            uint64_t batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(this_core_x, this_core_y, batch_ready_sem, 0);
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_direction_connection,
+                pkt_hdr_mcastseminc,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+            noc_async_writes_flushed();
 
-        batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_direction_connection,
-            pkt_hdr_mcastseminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-        noc_async_writes_flushed();
+            batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                fabric_direction_connection,
+                pkt_hdr_mcastseminc,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
+            noc_async_writes_flushed();
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
-        noc_semaphore_set(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset semaphore before next batch
+            noc_semaphore_wait_min(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
+            noc_semaphore_set(
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset before next batch
+        }
     }
 
     noc_async_write_barrier();
