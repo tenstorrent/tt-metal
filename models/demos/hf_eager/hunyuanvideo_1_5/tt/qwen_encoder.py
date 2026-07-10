@@ -12,7 +12,7 @@ from __future__ import annotations
 import types
 
 import ttnn
-from models.tt_dit.encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder
+from models.tt_dit.encoders.qwen25vl.model_qwen25vl import Qwen25VlTextEncoder, _apply_rope
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor as _tensor
@@ -23,6 +23,50 @@ from models.tt_dit.utils import tensor as _tensor
 HY_QWEN_SUBMESH = None
 
 _HIDDEN_LAYERS_TO_SKIP = 2  # HunyuanVideo mllm embed = hidden_states[-(2+1)] = [-3]
+
+
+def _eager_attn_fp32_forward(self, x, *, attention_bias, pos_embeds):
+    """fp32 eager attention (explicit q@kT -> softmax -> @v) replacing the flash
+    SDPA. Fixes the HunyuanVideo conditioning-fidelity gap: the bf16 attention core
+    (flash or bf16-eager) accumulates ~1.3%/layer error over 26 layers -> ~0.99
+    conditioning that blurs the diffusion output. Doing the core in fp32 recovers it
+    to ~0.9998 (see the note at the bottom of this file). Text-encode runs once per
+    generation, so the fp32/explicit cost is acceptable. Mirrors
+    Qwen25VlAttention.forward exactly otherwise (qkv/head-split/rope/o_proj)."""
+    x = self.qkv_proj.forward(x)
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        ttnn.unsqueeze(x, 1),
+        num_heads=self._num_local_heads,
+        num_kv_heads=self._num_local_kv_heads,
+        transpose_k_heads=False,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cos, sin = pos_embeds
+    q = _apply_rope(q, cos, sin)
+    k = _apply_rope(k, cos, sin)
+    hq, hkv = self._num_local_heads, self._num_local_kv_heads
+    if hq != hkv:  # GQA: broadcast kv heads to q heads
+        k = ttnn.repeat_interleave(k, hq // hkv, dim=1)
+        v = ttnn.repeat_interleave(v, hq // hkv, dim=1)
+    q = ttnn.typecast(q, ttnn.float32)
+    k = ttnn.typecast(k, ttnn.float32)
+    v = ttnn.typecast(v, ttnn.float32)
+    scale = 1.0 / (q.shape[-1] ** 0.5)
+    scores = ttnn.multiply(
+        ttnn.matmul(q, ttnn.permute(k, (0, 1, 3, 2)), compute_kernel_config=self._sdpa_compute_kernel_config), scale
+    )
+    if attention_bias is not None:
+        scores = ttnn.add(scores, ttnn.typecast(attention_bias, ttnn.float32))
+    attn = ttnn.softmax(scores, dim=-1)
+    out = ttnn.matmul(attn, v, compute_kernel_config=self._sdpa_compute_kernel_config)
+    out = ttnn.typecast(out, ttnn.bfloat16)
+    x = ttnn.transformer.concatenate_heads(out)
+    if self._tp_axis is not None:
+        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+    x = self.o_proj.forward(x)
+    if self._tp_axis is not None:
+        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+    return x
 
 
 def build_tt_qwen_encoder(text_encoder, device) -> Qwen25VlTextEncoder:
@@ -48,6 +92,11 @@ def build_tt_qwen_encoder(text_encoder, device) -> Qwen25VlTextEncoder:
         ccl_manager=CCLManager(device, num_links=1, topology=ttnn.Topology.Linear) if tp > 1 else None,
     )
     model.load_torch_state_dict(text_encoder.state_dict())
+    # Fidelity fix: use fp32 eager attention instead of the bf16 flash SDPA. The
+    # bf16 attention core blurs HunyuanVideo's conditioning (~0.99 PCC); fp32 eager
+    # restores ~0.9998. See _eager_attn_fp32_forward and the note below.
+    for layer in model.layers:
+        layer.self_attn.forward = types.MethodType(_eager_attn_fp32_forward, layer.self_attn)
     return model
 
 
@@ -81,3 +130,47 @@ class TTQwenTextEncoderAdapter:
         emb = ttnn.to_torch(ttnn.get_device_tensors(hs[-1])[0]).to(self.__dict__["_real"].dtype)
         # _get_mllm_prompt_embeds reads only hidden_states[-3]; return a 3-list so [-3]==emb.
         return types.SimpleNamespace(hidden_states=[emb, emb, emb])
+
+
+# ---------------------------------------------------------------------------
+# NOTE / TODO (Qwen text-encode fidelity) — for a proper upstream fix
+# ---------------------------------------------------------------------------
+# Symptom: with the stock tt_dit Qwen port, on-device text-encode produced a
+# noticeably blurry video vs CPU text-encode (same DiT+VAE otherwise).
+#
+# Investigation (repro scripts kept in the bring-up scratchpad):
+#   - NOT bf16 rounding:  CPU-bf16 vs CPU-fp32 = 0.99994.
+#   - NOT tensor parallel: TP=1 == TP=4 (0.9906).
+#   - NOT the attn mask:   bf4 == bf16 == finite (0.98731).
+#   - NOT the MLP:         isolated (matched input) = 0.99999.
+#   - NOT qkv/head split:  pre-RoPE q/k/v = 1.0 / 1.0 / 0.99999.
+#   => The gap is the ATTENTION CORE at bf16 (RoPE + SDPA), ~1.3%/layer,
+#      accumulating over 26 layers to ~0.99 on the hidden_states[-3] the DiT
+#      consumes -- enough to blur the diffusion output.
+#
+# What does / doesn't fix it (measured on the 13 valid conditioning tokens):
+#   flash SDPA (bf16 core, HiFi4+fp32 acc): 0.99145   (blurs)
+#   bf16 eager attention:                   0.97476   (worse)
+#   fp32 eager attention (THIS):            0.99980   (fixed)
+# HiFi4 on the Linears barely moved it (0.9915->0.9934). ttnn.transformer.
+# scaled_dot_product_attention REJECTS fp32 inputs, so fp32 must be done via
+# explicit eager attention (no SDPA) -- what _eager_attn_fp32_forward does.
+#
+# This module applies the fp32-eager workaround locally (monkeypatch on each
+# layer's self_attn). PROPER FIX belongs upstream in models/tt_dit/encoders/
+# qwen25vl: either (a) an fp32 attention-core option, or (b) improve the bf16
+# flash-SDPA path's numerics for this deep-network / mid-layer-readout use.
+# Text-encode runs ONCE per generation, so the fp32/explicit cost here is fine.
+#
+# UPDATE (validated end-to-end): fp32-eager brings the VALID-token embeds to
+# PCC 0.99984 / rel-L2 1.8% / norm-ratio 0.997 / linear-fit s=1,c=0 vs CPU-fp32
+# (at TP=4, the gen config) -- a genuine correction over bf16 flash (~0.99). BUT a
+# full 13-frame gen with this fix STILL looked soft vs CPU text-encode. So the
+# residual video degradation is NOT the valid-token embed accuracy (now matched).
+# Prime remaining suspect: the ~987 PADDING tokens (post-crop mllm stream is 13
+# valid + ~987 pad) -- the DiT's fused joint-SDPA can't mask padding (see the
+# joint-SDPA commit note), and _trim_to_valid only trims to a tile-multiple, so a
+# few padding embeds leak into DiT attention; tt vs CPU padding embeds can differ.
+# NEXT: compare tt-vs-CPU embeds over the padding region and audit _trim_to_valid /
+# the DiT mllm padding handling. (Diffusion sensitivity to the residual is also
+# possible.) Keep text-encode on CPU for production until this is closed.
