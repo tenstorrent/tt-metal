@@ -127,13 +127,29 @@ void RealtimeProfilerTracyHandler::AddDevice(
 void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_id) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
-    if (orphan_end_count_ > 0) {
+    // Localize the residual: unmatched ENDs (orphans dropped) vs unmatched STARTs (lanes left with
+    // positive depth). If starts_open ~= orphan_ends, a start was routed to the WRONG lane
+    // (host enrichment mis-map). If there are orphan ends but ~no open starts, the start was
+    // genuinely LOST upstream (producer ring overwrite / transport). Normal trailing-open zones give
+    // a small baseline of starts_open.
+    int64_t starts_open = 0;
+    size_t open_lanes = 0;
+    for (const auto& [lane, depth] : lane_depth_) {
+        if (depth > 0) {
+            starts_open += depth;
+            ++open_lanes;
+        }
+    }
+    if (orphan_end_count_ > 0 || starts_open > 0) {
         log_warning(
             tt::LogMetal,
-            "[Real-time profiler] SUMMARY: dropped {} orphan ZONE_END(s) across {} distinct lane(s) this "
-            "session (unmatched ends = a lost/late ZONE_START upstream; each would SEGV tracy-capture).",
+            "[Real-time profiler] SUMMARY: {} orphan ZONE_END(s) across {} lane(s); {} unmatched "
+            "ZONE_START(s) still open across {} lane(s). (ends>>starts => start lost upstream; "
+            "ends~=starts => start mis-routed to wrong lane)",
             orphan_end_count_,
-            orphan_lanes_.size());
+            orphan_lanes_.size(),
+            starts_open,
+            open_lanes);
     }
     for (auto it = tracy_contexts_.begin(); it != tracy_contexts_.end();) {
         if ((it->first >> 40) == chip_id) {
