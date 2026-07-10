@@ -356,6 +356,13 @@ constexpr std::uint32_t bfp_exp_section_size(const std::uint32_t idx, const std:
     return 1 + effective_num_faces + idx * datum_bytes - (idx + 1);
 }
 
+// Mantissa bytes for one face row (16 datums = FACE_C_DIM) of each BFP format, i.e. the `datum_bytes`
+// @ref bfp_exp_section_size expects: 16 datums * per-datum mantissa size (Bfp8 = 1 B, Bfp4 = 1/2 B,
+// Bfp2 = 1/4 B). Named once here so the packer exp-section-size call sites carry no bare 16/8/4.
+constexpr std::uint32_t bfp8_row_bytes = 16;
+constexpr std::uint32_t bfp4_row_bytes = 8;
+constexpr std::uint32_t bfp2_row_bytes = 4;
+
 // This function saves the exponential section size/required offsets to GPR for reconfiguring
 // of data format for packer. These registers are not explicitly used by the packer during
 // operation, thus we do not need to use a semaphore to wait for the packer to finish before
@@ -365,30 +372,30 @@ inline void cache_exponential_section_sizes_in_gprs(const std::uint32_t num_face
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     regfile[p_gpr_pack::EXP0_SEC_SIZE_BFP]  = (partial_face ? 1 : num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = bfp_exp_section_size(1 /* index */, 16 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP8] = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, 16 /* datum bytes */, num_faces)
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP8] = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces)
                                                   << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, 16 /* datum bytes */, num_faces)
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP8] = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces)
                                                   << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = bfp_exp_section_size(1 /* index */, 8 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP4] = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = bfp_exp_section_size(2 /* index */, 8 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = bfp_exp_section_size(3 /* index */, 8 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP4] = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP4] = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
     }
 
-    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = bfp_exp_section_size(1 /* index */, 4 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+    regfile[p_gpr_pack::EXP1_SEC_SIZE_BFP2] = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
 
     if constexpr (!reconfiguring)
     {
-        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = bfp_exp_section_size(2 /* index */, 4 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
-        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = bfp_exp_section_size(3 /* index */, 4 /* datum bytes */, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP2_SEC_SIZE_BFP2] = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
+        regfile[p_gpr_pack::EXP3_SEC_SIZE_BFP2] = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces) << THCON_SEC0_REG8_Exp_section_size_SHAMT;
         sync_regfile_write(p_gpr_pack::EXP3_SEC_SIZE_BFP2);
     }
     else
@@ -523,29 +530,29 @@ inline void set_packer_config(
         // Override exp section size for packers 1,2,3 (see bfp_exp_section_size)
         if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp8_b))
         {
-            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, 16 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, 16 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, 16 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp8_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp4_b))
         {
-            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, 8 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, 8 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, 8 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp4_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
         else if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2) || (pack_dst_format & 0x1F) == to_underlying(DataFormat::Bfp2_b))
         {
-            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, 4 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(1 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC0_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, 4 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(2 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC1_REG1_Row_start_section_size_ADDR32 + 0] = config.val[0];
-            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, 4 /* datum bytes */, num_faces);
+            config.f.exp_section_size                              = bfp_exp_section_size(3 /* index */, bfp2_row_bytes, num_faces);
             cfg[THCON_SEC1_REG8_Row_start_section_size_ADDR32 + 0] = config.val[0];
         }
     }
