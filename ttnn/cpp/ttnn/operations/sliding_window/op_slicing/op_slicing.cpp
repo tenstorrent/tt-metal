@@ -12,6 +12,8 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/operations/experimental/slice_write/slice_write.hpp>
 #include <ttnn/operations/experimental/padded_slice/padded_slice.hpp>
+#include <ttnn/operations/experimental/quasar/slice_write/slice_write.hpp>
+#include <ttnn/operations/experimental/quasar/padded_slice/padded_slice.hpp>
 namespace ttnn::operations::op_slicing {
 
 // Compute the rounding value for slice boundaries based on output layout and slice type.
@@ -481,12 +483,20 @@ void run_sliced_op(
         auto sliced_input_tensor_memory_config = op_slice_attr->get_input_memory_config(
             {output_slice_height_start, output_slice_width_start}, {output_slice_height_end, output_slice_width_end});
 
-        const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
-            input_tensor,
-            ttsl::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-            ttsl::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
-            ttsl::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
-            sliced_input_tensor_memory_config);
+        // On Quasar, route the DRAM input-slice through the quasar Metal-2 padded_slice: the shared op
+        // builds a legacy DataMovementKernel, which Quasar rejects. WH/BH keep the shared op.
+        const Tensor sliced_input_tensor = [&]() {
+            const ttsl::SmallVector<uint32_t> begins{0, input_slice_height_start, input_slice_width_start, 0};
+            const ttsl::SmallVector<uint32_t> ends{
+                batch_size, input_slice_height_end, input_slice_width_end, input_channels};
+            const ttsl::SmallVector<uint32_t> step{1, 1, 1, 1};
+            if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+                return ttnn::operations::experimental::quasar::padded_slice(
+                    input_tensor, begins, ends, step, sliced_input_tensor_memory_config);
+            }
+            return ttnn::experimental::padded_slice(
+                input_tensor, begins, ends, step, sliced_input_tensor_memory_config);
+        }();
 
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,
@@ -519,13 +529,17 @@ void run_sliced_op(
                     ttnn::Shape(
                         {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
             }
-            ttnn::experimental::slice_write(
-                sliced_output_tensor,
-                output_tensor,
-                ttsl::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
-                ttsl::SmallVector<uint32_t>{
-                    batch_size, output_slice_height_end, output_slice_width_end, output_channels},
-                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+            // On Quasar, route the slice write-back through the quasar Metal-2 slice_write (same reason).
+            const ttsl::SmallVector<uint32_t> sw_begins{0, output_slice_height_start, output_slice_width_start, 0};
+            const ttsl::SmallVector<uint32_t> sw_ends{
+                batch_size, output_slice_height_end, output_slice_width_end, output_channels};
+            const ttsl::SmallVector<uint32_t> sw_step{1, 1, 1, 1};
+            if (sliced_output_tensor.device()->arch() == tt::ARCH::QUASAR) {
+                ttnn::operations::experimental::quasar::slice_write(
+                    sliced_output_tensor, output_tensor, sw_begins, sw_ends, sw_step);
+            } else {
+                ttnn::experimental::slice_write(sliced_output_tensor, output_tensor, sw_begins, sw_ends, sw_step);
+            }
         }
         output_slice_dim_start += output_slice_size;
         slice_index++;
