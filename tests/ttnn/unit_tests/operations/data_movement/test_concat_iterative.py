@@ -6,6 +6,8 @@ import pytest
 import torch
 import ttnn
 
+from tests.ttnn.utils_for_testing import select_tile
+
 # ==================================================
 # 1-1. Small Tensor (shape [1,1], interleaved)
 # ==================================================
@@ -20,8 +22,14 @@ def test_concat_small_tensors_1(device, tensor_layout, dim, num_inputs):
 
     memory_config = ttnn.MemoryConfig(memory_layout, ttnn.BufferType.DRAM)
 
+    tile = select_tile(ttnn.bfloat16, layout=tensor_layout)
     tt_tensor = ttnn.from_torch(
-        input_tensor, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
 
     tt_concat_inputs = []
@@ -66,11 +74,22 @@ def test_concat_small_tensors_2(device, tensor_layout, dim, num_inputs, input_sh
     torch_input_tensor1 = torch.full(tensor_shape[0], -1.0, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.full(tensor_shape[1], 1.0, dtype=torch.bfloat16)
 
+    tile = select_tile(ttnn.bfloat16, layout=tensor_layout)
     tt_input_tensor1 = ttnn.from_torch(
-        torch_input_tensor1, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        torch_input_tensor1,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
     tt_input_tensor2 = ttnn.from_torch(
-        torch_input_tensor2, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        torch_input_tensor2,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
 
     tt_concat_inputs = []
@@ -154,11 +173,22 @@ def test_concat_mid_tensor_1(device, input_mem_config, tensor_layout, dim, num_i
 
     torch_input_tensor1 = torch.full(input_shape, -1.0, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.full(input_shape, 1.0, dtype=torch.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=tensor_layout)
     tt_input_tensor1 = ttnn.from_torch(
-        torch_input_tensor1, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        torch_input_tensor1,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
     tt_input_tensor2 = ttnn.from_torch(
-        torch_input_tensor2, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        torch_input_tensor2,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
 
     tt_concat_inputs = []
@@ -196,11 +226,22 @@ def test_concat_lg_tensor_1(device, tensor_layout, num_inputs, dim, input_shapes
 
     torch_input_tensor1 = torch.full(input_shapes[0], -1.0, dtype=torch.bfloat16)
     torch_input_tensor2 = torch.full(input_shapes[1], 1.0, dtype=torch.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=tensor_layout)
     tt_input_tensor1 = ttnn.from_torch(
-        torch_input_tensor1, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        torch_input_tensor1,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
     tt_input_tensor2 = ttnn.from_torch(
-        torch_input_tensor2, dtype=ttnn.bfloat16, layout=tensor_layout, memory_config=memory_config, device=device
+        torch_input_tensor2,
+        dtype=ttnn.bfloat16,
+        layout=tensor_layout,
+        tile=tile,
+        memory_config=memory_config,
+        device=device,
     )
 
     tt_concat_inputs = []

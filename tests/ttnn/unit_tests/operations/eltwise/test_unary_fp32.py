@@ -11,6 +11,7 @@ from tests.ttnn.utils_for_testing import (
     assert_with_ulp,
     flush_subnormal_values_to_zero,
     generate_all_bfloat16_bitpatterns,
+    select_tile,
 )
 
 pytestmark = pytest.mark.use_module_device
@@ -26,7 +27,8 @@ def test_neg_fp32(device, ttnn_function):
     x_torch = torch.tensor([[0.00001]], dtype=torch.float32)
     y_torch = -x_torch
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     y_tt = ttnn_function(x_tt)
 
@@ -45,7 +47,8 @@ def test_sin_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.sin(x_torch)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     y_tt = ttnn_function(x_tt)
 
@@ -64,7 +67,8 @@ def test_cos_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.cos(x_torch)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     y_tt = ttnn_function(x_tt)
 
@@ -83,7 +87,8 @@ def test_tan_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.tan(x_torch)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     y_tt = ttnn_function(x_tt)
 
@@ -102,7 +107,8 @@ def test_relu_fp32(device, ttnn_function):
     x_torch = torch.rand((64, 128), dtype=torch.float32)
     y_torch = torch.relu(x_torch)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     y_tt = ttnn_function(x_tt)
 
@@ -119,7 +125,8 @@ def run_unary_fp32_test_with_ulp(device, ttnn_function, torch_function, max_ulp,
     # For testing, we set these values to 0.0 beforehand so that golden function also gets 0.0
     x_torch = flush_subnormal_values_to_zero(all_bf16_values)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     y_tt = ttnn_function(x_tt)
     y_torch = torch_function(x_torch)
@@ -191,7 +198,10 @@ def run_unary_test(device, h, w, ttnn_function, ulp=1, allow_nonfinite=False, pc
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile
+    )
     output_tensor = ttnn_function(input_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -229,12 +239,14 @@ def test_tanh_fp32_all_nan_payloads_propagate(device, base_bits, pad_bits):
     torch_input_tensor = input_bits.view(torch.float32).reshape(8192, 1024)
     assert torch.isnan(torch_input_tensor).all()
 
+    tile = select_tile(ttnn.float32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         preserve_nan_values=True,
+        tile=tile,
     )
 
     output_tensor = ttnn.to_torch(ttnn.tanh(input_tensor))

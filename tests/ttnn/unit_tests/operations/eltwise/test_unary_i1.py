@@ -8,6 +8,8 @@ import torch
 
 import ttnn
 
+from tests.ttnn.utils_for_testing import select_tile
+
 
 @pytest.mark.parametrize(
     "shapes",
@@ -28,12 +30,14 @@ def test_i1_range(device, shapes):
     torch_input_tensor_a = torch.rand(shapes, dtype=torch.float32) * (high - low) + low
     torch_output_tensor = torch.special.i1(torch_input_tensor_a)
 
+    tile = select_tile(ttnn.float32)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.float32,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -55,12 +59,14 @@ def test_i1_zero(device, shapes):
     torch_input_tensor_a = torch.zeros(shapes, dtype=torch.float32)
     torch_output_tensor = torch.special.i1(torch_input_tensor_a)
 
+    tile = select_tile(ttnn.bfloat16)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -136,12 +142,14 @@ def test_i1_ood(device, shapes, dtype):
     ref_input = torch_input_tensor_a.to(torch_dtype).to(torch.float32)
     torch_output_tensor = torch.special.i1(ref_input)
 
+    tile = select_tile(dtype)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -166,12 +174,14 @@ def test_i1_clamp_boundary(device, dtype):
     padded = torch.zeros((1, 1, 32, 32), dtype=torch.float32)
     padded[0, 0, 0, : boundaries.numel()] = boundaries
 
+    tile = select_tile(dtype)
     input_tensor_a = ttnn.from_torch(
         padded,
         layout=ttnn.TILE_LAYOUT,
         dtype=dtype,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.i1(input_tensor_a, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_torch(output_tensor)[0, 0, 0, : boundaries.numel()]

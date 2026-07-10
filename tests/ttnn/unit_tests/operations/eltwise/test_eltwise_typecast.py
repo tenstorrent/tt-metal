@@ -13,7 +13,7 @@ from tests.ttnn.python_api_testing.typecast_test_helpers import (
     typecast_test_input_bounds,
     uses_exact_integer_typecast_check,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, select_tile
 
 mem_configs = [
     ttnn.DRAM_MEMORY_CONFIG,
@@ -152,8 +152,14 @@ class TestTypecast:
         shape = input_shapes[0]
         torch_input = make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)
 
+        tile = select_tile(tt_input_dtype, tt_output_dtype)
         tt_input = ttnn.from_torch(
-            torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
+            torch_input,
+            dtype=tt_input_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            tile=tile,
+            device=device,
+            memory_config=input_mem_config,
         )
         tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype, memory_config=dst_mem_config)
         torch_output = ttnn.to_torch(tt_output)
@@ -190,7 +196,8 @@ def test_typecast_zero_fp_to_int(device, pt_input_dtype, tt_input_dtype, tt_outp
     shape = [1, 1, 32, 32]
     torch_input = torch.zeros(shape, dtype=pt_input_dtype)
 
-    tt_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(tt_input_dtype, tt_output_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
     tt_output = ttnn.typecast(tt_input, tt_input_dtype, tt_output_dtype)
     result = ttnn.to_torch(tt_output)
 
@@ -204,11 +211,12 @@ def test_typecast_bf16_to_bfp8_b(device):
 
     # bf16 --> bfp8_b by cpu.
     torch_bf16 = torch.randn(shape, dtype=torch.bfloat16)
-    bfp8_b_by_cpu = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b).to(npu_layout)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    bfp8_b_by_cpu = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b, layout=npu_layout, tile=tile)
     cpu_version = bfp8_b_by_cpu.to(cpu_layout).to_torch()
 
     # bf16 --> bfp8_b by npu
-    tt_bf16 = ttnn.Tensor(torch_bf16, ttnn.bfloat16).to(npu_layout).to(device)
+    tt_bf16 = ttnn.Tensor(torch_bf16, ttnn.bfloat16, layout=npu_layout, tile=tile).to(device)
     bfp8_b_by_npu = ttnn.typecast(tt_bf16, ttnn.bfloat8_b)
     npu_version = bfp8_b_by_npu.cpu().to(cpu_layout).to_torch()
 
@@ -245,11 +253,12 @@ def test_typecast_bf16_to_bfp8_b_various_input(seed, scale, bias, device):
     torch_bf16 = torch_bf16 * random_signs
 
     # bf16 --> bfp8_b by cpu.
-    bfp8_b_by_cpu = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b).to(npu_layout)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    bfp8_b_by_cpu = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b, layout=npu_layout, tile=tile)
     cpu_version = bfp8_b_by_cpu.to(cpu_layout).to_torch()
 
     # bf16 --> bfp8_b by npu
-    tt_bf16 = ttnn.Tensor(torch_bf16, ttnn.bfloat16).to(npu_layout).to(device)
+    tt_bf16 = ttnn.Tensor(torch_bf16, ttnn.bfloat16, layout=npu_layout, tile=tile).to(device)
     bfp8_b_by_npu = ttnn.typecast(tt_bf16, ttnn.bfloat8_b)
     npu_version = bfp8_b_by_npu.cpu().to(cpu_layout).to_torch()
 
@@ -286,11 +295,12 @@ def test_typecast_bf16_to_bfp8_b_with_inf_nan(seed, scale, bias, insert_inf, ins
     torch_bf16 = torch_bf16 * random_signs
 
     # bf16 --> bfp8_b by cpu.
-    bfp8_b_by_cpu = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b).to(npu_layout)
+    tile = select_tile(ttnn.bfloat16, ttnn.bfloat8_b)
+    bfp8_b_by_cpu = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b, layout=npu_layout, tile=tile)
     cpu_version = bfp8_b_by_cpu.to(cpu_layout).to_torch()
 
     # bf16 --> bfp8_b by npu
-    tt_bf16 = ttnn.Tensor(torch_bf16, ttnn.bfloat16).to(npu_layout).to(device)
+    tt_bf16 = ttnn.Tensor(torch_bf16, ttnn.bfloat16, layout=npu_layout, tile=tile).to(device)
     bfp8_b_by_npu = ttnn.typecast(tt_bf16, ttnn.bfloat8_b)
     npu_version = bfp8_b_by_npu.cpu().to(cpu_layout).to_torch()
 
@@ -306,7 +316,8 @@ def test_typecast_bfp8_b_to_bf16(device):
 
     # bfp8_b --> bf16 by cpu.
     torch_bf16 = torch.randn(shape, dtype=torch.bfloat16)
-    bfp8_b = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b).to(npu_layout)
+    tile = select_tile(ttnn.bfloat8_b, ttnn.bfloat16)
+    bfp8_b = ttnn.Tensor(torch_bf16, ttnn.bfloat8_b, layout=npu_layout, tile=tile)
     cpu_version = bfp8_b.to(cpu_layout).to_torch()
 
     # bfp8_b --> bf16 by npu.
@@ -325,11 +336,12 @@ def test_typecast_fp32_to_bfp8_b(device):
 
     # fp32 --> bfp8_b by cpu.
     torch_fp32 = torch.randn(shape, dtype=torch.float32)
-    bfp8_b_by_cpu = ttnn.Tensor(torch_fp32, ttnn.bfloat8_b).to(npu_layout)
+    tile = select_tile(ttnn.float32, ttnn.bfloat8_b)
+    bfp8_b_by_cpu = ttnn.Tensor(torch_fp32, ttnn.bfloat8_b, layout=npu_layout, tile=tile)
     cpu_version = bfp8_b_by_cpu.to(cpu_layout).to_torch()
 
     # fp32 --> bfp8_b by npu
-    tt_fp32 = ttnn.Tensor(torch_fp32, ttnn.float32).to(npu_layout).to(device)
+    tt_fp32 = ttnn.Tensor(torch_fp32, ttnn.float32, layout=npu_layout, tile=tile).to(device)
     bfp8_b_by_npu = ttnn.typecast(tt_fp32, ttnn.bfloat8_b)
     npu_version = bfp8_b_by_npu.cpu().to(cpu_layout).to_torch()
 
@@ -345,7 +357,8 @@ def test_typecast_bfp8_b_to_fp32(device):
 
     # bfp8_b --> fp32 by cpu.
     torch_fp32 = torch.randn(shape, dtype=torch.float32)
-    bfp8_b = ttnn.Tensor(torch_fp32, ttnn.bfloat8_b).to(npu_layout)
+    tile = select_tile(ttnn.bfloat8_b, ttnn.float32)
+    bfp8_b = ttnn.Tensor(torch_fp32, ttnn.bfloat8_b, layout=npu_layout, tile=tile)
     cpu_version = bfp8_b.to(cpu_layout).to_torch()
 
     # bfp8_b --> fp32 by npu.
@@ -386,8 +399,14 @@ def test_typecast_legacy_sharded(device, shard_layout, core_grid, shard_shape):
     mem_config = ttnn.MemoryConfig(shard_layout, ttnn.BufferType.L1, shard_spec)
 
     torch_input = _make_fp32_to_int32_input(shape)
+    tile = select_tile(ttnn.float32, ttnn.int32)
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=mem_config,
     )
     output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
     assert output_tensor.dtype == ttnn.int32
@@ -444,8 +463,9 @@ def test_typecast_nd_sharded_int(device, tensor_shape, nd_shard_shape, shard_gri
     mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
 
     torch_input = _make_fp32_to_int32_input(tensor_shape)
+    tile = select_tile(ttnn.float32, ttnn.int32, layout=layout)
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=ttnn.float32, layout=layout, device=device, memory_config=mem_config
+        torch_input, dtype=ttnn.float32, layout=layout, tile=tile, device=device, memory_config=mem_config
     )
     output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
     assert output_tensor.dtype == ttnn.int32
@@ -500,12 +520,18 @@ def test_typecast_nd_sharded_float(
 
     torch_input = torch.randn(tensor_shape, dtype=pt_input_dtype)
 
+    tile = select_tile(tt_input_dtype, tt_output_dtype)
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        torch_input,
+        dtype=tt_input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=mem_config,
     )
 
     # Build CPU-side reference: run the same input -> tt_input_dtype -> tt_output_dtype
-    cpu_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
+    cpu_tensor = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     cpu_reference = ttnn.to_torch(cpu_tensor)
 
     output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
@@ -563,12 +589,18 @@ def test_typecast_legacy_sharded_tile_size_mismatch(
 
     torch_input = torch.randn(shape, dtype=pt_input_dtype)
 
-    cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(tt_input_dtype, tt_output_dtype)
+    cpu_input = ttnn.from_torch(torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     cpu_output = ttnn.typecast(cpu_input, dtype=tt_output_dtype)
     cpu_reference = ttnn.to_torch(cpu_output)
 
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        torch_input,
+        dtype=tt_input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=mem_config,
     )
     output_tensor = ttnn.typecast(input_tensor, dtype=tt_output_dtype)
     assert output_tensor.dtype == tt_output_dtype
@@ -602,8 +634,14 @@ def test_typecast_legacy_sharded_dram_buffer(device, shard_layout):
 
     torch_input = _make_fp32_to_int32_input(shape)
 
+    tile = select_tile(ttnn.float32, ttnn.int32)
     input_tensor = ttnn.from_torch(
-        torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+        torch_input,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=mem_config,
     )
     output_tensor = ttnn.typecast(input_tensor, dtype=ttnn.int32)
     assert output_tensor.dtype == ttnn.int32
@@ -727,10 +765,12 @@ def test_typecast_uint8_to_bfloat16_exhaustive(shape, layout, memory_config, dev
 
     expected = torch_input.to(torch.bfloat16)
 
+    tile = select_tile(ttnn.uint8, ttnn.bfloat16, layout=layout)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.uint8,
         layout=layout,
+        tile=tile,
         device=device,
         memory_config=memory_config,
     )

@@ -12,7 +12,7 @@ import ttnn
 import math
 
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_allclose, assert_with_pcc, select_tile
 
 pytestmark = pytest.mark.use_module_device
 
@@ -24,12 +24,13 @@ pytestmark = pytest.mark.use_module_device
 def test_copy(shape, layout, dtype, device):
     torch.manual_seed(2005)
     torch_dtype = torch.int32
+    tile = select_tile(dtype, layout=layout)
 
     input = torch.randint(1, 100, shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, dtype, layout=layout, device=device)
+    input = ttnn.from_torch(input, dtype, layout=layout, device=device, tile=tile)
 
     input_b = torch.zeros(shape, dtype=torch_dtype)
-    input_b = ttnn.from_torch(input_b, dtype, layout=layout, device=device)
+    input_b = ttnn.from_torch(input_b, dtype, layout=layout, device=device, tile=tile)
 
     ttnn.copy(input, input_b)
     assert input_b.shape == input.shape
@@ -103,8 +104,9 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
+    tile = select_tile(dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout, tile=tile)
+    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout, tile=tile)
 
     num_cores_x = 2
     num_cores_y = 2
@@ -157,8 +159,9 @@ def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout)
-    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout)
+    tile = select_tile(dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(input_torch, dtype, layout=layout, tile=tile)
+    ttnn_output = ttnn.from_torch(output_torch, dtype, layout=layout, tile=tile)
 
     num_cores = 2
     shard_grid = ttnn.CoreRangeSet(
@@ -215,8 +218,9 @@ def test_copy_height_sharded(device, layout, shape, shard_scheme, dtype):
     else:
         input_torch = torch.randn(shape)
     output_torch = torch.zeros(shape)
-    ttnn_input = ttnn.from_torch(input_torch, dtype=dtype, layout=layout)
-    ttnn_output = ttnn.from_torch(output_torch, dtype=dtype, layout=layout)
+    tile = select_tile(dtype, layout=layout)
+    ttnn_input = ttnn.from_torch(input_torch, dtype=dtype, layout=layout, tile=tile)
+    ttnn_output = ttnn.from_torch(output_torch, dtype=dtype, layout=layout, tile=tile)
 
     num_cores = 8
     shard_grid = ttnn.CoreRangeSet(
@@ -1062,7 +1066,8 @@ def test_copy_tilized_interleaved_to_nd_sharded(
     assert sharded_memory_config.is_sharded()
 
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     input_tensor = ttnn.to_device(input_tensor, device)
 
     output_tensor = ttnn.assign(input_tensor, memory_config=sharded_memory_config)
@@ -1129,7 +1134,8 @@ def test_copy_tilized_interleaved_to_nd_sharded_dtype_conversion(
     assert sharded_memory_config.is_sharded()
 
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(input_dtype, output_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     input_tensor = ttnn.to_device(input_tensor, device)
 
     output_tensor = ttnn.assign(input_tensor, memory_config=sharded_memory_config, dtype=output_dtype)
@@ -1193,7 +1199,8 @@ def test_copy_tilized_interleaved_to_nd_sharded_dram(device, tensor_shape, shard
     assert sharded_memory_config.is_sharded()
 
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     input_tensor = ttnn.to_device(input_tensor, device)
 
     output_tensor = ttnn.assign(input_tensor, memory_config=sharded_memory_config)
@@ -1263,7 +1270,8 @@ def test_copy_tilized_interleaved_to_nd_sharded_dram_dtype_conversion(
     assert sharded_memory_config.is_sharded()
 
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(input_dtype, output_dtype)
+    input_tensor = ttnn.from_torch(torch_input, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, tile=tile)
     input_tensor = ttnn.to_device(input_tensor, device)
 
     output_tensor = ttnn.assign(input_tensor, memory_config=sharded_memory_config, dtype=output_dtype)
@@ -1386,10 +1394,12 @@ def test_copy_tilized_legacy_sharded_to_nd_sharded(
 
     input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape, shard_orientation)
     input_sharded_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_sharded_mem_config,
     )
@@ -1512,10 +1522,12 @@ def test_copy_tilized_nd_sharded_to_nd_sharded(
 
     input_nd_spec = ttnn.NdShardSpec(input_nd_shard_shape, input_grid, orientation=shard_orientation)
     input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -1612,7 +1624,8 @@ def test_copy_tilized_interleaved_to_legacy_2d_sharded(
     torch.manual_seed(0)
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile)
     input_tensor = ttnn.to_device(input_tensor, device)
 
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
@@ -1746,10 +1759,12 @@ def test_copy_tilized_legacy_2d_sharded_to_legacy_2d_sharded(
 
     input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape_2d, shard_orientation)
     input_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -1873,10 +1888,12 @@ def test_copy_tilized_nd_sharded_to_legacy_2d_sharded(
 
     input_nd_spec = ttnn.NdShardSpec(input_nd_shard_shape, input_grid, orientation=shard_orientation)
     input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -2246,10 +2263,12 @@ def test_copy_tilized_nd_sharded_to_interleaved(
 
     input_nd_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
     input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -2306,10 +2325,12 @@ def test_copy_tilized_nd_sharded_to_interleaved_dtype_conversion(
 
     input_nd_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
     input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    tile = select_tile(input_dtype, output_dtype)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=input_dtype,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -2397,10 +2418,12 @@ def test_copy_tilized_legacy_2d_sharded_to_interleaved(
 
     input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape, shard_orientation)
     input_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -2472,10 +2495,12 @@ def test_copy_tilized_legacy_2d_sharded_to_interleaved_dtype_conversion(
 
     input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape, shard_orientation)
     input_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
+    tile = select_tile(input_dtype, output_dtype)
     input_tensor = ttnn.from_torch(
         torch_input,
         dtype=input_dtype,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=input_mem_config,
     )
@@ -2625,7 +2650,10 @@ def test_copy_tilized_override_runtime_arguments(
     for seed in (0, 42):
         torch.manual_seed(seed)
         torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
-        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(ttnn.bfloat16)
+        input_tensor = ttnn.from_torch(
+            torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile, device=device
+        )
 
         output_tensor = ttnn.assign(input_tensor, memory_config=sharded_memory_config)
 
@@ -2645,7 +2673,8 @@ def test_copy_tile_interleaved_to_width_sharded_bf8(device):
     shape = [1, 1, 8192, 2048]
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat8_b)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, tile=tile, device=device)
 
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
     shard_shape = (8192, 256)

@@ -20,7 +20,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, select_tile
 
 _TTNN_TO_TORCH_DTYPE = {
     ttnn.bfloat16: torch.bfloat16,
@@ -177,7 +177,8 @@ def _run_slice(
     torch_dtype = _TTNN_TO_TORCH_DTYPE[dtype]
     x = torch.rand(shape, dtype=torch_dtype)
 
-    ttnn_in = ttnn.from_torch(x, layout=layout, dtype=dtype, device=device, memory_config=input_mem_config)
+    tile = select_tile(dtype, layout=layout)
+    ttnn_in = ttnn.from_torch(x, layout=layout, dtype=dtype, device=device, memory_config=input_mem_config, tile=tile)
     slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))
     result = ttnn.slice(ttnn_in, begins, ends, step, memory_config=output_mem_config)
 
@@ -738,8 +739,9 @@ def test_slice_dram_sharded_fallback(device):
     dram_sharded = _height_sharded(shape, device, buffer_type=ttnn.BufferType.DRAM)
     torch.manual_seed(12345)
     x = torch.rand(shape, dtype=torch.bfloat16)
+    tile = select_tile(ttnn.bfloat16)
     ttnn_in = ttnn.from_torch(
-        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=dram_sharded
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=dram_sharded, tile=tile
     )
     result = ttnn.slice(ttnn_in, (0, 0, 0, 0), (1, 1, 64, 64), (1, 1, 1, 1), memory_config=L1_INTERLEAVED)
     assert result.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
@@ -759,7 +761,10 @@ def test_slice_block_sharded_default_mc_no_longer_fatal(device):
     in_mc = _block_sharded(shape, device)
     torch.manual_seed(0)
     x = torch.rand(shape, dtype=torch.bfloat16)
-    ttnn_in = ttnn.from_torch(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc)
+    tile = select_tile(ttnn.bfloat16)
+    ttnn_in = ttnn.from_torch(
+        x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in_mc, tile=tile
+    )
     result = ttnn.slice(ttnn_in, (0, 0, 0, 0), (1, 1, 32, 32), (1, 1, 1, 1))
     assert result.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
     ref = x[:1, :1, :32, :32]

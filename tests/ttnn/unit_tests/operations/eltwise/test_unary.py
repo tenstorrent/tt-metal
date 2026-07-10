@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_with_ulp, assert_allclose, select_tile
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
@@ -56,7 +56,8 @@ def run_unary_test(
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor)
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
@@ -76,7 +77,8 @@ def run_unary_with_approx_mode_test(
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor, vector_mode=vector_mode, fast_and_approximate_mode=approx_mode)
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
@@ -98,7 +100,8 @@ def run_unary_test_fixed(
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor)
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
@@ -120,7 +123,8 @@ def run_identity_test(device, h, w, data_type):
         torch_output_tensor = golden_function(torch_input_tensor)
 
         # run tt
-        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(data_type)
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
         output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -137,7 +141,8 @@ def run_identity_test(device, h, w, data_type):
         torch_output_tensor = golden_function(torch_input_tensor)
 
         # run tt
-        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(data_type)
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
         output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -155,7 +160,8 @@ def run_identity_test(device, h, w, data_type):
         torch_output_tensor = golden_function(torch_input_tensor)
 
         # run tt
-        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(data_type)
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
         output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -173,7 +179,8 @@ def run_identity_test(device, h, w, data_type):
         torch_output_tensor = golden_function(torch_input_tensor)
 
         # run tt
-        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(data_type)
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
         output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -190,7 +197,8 @@ def run_identity_test(device, h, w, data_type):
         torch_output_tensor = golden_function(torch_input_tensor)
 
         # run tt
-        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(data_type)
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
         output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -207,7 +215,8 @@ def run_identity_test(device, h, w, data_type):
         torch_output_tensor = golden_function(torch_input_tensor)
 
         # run tt
-        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device)
+        tile = select_tile(data_type)
+        input_tensor = ttnn.from_torch(torch_input_tensor, data_type, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
         output_tensor = ttnn.identity(input_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
 
@@ -293,12 +302,14 @@ def test_relu_uint32_full_range(device, input_shapes, value_ranges):
     golden_function = ttnn.get_golden_function(ttnn.relu)
     torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint32)
 
+    tile = select_tile(ttnn.uint32)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.uint32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint32)
 
@@ -312,7 +323,10 @@ def test_relu_reglu_uint32_edge_cases(device):
     golden_function = ttnn.get_golden_function(ttnn.relu)
     torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint32)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.uint32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT, tile=tile
+    )
 
     relu_out = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint32)
     assert torch.equal(relu_out, torch_output_tensor)
@@ -331,7 +345,10 @@ def test_relu_reglu_uint32_edge_cases(device):
     reglu_golden = ttnn.get_golden_function(ttnn.reglu)
     torch_reglu_output = reglu_golden(torch_reglu_input.to(torch.int64), -1).to(torch.uint32)
 
-    reglu_input = ttnn.from_torch(torch_reglu_input, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.uint32)
+    reglu_input = ttnn.from_torch(
+        torch_reglu_input, dtype=ttnn.uint32, device=device, layout=ttnn.TILE_LAYOUT, tile=tile
+    )
     reglu_out = ttnn.to_torch(ttnn.reglu(reglu_input, -1), dtype=torch.uint32)
 
     assert torch.equal(reglu_out, torch_reglu_output)
@@ -347,12 +364,14 @@ def test_reglu_uint32_full_range(device, input_shapes, value_ranges):
     reglu_golden = ttnn.get_golden_function(ttnn.reglu)
     torch_reglu_output = (reglu_golden(torch_reglu_input.to(torch.int64), -1) % (2**32)).to(torch.uint32)
 
+    tile = select_tile(ttnn.uint32)
     reglu_input = ttnn.from_torch(
         torch_reglu_input,
         dtype=ttnn.uint32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     reglu_out = ttnn.to_torch(ttnn.reglu(reglu_input, -1), dtype=torch.uint32)
 
@@ -367,12 +386,14 @@ def test_reglu_uint16_full_range(device):
     reglu_golden = ttnn.get_golden_function(ttnn.reglu)
     torch_reglu_output = (reglu_golden(torch_reglu_input.to(torch.int64), -1) % (2**16)).to(torch.uint16)
 
+    tile = select_tile(ttnn.uint16)
     reglu_input = ttnn.from_torch(
         torch_reglu_input,
         dtype=ttnn.uint16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     reglu_out = ttnn.to_torch(ttnn.reglu(reglu_input, -1), dtype=torch.uint16)
 
@@ -385,12 +406,14 @@ def test_relu_uint8_full_range(device):
     golden_function = ttnn.get_golden_function(ttnn.relu)
     torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint8)
 
+    tile = select_tile(ttnn.uint8)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.uint8,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint8)
 
@@ -403,12 +426,14 @@ def test_relu_uint16_full_range(device):
     golden_function = ttnn.get_golden_function(ttnn.relu)
     torch_output_tensor = golden_function(torch_input_tensor.to(torch.int64), device=device).to(torch.uint16)
 
+    tile = select_tile(ttnn.uint16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.uint16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     output_tensor = ttnn.to_torch(ttnn.relu(input_tensor), dtype=torch.uint16)
 
@@ -433,7 +458,8 @@ def test_log_edge_cases(device):
     in_data = torch.tensor(
         [-10.0, -0.0, 0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch.float32
     )
-    input_tensor = ttnn.from_torch(in_data, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    input_tensor = ttnn.from_torch(in_data, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.log(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.log)
@@ -488,7 +514,8 @@ def test_unary_log_operations_ttnn(
     if ttnn_dtype == ttnn.bfloat8_b:
         tensor_kwargs["pad_value"] = 1.0
 
-    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs, tile=tile)
     output_tensor = log_function(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     golden_function = ttnn.get_golden_function(log_function)
@@ -545,7 +572,8 @@ def run_unary_inverse_trig_bf16_test(device, h, w, ttnn_function, ulp_threshold,
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor)
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
     output_tensor = ttnn.to_torch(output_tensor)
@@ -620,7 +648,8 @@ def run_unary_test_range(device, h, w, ttnn_function, layout=ttnn.TILE_LAYOUT, u
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor)
     # Verify output layout matches input layout
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
@@ -650,7 +679,8 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, layout=ttnn.T
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor, scalar)
     # Verify output layout matches input layout
     assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
@@ -666,7 +696,8 @@ def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, ulp
     golden_function = ttnn.get_golden_function(ttnn.remainder)
     torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor, scalar)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -695,7 +726,8 @@ def test_relu_min(device, h, w, lower_limit, dtype):
     golden_function = ttnn.get_golden_function(ttnn.relu_min)
     torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.relu_min(input_tensor, lower_limit)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -714,7 +746,8 @@ def test_relu_max(device, h, w, upper_limit, dtype):
     golden_function = ttnn.get_golden_function(ttnn.relu_max)
     torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(dtype)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.relu_max(input_tensor, upper_limit)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -1079,7 +1112,10 @@ def run_unary_test_bitwise_not(device, h, w, fill_value, ttnn_function):
     golden_function = ttnn.get_golden_function(ttnn_function)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile
+    )
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
@@ -1105,7 +1141,8 @@ def test_bitwise_not(device, h, w, fill_value):
 )
 def test_unary_floor(input_shapes, device):
     in_data1 = torch.empty(input_shapes, dtype=torch.float32).uniform_(-43566, 43565)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.floor(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.floor)
     golden_tensor = golden_function(in_data1)
@@ -1123,7 +1160,8 @@ def test_unary_floor(input_shapes, device):
 )
 def test_unary_ceil(input_shapes, device):
     in_data1 = torch.empty(input_shapes, dtype=torch.float32).uniform_(-43566, 43565)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.ceil(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.ceil)
     golden_tensor = golden_function(in_data1)
@@ -1140,7 +1178,8 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
 
     torch.manual_seed(0)
 
-    tt_input = ttnn.from_torch(torch.randn([h, w]), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tile = select_tile(dtype)
+    tt_input = ttnn.from_torch(torch.randn([h, w]), device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, tile=tile)
     torch_input = ttnn.to_torch(tt_input)
 
     torch_output = golden_function(torch_input, device=device)
@@ -1174,7 +1213,8 @@ def test_alt_complex_rotate90(device, h: int, w: int, dtype: ttnn.DataType):
 )
 def test_unary_zero_comp_ttnn(input_shapes, low, high, ttnn_function, device):
     in_data = torch.randint(low, high, input_shapes, dtype=torch.int32)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     cq_id = 0
     output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
@@ -1210,7 +1250,8 @@ def test_unary_zero_comp_uint_ttnn(input_shapes, low, high, torch_dtype, ttnn_dt
         in_data = in_data.to(torch.int64) if ttnn_dtype == ttnn.uint32 else in_data
         in_data = in_data.masked_fill(zero_mask, 0)
         in_data = in_data.to(torch.uint32) if ttnn_dtype == ttnn.uint32 else in_data
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     cq_id = 0
     output_tensor = ttnn_function(input_tensor, queue_id=cq_id)
     golden_function = ttnn.get_golden_function(ttnn_function)
@@ -1253,7 +1294,8 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
     flat[::k] = 0
     in_data = flat.view(input_shapes)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn_function(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn_function)
@@ -1283,7 +1325,8 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn_op(input_tensor, scalar)
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -1312,7 +1355,8 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
 def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     torch.manual_seed(0)
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
@@ -1334,7 +1378,8 @@ def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, devi
 def test_unary_edge_case_ttnn(input_shapes, ttnn_function, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data)
@@ -1371,7 +1416,8 @@ def test_unary_angle_conversion_ttnn(input_shapes, device, ttnn_dtype, ttnn_func
 def test_unary_trunc_ttnn(input_shapes, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.trunc(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.trunc)
@@ -1387,7 +1433,8 @@ def test_unary_trunc_ttnn(input_shapes, device):
 def test_unary_trunc_ttnn_opt(input_shapes, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     cq_id = 0
     ttnn.trunc(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
@@ -1416,7 +1463,8 @@ def test_unary_trunc_ttnn_opt(input_shapes, device):
 def test_unary_silu_swish_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_function, device, atol):
     torch.manual_seed(0)
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
@@ -1431,7 +1479,8 @@ def test_unary_silu_swish_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_funct
 @pytest.mark.parametrize("ttnn_function", [ttnn.silu, ttnn.swish])
 def test_unary_silu_swish_threshold(ttnn_function, device):
     in_data1 = torch.tensor([[-1.0, 0.0, 0.5, 1.0, 1.5, 3.5, 5.0, 5.2, 5.5]], dtype=torch.bfloat16)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn_function(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn_function)
@@ -1463,7 +1512,8 @@ def test_unary_inverse_hyperbolic_edge_case_ttnn(
     input_shapes, device, torch_dtype, ttnn_dtype, low, high, ttnn_function
 ):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(low, high)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
     output_tensor = ttnn_function(input_tensor1)
@@ -1510,7 +1560,8 @@ def test_unary_inverse_hyperbolic_edge_case_ttnn(
 )
 def test_unary_acosh_ttnn(input_shapes, device):
     in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(1, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.acosh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.acosh)
@@ -1535,7 +1586,8 @@ def test_unary_acosh_ttnn(input_shapes, device):
 )
 def test_unary_asinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.asinh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.asinh)
@@ -1568,7 +1620,8 @@ def test_unary_asinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 )
 def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(low, high)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
     output_tensor = ttnn.atanh(input_tensor1)
@@ -1582,7 +1635,8 @@ def _run_inverse_hyperbolic_special_cases(device, ttnn_function, torch_function,
     """Assert the device kernel matches the torch golden bit-pattern-wise on hand-picked
     special-case inputs (boundary singularities, NaN/inf propagation, sign handling)."""
     in_data = torch.tensor(values, dtype=torch.float32).reshape(1, 1, 1, -1)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.to_torch(ttnn_function(input_tensor))
     golden_tensor = torch_function(in_data)
 
@@ -1657,7 +1711,8 @@ def test_unary_acosh_special_cases_ttnn(device):
 )
 def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtype, ttnn_function, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn_function(input_tensor, lambd=param)
     golden_function = ttnn.get_golden_function(ttnn_function)
@@ -1686,7 +1741,8 @@ def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtyp
 )
 def test_unary_shrink_functions_bf8b_ttnn(input_shapes, param, ttnn_function, device):
     in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100, 100)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat8_b)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     in_data = ttnn.to_torch(input_tensor, dtype=torch.bfloat16)
 
     output_tensor = ttnn_function(input_tensor, lambd=param)
@@ -1714,7 +1770,8 @@ def test_unary_shrink_functions_bf8b_ttnn(input_shapes, param, ttnn_function, de
 def test_unary_shrink_functions_edge_case_ttnn(input_shapes, param, ttnn_function, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn_function(input_tensor, lambd=param)
     golden_function = ttnn.get_golden_function(ttnn_function)
     golden_tensor = golden_function(in_data, lambd=param)
@@ -1732,7 +1789,8 @@ def test_unary_shrink_functions_edge_case_ttnn(input_shapes, param, ttnn_functio
 def test_unary_frac_ttnn(input_shapes, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.frac(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.frac)
@@ -1748,7 +1806,8 @@ def test_unary_frac_ttnn(input_shapes, device):
 def test_unary_frac_ttnn_opt(input_shapes, device):
     in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     cq_id = 0
     ttnn.frac(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
@@ -1775,7 +1834,8 @@ def test_unary_frac_ttnn_opt(input_shapes, device):
 )
 def test_unary_softsign_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
@@ -1803,7 +1863,8 @@ def test_unary_softsign_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device
 )
 def test_unary_hardsigmoid_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
@@ -1831,7 +1892,8 @@ def test_unary_hardsigmoid_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, dev
 )
 def test_unary_hardswish_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, atol, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(low, high)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.hardswish(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.hardswish)
@@ -1851,7 +1913,8 @@ def test_unary_hardswish_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, 
 def test_unary_hardswish_bf8b_ttnn(input_shapes, low, high, device):
     in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(low, high)
 
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat8_b)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     in_data1 = ttnn.to_torch(input_tensor1, dtype=torch.bfloat16)
 
     output_tensor = ttnn.hardswish(input_tensor1)
@@ -1887,7 +1950,8 @@ def test_unary_hardswish_bf8b_ttnn(input_shapes, low, high, device):
 def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max_val, device):
     torch.manual_seed(0)
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
@@ -1920,7 +1984,8 @@ def test_unary_signbit_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     else:
         in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
 
@@ -1933,7 +1998,8 @@ def test_unary_signbit_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
 def test_unary_signbit_int32_edge_case_ttnn(device):
     in_data = torch.tensor([-2147483648, 2147483647, +0, -0, 0], dtype=torch.int32)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
@@ -1953,8 +2019,14 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     in_data = torch.tensor(
         [-0.0, 0.0, +0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch_dtype
     )
+    tile = select_tile(ttnn_dtype)
     input_tensor = ttnn.from_torch(
-        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+        in_data,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+        tile=tile,
     )
 
     output_tensor = ttnn.signbit(input_tensor)
@@ -2011,7 +2083,8 @@ def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
 )
 def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype, ttnn_dtype, device, expect_error):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     min = min_val
     max = max_val
     if min is None and max is None:
@@ -2040,7 +2113,8 @@ def test_unary_clamp_tss_float_ttnn(input_shapes, min_val, max_val, torch_dtype,
 )
 def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
@@ -2068,7 +2142,8 @@ def test_unary_tanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
 )
 def test_unary_tanh_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-10, 10)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
@@ -2090,7 +2165,8 @@ def test_unary_square_uint16_ttnn(input_shapes, device):
     in_data = torch.randint(
         0, 255, input_shapes, dtype=torch.int32
     )  # Beyond 255 leads to overflow of uint16 range, since it a square op.
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.uint16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     cq_id = 0
     output_tensor = ttnn.square(input_tensor, queue_id=cq_id)
@@ -2125,7 +2201,8 @@ def test_unary_square_uint16_ttnn(input_shapes, device):
 def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device, expect_error):
     torch.manual_seed(0)
     in_data1 = torch.randint(-100, 100, input_shapes, dtype=torch.int32)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     min = min_val
     max = max_val
     if min is None and max is None:
@@ -2155,7 +2232,8 @@ def test_unary_clamp_tss_int32_ttnn(input_shapes, min_val, max_val, device, expe
 )
 def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-9, 9)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
 
@@ -2188,7 +2266,8 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 )
 def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-9, 9)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
 
@@ -2214,7 +2293,8 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 @pytest.mark.parametrize("exponent", [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.5, 8.0, 9.0, 10.0])
 def test_unary_rpow_ttnn(input_shapes, exponent, device):
     in_data1 = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-30, 30)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.rpow(input_tensor1, exponent)
     golden_function = ttnn.get_golden_function(ttnn.rpow)
     golden_tensor = golden_function(in_data1, exponent)
@@ -2240,7 +2320,8 @@ def test_unary_rpow_ttnn(input_shapes, exponent, device):
 )
 def test_unary_cbrt_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
 
@@ -2270,8 +2351,14 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
         [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
         dtype=torch_dtype,
     )
+    tile = select_tile(ttnn_dtype)
     input_tensor = ttnn.from_torch(
-        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+        in_data,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        preserve_nan_values=True,
+        tile=tile,
     )
 
     output_tensor = ttnn_op(input_tensor)
@@ -2299,7 +2386,8 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
 @pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 5.75, 10.0])
 def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_dtype, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data = ttnn.to_torch(input_tensor, dtype=torch_dtype)
 
@@ -2337,7 +2425,8 @@ def test_unary_hardmish(input_shapes, torch_dtype, ttnn_dtype, device):
     # limit the range to avoid overflow in hardmish
     in_data1 = in_data1[(in_data1 + 2.0).abs() < torch.finfo(torch.float32).max / 2]
 
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.hardmish(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.hardmish)
@@ -2363,12 +2452,14 @@ def test_hardmish_bfloat16_ulp(device):
     )
     input_tensor[mask] = 0.0
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     golden_function = ttnn.get_golden_function(ttnn.hardmish)
     golden = golden_function(input_tensor, device=device)
@@ -2384,12 +2475,14 @@ def test_hardmish_bfloat16_allclose(device):
     input_tensor = all_bitpatterns.view(torch.bfloat16)
     input_tensor = input_tensor.to(torch.float32)
 
+    tile = select_tile(ttnn.float32)
     tt_in = ttnn.from_torch(
         input_tensor,
         dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     golden_function = ttnn.get_golden_function(ttnn.hardmish)
     golden = golden_function(input_tensor, device=device)
@@ -2421,7 +2514,8 @@ def test_unary_root_ops_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fas
         in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(1, 100)
     else:
         in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn_op(input_tensor, fast_and_approximate_mode=fast_approx_mode)
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -2462,12 +2556,14 @@ def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
         pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
 
     in_data = torch.zeros(torch.Size([1, 1, 32, 32]), dtype=dtype)
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         in_data,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     output_tensor = ttnn.rdiv(input_tensor, param, rounding_mode=rounding_mode)
@@ -2499,7 +2595,8 @@ def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
 def test_unary_rdiv_ttnn(input_shapes, torch_dtype, ttnn_dtype, param, rounding_mode, device):
     torch.manual_seed(0)
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.rdiv(input_tensor, param, rounding_mode=rounding_mode)
     golden_function = ttnn.get_golden_function(ttnn.rdiv)
@@ -2551,11 +2648,13 @@ def test_unary_bitcast_ttnn(
 
     # Create PyTorch tensor and convert to TTNN tensor
     padded_torch_tensor = torch.tensor(padded_vals, dtype=torch_input_dtype).reshape(input_shapes)
+    tile = select_tile(ttnn_input_dtype)
     input_tensor = ttnn.from_torch(
         padded_torch_tensor,
         dtype=ttnn_input_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
+        tile=tile,
     )
 
     # Perform bitcast
@@ -2620,7 +2719,8 @@ def test_unary_bitcast_ttnn(
 def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(low, high)
-    input_tensor_a = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor_a = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.logit(input_tensor_a, eps=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -2645,7 +2745,8 @@ def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, de
 def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-1, 1.1)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.logit(input_tensor, eps=eps)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -2672,7 +2773,8 @@ def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-100, 100)
     in_data[..., ::5] = 0  # every 5th element is zero
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.logical_not(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.logical_not)
@@ -2692,7 +2794,8 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     torch.manual_seed(0)
     in_data = torch.empty((2, 32, 64), dtype=torch_dtype).uniform_(-20, 100)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.mish(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode)
     output_tensor = ttnn.to_torch(output_tensor)
 
