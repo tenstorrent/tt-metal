@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/local_tensor_accessor.h"
 
 void kernel_main() {
     // This test uses legacy RTA indices to get the bank base addresses.
@@ -23,9 +24,11 @@ void kernel_main() {
     auto tensor_accessor_src = TensorAccessor(args_src, input_base_address);
     auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address);
 
-    // If you needed the pointer, you could pull it out of the TensorAccessor:
-    const uint32_t src_l1 = tensor_accessor_src.get_bank_base_address();
-    const uint32_t dst_l1 = tensor_accessor_dst.get_bank_base_address();
+    // If you needed the pointer, use LocalTensorAccessor's legacy raw-address ctor:
+    LocalTensorAccessor<uint32_t> local_accessor_src(input_base_address);
+    LocalTensorAccessor<uint32_t> local_accessor_dst(output_base_address);
+    const uint32_t src_l1 = local_accessor_src.get_bank_base_address();
+    const uint32_t dst_l1 = local_accessor_dst.get_bank_base_address();
     const uint32_t shard_size_bytes =
         tensor_accessor_src.get_aligned_page_size() * tensor_accessor_src.dspec().shard_volume();
     const uint32_t total_bytes = shard_size_bytes * n_shards;
