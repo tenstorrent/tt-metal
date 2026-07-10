@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp, select_tile
 
 pytestmark = pytest.mark.use_module_device
 
@@ -52,8 +52,10 @@ def test_add_and_apply_activations(device, shape, activations, torch_dtype):
             elif op_type == ttnn.UnaryOpType.NEZ:
                 torch_output_tensor = torch.ne(torch_output_tensor, 0)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_dtype = ttnn.bfloat16 if torch_dtype == torch.bfloat16 else ttnn.int32
+    tile = select_tile(ttnn_dtype)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b, activations=activations)
     output_tensor = ttnn.to_torch(output_tensor)
     if activations:

@@ -20,7 +20,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, select_tile
 
 
 # ---------------------------------------------------------------------------
@@ -42,8 +42,10 @@ def run_concat_test(device, shapes, dim, layout, dtype, memory_config=None, pcc=
     torch_inputs = [random_torch_tensor(dtype, s) for s in shapes]
     torch_out = torch.concat(torch_inputs, dim=dim)
 
+    tile = select_tile(dtype, layout=layout)
     ttnn_inputs = [
-        ttnn.from_torch(t, layout=layout, device=device, dtype=dtype, memory_config=memory_config) for t in torch_inputs
+        ttnn.from_torch(t, layout=layout, device=device, dtype=dtype, memory_config=memory_config, tile=tile)
+        for t in torch_inputs
     ]
 
     ttnn_out = ttnn.concat(ttnn_inputs, dim=dim, memory_config=memory_config)
@@ -216,9 +218,11 @@ class TestHeightShardedConcat:
         torch_b = random_torch_tensor(dtype, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=3)
 
-        ttnn_a = ttnn.from_torch(torch_a, layout=layout, device=device, dtype=dtype)
+        tile = select_tile(dtype, layout=layout)
+        ttnn_a = ttnn.from_torch(torch_a, layout=layout, device=device, dtype=dtype, tile=tile)
         ttnn_a = ttnn.to_memory_config(ttnn_a, input_mem)
-        ttnn_b = ttnn.from_torch(torch_b, layout=layout, device=device, dtype=dtype)
+        tile = select_tile(dtype, layout=layout)
+        ttnn_b = ttnn.from_torch(torch_b, layout=layout, device=device, dtype=dtype, tile=tile)
         ttnn_b = ttnn.to_memory_config(ttnn_b, input_mem)
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
@@ -254,9 +258,11 @@ class TestHeightShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape_b)
         torch_out = torch.concat([torch_a, torch_b], dim=3)
 
-        ttnn_a = ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_a = ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile)
         ttnn_a = ttnn.to_memory_config(ttnn_a, mem_a)
-        ttnn_b = ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_b = ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile)
         ttnn_b = ttnn.to_memory_config(ttnn_b, mem_b)
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
@@ -316,7 +322,8 @@ class TestHeightShardedConcat:
             mem = ttnn.create_sharded_memory_config(
                 ss, core_grid=shard_grid, strategy=ttnn.ShardStrategy.HEIGHT, use_height_and_width_as_shard_shape=True
             )
-            tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+            tile = select_tile(ttnn.bfloat16)
+            tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
             ttnn_inputs.append(ttnn.to_memory_config(tt, mem))
 
         output_mem = ttnn.create_sharded_memory_config(
@@ -346,11 +353,13 @@ class TestHeightShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=3)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
@@ -391,11 +400,13 @@ class TestWidthShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=2)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
@@ -450,7 +461,8 @@ class TestWidthShardedConcat:
             mem = ttnn.create_sharded_memory_config(
                 ss, core_grid=shard_grid, strategy=ttnn.ShardStrategy.WIDTH, use_height_and_width_as_shard_shape=True
             )
-            tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+            tile = select_tile(ttnn.bfloat16)
+            tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
             ttnn_inputs.append(ttnn.to_memory_config(tt, mem))
 
         output_mem = ttnn.create_sharded_memory_config(
@@ -480,11 +492,13 @@ class TestWidthShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=2)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
@@ -525,11 +539,13 @@ class TestBlockShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=3)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
@@ -562,11 +578,13 @@ class TestBlockShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=2)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
@@ -736,11 +754,13 @@ class TestShardedNonHWDimConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=0)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=0, memory_config=output_mem)
@@ -767,11 +787,13 @@ class TestShardedNonHWDimConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=1)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=1, memory_config=output_mem)
@@ -798,11 +820,13 @@ class TestShardedNonHWDimConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=0)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=0, memory_config=output_mem)
@@ -829,11 +853,13 @@ class TestShardedNonHWDimConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=1)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=1, memory_config=output_mem)
@@ -930,11 +956,13 @@ class TestShardedToInterleavedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=3)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_a = ttnn.to_memory_config(
-            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_b = ttnn.to_memory_config(
-            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16), input_mem
+            ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, tile=tile), input_mem
         )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
@@ -1028,8 +1056,14 @@ class TestInterleavedToShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=3)
 
-        ttnn_a = ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
-        ttnn_b = ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_a = ttnn.from_torch(
+            torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile
+        )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_b = ttnn.from_torch(
+            torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile
+        )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem)
         assert ttnn_out.is_sharded()
@@ -1055,8 +1089,14 @@ class TestInterleavedToShardedConcat:
         torch_b = random_torch_tensor(ttnn.bfloat16, shape)
         torch_out = torch.concat([torch_a, torch_b], dim=2)
 
-        ttnn_a = ttnn.from_torch(torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
-        ttnn_b = ttnn.from_torch(torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_a = ttnn.from_torch(
+            torch_a, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile
+        )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_b = ttnn.from_torch(
+            torch_b, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=input_mem, tile=tile
+        )
 
         ttnn_out = ttnn.concat([ttnn_a, ttnn_b], dim=2, memory_config=output_mem)
         assert ttnn_out.is_sharded()
@@ -1195,7 +1235,8 @@ class TestEdgeCases:
         """Single tensor concat is a no-op / memory_config change."""
         shape = (1, 1, 32, 64)
         torch_t = random_torch_tensor(ttnn.bfloat16, shape)
-        ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
 
         result = ttnn.concat([ttnn_t], dim=0)
         result = ttnn.to_torch(result)
@@ -1208,8 +1249,9 @@ class TestEdgeCases:
         dram_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
         l1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
+        tile = select_tile(ttnn.bfloat16)
         ttnn_t = ttnn.from_torch(
-            torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=dram_mem
+            torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=dram_mem, tile=tile
         )
         result = ttnn.concat([ttnn_t], dim=0, memory_config=l1_mem)
         assert result.memory_config().buffer_type == ttnn.BufferType.L1
@@ -1223,8 +1265,10 @@ class TestEdgeCases:
         torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(n_tensors)]
         torch_out = torch.concat(torch_inputs, dim=2)
 
+        tile = select_tile(ttnn.bfloat16)
         ttnn_inputs = [
-            ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16) for t in torch_inputs
+            ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
+            for t in torch_inputs
         ]
         ttnn_out = ttnn.concat(ttnn_inputs, dim=2)
         ttnn_out = ttnn.to_torch(ttnn_out)
@@ -1236,8 +1280,10 @@ class TestEdgeCases:
         torch_inputs = [random_torch_tensor(ttnn.bfloat16, s) for s in shapes]
         torch_out = torch.concat(torch_inputs, dim=-1)
 
+        tile = select_tile(ttnn.bfloat16)
         ttnn_inputs = [
-            ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16) for t in torch_inputs
+            ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
+            for t in torch_inputs
         ]
         ttnn_out = ttnn.concat(ttnn_inputs, dim=-1)
         ttnn_out = ttnn.to_torch(ttnn_out)
@@ -1249,8 +1295,10 @@ class TestEdgeCases:
         torch_inputs = [random_torch_tensor(ttnn.bfloat16, s) for s in shapes]
         torch_out = torch.concat(torch_inputs, dim=-2)
 
+        tile = select_tile(ttnn.bfloat16)
         ttnn_inputs = [
-            ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16) for t in torch_inputs
+            ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
+            for t in torch_inputs
         ]
         ttnn_out = ttnn.concat(ttnn_inputs, dim=-2)
         ttnn_out = ttnn.to_torch(ttnn_out)
@@ -1286,8 +1334,14 @@ class TestGroupsConcat:
             (1, 1, 32, shape_a[3] + shape_b[3]), core_grid, ttnn.ShardStrategy.HEIGHT
         )
 
-        ttnn_a = ttnn.from_torch(torch_a, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_a)
-        ttnn_b = ttnn.from_torch(torch_b, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_b)
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_a = ttnn.from_torch(
+            torch_a, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_a, tile=tile
+        )
+        tile = select_tile(ttnn.bfloat16, layout=layout)
+        ttnn_b = ttnn.from_torch(
+            torch_b, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=mem_b, tile=tile
+        )
 
         result = ttnn.concat([ttnn_a, ttnn_b], dim=3, memory_config=output_mem, groups=groups)
         actual = ttnn.to_torch(result)
@@ -1318,8 +1372,11 @@ class TestSubCoreGridsConcat:
         torch_inputs = [random_torch_tensor(ttnn.bfloat16, s) for s in shapes]
         torch_out = torch.concat(torch_inputs, dim=3)
 
+        tile = select_tile(ttnn.bfloat16, layout=layout)
         ttnn_inputs = [
-            ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=memory_config)
+            ttnn.from_torch(
+                t, layout=layout, device=device, dtype=ttnn.bfloat16, memory_config=memory_config, tile=tile
+            )
             for t in torch_inputs
         ]
         ttnn_out = ttnn.concat(ttnn_inputs, dim=3, memory_config=memory_config, sub_core_grids=sub_core_grids)
@@ -1356,8 +1413,9 @@ class TestUnsupportedCases:
         torch_a = random_torch_tensor(ttnn.bfloat16, shape)
 
         with expect_error(RuntimeError, "shard"):
+            tile = select_tile(ttnn.bfloat16)
             ttnn.from_torch(
-                torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=block_mem
+                torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=block_mem, tile=tile
             )
 
     def test_block_sharded_unsupported_dim(self, device, expect_error):
@@ -1410,8 +1468,10 @@ class TestUnsupportedCases:
         torch_a = random_torch_tensor(ttnn.bfloat16, (1, 1, 32, 64))
         torch_b = random_torch_tensor(ttnn.bfloat16, (1, 32, 64))
 
-        ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-        ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
 
         with expect_error(RuntimeError, "index out of range"):
             ttnn.concat([ttnn_a, ttnn_b], dim=0)
@@ -1421,8 +1481,10 @@ class TestUnsupportedCases:
         torch_a = random_torch_tensor(ttnn.bfloat16, (1, 1, 32, 64))
         torch_b = random_torch_tensor(ttnn.bfloat16, (1, 1, 64, 128))
 
-        ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-        ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
 
         with expect_error(
             RuntimeError,
@@ -1434,7 +1496,8 @@ class TestUnsupportedCases:
         """Dimension out of range should raise."""
         shape = (1, 1, 32, 64)
         torch_t = random_torch_tensor(ttnn.bfloat16, shape)
-        ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
 
         with expect_error(RuntimeError, "Index is out of bounds for the rank"):
             ttnn.concat([ttnn_t, ttnn_t], dim=4)
@@ -1443,12 +1506,15 @@ class TestUnsupportedCases:
         """Preallocated output tensor is currently unsupported."""
         shape = (1, 1, 32, 64)
         torch_t = random_torch_tensor(ttnn.bfloat16, shape)
-        ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        tile = select_tile(ttnn.bfloat16)
+        ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, tile=tile)
+        tile = select_tile(ttnn.bfloat16)
         out_t = ttnn.from_torch(
             random_torch_tensor(ttnn.bfloat16, (1, 1, 64, 64)),
             layout=ttnn.TILE_LAYOUT,
             device=device,
             dtype=ttnn.bfloat16,
+            tile=tile,
         )
 
         with expect_error(RuntimeError, "output_tensor"):

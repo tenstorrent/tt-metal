@@ -15,14 +15,15 @@ from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp, select_tile
 
 pytestmark = pytest.mark.use_module_device
 
 
 def rand_bf16_gen(shape, device, *, min=0, max=1, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     pt = torch.rand(shape, dtype=torch.bfloat16) * (max - min) + min
-    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    tile = select_tile(ttnn.bfloat16)
+    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, tile=tile)
     return pt, tt
 
 
@@ -86,8 +87,9 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
     b = torch.BFloat16Tensor(b)
     assert torch.add(a, b).tolist() == c_golden
 
-    ttnn_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_a)
-    ttnn_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_b)
+    tile = select_tile(ttnn.bfloat16)
+    ttnn_a = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_a, tile=tile)
+    ttnn_b = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_b, tile=tile)
     ttnn_c = ttnn.add(ttnn_a, ttnn_b)
     c = ttnn.to_torch(ttnn_c).reshape((-1))
 
@@ -101,12 +103,12 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
         [[1, 2, 3, 3, 4, 32, 32], [5, 1, 3, 3, 4, 32, 32]],
     ],
 )
-def test_binary_invalid_rank(device, a_shape, b_shape):
+def test_binary_invalid_rank(device, a_shape, b_shape, expect_error):
     torch.manual_seed(0)
     pt_a, tt_a = rand_bf16_gen(a_shape, device)
     pt_b, tt_b = rand_bf16_gen(b_shape, device)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "."):
         ttnn.add(tt_a, tt_b)
 
 
@@ -209,12 +211,14 @@ def test_binary_sharded_bcast_no_identical(
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(b_shape)
 
+    tile = select_tile(dtype_tt)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=dtype_tt,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -222,6 +226,7 @@ def test_binary_sharded_bcast_no_identical(
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b_config,
+        tile=tile,
     )
 
     out_pt = torch.add(a_pt, b_pt)
@@ -271,12 +276,14 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
+    tile = select_tile(ttnn.bfloat16, layout=memory_lay_out)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
         layout=memory_lay_out,
         memory_config=sharded_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -284,6 +291,7 @@ def test_binary_sharded_row_major_layout(device, a_shape, b_shape, sharded_core_
         device=device,
         layout=memory_lay_out,
         memory_config=sharded_config,
+        tile=tile,
     )
 
     out_pt = torch.add(a_pt, b_pt)
@@ -322,12 +330,14 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device, min=-1e3, max=1e3)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device, min=-1e3, max=1e3)
     ttnn_op = getattr(ttnn, ttnn_fn)
+    tile = select_tile(input_dtype)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=input_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
@@ -335,6 +345,7 @@ def test_bf4b_bf8b(a_shape, b_shape, input_dtype, pcc, ttnn_fn, device):
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
@@ -388,12 +399,14 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -401,6 +414,7 @@ def test_binary_sharded_bcast_w_height(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -458,12 +472,14 @@ def test_binary_sharded_bcast_w_height_c(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -471,6 +487,7 @@ def test_binary_sharded_bcast_w_height_c(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -522,12 +539,14 @@ def test_binary_sharded_bcast_w_height_n(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -535,6 +554,7 @@ def test_binary_sharded_bcast_w_height_n(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -590,12 +610,14 @@ def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -603,6 +625,7 @@ def test_binary_sharded_bcast_h_height(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -665,12 +688,14 @@ def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -678,6 +703,7 @@ def test_binary_sharded_bcast_scalar_height(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -733,12 +759,14 @@ def test_binary_sharded_bcast_hw_mixed_height(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=src_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -746,6 +774,7 @@ def test_binary_sharded_bcast_hw_mixed_height(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=dst_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -798,12 +827,14 @@ def test_binary_sharded_bcast_w_width(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -811,6 +842,7 @@ def test_binary_sharded_bcast_w_width(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -863,12 +895,14 @@ def test_binary_sharded_bcast_h_width(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -876,6 +910,7 @@ def test_binary_sharded_bcast_h_width(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -928,12 +963,14 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -941,6 +978,7 @@ def test_binary_sharded_bcast_scalar_width(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -1001,12 +1039,14 @@ def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt, sub_cor
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=src_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -1014,6 +1054,7 @@ def test_binary_sharded_bcast_hw_mixed_width(device, dtype_pt, dtype_tt, sub_cor
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=dst_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -1048,12 +1089,14 @@ def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
+    tile = select_tile(dtype_tt)
     a = ttnn.Tensor(
         inp_a.flatten().tolist(),
         shape,
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     b = ttnn.Tensor(
@@ -1062,6 +1105,7 @@ def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
@@ -1151,12 +1195,14 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=shard_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -1164,6 +1210,7 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=shard_config,
+        tile=tile,
     )
 
     out_pt = torch.add(a_pt, b_pt)
@@ -1274,12 +1321,14 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
     )
 
     for src_config, dst_config in input_combinations:
+        tile = select_tile(ttnn.bfloat16)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=src_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -1287,6 +1336,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=dst_config,
+            tile=tile,
         )
 
         out_pt = golden_function(a_pt, b_pt)
@@ -1329,12 +1379,14 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
         use_height_and_width_as_shard_shape=False,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=shard_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -1342,6 +1394,7 @@ def test_binary_sharded_auto(a_shape, b_shape, shard_type, core_coord, device):
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=shard_config,
+        tile=tile,
     )
 
     out_pt = torch.add(a_pt, b_pt)
@@ -1387,12 +1440,14 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
         (a_sharded_config, a_sharded_config, a_sharded_config),
     )
     for a_config, b_config, dst_config in input_combinations:
+        tile = select_tile(ttnn.bfloat16)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -1400,6 +1455,7 @@ def test_binary_sharded_bcast_no_identical_uneven(a_shape, b_shape, shard_type, 
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -1526,12 +1582,14 @@ def test_binary_sharded_bcast_scalar_value(
     )
     for a_config, dst_config in input_combinations:
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, scalar)
@@ -1604,12 +1662,14 @@ def test_binary_sharded_bcast_scalar_value_uneven(
     )
     for a_config, dst_config in input_combinations:
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, scalar)
@@ -1641,7 +1701,9 @@ def test_binary_sharded_bcast_scalar_value_uneven(
         ],
     ),
 )
-def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_scalar_invalid_row_major(
+    scalar, a_shape, shard_type, shard_size, core_range, device, expect_error
+):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
@@ -1656,13 +1718,15 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
         a_shape
     )
 
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "."):
+        tile = select_tile(ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=a_sharded_config,
+            tile=tile,
         )
 
         out_tt = ttnn.from_torch(
@@ -1671,6 +1735,7 @@ def test_binary_sharded_scalar_invalid_row_major(scalar, a_shape, shard_type, sh
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=a_sharded_config,
+            tile=tile,
         )
 
         tt_out = ttnn.add(a_tt, scalar, output_tensor=out_tt)
@@ -1701,12 +1766,14 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
     )
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
+    tile = select_tile(ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=a_sharded_config,
+        tile=tile,
     )
     tt_out = ttnn.add(a_tt, scalar)
     tt_out = ttnn.to_torch(tt_out)
@@ -1745,12 +1812,14 @@ def test_binary_sharded_scalar_tile(
     )
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_torch), dtype_ttnn)(a_shape)
+    tile = select_tile(dtype_ttnn)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=dtype_ttnn,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_sharded_config,
+        tile=tile,
     )
     tt_out = ttnn.add(a_tt, scalar)
     tt_out = ttnn.to_torch(tt_out)
@@ -1840,12 +1909,14 @@ class TestBinaryRowMajor:
             pt_a = torch.randint(0, 1000, a_shape, dtype=torch.int64).to(torch.uint32)
             pt_b = torch.randint(0, 1000, b_shape, dtype=torch.int64).to(torch.uint32)
 
+        tile = select_tile(dtype_tt, layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_a = ttnn.from_torch(
             pt_a,
             dtype=dtype_tt,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=a_config,
+            tile=tile,
         )
         tt_b = ttnn.from_torch(
             pt_b,
@@ -1853,6 +1924,7 @@ class TestBinaryRowMajor:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=b_config,
+            tile=tile,
         )
 
         add_kwargs = {}
@@ -1899,12 +1971,14 @@ class TestBinaryRowMajor:
         scalar_val = 2.5
 
         pt_a = torch.randn(shape, dtype=dtype_pt)
+        tile = select_tile(dtype_tt, layout=ttnn.ROW_MAJOR_LAYOUT)
         tt_a = ttnn.from_torch(
             pt_a,
             dtype=dtype_tt,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=a_config,
+            tile=tile,
         )
 
         with ttnn.manage_config("throw_exception_on_fallback", True):
@@ -1968,12 +2042,14 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_shard_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -1981,6 +2057,7 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b_shard_config,
+        tile=tile,
     )
 
     out_pt = torch.add(a_pt, b_pt)
@@ -2007,7 +2084,7 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
     ),
 )
 def test_binary_sharded_invalid_row_major_layout(
-    a_shape, b_shape, shard_type, shard_size, core_range, dtype_pt, dtype_tt, device
+    a_shape, b_shape, shard_type, shard_size, core_range, dtype_pt, dtype_tt, device, expect_error
 ):
     torch.manual_seed(0)
     a_sharded_config = ttnn.create_sharded_memory_config(
@@ -2028,13 +2105,15 @@ def test_binary_sharded_invalid_row_major_layout(
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "."):
+        tile = select_tile(ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=ttnn.bfloat16,
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=a_sharded_config,
+            tile=tile,
         )
 
         b_tt = ttnn.from_torch(
@@ -2043,6 +2122,7 @@ def test_binary_sharded_invalid_row_major_layout(
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=b_sharded_config,
+            tile=tile,
         )
 
         _ = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config)
@@ -2092,12 +2172,14 @@ def test_binary_sharded_row_major_layout_mixed(
     )
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
+    tile = select_tile(dtype_tt)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=dtype_tt,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=a_sharded_config,
+        tile=tile,
     )
 
     b_tt = ttnn.from_torch(
@@ -2106,6 +2188,7 @@ def test_binary_sharded_row_major_layout_mixed(
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b_sharded_config,
+        tile=tile,
     )
     out_pt = torch.add(a_pt, b_pt)
     out_tt_sharded = ttnn.add(a_tt, b_tt, memory_config=a_sharded_config)
@@ -2326,11 +2409,13 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
         input_shape_b
     )
 
+    tile = select_tile(ttnn.bfloat16)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
     )
 
     b_tt = ttnn.from_torch(
@@ -2338,6 +2423,7 @@ def test_bcast(input_shape_a, device, bcast_dim, math_op):
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
     )
 
     output_tensor = ttnn.bcast(a_tt, b_tt, math_op, bcast_dim)
@@ -2450,8 +2536,13 @@ def test_yolov8_add_small(device):
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.L1, shard_spec=None
     )
 
-    tt_a = ttnn.from_torch(tor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
-    tt_b = ttnn.from_torch(tor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    tile = select_tile(ttnn.bfloat16, ttnn.float32)
+    tt_a = ttnn.from_torch(
+        tor_a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem, tile=tile
+    )
+    tt_b = ttnn.from_torch(
+        tor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem, tile=tile
+    )
     #  print("with typecast")
     #  tt_a = ttnn.typecast(tt_a, dtype=ttnn.float32)
     print("add")
@@ -2466,7 +2557,10 @@ def test_yolov8_add_small(device):
 
 def rand_gen(shape, device, *, dtype, tt_dtype, min=0, max=1, memory_config):
     pt = torch.rand(shape, dtype=dtype) * (max - min) + min
-    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, dtype=tt_dtype)
+    tile = select_tile(tt_dtype)
+    tt = ttnn.from_torch(
+        pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, dtype=tt_dtype, tile=tile
+    )
     return pt, tt
 
 
@@ -2501,8 +2595,9 @@ def test_add_1m(device):
     b = torch.ones(32, 32)
     c = a + b
 
-    ta = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
-    tb = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    ta = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
+    tb = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
     tc = ttnn.add(ta, tb)
 
     # torch.allclose() will fail when op internally uses TF32 format
@@ -2518,8 +2613,9 @@ def test_add_i32(device):
 
     torch_add = a + b
 
-    input_tensor_a = ttnn.from_torch(a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor_a = ttnn.from_torch(a, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
+    input_tensor_b = ttnn.from_torch(b, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output_tensor)
@@ -2540,12 +2636,14 @@ def test_sub_implicit_broadcast(device, shapes):
     torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.float32)
     torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
 
+    tile = select_tile(ttnn.float32)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         dtype=ttnn.float32,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     input_tensor_b = ttnn.from_torch(
         torch_input_tensor_b,
@@ -2553,6 +2651,7 @@ def test_sub_implicit_broadcast(device, shapes):
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     output_tensor = ttnn.sub(input_tensor_a, input_tensor_b, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -2563,8 +2662,13 @@ def test_sub_implicit_broadcast(device, shapes):
 
 def test_small_fp32_multiply(device):
     # Scaling with 0.01 to get realistic values that appear during training.
-    a = ttnn.from_torch(0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
-    b = ttnn.from_torch(0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.float32)
+    a = ttnn.from_torch(
+        0.01 * torch.randn((1, 1, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device, tile=tile
+    )
+    b = ttnn.from_torch(
+        0.01 * torch.randn((4, 32, 2048), dtype=torch.float32), layout=ttnn.TILE_LAYOUT, device=device, tile=tile
+    )
 
     out_torch = torch.multiply(ttnn.to_torch(a), ttnn.to_torch(b))
     # print("Torch multiply result:")
@@ -2626,12 +2730,14 @@ def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -2639,6 +2745,7 @@ def test_binary_sharded_bcast_w_block(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -2697,12 +2804,14 @@ def test_binary_sharded_bcast_h_block(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -2710,6 +2819,7 @@ def test_binary_sharded_bcast_h_block(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -2762,12 +2872,14 @@ def test_binary_sharded_bcast_scalar_block(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -2775,6 +2887,7 @@ def test_binary_sharded_bcast_scalar_block(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -2823,12 +2936,14 @@ def test_binary_sharded_bcast_hw_mixed_block(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -2836,6 +2951,7 @@ def test_binary_sharded_bcast_hw_mixed_block(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -2882,12 +2998,14 @@ def test_binary_sharded_bcast_scalar_zero_dim(
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=dtype_pt), dtype_tt)(b_shape)
 
+    tile = select_tile(dtype_tt)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=dtype_tt,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -2895,6 +3013,7 @@ def test_binary_sharded_bcast_scalar_zero_dim(
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b_config,
+        tile=tile,
     )
 
     out_pt = torch.mul(a_pt, b_pt)
@@ -2941,12 +3060,14 @@ def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
     )
     b_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec)
 
+    tile = select_tile(dtype_tt)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=dtype_tt,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -2954,6 +3075,7 @@ def test_binary_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, device):
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=b_config,
+        tile=tile,
     )
 
     out_pt = torch.mul(a_pt, b_pt)
@@ -2988,12 +3110,14 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
     a_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec)
     b_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec)
 
+    tile = select_tile(dtype_tt)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=dtype_tt,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -3001,6 +3125,7 @@ def test_binary_sharded_shardspec_dram(dtype_pt, dtype_tt, device):
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     out_pt = torch.mul(a_pt, b_pt)
     out_tt = ttnn.mul(a_tt, b_tt)
@@ -3051,12 +3176,14 @@ def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3064,6 +3191,7 @@ def test_binary_sharded_bcast_w_height_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3122,12 +3250,14 @@ def test_binary_sharded_bcast_w_width_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3135,6 +3265,7 @@ def test_binary_sharded_bcast_w_width_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3188,12 +3319,14 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3201,6 +3334,7 @@ def test_binary_sharded_bcast_w_block_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3263,12 +3397,14 @@ def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3276,6 +3412,7 @@ def test_binary_sharded_bcast_h_height_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3334,12 +3471,14 @@ def test_binary_sharded_bcast_h_width_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3347,6 +3486,7 @@ def test_binary_sharded_bcast_h_width_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3399,12 +3539,14 @@ def test_binary_sharded_bcast_h_block_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3412,6 +3554,7 @@ def test_binary_sharded_bcast_h_block_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3468,12 +3611,14 @@ def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3481,6 +3626,7 @@ def test_binary_sharded_bcast_scalar_height_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3539,12 +3685,14 @@ def test_binary_sharded_bcast_scalar_width_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3552,6 +3700,7 @@ def test_binary_sharded_bcast_scalar_width_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3604,12 +3753,14 @@ def test_binary_sharded_bcast_scalar_block_uneven(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3617,6 +3768,7 @@ def test_binary_sharded_bcast_scalar_block_uneven(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3633,7 +3785,8 @@ def test_binary_sharded_bcast_scalar_block_uneven(device, dtype_pt, dtype_tt):
 def rand_bf16_gen_dtype(shape, device, *, min=0, max=1, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     torch_dtype = getattr(torch, dtype)
     pt = torch.rand(shape, dtype=torch_dtype) * (max - min) + min
-    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    tile = select_tile(getattr(ttnn, dtype))
+    tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, tile=tile)
     return pt, tt
 
 
@@ -3661,7 +3814,10 @@ def gen_tensor_for_dtype(shape, device, dtype_pt, dtype_tt, *, low=1, high=10, m
         pt = torch.randint(low=low, high=high, size=shape, dtype=torch.int32).to(torch.uint16)
     else:
         pt = torch.rand(shape, dtype=dtype_pt) * (high - low) + low
-    tt = ttnn.from_torch(pt, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    tile = select_tile(dtype_tt)
+    tt = ttnn.from_torch(
+        pt, dtype=dtype_tt, device=device, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, tile=tile
+    )
     return pt, tt
 
 
@@ -3793,12 +3949,14 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven(
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
         out_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(out_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3806,6 +3964,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven(
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
         out_tt = ttnn.from_torch(
             out_pt,
@@ -3813,6 +3972,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven(
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=dst_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3884,12 +4044,14 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
         out_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(out_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -3897,6 +4059,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
         out_tt = ttnn.from_torch(
             out_pt,
@@ -3904,6 +4067,7 @@ def test_binary_sharded_bcast_hw_mixed_output_mixed_shard_strategy_mixed_uneven_
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=dst_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -3941,11 +4105,20 @@ def test_add_sharded(device, input_shape):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    tile = select_tile(ttnn.bfloat16)
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+        torch_input_tensor_a,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+        tile=tile,
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+        torch_input_tensor_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+        tile=tile,
     )
     output = ttnn.add(input_tensor_a, input_tensor_b)
     output = ttnn.to_torch(output)
@@ -4003,12 +4176,14 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
         out_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(out_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -4016,6 +4191,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
         out_tt = ttnn.from_torch(
             out_pt,
@@ -4023,6 +4199,7 @@ def test_binary_sharded_bcast_hw_mixed_orientation_output(device, dtype_pt, dtyp
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=dst_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -4055,6 +4232,8 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_
     torch.manual_seed(0)
     a_shape = torch.Size([2, 7, 32 * 2, 4 * 32])
     b_shape = torch.Size([1, 7, 1, 4 * 32])
+    tile = select_tile(dtype_tt)
+    tile_h = tile.tile_shape[0]
 
     a_sharded_config = ttnn.create_sharded_memory_config(
         [2 * 32 * 2, 4 * 32],
@@ -4064,8 +4243,9 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_
         use_height_and_width_as_shard_shape=True,
     )
 
+    # Width-sharded b pads H=1 to tile_h; shard height must match physical height N*C*tile_h.
     b_sharded_config = ttnn.create_sharded_memory_config(
-        [7 * 32, 32],
+        [7 * tile_h, 32],
         core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -4088,6 +4268,7 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -4095,6 +4276,7 @@ def test_binary_sharded_bcast_h_mixed_strategy_mixed_L1(device, dtype_pt, dtype_
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -4158,12 +4340,14 @@ def test_binary_sharded_bcast_identical_mixed_strategy(device, dtype_pt, dtype_t
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -4171,6 +4355,7 @@ def test_binary_sharded_bcast_identical_mixed_strategy(device, dtype_pt, dtype_t
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -4232,12 +4417,14 @@ def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device, dtype_pt, 
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         out_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(out_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         out_tt = ttnn.from_torch(
             out_pt,
@@ -4245,6 +4432,7 @@ def test_binary_sharded_bcast_scalar_value_mixed_shard_uneven(device, dtype_pt, 
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=out_sharded_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, scalar)
@@ -4297,12 +4485,14 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
+    tile = select_tile(dtype_tt)
     a = ttnn.Tensor(
         inp_a.flatten().tolist(),
         shape,
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     b = ttnn.Tensor(
@@ -4311,6 +4501,7 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     out_tt = ttnn_fn(
@@ -4357,12 +4548,14 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
+    tile = select_tile(dtype_tt)
     a = ttnn.Tensor(
         inp_a.flatten().tolist(),
         shape,
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     b = ttnn.Tensor(
@@ -4371,6 +4564,7 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     out_tt = ttnn.div(
@@ -4426,12 +4620,14 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
+    tile = select_tile(dtype_tt)
     a = ttnn.Tensor(
         inp_a.flatten().tolist(),
         shape,
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     b = ttnn.Tensor(
@@ -4440,6 +4636,7 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
         dtype_tt,
         ttnn.TILE_LAYOUT,
         device,
+        tile=tile,
     )
 
     out_tt = ttnn.remainder(
@@ -4496,12 +4693,14 @@ def test_binary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
         a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(a_shape)
         b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_pt), dtype_tt)(b_shape)
 
+        tile = select_tile(dtype_tt)
         a_tt = ttnn.from_torch(
             a_pt,
             dtype=dtype_tt,
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
+            tile=tile,
         )
         b_tt = ttnn.from_torch(
             b_pt,
@@ -4509,6 +4708,7 @@ def test_binary_sharded_bcast_identical_sdxl(device, dtype_pt, dtype_tt):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=b_config,
+            tile=tile,
         )
 
         out_pt = torch.add(a_pt, b_pt)
@@ -4524,8 +4724,9 @@ def test_binary_reshard(device):
     torch_b = torch.randn(32, 8192, dtype=torch.bfloat16)
 
     # Convert to TTNN tensors on device (DRAM interleaved)
-    a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT)
-    b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
+    b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
 
     # Shard both inputs to 64 cores (8x8 grid)
     # 256 tiles / 64 cores = 4 tiles per shard
@@ -4596,8 +4797,13 @@ def test_binary_sharded_half_mem_config(device, input_shard_orientation, output_
             use_height_and_width_as_shard_shape=True,
         )
 
-    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
-    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_a = ttnn.from_torch(
+        torch_input_a, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device, tile=tile
+    )
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device, tile=tile
+    )
 
     # Use generic sharded memory config without explicit shard spec - should inherit from inputs
     output = ttnn.add(input_a, input_b, memory_config=output_memory_config)
@@ -4637,7 +4843,10 @@ def test_binary_sharded_half_mem_config_scalar(device, output_memory_config, sca
             use_height_and_width_as_shard_shape=True,
         )
 
-    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, memory_config=shard_config, device=device, tile=tile
+    )
 
     # Use generic sharded memory config without explicit shard spec - should inherit from input
     output = ttnn.mul(input_tensor, scalar, memory_config=output_memory_config)
@@ -4662,8 +4871,11 @@ def test_binary_bcast_sharded_output_half_mem_config(device):
         use_height_and_width_as_shard_shape=True,
     )
 
-    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_b = ttnn.from_torch(torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=b_shard_config, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    input_a = ttnn.from_torch(torch_input_a, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
+    input_b = ttnn.from_torch(
+        torch_input_b, layout=ttnn.TILE_LAYOUT, memory_config=b_shard_config, device=device, tile=tile
+    )
 
     # Use generic height sharded memory config - should inherit from input B
     output = ttnn.add(input_a, input_b, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG)
@@ -4691,8 +4903,9 @@ def test_binary_sharded_half_mem_config_interleaved(device, memory_config):
     torch_bias = torch.randn(*bias_shape, dtype=torch.bfloat16)
 
     # Convert to TTNN tensors with tile layout
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT)
-    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT)
+    tile = select_tile(ttnn.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
+    ttnn_bias = ttnn.from_torch(torch_bias, device=device, layout=ttnn.TILE_LAYOUT, tile=tile)
 
     # Perform the add operation with the specified memory config
     torch_output = torch.add(torch_input, torch_bias)
@@ -4717,11 +4930,22 @@ def test_binary_sharded_output_uneven(device):
 
     pt_in1 = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
     pt_in2 = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    tile = select_tile(ttnn.bfloat16)
     tt_in1 = ttnn.from_torch(
-        pt_in1, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+        pt_in1,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=width_sharded,
+        dtype=ttnn.bfloat16,
+        tile=tile,
     )
     tt_in2 = ttnn.from_torch(
-        pt_in2, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+        pt_in2,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=width_sharded,
+        dtype=ttnn.bfloat16,
+        tile=tile,
     )
     block_sharded = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -4775,16 +4999,22 @@ def test_multiply_bfloat8_b_bcast_scalarsharded(device):
     )
 
     # Convert to TTNN tensors with bfloat8_b (as in model)
+    tile = select_tile(ttnn.bfloat8_b)
     ttnn_mm_slice = ttnn.from_torch(
         torch_mm_slice,
         dtype=ttnn.bfloat8_b,  # Critical: using bfloat8_b
         layout=ttnn.TILE_LAYOUT,
         memory_config=height_sharded_config,
         device=device,
+        tile=tile,
     )
 
     ttnn_scale = ttnn.from_torch(
-        torch_scale, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device  # Critical: using bfloat8_b
+        torch_scale,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,  # Critical: using bfloat8_b
+        tile=tile,
     )
 
     # Golden reference
@@ -4829,12 +5059,14 @@ def test_binary_mul_scalar_bcast_height_sharded_sd_regression(device, a_shape, s
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(b_shape)
 
+    tile = select_tile(ttnn.bfloat8_b)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat8_b,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=a_sharded_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -4842,6 +5074,7 @@ def test_binary_mul_scalar_bcast_height_sharded_sd_regression(device, a_shape, s
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     out_pt = torch.mul(a_pt, b_pt)
@@ -4884,12 +5117,14 @@ def test_resnet50_residual_add_bfloat8b_sharded(
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float), ttnn.bfloat8_b)(shape)
 
+    tile = select_tile(ttnn.bfloat8_b)
     a_tt = ttnn.from_torch(
         a_pt,
         dtype=ttnn.bfloat8_b,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=sharded_config,
+        tile=tile,
     )
     b_tt = ttnn.from_torch(
         b_pt,
@@ -4897,6 +5132,7 @@ def test_resnet50_residual_add_bfloat8b_sharded(
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=sharded_config,
+        tile=tile,
     )
 
     out_pt = torch.relu(torch.add(a_pt, b_pt))

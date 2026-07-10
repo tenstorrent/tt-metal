@@ -7,7 +7,7 @@ import math
 import torch
 import pytest
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose
+from tests.ttnn.utils_for_testing import assert_allclose, select_tile
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range,
     data_gen_with_range_dtype,
@@ -105,7 +105,8 @@ def test_unary_abs_ttnn(input_shapes, device):
 )
 def test_unary_inverse_trig_functions_ttnn(input_shapes, torch_dtype, ttnn_dtype, pcc, low, high, ttnn_op, device):
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(low, high)
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn_op(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -760,7 +761,8 @@ def test_unary_bitwise_not(input_shapes, device):
 
     in_data = in_data[-num_elements:].reshape(input_shapes)
 
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.int32)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     output_tensor = ttnn.bitwise_not(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.bitwise_not)
@@ -793,12 +795,14 @@ def test_unary_log1p_ttnn(input_shapes, device):
         torch_input_tensor = torch.cat([uniform_input_values, corner_cases])
         torch_input_tensor = torch_input_tensor[:num_elements].reshape(input_shapes)
 
+    tile = select_tile(ttnn.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     cq_id = 0
     output_tensor = ttnn.log1p(input_tensor, queue_id=cq_id)
@@ -847,12 +851,14 @@ def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, 
         torch_input_tensor = torch.linspace(-100, 0, num_elements, dtype=torch_dtype)
     torch_input_tensor = torch_input_tensor.reshape(input_shapes)
 
+    tile = select_tile(ttnn_dtype)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
     cq_id = 0
     output_tensor_tt = ttnn_op(input_tensor, queue_id=cq_id, fast_and_approximate_mode=fast_and_approx)
@@ -893,7 +899,10 @@ def test_fill(device, h, w, scalar, torch_dtype, ttnn_dtype):
         scalar = int(scalar)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn_dtype)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile
+    )
 
     output_tensor = ttnn.fill(input_tensor_a, scalar)
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_dtype)
@@ -969,8 +978,14 @@ def test_unary_comp_ops(ttnn_op, ttnn_dtype, device):
     torch_fn = ttnn.get_golden_function(ttnn_op)
     tor_res = torch_fn(torch_input)
 
+    tile = select_tile(ttnn_dtype)
     tt_a = ttnn.from_torch(
-        torch_input, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_input,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        tile=tile,
     )
     result = ttnn_op(tt_a)
     tt_res = ttnn.to_torch(result)
