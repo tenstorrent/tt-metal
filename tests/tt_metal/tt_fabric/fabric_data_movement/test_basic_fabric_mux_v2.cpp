@@ -836,6 +836,19 @@ std::string test_case_name(const ::testing::TestParamInfo<TestCaseConfig>& info)
 
 }  // namespace
 
+// Smoke: high-signal subset for N300 merge-gate / fast CI.
+// Filter: --gtest_filter="*FabricMuxV2Smoke*Fixture.*"
+class FabricMuxV2Smoke1DFixture : public Fabric1DFixture, public ::testing::WithParamInterface<TestCaseConfig> {};
+
+TEST_P(FabricMuxV2Smoke1DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
+
+class FabricMuxV2Smoke2DFixture : public Fabric2DFixture, public ::testing::WithParamInterface<TestCaseConfig> {};
+
+TEST_P(FabricMuxV2Smoke2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
+
+// Full: remaining coverage for T3K / Galaxy / BH multi-card.
+// Filter: --gtest_filter="*FabricMuxV2Functional*Fixture.*"
+// Combined: --gtest_filter="*FabricMuxV2*Fixture.*"
 class FabricMuxV2Functional1DFixture : public Fabric1DFixture, public ::testing::WithParamInterface<TestCaseConfig> {};
 
 TEST_P(FabricMuxV2Functional1DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
@@ -844,7 +857,7 @@ class FabricMuxV2Functional2DFixture : public Fabric2DFixture, public ::testing:
 
 TEST_P(FabricMuxV2Functional2DFixture, SharedMuxFunctionalCoverage) { run_test_case(*this, GetParam()); }
 
-constexpr std::array<TestCaseConfig, 32> kTestCases = {{
+constexpr std::array<TestCaseConfig, 6> kSmokeCases = {{
     TestCaseConfig{
         .name = "SingleSender_DefaultPayload_Riscv0",
         .num_packets = kShortPacketCount,
@@ -856,6 +869,43 @@ constexpr std::array<TestCaseConfig, 32> kTestCases = {{
         .num_buffers_per_channel = 4,
         .forwarder_noc = tt::tt_metal::NOC::RISCV_1_default,
     },
+    TestCaseConfig{
+        .name = "MultiSender_16Senders",
+        .num_senders = 16,
+        .num_packets = kShortPacketCount,
+        .packet_payload_size_bytes = 128,
+        .num_buffers_per_channel = 1,
+    },
+    // Non-pow2 buffer counts exercise the forwarder generic slot-wrap path.
+    TestCaseConfig{
+        .name = "NonPow2Buffers_5Bufs_MultiSender",
+        .num_senders = 8,
+        .num_packets = kShortPacketCount,
+        .packet_payload_size_bytes = 128,
+        .num_buffers_per_channel = 5,
+    },
+    TestCaseConfig{
+        .name = "Staging_NonStateful_StageRingFull",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .test_pattern = StagingTestPattern::StageRingFull,
+        .stage_count = 4,
+    },
+    // Stateful lane + opportunistic flush + non-blocking status TRID.
+    TestCaseConfig{
+        .name = "Staging_Stateful_TridOppFlush",
+        .num_packets = kShortPacketCount,
+        .num_buffers_per_channel = 4,
+        .eager_staging = true,
+        .use_stateful_lane = true,
+        .test_pattern = StagingTestPattern::OpportunisticFlush,
+        .stage_count = 2,
+        .status_read_trid = 1,
+    },
+}};
+
+constexpr std::array<TestCaseConfig, 26> kFullCases = {{
     TestCaseConfig{
         .name = "SmallPayload_SteadyState",
         .num_packets = kMediumPacketCount,
@@ -869,23 +919,6 @@ constexpr std::array<TestCaseConfig, 32> kTestCases = {{
         .num_packets = kMediumPacketCount,
         .packet_payload_size_bytes = 128,
         .num_buffers_per_channel = 4,
-    },
-    TestCaseConfig{
-        .name = "MultiSender_16Senders",
-        .num_senders = 16,
-        .num_packets = kShortPacketCount,
-        .packet_payload_size_bytes = 128,
-        .num_buffers_per_channel = 1,
-    },
-    // Non-pow2 buffer counts exercise the forwarder generic slot-wrap path
-    // (num_buffers_per_channel_is_pow2 == false). bufs=3 is covered by the
-    // staging StageRingFull case below; this case adds modulus 5 + higher fan-in.
-    TestCaseConfig{
-        .name = "NonPow2Buffers_5Bufs_MultiSender",
-        .num_senders = 8,
-        .num_packets = kShortPacketCount,
-        .packet_payload_size_bytes = 128,
-        .num_buffers_per_channel = 5,
     },
     // Odd channel counts are not a separate codegen path, but cover stream-id /
     // scratch / manager scan sizing that pow2 sender counts miss.
@@ -951,14 +984,6 @@ constexpr std::array<TestCaseConfig, 32> kTestCases = {{
         .stage_count = 1,
     },
     TestCaseConfig{
-        .name = "Staging_NonStateful_StageRingFull",
-        .num_packets = kShortPacketCount,
-        .num_buffers_per_channel = 4,
-        .eager_staging = true,
-        .test_pattern = StagingTestPattern::StageRingFull,
-        .stage_count = 4,
-    },
-    TestCaseConfig{
         .name = "Staging_NonStateful_StageIdle",
         .num_packets = kShortPacketCount,
         .num_buffers_per_channel = 4,
@@ -1019,16 +1044,6 @@ constexpr std::array<TestCaseConfig, 32> kTestCases = {{
         .num_packets = kShortPacketCount,
         .num_buffers_per_channel = 4,
         .eager_staging = true,
-        .test_pattern = StagingTestPattern::OpportunisticFlush,
-        .stage_count = 2,
-        .status_read_trid = 1,
-    },
-    TestCaseConfig{
-        .name = "Staging_Stateful_TridOppFlush",
-        .num_packets = kShortPacketCount,
-        .num_buffers_per_channel = 4,
-        .eager_staging = true,
-        .use_stateful_lane = true,
         .test_pattern = StagingTestPattern::OpportunisticFlush,
         .stage_count = 2,
         .status_read_trid = 1,
@@ -1111,8 +1126,10 @@ constexpr std::array<TestCaseConfig, 32> kTestCases = {{
     },
 }};
 
-INSTANTIATE_TEST_SUITE_P(Functional1D, FabricMuxV2Functional1DFixture, ::testing::ValuesIn(kTestCases), test_case_name);
+INSTANTIATE_TEST_SUITE_P(Smoke1D, FabricMuxV2Smoke1DFixture, ::testing::ValuesIn(kSmokeCases), test_case_name);
+INSTANTIATE_TEST_SUITE_P(Smoke2D, FabricMuxV2Smoke2DFixture, ::testing::ValuesIn(kSmokeCases), test_case_name);
 
-INSTANTIATE_TEST_SUITE_P(Functional2D, FabricMuxV2Functional2DFixture, ::testing::ValuesIn(kTestCases), test_case_name);
+INSTANTIATE_TEST_SUITE_P(Functional1D, FabricMuxV2Functional1DFixture, ::testing::ValuesIn(kFullCases), test_case_name);
+INSTANTIATE_TEST_SUITE_P(Functional2D, FabricMuxV2Functional2DFixture, ::testing::ValuesIn(kFullCases), test_case_name);
 
 }  // namespace tt::tt_fabric::fabric_router_tests::fabric_mux_v2_tests
