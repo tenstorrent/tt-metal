@@ -9,8 +9,8 @@ programmable DRAM cores (DRISC kernels) into the receiver ring instead of from
 worker cores. Public surface mirrors ``Prefetcher`` so MLP/attention/model code
 swaps without changes.
 
-Lifecycle differs internally: a single ``ttnn.experimental.start_dram_core_prefetcher``
-runs for the model's life, with ``queue_dram_core_prefetcher_request`` called once
+Lifecycle differs internally: a single ``ttnn.experimental.start_tensor_prefetcher``
+runs for the model's life, with ``queue_tensor_prefetcher_request`` called once
 per ``run()`` (per decode ``forward()``). ``stop()`` is a no-op between forwards;
 the real shutdown happens in ``teardown()`` or when the MeshDevice closes.
 """
@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.recv_contig_layout import bank_receivers_strided as _bank_receivers_strided
+from models.tt_transformers.tt.recv_contig_layout import bank_receivers_contiguous as _bank_receivers_contiguous
 from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
 from models.tt_transformers.tt.recv_contig_layout import ring_pos_coord as _ring_pos_coord
 
@@ -162,8 +162,7 @@ class DramCorePrefetcher(LightweightModule):
         self.ring_size: int = self.num_senders * self.num_receiver_cores
 
         # Receiver rectangle is num_senders (cols) x num_receiver_cores (rows): ring position r
-        # maps to (col=r%num_senders, row=r//num_senders), and bank b owns rectangle column b
-        # (its strided ring positions b, b+num_senders, ...).
+        # maps to (col=r%num_senders, row=r//num_senders).
         #
         # Receiver cores in ring-position order. The gather_in0 matmul walks its core_grid in
         # this order, so ring core r computes output N-cols [r*per_core_N, (r+1)*per_core_N).
@@ -180,12 +179,11 @@ class DramCorePrefetcher(LightweightModule):
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
         )
 
-        # Per-bank receivers as a list aligned with bank indices. Strided (receiver-contiguous):
-        # bank b feeds ring positions [b, b+num_senders, ...], matching the round-robin NdShardSpec
-        # weight layout so shard r reaches ring position r. Used only to build the DRAM-sender GCB;
-        # the matmul grid comes from receiver_cores() (ring order), which is intentionally decoupled.
+        # Per-bank receivers as a list aligned with bank indices. Bank b feeds the contiguous ring
+        # arc [b*num_receiver_cores, (b+1)*num_receiver_cores), matching the CONTIGUOUS_1D
+        # NdShardSpec required by the gather_in0 matmul's bank-to-receiver validation.
         self._bank_to_receivers: List = [
-            (b, _bank_receivers_strided(b, self.num_receiver_cores, self.num_senders, self.num_senders))
+            (b, _bank_receivers_contiguous(b, self.num_receiver_cores, self.num_senders))
             for b in range(self.num_senders)
         ]
 
@@ -290,7 +288,7 @@ class DramCorePrefetcher(LightweightModule):
         if self.global_cb is None:
             self._build_global_cb()
         if not self._started:
-            ttnn.experimental.start_dram_core_prefetcher(self.mesh_device)
+            ttnn.experimental.start_tensor_prefetcher(self.mesh_device)
             self._started = True
 
         # One request per forward(): queue every inserted weight once, in construction order, so
@@ -301,7 +299,7 @@ class DramCorePrefetcher(LightweightModule):
         # list is invariant after prefetch(), so it's cached in _queue_payload.
         if self._queue_payload is None:
             self._queue_payload = [(t, self.ring_size) for t in self.prefetched_tensors]
-        ttnn.experimental.queue_dram_core_prefetcher_request(
+        ttnn.experimental.queue_tensor_prefetcher_request(
             self.mesh_device,
             self._queue_payload,
             global_cb=self.global_cb,
@@ -316,7 +314,7 @@ class DramCorePrefetcher(LightweightModule):
 
     def teardown(self) -> None:
         if self._started and not self._stopped:
-            ttnn.experimental.stop_dram_core_prefetcher(self.mesh_device)
+            ttnn.experimental.stop_tensor_prefetcher(self.mesh_device)
             self._stopped = True
 
     def __del__(self):
@@ -390,7 +388,13 @@ class DramCorePrefetcher(LightweightModule):
         """
         if is_galaxy:
             return default
-        return recv_contig_mem_config(k, n, self.ring_size, self.num_senders)
+        return recv_contig_mem_config(
+            k,
+            n,
+            self.ring_size,
+            self.num_senders,
+            ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        )
 
     def dynamic_worker_core_grid(self, num_cores: int) -> ttnn.CoreRangeSet:
         """Allocate ``num_cores`` worker cores as a SOLID rectangle below the receiver rectangle.
@@ -460,9 +464,9 @@ class DramCorePrefetcher(LightweightModule):
         logger.info(
             f"[DramCorePrefetcher] Creating GCB: ring={self.ring_size} max_in1={max_in1_block_size} size={gcb_size}"
         )
-        # Receiver-contiguous weights are NdShardSpec (round-robin), which the matmul-aware
+        # Receiver-contiguous weights are NdShardSpec (CONTIGUOUS_1D), which the matmul-aware
         # _for_matmul_1d factory rejects (it asserts a K-row-major single-wide-shard-per-bank
-        # layout). Build the DRAM-sender GCB directly from the strided bank->receivers topology;
+        # layout). Build the DRAM-sender GCB directly from the contiguous bank->receivers topology;
         # the underlying GCB object is identical.
         self.global_cb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
             self.mesh_device,
