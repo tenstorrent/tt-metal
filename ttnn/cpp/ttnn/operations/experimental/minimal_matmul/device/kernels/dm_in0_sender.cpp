@@ -228,8 +228,209 @@ void kernel_main() {
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
             bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
 
+#if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1)
+            // Helpers for the paired forward/backward band-interleave path. Resolve both k-blocks
+            // without waiting, then per band wait/read forward then backward so already-landed
+            // signals from either direction are consumed as they arrive. Push order stays forward
+            // then backward so in1/compute stay positionally aligned.
+            auto pair_issue_band_read = [&](uint32_t dst_addr, uint32_t kb, uint32_t row_start, uint32_t row_end) {
+                read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                    in0_reader,
+                    in0_shape,
+                    dst_addr,
+                    in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                    in3_reader,
+                    fused_op_receiver.local_k_start,
+                    fused_op_receiver.local_k_end,
+                    fused_op_receiver.input_tensor_Wt,
+#endif
+                    row_start,
+                    row_end,
+                    kb * K_block_tiles,
+                    (kb + 1) * K_block_tiles,
+                    /*issue_barrier=*/false);
+            };
+            auto pair_defer_flush = [&](uint32_t kbi) {
+                if (defer_write && kbi == defer_write_k_block) {
+                    if constexpr (is_output_writer) {
+                        DeviceZoneScopedN("DEFER-WRITE");
+                        cb_wait_front(cb_id_out, out_block_num_tiles);
+                        uint32_t out_read_ptr = get_read_ptr(cb_id_out);
+                        if constexpr (N_chunks == 1) {
+                            write_block_sync<M_block_tiles, N_block_tiles>(
+                                std::get<0>(outputs_tuple),
+                                out_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        } else {
+                            write_block_sync_split<M_block_tiles, N_block_tiles, N_chunks, N_tiles_per_chunk>(
+                                outputs_tuple,
+                                out0_shape,
+                                out_read_ptr,
+                                out_tile_size,
+                                defer_write_m_tile,
+                                defer_write_m_tile_end,
+                                defer_write_n_tile,
+                                defer_write_n_tile_end);
+                        }
+                        cb_pop_front(cb_id_out, out_block_num_tiles);
+                    }
+                }
+            };
+            auto pair_finish_block = [&](uint32_t in0_addr, uint32_t kbi) {
+                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                if (!is_sink_core) {
+                    DeviceZoneScopedN("SNF");
+                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_addr);
+                    noc_async_write(in0_addr, in0_unicast_data_addr, current_block_bytes);
+#ifdef ARCH_BLACKHOLE
+                    noc_async_writes_flushed();
+#endif
+                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                }
+#ifdef SRS_FUSE_OP_SIGNALER
+                if constexpr (is_output_writer) {
+                    if (not_first_block && kbi == max_defer_write_k_block) {
+                        noc_async_write_barrier();
+                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                    }
+                }
+#endif
+            };
+            // Read one whole in0 k-block as balanced M-row bands, waiting each band's signal itself
+            // (resolve_interleaved_k_block did not wait). Self (dir 2) is a single aggregated signal,
+            // read whole. Used for the schedule's self chunks and any unpaired remote chunk.
+            auto pair_read_single = [&](uint32_t kb, uint8_t dir, uint32_t kbi, uint32_t total_rows) {
+                pair_defer_flush(kbi);
+                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                uint32_t addr = get_write_ptr(cb_id_in0);
+                {
+                    DeviceZoneScopedN("DRAM-Latency");
+                    if (dir != 2) {
+                        for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
+                            uint32_t band_lo, band_h;
+                            balanced_band(total_rows, IN0_SUB_CHUNKS, sub, band_lo, band_h);
+                            if (band_h == 0) {
+                                break;
+                            }
+                            {
+                                DeviceZoneScopedN("IN0-BAND-WAIT");
+                                fused_op_receiver.wait_for_dir(dir);
+                            }
+                            {
+                                DeviceZoneScopedN("IN0-READ-ISSUE");
+                                pair_issue_band_read(
+                                    addr + band_lo * K_block_tiles * in0_tile_size,
+                                    kb,
+                                    m_tile + band_lo,
+                                    m_tile + band_lo + band_h);
+                            }
+                        }
+                        noc_async_read_barrier();
+                    } else {
+                        fused_op_receiver.wait_for_dir(2);
+                        read_in0_block_sync<M_block_tiles, K_block_tiles>(
+                            in0_reader,
+                            in0_shape,
+                            addr,
+                            in0_tile_size,
+#ifdef READ_FROM_LOCAL_INPUT
+                            in3_reader,
+                            fused_op_receiver.local_k_start,
+                            fused_op_receiver.local_k_end,
+                            fused_op_receiver.input_tensor_Wt,
+#endif
+                            m_tile,
+                            m_tile_end,
+                            kb * K_block_tiles,
+                            (kb + 1) * K_block_tiles);
+                    }
+                }
+                pair_finish_block(addr, kbi);
+            };
+#endif
+
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 DeviceZoneScopedN("AVAILABLE");
+#if defined(FUSE_AG) && (IN0_SUB_CHUNKS > 1)
+                if constexpr (is_injector_core) {
+                    // Interleaved schedule, first n-block: resolve a forward slot and the following
+                    // backward slot, then per band wait/read forward then backward.
+                    if (fused_op_receiver.use_interleaved && n_block_iter == 0 && !reuse_block) {
+                        const uint32_t total_rows = m_tile_end - m_tile;
+                        uint8_t dir_a;
+                        uint32_t kb_a = fused_op_receiver.resolve_interleaved_k_block(k_block_iter, dir_a);
+                        if (dir_a == 1 && (k_block_iter + 1) < K_num_blocks) {
+                            uint8_t dir_b;
+                            uint32_t kb_b = fused_op_receiver.resolve_interleaved_k_block(k_block_iter + 1, dir_b);
+                            if (dir_b == 0) {
+                                uint32_t addr_f;
+                                uint32_t addr_b;
+                                {
+                                    DeviceZoneScopedN("PAIR-SETUP");
+                                    pair_defer_flush(k_block_iter);
+                                    pair_defer_flush(k_block_iter + 1);
+                                    cb_reserve_back(cb_id_in0, 2 * in0_block_num_tiles);
+                                    addr_f = get_write_ptr(cb_id_in0);
+                                    addr_b = addr_f + in0_block_num_tiles * in0_tile_size;
+                                    if (addr_b >= get_local_cb_interface(cb_id_in0).fifo_limit) {
+                                        addr_b -= get_local_cb_interface(cb_id_in0).fifo_size;
+                                    }
+                                }
+                                {
+                                    DeviceZoneScopedN("DRAM-Latency");
+                                    for (uint32_t sub = 0; sub < IN0_SUB_CHUNKS; sub++) {
+                                        uint32_t band_lo, band_h;
+                                        balanced_band(total_rows, IN0_SUB_CHUNKS, sub, band_lo, band_h);
+                                        if (band_h == 0) {
+                                            break;
+                                        }
+                                        const uint32_t row_start = m_tile + band_lo;
+                                        const uint32_t row_end = row_start + band_h;
+                                        const uint32_t off = band_lo * K_block_tiles * in0_tile_size;
+                                        {
+                                            DeviceZoneScopedN("IN0-BAND-WAIT");
+                                            fused_op_receiver.wait_for_dir(1);
+                                        }
+                                        {
+                                            DeviceZoneScopedN("IN0-READ-ISSUE");
+                                            pair_issue_band_read(addr_f + off, kb_a, row_start, row_end);
+                                        }
+                                        {
+                                            DeviceZoneScopedN("IN0-BAND-WAIT");
+                                            fused_op_receiver.wait_for_dir(0);
+                                        }
+                                        {
+                                            DeviceZoneScopedN("IN0-READ-ISSUE");
+                                            pair_issue_band_read(addr_b + off, kb_b, row_start, row_end);
+                                        }
+                                    }
+                                    noc_async_read_barrier();
+                                }
+                                pair_finish_block(addr_f, k_block_iter);
+                                pair_finish_block(addr_b, k_block_iter + 1);
+                                k_block_iter++;  // consumed two slots; loop's ++ advances past the pair
+                                continue;
+                            }
+                            // Backward drained: dir_b is another forward. Read both as singles in order.
+                            pair_read_single(kb_a, dir_a, k_block_iter, total_rows);
+                            pair_read_single(kb_b, dir_b, k_block_iter + 1, total_rows);
+                            k_block_iter++;
+                            continue;
+                        }
+                        // Self (dir 2) or a lone backward: single block, no pairing.
+                        pair_read_single(kb_a, dir_a, k_block_iter, total_rows);
+                        continue;
+                    }
+                }
+#endif
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         DeviceZoneScopedN("DEFER-WRITE");
@@ -269,7 +470,10 @@ void kernel_main() {
                     continue;
                 }
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                {
+                    DeviceZoneScopedN("CB-WAIT");
+                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                }
 
                 uint32_t in0_start_address = get_write_ptr(cb_id_in0);
                 if constexpr (is_injector_core) {

@@ -345,6 +345,22 @@ struct MinimalMatmulOpReceiver {
         return k_block;
     }
 
+    // Resolve the next interleaved slot's k-block and direction WITHOUT blocking on its signal.
+    // Used when pairing a forward k-block with the following backward one so both can be resolved
+    // before any wait_for_dir; the caller issues all IN0_SUB_CHUNKS waits itself. Schedule entries
+    // stay identical to the non-paired path so in1/compute replay stays aligned.
+    uint32_t resolve_interleaved_k_block(uint32_t k_block_iter, uint8_t& out_dir) {
+        DeviceZoneScopedN("RESOLVE-INTERLEAVED-K-BLOCK");
+
+        uint8_t dev;
+        uint32_t chunk;
+        next_interleaved_slot(out_dir, dev, chunk);
+        uint32_t k_block = device_k_block_start_ids[dev] + chunk;
+        k_block_device_received[k_block]++;
+        forward_k_block_schedule[k_block_iter] = k_block;
+        return k_block;
+    }
+
     uint32_t compute_actual_k_block_iter(bool is_first_n_block_iter, uint32_t k_block_iter, bool is_forward) {
         uint32_t k_block_received = 0;
 
