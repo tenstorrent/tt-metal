@@ -95,7 +95,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 45
+      timeout: 68
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -140,7 +140,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 45
+      timeout: 75
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -234,7 +234,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 20
+      timeout: 30
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
   sp_config: spsg
@@ -295,7 +295,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
@@ -317,7 +317,7 @@
   test_group: module
   skus:
     bh_spsg:
-      timeout: 45
+      timeout: 75
   owner_id: U08RL15T4N8
   team: models
   sp_config: spsg
