@@ -54,7 +54,7 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
    - Support for linked/chained transactions
    - Support for loopback operations
 
-3. **Advanced Multicast Schemes**: Tests different multicast implementation strategies for optimal performance across various grid sizes and communication patterns.
+3. **Advanced Multicast Schemes**: Tests different multicast implementation strategies for optimal performance across various grid sizes and communication patterns. A description of the multicast schemes tested can be found [here](https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/multicast_schemes/Multicast%20Schemes.md).
 
 ## Device 2.0 API Tests
 This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design.
