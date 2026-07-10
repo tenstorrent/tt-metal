@@ -33,7 +33,12 @@ struct SMCRuntimeTelemetryBuffer {
 };
 
 std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control(tt::umd::TTDevice& tt_device) {
-    auto size = tt_device.get_firmware_info_provider()->get_runtime_telemetry_buffer_size();
+    auto* firmware_info_provider = tt_device.get_firmware_info_provider();
+    if (firmware_info_provider == nullptr) {
+        log_warning(tt::LogMetal, "Firmware info provider unavailable; skipping dispatch telemetry SMC buffer");
+        return std::nullopt;
+    }
+    auto size = firmware_info_provider->get_runtime_telemetry_buffer_size();
     if (!size.has_value()) {
         log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer is unavailable");
         return std::nullopt;
@@ -47,7 +52,7 @@ std::optional<SMCRuntimeTelemetryBuffer> discover_smc_dispatch_telemetry_control
         return std::nullopt;
     }
 
-    auto addr = tt_device.get_firmware_info_provider()->get_runtime_telemetry_buffer_address();
+    auto addr = firmware_info_provider->get_runtime_telemetry_buffer_address();
     if (!addr.has_value()) {
         log_warning(tt::LogMetal, "Dispatch telemetry SMC buffer address is unavailable or invalid");
         return std::nullopt;

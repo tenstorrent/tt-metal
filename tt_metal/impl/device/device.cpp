@@ -99,15 +99,25 @@ void Device::initialize_smc_dispatch_telemetry_control() {
     if (context_->rtoptions().get_dispatch_telemetry_disabled()) {
         return;
     }
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
 
     smc_dispatch_telemetry_control_ = dispatch_telemetry_types::SMCDispatchTelemetryControl{};
     smc_dispatch_telemetry_control_.dispatch_telemetry_addr =
         context_->dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
     smc_dispatch_telemetry_control_.num_hw_cqs = this->num_hw_cqs_;
-    auto* tt_device = context_->get_cluster().get_driver()->get_chip(this->id_)->get_tt_device();
-    if (tt_device == nullptr) {
-        return;
-    }
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
 }
 
@@ -116,7 +126,17 @@ void Device::invalidate_smc_dispatch_telemetry_control() {
         return;
     }
 
-    auto* tt_device = context_->get_cluster().get_driver()->get_chip(this->id_)->get_tt_device();
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
     if (tt_device == nullptr) {
         return;
     }
@@ -129,14 +149,25 @@ void Device::update_smc_dispatch_telemetry_for_fast_dispatch(
         return;
     }
 
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
+    if (tt_device == nullptr) {
+        return;
+    }
+
     TT_FATAL(
         cq_id < dispatch_telemetry_types::RESERVED_CQ_SPACE,
         "CQ id {} exceeds reserved SMC dispatch telemetry CQ space",
         cq_id);
-    auto* tt_device = context_->get_cluster().get_driver()->get_chip(this->id_)->get_tt_device();
-    if (tt_device == nullptr) {
-        return;
-    }
 
     smc_dispatch_telemetry_control_.cq_dispatch_core_coords[cq_id] = coords;
     write_smc_dispatch_telemetry_control(*tt_device, smc_dispatch_telemetry_control_);
@@ -147,7 +178,17 @@ void Device::set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled) {
         return;
     }
 
-    auto* tt_device = context_->get_cluster().get_driver()->get_chip(this->id_)->get_tt_device();
+    auto* tt_device = [&]() -> tt::umd::TTDevice* {
+        const auto& driver = context_->get_cluster().get_driver();
+        if (driver == nullptr) {
+            return nullptr;
+        }
+        auto* chip = driver->get_chip(this->id_);
+        if (chip == nullptr) {
+            return nullptr;
+        }
+        return chip->get_tt_device();
+    }();
     if (tt_device == nullptr) {
         return;
     }

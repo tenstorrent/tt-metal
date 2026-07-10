@@ -65,10 +65,14 @@ void for_each_worker_core(const CoreRangeSet& worker_cores, Func func) {
 }
 
 std::optional<std::string> smc_runtime_telemetry_unavailable_reason(tt::umd::TTDevice& tt_device) {
-    if (!tt_device.get_firmware_info_provider()->get_runtime_telemetry_buffer_size().has_value()) {
+    auto* firmware_info_provider = tt_device.get_firmware_info_provider();
+    if (firmware_info_provider == nullptr) {
+        return "Firmware info provider is unavailable";
+    }
+    if (!firmware_info_provider->get_runtime_telemetry_buffer_size().has_value()) {
         return "SMC runtime telemetry buffer is unavailable";
     }
-    if (!tt_device.get_firmware_info_provider()->get_runtime_telemetry_buffer_address().has_value()) {
+    if (!firmware_info_provider->get_runtime_telemetry_buffer_address().has_value()) {
         return "SMC runtime telemetry buffer address is unavailable or invalid";
     }
     return std::nullopt;
