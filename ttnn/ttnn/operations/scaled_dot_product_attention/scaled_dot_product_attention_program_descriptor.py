@@ -79,13 +79,6 @@ def create_program_descriptor(
     Skv_t = (S_kv + TILE_DIM - 1) // TILE_DIM
     Dt = (D + TILE_DIM - 1) // TILE_DIM
 
-    q_chunk_t = min(Sq_t, MAX_CHUNK)
-    kv_chunk_t = min(Skv_t, MAX_CHUNK)
-    q_blocks_per_bh = (Sq_t + q_chunk_t - 1) // q_chunk_t
-    num_kv_blocks = (Skv_t + kv_chunk_t - 1) // kv_chunk_t
-    num_q_blocks = B * H_q * q_blocks_per_bh
-    gqa_factor = H_q // H_kv
-
     # mask_mode: 0 = none, 1 = custom (additive tensor read from DRAM),
     #            2 = causal (triangular bias generated on-device in the reader).
     read_dram_mask = attn_mask is not None
@@ -104,6 +97,86 @@ def create_program_descriptor(
     # needs no handling — padded Q/K/V columns are zero, so QKᵀ/PV are exact.
     skv_last_valid = S_kv % TILE_DIM
     skv_non_aligned = 1 if skv_last_valid != 0 else 0
+
+    # --- dtype-driven CB tile formats / byte sizes (needed by the L1 budget fit) ---
+    tile_dtype = query.dtype
+    tile_bytes = ttnn.tile_size(tile_dtype)
+    scaler_bytes = ttnn.tile_size(ttnn.bfloat16)
+    fp32 = ttnn.float32
+    fp32_bytes = ttnn.tile_size(fp32)
+    # Score-path intermediates are promoted to bf16 for bf8b input (Refinement 1).
+    score_dtype = ttnn.bfloat16 if tile_dtype == ttnn.bfloat8_b else tile_dtype
+    score_bytes = ttnn.tile_size(score_dtype)
+    # Causal mask generated on-device in score_dtype; custom mask stays caller dtype.
+    mask_fmt = score_dtype if mask_mode == 2 else tile_dtype
+    mask_bytes = ttnn.tile_size(mask_fmt)
+    mask_elem_bytes = 4 if mask_fmt == fp32 else 2
+
+    # --- L1 budget fit (Refinement 4) --------------------------------------
+    # The Dt-scaling CBs (cb_q/cb_qs/cb_k/cb_v at chunk*Dt, and the fp32
+    # cb_pv/cb_o_run/cb_o_new + cb_out at q_chunk_t*Dt) blow the ~1.5 MB per-core
+    # L1 budget as head_dim grows (OOM at D>=256). Two host-side levers keep the
+    # footprint under budget for every tested head_dim (D<=1024, Dt<=32):
+    #   1. compute->compute CBs are single-buffered. The two ends run on the one
+    #      compute thread strictly sequentially -- there is no pipelining to buy
+    #      with a 2nd buffer (see /memory-budget-metal 4.2). Only genuine cross-
+    #      thread pipes stay double-buffered: cb_k/cb_v (reader->compute) and
+    #      cb_out (compute->writer).
+    #   2. the chunk tile counts (q_chunk_t / kv_chunk_t) and the reader double-
+    #      buffer are chosen so the projected footprint fits. Large head_dim ->
+    #      smaller chunks (more, smaller Q/KV blocks). The online-softmax
+    #      recurrence is correct for any block count, so this is a pure work-
+    #      granularity knob. C=1 (one Q tile-row, one KV tile-block) is the floor
+    #      and fits every D<=1024 cell for all three dtypes.
+    L1_BUDGET = 1499136
+    L1_SAFETY = 96 * 1024  # headroom for per-CB page rounding + dispatch overhead
+
+    def _project_footprint(qcb, kcb, db_kv):
+        block_pages = qcb * kcb
+        o_pages = qcb * Dt
+        total = 0
+        total += qcb * Dt * tile_bytes  # cb_q  (reader->compute)
+        total += qcb * Dt * tile_bytes  # cb_qs (held)
+        total += db_kv * kcb * Dt * tile_bytes  # cb_k  (reader->compute)
+        total += db_kv * kcb * Dt * tile_bytes  # cb_v  (reader->compute)
+        total += (2 * block_pages if emit_mask else 1) * mask_bytes  # cb_mask (reader->compute)
+        total += 1 * scaler_bytes  # cb_scaler_max
+        total += (2 if skv_non_aligned else 1) * scaler_bytes  # cb_scaler_sum
+        total += qcb * fp32_bytes  # cb_l_new
+        total += o_pages * fp32_bytes  # cb_pv
+        total += o_pages * fp32_bytes  # cb_o_run
+        total += o_pages * fp32_bytes  # cb_o_new
+        total += qcb * fp32_bytes  # cb_l_inv
+        total += (block_pages if emit_mask else 1) * score_bytes  # cb_masked
+        total += 2 * o_pages * tile_bytes  # cb_out (compute->writer)
+        total += block_pages * score_bytes  # cb_scores
+        total += block_pages * score_bytes  # cb_probs
+        total += 6 * qcb * fp32_bytes  # m_cur/m_run/m_new/corr/l_cur/l_run
+        return total
+
+    q_chunk_t = min(Sq_t, 1)
+    kv_chunk_t = min(Skv_t, 1)
+    kv_double_buffer = 1
+    for _C in range(MAX_CHUNK, 0, -1):
+        _qcb = min(Sq_t, _C)
+        _kcb = min(Skv_t, _C)
+        _picked = False
+        for _db in (2, 1):
+            if _project_footprint(_qcb, _kcb, _db) <= L1_BUDGET - L1_SAFETY:
+                q_chunk_t, kv_chunk_t, kv_double_buffer = _qcb, _kcb, _db
+                _picked = True
+                break
+        if _picked:
+            break
+    # If nothing fit (Dt beyond the budget envelope, e.g. D>1024), the loop
+    # leaves the C=1/single-buffer floor selected above; program launch then
+    # raises the honest L1 OOM (a D-outer-loop O-accumulation restructure would
+    # be required past that point — out of scope, no tested cell reaches it).
+
+    q_blocks_per_bh = (Sq_t + q_chunk_t - 1) // q_chunk_t
+    num_kv_blocks = (Skv_t + kv_chunk_t - 1) // kv_chunk_t
+    num_q_blocks = B * H_q * q_blocks_per_bh
+    gqa_factor = H_q // H_kv
 
     # --- Work distribution: contiguous Q-block run per core ---
     device = query.device()
@@ -127,10 +200,8 @@ def create_program_descriptor(
     )
 
     # --- CB sizing (pages) ---
-    tile_dtype = query.dtype
-    tile_bytes = ttnn.tile_size(tile_dtype)
-    scaler_bytes = ttnn.tile_size(ttnn.bfloat16)
-
+    # Byte sizes + score/mask formats were resolved above (L1 budget fit needs
+    # them). qcb/kcb are the budget-selected chunk tile counts.
     qcb = q_chunk_t
     kcb = kv_chunk_t
     block_pages = qcb * kcb
@@ -143,60 +214,44 @@ def create_program_descriptor(
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=psize)],
         )
 
-    # Softmax-path score intermediates (QKᵀ scores, masked scores, exp probs).
-    # For bf8b input these MUST NOT be stored as bf8b: the additive mask writes
-    # -inf into cb_masked, and bf8b's shared-per-16-element exponent lets one -inf
-    # entry corrupt the valid scores in its block (PCC ~0.9 on custom-mask cells).
-    # bf16 has a per-element exponent, so -inf stays local. Q/K/V and the output
-    # stay in the caller's dtype; only the internal score path is promoted.
-    score_dtype = ttnn.bfloat16 if tile_dtype == ttnn.bfloat8_b else tile_dtype
-    score_bytes = ttnn.tile_size(score_dtype)
-
     def cbs_(idx, pages):
         return cb(idx, pages, fmt=score_dtype, psize=score_bytes)
-
-    # Causal mask is generated on-device in score_dtype (bf16 for bf16/bf8b,
-    # fp32 for fp32) so the additive mask-add stays same-format. The reader
-    # writes -inf/0/triangular tiles element-by-element, so it needs the element
-    # size: 4 bytes for fp32, else 2 (bf16). Custom masks stay in the caller
-    # dtype (read from DRAM). mask_elem_bytes is only consumed on the causal path.
-    mask_fmt = score_dtype if mask_mode == 2 else tile_dtype
-    mask_bytes = ttnn.tile_size(mask_fmt)
-    mask_elem_bytes = 4 if mask_fmt == ttnn.float32 else 2
-
-    # fp32 accumulation path: the running output/sum are updated over up to
-    # num_kv_blocks (long context => dozens) online-softmax steps; bf16 storage
-    # loses precision there. The matmul/reduce already accumulate in fp32 DEST.
-    fp32 = ttnn.float32
-    fp32_bytes = ttnn.tile_size(ttnn.float32)
 
     def cbf(idx, pages):
         return cb(idx, pages, fmt=fp32, psize=fp32_bytes)
 
+    # Buffering (Refinement 4 — L1 budget fit):
+    #   * cb_k / cb_v (reader->compute) keep the reader-prefetch double buffer,
+    #     dropped to single only when the budget is tight (kv_double_buffer).
+    #   * cb_out (compute->writer) stays double-buffered for the writer pipeline.
+    #   * every compute->compute CB is SINGLE-buffered: producer and consumer are
+    #     the one compute thread running sequentially, so a 2nd buffer buys no
+    #     pipelining and only wastes L1 (/memory-budget-metal 4.2). cb_qs was
+    #     already single (held across the KV loop).
     cbs = [
         cb(CB_Q, qcb * Dt),
         cb(CB_QS, qcb * Dt),
-        cb(CB_K, 2 * kcb * Dt),
-        cb(CB_V, 2 * kcb * Dt),
+        cb(CB_K, kv_double_buffer * kcb * Dt),
+        cb(CB_V, kv_double_buffer * kcb * Dt),
         cb(CB_MASK, 2 * block_pages if emit_mask else 1, fmt=mask_fmt, psize=mask_bytes),
         cb(CB_SCALER_MAX, 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
         # 2 tiles when S_kv is non-aligned: [full scaler, partial scaler].
         cb(CB_SCALER_SUM, 2 if skv_non_aligned else 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
-        cbf(CB_L_NEW, 2 * qcb),
-        cbf(CB_PV, 2 * o_pages),
-        cbf(CB_O_RUN, 2 * o_pages),
-        cbf(CB_O_NEW, 2 * o_pages),
-        cbf(CB_L_INV, 2 * qcb),
-        cbs_(CB_MASKED, 2 * block_pages if emit_mask else 1),
+        cbf(CB_L_NEW, qcb),
+        cbf(CB_PV, o_pages),
+        cbf(CB_O_RUN, o_pages),
+        cbf(CB_O_NEW, o_pages),
+        cbf(CB_L_INV, qcb),
+        cbs_(CB_MASKED, block_pages if emit_mask else 1),
         cb(CB_OUT, 2 * o_pages),
-        cbs_(CB_SCORES, 2 * block_pages),
-        cbs_(CB_PROBS, 2 * block_pages),
-        cbf(CB_M_CUR, 2 * qcb),
-        cbf(CB_M_RUN, 2 * qcb),
-        cbf(CB_M_NEW, 2 * qcb),
-        cbf(CB_CORR, 2 * qcb),
-        cbf(CB_L_CUR, 2 * qcb),
-        cbf(CB_L_RUN, 2 * qcb),
+        cbs_(CB_SCORES, block_pages),
+        cbs_(CB_PROBS, block_pages),
+        cbf(CB_M_CUR, qcb),
+        cbf(CB_M_RUN, qcb),
+        cbf(CB_M_NEW, qcb),
+        cbf(CB_CORR, qcb),
+        cbf(CB_L_CUR, qcb),
+        cbf(CB_L_RUN, qcb),
     ]
 
     # --- Reader ---
