@@ -22,21 +22,18 @@
 #include "ops/distributed/losses.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
-#include "ops/layernorm_op.hpp"
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/mla_q_rope.hpp"
+#include "ops/mla_qkv_assemble_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
 #include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
-#include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
-#include "ops/scaled_dot_product_attention.hpp"
 #include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
@@ -176,15 +173,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def(
-            "layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta") = nb::none());
-        py_layernorm.def(
-            "composite_layernorm",
-            &ttml::ops::composite_layernorm,
-            nb::arg("tensor"),
-            nb::arg("gamma"),
-            nb::arg("beta") = nb::none());
+        // TODO(nuked-op layer_norm): restore layernorm / composite_layernorm bindings once the op is recreated.
     }
 
     {
@@ -277,51 +266,9 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_attention = static_cast<nb::module_>(m.attr("attention"));
-        // Overload 1: mask as ttml.autograd.Tensor (or None)
-        py_attention.def(
-            "scaled_dot_product_attention",
-            [](const autograd::TensorPtr& query,
-               const autograd::TensorPtr& key,
-               const autograd::TensorPtr& value,
-               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
-                return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
-            },
-            nb::arg("query"),
-            nb::arg("key"),
-            nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
-        // Overload 2: mask as ttnn.Tensor (or None) - wrap it in autograd::Tensor
-        // ttnn.Tensor wraps tt::tt_metal::Tensor, so we accept that type
-        py_attention.def(
-            "scaled_dot_product_attention",
-            [](const autograd::TensorPtr& query,
-               const autograd::TensorPtr& key,
-               const autograd::TensorPtr& value,
-               const std::optional<tt::tt_metal::Tensor>& mask) -> autograd::TensorPtr {
-                std::optional<autograd::TensorPtr> mask_ptr = std::nullopt;
-                if (mask.has_value()) {
-                    mask_ptr = autograd::create_tensor(mask.value(), false);
-                }
-                return ttml::ops::scaled_dot_product_attention(query, key, value, mask_ptr);
-            },
-            nb::arg("query"),
-            nb::arg("key"),
-            nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
-
-        py_attention.def(
-            "scaled_dot_product_attention_composite",
-            [](const autograd::TensorPtr& query,
-               const autograd::TensorPtr& key,
-               const autograd::TensorPtr& value,
-               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
-                return ttml::ops::scaled_dot_product_attention_composite(query, key, value, mask);
-            },
-            nb::arg("query"),
-            nb::arg("key"),
-            nb::arg("value"),
-            nb::arg("mask") = std::nullopt);
+        // TODO(nuked-op sdpa): restore scaled_dot_product_attention bindings
+        // (overloads + composite) once the SDPA op is recreated.
+        static_cast<void>(m);
     }
 
     {
@@ -398,14 +345,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_rmsnorm = static_cast<nb::module_>(m.attr("rmsnorm"));
-        py_rmsnorm.def("rmsnorm", &ttml::ops::rmsnorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("epsilon"));
-        py_rmsnorm.def(
-            "rmsnorm_composite",
-            &ttml::ops::rmsnorm_composite,
-            nb::arg("tensor"),
-            nb::arg("gamma"),
-            nb::arg("epsilon"));
+        // TODO(nuked-op rms_norm): restore rmsnorm / rmsnorm_composite bindings once the op is recreated.
     }
 
     m.def(
