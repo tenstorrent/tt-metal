@@ -149,7 +149,11 @@ constexpr uint32_t downstream_cb_end = downstream_cb_base + downstream_cb_size;
 constexpr uint32_t fd_core_type_idx = static_cast<uint32_t>(fd_core_type);
 
 constexpr bool dispatch_s_enabled = dispatch_d_shutdown_sem_id != 0;
+#ifdef ARCH_QUASAR
+constexpr bool publish_noc_count = false;
+#else
 constexpr bool publish_noc_count = !distributed_dispatcher && dispatch_s_enabled;
+#endif
 
 // Break buffer into blocks, 1/n of the total (dividing equally)
 // Do bookkeeping (release, etc) based on blocks
@@ -998,17 +1002,9 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
     return (diff << shift) >= 0;
 }
 
-#ifdef ARCH_QUASAR
-// Returns a pointer to the L1 worker completion counter address
-FORCE_INLINE volatile uint32_t* worker_completion_sem_addr(uint32_t stream) {
-    return reinterpret_cast<volatile uint32_t*>(
-        l1_uncached_addr(DISPATCH_MESSAGE_ADDR + L1_ALIGNMENT * (stream - first_stream_used)));
-}
-#endif
-
 FORCE_INLINE void wait_worker_completion(uint32_t stream, uint32_t wait_count) {
 #ifdef ARCH_QUASAR
-    while (!wrap_ge(*worker_completion_sem_addr(stream), wait_count)) {
+    while (!wrap_ge(*worker_completion_sem_addr(stream, first_stream_used), wait_count)) {
     }
 #else
     while (!stream_wrap_ge(NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
@@ -1162,7 +1158,8 @@ void process_go_signal_mcast_cmd() {
             // greater than the number of cores actually on the chip, we must account for acks
             // from non-existent cores here.
 #ifdef ARCH_QUASAR
-            *worker_completion_sem_addr(stream) += (num_virtual_unicast_cores - num_physical_unicast_cores);
+            *worker_completion_sem_addr(stream, first_stream_used) +=
+                (num_virtual_unicast_cores - num_physical_unicast_cores);
 #else
             NOC_STREAM_WRITE_REG(
                 stream,
@@ -1541,7 +1538,7 @@ void kernel_main() {
     for (size_t i = 0; i < max_num_worker_sems; i++) {
         const uint32_t index = i + first_stream_used;
 #ifdef ARCH_QUASAR
-        *worker_completion_sem_addr(index) = 0;
+        *worker_completion_sem_addr(index, first_stream_used) = 0;
 #else
         NOC_STREAM_WRITE_REG(
             index,
