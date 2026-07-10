@@ -428,6 +428,36 @@ def main():
 
             try:
                 captureProcess.communicate(timeout=15)
+                # A crashed capture tool (e.g. the profiling stream SIGSEGVs tracy-capture) makes
+                # communicate() return normally with a nonzero/negative returncode -- there is no
+                # TimeoutExpired. Detect that here and fail LOUDLY, instead of silently walking into
+                # the copy below and emitting a misleading "Could not copy ... No such file" warning
+                # for a .tracy that was never written.
+                capRc = captureProcess.returncode
+                if capRc != 0:
+                    # A signal death shows up either as a negative returncode (direct child) or as
+                    # 128+signo (when launched via a shell). Decode both so the message names the
+                    # actual signal (e.g. SIGSEGV) instead of a bare exit code.
+                    sigNo = None
+                    if capRc is not None and capRc < 0:
+                        sigNo = -capRc
+                    elif capRc is not None and capRc > 128:
+                        sigNo = capRc - 128
+                    if sigNo is not None:
+                        try:
+                            sigName = signal.Signals(sigNo).name
+                        except ValueError:
+                            sigName = f"signal {sigNo}"
+                        detail = f"was killed by {sigName} (signal {sigNo}, exit code {capRc})"
+                    else:
+                        detail = f"exited with code {capRc}"
+                    logger.error(
+                        f"Tracy capture tool (tracy-capture) {detail} before writing a trace. "
+                        f"The profiling stream crashed the capture tool, so NO .tracy was produced. "
+                        f"This is a capture-side failure -- the test itself may have passed. "
+                        f"Re-run under a debugger/ASan build of tracy-capture to root-cause."
+                    )
+                    sys.exit(70)  # EX_SOFTWARE: internal capture-tool failure
                 # Copy the generated .tracy file to the server's traces folder with a unique name
                 import datetime
 
