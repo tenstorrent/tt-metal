@@ -551,7 +551,7 @@ class Flux1KontextPipeline(PipelineAPIMixin):
         cfg_enabled: bool,
         submesh_idx: int,
         latents: ttnn.Tensor,
-        image_latents: ttnn.Tensor,
+        image_latents: ttnn.Tensor | None,
         spatial_rope: tuple[ttnn.Tensor, ttnn.Tensor],
         combined_sequence_length: int,
         noise_local_len: int,
