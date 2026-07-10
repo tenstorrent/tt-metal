@@ -202,16 +202,6 @@ inline uint32_t default_num_entries(uint32_t num_p, uint32_t num_c) {
 
 #define DFB_NO_EXTRA_SKIP ((void)0)
 
-// A DM->DM config consumes (num_p + num_c) DM cores; Quasar exposes only 6 usable DM cores per
-// node (QUASAR_USER_DM_CORES_PER_NODE), so any DM->DM config needing more can never be launched
-// there and ValidateProgramSpec would FATAL. Skip it explicitly. (DM<->Tensix configs are exempt:
-// the Tensix endpoint is not a DM core.)
-#define DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(num_p, num_c)                                             \
-    if (devices_.at(0)->arch() == ARCH::QUASAR && ((num_p) + (num_c)) > 6) {                        \
-        GTEST_SKIP() << "DM->DM config needs " << ((num_p) + (num_c))                               \
-                     << " DM cores, exceeds the Quasar per-node budget of 6";                       \
-    }
-
 constexpr uint32_t dfb_default_num_entries(uint32_t num_p, uint32_t num_c) {
     const uint32_t m = (num_p / std::gcd(num_p, num_c)) * num_c;
     return ((16u + m - 1u) / m) * m;

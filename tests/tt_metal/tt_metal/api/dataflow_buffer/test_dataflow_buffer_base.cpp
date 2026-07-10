@@ -56,15 +56,12 @@ static std::string M2ImplicitSyncParamName(const ::testing::TestParamInfo<bool>&
 // canonical for Quasar, so only configs with UNIQUE coverage are kept here --
 //   * the three 1Sx1S cases (num_p==num_c==1) which also run on WH/BH (see
 //     DFB_SKIP_IF_UNSUPPORTED), and
-//   * configs with no 2.0 twin (DM->DM 4Sx4{S,A} over the Quasar DM budget;
-//     DM->Tensix 6Sx4A, which needs BLOCKED).
+//   * DM->Tensix 6Sx4A, which has no 2.0 twin (needs BLOCKED).
 // (The Tensix->DM ALL column was ported into the 2.0 sweep below.)
 // ====================================================================================
 DFB_TEST_BUF(DM,       1Sx1S, DM,     DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP, 18)
 DFB_TEST    (DMTensix, 1Sx1S, DM,     TENSIX, 1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
 DFB_TEST    (TensixDM, 1Sx1S, TENSIX, DM,     1, STRIDED, 1, STRIDED, DFB_NO_EXTRA_SKIP)
-DFB_TEST_BUF(DM,       4Sx4S, DM,     DM,     4, STRIDED, 4, STRIDED, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4), 29)
-DFB_TEST    (DM,       4Sx4A, DM,     DM,     4, STRIDED, 4, ALL, DFB_SKIP_DM_DM_OVER_QUASAR_BUDGET(4, 4))
 DFB_TEST    (DMTensix, 6Sx4A, DM,     TENSIX, 6, STRIDED, 4, ALL, DFB_NO_EXTRA_SKIP)
 
 // Metal 2.0 single-DFB config sweep
