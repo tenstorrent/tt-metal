@@ -97,13 +97,20 @@ class TtFinalLayerFP32:
         )
 
     def __call__(self, x: ttnn.Tensor, t: torch.Tensor, latent_shape) -> ttnn.Tensor:
-        assert tuple(t.shape[:2]) == (1, 1), (
-            "single global-timestep case only (B=1, T=1): the fused "
-            "ttnn.layer_norm affine path assumes one (shift, scale) pair "
-            "applies uniformly across the whole sequence -- true for this "
-            "bring-up's synthetic PCC input (B=1, T=1), not the general "
-            "per-frame-timestep (T>1) case."
-        )
+        if t.shape[1] > 1:
+            # The fused ttnn.layer_norm affine path applies one (shift, scale) pair uniformly
+            # across the whole sequence -- exact (not an approximation) when every frame's
+            # timestep embedding is identical, which is what run_t2v's uniform-noise-level T2V
+            # generation always produces (see long_cat_video_transformer3_d_model.py's
+            # _timestep_embed, which broadcasts one scalar timestep to every frame). A caller
+            # with genuinely different per-frame timesteps (e.g. rolling/progressive denoising)
+            # needs a real per-frame-modulated implementation, not this fused one -- fail loud
+            # rather than silently apply only frame 0's modulation to every frame.
+            assert torch.allclose(t, t[:, :1, :].expand_as(t)), (
+                "per-frame (T>1) timestep modulation with genuinely DIFFERENT values per frame "
+                "is not supported by this fused ttnn.layer_norm affine path."
+            )
+        t = t[:, :1, :]  # representative frame (identical to every other frame; see above)
         t_tt = ttnn.from_torch(
             t.to(torch.float32).reshape(1, -1),
             dtype=self.dtype,

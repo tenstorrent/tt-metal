@@ -292,10 +292,16 @@ class TtLongCatSingleStreamBlock:
         return self.ffn(x)
 
     def __call__(self, x: ttnn.Tensor, y: torch.Tensor, t: torch.Tensor, y_seqlen, latent_shape) -> ttnn.Tensor:
-        assert tuple(t.shape[:2]) == (
-            1,
-            1,
-        ), "single global-timestep case only (B=1, T=1); see final_layer_f_p32 for rationale."
+        if t.shape[1] > 1:
+            # See final_layer_f_p32.py's identical check for the rationale: this fused
+            # global-modulation path is exact (not an approximation) only when every frame's
+            # timestep embedding is identical, which is what run_t2v's uniform-noise-level T2V
+            # generation always produces.
+            assert torch.allclose(t, t[:, :1, :].expand_as(t)), (
+                "per-frame (T>1) timestep modulation with genuinely DIFFERENT values per frame "
+                "is not supported by this fused global-modulation path; see final_layer_f_p32.py."
+            )
+        t = t[:, :1, :]  # representative frame (identical to every other frame; see above)
         assert len(y_seqlen) == 1 and int(y_seqlen[0]) == y.shape[1], (
             "B=1: the whole of `y` is one batch item's valid caption context, "
             "no variable-length packing/slicing needed."
