@@ -87,6 +87,18 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
             "indexer_score kv_len {} must be in (0, T={}] (the allocated k length)",
             kv_len,
             T);
+        // Block-max-pool writes whole blocks: the writer emits valid_blocks = valid_tiles / block_tiles (floor),
+        // so a kv_len that lands mid-block would drop the partially-valid boundary block (compute pools it
+        // correctly, but the writer never stores it, leaving a stale output column). block_size is compile-time
+        // and kv_len is a runtime value re-checked on hit, so the cross-check lives here (runs miss AND hit).
+        if (attrs.block_size > 0) {
+            TT_FATAL(
+                kv_len % attrs.block_size == 0,
+                "indexer_score kv_len {} must be a multiple of block_size {} when block-max-pooling (a kv_len "
+                "splitting a block drops the boundary block's score)",
+                kv_len,
+                attrs.block_size);
+        }
     }
 }
 
@@ -638,13 +650,18 @@ ttnn::Tensor indexer_score_msa(
     uint32_t block_size,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_len,
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> block_cyclic_sp_axis,
     std::optional<uint32_t> block_cyclic_chunk_local) {
     // M3 has no learned gates, only a 1/sqrt(d) scale. Rather than materialize a constant [B,Hi,Sq,1] gate
     // tensor (an extra fill op dispatched every call), the reader fills cb_w with `scale` in L1 in-kernel
     // (synthesize_gate); q is passed as the unused weights placeholder so the op infra still has a valid
-    // on-device tensor. MSA fixes apply_relu=false; num_groups/block_size are selection knobs.
+    // on-device tensor. MSA fixes apply_relu=false; num_groups/block_size are selection knobs. The
+    // persistent-KV-cache knobs (cache_batch_idx/kv_len) are the same runtime, hash-excluded pass-throughs as
+    // DSA -- the device op and all 3 kernels are mode-agnostic for them (the fused-streaming K read applies
+    // the indexed-slot offset, and pooled kv_len is guarded to a block boundary in validate).
     return launch_indexer_score(
         q,
         k,
@@ -657,8 +674,8 @@ ttnn::Tensor indexer_score_msa(
         /*gate_scale=*/scale,
         program_config,
         compute_kernel_config,
-        /*cache_batch_idx=*/std::nullopt,
-        /*kv_len=*/std::nullopt,
+        cache_batch_idx,
+        kv_len,
         cluster_axis,
         block_cyclic_sp_axis,
         block_cyclic_chunk_local);

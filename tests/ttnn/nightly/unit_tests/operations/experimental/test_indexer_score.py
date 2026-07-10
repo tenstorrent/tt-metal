@@ -160,11 +160,19 @@ def run_msa(
     q_dtype=ttnn.bfloat16,
     k_dtype=ttnn.bfloat16,
     compute_kernel_config=None,
+    cache_batch_idx=None,
+    kv_len=None,
 ):
     """Run indexer_score_msa (raw dot, constant `scale` gate, per-group planes) and return torch.
 
     No weights tensor: M3 has no learned gates, only `scale` (run as a constant gate in-op).
+    cache_batch_idx / kv_len are the same runtime, hash-excluded persistent-cache knobs as DSA.
     """
+    persistent = {}
+    if cache_batch_idx is not None:
+        persistent["cache_batch_idx"] = cache_batch_idx
+    if kv_len is not None:
+        persistent["kv_len"] = kv_len
     out = ttnn.experimental.indexer_score_msa(
         to_device(q, device, dtype=q_dtype),
         to_device(k, device, dtype=k_dtype),
@@ -172,6 +180,7 @@ def run_msa(
         scale=scale,
         num_groups=num_groups,
         block_size=block_size,
+        **persistent,
         **_extra_kwargs(program_config, compute_kernel_config),
     )
     return ttnn.to_torch(out)
@@ -1435,6 +1444,326 @@ def test_indexer_score_block_pool_exact_vs_unpooled(device):
     # bf16 max is exact selection of identical values -> the visible block maxes must match bit-for-bit
     # (forced-local blocks are +inf on both sides: inf == inf under torch.equal).
     assert torch.equal(pooled[~masked].float(), ref[~masked])
+
+
+# ---------------------------------------------------------------------------
+# MSA persistent KV cache: cache_batch_idx (indexed slot) and kv_len (valid prefix) are the same runtime,
+# hash-excluded pass-throughs the DSA frontend exposes; the device op + all 3 kernels are mode-agnostic for
+# them. The g1 (Hi=1) shape drives MSA's fused-streaming K read -- the path that must apply the indexed-slot
+# page offset (a wrong-slot read silently returns slot 0) and the runtime kv_len mask.
+# ---------------------------------------------------------------------------
+MSA_PERSIST = dict(dim=128, sq=64, t=256, chunk_start=128)
+
+
+def _msa_scale_w(heads, sq, scale):
+    """MSA's constant gate materialized for the reference (the op synthesizes it in-kernel)."""
+    return torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize("num_groups", [1, 4], ids=["g1_fused", "g4"])
+def test_indexer_score_msa_indexed_cache(device, num_groups):
+    """MSA cache_batch_idx selects a slot of a shared [B,1,T,D] cache; every slot scores correctly AND
+    switching slots does not recompile (the slot is hash-excluded). g1 (Hi=1) drives the fused-streaming K
+    read -- the path that must add the indexed-slot page offset, so a wrong-slot read fails the per-slot
+    reference. g4 exercises the same on the non-fused per-group-plane path."""
+    c = MSA_PERSIST
+    B, heads, scale = 3, num_groups, c["dim"] ** -0.5  # Hi == num_groups: g1 -> fused single head, g4 -> 4 planes
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    g = torch.Generator().manual_seed(17)
+    q = torch.randn(1, heads, c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+    k_cache = torch.randn(B, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)  # slots differ
+    q_dev, k_dev = to_device(q, device), to_device(k_cache, device)
+    w_scale = _msa_scale_w(heads, c["sq"], scale)
+
+    def run(b):
+        return ttnn.to_torch(
+            ttnn.experimental.indexer_score_msa(
+                q_dev,
+                k_dev,
+                num_groups=num_groups,
+                chunk_start_idx=c["chunk_start"],
+                scale=scale,
+                program_config=cfg,
+                cache_batch_idx=b,
+            )
+        )
+
+    def check(out, b):
+        ref = indexer_score_msa_ref(q, k_cache[b : b + 1], w_scale, c["chunk_start"], num_groups)
+        assert_grouped_match(out, ref, num_groups, c["sq"], c["t"])
+
+    check(run(0), 0)
+    entries = device.num_program_cache_entries()
+    for b in range(1, B):
+        check(run(b), b)
+    assert device.num_program_cache_entries() == entries, "switching cache_batch_idx recompiled"
+
+
+@pytest.mark.parametrize("num_groups", [1, 4], ids=["g1_fused", "g4"])
+def test_indexer_score_msa_runtime_kv_len(device, num_groups):
+    """MSA over an oversized T=512 buffer scored at several kv_len<=T: only [0,kv_len) is valid, matches the
+    reference there, and growing kv_len does NOT recompile (kv_len is hash-excluded). g1 drives the
+    fused-streaming K read (kv_len masking on the fused path); g4 the per-group-plane path."""
+    heads, scale, dim, sq, t, chunk_start = num_groups, num_groups, 128, 64, 512, 0
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    g = torch.Generator().manual_seed(29)
+    q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, t, dim, generator=g, dtype=torch.bfloat16)
+    q_dev, k_dev = to_device(q, device), to_device(k, device)
+    w_scale = _msa_scale_w(heads, sq, scale)
+
+    def run(kv_len):
+        return ttnn.to_torch(
+            ttnn.experimental.indexer_score_msa(
+                q_dev,
+                k_dev,
+                num_groups=num_groups,
+                chunk_start_idx=chunk_start,
+                scale=scale,
+                program_config=cfg,
+                kv_len=kv_len,
+            )
+        )
+
+    def check(out, kv_len):
+        ref = indexer_score_msa_ref(q, k[:, :, :kv_len, :], w_scale, chunk_start, num_groups)
+        assert_grouped_match(out[:, :, :, :kv_len], ref, num_groups, sq, kv_len)
+
+    check(run(64), 64)  # most work units fully past kv_len
+    entries = device.num_program_cache_entries()
+    for kv_len in (128, 256, 512):
+        check(run(kv_len), kv_len)
+    assert device.num_program_cache_entries() == entries, "changing kv_len recompiled"
+
+
+def test_indexer_score_msa_block_pool_kv_len(device):
+    """block_size pooling + a block-aligned runtime kv_len: only blocks within the valid prefix are written
+    and match the pooled reference there. Pins the pooled-path kv_len composition (the writer emits whole
+    blocks; kv_len is guarded to a block boundary)."""
+    heads, num_groups, dim, sq, t = 4, 4, GLX_DIM, 128, 2048
+    chunk_start, scale = 512, GLX_DIM**-0.5
+    kv_len = 1024  # block-aligned (8 * 128), < T=2048; causal window 512+128=640 <= kv_len
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    out = run_msa(
+        q,
+        k,
+        chunk_start,
+        device,
+        scale=scale,
+        num_groups=num_groups,
+        block_size=BLOCK_POOL_BS,
+        program_config=cfg,
+        kv_len=kv_len,
+    )
+    w_scale = _msa_scale_w(heads, sq, scale)
+    ref = indexer_score_msa_ref(q, k[:, :, :kv_len, :], w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
+    nb = kv_len // BLOCK_POOL_BS
+    assert_pooled_match(out[:, :, :, :nb], ref, num_groups, sq, nb, pcc_floor=0.995)
+
+
+def test_indexer_score_msa_rejects_kv_len_not_block_aligned(device, expect_error):
+    """With block_size>0 a runtime kv_len must be a multiple of block_size (whole blocks are written); a
+    tile-aligned-but-not-block-aligned kv_len is rejected -- on a WARM cache too, since kv_len is re-validated
+    on a program-cache hit."""
+    heads, num_groups, dim, sq, t = 4, 4, GLX_DIM, 128, 2048
+    chunk_start, scale = 512, GLX_DIM**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    q, k, _ = make_inputs(heads, dim, sq, t)
+    q_dev, k_dev = to_device(q, device), to_device(k, device)
+
+    # Warm the program cache with a block-aligned kv_len; the mis-aligned one then hits the SAME program.
+    ttnn.experimental.indexer_score_msa(
+        q_dev,
+        k_dev,
+        num_groups=num_groups,
+        chunk_start_idx=chunk_start,
+        scale=scale,
+        block_size=BLOCK_POOL_BS,
+        program_config=cfg,
+        kv_len=1024,
+    )
+    with expect_error(RuntimeError, "multiple of block_size"):
+        ttnn.experimental.indexer_score_msa(
+            q_dev,
+            k_dev,
+            num_groups=num_groups,
+            chunk_start_idx=chunk_start,
+            scale=scale,
+            block_size=BLOCK_POOL_BS,
+            program_config=cfg,
+            kv_len=1024 + 32,  # tile-aligned, not a multiple of 128
+        )
+
+
+def test_indexer_score_msa_indexed_cache_nd_sharded_k(device):
+    """MSA indexed cache that is ND-sharded across DRAM banks (each [1,1,T,D] slot is one shard): the fused
+    single-head reader (Hi=1) resolves the sharded banks through a TensorAccessor AND applies the indexed-slot
+    page offset, so every slot still scores correctly. Mirrors the DSA ND-sharded indexed-cache test for MSA's
+    fused-streaming K read (a dropped/wrong offset would silently return slot 0)."""
+    c = MSA_PERSIST
+    B, heads, scale = 2, 1, c["dim"] ** -0.5  # Hi=1 -> fused single-head read
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    g = torch.Generator().manual_seed(19)
+    q = torch.randn(1, heads, c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+    k_cache = torch.randn(B, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)  # slots differ
+    q_dev = to_device(q, device)
+    k_mem = _nd_sharded_dram_config(device, rows_per_shard=c["t"])  # each [1,1,T,D] slot is one shard
+    k_dev = ttnn.from_torch(k_cache, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=k_mem)
+    assert k_dev.memory_config().is_sharded()
+    w_scale = _msa_scale_w(heads, c["sq"], scale)
+
+    for b in range(B):
+        out = ttnn.to_torch(
+            ttnn.experimental.indexer_score_msa(
+                q_dev,
+                k_dev,
+                num_groups=1,
+                chunk_start_idx=c["chunk_start"],
+                scale=scale,
+                program_config=cfg,
+                cache_batch_idx=b,
+            )
+        )
+        ref = indexer_score_msa_ref(q, k_cache[b : b + 1], w_scale, c["chunk_start"], 1)
+        assert_grouped_match(out, ref, 1, c["sq"], c["t"])
+
+
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk, head_group",
+    [
+        (32, 32, 0),  # all heads resident, single-tile k chunks (per-column fallback path)
+        (32, 128, 0),  # KC=4 chunked k: kv_len can land mid-chunk and zero whole trailing chunks
+        (32, 32, 8),  # head streaming in groups of 8 (per-column accumulate_row_streaming path)
+    ],
+    ids=["fallback_kc1", "chunked_k_kc4", "stream_hb8"],
+)
+def test_indexer_score_msa_runtime_kv_len_compute_paths(device, q_chunk, k_chunk, head_group):
+    """MSA runtime kv_len swept over the raw-dot compute paths (per-column fallback / chunked-k / head
+    streaming) -- brings MSA to the 4-path parity of the DSA kv_len sweep. num_groups=1 (streaming and
+    fallback are single-plane paths). Growing kv_len must NOT recompile (kv_len is hash-excluded)."""
+    heads, dim, sq, t, chunk_start = 64, 128, 64, 512, 0  # oversized T=512
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
+    g = torch.Generator().manual_seed(31)
+    q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, t, dim, generator=g, dtype=torch.bfloat16)
+    q_dev, k_dev = to_device(q, device), to_device(k, device)
+    w_scale = _msa_scale_w(heads, sq, scale)
+
+    def run(kv_len):
+        return ttnn.to_torch(
+            ttnn.experimental.indexer_score_msa(
+                q_dev,
+                k_dev,
+                num_groups=1,
+                chunk_start_idx=chunk_start,
+                scale=scale,
+                program_config=cfg,
+                kv_len=kv_len,
+            )
+        )
+
+    def check(out, kv_len):
+        ref = indexer_score_msa_ref(q, k[:, :, :kv_len, :], w_scale, chunk_start, 1)
+        assert_grouped_match(out[:, :, :, :kv_len], ref, 1, sq, kv_len)
+
+    check(run(64), 64)  # most work units fully past kv_len
+    entries = device.num_program_cache_entries()
+    for kv_len in (128, 256, 512):
+        check(run(kv_len), kv_len)
+    assert device.num_program_cache_entries() == entries, "changing kv_len recompiled"
+
+
+def test_indexer_score_msa_indexed_cache_rejects(device, expect_error):
+    """MSA mirrors the DSA indexed-cache rejections: an out-of-range cache_batch_idx (>= B) is rejected on a
+    WARM cache (re-validated on hit), and a multi-slot cache with NO cache_batch_idx is ambiguous and rejected.
+    Confirms the MSA frontend forwards cache_batch_idx into the shared validation."""
+    c = MSA_PERSIST
+    B, heads, scale = 2, 1, c["dim"] ** -0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    g = torch.Generator().manual_seed(21)
+    q = torch.randn(1, heads, c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+    k_cache = torch.randn(B, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
+    q_dev, k_dev = to_device(q, device), to_device(k_cache, device)
+
+    # Warm the program cache with a valid slot; the OOB slot then hits the SAME program and must still fail.
+    ttnn.experimental.indexer_score_msa(
+        q_dev, k_dev, num_groups=1, chunk_start_idx=c["chunk_start"], scale=scale, program_config=cfg, cache_batch_idx=0
+    )
+    with expect_error(RuntimeError, "cache_batch_idx"):
+        ttnn.experimental.indexer_score_msa(
+            q_dev,
+            k_dev,
+            num_groups=1,
+            chunk_start_idx=c["chunk_start"],
+            scale=scale,
+            program_config=cfg,
+            cache_batch_idx=B,
+        )
+    with expect_error(RuntimeError, "batch must be 1"):
+        ttnn.experimental.indexer_score_msa(
+            q_dev, k_dev, num_groups=1, chunk_start_idx=c["chunk_start"], scale=scale, program_config=cfg
+        )
+
+
+def test_indexer_score_msa_rejects_bad_kv_len(device, expect_error):
+    """MSA mirrors the DSA base kv_len rejections (block_size=0): kv_len must be tile-aligned, within (0, T],
+    and leave room for the causal window (chunk_start + Sq <= kv_len). Each violation fails on a WARM cache
+    too (kv_len is hash-excluded and re-validated on a program-cache hit)."""
+    heads, dim, sq, t, chunk_start = 1, 128, 64, 512, 0
+    scale = dim**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=64, head_group_size=0)
+    g = torch.Generator().manual_seed(33)
+    q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, t, dim, generator=g, dtype=torch.bfloat16)
+    q_dev, k_dev = to_device(q, device), to_device(k, device)
+
+    # Warm with a valid kv_len; each bad one then hits the SAME program and must still fail on the hit.
+    ttnn.experimental.indexer_score_msa(
+        q_dev, k_dev, num_groups=1, chunk_start_idx=chunk_start, scale=scale, program_config=cfg, kv_len=128
+    )
+    for bad in (t + 32, 100, 32):  # above T / not tile-aligned / causal window (>= chunk_start+Sq=64) violated
+        with expect_error(RuntimeError, "kv_len"):
+            ttnn.experimental.indexer_score_msa(
+                q_dev, k_dev, num_groups=1, chunk_start_idx=chunk_start, scale=scale, program_config=cfg, kv_len=bad
+            )
+
+
+def test_indexer_score_msa_indexed_cache_block_pool(device):
+    """MSA indexed cache combined with block-max-pool: cache_batch_idx selects a slot of a shared cache and
+    the pooled writer emits per-block scores for that slot. Exercises the slot page offset on the block-pool
+    path (the kv_len+pool test uses a single-slot cache), matching M3's paged block-selection deployment."""
+    heads, num_groups, dim, sq, t = 4, 4, GLX_DIM, 128, 2048
+    B, chunk_start, scale = 2, 512, GLX_DIM**-0.5
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+    g = torch.Generator().manual_seed(23)
+    q = torch.randn(1, heads, sq, dim, generator=g, dtype=torch.bfloat16)
+    k_cache = torch.randn(B, 1, t, dim, generator=g, dtype=torch.bfloat16)  # slots differ
+    q_dev, k_dev = to_device(q, device), to_device(k_cache, device)
+    w_scale = _msa_scale_w(heads, sq, scale)
+
+    def run(b):
+        return ttnn.to_torch(
+            ttnn.experimental.indexer_score_msa(
+                q_dev,
+                k_dev,
+                num_groups=num_groups,
+                chunk_start_idx=chunk_start,
+                scale=scale,
+                block_size=BLOCK_POOL_BS,
+                program_config=cfg,
+                cache_batch_idx=b,
+            )
+        )
+
+    run(0)
+    entries = device.num_program_cache_entries()  # one pooled program cached now
+    for b in range(B):
+        ref = indexer_score_msa_ref(q, k_cache[b : b + 1], w_scale, chunk_start, num_groups, block_size=BLOCK_POOL_BS)
+        assert_pooled_match(run(b), ref, num_groups, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
+    assert device.num_program_cache_entries() == entries, "switching cache_batch_idx recompiled"
 
 
 @pytest.mark.parametrize(

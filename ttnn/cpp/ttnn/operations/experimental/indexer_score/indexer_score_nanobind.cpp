@@ -131,6 +131,17 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
+            cache_batch_idx: optional int. Selects the batch slot of a shared
+                [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
+                banks). Re-applied each dispatch, so switching slots does not
+                recompile. Same semantics as indexer_score_dsa.
+            kv_len: optional int. Valid prefix of a k allocated at its full T;
+                the rest is masked out. Tile-aligned, in (0, T], with
+                chunk_start_idx + Sq <= kv_len. When block-max-pooling
+                (block_size > 0) it must also be a multiple of block_size (whole
+                blocks are written). Re-applied each dispatch (a serving loop
+                growing kv_len reuses one program). Only columns/blocks within
+                the valid prefix are written.
             cluster_axis: mesh axis that is the SP ring. On a mesh, device r uses
                 chunk_start = chunk_start_idx + r*Sq, where r is its linearized
                 index along this axis. None = linear device order.
@@ -155,6 +166,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("block_size") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
         nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("cache_batch_idx") = std::nullopt,
+        nb::arg("kv_len") = std::nullopt,
         nb::arg("cluster_axis") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);

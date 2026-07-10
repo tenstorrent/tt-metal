@@ -285,7 +285,11 @@ inline void read_k_chunk(
  *  it while the next reads (overlap). Pushes the full k_chunk_tiles (pad cols stale, compute masks them).
  *  No mcast. mm_col_batch is shared with the compute kernel's DEST column batch (indexer_score_common.hpp). */
 template <typename KAcc>
-inline void read_k_chunk_streaming(Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
+inline void read_k_chunk_streaming(
+    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t k_batch_page_offset) {
+    // k_batch_page_offset = indexed-cache slot shift (0 when not indexed), applied on top of the (possibly
+    // block-cyclic remapped) intra-slot page -- identical to read_k_chunk; the fused-streaming path must not
+    // drop it, or an indexed slot would silently read slot 0.
     CircularBuffer cb(cb_k);
     for (uint32_t cbase = 0; cbase < k_tiles_per_unit; cbase += mm_col_batch) {
         const uint32_t c_end = (cbase + mm_col_batch <= k_tiles_per_unit) ? (cbase + mm_col_batch) : k_tiles_per_unit;
@@ -300,7 +304,7 @@ inline void read_k_chunk_streaming(Noc noc, const KAcc& k_acc, uint32_t k_tile_s
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         k_tile_bytes,
-                        {.page_id = seq_tile * head_dim_tiles + d},
+                        {.page_id = k_batch_page_offset + seq_tile * head_dim_tiles + d},
                         {});
                     ptr += k_tile_bytes;
                 }
@@ -367,7 +371,8 @@ void kernel_main() {
             if (real_band) {
                 span.set(group, band0 + band);
                 if constexpr (fuse_single && fused_stream_k) {
-                    read_k_chunk_streaming(noc, k_acc, span.k_tile_start(), span.k_tiles());  // no mcast: stream
+                    read_k_chunk_streaming(
+                        noc, k_acc, span.k_tile_start(), span.k_tiles(), k_batch_page_offset);  // no mcast: stream
                 } else {
                     // k FIRST: compute waits the whole k chunk, so reading k ahead lets the split q-row0 push
                     // unblock the first matmul.
