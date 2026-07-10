@@ -37,6 +37,12 @@ VERIFIED_MODEL_CONFIGS = {
     "Gemma3-27B": {"dim": 4608, "hidden_dim": 24576, "n_heads": 32, "n_kv_heads": 8},
 }
 
+
+def uses_tensor_prefetcher(prefetcher) -> bool:
+    """Return whether a model backend queues Tensor Prefetcher requests per matmul."""
+    return prefetcher is not None and getattr(prefetcher, "uses_tensor_prefetcher", False)
+
+
 # Single source for ttnn weight-dtype -> tile byte size, shared by both prefetcher backends
 # (worker insert_tensor block sizing, DRAM-core GCB sizing, and the support checks). Keeping
 # one map avoids the two backends silently disagreeing if a dtype/tile size changes.
@@ -81,8 +87,8 @@ def make_prefetcher(
     the Tensor prefetcher is supported by the device firmware. Otherwise returns the
     original worker-core ``Prefetcher``.
 
-    Both classes expose the same public surface so callers in MLP / attention / model
-    code don't need to branch on which backend is in use.
+    The returned backends intentionally have distinct lifecycles. Callers use
+    ``uses_tensor_prefetcher`` where behavior differs.
     """
     use_dram_core = (
         os.getenv("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") == "1"
@@ -511,9 +517,8 @@ class Prefetcher(LightweightModule):
         Populates the tensor addresses that need to be prefetched
         Args:
             tensor: The tensor to insert into the prefetcher queue
-            program_config: Accepted for API parity with DramCorePrefetcher (which sizes its GCB
-                from per_core_N); the worker-core path derives block sizes from the tensor itself
-                and ignores it.
+            program_config: The consuming matmul config. The worker backend derives block sizes
+                from the tensor itself and ignores it.
         """
         del program_config
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
@@ -593,16 +598,6 @@ class Prefetcher(LightweightModule):
         assert self.garbage is not None, "Prefetcher has not been run. Cannot stop prefetcher"
         ttnn.deallocate(self.garbage)
         self.garbage = None
-        return
-
-    def teardown(self) -> None:
-        """No-op for the worker-core path: shutdown happens per-forward in ``stop()``.
-
-        Present so callers can drive one lifecycle — ``run()``/``stop()`` per forward, then a
-        single ``teardown()`` at the end — across both prefetcher backends without branching on
-        the backend type. (``DramCorePrefetcher.stop()`` is the no-op there, and its ``teardown()``
-        stops the long-lived DRISC daemon.)
-        """
         return
 
     def weight_cache_suffix(self) -> str:
