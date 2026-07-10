@@ -1031,7 +1031,10 @@ class LTXVideoDecoder(Module):
 
         sample_tt = self.norm_out(sample_tt, compute_kernel_config=self.norm_out_compute_kernel_config)
         sample_tt = ttnn.to_layout(sample_tt, ttnn.ROW_MAJOR_LAYOUT)
-        return self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+        out = self.conv_out(sample_tt, causal=self.causal, logical_h=logical_h, logical_w=logical_w)
+        # logical_h/logical_w have grown through the upsample blocks (e.g. 34 -> 272); the caller needs
+        # these post-upsample dims to crop mesh padding, not the pre-upsample ones it passed in.
+        return out, logical_h, logical_w
 
     def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
         """Decode latent (B, 128, F', H', W') → video.
@@ -1054,7 +1057,7 @@ class LTXVideoDecoder(Module):
             dtype=ttnn.bfloat16,
         )
 
-        sample_tt = self.decode_device(sample_tt, logical_h, logical_w)
+        sample_tt, logical_h, logical_w = self.decode_device(sample_tt, logical_h, logical_w)
 
         # Depth-to-space unpatch on device, output BCTHW so the gather's innermost dim stays large
         # (channels-last would gather a length-3 innermost). conv_out channels are ordered (c, p, r, q).

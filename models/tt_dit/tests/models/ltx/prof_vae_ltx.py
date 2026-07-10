@@ -250,7 +250,7 @@ def test_prof_vae_ltx_trace(mesh_device, device_params):
     ttnn.synchronize_device(mesh)
 
     tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-    out = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+    out, _, _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
     ttnn.end_trace_capture(mesh, tid, cq_id=0)
     ttnn.synchronize_device(mesh)
 
@@ -346,7 +346,11 @@ def test_conv3d_padded_output(mesh_device, device_params):
     mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     torch.manual_seed(0)
     x = ttnn.from_torch(
-        torch.randn(1, 8, Hd, Wd, C).bfloat16(), device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem
+        torch.randn(1, 8, Hd, Wd, C).bfloat16(),
+        device=mesh,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
     )
 
     def _conv(output_pad_h, output_pad_w):
@@ -439,7 +443,11 @@ def test_bench_conv_halo_vs_plain(mesh_device, device_params):
         logical_h = Hlog
         logical_w = Wlog
         raw = ttnn.from_torch(
-            torch.zeros(1, T, Hd, Wd, C).bfloat16(), device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem
+            torch.zeros(1, T, Hd, Wd, C).bfloat16(),
+            device=mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
         padded = ttnn.from_torch(
             torch.zeros(1, T, Hd + 2 * pH, Wd + 2 * pW, C).bfloat16(),
@@ -450,7 +458,11 @@ def test_bench_conv_halo_vs_plain(mesh_device, device_params):
         )
         total_sticks = T * 2 * pH * Wd + T * 2 * pW * (Hd + 2 * pH)
         halo_buf = ttnn.from_torch(
-            torch.zeros(total_sticks, C).bfloat16(), device=mesh, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, memory_config=mem
+            torch.zeros(total_sticks, C).bfloat16(),
+            device=mesh,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=mem,
         )
         offset = _get_pad_offset({}, raw, pc, mesh)
 
@@ -502,7 +514,10 @@ def test_bench_conv_halo_vs_plain(mesh_device, device_params):
         p = "OOM" if plain is None else f"{plain:8.1f}"
         hn = "OOM" if halo_nm is None else f"{halo_nm:8.1f}"
         h = "OOM" if halo is None else f"{halo:8.1f}"
-        print(f"  {sid:4} {Hd:3}x{Wd:<3} C{C:4}->{c_out:<4} T{T:3}: plain {p:>8}  halo_nomask {hn:>8} ({r1})  halo_mask {h:>8} ({r2})", flush=True)
+        print(
+            f"  {sid:4} {Hd:3}x{Wd:<3} C{C:4}->{c_out:<4} T{T:3}: plain {p:>8}  halo_nomask {hn:>8} ({r1})  halo_mask {h:>8} ({r2})",
+            flush=True,
+        )
 
 
 @pytest.mark.parametrize(
@@ -898,7 +913,7 @@ def test_dual_output_decode_pcc(mesh_device, device_params):
     def decode_to_host():
         # Single untraced decode_device + gather. No trace: capture would re-dispatch the whole decode a
         # second time (untraced), doubling the cost for a one-shot comparison.
-        out = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+        out, _, _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
         ttnn.synchronize_device(mesh)
         host = fast_device_to_host(out, mesh, concat_dims, ccl_manager=tt_decoder.ccl_manager)
         ttnn.deallocate(out)
@@ -975,7 +990,7 @@ def test_halo_vs_fullpad_decode_pcc(mesh_device, device_params):
         _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
         ttnn.synchronize_device(mesh)
         tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-        out = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+        out, _, _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
         ttnn.end_trace_capture(mesh, tid, cq_id=0)
         ttnn.synchronize_device(mesh)
         ttnn.execute_trace(mesh, tid, cq_id=0, blocking=True)
