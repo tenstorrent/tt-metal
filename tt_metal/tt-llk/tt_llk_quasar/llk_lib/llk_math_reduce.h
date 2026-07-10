@@ -143,13 +143,13 @@ inline void _llk_math_reduce_row_int32_fpu_(const TensorShape& tensor_shape)
 }
 
 /**
- * @brief Perform reduce-scalar at runtime for Int32 dest.
+ * @brief Perform reduce-scalar MAX at runtime for Int32 dest.
  *
- * MAX: MOVD2B(transpose) -> MOVB2A -> GMPOOL (FPU path, Int8-range exact).
- * SUM/AVG: unsupported on FPU — first GAPOOL partials cannot reload into Src for the final GAPOOL; use SFPU.
+ * MOVD2B(transpose) -> MOVB2A -> GMPOOL (FPU path, Int8-range exact).
+ * SUM/AVG are not supported on FPU (partials cannot reload into Src for the final
+ * GAPOOL) -> use SFPU
  * Full 32x32 tiles only — tiny tiles are not supported for Int8→Int32 reduce.
  */
-template <PoolType POOL_TYPE>
 inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
 {
     LLK_ASSERT(
@@ -161,25 +161,19 @@ inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
 
     for (std::uint32_t face = 0; face < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face++)
     {
-        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
+        tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
     }
-    tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
+    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
 
-    if constexpr (POOL_TYPE == PoolType::MAX)
-    {
-        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
-        TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, scratch_dst_addr);
-        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
-        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
-        TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
-        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
-    }
-    else
-    {
-        static_assert(
-            POOL_TYPE == PoolType::MAX,
-            "Scalar SUM/AVG (Int32 dest) unsupported on FPU: after the first GAPOOL, partials cannot fit back into Src for the final GAPOOL");
-    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+
+    // Transpose scratch face-row into SrcB[32:47], then copy to SrcA for GMPOOL.
+    TTI_MOVD2B(0, p_movd2b::SRC_ROW32_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, scratch_dst_addr);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
+
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
+    tti_pool_instr_func<PoolType::MAX, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
 }
 
 /**
@@ -584,33 +578,26 @@ inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& t
 {
     _set_dst_write_addr_by_rows_(tile_idx);
 
-    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
+    if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
-        if constexpr (is_int_fpu_en)
-        {
-            _llk_math_reduce_row_int32_fpu_<POOL_TYPE>(tensor_shape);
-        }
-        else
-        {
-            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-        }
+        _llk_math_reduce_row_int32_fpu_<POOL_TYPE>(tensor_shape);
     }
-    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
+    else if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR && POOL_TYPE == PoolType::MAX)
     {
-        if constexpr (is_int_fpu_en)
-        {
-            _llk_math_reduce_scalar_int32_fpu_<POOL_TYPE>(tensor_shape);
-        }
-        else
-        {
-            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-        }
+        _llk_math_reduce_scalar_int32_fpu_(tensor_shape);
+    }
+    else if constexpr (is_int_fpu_en && REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
+    {
+        LLK_ASSERT(
+            false,
+            "Scalar SUM/AVG (Int32 dest) unsupported on FPU: after the first GAPOOL, "
+            "partials cannot fit back into Src for the final GAPOOL");
     }
     else
     {
-        // Run MOP
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
+
     // Since only 1 face of srcB is used for constant values,
     // can clear data valid after all operations are done
     TTI_SETRWC(p_setrwc::CLR_B, 0, 0, p_setrwc::SET_ABD_F);
