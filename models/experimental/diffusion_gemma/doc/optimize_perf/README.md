@@ -3,19 +3,54 @@
 > **Historical dg-08 snapshot.** The 4175.7 ms/step, 137.55 ms/layer, and
 > sequential-commit numbers below predate true-sparse MoE, OPT-004, batched
 > commit, traced denoise, and the L1-residency pass. Do not quote them as the
-> current model. Current shipping performance is ~18 t/s @48; the
-> `DG_NORM_FULLCANVAS=1` opt-in path measures 20.68 t/s. Start with
-> `perf_campaign_worklog.md`, `l1_residency.md`, and `early_halt.md`.
+> current model. The 2026-07-10 final unset-default reproduction is
+> **18.844 t/s @48**; the
+> `DG_NORM_FULLCANVAS=1` measured 20.68 t/s historically but failed its
+> decision-fidelity flip gate and is ineligible as the selected default. Start with
+> `perf_campaign_worklog.md`, `selfcond_logits_l1.md`, `selfcond_prechunk.md`,
+> `l1_residency.md`, and `early_halt.md`.
 
 Per-device performance optimization of the DiffusionGemma **denoise step / per-block** path on
 QB2 (`bh-qbge-06`, P150x4, mesh `(1,4)`, TP=4). The optimization unit is the **denoise step over
 the 256-token canvas** (≤48 steps/block) plus the commit — *not* per-token autoregressive decode.
-Precision policy (bf16 weights/activations/KV, fp32 self-cond softmax & entropy accumulation) and
-the diffusion decisions (temperature 0.8→0.4, Gumbel-max, entropy-budget accept, random-token
-renoise, commit = clean argmax) are preserved. No `models/demos/gemma4/` edits.
+Precision policy (BF16 weights/activations/KV and the established BF16 ordered online-chunk
+self-conditioning reduction) and the diffusion decisions (temperature 0.8→0.4, Gumbel-max,
+entropy-budget accept, random-token renoise, commit = clean argmax) are preserved. The accepted
+prechunk and logits-L1 batches change storage/copy placement only. No
+`models/demos/gemma4/` edits.
 
 See `work_log.md` for the full topology audit, per-op tables, candidate tables, and roofline; this
 README is the summary + artifact index.
+
+## Current selected default (2026-07-10)
+
+The self-conditioning soft embedding still uses the exact existing sequence of 32 ordered
+8192-vocabulary BF16 matmuls and additions, but its tied embedding table is now stored as 32
+persistent chunks. This removes 32 repeated device slices per denoise step without changing values,
+matmul shapes, or reduction order. Each matching dynamic logits slice, its immediate
+`subtract -> exp`, denominator reduction, and ordered denominator accumulator remain in L1.
+The chunk matmuls, ordered numerator accumulator, and final divide remain in DRAM.
+
+| final default, selector unset/resolved enabled | value |
+|---|---:|
+| full 30L traced @48 steady block | **13.5849 s / 18.844 tokens/s** |
+| full 30L traced @12 steady block (standalone process) | **4.3122 s / 59.366 tokens/s** |
+| derived warmed traced step | **257.575 ms** |
+| prior selected default @48 | 13.6817 s / 18.711 tokens/s |
+| complete traced generation (prefill + 3 blocks) | 153.9791 s vs 153.341 s prior selected default (**+0.42% regression**) |
+| committed/decision identity | exact commits plus all 48 steps × 6 recorded fields in argmax and production chunked-Gumbel modes |
+
+The final reviewed L1-default reproduction is +0.71% over the prior selected default and preserves
+the established `a9f0d18709b07d1e` three-block commit digest. Every persisted full-depth @48
+clean argmax, sampled token, entropy, accept mask, renoised next-canvas, and explicit clean commit
+candidate hash is also exact under identical initial canvas, Gumbel descriptors, and injected
+renoise tokens. The production chunked-Gumbel path passes the same 48-step gate and a full-budget
+256K capability smoke. Traced throughput remains explicitly RUN-first argmax because
+`traced_denoise.py` rejects real Gumbel noise. Full evidence, commands, 256K capacity
+accounting, watcher results, cross-process variance, the lack of a complete-generation win, and
+final-default policy are in
+`selfcond_logits_l1.md` and `selfcond_logits_l1_e2e.json`. The underlying prechunk batch remains
+documented in `selfcond_prechunk.md` and `selfcond_prechunk_e2e.json`.
 
 ## Headline result
 
@@ -83,6 +118,28 @@ eager, device canvas feedback).
 - `prof_denoise_step.py` — reduced-layer traced denoise step + prefill(TTFT) + commit profiling.
 - `diag_sampling_ops.py`, `diag_argmax_alt.py`, `diag_accept_placement.py` — eager op diagnostics.
 - `verify_trace_safe_loop.py` — trace-safe fixed-step loop correctness (device canvas feedback).
+- `selfcond_prechunk.md` / `selfcond_prechunk_summary.json` — underlying embedding-prechunk A/B,
+  synchronized component timing, final default reproduction, 256K capacity, and watcher evidence.
+- `selfcond_prechunk_e2e.json` — exact 10 GiB trace-region provenance, TTFT, all block latencies,
+  complete three-block generation time, @12 slope points, and control/candidate/unset-default rows.
+- `verify_selfcond_prechunk_decisions.py` / `selfcond_prechunk_decisions.json` — full-depth @48
+  exact per-step diffusion-decision gate under identical injected renoise tokens.
+- `selfcond_prechunk_gumbel_decisions.json` — equivalent @48 gate with identical production
+  chunked-Gumbel descriptors, including explicit per-step commit candidates.
+- `qualitative_prechunk.py` / `selfcond_prechunk_qualitative.json` — prompt-correct traced qualitative
+  control versus selected default.
+- `selfcond_prechunk_256k_chunked.json` / `selfcond_prechunk_watcher_summary.json` — full-budget
+  production-sampler 256K capability and complete four-device watcher attach/detach evidence.
+- `selfcond_logits_l1.md` / `selfcond_logits_l1_e2e.json` — current selected-default L1 placement,
+  independent-process A/B, synchronized component evidence, and required unset-default reproduction.
+- `selfcond_logits_l1_decisions.json` / `selfcond_logits_l1_gumbel_decisions.json` — exact @48
+  diffusion-decision gates for RUN-first argmax and production chunked-Gumbel.
+- `selfcond_logits_l1_256k_chunked.json` / `selfcond_logits_l1_watcher_summary.json` — L1-default
+  full-depth 256K production-sampler capability and separate watcher evidence.
+- `selfcond_logits_split_rejection.md` / `.json` — post-prechunk dynamic-logits `ttnn.split`
+  experiment; targeted component unchanged and canonical warmed @48 throughput -0.12%, so removed.
+- `selfcond_vocab_chunk_rejection.md` / `.json` — larger online-softmax grouping reached
+  +0.95% warmed @48 but changed the canonical clean-commit digest, so the selector was removed.
 - `artifacts/*.log` — raw run logs; `tracy/` — tt-perf-report CSV/tables.
 
 ## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)

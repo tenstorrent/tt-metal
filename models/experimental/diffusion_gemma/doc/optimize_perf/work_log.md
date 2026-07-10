@@ -1,13 +1,19 @@
 # DiffusionGemma optimize-perf (#47465) — work log
 
+> Historical topology/audit log. Section-local “current” statements describe
+> their measurement date. Selected-current evidence is
+> `selfcond_logits_l1_e2e.json` and `selfcond_logits_l1.md`.
+
 Stage: dg-08-optimize-perf (PERF). Device: QB2 / `bh-qbge-06` / P150x4, mesh `(1,4)`, TP=4.
 Branch: `diffusion-gemma-function`. Baseline SHA at stage start: `aff8f2105d3`.
 Env: venv `/home/zni/venvs/tt-diffusion-gemma` (Python 3.12, ttnn + transformers 5.12.1).
-Build: `build_Release` (Tracy/device-profiler support present: `build_Release/lib/libtracy.so`).
+Build: `build_Release`; current CMake cache has `ENABLE_TRACY=OFF`, so synchronized component timing
+and Metal trace capture/replay are the approved profiling substitutes.
 
 **Optimization unit = the DENOISE STEP over the 256-token canvas (≤48 steps/block) + the commit.**
-NOT per-token autoregressive decode. Precision policy is preserved from the context contract
-(bf16 weights / activations / KV; fp32 accumulation for self-conditioning softmax & entropy).
+NOT per-token autoregressive decode. Precision policy is preserved from the context contract:
+BF16 weights / activations / KV and the established BF16 ordered online-chunk self-conditioning
+and terminal-entropy arithmetic.
 Diffusion decisions preserved: temperature schedule 0.8→0.4, Gumbel-max, entropy-budget accept,
 random-token renoise, commit = clean argmax.
 
@@ -25,7 +31,7 @@ followed by `denoise_loop.denoise_step(logits, ...)` (the terminal decision path
 | # | Stage | Op sequence (DiffusionGemma-local) | Cost class | Candidate action |
 |---|---|---|---|---|
 | L0 | `embed_canvas_tokens` | reshape → to_layout(ROW_MAJOR) → `embed_tokens` → reshape → to_layout(TILE) | embedding lookup [1,1,256,2816] | layout churn; minor |
-| L1 | self-conditioning `condition` | `soft_embedding` (prev_logits): production vocab 262144 > 8192 → `_soft_embedding_chunked`: **32 vocab chunks** × (slice logits + subtract + exp + sum + slice embed + matmul[256,8192]@[8192,2816] + adds), then gated MLP (pre_norm, gate/up/down linears, gelu, mul) + scaleless post_norm | 32 chunked matmuls + full-vocab streaming per step (denoise only) | tune chunk size / fuse; fp32 softmax accum is load-bearing (keep) |
+| L1 | self-conditioning `condition` | `soft_embedding` (prev_logits): production vocab 262144 > 8192 → `_soft_embedding_chunked`: **32 vocab chunks** × (L1 slice/subtract/exp/denominator sum + persistent embed chunk + DRAM matmul[256,8192]@[8192,2816] + ordered adds), then gated MLP (pre_norm, gate/up/down linears, gelu, mul) + scaleless post_norm | 32 chunked matmuls + full-vocab streaming per step (denoise only); selected defaults remove embedding slices and retain the dynamic-logits/denominator chain in L1 | selected 2026-07-10: prechunk + logits/denominator-L1, exact decisions, final reviewed 18.844 t/s @48; `ttnn.split` lost and larger chunks changed commits |
 | L2 | backbone `denoise_hidden_forward` ×30 layers | per layer: chunked input_layernorm → denoise_attention → chunked post_attn_norm + residual → chunked pre_ff_norm → shared_mlp → (MoE: chunked router norm + linear + softmax + topk(128,8) + scatter + sparse experts) → chunked norms + adds + layer_scalar | **dominant** — 30× MoE-A4B over 256 tokens | see 1b/1c |
 | L3 | final norm | `_chunked_norm_forward(tt_model.norm)` | 8 slice+norm+concat | de-chunk |
 | L4 | LM head | `_apply_lm_head(hidden, is_decode=False)` → hidden[256,2816] → vocab 262144, softcap 30 | **large DRAM-bound matmul** | backbone knob; vocab-shard |
@@ -352,7 +358,8 @@ is substituted by synchronized per-op device times (§2a/§2b) + the per-layer s
   (§2g); ROW_MAJOR argmax bit-identical to TILE.
 - Performance accounting reconciled (roofline vs traced device time vs e2e) — §3/§3c.
 - Warmed traced replay measured (per-step / per-block / full-generation) — §3c; terminal ranking traced — §2d.
-- Precision policy preserved (bf16 weights/activations/KV; fp32 self-cond & entropy accum) — unchanged.
+- Precision policy preserved (BF16 weights/activations/KV and established BF16 ordered online-chunk
+  self-conditioning/terminal entropy arithmetic) — unchanged.
 - `perf_summary.json` written — `doc/optimize_perf/perf_summary.json`.
 - tt-perf-report / Tracy op CSV — hardware-profiler-limited (ENABLE_TRACY=OFF), §4e; substituted
   synchronized per-op device times.

@@ -1,0 +1,53 @@
+{
+  "date": "2026-07-10",
+  "gate": "separate watcher smoke for self-conditioning logits L1 traced canvas feedback",
+  "raw_log": {
+    "workspace_path": "generated/watcher/watcher.log",
+    "lines_after_run": 75372,
+    "note": "The watcher retained earlier records despite TT_METAL_WATCHER_APPEND=0; run-specific evidence is the final attach/detach interval below."
+  },
+  "metrics_artifact": "selfcond_logits_l1_watcher.json",
+  "environment": {
+    "TT_METAL_WATCHER": "10",
+    "TT_METAL_WATCHER_APPEND": "0",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1",
+    "DG_DENOISE_TRACED": "1",
+    "DG_TRACE_REGION_SIZE": "1073741824",
+    "DG_SELFCOND_LOGITS_L1": "chain",
+    "resolved_selfcond_logits_l1": "chain"
+  },
+  "workload": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel": 4,
+    "num_layers": 2,
+    "max_seq_len": 1024,
+    "prompt_len": 24,
+    "prompt_aligned_256": false,
+    "canvas_length": 256,
+    "max_denoising_steps": 4,
+    "gumbel_mode": "argmax",
+    "blocks_emitted": 1,
+    "tokens_emitted": 256,
+    "final_next_pos": 288
+  },
+  "run_specific_watcher_attach_records": [
+    "line 73105: At 0.469s attach device 0",
+    "line 73107: At 0.469s attach device 1",
+    "line 73109: At 0.469s attach device 2",
+    "line 73111: At 0.469s attach device 3"
+  ],
+  "run_specific_watcher_detach_records": [
+    "line 75369: At 12.202s detach device 0",
+    "line 75370: At 12.202s detach device 1",
+    "line 75371: At 12.202s detach device 2",
+    "line 75372: At 12.202s detach device 3"
+  ],
+  "error_scan_regex": "ERROR|ASSERT|NOC.*(fail|error)|UNREACHABLE|Watchdog|exception",
+  "error_scan_matches": 0,
+  "process_result": "exit 0; DG_VLLM_SERVING_SMOKE_SUCCESS; 256 tokens emitted; clean four-device detach",
+  "verdict": "PASS"
+}

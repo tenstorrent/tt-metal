@@ -1,0 +1,63 @@
+{
+  "date": "2026-07-10",
+  "candidate": "increase the self-conditioning online-softmax and persistent-embedding chunk size above 8192",
+  "status": "REJECTED_AND_REMOVED",
+  "hardware": "QB2 P150x4 TP=4",
+  "precision": "BF16 unchanged, but larger matmul/reduction grouping changes rounded values",
+  "component_sweep": {
+    "harness": "prof_step_breakdown.py --num-layers 2 --iters 5",
+    "rows": [
+      {
+        "vocab_chunk_size": 8192,
+        "soft_embedding_ms": 16.038019400002668,
+        "full_two_layer_step_ms": 71.35855279993848,
+        "status": "selected control"
+      },
+      {
+        "vocab_chunk_size": 16384,
+        "soft_embedding_ms": 15.554002799763111,
+        "full_two_layer_step_ms": 71.80965500010643
+      },
+      {
+        "vocab_chunk_size": 32768,
+        "soft_embedding_ms": 15.321949599456275,
+        "full_two_layer_step_ms": 70.99411840026733,
+        "status": "advanced to canonical traced gate"
+      },
+      {
+        "vocab_chunk_size": 65536,
+        "soft_embedding_ms": 15.222569400066277,
+        "full_two_layer_step_ms": 72.44684619945474
+      }
+    ],
+    "selected_32k_soft_embedding_delta_percent": -4.464826875981165
+  },
+  "canonical_traced_at48": {
+    "workload": "30 layers, 48 fixed steps, 256-token canvas, three blocks, seed 0, RUN-first argmax, 10 GiB trace reservation",
+    "control_8192": {
+      "steady_block_latency_s": 13.6321,
+      "tokens_per_block_per_s": 18.779,
+      "full_generation_s": 151.9821,
+      "committed_sha": "a9f0d18709b07d1e",
+      "resolved_selfcond_logits_l1": "chain"
+    },
+    "candidate_32768": {
+      "steady_block_latency_s": 13.5042,
+      "tokens_per_block_per_s": 18.957,
+      "full_generation_s": 152.1255,
+      "committed_sha": "f224bc72c06ce5a0",
+      "resolved_selfcond_logits_l1": "chain"
+    },
+    "block_latency_delta_percent": -0.9382266855436749,
+    "throughput_delta_percent": 0.9478672985782088,
+    "full_generation_delta_percent": 0.09435321659589935
+  },
+  "decision_gate": {
+    "gate": "canonical three-block clean-commit identity",
+    "verdict": "FAIL",
+    "control_committed_sha": "a9f0d18709b07d1e",
+    "candidate_committed_sha": "f224bc72c06ce5a0",
+    "interpretation": "The faster chunk grouping changes final diffusion decisions under the fixed canonical seed. This is already a decisive failure; no opt-in or full per-step acceptance campaign is eligible."
+  },
+  "decision": "Keep the established ordered 8192-vocabulary grouping. Remove DG_SELFCOND_VOCAB_CHUNK_SIZE and all speculative selector code."
+}

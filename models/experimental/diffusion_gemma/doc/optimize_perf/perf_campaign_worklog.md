@@ -1,5 +1,10 @@
 # DiffusionGemma perf-optimization campaign (#47465 → goal 100 tok/s)
 
+> Chronological campaign log: intermediate “current” and “ceiling” statements
+> are historical at their section date. The selected result is the 2026-07-10
+> self-conditioning logits-L1 section below and
+> `selfcond_logits_l1_e2e.json` (18.844 tokens/block/s at @48).
+
 Optimization unit = **traced** denoise step over the 256 canvas + commit (dg-08 methodology).
 Config: Blackhole QB2 `(1×4)` TP, tuned true-sparse MoE (`DG_SPARSE_MOE_TUNED=1`, HiFi2).
 
@@ -158,7 +163,8 @@ shared-gemma4 edits" constraints.
 The campaign conclusion above flagged "lower precision (bf8)" as an excluded lever. It has now been
 **measured** (full detail: `doc/datatype_sweep/`). DG-local knob `DG_EXPERTS_BFP8=1`
 (`tt/precision_build.py`) flips ONLY the MoE expert gate/up/down weights bf16 → `bfloat8_b`; the
-decision path (router/logits/entropy/argmax/accept) stays bf16/fp32. No `models/demos/gemma4/` edits.
+decision path keeps its existing BF16 production logits/entropy arithmetic (injected Gumbel noise
+may be FP32). No `models/demos/gemma4/` edits.
 
 **Decision agreement (bf16 vs bfp8, deterministic 16-step trajectory, 30L):** committed clean-argmax
 agreement **0.227** (bar ≥0.95), mean entropy PCC **0.631** (min 0.036), mean accept/renoise IoU
@@ -279,9 +285,132 @@ changes *which* equally-(un)faithful bf16 output, not *whether* it is faithful).
 would require an absolute HF-vs-TT check + ideally #48291 resolved. The +15.8% @48 win remains available
 opt-in.
 
+## 2026-07-09 — self-conditioning embedding prechunk: bit-exact +3.03% @48, default ON
+
+Full evidence: `doc/optimize_perf/selfcond_prechunk.md`. A repaired synchronized component probe found
+the self-conditioning soft embedding at **25.863 ms** in a two-layer real-checkpoint step, versus only
+4.361 ms for LM head and 1.595 ms for the self-conditioning MLP. Its online softmax uses 32 ordered
+8K-vocabulary chunks and was copying the matching 8K rows from the 256K×2816 embedding table before
+every matmul.
+
+`tt/self_conditioning.py` now builds the same BF16 table as 32 persistent 8K-row tensors and directly
+feeds each existing matmul. It removes 32 device `Slice` operations per denoise step without changing
+chunk boundaries, values, matmul geometry, or reduction order. The monolithic allocation is replaced,
+not retained, so embedding-weight bytes are unchanged. `DG_SELFCOND_PRECHUNK_EMBED=0` is the diagnostic
+opt-out; the selected path is default ON.
+
+**Measured gates (QB2 TP=4, 30L, traced, three 256-token blocks):**
+- synchronized soft embedding: **25.863 → 18.210 ms (-29.6%)**; two-layer full step 82.334 → 73.575 ms;
+- @48 steady block: **13.9946 → 13.6555 s**, **18.293 → 18.747 t/s (+2.48%)**;
+- @12 steady block: **4.3943 → 4.3401 s**, **58.258 → 58.984 t/s (+1.25%)**;
+- 48/12 slope: **266.675 → 258.761 ms/warmed traced step (-7.914 ms, -2.97%)**;
+- output identity: exact established SHAs at both budgets (`a9f0d18709b07d1e` @48,
+  `24393ba7aad6077c` @12), each over three blocks.
+
+Final exact-provenance processes reserved `DG_TRACE_REGION_SIZE=10737418240` before mesh open and
+recorded every generation phase; the harness now rejects every other reservation and non-canonical
+workload before opening the mesh. Control → unset default is **14.0971 → 13.6817 s** and
+**18.160 → 18.711 t/s @48 (+3.03%)**; @12 is **4.4479 → 4.3710 s** and **57.555 → 58.568 t/s
+(+1.76%)**. The resulting slope is **268.033 → 258.631 ms/warmed traced step (-9.403 ms,
+-3.51% latency)**. Explicit `=1` reproduces 13.6996 s / 18.687 t/s. Full prefill + three-block
+generation improves **155.4222 → 153.3410 s (+1.36%)**, and TTFT improves 127.227 → 125.977 s.
+The earlier 18.819 t/s row is superseded by this self-contained final run.
+
+This is precision- and decision-preserving, unlike full-canvas RMSNorm: no decision-fidelity waiver or
+#48291 interpretation is needed. Three prompt-correct qualitative control/default runs also matched
+bit-for-bit; complete outputs show existing #48291 generation defects are neither improved nor
+worsened. Full-depth eager record gates injected identical initial canvases and 48 renoise tensors
+into control/default and compared every per-step argmax, sampled ids, entropy, accept mask, next
+canvas, and explicit clean commit candidate: **48/48 steps exact across all fields** in both RUN-first
+argmax and production chunked-Gumbel modes. Proportional tests pass (40/40), including
+the new partial final chunk and persistent-chunk lifecycle assertions; a separate watcher run passed
+on the traced 4-step path with a non-aligned 24-token prompt; the batch-local no-shared-edits gate
+passes versus the clean starting HEAD `0472860c40c`.
+
+The persistent embedding payload remains exactly 1408 MiB/chip, but allocation topology changes from
+one tensor to 32 (+31 allocations). A fresh full-depth `max_seq_len=262144` final-default eager
+production chunked-Gumbel smoke completed all 48 steps and one 256-token block with 0.733 GiB/chip
+still free. Full-depth *traced* 256K
+is not currently composable: with no reservation the trace overlaps the DRAM high-water mark, while
+176–512 MiB reservations leave no contiguous 128 MiB token-entropy temporary. This exact capacity
+limit and the independently passing traced 1024-allocation canvas-feedback path are now explicit in
+`doc/context_contract.json`; the advertised eager 256K capability is preserved. The traced controller
+explicitly rejects real Gumbel noise, so the ranking remains labeled RUN-first argmax and no traced
+production-Gumbel throughput is claimed.
+
+## 2026-07-10 — dynamic logits `ttnn.split`: measured wash, rejected and removed
+
+After prechunking the static embedding rows, the matching dynamic logits still use 32 sequential
+8K-row `ttnn.slice` operations. A fresh candidate replaced them with one
+`ttnn.split(..., 8192, dim=-1)` while preserving BF16 values, matmul shapes, and reduction order.
+The synchronized soft-embedding component was unchanged (**18.2129 → 18.2116 ms**). Canonical
+full-30L traced @48 steady blocks regressed **13.6284 → 13.6445 s** and
+**18.784 → 18.762 t/s (-0.12%)**, with exact three-block commit digest
+`a9f0d18709b07d1e`. The candidate's lower complete-generation total was entirely first-block
+trace-capture variance; warmed execution did not improve. The code and selector were removed.
+Exact commands and rows are in `selfcond_logits_split_rejection.md` and
+`selfcond_logits_split_rejection.json`.
+
+## 2026-07-10 — self-conditioning logits L1 chain: exact +0.71% final default
+
+After rejecting `ttnn.split`, synchronized placement probes kept the existing 32 dynamic logits
+slices but changed their output memory. L1 for only the slices improved the soft embedding
+18.213 -> 17.721 ms; retaining `slice -> subtract -> exp`, denominator reductions, and the ordered
+denominator accumulator in L1 improved it to **16.038 ms (-11.94%)** and the full two-layer probe
+73.524 -> **71.359 ms**. Chunk matmuls, ordered numerator accumulation, and the final divide remain
+in DRAM. The candidate changes only memory placement.
+
+Three fresh independent DRAM-control @48 processes measured 13.6284, 13.6161, and 13.6051 s per
+steady block. Two explicit L1-chain processes measured 13.4969 and 13.5253 s. The medians improve
+**13.6161 -> 13.5111 s (-0.77%)** and **18.801 -> 18.9475 t/s (+0.78%)**, with exact
+`a9f0d18709b07d1e` three-block commits. A same-model sequential A/B contradicted those
+independent-process rows (the second session regressed 13.6456 -> 13.7841 s), and one explicit @12
+sample also regressed within variance. Both are retained as limitations rather than hidden.
+
+After all gates passed, `DG_SELFCOND_LOGITS_L1` was defaulted to `chain` with `off` as a diagnostic
+escape. After the later 32K experiment and stage-review fixes were complete, the required fresh
+process with all self-conditioning selectors unset reproduced **13.5849 s / 18.844 t/s @48**. The
+paired final @12 result is **4.3122 s / 59.366 t/s**, implying **257.575 ms/warmed traced step**.
+Against the prior selected default this is **-0.71% block latency / +0.71% throughput**. Complete
+prefill plus three blocks was 153.9791 s versus 153.3410 s previously (**+0.42% regression**), so no
+full-generation win is claimed. An intervening default control measured 13.6321 s and an earlier
+post-cleanup run measured 13.5120 s; the final review-followup run is the conservative headline.
+
+Stage review found that TTNN output inheritance also retains the denominator reduction/accumulator
+in L1. Making that inherited placement explicit with output-memory arguments regressed the required
+run to 13.6380 s / 18.771 t/s, so those arguments were removed. The inherited placement is now
+source-commented and covered by a memory-aware unit test; documentation names the actual boundary.
+
+Correctness is exact across all six recorded fields and the final commit for 48/48 steps under both
+RUN-first argmax and production chunked-Gumbel with identical injected noise. Three prompt-correct
+production-Gumbel A/B outputs are exact. Full-depth 30L / 48-step / 256K capability passes with a
+non-aligned prompt; the separate traced watcher smoke reports four clean attaches/detaches and zero
+error signatures. Proportional tests pass (41/41).
+
+An adjacent mode that also placed numerator matmuls/accumulation and the final divide in L1 saved
+only 0.375 ms beyond the selected chain in the component probe. Its traced attempt was discarded
+because an external hardware test started after preflight and overlapped the run; the speculative
+mode was removed and no contaminated number is evidence.
+
+Full commands, raw rows, final-default policy, and limitations:
+`selfcond_logits_l1.md` / `selfcond_logits_l1_e2e.json`.
+
+## 2026-07-10 — larger self-conditioning vocab chunks: faster, decision-inexact, removed
+
+A fresh selector swept the ordered online-softmax grouping from 8K to 16K, 32K, and 64K
+vocabulary rows. The 32K point reduced soft embedding **16.038 -> 15.322 ms (-4.46%)** and won the
+canonical warmed @48 run **13.6321 -> 13.5042 s / 18.779 -> 18.957 t/s (+0.95%)**. However, the
+three-block clean-commit digest changed from the established `a9f0d18709b07d1e` to
+`f224bc72c06ce5a0` under the identical canonical prompt, seed, and fixed 48-step workload.
+
+The candidate therefore fails the minimum diffusion-decision identity gate despite its speed.
+Changing chunk width changes BF16 matmul/reduction grouping. The selector and speculative source
+were removed; the established ordered 8192-vocabulary path remains selected. Exact commands and
+rows: `selfcond_vocab_chunk_rejection.md` / `.json`.
+
 ---
 
-**Stage review (independent, xhigh): clean-pass** @ commit `b88f2c361f8` (+ follow-up doc/comment
+**Prior early-halt stage review (not this prechunk batch; independent, xhigh): clean-pass** @ commit `b88f2c361f8` (+ follow-up doc/comment
 clarifications). No required work. Confirmed: on-device single-scalar halt (not the retired 5-tensor
 readback), host branch == eager StableAndConfident rule, trace-safe capture, Guard 1 byte-identical,
 Guard 2 eager-faithful firing (scheme A exact; scheme B commit correct under convergence-stability, so

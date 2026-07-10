@@ -1,0 +1,183 @@
+{
+  "date": "2026-07-10",
+  "target": "DiffusionGemma 26B-A4B-it",
+  "hardware": "QB2 P150x4 TP=4",
+  "workload": "canonical traced RUN-first argmax, 30 layers, 256-token canvas, seed 0, three blocks",
+  "trace_region_size_bytes": 10737418240,
+  "source_head": "0472860c40c3c100466cea407a506d7b4d1bb443",
+  "source_state": "dirty DiffusionGemma-local working tree; final default reproduced after stage-review attribution correction",
+  "candidate": "place each dynamic logits slice, subtract/exp, denominator reduction, and ordered denominator accumulator in interleaved L1",
+  "selector": {
+    "name": "DG_SELFCOND_LOGITS_L1",
+    "selected_default": "chain",
+    "diagnostic_control": "off",
+    "placement_contract": "TTNN sum/add inherit first-input memory: denominator stays L1 from exp; DRAM matmul keeps numerator and final divide DRAM"
+  },
+  "component_ms": {
+    "harness": "prof_step_breakdown.py --num-layers 2 --iters 5",
+    "control_off": {
+      "soft_embedding": 18.212908200075617,
+      "full_two_layer_step": 73.52447480006958
+    },
+    "slice_only_intermediate": {
+      "soft_embedding": 17.72146840012283,
+      "full_two_layer_step": 72.89117059990531
+    },
+    "selected_chain": {
+      "soft_embedding": 16.038019400002668,
+      "full_two_layer_step": 71.35855279993848
+    },
+    "selected_soft_embedding_delta_percent": -11.940425256563258,
+    "note": "Operations, chunk boundaries, BF16 values, matmul shapes, and ordered accumulation are unchanged; chunk matmuls, numerator accumulation, and final divide stay DRAM."
+  },
+  "independent_process_at48": {
+    "controls_off": [
+      {
+        "steady_block_latency_s": 13.6284,
+        "tokens_per_block_per_s": 18.784,
+        "full_generation_s": 152.1866
+      },
+      {
+        "steady_block_latency_s": 13.6161,
+        "tokens_per_block_per_s": 18.801,
+        "full_generation_s": 151.2421
+      },
+      {
+        "steady_block_latency_s": 13.6051,
+        "tokens_per_block_per_s": 18.817,
+        "full_generation_s": 152.3873
+      }
+    ],
+    "explicit_chain_candidates": [
+      {
+        "steady_block_latency_s": 13.4969,
+        "tokens_per_block_per_s": 18.967,
+        "full_generation_s": 151.9106
+      },
+      {
+        "steady_block_latency_s": 13.5253,
+        "tokens_per_block_per_s": 18.928,
+        "full_generation_s": 153.2179
+      }
+    ],
+    "control_median_block_s": 13.6161,
+    "control_median_tokens_per_s": 18.801,
+    "candidate_median_block_s": 13.5111,
+    "candidate_median_tokens_per_s": 18.9475,
+    "latency_delta_percent": -0.7711459228413431,
+    "throughput_delta_percent": 0.7792138716025798,
+    "committed_sha_all_runs": "a9f0d18709b07d1e",
+    "full_generation_interpretation": "First-block trace-capture variance dominates the three-block full-generation totals; no independent-process full-generation speedup is claimed."
+  },
+  "standalone_at12": {
+    "control_off": {
+      "steady_block_latency_s": 4.2752,
+      "tokens_per_block_per_s": 59.88,
+      "full_generation_s": 39.7459
+    },
+    "explicit_chain_candidate": {
+      "steady_block_latency_s": 4.2981,
+      "tokens_per_block_per_s": 59.562,
+      "full_generation_s": 40.1534
+    },
+    "historical_unset_default_before_stage_review": {
+      "steady_block_latency_s": 4.2647,
+      "tokens_per_block_per_s": 60.028,
+      "full_generation_s": 40.3183,
+      "committed_sha": "24393ba7aad6077c"
+    },
+    "interpretation": "Historical variance samples only. The reviewed current final_unset_default @12 row is 4.3122 s / 59.366 t/s below."
+  },
+  "same_model_sequential_anomaly": {
+    "order": [
+      "off",
+      "chain"
+    ],
+    "control_off": {
+      "steady_block_latency_s": 13.6456,
+      "tokens_per_block_per_s": 18.761,
+      "full_generation_s": 153.332
+    },
+    "chain_second_session": {
+      "steady_block_latency_s": 13.7841,
+      "tokens_per_block_per_s": 18.572,
+      "full_generation_s": 156.2471
+    },
+    "status": "contradictory second-session result retained as a limitation; production and final-default evidence use one fresh session per process"
+  },
+  "final_unset_default": {
+    "DG_SELFCOND_LOGITS_L1": "<unset>",
+    "resolved_selfcond_logits_l1": "chain",
+    "earlier_at48_reproductions": [
+      {
+        "steady_block_latency_s": 13.5593,
+        "tokens_per_block_per_s": 18.88,
+        "full_generation_s": 152.9066,
+        "committed_sha": "a9f0d18709b07d1e"
+      },
+      {
+        "steady_block_latency_s": 13.512,
+        "tokens_per_block_per_s": 18.946,
+        "full_generation_s": 152.0741,
+        "committed_sha": "a9f0d18709b07d1e"
+      }
+    ],
+    "review_followup_explicit_memory_arguments_rejected": {
+      "steady_block_latency_s": 13.638,
+      "tokens_per_block_per_s": 18.771,
+      "full_generation_s": 154.4797,
+      "committed_sha": "a9f0d18709b07d1e",
+      "decision": "materially slower final reproduction; explicit arguments removed in favor of the measured inherited-placement form"
+    },
+    "at48": {
+      "prefill_s": 1.3153,
+      "ttft_s": 126.809,
+      "per_block_latency_s": [
+        125.4927,
+        13.5965,
+        13.5732
+      ],
+      "steady_block_latency_s": 13.5849,
+      "tokens_per_block_per_s": 18.844,
+      "full_generation_s": 153.9791,
+      "committed_sha": "a9f0d18709b07d1e"
+    },
+    "at12": {
+      "prefill_s": 1.1278,
+      "ttft_s": 31.51,
+      "per_block_latency_s": [
+        30.382,
+        4.3052,
+        4.3192
+      ],
+      "steady_block_latency_s": 4.3122,
+      "tokens_per_block_per_s": 59.366,
+      "full_generation_s": 40.1358,
+      "committed_sha": "24393ba7aad6077c"
+    },
+    "derived_warmed_traced_step_ms": 257.575,
+    "comparison_to_prior_selected_default": {
+      "prior_at48_block_s": 13.6817,
+      "prior_at48_tokens_per_s": 18.711,
+      "prior_full_generation_s": 153.341,
+      "block_latency_delta_percent": -0.7075144170680558,
+      "throughput_delta_percent": 0.7108118219229409,
+      "full_generation_delta_percent": 0.41613136734466316
+    },
+    "headline_policy": "Use this final stage-review-followup selector-unset result rather than faster earlier or explicit-candidate samples."
+  },
+  "correctness": {
+    "argmax_decisions": "PASS after stage-review rerun, 48/48 exact across six fields; selfcond_logits_l1_decisions.json",
+    "production_chunked_gumbel_decisions": "PASS after stage-review rerun, 48/48 exact across six fields; selfcond_logits_l1_gumbel_decisions.json",
+    "production_chunked_gumbel_qualitative": "PASS, three prompt-correct outputs and commits exact; selfcond_logits_l1_gumbel_qualitative.json",
+    "unit_tests": "41 passed",
+    "watcher": "PASS; selfcond_logits_l1_watcher_summary.json",
+    "full_depth_256k": "PASS, 30 layers, 48 steps, production chunked-Gumbel; selfcond_logits_l1_256k_chunked.json"
+  },
+  "discarded_experiments": {
+    "ttnn_split": "Rejected and removed; selfcond_logits_split_rejection.json",
+    "l1_numerator_and_divide": "Placing numerator matmuls/accumulation and final divide in L1 saved only 0.375 ms beyond chain. Its traced attempt was discarded because an external hardware test started after preflight and overlapped the run; the mode was removed.",
+    "larger_vocab_chunks": "32K grouping was +0.95% warmed @48 but changed the canonical clean-commit digest; rejected and removed; selfcond_vocab_chunk_rejection.json",
+    "explicit_memory_arguments": "Stage-review follow-up made inherited output placement explicit; the final run regressed to 18.771 t/s, so those arguments were removed and the inherited placement is now source-commented and unit-tested."
+  }
+}

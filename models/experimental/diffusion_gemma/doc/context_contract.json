@@ -19,14 +19,69 @@
     "input_alignment": "Prompt length may be any valid length up to max_model_len. There is no requirement that prompt length be divisible by 256, by a prefill tile (32), by block_size, or by a page. prefill_prompt_tokens pads the prompt to a 32-tile multiple internally and reports the logical/aligned lengths; the intrinsic 256-token output block granularity does not constrain the prompt length."
   },
   "datatype_policy": {
-    "source": "dg-07 datatype sweep RUN 2026-07-08 (doc/datatype_sweep/). One reduction evaluated: MoE experts bf16 -> bfloat8_b. REJECTED on diffusion-decision fidelity (committed clean-argmax agreement 0.227, entropy PCC 0.631, accept IoU 0.501 vs the bf16 reference). Shipping policy stays all-bf16 weights + fp32 decision path.",
+    "source": "dg-07 datatype sweep RUN 2026-07-08 (doc/datatype_sweep/). One reduction evaluated: MoE experts bf16 -> bfloat8_b. REJECTED on diffusion-decision fidelity (committed clean-argmax agreement 0.227, entropy PCC 0.631, accept IoU 0.501 vs the bf16 reference). Shipping policy keeps BF16 weights and the established decision arithmetic; production self-conditioning and entropy are BF16 as detailed below.",
     "weights": "ttnn.bfloat16",
     "activations_residual": "ttnn.bfloat16",
     "kv_cache": "ttnn.bfloat16",
     "ccl": "ttnn.bfloat16 (backbone TP=4 all-reduce/all-gather via gemma4 CCL)",
-    "self_conditioning": "ttnn.bfloat16 tensors; softmax/soft-embedding accumulate with fp32 (WormholeComputeKernelConfig HiFi4, fp32_dest_acc_en=True) per denoise_forward.default_self_conditioning_compute_kernel_config",
+    "self_conditioning": "ttnn.bfloat16 tensors and weights. The production 262144-vocab soft embedding uses the numerically stable, ordered 8192-vocab online-softmax path in tt/self_conditioning.py. That chunked branch currently does not forward default_self_conditioning_compute_kernel_config; do not infer fp32 accumulation from the accepted argument. The dg-08 prechunk and logits-L1 optimizations change storage/copy placement only and preserve this selected BF16 arithmetic exactly.",
     "matches_gemma4_vllm_bridge": "Yes \u2014 bf16 weights + bf16 KV cache. bf16 experts are now selected on FIDELITY grounds (bfp8 fits and is faster but fails the diffusion-decision gate); fp32 experts also do not fit and fp32 router top-k is blocked by ttnn.topk TT_FATAL.",
     "experts_bfp8_evaluated": "bfp8 experts FIT (post-build 7.830 GiB/chip, frees 5.44 GiB vs bf16 13.268) and are ~6-9% faster traced, but change ~77% of committed tokens vs bf16 and collapse entropy PCC to 0.631 (min 0.036). Rejected on fidelity, not fit. DG-local knob DG_EXPERTS_BFP8 landed OFF-by-default for reuse if #48291 creates headroom."
+  },
+  "self_conditioning_embedding_storage": {
+    "shape": [
+      262144,
+      2816
+    ],
+    "dtype": "ttnn.bfloat16",
+    "logical_payload_bytes_per_chip": 1476395008,
+    "logical_payload_mib_per_chip": 1408,
+    "previous_layout": "one persistent 1408 MiB DRAM tensor; each denoise step copied 32 sequential 44 MiB slices",
+    "selected_layout": "32 persistent 44 MiB DRAM tensors; same ordered 8192-row chunks and same 1408 MiB payload",
+    "persistent_payload_delta_bytes": 0,
+    "allocation_count_delta": 31,
+    "selector": "DG_SELFCOND_PRECHUNK_EMBED defaults enabled; set 0 only for the diagnostic previous-layout control",
+    "full_depth_256k_final_default_probe": {
+      "date": "2026-07-09",
+      "max_seq_len": 262144,
+      "layers": 30,
+      "canvas_length": 256,
+      "logical_prompt_len": 24,
+      "mode": "eager full 48-step production chunked-Gumbel serving smoke; sparse tuned BF16 MoE; prechunk selector unset/resolved enabled",
+      "post_build_dram_gib_per_chip": 29.704,
+      "post_prefill_and_block_dram_gib_per_chip": 31.134,
+      "free_after_block_gib_per_chip": 0.733,
+      "artifact": "doc/optimize_perf/selfcond_prechunk_256k_chunked.json",
+      "result": "DG_VLLM_SERVING_SMOKE_SUCCESS; all 48 denoise steps completed; one 256-token block emitted; final_next_pos=288; clean teardown"
+    },
+    "traced_256k_limit": {
+      "status": "not currently composable with the full-vocab entropy live set at max context",
+      "zero_trace_reservation": "model/adapter operations fit, but end_trace_capture reports trace-buffer overlap at the DRAM high-water mark",
+      "bounded_reservation_probes_bytes": [
+        536870912,
+        268435456,
+        201326592,
+        184549376
+      ],
+      "failure": "reserving enough trace space removes the contiguous 128 MiB buffer needed by token_entropy exp_shifted/expected_terms; exact allocator OOMs are recorded in doc/optimize_perf/selfcond_prechunk.md",
+      "contract": "The advertised 256K model capability is freshly proven with the production memory-bounded chunked-Gumbel sampler for the full 48-step budget. Trace-safe canvas feedback and the selected optimization are independently verified on the full 30-layer traced 1024-allocation RUN-first argmax path at 48 and 12 steps. No max_model_len reduction was made."
+    }
+  },
+  "self_conditioning_logits_placement": {
+    "selected_layout": "Each dynamic 8192-vocabulary logits slice, its immediate subtract/exp, denominator reduction, and ordered denominator accumulator use interleaved L1. The 32 chunk matmuls, ordered numerator accumulator, and final division remain in DRAM.",
+    "selector": "DG_SELFCOND_LOGITS_L1 defaults to chain; set off only for the diagnostic DRAM-placement control",
+    "arithmetic_contract": "No dtype, input value, chunk boundary, matmul shape, operation boundary, or accumulation order changes.",
+    "decision_gate": "48/48 exact across argmax, sampled ids, BF16 entropy, accept mask, renoised canvas, commit candidate, and final commit under both RUN-first argmax and production ChunkedGumbelNoise",
+    "full_depth_256k_probe": {
+      "date": "2026-07-10",
+      "max_seq_len": 262144,
+      "layers": 30,
+      "canvas_length": 256,
+      "logical_prompt_len": 24,
+      "mode": "eager full 48-step production chunked-Gumbel serving smoke; sparse tuned BF16 MoE; prechunk enabled and logits-L1 chain explicit",
+      "artifact": "doc/optimize_perf/selfcond_logits_l1_256k_chunked.json",
+      "result": "DG_VLLM_SERVING_SMOKE_SUCCESS; all 48 denoise steps completed; one 256-token block emitted; final_next_pos=288; clean teardown"
+    }
   },
   "mesh": {
     "device": "QB2 / P150x4",
@@ -40,14 +95,14 @@
     "max_num_seqs_note": "Batch-1 single-user latency is the headline target. Larger batch/concurrency (up to 32) is bounded by the 256K-KV per-request footprint; the block-diffusion per-step canvas K/V scratch (#47474 storage class ii) is additional per-request memory. Record the largest tested max_num_seqs in the serving evidence."
   },
   "sampling": {
-    "mode": "on-device canvas sampling (sample_on_device_mode=all). No host greedy/top-1 argmax path, no full-logits readback. Per-step decision tensors ([B,L] argmax/entropy/sampled/accept) are read back only for the data-dependent halt check; the full [B,L,vocab] logits stay on device.",
+    "mode": "on-device canvas sampling (sample_on_device_mode=all). No full-logits readback. The eager diagnostic loop can read compact per-step decision tensors ([B,L] argmax/entropy/sampled/accept); the traced fixed-step RUN-first path keeps canvas feedback device-resident and reads only the final clean commit candidate.",
     "procedure": "Per denoise step: temperature-scale (linear 0.8->0.4) -> Gumbel-max argmax(logits/T + gumbel) -> entropy-budget acceptance (sort/cumsum/scatter) -> renoise rejected positions to random tokens. Commit = clean argmax. RUN-first: --argmax-sampling routes clean argmax (gumbel_noise=None) to avoid full-vocab noise allocation at 256K.",
     "eos_token_ids": [
       1,
       106,
       50
     ],
-    "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core (sampling.argmax_last_dim; bit-identical to TILE argmax, 1240ms->14.4ms/op, 2x/step); accept/renoise constants are preallocated once outside the trace (denoise_loop.make_denoise_constants: budget_t/accept_zeros/renoise_ones, a few KB persistent, replacing per-step ttnn.full/zeros_like host writes that are illegal during trace capture). Trace-safe fixed-step loop denoise_loop.run_fixed_denoise_steps (fixed <=48-step count, device canvas feedback, no host readback of the cutoff). Traced full 30-layer denoise step ~4176 ms; per block (48 steps + commit) ~232 s. No dtype/mesh/max_model_len change."
+    "optimize_perf_47465": "Terminal decision path is trace-safe and optimized (decisions unchanged): argmax over the 262144 vocab uses ROW_MAJOR multi-core; accept/renoise constants are preallocated outside capture; the fixed <=48-step trace keeps canvas feedback on device. The ~4176 ms step / ~232 s block values in the original #47465 evidence are historical. Current selected-default RUN-first argmax evidence is selfcond_logits_l1_e2e.json (257.575 ms derived warmed step; 13.5849 s steady @48 block). The production chunked-Gumbel sampler is decision-gated and 256K-capability-gated but is not supported by traced_denoise.py, so no traced Gumbel throughput is claimed."
   },
   "generation_config": {
     "max_denoise_steps": 48,

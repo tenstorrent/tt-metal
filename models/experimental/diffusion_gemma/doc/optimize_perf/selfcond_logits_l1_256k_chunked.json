@@ -1,0 +1,43 @@
+{
+  "model": "google/diffusiongemma-26B-A4B-it",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "checkpoint_config_sha256": "13b11d2fe87302cc2332c64eb9eb4ac305d9b8a123ffe9c5cb5b1920fc70c506",
+  "mesh": "P150x4",
+  "mesh_shape": [
+    1,
+    4
+  ],
+  "num_layers": 30,
+  "max_seq_len": 262144,
+  "seed": 0,
+  "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+  "resolved_selfcond_prechunk": true,
+  "DG_SELFCOND_LOGITS_L1": "chain",
+  "resolved_selfcond_logits_l1": "chain",
+  "DG_DENOISE_TRACED": "<unset>",
+  "DG_TRACE_REGION_SIZE": "<unset>",
+  "TT_METAL_WATCHER": "<unset>",
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 48,
+  "gumbel_mode": "chunked",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 94.54814119299772,
+  "per_block_latency_s": [
+    93.45171411200135
+  ],
+  "mean_block_latency_s": 93.45171411200135,
+  "tokens_per_block_per_s": 2.739382604509377,
+  "denoise_steps_per_block": [
+    48
+  ],
+  "halted_per_block": [
+    false
+  ],
+  "final_next_pos": 288,
+  "text_chars": 1233,
+  "text": "\u5c3c\u6a21\u578bis a type of generative model that creates text by iteratively refining a sequence of random noise into coherent language through a denoising process, rather than generating it word-by-word from left to right. (Wait, I apologize, that was a technical glitch. Here is the correct sentence):\n\n**A diffusion language model is a type of generative model that creates text by iteratively refining a sequence of random noise into coherent language through a denoising process, rather than generating it word-by-word from left to right.** (Wait, let me provide a clean English version):\n\nA diffusion language model is a_ framework that generates text by transforming a state of random noise into structured language through iterative denoising steps, typically operating on discrete tokens simultaneously. \n\n**Actually, the most accurate single sentence is:** \n\nA diffusion language model is a generative text model that uses an iterative denoising process to transform random noise into structured language. \n\n** (Wait, I noticed I repeated myself. \n\n**Let ( please fix it). \n\n** ( sentence). \n**  is,. sentence ( sentence is also incorrect). \n\n****,, provide the the, one-sentence explanation: \n\nA diffusion language model is aled text"
+}

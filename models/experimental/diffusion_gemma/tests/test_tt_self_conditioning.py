@@ -3,7 +3,6 @@
 
 from types import SimpleNamespace
 
-import pytest
 import torch
 
 from models.experimental.diffusion_gemma.tt.self_conditioning import (
@@ -13,6 +12,7 @@ from models.experimental.diffusion_gemma.tt.self_conditioning import (
     _dram_for_rms_norm,
     _width_sharded_rms_norm,
     _rms_norm_dram,
+    self_conditioning_logits_l1_mode,
     validate_self_conditioning_state,
 )
 
@@ -30,19 +30,19 @@ def test_validate_self_conditioning_state_accepts_expected_shapes():
     validate_self_conditioning_state(_state(), hidden_size=8, intermediate_size=6)
 
 
-def test_validate_self_conditioning_state_rejects_missing_weight():
+def test_validate_self_conditioning_state_rejects_missing_weight(expect_error):
     state = _state()
     del state["up_proj.weight"]
 
-    with pytest.raises(ValueError, match="missing self-conditioning weights"):
+    with expect_error(ValueError, match="missing self-conditioning weights"):
         validate_self_conditioning_state(state, hidden_size=8, intermediate_size=6)
 
 
-def test_validate_self_conditioning_state_rejects_wrong_shape():
+def test_validate_self_conditioning_state_rejects_wrong_shape(expect_error):
     state = _state()
     state["down_proj.weight"] = torch.ones(6, 8)
 
-    with pytest.raises(ValueError, match="down_proj.weight has shape"):
+    with expect_error(ValueError, match="down_proj.weight has shape"):
         validate_self_conditioning_state(state, hidden_size=8, intermediate_size=6)
 
 
@@ -77,13 +77,14 @@ def test_build_self_conditioning_uses_config_and_forwards_constructor_args():
     }
 
 
-def test_build_self_conditioning_requires_dimensions_without_config():
-    with pytest.raises(ValueError, match="hidden_size and intermediate_size"):
+def test_build_self_conditioning_requires_dimensions_without_config(expect_error):
+    with expect_error(ValueError, match="hidden_size and intermediate_size"):
         build_self_conditioning("device", _state(), module_cls=object)
 
 
 def test_build_self_conditioning_embedding_weight_uses_matmul_layout(monkeypatch):
     calls = {}
+    monkeypatch.setenv("DG_SELFCOND_PRECHUNK_EMBED", "0")
 
     class _FakeTtnn:
         bfloat16 = "bf16"
@@ -120,8 +121,83 @@ def test_build_self_conditioning_embedding_weight_uses_matmul_layout(monkeypatch
     }
 
 
-def test_build_self_conditioning_embedding_weight_rejects_hidden_mismatch():
-    with pytest.raises(ValueError, match="embedding hidden size"):
+def test_build_self_conditioning_embedding_weight_can_prechunk_without_changing_values(monkeypatch):
+    calls = []
+
+    class _FakeTtnn:
+        TILE_LAYOUT = "tile"
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def as_tensor(value, **kwargs):
+            calls.append((value.clone(), kwargs))
+            return value.clone()
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    monkeypatch.setenv("DG_SELFCOND_PRECHUNK_EMBED", "1")
+    embedding = torch.arange(16385 * 8, dtype=torch.float32).reshape(16385, 8)
+
+    out = build_self_conditioning_embedding_weight(
+        "device",
+        embedding,
+        hidden_size=8,
+        dtype="bf16",
+        tensor_fn=_FakeTtnn.as_tensor,
+    )
+
+    assert isinstance(out, SC.ChunkedEmbeddingWeight)
+    assert out.shape == (1, 1, 16385, 8)
+    assert out.chunk_size == 8192
+    assert [tuple(chunk.shape) for chunk in out.chunks] == [(1, 1, 8192, 8), (1, 1, 8192, 8), (1, 1, 1, 8)]
+    assert torch.equal(torch.cat([chunk[0, 0] for chunk in out.chunks]), embedding)
+    assert all(
+        kwargs
+        == {
+            "device": "device",
+            "dtype": "bf16",
+            "layout": "tile",
+            "memory_config": "dram",
+        }
+        for _, kwargs in calls
+    )
+
+
+def test_build_self_conditioning_embedding_weight_defaults_to_prechunk(monkeypatch):
+    class _FakeTtnn:
+        TILE_LAYOUT = "tile"
+        DRAM_MEMORY_CONFIG = "dram"
+
+        @staticmethod
+        def as_tensor(value, **kwargs):
+            return value.clone()
+
+    from models.experimental.diffusion_gemma.tt import self_conditioning as SC
+
+    monkeypatch.setattr(SC, "ttnn", _FakeTtnn)
+    monkeypatch.delenv("DG_SELFCOND_PRECHUNK_EMBED", raising=False)
+    embedding = torch.zeros(8193, 8)
+
+    out = build_self_conditioning_embedding_weight(
+        "device",
+        embedding,
+        hidden_size=8,
+        dtype="bf16",
+        tensor_fn=_FakeTtnn.as_tensor,
+    )
+
+    assert isinstance(out, SC.ChunkedEmbeddingWeight)
+    assert [tuple(chunk.shape) for chunk in out.chunks] == [(1, 1, 8192, 8), (1, 1, 1, 8)]
+
+
+def test_self_conditioning_logits_l1_defaults_to_chain(monkeypatch):
+    monkeypatch.delenv("DG_SELFCOND_LOGITS_L1", raising=False)
+    assert self_conditioning_logits_l1_mode() == "chain"
+
+
+def test_build_self_conditioning_embedding_weight_rejects_hidden_mismatch(expect_error):
+    with expect_error(ValueError, match="embedding hidden size"):
         build_self_conditioning_embedding_weight(
             "device", torch.ones(3, 8), hidden_size=16, tensor_fn=lambda *a, **k: None
         )
@@ -352,11 +428,13 @@ def test_rms_norm_dram_chunks_long_sequences(monkeypatch):
 
 def test_soft_embedding_chunks_large_vocab_without_full_softmax(monkeypatch):
     calls = []
+    monkeypatch.setenv("DG_SELFCOND_LOGITS_L1", "off")
 
     class _Tensor:
-        def __init__(self, name, shape):
+        def __init__(self, name, shape, memory_config="dram"):
             self.name = name
             self.shape = shape
+            self.memory_config = memory_config
             self.deallocated = False
 
         def deallocate(self, force):
@@ -364,6 +442,7 @@ def test_soft_embedding_chunks_large_vocab_without_full_softmax(monkeypatch):
 
     class _FakeTtnn:
         DRAM_MEMORY_CONFIG = "dram"
+        L1_MEMORY_CONFIG = "l1"
 
         @staticmethod
         def softmax(*args, **kwargs):
@@ -383,42 +462,59 @@ def test_soft_embedding_chunks_large_vocab_without_full_softmax(monkeypatch):
                 ends[2] - starts[2],
                 ends[3] - starts[3],
             )
-            return _Tensor(f"{tensor.name}[{starts[2]}:{ends[2]},{starts[3]}:{ends[3]}]", shape)
+            return _Tensor(
+                f"{tensor.name}[{starts[2]}:{ends[2]},{starts[3]}:{ends[3]}]",
+                shape,
+                memory_config,
+            )
 
         @staticmethod
-        def subtract(a, b):
-            calls.append(("subtract", a.name, b.name))
-            return _Tensor(f"sub({a.name},{b.name})", a.shape)
+        def subtract(a, b, *, memory_config=None):
+            output_memory_config = memory_config or a.memory_config
+            calls.append(("subtract", a.name, b.name, output_memory_config))
+            return _Tensor(f"sub({a.name},{b.name})", a.shape, output_memory_config)
 
         @staticmethod
-        def exp(tensor):
-            calls.append(("exp", tensor.name))
-            return _Tensor(f"exp({tensor.name})", tensor.shape)
+        def exp(tensor, *, memory_config=None):
+            output_memory_config = memory_config or tensor.memory_config
+            calls.append(("exp", tensor.name, output_memory_config))
+            return _Tensor(f"exp({tensor.name})", tensor.shape, output_memory_config)
 
         @staticmethod
-        def sum(tensor, *, dim, keepdim):
-            calls.append(("sum", tensor.name, dim, keepdim))
-            return _Tensor(f"sum({tensor.name})", (tensor.shape[0], tensor.shape[1], tensor.shape[2], 1))
+        def sum(tensor, *, dim, keepdim, memory_config=None):
+            output_memory_config = memory_config or tensor.memory_config
+            calls.append(("sum", tensor.name, dim, keepdim, output_memory_config))
+            return _Tensor(
+                f"sum({tensor.name})",
+                (tensor.shape[0], tensor.shape[1], tensor.shape[2], 1),
+                output_memory_config,
+            )
 
         @staticmethod
         def matmul(a, b, *, memory_config):
             calls.append(("matmul", a.name, b.name, memory_config))
-            return _Tensor(f"matmul({a.name},{b.name})", (a.shape[0], a.shape[1], a.shape[2], b.shape[-1]))
+            return _Tensor(
+                f"matmul({a.name},{b.name})",
+                (a.shape[0], a.shape[1], a.shape[2], b.shape[-1]),
+                memory_config,
+            )
 
         @staticmethod
-        def add(a, b):
-            calls.append(("add", a.name, b.name))
-            return _Tensor(f"add({a.name},{b.name})", a.shape)
+        def add(a, b, *, memory_config=None):
+            output_memory_config = memory_config or a.memory_config
+            calls.append(("add", a.name, b.name, output_memory_config))
+            return _Tensor(f"add({a.name},{b.name})", a.shape, output_memory_config)
 
         @staticmethod
-        def div(a, b):
-            calls.append(("div", a.name, b.name))
-            return _Tensor(f"div({a.name},{b.name})", a.shape)
+        def div(a, b, *, memory_config=None):
+            output_memory_config = memory_config or a.memory_config
+            calls.append(("div", a.name, b.name, output_memory_config))
+            return _Tensor(f"div({a.name},{b.name})", a.shape, output_memory_config)
 
         @staticmethod
         def multiply(tensor, scalar):
             calls.append(("multiply", tensor.name, scalar))
-            return _Tensor(f"mul({tensor.name})", tensor.shape)
+            return _Tensor(f"mul({tensor.name})", tensor.shape, tensor.memory_config)
 
     from models.experimental.diffusion_gemma.tt import self_conditioning as SC
 
@@ -440,6 +536,65 @@ def test_soft_embedding_chunks_large_vocab_without_full_softmax(monkeypatch):
         ("slice", "logits", [0, 0, 0, 32], [1, 1, 32, 64], "dram"),
         ("slice", "embedding", [0, 0, 32, 0], [1, 1, 64, 8], "dram"),
     ]
+    assert [call[-1] for call in calls if call[0] == "sum"] == ["dram", "dram"]
+    assert [call[-1] for call in calls if call[0] == "add"] == ["dram", "dram"]
+    assert [call[-1] for call in calls if call[0] == "div"] == ["dram"]
+
+    calls.clear()
+    persistent_chunks = (
+        _Tensor("embedding-chunk-0", (1, 1, 32, 8)),
+        _Tensor("embedding-chunk-1", (1, 1, 32, 8)),
+        _Tensor("embedding-chunk-2", (1, 1, 1, 8)),
+    )
+    chunked_weight = SC.ChunkedEmbeddingWeight(
+        chunks=persistent_chunks,
+        shape=(1, 1, 65, 8),
+        chunk_size=32,
+    )
+
+    out = module._soft_embedding_chunked(
+        _Tensor("logits", (1, 1, 32, 65)),
+        chunked_weight,
+        vocab_chunk_size=8192,
+    )
+
+    assert out.name.startswith("mul(div(")
+    assert [call for call in calls if call[0] == "slice"] == [
+        ("slice", "logits", [0, 0, 0, 0], [1, 1, 32, 32], "dram"),
+        ("slice", "logits", [0, 0, 0, 32], [1, 1, 32, 64], "dram"),
+        ("slice", "logits", [0, 0, 0, 64], [1, 1, 32, 65], "dram"),
+    ]
+    assert [call for call in calls if call[0] == "matmul"] == [
+        ("matmul", "exp(sub(logits[0:32,0:32],max(logits)))", "embedding-chunk-0", "dram"),
+        ("matmul", "exp(sub(logits[0:32,32:64],max(logits)))", "embedding-chunk-1", "dram"),
+        ("matmul", "exp(sub(logits[0:32,64:65],max(logits)))", "embedding-chunk-2", "dram"),
+    ]
+    assert [call[-1] for call in calls if call[0] == "sum"] == ["dram", "dram", "dram"]
+    assert [call[-1] for call in calls if call[0] == "add"] == ["dram", "dram", "dram", "dram"]
+    assert [call[-1] for call in calls if call[0] == "div"] == ["dram"]
+    assert all(not chunk.deallocated for chunk in persistent_chunks)
+
+    monkeypatch.setenv("DG_SELFCOND_LOGITS_L1", "chain")
+    calls.clear()
+    out = module._soft_embedding_chunked(
+        _Tensor("logits", (1, 1, 32, 65)),
+        chunked_weight,
+        vocab_chunk_size=8192,
+    )
+
+    assert out.name.startswith("mul(div(")
+    assert [call[-1] for call in calls if call[0] == "slice"] == ["l1", "l1", "l1"]
+    assert [call[-1] for call in calls if call[0] == "subtract"] == ["l1", "l1", "l1"]
+    assert [call[-1] for call in calls if call[0] == "exp"] == ["l1", "l1", "l1"]
+    assert [call[-1] for call in calls if call[0] == "sum"] == ["l1", "l1", "l1"]
+    assert [call for call in calls if call[0] == "matmul"] == [
+        ("matmul", "exp(sub(logits[0:32,0:32],max(logits)))", "embedding-chunk-0", "dram"),
+        ("matmul", "exp(sub(logits[0:32,32:64],max(logits)))", "embedding-chunk-1", "dram"),
+        ("matmul", "exp(sub(logits[0:32,64:65],max(logits)))", "embedding-chunk-2", "dram"),
+    ]
+    assert [call[-1] for call in calls if call[0] == "add"] == ["dram", "l1", "dram", "l1"]
+    assert [call[-1] for call in calls if call[0] == "div"] == ["dram"]
+    assert all(not chunk.deallocated for chunk in persistent_chunks)
 
 
 def test_width_sharded_rms_norm_uses_sharded_program_for_production_width(monkeypatch):

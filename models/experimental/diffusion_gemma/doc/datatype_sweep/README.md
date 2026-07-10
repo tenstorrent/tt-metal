@@ -1,7 +1,8 @@
 # DiffusionGemma dg-07 datatype sweep (#47475 quant / #47465 perf)
 
 **Verdict: bfp8 MoE experts FAIL the diffusion-decision-fidelity gate. DiffusionGemma keeps
-bf16 experts. The 17.9–18.2 t/s @48 bf16 baseline stands.** The DG-local bfp8 knob is landed
+bf16 experts. The 17.9–18.2 t/s @48 value was the baseline at this sweep date; current selected
+evidence is `../optimize_perf/selfcond_logits_l1_e2e.json` (18.844 t/s).** The DG-local bfp8 knob is landed
 **off by default** for reuse if #48291 ever creates fidelity headroom.
 
 Hardware: QB2 / `bh-qbge-06` / P150x4, mesh `(1,4)`, TP=4. Date: 2026-07-08. Full 30 layers.
@@ -25,7 +26,8 @@ it delegates to the shared `create_tt_model` **unchanged**. With `DG_EXPERTS_BFP
 we may not edit the shared constructor) and passes `Gemma4Precision({"experts": bfloat8_b})` into
 `Gemma4Model`. **Only the expert weights change**; router, attention, shared MLP, embedding,
 lm_head, KV-cache, and the entire decision path (logits softcap, softmax→probability, entropy,
-Gumbel-max argmax, entropy-budget accept/renoise) stay bf16/fp32. Expert cache filenames carry
+Gumbel-max argmax, entropy-budget accept/renoise) keep their existing dtypes. Production logits and
+entropy remain BF16; injected Gumbel noise may be FP32. Expert cache filenames carry
 the dtype suffix (`_bfp8_dtype_BFLOAT8_B`), so bf16 and bfp8 caches coexist.
 
 `git diff main -- models/demos/gemma4/` is empty (verified).

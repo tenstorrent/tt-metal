@@ -118,10 +118,14 @@ def run(num_layers, canvas_length, iters, prompt, max_seq_len):
         emb.deallocate(True)
 
         def hidden_fwd():
+            # denoise_hidden_forward owns and deallocates its canvas_hidden input
+            # while advancing the residual stream. Keep cond0 as the persistent
+            # benchmark source and give each timed invocation a fresh clone.
+            hidden_input = ttnn.clone(cond0)
             h = DF.denoise_hidden_forward(
                 tt_model,
                 prompt_hidden_by_layer=adapter.prompt_hidden_by_layer,
-                canvas_hidden=cond0,
+                canvas_hidden=hidden_input,
                 q_rope_offset=adapter.q_rope_offset,
                 prompt_len=adapter.prompt_len,
             )
@@ -130,20 +134,23 @@ def run(num_layers, canvas_length, iters, prompt, max_seq_len):
         res["hidden_fwd_ms"] = _time(hidden_fwd, iters, mesh)
 
         # a persistent hidden for LM head + a persistent logits for soft-emb/terminal
+        hidden_input = ttnn.clone(cond0)
         hidden = DF.denoise_hidden_forward(
             tt_model,
             prompt_hidden_by_layer=adapter.prompt_hidden_by_layer,
-            canvas_hidden=cond0,
+            canvas_hidden=hidden_input,
             q_rope_offset=adapter.q_rope_offset,
             prompt_len=adapter.prompt_len,
         )
 
         def lm_head():
-            lg = tt_model._apply_lm_head(hidden, is_decode=False)
+            # _apply_lm_head consumes/deallocates its hidden-state input.
+            hidden_input = ttnn.clone(hidden)
+            lg = tt_model._apply_lm_head(hidden_input, is_decode=False)
             lg.deallocate(True)
 
         res["lm_head_ms"] = _time(lm_head, iters, mesh)
-        logits = tt_model._apply_lm_head(hidden, is_decode=False)
+        logits = tt_model._apply_lm_head(ttnn.clone(hidden), is_decode=False)
 
         # ---- soft_embedding over the full 262k vocab ----
         def soft_emb():

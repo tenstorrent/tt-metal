@@ -20,7 +20,8 @@ convention: we may not edit the shared constructor, so we reproduce it here).
 Decision-path precision is preserved: the override touches ONLY the ``experts`` module. The
 router (``MoEBlock`` keeps ``router_dtype=bf16``), attention, shared MLP, embedding, lm_head,
 the KV-cache, and every DiffusionGemma decision op (final logit softcap, softmax->
-probability, entropy, Gumbel-max argmax, entropy-budget accept/renoise) stay bf16/fp32.
+probability, entropy, Gumbel-max argmax, entropy-budget accept/renoise) retain their existing
+dtypes. The production logits/entropy path is BF16; injected Gumbel noise may be FP32.
 
 Expert cache filenames already carry the dtype suffix (``_bfp8`` / ``_bf16`` +
 ``_dtype_BFLOAT8_B`` / ``_dtype_BFLOAT16``), so bf16 and bfp8 expert caches coexist; the
@@ -139,7 +140,10 @@ def create_tt_model_dg(mesh_device, **kwargs):
             merged[module_name] = value
     merged["experts"] = override
     precision = Gemma4Precision(merged)
-    logger.info(f"[dg-precision] MoE experts dtype override -> {override} (decision path stays bf16/fp32)")
+    logger.info(
+        f"[dg-precision] MoE experts dtype override -> {override} "
+        "(decision-path dtypes unchanged; production logits/entropy remain BF16)"
+    )
 
     model = Gemma4Model(
         mesh_device=mesh_device,

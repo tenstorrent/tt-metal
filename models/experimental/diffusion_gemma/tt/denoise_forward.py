@@ -31,7 +31,11 @@ TILE_SIZE = getattr(ttnn, "TILE_SIZE", 32)
 
 
 def default_self_conditioning_compute_kernel_config():
-    """Use fp32 accumulation for production-vocab self-conditioning softmax."""
+    """Select HiFi4/fp32 accumulation for the moderate-vocab full-softmax path.
+
+    The production 262144-vocab path uses ordered online chunks in
+    ``tt.self_conditioning`` and does not forward this matmul config.
+    """
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,

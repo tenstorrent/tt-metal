@@ -27,8 +27,11 @@ Emits a single greppable ``DG_VLLM_SERVING_SMOKE_SUCCESS ...`` line on success a
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import time
+from pathlib import Path
 
 import torch
 from loguru import logger
@@ -41,6 +44,10 @@ from models.experimental.diffusion_gemma.demo.text_demo import (
     _open_mesh_device,
 )
 from models.experimental.diffusion_gemma.tt.generate import decode_generation, tokenize_prompt
+from models.experimental.diffusion_gemma.tt.self_conditioning import (
+    self_conditioning_embedding_prechunk_enabled,
+    self_conditioning_logits_l1_mode,
+)
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 
 
@@ -97,6 +104,12 @@ def _success_marker(metrics: dict) -> str:
         f"final_next_pos={metrics['final_next_pos']} "
         f"text_chars={metrics['text_chars']}"
     )
+
+
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def run(args) -> dict:
@@ -169,7 +182,23 @@ def run(args) -> dict:
 
         mean_block_latency_s = sum(decode_block_latencies) / len(decode_block_latencies)
         tokens_per_block_per_s = args.canvas_length / mean_block_latency_s if mean_block_latency_s > 0 else 0.0
+        checkpoint = Path(args.checkpoint)
         metrics = {
+            "model": "google/diffusiongemma-26B-A4B-it",
+            "checkpoint": str(checkpoint),
+            "checkpoint_config_sha256": _file_sha256(checkpoint / "config.json"),
+            "mesh": args.mesh,
+            "mesh_shape": [1, 4] if args.mesh == "P150x4" else None,
+            "num_layers": len(bundle.tt_model.layers),
+            "max_seq_len": args.max_seq_len,
+            "seed": args.seed,
+            "DG_SELFCOND_PRECHUNK_EMBED": os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "<unset>"),
+            "resolved_selfcond_prechunk": self_conditioning_embedding_prechunk_enabled(),
+            "DG_SELFCOND_LOGITS_L1": os.environ.get("DG_SELFCOND_LOGITS_L1", "<unset>"),
+            "resolved_selfcond_logits_l1": self_conditioning_logits_l1_mode(),
+            "DG_DENOISE_TRACED": os.environ.get("DG_DENOISE_TRACED", "<unset>"),
+            "DG_TRACE_REGION_SIZE": os.environ.get("DG_TRACE_REGION_SIZE", "<unset>"),
+            "TT_METAL_WATCHER": os.environ.get("TT_METAL_WATCHER", "<unset>"),
             "prompt_len": prompt_len,
             "prompt_aligned_256": bool(prompt_len % args.canvas_length == 0),
             "cache_len": cache_len,

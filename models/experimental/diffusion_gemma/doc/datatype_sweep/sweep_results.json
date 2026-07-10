@@ -32,9 +32,9 @@
         "experts": "bfloat16", "router": "bfloat16", "attention": "bfloat16",
         "shared_mlp": "bfloat16", "embedding": "bfloat16", "lm_head": "bfloat16",
         "kv_cache": "bfloat16", "activations_residual": "bfloat16", "ccl": "bfloat16",
-        "canvas_scratch": "bfloat16", "logits_to_probability_entropy": "float32"
+        "canvas_scratch": "bfloat16", "logits_to_probability_entropy": "bfloat16 on the production path; Gumbel noise may be float32"
       },
-      "compute_fidelity": "unchanged from full-model bring-up (decision path HiFi4 fp32_dest_acc; MoE matmul existing fidelity). Compute fidelity was NOT swept in this stage — only expert weight dtype.",
+      "compute_fidelity": "unchanged from full-model bring-up. The HiFi4/fp32_dest_acc self-conditioning config applies only to the moderate-vocab full-softmax branch; the production 262144-vocab ordered chunk path and token_entropy use BF16 tensors. Compute fidelity was NOT swept in this stage — only expert weight dtype.",
       "dram_used_gib_per_chip": 13.268,
       "decision_agreement_vs_bf16_reference": {
         "committed_argmax_agreement": 1.0, "mean_per_step_argmax_agreement": 1.0,
@@ -55,8 +55,8 @@
         "experts": "bfloat8_b", "router": "bfloat16", "attention": "bfloat16",
         "shared_mlp": "bfloat16", "embedding": "bfloat16", "lm_head": "bfloat16",
         "kv_cache": "bfloat16", "activations_residual": "bfloat16", "ccl": "bfloat16",
-        "canvas_scratch": "bfloat16", "logits_to_probability_entropy": "float32",
-        "note": "ONLY the expert gate/up/down proj weights change; the decision path (router/logits/entropy/argmax/accept) stays bf16/fp32."
+        "canvas_scratch": "bfloat16", "logits_to_probability_entropy": "bfloat16 on the production path; Gumbel noise may be float32",
+        "note": "ONLY the expert gate/up/down projection weights change; all decision-path dtypes stay at their BF16-selected defaults."
       },
       "compute_fidelity": "unchanged (weight-dtype-only change).",
       "dram_used_gib_per_chip": 7.830,

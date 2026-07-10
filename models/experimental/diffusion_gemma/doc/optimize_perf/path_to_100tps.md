@@ -3,11 +3,14 @@
 > **Roadmap, not current-state report.** The “Current landed state” and ranked
 > starting-line estimates below were written before OPT-004, batched commit,
 > traced denoise, BF8 rejection, early-halt implementation, and the 2026-07-09
-> L1-residency pass. Current shipping performance is ~18 t/s @48;
-> `DG_NORM_FULLCANVAS=1` reaches 20.68 t/s but remains opt-in, and
+> L1-residency pass. Current selected-default RUN-first argmax performance is
+> 18.844 t/s @48 (`selfcond_logits_l1_e2e.json`);
+> `DG_NORM_FULLCANVAS=1` reached 20.68 t/s but failed its decision-fidelity
+> flip gate and is ineligible as the precision-preserving default, and
 > `DG_MOE_L1` is a measured wash. Use this document for arithmetic and lever
-> provenance only. For current facts read `perf_campaign_worklog.md`,
-> `l1_residency.md`, `early_halt.md`, and `norm_fullcanvas_flip_gate.md`.
+> provenance only. For current facts read `selfcond_logits_l1.md`,
+> `selfcond_prechunk.md`, `perf_campaign_worklog.md`, `l1_residency.md`,
+> `early_halt.md`, and `norm_fullcanvas_flip_gate.md`.
 
 Rigorous projection of DiffusionGemma 26B-A4B-it decode throughput from the **current landed
 state** (true-sparse token-gather MoE, `tt/sparse_moe.py`) toward a **100 t/s** target on QB2

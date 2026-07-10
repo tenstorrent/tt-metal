@@ -5,7 +5,7 @@
   "hardware": "QB2 / bh-qbge-06 / P150x4",
   "mesh": {"shape": [1, 4], "tensor_parallel": 4, "data_parallel": 1},
   "selected_config_id": "cfg_bf16_experts",
-  "summary": "No reduced-precision reduction is adopted. The one candidate reduction evaluated (MoE experts bf16 -> bfloat8_b) FAILED the diffusion-decision-fidelity gate, so the shipping policy stays all-bf16 weights with the fp32 decision path. bf16 is selected on FIDELITY grounds (bfp8 fits DRAM comfortably and is ~8% faster).",
+  "summary": "No reduced-precision reduction is adopted. The one candidate reduction evaluated (MoE experts bf16 -> bfloat8_b) FAILED the diffusion-decision-fidelity gate, so the shipping policy keeps BF16 weights and the existing decision arithmetic. BF16 experts are selected on FIDELITY grounds (bfp8 fits DRAM comfortably and is ~8% faster).",
 
   "weight_groups": {
     "experts": {"dtype": "bfloat16", "evidence": "cache files layer_*/moe/experts/{gate,up,down}_proj_tp4_bf16_dtype_BFLOAT16_layout_TILE.tensorbin; post-build DRAM 13.268 GiB/chip", "bfp8_evaluated": true, "bfp8_verdict": "REJECTED — committed-argmax agreement 0.227, entropy PCC 0.631, accept IoU 0.501 vs bf16 reference"},
@@ -17,7 +17,7 @@
   },
   "layer_exceptions": "none — the sweep was model-uniform (all 30 layers same policy).",
   "compute_fidelities": {
-    "decision_path": "HiFi4, fp32_dest_acc_en=True (denoise_forward.default_self_conditioning_compute_kernel_config; entropy/gumbel fp32)",
+    "decision_path": "The production 262144-vocab self-conditioning online-chunk branch and token_entropy operate on BF16 logits/tensors. default_self_conditioning_compute_kernel_config (HiFi4, fp32_dest_acc_en=True) is accepted by the adapter but applies only to the moderate-vocab full-softmax branch; the production chunked branch does not forward it. Injected/device Gumbel noise may be float32, but that does not make logits or entropy accumulation float32.",
     "moe_matmul": "existing full-model fidelity (unchanged)",
     "note": "Compute fidelity was NOT swept in this stage — only expert weight dtype. LoFi/BFP4 matmul groups were not explored because the bf16->bfp8 weight reduction already fails the fidelity gate."
   },
@@ -25,7 +25,7 @@
   "ccl_dtype": "bfloat16 (backbone TP=4 all-reduce/all-gather via gemma4 CCL; sparse-MoE dispatch scratch bf16, cumsum fp32)",
   "kv_cache_dtype": "bfloat16 (models/demos/gemma4/tt/model.py cache_dtype=ttnn.bfloat16) — NOT swept (capacity unchanged)",
   "canvas_scratch_dtype": "bfloat16 (per-step recomputed canvas K/V) — NOT swept (capacity unchanged)",
-  "logits_to_probability_entropy_dtype": "float32 (tt/sampling.py token_entropy, gumbel_max, sample_gumbel_noise all fp32) — high-sensitivity decision path, kept fp32, explicitly validated as unchanged by the knob",
+  "logits_to_probability_entropy_dtype": "BF16 logits and token_entropy intermediates on the selected production path; sample_gumbel_noise defaults to float32 when stochastic Gumbel sampling is requested. This stage did not change these dtypes.",
 
   "capacity_impact": {
     "kv_cache_or_canvas_scratch_changed": false,

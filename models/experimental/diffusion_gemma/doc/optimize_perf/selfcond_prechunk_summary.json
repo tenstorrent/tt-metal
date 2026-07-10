@@ -1,0 +1,108 @@
+{
+  "date": "2026-07-09",
+  "target": "DiffusionGemma 26B-A4B-it",
+  "hardware": "QB2 P150x4 TP=4",
+  "candidate": "persistent 8192-row self-conditioning embedding chunks",
+  "default_enabled": true,
+  "diagnostic_opt_out": "DG_SELFCOND_PRECHUNK_EMBED=0",
+  "precision": "BF16 unchanged",
+  "component_ms": {
+    "monolithic_soft_embedding": 25.863,
+    "prechunked_soft_embedding": 18.210,
+    "monolithic_two_layer_step": 82.334,
+    "prechunked_two_layer_step": 73.575
+  },
+  "traced_e2e": {
+    "trace_region_size_bytes": 10737418240,
+    "initial_candidate_ab": {
+      "48_steps": {
+        "monolithic_block_s": 13.9946,
+        "prechunked_block_s": 13.6555,
+        "monolithic_tokens_per_s": 18.293,
+        "prechunked_tokens_per_s": 18.747,
+        "speedup_percent": 2.48,
+        "committed_sha_before": "a9f0d18709b07d1e",
+        "committed_sha_after": "a9f0d18709b07d1e"
+      },
+      "12_steps": {
+        "monolithic_block_s": 4.3943,
+        "prechunked_block_s": 4.3401,
+        "monolithic_tokens_per_s": 58.258,
+        "prechunked_tokens_per_s": 58.984,
+        "speedup_percent": 1.25,
+        "committed_sha_before": "24393ba7aad6077c",
+        "committed_sha_after": "24393ba7aad6077c"
+      },
+      "derived_step_ms_before": 266.675,
+      "derived_step_ms_after": 258.761,
+      "derived_step_saving_ms": 7.914
+    },
+    "final_exact_provenance": {
+      "control_48": {
+        "block_s": 14.0971,
+        "tokens_per_s": 18.160,
+        "ttft_s": 127.227,
+        "full_generation_s": 155.4222
+      },
+      "explicit_candidate_48": {
+        "block_s": 13.6996,
+        "tokens_per_s": 18.687,
+        "ttft_s": 125.763,
+        "full_generation_s": 153.1637
+      },
+      "unset_default_48": {
+        "resolved_selfcond_prechunk": true,
+        "block_s": 13.6817,
+        "tokens_per_s": 18.711,
+        "tokens_per_s_speedup_percent": 3.034,
+        "ttft_s": 125.977,
+        "full_generation_s": 153.3410,
+        "full_generation_speedup_percent": 1.357,
+        "committed_sha": "a9f0d18709b07d1e"
+      },
+      "control_12": {
+        "block_s": 4.4479,
+        "tokens_per_s": 57.555
+      },
+      "unset_default_12": {
+        "block_s": 4.3710,
+        "tokens_per_s": 58.568,
+        "committed_sha": "24393ba7aad6077c"
+      },
+      "derived_step_ms_before": 268.033,
+      "derived_step_ms_after": 258.631,
+      "derived_step_saving_ms": 9.403,
+      "artifact": "selfcond_prechunk_e2e.json"
+    }
+  },
+  "correctness": {
+    "unit_tests": "40 passed",
+    "committed_output_identity": true,
+    "exact_48_step_decisions": "48/48 exact for clean argmax, sampled ids, entropy, accept mask, renoised canvas, and the explicit clean commit candidate in both RUN-first argmax and production chunked-Gumbel modes; see selfcond_prechunk_decisions.json and selfcond_prechunk_gumbel_decisions.json",
+    "math_order_changed": false,
+    "qualitative": "three prompt-correct control/default prompts bit-identical in both traced RUN-first argmax and eager production chunked-Gumbel modes; complete anomaly accounting is in selfcond_prechunk_qualitative.json and selfcond_prechunk_gumbel_qualitative.json",
+    "watcher": "clean traced 4-step smoke; non-aligned prompt length 24; four attach and four detach records; see selfcond_prechunk_watcher_summary.json",
+    "batch_no_shared_edits_gate": "passed vs 0472860c40c"
+  },
+  "persistent_allocation": {
+    "embedding_payload_bytes_per_chip_before": 1476395008,
+    "embedding_payload_bytes_per_chip_after": 1476395008,
+    "allocation_count_delta": 31,
+    "full_depth_256k_eager_chunked_gumbel": {
+      "result": "DG_VLLM_SERVING_SMOKE_SUCCESS",
+      "max_denoising_steps": 48,
+      "gumbel_mode": "chunked",
+      "post_build_dram_gib_per_chip": 29.704,
+      "post_block_dram_gib_per_chip": 31.134,
+      "free_after_block_gib_per_chip": 0.733,
+      "artifact": "selfcond_prechunk_256k_chunked.json"
+    }
+  },
+  "limitations": [
+    "dynamic logits slices and the 32 online-softmax matmuls remain",
+    "ENABLE_TRACY=OFF; component attribution uses synchronized timings",
+    "model-load allocation count increases by 31 while weight payload bytes stay constant",
+    "full-depth traced 256K is blocked by the combined trace-region and 128 MiB token-entropy temporary live set; eager production chunked-Gumbel 256K capability passes at the full 48-step budget",
+    "traced_denoise.py explicitly supports gumbel_noise=None only and rejects real Gumbel tensors/descriptors; therefore traced rankings are labeled RUN-first argmax and no traced production-Gumbel throughput is claimed"
+  ]
+}

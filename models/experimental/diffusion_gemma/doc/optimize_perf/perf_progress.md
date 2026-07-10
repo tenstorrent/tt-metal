@@ -1,5 +1,13 @@
 # DiffusionGemma decode-throughput optimization — running progress
 
+> **Historical running log.** Session-local “current”, “headline”, and
+> “model-faithful” labels below describe the state at that point in the
+> campaign; they are not the selected result at HEAD. The current
+> unset-default reproduction is the self-conditioning logits-L1 result in
+> `selfcond_logits_l1_e2e.json`: 13.5849 s steady block, 18.844 tokens/block/s,
+> and 153.9791 s full generation (including first-block trace capture) for the
+> canonical 48-step, 3-block traced RUN-first argmax workload.
+
 QB2 (`bh-qbge-06`, P150x4, mesh `(1,4)`, TP=4), branch `diffusion-gemma-function`, `build_Release`.
 Optimization unit = **denoise step over the 256-token canvas** (≤48 steps/block) + **commit**.
 Goal: raise decode throughput from ~1.3–2.3 t/s toward 30 t/s. One verified lever at a time.
@@ -1050,3 +1058,35 @@ the sweep was stopped after the decisive `gate_up` result to free the device.
 **Consequence:** the `@48 = 17.92 t/s` headline already runs `DG_SPARSE_MOE_TUNED=1`, and the matmul
 geometry inside it is optimal. The task's expected "@48 18 → low-20s from matmul geometry" is **not
 available** — the OPT-004 work that would have delivered it is already landed and in the 17.92 number.
+
+## Current selected default (2026-07-10) — self-conditioning logits L1 chain
+
+The historical sessions above are superseded by two precision-preserving self-conditioning
+storage/placement batches. Persistent embedding prechunks removed 32 static weight slices. The
+latest batch retains each dynamic 8K logits slice, its `subtract -> exp`, denominator reduction,
+and ordered denominator accumulator in L1 while leaving all 32 BF16 matmuls, ordered numerator
+accumulation, and the final divide unchanged in DRAM.
+
+- synchronized soft embedding: **18.213 -> 16.038 ms (-11.94%)**;
+- independent-process @48 medians: **13.6161 -> 13.5111 s (-0.77%)** and
+  **18.801 -> 18.9475 t/s (+0.78%)**;
+- required final review-followup selector-unset reproduction: **13.5849 s / 18.844 t/s @48**,
+  **4.3122 s / 59.366 t/s @12**, **257.575 ms/warmed traced step**;
+- prior selected default comparison: **+0.71% @48**; complete three-block generation regressed
+  **153.3410 -> 153.9791 s (+0.42%)**, so no full-generation win is claimed;
+- exact 48/48 diffusion decisions across six fields plus final commit under both RUN-first argmax
+  and production chunked-Gumbel;
+- full-depth 30L / 48-step / 256K production-Gumbel capability and separate watcher gates pass;
+  proportional unit tests **41/41**.
+
+The evidence also retains contrary variance: a chain run in the second session of one same-model
+process regressed, one standalone @12 explicit-candidate sample regressed, and an intervening
+8K/default control measured 18.779 t/s. Stage-review follow-up also rejected explicit output-memory
+arguments at 18.771 t/s. The final default is reported at the fresh reviewed 18.844 t/s rather than
+the faster earlier 18.946/18.967 t/s samples. See `selfcond_logits_l1.md` and
+`selfcond_logits_l1_e2e.json`.
+
+One subsequent candidate increased the self-conditioning vocab grouping from 8K to 32K. It was a
+real warmed speed win (**18.779 -> 18.957 t/s, +0.95%**) but changed the canonical clean-commit
+digest (`a9f0d18709b07d1e -> f224bc72c06ce5a0`). The selector was removed; see
+`selfcond_vocab_chunk_rejection.md`.

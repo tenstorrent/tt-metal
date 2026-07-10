@@ -1,0 +1,52 @@
+{
+  "date": "2026-07-10",
+  "gate": "separate watcher smoke for self-conditioning prechunk traced canvas feedback",
+  "raw_log": {
+    "workspace_path": "generated/watcher/watcher.log",
+    "bytes": 5295465,
+    "lines": 73087,
+    "sha256": "25a5a17fd87d7e84bf7f2ac2f12f9a2e70dbd427c520b578e8f947e23ae1a051"
+  },
+  "metrics_artifact": {
+    "path": "selfcond_prechunk_watcher.json",
+    "sha256": "616488405fbad0142d86b1b6bdf2a10546f4550b43f1846d776569b30e3fe59e"
+  },
+  "environment": {
+    "TT_METAL_WATCHER": "10",
+    "TT_METAL_WATCHER_APPEND": "0",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1",
+    "DG_DENOISE_TRACED": "1",
+    "DG_TRACE_REGION_SIZE": "1073741824",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>"
+  },
+  "workload": {
+    "mesh": "P150x4",
+    "mesh_shape": [1, 4],
+    "tensor_parallel": 4,
+    "num_layers": 2,
+    "max_seq_len": 1024,
+    "prompt_len": 24,
+    "prompt_aligned_256": false,
+    "canvas_length": 256,
+    "max_denoising_steps": 4,
+    "gumbel_mode": "argmax",
+    "resolved_selfcond_prechunk": true
+  },
+  "watcher_attach_records": [
+    "At 24.895s attach device 0",
+    "At 24.895s attach device 1",
+    "At 24.895s attach device 2",
+    "At 24.895s attach device 3"
+  ],
+  "watcher_detach_records": [
+    "At 10.367s detach device 0",
+    "At 10.367s detach device 1",
+    "At 10.367s detach device 2",
+    "At 10.367s detach device 3"
+  ],
+  "error_scan_regex": "ERROR|ASSERT|NOC.*(fail|error)|UNREACHABLE|Watchdog|exception",
+  "error_scan_matches": 0,
+  "process_result": "exit 0; DG_VLLM_SERVING_SMOKE_SUCCESS; 256 tokens emitted; final_next_pos=288",
+  "post_run_device_list": "tt-smi -ls --local exited 0 and listed released UMD chips 0, 1, 2, and 3",
+  "verdict": "PASS"
+}

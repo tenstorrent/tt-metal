@@ -1,0 +1,41 @@
+{
+  "model": "google/diffusiongemma-26B-A4B-it",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "checkpoint_config_sha256": "13b11d2fe87302cc2332c64eb9eb4ac305d9b8a123ffe9c5cb5b1920fc70c506",
+  "mesh": "P150x4",
+  "mesh_shape": [
+    1,
+    4
+  ],
+  "num_layers": 2,
+  "max_seq_len": 1024,
+  "seed": 0,
+  "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+  "resolved_selfcond_prechunk": true,
+  "DG_DENOISE_TRACED": "1",
+  "DG_TRACE_REGION_SIZE": "1073741824",
+  "TT_METAL_WATCHER": "10",
+  "prompt_len": 24,
+  "prompt_aligned_256": false,
+  "cache_len": 32,
+  "canvas_length": 256,
+  "max_denoising_steps": 4,
+  "gumbel_mode": "argmax",
+  "blocks_emitted": 1,
+  "tokens_emitted": 256,
+  "ttft_s": 3.951049030001741,
+  "per_block_latency_s": [
+    2.778963187000045
+  ],
+  "mean_block_latency_s": 2.778963187000045,
+  "tokens_per_block_per_s": 92.12068774338746,
+  "denoise_steps_per_block": [
+    4
+  ],
+  "halted_per_block": [
+    false
+  ],
+  "final_next_pos": 288,
+  "text_chars": 2140,
+  "text": "[multimodal]<unused8><unused5><unused8><unused8><unused11><unused8><unused8><unused5><unused5><unused8><unused11><unused8><unused8><unused11><unused8><unused8><unused8><unused11><unused8><unused11><unused11><unused8><unused8><unused8><unused8><unused11><unused11><unused11><unused8><unused8><unused5><unused5><unused5><unused8><unused15><unused8><unused5><unused5><unused8><unused10><unused10><unused5><unused11><unused18><unused8><unused5><unused11><unused10><unused11><unused11><unused11><unused11><unused5><unused11><unused11><unused8><unused10><unused1><unused23><unused10><unused10><unused8><unused8><unused15><unused8><unused12><unused10><unused13><unused10><unused10><unused10><unused8><unused8><unused12><unused11><unused10><unused8><unused8><unused8><unused8><unused8><unused15><unused8><unused18><unused11><unused23><unused11><unused13><unused10><unused18><unused11><unused8><unused8><unused8><unused10><unused8><unused8><unused10><unused5><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused1><unused1><unused8><unused10><unused1><unused8><unused1><unused8><unused5><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused1><unused8><unused10><unused8><unused8><unused8><unused10><unused8><unused5><unused8><unused10><unused10><unused8><unused10><unused15><unused8><unused8><unused8><unused8><unused11><unused5><unused1><unused5><unused8><unused30><unused8><unused11><unused8><unused10><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused1><unused1><unused8><unused8><unused8><unused8><unused1><unused8><unused8><unused8><unused8><unused8><unused1><unused8><unused8><unused8><unused1><unused1><unused8><unused1><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8><unused8>"
+}

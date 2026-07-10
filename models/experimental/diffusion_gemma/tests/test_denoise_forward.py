@@ -3,7 +3,6 @@
 
 from types import SimpleNamespace
 
-import pytest
 
 from models.experimental.diffusion_gemma.tt import denoise_forward as DF
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
@@ -201,10 +200,10 @@ def test_denoise_attn_mask_builder_can_materialize_long_prompt_sliding_mask_for_
     ]
 
 
-def test_denoise_attn_mask_builder_rejects_missing_sliding_window():
+def test_denoise_attn_mask_builder_rejects_missing_sliding_window(expect_error):
     model = _FakeModel(num_layers=1, layer_types=["sliding_attention"], sliding_window=None)
 
-    with pytest.raises(ValueError, match="requires a positive sliding_window"):
+    with expect_error(ValueError, match="requires a positive sliding_window"):
         _build_denoise_attn_mask_for_layer(
             model,
             0,
@@ -282,7 +281,10 @@ def test_denoise_hidden_forward_reads_and_deallocates_lazy_prompt_sources(monkey
         calls.append(("read", layer_idx))
         return prompt_sources[layer_idx]
 
-    def fake_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
+    def fake_layer_forward(
+        tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, *, canvas_rope_provider=None
+    ):
+        assert canvas_rope_provider is None
         calls.append(("layer", layer_idx, prompt_source, q_rope_offset))
         return layer_hiddens[layer_idx]
 
@@ -316,13 +318,16 @@ def test_denoise_hidden_forward_deallocates_final_norm_input(monkeypatch):
     model = _FakeModel(num_layers=1)
     model.norm = SimpleNamespace()
 
-    def fake_layer_forward(tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset):
+    def fake_layer_forward(
+        tt_model, layer_idx, hidden_states, prompt_source, attn_mask, q_rope_offset, *, canvas_rope_provider=None
+    ):
         assert tt_model is model
         assert layer_idx == 0
         assert hidden_states is canvas
         assert prompt_source is prompt
         assert attn_mask is None
         assert q_rope_offset == 32
+        assert canvas_rope_provider is None
         return layer_hidden
 
     def fake_chunked_norm(norm, hidden_states):
@@ -449,8 +454,8 @@ def test_denoise_logits_adapter_reports_retained_logits_ownership():
     assert not adapter.owns_logits("other")
 
 
-def test_embed_canvas_tokens_rejects_batch_greater_than_one():
-    with pytest.raises(ValueError, match="batch=1"):
+def test_embed_canvas_tokens_rejects_batch_greater_than_one(expect_error):
+    with expect_error(ValueError, match="batch=1"):
         embed_canvas_tokens(object(), _FakeTensor([2, 256]))
 
 
@@ -503,11 +508,11 @@ def test_read_prompt_kv_cache_by_layer_reads_every_model_layer():
     assert calls == [("cache-0", 64, 32), ("cache-1", 64, 32), ("cache-2", 64, 32)]
 
 
-def test_read_prompt_kv_cache_by_layer_rejects_cache_layer_mismatch():
+def test_read_prompt_kv_cache_by_layer_rejects_cache_layer_mismatch(expect_error):
     model = _FakeModel(num_layers=2)
     model.tt_kv_cache = ["cache-0"]
 
-    with pytest.raises(ValueError, match="tt_kv_cache has 1 layers"):
+    with expect_error(ValueError, match="tt_kv_cache has 1 layers"):
         read_prompt_kv_cache_by_layer(model, prompt_len=64, read_fn=lambda *args, **kwargs: None)
 
 
@@ -679,8 +684,8 @@ def test_make_denoise_logits_adapter_from_remapped_state_uses_backbone_embedding
     )
 
 
-def test_make_denoise_logits_adapter_from_remapped_state_rejects_missing_embedding():
-    with pytest.raises(ValueError, match="missing tied embedding weight"):
+def test_make_denoise_logits_adapter_from_remapped_state_rejects_missing_embedding(expect_error):
+    with expect_error(ValueError, match="missing tied embedding weight"):
         make_denoise_logits_adapter_from_remapped_state(
             "model",
             prompt_len=64,

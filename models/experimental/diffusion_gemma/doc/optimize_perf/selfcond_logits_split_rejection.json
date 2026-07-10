@@ -1,0 +1,60 @@
+{
+  "candidate": "replace 32 sequential self-conditioning logits ttnn.slice calls with one ttnn.split",
+  "date_utc": "2026-07-10",
+  "status": "rejected_and_code_removed",
+  "precision_and_order": "BF16 arithmetic, matmul shapes, and ordered chunk reduction unchanged",
+  "component_gate": {
+    "harness": "prof_step_breakdown.py --num-layers 2 --iters 5",
+    "control": {
+      "DG_SELFCOND_SPLIT_LOGITS": "0",
+      "soft_embedding_ms": 18.212908200075617,
+      "full_step_ms": 73.52447480006958
+    },
+    "candidate": {
+      "DG_SELFCOND_SPLIT_LOGITS": "1",
+      "soft_embedding_ms": 18.211636200430803,
+      "full_step_ms": 73.90670980021241
+    },
+    "soft_embedding_delta_percent": -0.006985213925131282,
+    "verdict": "no measurable component improvement"
+  },
+  "canonical_traced_at48": {
+    "harness": "bench_lever_e2e.py --levers baseline --budgets 48 --blocks 3",
+    "trace_region_size_bytes": 10737418240,
+    "resolved_selfcond_prechunk": true,
+    "control": {
+      "DG_SELFCOND_SPLIT_LOGITS": "0",
+      "prefill_s": 1.0927,
+      "per_block_latency_s": [
+        123.8355,
+        13.6336,
+        13.6232
+      ],
+      "steady_block_latency_s": 13.6284,
+      "tokens_per_block_per_s": 18.784,
+      "full_generation_s": 152.1866,
+      "committed_sha": "a9f0d18709b07d1e"
+    },
+    "candidate": {
+      "DG_SELFCOND_SPLIT_LOGITS": "1",
+      "prefill_s": 1.1058,
+      "per_block_latency_s": [
+        123.0523,
+        13.6363,
+        13.6527
+      ],
+      "steady_block_latency_s": 13.6445,
+      "tokens_per_block_per_s": 18.762,
+      "full_generation_s": 151.4487,
+      "committed_sha": "a9f0d18709b07d1e"
+    },
+    "steady_block_latency_delta_percent": 0.11813565526211232,
+    "throughput_delta_percent": -0.11712095400341035,
+    "interpretation": "Warmed throughput regressed while the targeted component was unchanged. The lower candidate full-generation total came from variable first-block trace capture, not warmed execution."
+  },
+  "decision": "Do not add or enable DG_SELFCOND_SPLIT_LOGITS. Keep sequential logits slices.",
+  "limitations": [
+    "The trace harness uses RUN-first argmax because traced_denoise.py rejects real Gumbel noise.",
+    "The candidate was removed after measurement, so no separate diffusion-decision campaign was needed beyond the identical three-block commit digest."
+  ]
+}

@@ -1,5 +1,14 @@
 {
   "stage": "dg-08-optimize-perf (#47465)",
+  "evidence_status": "historical early dg-08 snapshot; retained for topology provenance, not selected-current performance",
+  "selected_current_evidence": "selfcond_logits_l1_e2e.json",
+  "selected_current": {
+    "steady_block_s_at48": 13.5849,
+    "tokens_per_block_per_s_at48": 18.844,
+    "derived_warmed_traced_step_ms": 257.575,
+    "full_generation_three_blocks_s": 153.9791,
+    "sampling_scope": "traced RUN-first argmax ranking; production chunked-Gumbel decisions and 256K capacity pass separately"
+  },
   "device": "QB2 / bh-qbge-06 / P150x4, mesh [1,4], TP=4, fabric FABRIC_1D",
   "baseline_sha": "aff8f2105d3",
   "workload": {
@@ -12,7 +21,7 @@
     "mesh": [1, 4],
     "tensor_parallel": 4
   },
-  "precision_preserved": "bf16 weights/activations/KV; fp32 accumulation for self-conditioning softmax and entropy",
+  "precision_preserved": "BF16 weights/activations/KV and the established BF16 ordered online-chunk self-conditioning and terminal-entropy arithmetic",
   "diffusion_decisions_preserved": "temperature 0.8->0.4, Gumbel-max, entropy-budget accept (sort/cumsum/scatter), random-token renoise, commit = clean argmax",
 
   "ttft_ms_reduced_layer": {"L1": 74.7, "L2": 92.6, "L4": 384.8, "note": "reduced-layer prefill of a 32-token prompt; scales ~linearly with layers"},

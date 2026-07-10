@@ -1,5 +1,7 @@
 {
   "stage": "dg-08 L1-residency pass (#47465)",
+  "evidence_status": "historical candidate study; not selected-current evidence",
+  "selected_current_evidence": "selfcond_logits_l1_e2e.json",
   "workload": {
     "profile": "block_diffusion_denoise_step",
     "prompt": "Explain what a diffusion language model is in one sentence.",
@@ -47,6 +49,6 @@
     "watcher-clean verified with TT_METAL_WATCHER_DISABLE_ETH=1 (ACTIVE_ETH kernel-config-buffer overflow is a known watcher+fabric limitation, not a norm-change defect)",
     "HIGH-4 not bit-identical to the chunked path (bf16 sharded-norm block_h reduction-order); coherent output, per-norm PCC 0.999998; lands opt-in until decision-fidelity vs HF is validated",
     "MoE expert matmul is weight-bound at ~92% of the 256 GB/s roofline (immovable in-repo); terminal argmax/entropy over 262144 vocab blocked by the 18-bit-index fp32-reduction wall (out-of-gate)",
-    "model-faithful @48 baseline 17.86-18.13 t/s; HIGH-4 lifts the model-faithful @48 to 20.68 t/s if flipped on"
+    "historical traced RUN-first argmax @48 baseline 17.86-18.13 t/s; HIGH-4 reached 20.68 t/s but is ineligible for the selected default because its decision-fidelity flip gate failed"
   ]
 }

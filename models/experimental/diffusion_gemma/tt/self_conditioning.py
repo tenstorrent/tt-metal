@@ -24,9 +24,29 @@ as part of the mesh denoise logits wrapper in ``tests/test_device_bidirectional_
 
 from __future__ import annotations
 
+import os
+from typing import NamedTuple
+
 import ttnn
 
 from models.experimental.diffusion_gemma.weight_mapping import expected_self_conditioning_shapes
+
+
+class ChunkedEmbeddingWeight(NamedTuple):
+    chunks: tuple
+    shape: tuple
+    chunk_size: int
+
+
+def self_conditioning_embedding_prechunk_enabled() -> bool:
+    return os.getenv("DG_SELFCOND_PRECHUNK_EMBED", "1") != "0"
+
+
+def self_conditioning_logits_l1_mode() -> str:
+    mode = os.getenv("DG_SELFCOND_LOGITS_L1", "chain").lower()
+    if mode not in {"off", "chain"}:
+        raise ValueError("DG_SELFCOND_LOGITS_L1 must be one of: off, chain")
+    return mode
 
 
 def _config_value(config, name: str):
@@ -92,13 +112,30 @@ def build_self_conditioning_embedding_weight(
         raise ValueError("embedding_weight must have shape [vocab, hidden]")
     if hidden_size is not None and embedding_weight.shape[-1] != hidden_size:
         raise ValueError(f"embedding hidden size {embedding_weight.shape[-1]} does not match expected {hidden_size}")
-    return tensor_fn(
-        embedding_weight.unsqueeze(0).unsqueeze(0),
-        device=device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    tensor_kwargs = {
+        "device": device,
+        "dtype": dtype,
+        "layout": ttnn.TILE_LAYOUT,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+    }
+    if self_conditioning_embedding_prechunk_enabled():
+        chunk_size = 8192
+        chunks = tuple(
+            tensor_fn(
+                embedding_weight[start : min(start + chunk_size, embedding_weight.shape[0])]
+                .unsqueeze(0)
+                .unsqueeze(0)
+                .contiguous(),
+                **tensor_kwargs,
+            )
+            for start in range(0, embedding_weight.shape[0], chunk_size)
+        )
+        return ChunkedEmbeddingWeight(
+            chunks=chunks,
+            shape=(1, 1, embedding_weight.shape[0], embedding_weight.shape[1]),
+            chunk_size=chunk_size,
+        )
+    return tensor_fn(embedding_weight.unsqueeze(0).unsqueeze(0), **tensor_kwargs)
 
 
 def _dram_for_rms_norm(tensor):
@@ -276,13 +313,14 @@ class TtSelfConditioning:
 
         ``prev_logits_tt`` ``[1,1,L,vocab]`` (TILE), ``embedding_weight_tt`` the tied
         table ``[1,1,vocab,hidden]`` (TILE). Returns the signal ``[1,1,L,hidden]``.
-        For the production vocab (262144) drive ``softmax`` with an fp32
-        ``compute_kernel_config`` (bf16 over a 262k-wide reduction is lossy — see the
-        bfp8 entropy drift); a moderate vocab is fine in bf16.
+        ``compute_kernel_config`` applies to the moderate-vocabulary full-softmax
+        branch. The production 262144-vocabulary path uses the ordered online
+        chunk reduction below and retains its established BF16 arithmetic; it
+        does not forward that full-softmax kernel configuration.
         """
         vocab_size = prev_logits_tt.shape[-1]
         vocab_chunk_size = 8192
-        if vocab_size > vocab_chunk_size:
+        if isinstance(embedding_weight_tt, ChunkedEmbeddingWeight) or vocab_size > vocab_chunk_size:
             return self._soft_embedding_chunked(
                 prev_logits_tt,
                 embedding_weight_tt,
@@ -312,29 +350,48 @@ class TtSelfConditioning:
         numerator = None
         denominator = None
         vocab_size = prev_logits_tt.shape[-1]
+        embedding_chunks = None
+        if isinstance(embedding_weight_tt, ChunkedEmbeddingWeight):
+            embedding_chunks = embedding_weight_tt.chunks
+            vocab_chunk_size = embedding_weight_tt.chunk_size
         hidden_size = embedding_weight_tt.shape[-1]
+        logits_l1_mode = self_conditioning_logits_l1_mode()
         for start in range(0, vocab_size, vocab_chunk_size):
             end = min(start + vocab_chunk_size, vocab_size)
             logits_chunk = ttnn.slice(
                 prev_logits_tt,
                 [0, 0, 0, start],
                 [prev_logits_tt.shape[0], prev_logits_tt.shape[1], prev_logits_tt.shape[2], end],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if logits_l1_mode == "off" else ttnn.L1_MEMORY_CONFIG,
             )
-            shifted = ttnn.subtract(logits_chunk, logits_max)
+            if logits_l1_mode == "chain":
+                shifted = ttnn.subtract(logits_chunk, logits_max, memory_config=ttnn.L1_MEMORY_CONFIG)
+            else:
+                shifted = ttnn.subtract(logits_chunk, logits_max)
             logits_chunk.deallocate(True)
-            exp_chunk = ttnn.exp(shifted)
+            if logits_l1_mode == "chain":
+                exp_chunk = ttnn.exp(shifted, memory_config=ttnn.L1_MEMORY_CONFIG)
+            else:
+                exp_chunk = ttnn.exp(shifted)
             shifted.deallocate(True)
+            # TTNN reductions and binary ops inherit the first input's memory
+            # config. In chain mode this intentionally carries the denominator
+            # reduction/accumulator through L1 without changing operation order;
+            # the DRAM matmul keeps the numerator and final divide in DRAM.
             denom_chunk = ttnn.sum(exp_chunk, dim=-1, keepdim=True)
-            embed_chunk = ttnn.slice(
-                embedding_weight_tt,
-                [0, 0, start, 0],
-                [embedding_weight_tt.shape[0], embedding_weight_tt.shape[1], end, hidden_size],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            if embedding_chunks is None:
+                embed_chunk = ttnn.slice(
+                    embedding_weight_tt,
+                    [0, 0, start, 0],
+                    [embedding_weight_tt.shape[0], embedding_weight_tt.shape[1], end, hidden_size],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                embed_chunk = embedding_chunks[start // vocab_chunk_size]
             numer_chunk = ttnn.matmul(exp_chunk, embed_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             exp_chunk.deallocate(True)
-            embed_chunk.deallocate(True)
+            if embedding_chunks is None:
+                embed_chunk.deallocate(True)
             if numerator is None:
                 numerator = numer_chunk
                 denominator = denom_chunk

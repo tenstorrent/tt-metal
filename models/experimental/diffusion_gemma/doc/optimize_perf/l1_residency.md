@@ -1,5 +1,11 @@
 # DiffusionGemma — L1-residency pass on the denoise hot path (dg-08, #47465)
 
+> **Historical candidate study, not a selected-current result.**
+> `DG_NORM_FULLCANVAS` changed diffusion decisions and failed its flip gate, so
+> its 20.68 t/s number is ineligible for the precision-preserving default.
+> `DG_MOE_L1` was a wash. Current selected-default evidence is
+> `selfcond_logits_l1_e2e.json`.
+
 **Objective:** raise output tok/s by keeping the denoise-step activation/residual/norm/attention
 intermediates **L1-resident** across op boundaries instead of round-tripping DRAM, spilling to DRAM
 only when a tensor cannot fit. DiffusionGemma-local only; zero `models/demos/gemma4/` edits.
@@ -16,7 +22,7 @@ steady-state tok/s), not just isolated-op timing.
 
 | lever | flag | isolated micro | **traced e2e @48** | landed |
 |---|---|---|---|---|
-| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, PCC 0.999998 | **17.86 → 20.68 t/s (+15.8%)** | **opt-in (default off); flip gate FAILED → stays opt-in** (see `norm_fullcanvas_flip_gate.md`) |
+| **HIGH-4 full-canvas RMSNorm** | `DG_NORM_FULLCANVAS` | **9.8× / norm**, PCC 0.999998 | **17.86 → 20.68 t/s (+15.8%)** | **flip gate FAILED; ineligible for decision-preserving default** (see `norm_fullcanvas_flip_gate.md`) |
 | HIGH-1 gather + HIGH-2 down L1 | `DG_MOE_L1` | MoE fwd −3.2% (gather −57%), bit-identical | 18.13→18.02 (−0.6%), 53.2→53.4 @12 (wash) | opt-in, default off |
 | MED-5 gate/up L1 | `DG_MOE_L1=chain` | `batched_experts` flat | no-op by construction | no |
 | HIGH-3 residual-stream L1 | — | coupled (every consumer takes DRAM) | not measured standalone | no |
@@ -26,7 +32,7 @@ steady-state tok/s), not just isolated-op timing.
 **Headline finding:** the objective's premise (DRAM round-trips are reclaimable headroom) is
 **correct — but the reclaimable round-trips are the chunked-RMSNorm slice/concat glue, NOT the MoE
 matmul activation round-trips.** Collapsing the 8×(32-row slice → norm → DRAM-concat) RMSNorm to one
-256-row width-sharded norm lifts the model-faithful @48 step from **17.86 → 20.68 t/s (+15.8%)** and
+256-row width-sharded norm lifted that historical @48 candidate from **17.86 → 20.68 t/s (+15.8%)** and
 @12 from **49.8 → 61.5 t/s (+23.3%)**. The MoE gather/down L1 levers, by contrast, are a measured
 **wash** because their DRAM writes already overlap adjacent compute under trace. Both were only
 distinguishable **on device**.
@@ -43,14 +49,14 @@ trace capture/replay works. Harnesses (all under `doc/optimize_perf/`):
 - `bench_moe_l1_e2e.py`, `bench_lever_e2e.py` — traced 30L steady-state tok/s per lever, with
   `committed_sha` (bit-for-bit output identity check) and coherence text head.
 
-## Baselines reproduced (traced, model-faithful, 3-block steady, seed 0)
+## Historical baselines reproduced (traced RUN-first argmax, 3-block steady, seed 0)
 
 Baselines reproduce the campaign's established `committed_sha`, confirming the harness measures the
-true model-faithful path (run-to-run block latency varies ~1.5%; the norm win is far above that):
+same traced RUN-first argmax path (run-to-run block latency varies ~1.5%; the norm win is far above that):
 
 | budget | t/s | steady block s | committed_sha | matches |
 |---|---:|---:|---|---|
-| @48 (model-faithful) | 17.86–18.13 | 14.12–14.34 | `a9f0d18709b07d1e` | worklog `traced_tuned_s48` |
+| @48 | 17.86–18.13 | 14.12–14.34 | `a9f0d18709b07d1e` | worklog `traced_tuned_s48` |
 | @12 | 49.8–53.2 | 4.81–5.14 | `24393ba7aad6077c` | worklog `traced_tuned_s12` |
 
 ## HIGH-4 — full-canvas RMSNorm (`tt/denoise_forward.py`, `DG_NORM_FULLCANVAS`) — the win

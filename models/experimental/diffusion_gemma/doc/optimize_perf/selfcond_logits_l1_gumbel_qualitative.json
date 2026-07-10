@@ -1,0 +1,191 @@
+{
+  "date": "2026-07-10",
+  "gate": "self-conditioning logits L1 prompt-correct qualitative A/B",
+  "config": {
+    "model": "google/diffusiongemma-26B-A4B-it",
+    "checkpoint_config_sha256": "13b11d2fe87302cc2332c64eb9eb4ac305d9b8a123ffe9c5cb5b1920fc70c506",
+    "tokenizer_config_sha256": "a284d1243b62be31faa9c13e1c28cece940c4abaa7bd9ad87b94f61b40687200",
+    "tokenizer_class": "GemmaTokenizer",
+    "chat_template_present": true,
+    "prompt_mode": "chat",
+    "rendering_method": "tokenizer.apply_chat_template(add_generation_prompt=True)",
+    "prompt_source": "qualitative_prechunk.py::PROMPTS",
+    "gumbel_mode": "chunked",
+    "seed": 0,
+    "canvas_length": 256,
+    "max_denoise_steps": 16
+  },
+  "config_identity": {
+    "model": true,
+    "checkpoint_config_sha256": true,
+    "tokenizer_config_sha256": true,
+    "tokenizer_class": true,
+    "chat_template_present": true,
+    "prompt_mode": true,
+    "rendering_method": true,
+    "prompt_source": true,
+    "gumbel_mode": true,
+    "seed": true,
+    "canvas_length": true,
+    "max_denoise_steps": true
+  },
+  "control": {
+    "process_label": "dg_selfcond_l1_qualitative_control",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "resolved_selfcond_prechunk": true,
+    "DG_SELFCOND_LOGITS_L1": "off",
+    "resolved_selfcond_logits_l1": "off"
+  },
+  "candidate": {
+    "process_label": "dg_selfcond_l1_qualitative_candidate",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "resolved_selfcond_prechunk": true,
+    "DG_SELFCOND_LOGITS_L1": "chain",
+    "resolved_selfcond_logits_l1": "chain"
+  },
+  "prompts": [
+    {
+      "prompt_id": "greeting",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, how are you?"
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nHello, how are you?<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        9259,
+        236764,
+        1217,
+        659,
+        611,
+        236881,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "prompt_len": 19,
+      "input_exact": {
+        "prompt_id": true,
+        "messages": true,
+        "rendered_prompt": true,
+        "prompt_token_ids": true,
+        "prompt_len": true
+      },
+      "control_committed_sha": "b2f37af19faecf20",
+      "candidate_committed_sha": "b2f37af19faecf20",
+      "commit_exact": true,
+      "text_exact": true,
+      "generated_text": "你好！我                           , 1       �                                                                                     1                            2                                          10             100                      (  ( ()"
+    },
+    {
+      "prompt_id": "explain_diffusion",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain what a diffusion language model is in one sentence."
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nExplain what a diffusion language model is in one sentence.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        155122,
+        1144,
+        496,
+        16970,
+        5192,
+        2028,
+        563,
+        528,
+        886,
+        13315,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "prompt_len": 24,
+      "input_exact": {
+        "prompt_id": true,
+        "messages": true,
+        "rendered_prompt": true,
+        "prompt_token_ids": true,
+        "prompt_len": true
+      },
+      "control_committed_sha": "e12f4556267c918b",
+      "candidate_committed_sha": "e12f4556267c918b",
+      "commit_exact": true,
+      "text_exact": true,
+      "generated_text": " language model is a type of generative model that creates text by iteratively refining a sequence of random noise into a coherent sentence through a gradual diffusion process, rather than predicting words one at a time from left to right. (Wait,，,, the  a,.., .......,., the the...\n\nHere is the correct sentence  sentence\n\n me\n\n,,  the the sentence\n\n sentence\n\n**A diffusion language model is a type of generative model that creates text by iteratively refining a sequence of random noise into a coherent sentence through a gradual diffusion process, rather than predicting words one at a time from left to right.** (Wait,,', the in in the English.)\n\n**Correct,:**\n\n\n model model model is a model model model model model text text a a\n\n a a a  a, a \n a\n,   ..\n\n\n\n is,,\n  a\n model  model model    a a a   a  model. \n   noise 生成 a   \n\n\n \n\n\n\n\n\n 。 model\n\n ( model (   ( ( ( ( ( ( the).\n\n"
+    },
+    {
+      "prompt_id": "moon_phases",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write one concise sentence explaining why the Moon has phases."
+        }
+      ],
+      "rendered_prompt": "<bos><|turn>user\nWrite one concise sentence explaining why the Moon has phases.<turn|>\n<|turn>model\n<|channel>thought\n<channel|>",
+      "prompt_token_ids": [
+        2,
+        105,
+        2364,
+        107,
+        6974,
+        886,
+        63510,
+        13315,
+        26804,
+        3217,
+        506,
+        19656,
+        815,
+        19401,
+        236761,
+        106,
+        107,
+        105,
+        4368,
+        107,
+        100,
+        45518,
+        107,
+        101
+      ],
+      "prompt_len": 24,
+      "input_exact": {
+        "prompt_id": true,
+        "messages": true,
+        "rendered_prompt": true,
+        "prompt_token_ids": true,
+        "prompt_len": true
+      },
+      "control_committed_sha": "e0578d3bef313f68",
+      "candidate_committed_sha": "e0578d3bef313f68",
+      "commit_exact": true,
+      "text_exact": true,
+      "generated_text": "The Moon has phases because it orbits the Earth, changing the angle at which its sunlit half is visible to us. \n                🌑 🌑   🌑 🌑      � � � � �   �     �  \n�   ��� \n� �\n� � �� \n��\n\n�  \n� \n\n\n� \n\n��\n ◴\n�  �\n\n\n   \n�  \n\n\n  \n  \n\n    \n\n\n     \n\n   \n   \n \n.2.\nWait, ,,    \n      \n     , \n             \n \n \n\n\n \n\n\n\n \n\n\n\n\n    ( ( )\n"
+    }
+  ],
+  "verdict": "PASS"
+}

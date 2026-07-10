@@ -1,0 +1,194 @@
+{
+  "date": "2026-07-09",
+  "gate": "self-conditioning prechunk full-generation traced E2E",
+  "sampling_scope": "RUN-first argmax (gumbel_noise=None); traced_denoise.py rejects real Gumbel noise",
+  "production_sampler_evidence": {
+    "decision_gate": "selfcond_prechunk_gumbel_decisions.json",
+    "full_depth_256k": "selfcond_prechunk_256k_chunked.json",
+    "traced_throughput_claimed": false
+  },
+  "provenance": {
+    "model": "google/diffusiongemma-26B-A4B-it",
+    "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+    "checkpoint_config_sha256": "13b11d2fe87302cc2332c64eb9eb4ac305d9b8a123ffe9c5cb5b1920fc70c506",
+    "tokenizer_config_sha256": "a284d1243b62be31faa9c13e1c28cece940c4abaa7bd9ad87b94f61b40687200",
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel": 4,
+    "max_seq_len": 1024,
+    "canvas_length": 256,
+    "prompt": "Explain what a diffusion language model is in one sentence.",
+    "seed": 0,
+    "source_head": "0472860c40c3c100466cea407a506d7b4d1bb443",
+    "source_worktree_dirty": true,
+    "source_sha256": {
+      "models/experimental/diffusion_gemma/tt/self_conditioning.py": "e516f462b473be97d3a8d15d31aa2e91931a3bf89e65300e74a3bef234481e5c",
+      "models/experimental/diffusion_gemma/doc/optimize_perf/bench_lever_e2e.py": "017a757e79717a5c0f41c4437d9ae0935586dd631a6b4d418484a240fa030399",
+      "models/experimental/diffusion_gemma/doc/optimize_perf/summarize_selfcond_prechunk_e2e.py": "8b31dcdfb2437a63ee7cd4e69616003ef6e435d6519ccfe0da1446fcf7cbe74e"
+    },
+    "build_cache_sha256": "66b8c6c78549900aa8eed962ec1c56af53dd8961712adf6ced22cb8fd56ba532",
+    "enable_tracy": false,
+    "raw_process_rows": "embedded in this artifact; source labels identify the five serialized process outputs"
+  },
+  "base_env": {
+    "DG_SPARSE_MOE": "1",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_SPARSE_MOE_TUNED": "1",
+    "DG_DENOISE_TRACED": "1"
+  },
+  "control": {
+    "process_label": "selfcond_e2e_control",
+    "DG_SELFCOND_PRECHUNK_EMBED": "0",
+    "resolved_selfcond_prechunk": false,
+    "trace_region_size_bytes": 10737418240,
+    "steps": 48,
+    "blocks": 3,
+    "prefill_s": 1.3273,
+    "ttft_s": 127.227,
+    "per_block_latency_s": [
+      125.899,
+      14.1206,
+      14.0735
+    ],
+    "sum_block_latency_s": 154.0932,
+    "full_generation_s": 155.4222,
+    "steady_block_latency_s": 14.0971,
+    "tokens_per_block_per_s": 18.16,
+    "denoise_steps_per_block": [
+      48,
+      48,
+      48
+    ],
+    "committed_sha": "a9f0d18709b07d1e",
+    "text_head": "尼模型is a type of generative model that creates text by iteratively refining a sequence of random noise into coherent language through a denoising process, rather"
+  },
+  "candidate": {
+    "process_label": "selfcond_e2e_candidate",
+    "DG_SELFCOND_PRECHUNK_EMBED": "1",
+    "resolved_selfcond_prechunk": true,
+    "trace_region_size_bytes": 10737418240,
+    "steps": 48,
+    "blocks": 3,
+    "prefill_s": 1.316,
+    "ttft_s": 125.763,
+    "per_block_latency_s": [
+      124.4468,
+      13.7019,
+      13.6974
+    ],
+    "sum_block_latency_s": 151.8461,
+    "full_generation_s": 153.1637,
+    "steady_block_latency_s": 13.6996,
+    "tokens_per_block_per_s": 18.687,
+    "denoise_steps_per_block": [
+      48,
+      48,
+      48
+    ],
+    "committed_sha": "a9f0d18709b07d1e",
+    "text_head": "尼模型is a type of generative model that creates text by iteratively refining a sequence of random noise into coherent language through a denoising process, rather"
+  },
+  "final_default": {
+    "process_label": "selfcond_e2e_default",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "resolved_selfcond_prechunk": true,
+    "trace_region_size_bytes": 10737418240,
+    "steps": 48,
+    "blocks": 3,
+    "prefill_s": 1.112,
+    "ttft_s": 125.977,
+    "per_block_latency_s": [
+      124.864,
+      13.7052,
+      13.6582
+    ],
+    "sum_block_latency_s": 152.2274,
+    "full_generation_s": 153.341,
+    "steady_block_latency_s": 13.6817,
+    "tokens_per_block_per_s": 18.711,
+    "denoise_steps_per_block": [
+      48,
+      48,
+      48
+    ],
+    "committed_sha": "a9f0d18709b07d1e",
+    "text_head": "尼模型is a type of generative model that creates text by iteratively refining a sequence of random noise into coherent language through a denoising process, rather"
+  },
+  "candidate_speedup_vs_control_percent": {
+    "steady_block_latency_percent": 2.902,
+    "steady_tokens_per_s_percent": 2.902,
+    "ttft_percent": 1.164,
+    "full_generation_percent": 1.475
+  },
+  "final_default_speedup_vs_control_percent": {
+    "steady_block_latency_percent": 3.036,
+    "steady_tokens_per_s_percent": 3.034,
+    "ttft_percent": 0.992,
+    "full_generation_percent": 1.357
+  },
+  "committed_output_exact": true,
+  "verdict": "PASS",
+  "12_step_slope_points": {
+    "control": {
+      "process_label": "selfcond_e2e_control_12",
+      "DG_SELFCOND_PRECHUNK_EMBED": "0",
+      "resolved_selfcond_prechunk": false,
+      "trace_region_size_bytes": 10737418240,
+      "steps": 12,
+      "blocks": 3,
+      "prefill_s": 1.3382,
+      "ttft_s": 31.99,
+      "per_block_latency_s": [
+        30.6504,
+        4.4053,
+        4.4906
+      ],
+      "sum_block_latency_s": 39.5462,
+      "full_generation_s": 40.8863,
+      "steady_block_latency_s": 4.4479,
+      "tokens_per_block_per_s": 57.555,
+      "denoise_steps_per_block": [
+        12,
+        12,
+        12
+      ],
+      "committed_sha": "24393ba7aad6077c",
+      "text_head": " language model is a type of generative model that creates text by iteratively refining a sequence of random noise or tokens into a coherent sentence or paragra"
+    },
+    "final_default": {
+      "process_label": "selfcond_e2e_default_12",
+      "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+      "resolved_selfcond_prechunk": true,
+      "trace_region_size_bytes": 10737418240,
+      "steps": 12,
+      "blocks": 3,
+      "prefill_s": 1.124,
+      "ttft_s": 31.992,
+      "per_block_latency_s": [
+        30.8678,
+        4.4004,
+        4.3415
+      ],
+      "sum_block_latency_s": 39.6097,
+      "full_generation_s": 40.7351,
+      "steady_block_latency_s": 4.371,
+      "tokens_per_block_per_s": 58.568,
+      "denoise_steps_per_block": [
+        12,
+        12,
+        12
+      ],
+      "committed_sha": "24393ba7aad6077c",
+      "text_head": " language model is a type of generative model that creates text by iteratively refining a sequence of random noise or tokens into a coherent sentence or paragra"
+    }
+  },
+  "derived_warmed_traced_step": {
+    "control_ms": 268.033,
+    "final_default_ms": 258.631,
+    "saving_ms": 9.403,
+    "speedup_percent": 3.636
+  }
+}
