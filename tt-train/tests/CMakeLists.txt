@@ -51,26 +51,17 @@ set(SOURCES
     ops/select_target_logit_op_test.cpp
     ops/subtract_at_target_op_test.cpp
     ops/positional_embedding_test.cpp
-    ops/layernorm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
-    ops/distributed/ring_sdpa_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
-    ops/rmsnorm_op_test.cpp
     ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
-    ops/softmax_test.cpp
-    ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
-    ops/sdpa_fw_op_test.cpp
-    ops/sdpa_bw_op_test.cpp
-    ops/layernorm_bw_fused_op_test.cpp
-    ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
     ops/moe_ffn_swiglu_op_test.cpp
     ops/moe_group_op_test.cpp

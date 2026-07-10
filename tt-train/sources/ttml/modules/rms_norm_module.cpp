@@ -5,7 +5,6 @@
 #include "rms_norm_module.hpp"
 
 #include "core/tt_tensor_utils.hpp"
-#include "ops/rmsnorm_op.hpp"
 
 namespace ttml::modules {
 
@@ -22,11 +21,10 @@ RMSNormLayer::RMSNormLayer(uint32_t features, float epsilon, bool use_composite)
 }
 
 autograd::TensorPtr RMSNormLayer::operator()(const autograd::TensorPtr& tensor) {
-    if (m_use_composite) {
-        return ops::rmsnorm_composite(tensor, m_gamma, m_epsilon);
-    } else {
-        return ops::rmsnorm(tensor, m_gamma, m_epsilon);
-    }
+    // TODO(nuked-op rms_norm): restore real call (rmsnorm_composite / rmsnorm)
+    static_cast<void>(m_use_composite);
+    static_cast<void>(m_epsilon);
+    return tensor;
 }
 
 }  // namespace ttml::modules

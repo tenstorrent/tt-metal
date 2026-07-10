@@ -8,7 +8,6 @@
 #include "autograd/graph.hpp"
 #include "autograd/tensor.hpp"
 #include "modules/module_base.hpp"
-#include "ops/rmsnorm_op.hpp"
 
 namespace ttml::modules {
 
