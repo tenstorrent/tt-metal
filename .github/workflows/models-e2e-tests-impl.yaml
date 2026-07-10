@@ -202,6 +202,12 @@ jobs:
             echo "--- $s ---"
             grep -E "$s" generated/llk_report_table.md 2>/dev/null | awk -F'|' '{print $3}' | sort -u | head -40 || true
           done
+          # Per-kernel text report → name the exact compute kernel(s) that hit the #45127 paths.
+          python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f text -l llk_core,llk_api -o generated/llk_report_text.txt || true
+          echo "===================== kernels containing tilize_uninit / FACE_ROW_MAJOR (name + path) ====================="
+          awk '/^### kernel:/{k=$0} /^    path:/{p=$0}
+               /_llk_unpack_tilize_uninit_|_llk_unpack_tilize_|FACE_ROW_MAJOR/{if(k!=""){print k; print p; k=""}}' \
+               generated/llk_report_text.txt 2>/dev/null | head -80 || true
       - name: Upload LLK report (#45127)
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -212,6 +218,7 @@ jobs:
           path: |
             generated/llk_report_table.md
             generated/llk_report.csv
+            generated/llk_report_text.txt
             docker-job/generated/llk_report_table.md
             docker-job/generated/llk_report.csv
           if-no-files-found: warn
