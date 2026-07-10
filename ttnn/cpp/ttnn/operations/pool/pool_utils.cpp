@@ -9,7 +9,6 @@
 
 #include "tt-metalium/constants.hpp"
 
-#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 namespace ttnn::operations::pool {
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
@@ -72,40 +71,6 @@ std::map<std::string, std::string> get_defines(Pool2DType pool_type) {
 
 using sliding_window::ParallelConfig;
 using sliding_window::SlidingWindowConfig;
-
-std::optional<ParallelConfig> determine_valid_parallel_config(
-    const TensorMemoryLayout shard_layout,
-    uint32_t batch_size,
-    uint32_t channels,
-    uint32_t output_height,
-    uint32_t output_width,
-    const CoreCoord& compute_grid_size,
-    ShardOrientation block_shard_orientation,
-    bool enable_channels_padding,
-    bool is_shard_height_tile_multiple,
-    bool is_shard_width_tile_multiple,
-    uint32_t act_block_h_override) {
-    if (shard_layout != TensorMemoryLayout::HEIGHT_SHARDED && shard_layout != TensorMemoryLayout::BLOCK_SHARDED &&
-        shard_layout != TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_THROW("Pool2d supports Height, Block or Width Sharded Layouts but got {}", shard_layout);
-    }
-    auto pconfig = conv::determine_parallel_config(
-        shard_layout,
-        batch_size,
-        channels,
-        output_height,
-        output_width,
-        channels,
-        tt::constants::TILE_WIDTH,
-        compute_grid_size,
-        block_shard_orientation,
-        enable_channels_padding,
-        is_shard_height_tile_multiple,
-        is_shard_width_tile_multiple,
-        act_block_h_override);
-
-    return pconfig;
-}
 
 DataType get_index_data_type(uint32_t in_h, uint32_t in_w) {
     uint32_t hw = in_h * in_w;
@@ -392,111 +357,6 @@ pool_op_l1_usage calculate_L1_usage(
         sizes.total());
 
     return pool_op_l1_usage{.local_cb_size = sizes.local_cb_total(), .global_cb_size = sizes.global_cb_total()};
-}
-
-std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
-    const DataType& input_dtype,
-    const Layout& input_layout,
-    CoreCoord compute_grid_size,
-    const SlidingWindowConfig& sliding_window_config,
-    Pool2DType pool_type,
-    bool count_include_pad,
-    std::optional<int32_t> divisor_override,
-    bool return_indices,
-    const Layout& output_layout,
-    const DataType& output_dtype,
-    bool config_tensor_in_dram) {
-    uint32_t batch_size = sliding_window_config.batch_size;
-    uint32_t channels = sliding_window_config.channels;
-    auto output_shape = sliding_window_config.get_output_shape();
-
-    struct l1_usage_config {
-        pool_op_l1_usage l1_usage{};
-        std::optional<ParallelConfig> config;
-    };
-
-    auto get_memconfig = [&](const ParallelConfig& parallel_config) {
-        uint32_t nhw = batch_size * output_shape[1] * output_shape[2];
-        // Use FACE_WIDTH (TILE_WIDTH/2) alignment to match the actual shard formula for
-        // non-partial cases, so the L1 estimate stays consistent with the pre-partial-tile-fix
-        // behaviour and doesn't shift scheme selection for configs that were already working.
-        // For the actual output tensor the shard is widened to TILE_WIDTH when
-        // channels % TILE_WIDTH < FACE_WIDTH (generic_pools.cpp / pool_op.cpp), but that extra
-        // 32 bytes per row is small enough never to cause L1 overflow.
-        uint32_t out_channel_padded = tt::round_up(
-            channels,
-            conv::get_num_cores_channels_from_parallel_config(parallel_config) * tt::constants::TILE_WIDTH / 2);
-        return conv::create_sharded_memory_config_from_parallel_config(
-            ttnn::Shape({1, 1, nhw, out_channel_padded}), parallel_config, tt::constants::TILE_HEIGHT);
-    };
-
-    bool is_in_tiled = input_layout == ttnn::TILE_LAYOUT;
-    bool is_out_tiled = output_layout == ttnn::TILE_LAYOUT;
-
-    auto calc_l1_usage_inner = [&](TensorMemoryLayout layout, ShardOrientation orientation) -> l1_usage_config {
-        auto input_parallel_config = pool::determine_valid_parallel_config(
-            layout,
-            batch_size,
-            channels,
-            output_shape[1],
-            output_shape[2],
-            compute_grid_size,
-            orientation,
-            false,
-            is_out_tiled,
-            is_in_tiled || is_out_tiled,  // if input/output is tiled we need the shard width to be a tile multiple,
-            0);
-
-        if (!input_parallel_config.has_value()) {
-            return {
-                pool_op_l1_usage{
-                    .local_cb_size = std::numeric_limits<uint32_t>::max(),
-                    .global_cb_size = std::numeric_limits<uint32_t>::max()},
-                input_parallel_config};
-        }
-        pool_op_l1_usage l1_usage = calculate_L1_usage(
-            input_dtype,
-            sliding_window_config.input_hw.first,
-            sliding_window_config.input_hw.second,
-            sliding_window_config.channels,
-            sliding_window_config.get_pad_h(),
-            sliding_window_config.get_pad_w(),
-            sliding_window_config.get_ceil_pad_h(),
-            sliding_window_config.get_ceil_pad_w(),
-            sliding_window_config.ceil_mode,
-            return_indices,
-            sliding_window_config.window_hw.first,
-            sliding_window_config.window_hw.second,
-            get_memconfig(input_parallel_config.value()),
-            get_memconfig(input_parallel_config.value()),
-            pool_type,
-            count_include_pad,
-            divisor_override,
-            output_layout,
-            output_dtype,
-            config_tensor_in_dram);
-
-        return {.l1_usage = l1_usage, .config = input_parallel_config};
-    };
-
-    auto l1_config_height = calc_l1_usage_inner(TensorMemoryLayout::HEIGHT_SHARDED, ShardOrientation::ROW_MAJOR);
-    auto l1_config_width = calc_l1_usage_inner(TensorMemoryLayout::WIDTH_SHARDED, ShardOrientation::ROW_MAJOR);
-    auto l1_config_block = calc_l1_usage_inner(TensorMemoryLayout::BLOCK_SHARDED, ShardOrientation::ROW_MAJOR);
-
-    uint32_t l1_usage_height = l1_config_height.l1_usage.total();
-    uint32_t l1_usage_width = l1_config_width.l1_usage.total();
-    uint32_t l1_usage_block = l1_config_block.l1_usage.total();
-
-    if (l1_usage_height > l1_usage_width) {
-        if (l1_usage_width > l1_usage_block) {
-            return l1_config_block.config;
-        }
-        return l1_config_width.config;
-    }
-    if (l1_usage_height > l1_usage_block) {
-        return l1_config_block.config;
-    }
-    return l1_config_height.config;
 }
 
 // pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure

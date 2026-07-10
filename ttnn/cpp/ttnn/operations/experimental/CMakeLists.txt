@@ -16,8 +16,6 @@
 # active owner of those ops.
 
 # metalium-developers-convolutions
-add_subdirectory(adaptive_pool)
-add_subdirectory(conv3d)
 add_subdirectory(cnn)
 
 # metalium-developers-ops-data-movement
@@ -30,7 +28,6 @@ add_subdirectory(quasar)
 add_subdirectory(reduction)
 
 # metalium-developers-sdpa
-add_subdirectory(indexer_score)
 add_subdirectory(topk_large_indices)
 
 # metallium-maintainers-llama-models
@@ -76,15 +73,12 @@ add_library(TTNN::Ops::Experimental ALIAS ttnn_op_experimental_shared)
 target_link_libraries(
     ttnn_op_experimental_shared
     INTERFACE
-        TTNN::Ops::Experimental::AdaptivePool
-        TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::CCL
         TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
-        TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
@@ -123,15 +117,12 @@ target_link_libraries(
 target_sources(
     ttnn_op_experimental_shared
     INTERFACE
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::AdaptivePool>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Conv3d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CNN>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Matmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Quasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
