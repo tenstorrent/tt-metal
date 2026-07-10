@@ -13,6 +13,7 @@ from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
     maybe_disable_pli_prefill_trace,
     patch_gemma4_trace_model_args,
+    resolve_gemma4_prefill_chunk_size,
     resolve_gemma4_prefill_trace_enable,
     warmup_gemma4_model_prefill,
 )
@@ -48,7 +49,7 @@ def _load_text_tokenizer(model_path):
         return AutoTokenizer.from_pretrained(fallback, trust_remote_code=True, extra_special_tokens={})
 
 
-def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding):
+def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded_sliding=False):
     """Padded prefill buckets for which capturing a prefill trace is correct AND
     a net win for Gemma4.
 
@@ -59,17 +60,17 @@ def _trace_prefill_supported_seq_lens(max_seq_len, has_per_layer_inputs, bounded
     lm_head on just the last-token tile — so the 262k-vocab matmul no longer
     scales with sequence length and these buckets stay a net win at higher ISL.
 
-    Disabled entirely when:
-      * the model has per-layer inputs (E2B/E4B): prefill uploads per-layer
-        tensors via ``ttnn.from_torch`` inside the layer loop, which is not
-        allowed during trace capture and would freeze warmup values.
-      * bounded sliding KV cache is on (long context, >16k): the traced path runs
-        with ``get_last_token=-1`` so the host-side ``valid_seq_len`` fill cap is
-        skipped, which silently corrupts the circular cache with prompt padding.
-        Unlocking >16k traced prefill needs the device-tensor fill cap in
-        paged_fill_cache (Phase 2).
+    Disabled when the model has per-layer inputs (E2B/E4B): prefill uploads
+    per-layer tensors via ``ttnn.from_torch`` inside the layer loop, which is not
+    allowed during trace capture and would freeze warmup values.
+
+    Bounded sliding is fine: the generator refreshes a persistent
+    ``valid_seq_len`` device tensor out-of-trace and ``paged_fill_cache``'s
+    writer caps the circular fill at runtime (``get_last_token=-1`` no longer
+    skips the cap). ``bounded_sliding`` is kept for call-site compatibility.
     """
-    if has_per_layer_inputs or bounded_sliding:
+    del bounded_sliding  # unlocked by kernel-side valid_seq_len fill cap
+    if has_per_layer_inputs:
         return []
     override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
     if override is not None:
@@ -92,28 +93,26 @@ def _patch_model_args(
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_context_len = max_seq_len
-    # Prefill chunking policy — the DEMO path forces a SINGLE chunk.
-    #
-    # Generator-level multi-chunk prefill (GEMMA4_GEN_PREFILL_CHUNK=<tokens>)
-    # drives chunk_start_idx/chunk_page_table per chunk. That path is only
-    # validated to not *hang* (the #49083 fetch-queue wedge on the vLLM serving
-    # boundary, see generator_vllm.py) — it is NOT validated for output
-    # correctness across many chunks: Gemma4's per-chunk plumbing (per-chunk RoPE
-    # offset, cross-chunk paged reads, the hand-rolled sliding-window tail, and an
-    # unimplemented KV-shared cross-chunk case) mis-handles long multi-chunk
-    # prefill and produces garbage (empirically <pad> at 64k / 16 chunks).
-    #
-    # The demo's long-context configs (64k/128k/256k) are instead validated with
-    # a SINGLE chunk: max_prefill_chunk_size is a power of 2 >= the padded prompt,
-    # so the prompt prefills in one chunk and the in-call SDPA chunks internally
-    # (correct past 32768, validated coherent to ~100k with bounded sliding). Only
-    # honor an explicit GEMMA4_GEN_PREFILL_CHUNK override; otherwise force the
-    # single chunk. (The vLLM generator legitimately differs — it must chunk to
-    # dodge the serving-path wedge — see resolve_gemma4_prefill_chunk_size.)
-    _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
-    model_args.max_prefill_chunk_size = (
-        _chunk_override if _chunk_override > 0 else 1 << max(int(max_seq_len - 1).bit_length(), 11)
-    )
+    # Prefill chunking: with bounded sliding (64k+), use generator-level chunks
+    # (4096 on QB2 / GEMMA4_GEN_PREFILL_CHUNK) so 128k/256k fit in DRAM — a
+    # single full-length chunk OOMs at 256k (~5.6GB scratch). Short-context /
+    # unbounded demos keep a single power-of-2 chunk. Multi-chunk long-context
+    # output is only partially coherent today ("la la..." fragments); that is a
+    # known correctness gap, separate from the DRAM fit requirement.
+    # GEMMA4_DEMO_SINGLE_CHUNK=1 forces the old single-chunk path under bounded.
+    _force_single = os.environ.get("GEMMA4_DEMO_SINGLE_CHUNK", "0") != "0"
+    if bounded_sliding and not _force_single:
+        model_args.max_prefill_chunk_size = resolve_gemma4_prefill_chunk_size(
+            max_seq_len, mesh_device=mesh_device, non_qb2_default=4096
+        )
+        logger.info(
+            f"Bounded sliding + chunked prefill: max_prefill_chunk_size=" f"{model_args.max_prefill_chunk_size}"
+        )
+    else:
+        _chunk_override = int(os.environ.get("GEMMA4_GEN_PREFILL_CHUNK", "0"))
+        model_args.max_prefill_chunk_size = (
+            _chunk_override if _chunk_override > 0 else 1 << max(int(max_seq_len - 1).bit_length(), 11)
+        )
     model_args.mesh_device = mesh_device
     model_args.device_name = determine_device_name(mesh_device)
     model_args.model_name = model_path
@@ -157,11 +156,116 @@ class ChunkedPrefillPageTableGuardMixin:
     class hierarchies both reach the shared method but do not share a gemma4 base.
     """
 
+    def _effective_paged_block_size(self, kv_cache):
+        """Effective block_size the paged ops address this model's K/V cache with.
+
+        Under vLLM hybrid kv-cache groups the K/V buffer is HMA-shared: a full-attention
+        layer views a buffer whose declared head_dim belongs to a sliding layer
+        (e.g. declared block 64 / head_dim 256 shared with full-attn head_dim 512 →
+        eff_bs 64). ``paged_fill_cache`` / chunked SDPA address that view, so page-table
+        math must use it too.
+
+        When every layer owns a matching cache (Option A / non-hybrid), declared
+        block_size is correct — do **not** scale by max(head_dim) just because sliding
+        and full layers differ. That wrongly halves the block size, doubles the page
+        table width, and makes later chunks' ``chunk_page_table`` slices land on the
+        zero-pad (clobbering earlier chunks' KV).
+        """
+        block_size = get_block_size(kv_cache)
+        for i, layer in enumerate(getattr(self.model[0], "layers", [])):
+            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            if cfg is None or i >= len(kv_cache) or kv_cache[i] is None:
+                continue
+            cache = kv_cache[i][0]
+            cache_hd = int(cache.shape[-1])
+            if cache_hd != int(cfg.head_dim) and cache_hd > 0:
+                # HMA-shared buffer: byte-invariant reinterpret for this layer's head_dim.
+                return int(cache.shape[2]) * cache_hd // int(cfg.head_dim)
+        return block_size
+
+    def _paged_prefill_block_size(self, kv_cache):
+        # Base Generator hook: chunked-prefill page-table padding/slicing uses this so
+        # it matches the HMA effective block_size instead of the declared shape.
+        return self._effective_paged_block_size(kv_cache)
+
+    def _chunk_prefill_get_last_token(self, *, is_last_chunk, last_token_idx_in_chunk, chunk_size):
+        """Per-chunk fill length for Gemma4 multi-chunk prefill.
+
+        Intermediate chunks are fully real tokens (padding lives only in the last
+        chunk). The legacy default reuses the last-chunk's short index for every
+        chunk, which under-fills intermediate KV and breaks cross-chunk /
+        bounded-sliding attention. Return ``-1`` for intermediate chunks so:
+          * ``valid_seq_len`` stays unset → the whole chunk is written to KV
+          * the model skips the last-token lm_head slice (logits are discarded)
+        Keep the real (tile-aligned) index on the last chunk.
+        """
+        del chunk_size
+        if is_last_chunk:
+            return (last_token_idx_in_chunk // 32) * 32
+        return -1
+
+    def _refresh_prefill_valid_seq_len(self, *, model_id=-1, last_token_idx=None, num_cached_tokens=0):
+        """Refresh the persistent bounded-fill cap tensor out of any active trace.
+
+        Traced prefill captures ``paged_fill_cache`` with ``get_last_token=-1``, so
+        the host-side ``valid_seq_len`` slice is skipped. The writer kernel instead
+        reads ``model.prefill_valid_len_dev``; this method copies the real
+        (unpadded) length into that buffer before capture/replay.
+        """
+        model = self.model[model_id]
+        update = getattr(model, "update_prefill_valid_seq_len", None)
+        if update is None or getattr(model, "prefill_valid_len_dev", None) is None:
+            return
+        if last_token_idx is None:
+            return
+        # Batched traced prefill passes a per-slot list; the shared fill-cap
+        # tensor is single-element, so only the single-user (scalar) path is
+        # supported here. Batched+bounded is not a current serving shape.
+        if isinstance(last_token_idx, (list, tuple)):
+            return
+        valid_len = int(last_token_idx) - int(num_cached_tokens) + 1
+        if valid_len > 0:
+            update(valid_len)
+
+    def _easy_trace_prefill(self, *args, **kwargs):
+        # Refresh before capture *and* replay so the writer kernel sees the
+        # current request's real length (trace binds the buffer address; this
+        # updates its contents out-of-trace).
+        self._refresh_prefill_valid_seq_len(
+            model_id=kwargs.get("model_id", -1),
+            last_token_idx=kwargs.get("last_token_idx"),
+            num_cached_tokens=kwargs.get("num_cached_tokens", 0),
+        )
+        # Non-APC traced prefill: ``full_page_table`` is sized to the raw prompt
+        # (e.g. 61 blocks for a 3896-token prompt) while the captured device
+        # buffer is sized to the padded bucket (64 for 4096). Under bounded
+        # sliding, layer-0's cache has only ``sliding_window/block_size`` blocks,
+        # so ``_pad_or_create_page_table`` cannot grow the short table up to the
+        # captured width and ``copy_host_to_device`` TT_FATALs. Drop
+        # ``full_page_table`` so the already-padded ``page_table`` is used.
+        # APC (num_cached_tokens > 0) still needs the full mapping for chunk
+        # slicing — leave it alone there.
+        if not kwargs.get("num_cached_tokens") and kwargs.get("full_page_table") is not None:
+            kwargs["full_page_table"] = None
+        # Defer lm_head outside the trace: capture returns post-norm hidden
+        # states; ``process_logits_after_prefill_trace`` runs lm_head on the
+        # last-token tile. Must live on this mixin (not only Gemma4Generator)
+        # so the vLLM ``Gemma4ForCausalLM`` path also sets the flag — otherwise
+        # ``get_last_token=-1`` (trace default) hits the intermediate-chunk
+        # ``return None`` and warmup crashes in process_logits_after_prefill_trace.
+        for m in self.model:
+            m._prefill_trace_mode = True
+        try:
+            return super()._easy_trace_prefill(*args, **kwargs)
+        finally:
+            for m in self.model:
+                m._prefill_trace_mode = False
+
     def prefill_forward_single_user_text(
         self, tokens, page_table=None, *, kv_cache=None, num_cached_tokens=0, **kwargs
     ):
         if page_table is not None and kv_cache is not None:
-            block_size = get_block_size(kv_cache)
+            block_size = self._effective_paged_block_size(kv_cache)
             needed_blocks = num_blocks_in_seq(tokens.shape[-1] + num_cached_tokens, block_size)
             # Bounded sliding KV cache: sliding layers pass ``cache_position_modulo``
             # to ``paged_fill_cache``, which requires ``page_table`` to span the whole
@@ -183,6 +287,15 @@ class ChunkedPrefillPageTableGuardMixin:
                 needed_blocks = max(needed_blocks, num_blocks_in_seq(max(modulos), block_size))
             if page_table.shape[1] > needed_blocks:
                 page_table = page_table[:, :needed_blocks]
+        # Eager single-chunk still prefers the host-side slice when get_last_token
+        # is known; refreshing here keeps the persistent tensor current for any
+        # path that falls through to the kernel cap (and for multi-chunk's last
+        # chunk if a future hook uses it).
+        self._refresh_prefill_valid_seq_len(
+            model_id=kwargs.get("model_id", -1),
+            last_token_idx=kwargs.get("last_token_idx"),
+            num_cached_tokens=num_cached_tokens,
+        )
         return super().prefill_forward_single_user_text(
             tokens,
             page_table=page_table,
@@ -205,24 +318,6 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
 
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
-
-    def _easy_trace_prefill(self, *args, **kwargs):
-        """Capture/replay a prefill trace with the lm_head deferred outside it.
-
-        Sets ``_prefill_trace_mode`` on every model for the duration of the
-        super() call so that ``Gemma4Model.__call__`` returns post-norm hidden
-        states (skipping the full-sequence lm_head) during trace capture. Replay
-        (``execute_trace``) runs no Python model code, so the flag only affects
-        the capture/compile passes; the deferred lm_head runs afterward in
-        ``process_logits_after_prefill_trace`` on the last-token tile.
-        """
-        for m in self.model:
-            m._prefill_trace_mode = True
-        try:
-            return super()._easy_trace_prefill(*args, **kwargs)
-        finally:
-            for m in self.model:
-                m._prefill_trace_mode = False
 
     def warmup_model_prefill(
         self,

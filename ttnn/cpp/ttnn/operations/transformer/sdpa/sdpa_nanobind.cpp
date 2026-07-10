@@ -244,7 +244,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     std::optional<float> scale,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<uint32_t> block_size,
+    std::optional<uint32_t> num_kv_heads) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -255,7 +257,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             scale,
             memory_config,
             program_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            block_size,
+            num_kv_heads);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -271,7 +275,9 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         scale,
         memory_config,
         program_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        block_size,
+        num_kv_heads);
 }
 
 }  // namespace
@@ -459,6 +465,12 @@ void bind_sdpa(nb::module_& mod) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            block_size (int, optional): Geometry override for an HMA-shared paged cache. When the
+                K/V cache was allocated for a different layer's view, pass this call's view
+                block_size (tokens/block); Q drives head_dim and the per-block element count must
+                be invariant. Defaults to the cache's declared block_size.
+            num_kv_heads (int, optional): Geometry override companion to `block_size`; this call's
+                view num_kv_heads. Defaults to the cache's declared num_kv_heads.
 
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh].
@@ -479,7 +491,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("scale").noconvert() = nb::none(),
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
-        nb::arg("compute_kernel_config").noconvert() = nb::none());
+        nb::arg("compute_kernel_config").noconvert() = nb::none(),
+        nb::arg("block_size").noconvert() = nb::none(),
+        nb::arg("num_kv_heads").noconvert() = nb::none());
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two
