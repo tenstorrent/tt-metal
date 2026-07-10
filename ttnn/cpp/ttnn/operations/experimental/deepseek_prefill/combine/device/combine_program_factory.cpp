@@ -1077,6 +1077,108 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
+    // [debug][cmb-place-host] Authoritative host-side coordinate table for this device's combine
+    // placement, so PHYSICAL (NOC0) coords never have to be hand-derived from the device [cmb-place]
+    // logs. Coordinate systems (Blackhole):
+    //   * TENSIX (sender/untilizer): logical -> virtual via virtual_core_from_logical_core. On an
+    //     unharvested BH grid virtual == physical NOC0, so the device [cmb-place] "virt" coords ARE the
+    //     physical NOC0 coords (no conversion needed). Both are printed here for confirmation.
+    //   * ETH (EDM) cores: the device prints only VIRTUAL (translated, ~(20+L,25)); physical NOC0 is
+    //     NOT device-derivable. get_link_eth_info() returns the eth core's physical NOC0 + routing
+    //     plane for exactly the channel that sender connects to. Pair the device sender line's
+    //     (idx,dir)->eth_virt with the (sender idx,dir)->eth_noc0 below to get eth virtual<->physical.
+    // log_warning (not log_debug) so it survives the build_Release logging level. This is host-only
+    // diagnostics: it appends NO runtime args, so it cannot perturb fabric/kernel behavior.
+    {
+        // directions is {E,W,N,S}; neighbors is the compact list of real neighbors in that same
+        // ascending order, so active_dirs[k] pairs with neighbors[k].
+        static constexpr const char* dir_name[4] = {"E", "W", "N", "S"};
+        std::vector<uint32_t> active_dirs;
+        for (uint32_t d = 0; d < 4; d++) {
+            if (directions[d]) {
+                active_dirs.push_back(d);
+            }
+        }
+        // NOC1 is the physical mirror of NOC0: noc1 = grid_size - 1 - noc0 (grid_size() == the full
+        // physical NOC grid dims used as noc_size by hal.noc_coordinate for the noc_index==1 flip).
+        const auto noc_grid = mesh_device->grid_size();
+        auto mirror_x = [&](uint32_t x) { return (uint32_t)(noc_grid.x - 1 - x); };
+        auto mirror_y = [&](uint32_t y) { return (uint32_t)(noc_grid.y - 1 - y); };
+        for (uint32_t s = 0; s < num_cores; s++) {
+            const auto& lg = sender_cores[s];
+            const uint32_t vx = sender_noc_coords[s].first, vy = sender_noc_coords[s].second;
+            log_warning(
+                tt::LogOp,
+                "[cmb-place-host] chip={} sender idx={} logical=({},{}) virt/phys_noc0=({},{}) noc1=({},{})",
+                src_chip_id,
+                s,
+                (uint32_t)lg.x,
+                (uint32_t)lg.y,
+                vx,
+                vy,
+                mirror_x(vx),
+                mirror_y(vy));
+        }
+        for (uint32_t j = 0; j < num_untilizer_cores; j++) {
+            const auto& lg = all_untilizer_cores[j];
+            auto vn = mesh_device->virtual_core_from_logical_core(lg, tt::CoreType::WORKER);
+            log_warning(
+                tt::LogOp,
+                "[cmb-place-host] chip={} untilizer logical=({},{}) virt/phys_noc0=({},{}) noc1=({},{}) -> sender "
+                "idx={}",
+                src_chip_id,
+                (uint32_t)lg.x,
+                (uint32_t)lg.y,
+                (uint32_t)vn.x,
+                (uint32_t)vn.y,
+                mirror_x((uint32_t)vn.x),
+                mirror_y((uint32_t)vn.y),
+                untilizer_sender_map[j]);
+        }
+        if (num_links > 0) {
+            for (uint32_t s = 0; s < num_cores; s++) {
+                const uint32_t core_link = s % num_links;
+                for (uint32_t k = 0; k < neighbors.size() && k < active_dirs.size(); k++) {
+                    const uint32_t d = active_dirs[k];
+                    // Self-neighbor (e.g. degenerate ring wrap) has no eth link; skip to keep the
+                    // (idx,dir) pairing meaningful. Never happens on the 1D combine line.
+                    if (neighbors[k][0] == mesh_coordinate[0] && neighbors[k][1] == mesh_coordinate[1]) {
+                        continue;
+                    }
+                    auto dst_node = mesh_device->get_fabric_node_id(neighbors[k]);
+                    try {
+                        auto info = tt::tt_fabric::get_link_eth_info(src_fabric_node_id, dst_node, core_link);
+                        log_warning(
+                            tt::LogOp,
+                            "[cmb-place-host] chip={} sender idx={} dir={}({}) link={} eth_noc0/phys=({},{}) "
+                            "eth_noc1=({},{}) plane={}",
+                            src_chip_id,
+                            s,
+                            d,
+                            dir_name[d],
+                            core_link,
+                            (uint32_t)info.eth_core_noc0.x,
+                            (uint32_t)info.eth_core_noc0.y,
+                            mirror_x((uint32_t)info.eth_core_noc0.x),
+                            mirror_y((uint32_t)info.eth_core_noc0.y),
+                            info.routing_plane);
+                    } catch (const std::exception& e) {
+                        // Never let a diagnostics call abort program build.
+                        log_warning(
+                            tt::LogOp,
+                            "[cmb-place-host] chip={} sender idx={} dir={}({}) link={} eth_noc0 UNAVAILABLE: {}",
+                            src_chip_id,
+                            s,
+                            d,
+                            dir_name[d],
+                            core_link,
+                            e.what());
+                    }
+                }
+            }
+        }
+    }
+
     // Global interleaved position of each untilizer core in rank-major / sender-minor order
     // [S0.U0, S1.U0, S0.U1, S1.U1, …]: every untilizer core processes batches global_pos, +G,
     // +2G, … of every expert (G = num_untilizer_cores, the total untilizer-core count).  Spreading
@@ -1109,6 +1211,27 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_global_pos[idx] = pos_by_sender_rank[s][r];
         }
     }
+
+    // [debug][cmb-place] Append a WORKER (tensix) core's full coordinate quad to writer RT args so the
+    // kernel can log all four systems without any device-side derivation. Pushes EXACTLY 8 uint32 in
+    // this fixed order (kernel must read them in the same order):
+    //   logical.x, logical.y, virtual.x, virtual.y, phys_noc0.x, phys_noc0.y, noc1.x, noc1.y
+    // Coordinate systems (Blackhole): virtual == physical NOC0 for tensix on the UNHARVESTED grid (this
+    // board), so phys_noc0 is taken from the virtual coord; NOC1 is the physical mirror grid_size-1-coord
+    // (the same transform hal.noc_coordinate applies for noc_index==1). Works for both std::vector<uint32_t>
+    // (writer_combine raw args) and KernelDescriptor::RTArgList (writer_untilize) via the generic lambda.
+    auto push_worker_coord_quad = [&](auto& args, const CoreCoord& logical) {
+        auto v = mesh_device->virtual_core_from_logical_core(logical, tt::CoreType::WORKER);
+        auto g = mesh_device->grid_size();  // full physical NOC grid dims == noc_size for the mirror
+        args.push_back((uint32_t)logical.x);
+        args.push_back((uint32_t)logical.y);
+        args.push_back((uint32_t)v.x);
+        args.push_back((uint32_t)v.y);
+        args.push_back((uint32_t)v.x);              // phys_noc0.x == virtual.x (unharvested BH tensix)
+        args.push_back((uint32_t)v.y);              // phys_noc0.y == virtual.y
+        args.push_back((uint32_t)(g.x - 1 - v.x));  // noc1.x = mirror
+        args.push_back((uint32_t)(g.y - 1 - v.y));  // noc1.y = mirror
+    };
 
     // Set runtime args for hybrid untilizer row cores.  Three layouts are possible:
     //   init_zeros && tile_layout: [output_addr, page_start, page_end, output_init_done_sem,
@@ -1168,6 +1291,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 writer_untilize_runtime_args.push_back(untilizer_global_pos[untilizer_idx]);  // global batch start
                 writer_untilize_runtime_args.push_back(num_untilizer_cores);                  // global batch stride (G)
             }
+
+            // [debug][cmb-place] This untilizer core's coordinate quad (8 uint32), appended LAST so it
+            // never disturbs the indices above. Kernel reads it right after total_untilizers.
+            push_worker_coord_quad(writer_untilize_runtime_args, writer_untilize_cores_vec[untilizer_idx]);
 
             desc.kernels[writer_untilize_kernel_id].emplace_runtime_args(
                 writer_untilize_cores_vec[untilizer_idx], writer_untilize_runtime_args);
@@ -1250,6 +1377,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // [debug] per-sender index, used by the writer kernel to build the eRISC combine marker value
         // (100 + chip*10 + index) written into the eth router's telemetry scratch[0].
         writer_runtime_args_raw.push_back(core_idx);
+
+        // [debug][cmb-place] This sender core's coordinate quad (8 uint32), appended right after
+        // combine_sender_index and BEFORE the fabric-connection args below. The kernel reads it at the
+        // top of its DEST_CHIP_ID block (right after combine_sender_index), before opening fabric
+        // connections, so it must NOT sit after the fabric args (order is alignment-critical).
+        push_worker_coord_quad(writer_runtime_args_raw, sender_core);
 
         if (num_links > 0) {
             // Combine-axis neighbors (each a distinct fabric direction) as fabric nodes.

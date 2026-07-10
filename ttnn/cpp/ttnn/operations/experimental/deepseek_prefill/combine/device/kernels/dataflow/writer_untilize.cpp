@@ -176,12 +176,34 @@ void kernel_main() {
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
 
-    // [debug][cmb-place] Log this untilizer's placement + the sender core it forwards untilized tokens
-    // to. Coords are VIRTUAL (translated) NOC space: my_x/my_y and the sender_noc_x/y RT args both live
-    // here, so sender_virt below joins to the sender's own [cmb-place sender] self_virt line (which
-    // carries its logical coords). send_noc = the NoC the untilizer->sender row writes use (noc_index).
+    // [debug][cmb-place] This untilizer core's host-computed coordinate quad (8 uint32), appended LAST by
+    // the factory (push_worker_coord_quad). Order: logical(x,y), virtual(x,y), phys_noc0(x,y), noc1(x,y).
+    uint32_t self_logical_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_logical_y = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_virt_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_virt_y = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_phys_noc0_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_phys_noc0_y = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_noc1_x = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t self_noc1_y = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // [debug][cmb-place] Log this untilizer's placement in ALL FOUR coordinate systems (host-computed,
+    // passed via RT args) plus a device-derived cross-check, then the VIRTUAL coords of the downstream
+    // sender core it forwards untilized tokens to. dev_virt/dev_logical are read on-core and must match
+    // host virt/logical (mismatch => RT-arg misalignment / coord bug). Downstream sender_virt joins to
+    // that sender's own [cmb-place sender] line (which carries its full quad). send_noc = the NoC the
+    // untilizer->sender row writes use (noc_index).
     DEVICE_PRINT(
-        "[cmb-place untilizer] self_virt=({},{}) self_logical=({},{}) sender_virt=({},{}) send_noc={}\n",
+        "[cmb-place untilizer] logical=({},{}) virt=({},{}) phys_noc0=({},{}) noc1=({},{}) | "
+        "dev_virt=({},{}) dev_logical=({},{}) downstream_sender_virt=({},{}) send_noc={}\n",
+        self_logical_x,
+        self_logical_y,
+        self_virt_x,
+        self_virt_y,
+        self_phys_noc0_x,
+        self_phys_noc0_y,
+        self_noc1_x,
+        self_noc1_y,
         (uint32_t)my_x[noc_index],
         (uint32_t)my_y[noc_index],
         (uint32_t)get_absolute_logical_x(),

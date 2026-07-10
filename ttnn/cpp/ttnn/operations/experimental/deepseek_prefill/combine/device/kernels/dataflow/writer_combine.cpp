@@ -158,6 +158,19 @@ void kernel_main() {
     // [debug] per-sender index (RT arg appended by the program factory); used for the eRISC combine marker.
     [[maybe_unused]] const uint32_t combine_sender_index = get_arg_val<uint32_t>(rt_args_idx++);
 
+    // [debug][cmb-place] This sender core's host-computed coordinate quad (8 uint32), appended by the
+    // factory (push_worker_coord_quad) right after combine_sender_index and BEFORE the fabric-connection
+    // args. Read unconditionally here so alignment holds for both the num_links==0 (no fabric args) and
+    // num_links>0 cases. Order: logical(x,y), virtual(x,y), phys_noc0(x,y), noc1(x,y).
+    [[maybe_unused]] const uint32_t self_logical_x = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_logical_y = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_virt_x = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_virt_y = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_phys_noc0_x = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_phys_noc0_y = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_noc1_x = get_arg_val<uint32_t>(rt_args_idx++);
+    [[maybe_unused]] const uint32_t self_noc1_y = get_arg_val<uint32_t>(rt_args_idx++);
+
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
     constexpr uint32_t combine_devices = axis == ReplicateGroup::COLS ? mesh_rows : mesh_cols;
@@ -388,14 +401,26 @@ void kernel_main() {
     }
     // DPRINT << "[combine-marker] writer START value=" << combine_marker_value << ENDL();
 
-    // [debug][cmb-place] Log this sender's placement + the eth (EDM) cores it injects tokens into, so
-    // the combine placement can be reconstructed from HW. Coords are VIRTUAL (translated) NOC space:
-    // my_x/my_y and the fabric adapter's edm_noc_x/y both live here, so each eth_virt below joins to
-    // the [cmb-place eth] self_virt that eth core prints (which carries its logical coords). send_noc =
-    // the NoC the sender->EDM payload writes use (the fabric worker NoC, == noc_index for combine).
+    // [debug][cmb-place] Log this sender's placement in ALL FOUR coordinate systems (host-computed,
+    // passed via RT args above) plus a device-derived cross-check, then the VIRTUAL coords of the
+    // downstream eth (EDM) cores it injects into. dev_virt/dev_logical are read on-core (my_x /
+    // get_absolute_logical) and must match the host virt/logical — a mismatch means RT-arg
+    // misalignment or a coord-system bug. Downstream eth_virt joins to that eth core's own
+    // [cmb-place eth] self_virt line (which carries its logical); its phys_noc0/noc1 come from the
+    // [cmb-place-host] factory dump keyed by (idx,dir). send_noc = the NoC the sender->EDM payload
+    // writes use (fabric worker NoC == noc_index for combine).
     DEVICE_PRINT(
-        "[cmb-place sender] idx={} self_virt=({},{}) self_logical=({},{}) send_noc={}\n",
+        "[cmb-place sender] idx={} logical=({},{}) virt=({},{}) phys_noc0=({},{}) noc1=({},{}) | "
+        "dev_virt=({},{}) dev_logical=({},{}) send_noc={}\n",
         combine_sender_index,
+        self_logical_x,
+        self_logical_y,
+        self_virt_x,
+        self_virt_y,
+        self_phys_noc0_x,
+        self_phys_noc0_y,
+        self_noc1_x,
+        self_noc1_y,
         (uint32_t)my_x[noc_index],
         (uint32_t)my_y[noc_index],
         (uint32_t)get_absolute_logical_x(),
@@ -404,7 +429,7 @@ void kernel_main() {
     for (uint32_t d = 0; d < 4; d++) {
         if (directions[d]) {
             DEVICE_PRINT(
-                "[cmb-place sender]   idx={} dir={} eth_virt=({},{})\n",
+                "[cmb-place sender]   idx={} dir={} downstream_eth_virt=({},{})\n",
                 combine_sender_index,
                 d,
                 (uint32_t)fabric_connections[d].edm_noc_x,
