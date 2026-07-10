@@ -55,18 +55,22 @@ def reference_decoder_layer_decode_forward(
 ) -> torch.Tensor:
     """Single decode step on HF ``Qwen2DecoderLayer`` with ``DynamicCache``."""
     pos = torch.tensor([[position]], dtype=torch.long, device=hidden.device)
+    cache_position = torch.tensor([position], dtype=torch.long, device=hidden.device)
     cos, sin = rotary_emb(hidden, pos)
     with torch.no_grad():
+        # HF decoder layers return a tuple (hidden_states, ...); cache kwarg is singular.
         out = layer(
             hidden,
             position_ids=pos,
-            past_key_values=cache,
+            past_key_value=cache,
             use_cache=True,
+            cache_position=cache_position,
             position_embeddings=(cos, sin),
         )
-    if out.dim() == 2:
-        out = out.unsqueeze(1)
-    return out.float()
+    hidden_out = out[0] if isinstance(out, (tuple, list)) else out
+    if hidden_out.dim() == 2:
+        hidden_out = hidden_out.unsqueeze(1)
+    return hidden_out.float()
 
 
 def tt_decoder_layer_decode_forward(
