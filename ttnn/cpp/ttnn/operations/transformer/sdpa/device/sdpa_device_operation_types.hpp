@@ -25,6 +25,16 @@ struct SDPAParams {
     // Windowed (block-diagonal) attention: when true, the mask is synthesized on-device from the
     // cu_window_seqlens tensor instead of being read from attn_mask. Implies non-causal.
     bool is_windowed = false;
+    // Chunked/paged geometry overrides (mirrors paged_scaled_dot_product_attention_decode).
+    // When the paged K/V cache was allocated for a *different* layer's (num_kv_heads,
+    // block_size, head_dim) shape — e.g. vLLM's hybrid kv-cache-groups HMA-shares one physical
+    // buffer between a full-attention layer (head_dim=512) and a sliding layer (head_dim=256) —
+    // the cache's declared shape no longer matches this call's view. Q's last dim drives
+    // head_dim; these overrides supply the view's block_size / num_kv_heads so the reader
+    // addresses the buffer correctly (the per-block element count must be invariant). Unset =
+    // use the cache tensor's own declared block_size / num_kv_heads (the common case).
+    std::optional<uint32_t> block_size_override;
+    std::optional<uint32_t> num_kv_heads_override;
 };
 
 struct SDPAInputs {

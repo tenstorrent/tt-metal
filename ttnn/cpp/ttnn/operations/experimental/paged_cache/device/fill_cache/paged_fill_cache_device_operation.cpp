@@ -145,6 +145,27 @@ void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
             "Batch idx tensor must be DRAM-resident");
     }
 
+    // valid_seq_len tensor: a single int (block-aligned token count). Read by the
+    // writer via TensorAccessor::get_noc_addr(0), so it must be a ROW_MAJOR,
+    // INTERLEAVED, DRAM-resident int tensor (same constraints as batch_idx_tensor).
+    if (tensor_args.valid_seq_len_tensor_opt.has_value()) {
+        const auto& tensor = tensor_args.valid_seq_len_tensor_opt.value();
+        TT_FATAL(
+            tensor.dtype() == DataType::UINT32 || tensor.dtype() == DataType::INT32,
+            "valid_seq_len tensor must be an integer type");
+        TT_FATAL(tensor.layout() == Layout::ROW_MAJOR, "valid_seq_len tensor must be in ROW_MAJOR layout");
+        TT_FATAL(
+            tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "valid_seq_len tensor must have INTERLEAVED memory layout");
+        TT_FATAL(
+            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "valid_seq_len tensor must be DRAM-resident");
+        // Only meaningful for a bounded (circular) fill; a no-op otherwise.
+        TT_FATAL(
+            args.cache_position_modulo.has_value(),
+            "valid_seq_len tensor is only supported when cache_position_modulo is set (bounded fill)");
+    }
+
     // When mesh_coords is provided, validate it is a subset of the tensor's mesh
     // coordinates. The descriptor framework dispatches a (noop) program for every
     // tensor_coord regardless of mesh_coords membership, so a stray coord in mesh_coords
@@ -202,7 +223,8 @@ Tensor paged_fill_cache(
     uint32_t batch_idx_fallback,
     const std::optional<std::set<ttnn::MeshCoordinate>>& mesh_coords,
     std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> cache_position_modulo) {
+    std::optional<uint32_t> cache_position_modulo,
+    const std::optional<Tensor>& valid_seq_len_tensor) {
     using OperationType = ttnn::experimental::prim::PagedFillCacheDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -217,6 +239,7 @@ Tensor paged_fill_cache(
         .input_tensor = input_tensor,
         .page_table = page_table,
         .batch_idx_tensor_opt = batch_idx_tensor,
+        .valid_seq_len_tensor_opt = valid_seq_len_tensor,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

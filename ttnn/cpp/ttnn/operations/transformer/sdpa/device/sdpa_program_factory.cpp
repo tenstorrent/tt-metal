@@ -196,8 +196,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const auto& k_shape = input_tensor_k.logical_shape();
     const auto& v_shape = input_tensor_v.logical_shape();
     const uint32_t B = q_shape[0], NQH = q_shape[1], Sq = q_shape[2], DH = q_shape[3];
-    const uint32_t NKH = k_shape[1];
-    const uint32_t NVH = v_shape[1];
+    // Geometry overrides for an HMA-shared paged buffer (see SDPAParams): when the paged K/V
+    // cache was allocated for a different layer's view, the reader must address it with this
+    // call's num_kv_heads / block_size (Q already drives head_dim via DHt) rather than the
+    // cache's declared shape. Unset ⇒ the cache's own num_kv_heads / block_size (all existing
+    // callers are unchanged). The reader computes physical tile ids manually from these as
+    // compile-time args (dataflow_common.hpp virtual_seq_tile_id_to_physical_tile_id), so the
+    // flat-tile buffer is reinterpreted correctly without any kernel change.
+    const uint32_t NKH = operation_attributes.num_kv_heads_override.value_or(k_shape[1]);
+    const uint32_t NVH = operation_attributes.num_kv_heads_override.value_or(v_shape[1]);
+    const uint32_t effective_kv_block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
 
     // In flash mla prefill, we have to support the case where NKH != NVH
     // We are calling op with the following shapes:
@@ -213,7 +221,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // For flexible chunked: max prefix length = page_table num_pages * block_size (from K/V layout).
     uint32_t max_prefix_tokens_flexible = 0;
     if (is_chunked && flexible_chunked) {
-        const uint32_t block_size_for_sk = k_shape[2];
+        const uint32_t block_size_for_sk = effective_kv_block_size;
         const uint32_t max_blocks = page_table.value().padded_shape()[1];
         max_prefix_tokens_flexible = max_blocks * block_size_for_sk;
     }
@@ -288,7 +296,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "sliding_window_size: {}", sliding_window_size.has_value() ? sliding_window_size.value() : 0);
 
     const auto chunked = compute_chunked_params(
-        is_chunked, is_chunked_legacy, flexible_chunked, chunk_start_idx, page_table, k_shape[2], q_chunk_size);
+        is_chunked,
+        is_chunked_legacy,
+        flexible_chunked,
+        chunk_start_idx,
+        page_table,
+        effective_kv_block_size,
+        q_chunk_size);
     const uint32_t chunked_q_chunk_offset = chunked.chunked_q_chunk_offset;
     const uint32_t block_size = chunked.block_size;
     const uint32_t block_size_t = chunked.block_size_t;

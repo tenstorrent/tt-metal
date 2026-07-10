@@ -216,8 +216,12 @@ def _device_params():
             False,
             True,
         ),
-        (  # long-context-64k — single user, ~64k prompt. max_seq_len is a power
-            # of 2 so the prompt prefills in a single chunk (see the note below).
+        # NOTE on long-context-64k/128k/256k (bounded sliding + chunked prefill):
+        #   Bounded sliding fits 128k/256k on QB2; generator chunks at 4096 so
+        #   prefill scratch fits (single-chunk 256k OOMs ~5.6GB). Output is only
+        #   partially coherent at these lengths — known multi-chunk gap.
+        #   >=64k auto-enables bounded (override with GEMMA4_BOUNDED_SLIDING=0/1).
+        (  # long-context-64k
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
             True,
             64 * 1024,
@@ -230,19 +234,7 @@ def _device_params():
             False,
             True,
         ),
-        # NOTE on the 128k/256k entries below:
-        #   KV memory fits on QB2 (4x P300) via bounded sliding + right-sized paging,
-        #   and single-chunk prefill runs at 128k without OOM. Long context is now
-        #   coherent end-to-end (validated at 100k-token prompts) after fixing two
-        #   bugs: (1) prefill ignored the Generator's chunk_start_idx -> forced a
-        #   single prefill chunk + in-call chunked SDPA (full-attn via chunked SDPA
-        #   over the paged cache, sliding via overlapping-window SDPA); (2) the
-        #   bounded sliding cache wrote the prompt's padding tail over its real
-        #   window -> capped the bounded-cache fill to the unpadded prompt length.
-        #
-        #   max_seq_len should be a power of 2: single-chunk prefill pads the prompt
-        #   up to the next power of 2, which must fit the RoPE/KV caches.
-        (  # long-context-128k — single user, 128k prompt (bounded sliding auto-on)
+        (  # long-context-128k
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",
             True,
             128 * 1024,
@@ -255,7 +247,7 @@ def _device_params():
             False,
             True,
         ),
-        (  # long-context-256k — single user, prompt is clipped to max_seq_len - max_generated_tokens
+        (  # long-context-256k — 31B native ctx; needs chunked prefill to avoid OOM
             "models/tt_transformers/demo/sample_prompts/input_data_long_256k.json",
             True,
             256 * 1024,
@@ -406,16 +398,11 @@ def test_demo_text(
         PagedAttentionConfig(block_size=block_size, max_num_blocks=page_max_num_blocks) if paged_attention else None
     )
 
-    # Sliding-cache mode. Default: FULL (unbounded) sliding KV, which stays
-    # coherent at long context — the bounded circular ring corrupts the recent
-    # window on padded >32k prefills (see docs/bounded_sliding_kv_cache_debug.md).
-    # Full KV allocates every sliding layer at full length, so it only fits up to
-    # ~64k on this board; above that we auto-fall back to bounded sliding to avoid
-    # OOM (the 50 sliding layers cap at the 1024-token window; only the 10
-    # full-attention layers grow), accepting bounded's known >~34k degradation
-    # there. Override either way with GEMMA4_BOUNDED_SLIDING=0/1.
+    # Sliding-cache mode. Default: FULL (unbounded) for short context (~fits to
+    # 64k on QB2). At max_seq_len >= 64k auto-enable bounded sliding + chunked
+    # prefill (4096) so 128k/256k fit. Override with GEMMA4_BOUNDED_SLIDING=0/1.
     _bs_env = os.environ.get("GEMMA4_BOUNDED_SLIDING")
-    bounded_sliding = (max_seq_len > 65536) if _bs_env is None else _bs_env.lower() in ("1", "true", "yes")
+    bounded_sliding = (max_seq_len >= 65536) if _bs_env is None else _bs_env.lower() in ("1", "true", "yes")
     bounded_sliding = bounded_sliding and paged_attention
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
