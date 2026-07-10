@@ -214,9 +214,18 @@ void kernel_main() {
             q_chunk_tiles,
             cb_q_rm,
             cb_q_in,
-            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitOnly,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        // PERF OPTIMIZATION (#49266): tilize_uninit reprograms SrcA's stride + tile descriptor
+        // (num_faces, Tile_x_dim) for whichever CB it is handed. The immediate next op is the QK
+        // matmul, and matmul reads its operands REVERSED (SrcA <- in1 = cb_k_in). So hand
+        // tilize_uninit the *next* CB (cb_k_in, num_faces=4) instead of the tilized output
+        // (cb_q_in, num_faces=2): SrcA lands correct for the matmul directly, letting the
+        // per-k_chunk reconfig_data_format(cb_k_in, cb_q_in) stay IGNORE and skip a second
+        // (per-chunk) stride reprogram. Passing cb_q_in here leaves SrcA at num_faces=2, so the
+        // matmul reads K with the wrong geometry -> Top-1 0% on galaxy half-tile (nf=2) Q.
+        tilize_uninit(cb_k_in, cb_q_in);
         matmul_init(cb_q_in, cb_k_in);
     } else {
         compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
