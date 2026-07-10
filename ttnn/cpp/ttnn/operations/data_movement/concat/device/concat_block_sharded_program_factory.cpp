@@ -6,11 +6,13 @@
 
 #include <algorithm>
 #include <numeric>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::prim {
 
@@ -67,15 +69,17 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
 
     auto* device = input_tensors[0].device();
 
+    std::optional<Tile> tile = std::nullopt;
     uint32_t unit_h, unit_w, unit_size;
     if (rm_layout) {
         unit_h = 1;
         unit_w = 1;
         unit_size = element_size;
     } else {
-        unit_h = TILE_HEIGHT;
-        unit_w = TILE_WIDTH;
-        unit_size = tt::tile_size(cb_data_format);
+        tile = output.tensor_spec().tile();
+        unit_h = tile->get_height();
+        unit_w = tile->get_width();
+        unit_size = tile->get_tile_size(cb_data_format);
     }
 
     std::vector<uint32_t> input_shard_h(num_input_tensors);
@@ -100,13 +104,13 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
                 l1_alignment);
         } else {
             TT_FATAL(
-                input_shard_h[i] % TILE_HEIGHT == 0 && input_shard_w[i] % TILE_WIDTH == 0,
+                input_shard_h[i] % unit_h == 0 && input_shard_w[i] % unit_w == 0,
                 "Input {} shard shape ({}, {}) is not tile-aligned ({}x{})",
                 i,
                 input_shard_h[i],
                 input_shard_w[i],
-                TILE_HEIGHT,
-                TILE_WIDTH);
+                unit_h,
+                unit_w);
         }
     }
 
@@ -125,12 +129,12 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             l1_alignment);
     } else {
         TT_FATAL(
-            output_shard_h % TILE_HEIGHT == 0 && output_shard_w % TILE_WIDTH == 0,
+            output_shard_h % unit_h == 0 && output_shard_w % unit_w == 0,
             "Output shard shape ({}, {}) is not tile-aligned ({}x{})",
             output_shard_h,
             output_shard_w,
-            TILE_HEIGHT,
-            TILE_WIDTH);
+            unit_h,
+            unit_w);
     }
 
     auto to_units_h = [&](uint32_t h) { return h / unit_h; };
@@ -138,6 +142,9 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
 
     const uint32_t out_units_w = to_units_w(output_shard_w);
     const uint32_t dst_stride_bytes = out_units_w * unit_size;
+
+    const std::optional<TileDescriptor> tile_descriptor =
+        tile.has_value() ? std::optional<TileDescriptor>(TileDescriptor(tile.value())) : std::nullopt;
 
     // --- Circular Buffers ---
     for (uint32_t i = 0; i < num_input_tensors; i++) {
@@ -149,6 +156,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
                 .buffer_index = static_cast<uint8_t>(i),
                 .data_format = cb_data_format,
                 .page_size = unit_size,
+                .tile = tile_descriptor,
             }}},
             .buffer = input_tensors[i].buffer(),
         });
@@ -162,6 +170,7 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
             .buffer_index = static_cast<uint8_t>(cb_dst_id),
             .data_format = cb_data_format,
             .page_size = unit_size,
+            .tile = tile_descriptor,
         }}},
         .buffer = output.buffer(),
     });

@@ -23,7 +23,11 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
     tt::DataFormat act_df = datatype_to_dataformat_converter(args.input_dtype);
     tt::DataFormat out_df = datatype_to_dataformat_converter(args.output_dtype);
 
-    if (tt::tile_size(act_df) != tt::tile_size(out_df)) {
+    const uint32_t input_unit_size =
+        (input.layout() == Layout::TILE) ? input.tensor_spec().tile().get_tile_size(act_df) : tt::tile_size(act_df);
+    const uint32_t output_unit_size =
+        (input.layout() == Layout::TILE) ? input.tensor_spec().tile().get_tile_size(out_df) : tt::tile_size(out_df);
+    if (input_unit_size != output_unit_size) {
         return false;
     }
 
@@ -43,7 +47,7 @@ bool can_use_sharded_optimized_factory(const TypecastParams& args, const Typecas
             return false;
         }
         size_t shard_size_in_bytes = shard_spec.shape[0] * shard_spec.shape[1] * tt::datum_size(act_df);
-        if (shard_size_in_bytes % tt::tile_size(act_df) != 0) {
+        if (shard_size_in_bytes % input_unit_size != 0) {
             return false;
         }
     }
@@ -79,6 +83,8 @@ TypecastDeviceOperation::program_factory_t TypecastDeviceOperation::select_progr
 
 void TypecastDeviceOperation::validate_on_program_cache_miss(
     const TypecastParams& args, const TypecastInputs& tensor_args) {
+    using namespace tt::constants;
+
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
 
@@ -100,6 +106,17 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.sub_core_grids.has_value() == false,
             "Typecast operation does not support sub_core_grids when input tensor is in Row-Major layout.");
+    }
+
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto& tile = input_tensor.tensor_spec().tile();
+        TT_FATAL(
+            tile.get_width() == TILE_WIDTH, "Typecast requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
+        if (tile.get_height() < TILE_HEIGHT &&
+            (args.input_dtype == DataType::BFLOAT8_B || args.input_dtype == DataType::BFLOAT4_B ||
+             args.output_dtype == DataType::BFLOAT8_B || args.output_dtype == DataType::BFLOAT4_B)) {
+            TT_FATAL(false, "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+        }
     }
 
     const TensorMemoryLayout& input_tensor_memory_layout = input_tensor.memory_config().memory_layout();
@@ -131,6 +148,11 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        if (input_tensor.layout() == Layout::TILE) {
+            TT_FATAL(
+                preallocated_output_tensor.value().tensor_spec().tile() == input_tensor.tensor_spec().tile(),
+                "Typecast operation requires preallocated output tile shape to match input tile shape");
+        }
     }
 }
 
@@ -140,10 +162,11 @@ TensorSpec TypecastDeviceOperation::compute_output_specs(
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    const Layout output_layout = tensor_args.input.layout();
-
-    const Shape output_shape = tensor_args.input.logical_shape();
-    return TensorSpec(output_shape, TensorLayout(args.output_dtype, output_layout, args.output_memory_config));
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
+    return TensorSpec(
+        tensor_args.input.logical_shape(),
+        TensorLayout(args.output_dtype, tensor_args.input.tensor_spec().page_config(), args.output_memory_config));
 }
 
 Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args, const TypecastInputs& tensor_args) {

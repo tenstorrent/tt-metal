@@ -8,12 +8,10 @@
 #include <optional>
 #include <span>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -26,7 +24,12 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     tt::tt_metal::IDevice* device = input_tensor.device();
     ProgramDescriptor desc;
 
-    uint32_t num_unpadded_tiles = output.physical_volume() / TILE_HW;
+    const auto& tile = input_tensor.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t tile_hw = tile.get_tile_hw();
+
+    uint32_t num_unpadded_tiles = output.physical_volume() / tile_hw;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -45,7 +48,7 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    uint32_t single_tile_size = tile.get_tile_size(cb_data_format);
 
     constexpr uint8_t src0_cb_index = 0;
     constexpr uint8_t tensor_cb_index = 1;
@@ -58,8 +61,10 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
             .buffer_index = src0_cb_index,
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
+    // Scratch CB for start/end index staging (not tiled data) — leave tile unset.
     desc.cbs.push_back(CBDescriptor{
         .total_size = single_tile_size,
         .core_ranges = all_cores,
@@ -67,16 +72,13 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
             .buffer_index = tensor_cb_index,
             .data_format = cb_data_format,
             .page_size = single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
-    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_width = tile_shape[1];
-    uint32_t tile_height = tile_shape[0];
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        src0_cb_index, tensor_cb_index, num_dims, tile_width, tile_height};
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, tensor_cb_index, num_dims, tile_w, tile_h};
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*start_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*end_buffer).append_to(reader_compile_time_args);
@@ -89,11 +91,11 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     //    num_unpadded_per_dim..., num_padded_per_dim..., input_shape...]
     const auto& input_shape = input_tensor.padded_shape();
     const auto& output_shape = output.padded_shape();
-    uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
-    uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
+    uint32_t num_unpadded_Xt = output_shape[-1] / tile_w;
+    uint32_t num_total_Xt = input_shape[-1] / tile_w;
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
-    uint32_t num_unpadded_Yt = output_shape[-2] / TILE_HEIGHT;
-    uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT;
+    uint32_t num_unpadded_Yt = output_shape[-2] / tile_h;
+    uint32_t num_total_Yt = input_shape[-2] / tile_h;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
@@ -124,6 +126,7 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
 
     // Reader per-core runtime args: [start_id, num_tiles, id_per_dim...]
     // Writer per-core runtime args: [dst_addr, num_tiles, start_id]
+    // Pass Buffer* for dst so the framework can patch the address on program-cache hits.
     constexpr uint32_t start_offset = 0;
 
     KernelDescriptor writer_desc;
@@ -184,7 +187,6 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
     reader_desc.emplace_common_runtime_args(reader_common);
     reader_desc.config = ReaderConfigDescriptor{};
     desc.kernels.push_back(std::move(reader_desc));
-
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;

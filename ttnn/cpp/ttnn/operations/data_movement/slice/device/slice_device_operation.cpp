@@ -24,15 +24,18 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
     return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
 }
 
-inline __attribute__((always_inline)) uint32_t
-get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
+inline __attribute__((always_inline)) uint32_t get_upper_start_offset(
+    const ttnn::Shape& shape,
+    Layout layout,
+    const ttnn::Shape& slice_start,
+    uint32_t tile_hw = tt::constants::TILE_HW) {
     // offset for every dim except last 2
     // 64-bit: shape.volume() (element count) overflows uint32 for tensors > 4 GB.
     uint64_t start_offset = 0;
 
     uint64_t num_pages = shape.volume();
     if (layout == Layout::TILE) {
-        num_pages /= tt::constants::TILE_HW;
+        num_pages /= tile_hw;
     } else {
         uint32_t page_width = shape[-1];
         num_pages /= page_width;
@@ -50,32 +53,36 @@ get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shap
 
 inline __attribute__((always_inline)) uint32_t
 get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
-    return get_upper_start_offset(tensor.padded_shape(), tensor.layout(), slice_start);
+    const uint32_t tile_hw =
+        tensor.layout() == Layout::TILE ? tensor.tensor_spec().tile().get_tile_hw() : tt::constants::TILE_HW;
+    return get_upper_start_offset(tensor.padded_shape(), tensor.layout(), slice_start, tile_hw);
 }
 
 // Returns the start offset for a tiled tensor, given the input tensor and the slice start shape.
 // If round_up is true, and the slice_start is not aligned to a tile boundary, it will round up to the next tile.
-uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up) {
-    using namespace tt::constants;
-    uint32_t num_input_pages = input_shape.volume() / (TILE_HW);
+uint32_t get_tiled_start_offset(
+    const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up, const tt::tt_metal::Tile& tile) {
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+    const uint32_t tile_hw = tile.get_tile_hw();
+    uint32_t num_input_pages = input_shape.volume() / tile_hw;
     uint32_t upper_dims_compressed = get_upper_dims_compressed(input_shape);
-    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * tt::div_up(input_shape[-2], TILE_HEIGHT));
+    uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * tt::div_up(input_shape[-2], tile_h));
 
     // offset for every dim except last 2
-    uint32_t start_offset = get_upper_start_offset(input_shape, Layout::TILE, slice_start);
+    uint32_t start_offset = get_upper_start_offset(input_shape, Layout::TILE, slice_start, tile_hw);
 
     if (round_up) {
-        start_offset +=
-            tt::div_up(slice_start[-2], TILE_HEIGHT) * num_pages_width + tt::div_up(slice_start[-1], TILE_WIDTH);
+        start_offset += tt::div_up(slice_start[-2], tile_h) * num_pages_width + tt::div_up(slice_start[-1], tile_w);
     } else {
-        start_offset += slice_start[-2] / TILE_HEIGHT * num_pages_width + slice_start[-1] / TILE_WIDTH;
+        start_offset += slice_start[-2] / tile_h * num_pages_width + slice_start[-1] / tile_w;
     }
     return start_offset;
 }
 
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up) {
     const auto& shape = input_tensor.padded_shape();
-    return get_tiled_start_offset(shape, slice_start, round_up);
+    return get_tiled_start_offset(shape, slice_start, round_up, input_tensor.tensor_spec().tile());
 }
 
 uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
@@ -154,16 +161,31 @@ void SliceDeviceOperation::validate_on_program_cache_miss(
             args.slice_end.rank());
     }
     if (tensor_args.input.layout() == Layout::TILE) {
+        const auto& tile = tensor_args.input.tensor_spec().tile();
+        TT_FATAL(tile.get_width() == TILE_WIDTH, "slice requires tile width {}, got {}", TILE_WIDTH, tile.get_width());
         TT_FATAL(
-            tensor_args.input.physical_volume() % TILE_HW == 0,
-            "Input tensor physical volume ({}) must be divisible by TILE_HW ({})",
+            !(tile.get_height() < TILE_HEIGHT &&
+              (tensor_args.input.dtype() == DataType::BFLOAT8_B || tensor_args.input.dtype() == DataType::BFLOAT4_B)),
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+        if (tensor_args.preallocated_output.has_value()) {
+            const auto& out_tile = tensor_args.preallocated_output.value().tensor_spec().tile();
+            TT_FATAL(
+                tile.get_tile_shape() == out_tile.get_tile_shape(),
+                "Input and output tensors must have the same tile shape when layout is TILE");
+        }
+        const uint32_t tile_h = tile.get_height();
+        const uint32_t tile_w = tile.get_width();
+        const uint32_t tile_hw = tile.get_tile_hw();
+        TT_FATAL(
+            tensor_args.input.physical_volume() % tile_hw == 0,
+            "Input tensor physical volume ({}) must be divisible by tile HW ({})",
             tensor_args.input.physical_volume(),
-            TILE_HW);
+            tile_hw);
         TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (args.slice_start[-2] % TILE_HEIGHT == 0),
+            (output_tensor_shape[-2] % tile_h == 0) && (args.slice_start[-2] % tile_h == 0),
             "Can only slice tilized tensor with height begin index aligned to tiles");
         TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (args.slice_start[-1] % TILE_WIDTH == 0),
+            (output_tensor_shape[-1] % tile_w == 0) && (args.slice_start[-1] % tile_w == 0),
             "Can only slice tilized tensor with width begin index aligned to tiles");
     } else if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
         if (has_step) {
@@ -232,8 +254,9 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
                 // TILE factories require tile-aligned shards; sub-tile results from
                 // adjust_shard_spec_to_shape fall through to generate_transpose_shard_spec.
                 const bool tile_layout = input_tensor.layout() == Layout::TILE;
-                const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
-                                          adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
+                const auto& tile = input_tensor.tensor_spec().tile();
+                const bool tile_aligned =
+                    adjusted->shape[0] % tile.get_height() == 0 && adjusted->shape[1] % tile.get_width() == 0;
                 if (!tile_layout || tile_aligned) {
                     derived = std::move(adjusted);
                 }
@@ -247,9 +270,11 @@ SliceDeviceOperation::spec_return_value_t SliceDeviceOperation::compute_output_s
             tt::tt_metal::MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), derived);
     }
 
+    // Preserve the input page config (including non-32x32 / tiny tiles). PageConfig(layout)
+    // alone defaults to 32x32, which undersizes the output relative to CBs sized from the real tile.
     return ttnn::TensorSpec(
         output_tensor_shape,
-        tt::tt_metal::TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config));
+        tt::tt_metal::TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config));
 }
 
 Tensor SliceDeviceOperation::create_output_tensors(
@@ -315,6 +340,8 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         tensor_args.start_tensor.has_value());
 
     const auto& input = tensor_args.input;
+    // Include tile shape so tiny-tile programs are not reused with default 32x32 kernels.
+    const auto& tile = input.tensor_spec().tile();
     hash = ttsl::hash::hash_objects(
         hash,
         input.logical_shape().rank(),
@@ -322,7 +349,9 @@ ttsl::hash::hash_t SliceDeviceOperation::compute_program_hash(
         input.padded_shape(),
         input.layout(),
         input.dtype(),
-        input.memory_config());
+        input.memory_config(),
+        tile.get_height(),
+        tile.get_width());
 
     if (tensor_args.start_tensor.has_value()) {
         const auto& st = tensor_args.start_tensor.value();
