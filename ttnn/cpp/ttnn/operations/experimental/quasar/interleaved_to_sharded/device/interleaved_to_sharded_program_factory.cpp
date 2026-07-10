@@ -200,7 +200,13 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     KernelSpec reader{
         .unique_id = I2S_READER,
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = I2S_INPUT, .accessor_name = "src"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // Quasar: the stick-layout reader fills the output DFB with many sub-tile (per-stick) NOC reads;
+        // implicit sync mis-credits per NOC op and stalls (reader NARW / writer WFW). Revert to explicit
+        // reserve/push credits. See ~/implicit_sync.md.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
     if (is_tile) {
         reader.source =
@@ -250,7 +256,10 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
     // Writer kernel.
     KernelSpec writer{
         .unique_id = I2S_WRITER,
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
     if (dst_is_dram) {
         writer.dfb_bindings = {ConsumerOf(I2S_OUTPUT_DFB, "out")};

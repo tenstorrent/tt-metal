@@ -119,7 +119,13 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::PRODUCER},
             },
         .compile_time_args = make_cta(/*is_reader=*/1),
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // Quasar: reader/writer co-write the borrowed SRC0/DST0 DFBs with sub-tile stick copies; implicit
+        // sync mis-credits per NOC op and stalls (reader NARW / writer WFW). Revert to explicit credits.
+        // See ~/implicit_sync.md.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     KernelSpec reader{
@@ -132,7 +138,10 @@ ttnn::device_operation::ProgramArtifacts Fold::MultiCore::create_program_artifac
                 DFBBinding{.dfb_spec_name = DST0, .accessor_name = "dst0", .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .compile_time_args = make_cta(/*is_reader=*/0),
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Assemble the spec ----
