@@ -153,14 +153,21 @@ measured Blackhole TP=4 program geometry locally (`tt/prefill_moe.py`). Gate/up 
 
 - Dense 256-token layer-0 MoE: **135.51 ms -> 21.16 ms (6.40x)**, elementwise exact
   (`torch.equal=True`, `max_abs=0`).
-- Warmed full 30-layer 1024-token causal prefill: **16.3412 s -> 2.6155 s (6.25x)**,
-  final logits elementwise exact (`max_abs=0`), or about **62.7 -> 391.5 prompt tok/s**.
+- Warmed full 30-layer 1024-token model forward: **16.3414 s -> 2.6158 s (6.247x)**,
+  or about **62.7 -> 391.5 model-forward prompt tok/s**. This excludes host embedding and
+  logits readback, so it is not an end-to-end TTFT claim.
+- Production `prefill_prompt_tokens` (host embedding included, logits readback absent):
+  flag-off **16.3419 s** -> selector-unset/default-on **2.6173 s (6.244x)**.
+- Final logits and every KV-cache shard across all 30 layers and four devices are elementwise
+  exact (`max_abs=0`). A non-aligned 1001-token prompt padded to 1024 is also exact.
 - Larger 64/128-token sparse-matmul chunks were explicitly rejected despite small latency
   gains: PCC fell to roughly 0.64/0.48. The selected path retains the correct 32-token chunk.
-- The exact geometry is default-on for the supported QB2 shape; set
-  `DG_PREFILL_MOE_TUNED=0` for the stock fallback. Unsupported shapes automatically fall back.
+- The exact geometry is default-on only for the measured Blackhole QB2 `(1,4)` TP=4,
+  11x10-grid, BF16, 128-expert shape; set `DG_PREFILL_MOE_TUNED=0` for the stock fallback.
+  A context-local dispatcher prevents concurrent Gemma4 calls from inheriting the selection.
 - Evidence: `bench_chunk_sweep.py` (component geometry/exactness) and
-  `bench_prefill_e2e.py` (alternating warmed full-backbone A/B).
+  `bench_prefill_e2e.py` (alternating warmed full-backbone A/B);
+  `prefill_moe_e2e.json` retains commands, raw samples, scopes, and correctness gates.
 
 ## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)
 

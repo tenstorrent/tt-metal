@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-07-10T20:33:28.788638+00:00",
+  "git_commit": "9b0c59eafeacf61f7308ef5ce858f4517b208259",
+  "command": "models/experimental/diffusion_gemma/doc/optimize_perf/bench_prefill_e2e.py --seq-len 1024 --non-aligned-len 1001 --num-layers 30 --max-seq-len 4096 --iters 2 --output-json models/experimental/diffusion_gemma/doc/optimize_perf/prefill_moe_e2e.json",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "architecture": "Blackhole",
+    "system": "P150x4 QB2",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel": 4,
+    "compute_grid": [
+      11,
+      10
+    ]
+  },
+  "model": {
+    "name": "DiffusionGemma 26B-A4B-it",
+    "layers": 30,
+    "expert_layers_guarded": 30,
+    "expert_weight_dtype": "bfloat16"
+  },
+  "model_forward": {
+    "scope": "synchronized model forward; host embedding and logits readback excluded",
+    "raw_prompt_tokens": 1024,
+    "padded_prompt_tokens": 1024,
+    "iterations": 2,
+    "baseline_times_s": [
+      16.341327162997914,
+      16.34151828099857
+    ],
+    "tuned_times_s": [
+      2.615810153001803,
+      2.6157577270059846
+    ],
+    "baseline_mean_s": 16.341422721998242,
+    "tuned_mean_s": 2.615783940003894,
+    "speedup": 6.247237194205694,
+    "logits_exact": true,
+    "logits_max_abs": 0.0,
+    "kv_cache_exact_all_layers_all_devices": true,
+    "kv_cache_max_abs": 0.0
+  },
+  "production_prefill": {
+    "scope": "prefill_prompt_tokens; host embedding included, host logits readback absent",
+    "flag_off_times_s": [
+      16.340849716987577,
+      16.34293603900005
+    ],
+    "unset_default_times_s": [
+      2.617810294002993,
+      2.6167665740067605
+    ],
+    "flag_off_mean_s": 16.341892877993814,
+    "unset_default_mean_s": 2.6172884340048768,
+    "speedup": 6.243825734173311,
+    "unset_default_enabled": true,
+    "flag_off_result": [
+      1024,
+      1024
+    ],
+    "unset_default_result": [
+      1024,
+      1024
+    ]
+  },
+  "non_aligned_correctness": {
+    "raw_prompt_tokens": 1001,
+    "padded_prompt_tokens": 1024,
+    "logits_exact": true,
+    "logits_max_abs": 0.0
+  }
+}
