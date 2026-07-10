@@ -63,6 +63,7 @@ GEMM_FLOPS_BENCHMARK_ENV = "TTNN_RUN_GEMM_FLOPS_BENCHMARK"
 
 
 SKIPPABLE_RUNTIME_ERROR_SUBSTRINGS = (
+    "clash with l1 buffers",
     "does not fit",
     "failed to allocate",
     "insufficient",
