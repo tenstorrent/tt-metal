@@ -202,17 +202,19 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
         uint32_t n = curr_c % N;
         uint32_t start_tile = num_pages_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
-        reader_run.runtime_arg_values["N"][core] = N;
-        reader_run.runtime_arg_values["C"][core] = C;
-        reader_run.runtime_arg_values["HtWt"][core] = HtWt;
-        reader_run.runtime_arg_values["batch_step"][core] = batch_step;
-        reader_run.runtime_arg_values["channel_step"][core] = channel_step;
-        reader_run.runtime_arg_values["num_pages"][core] = num_pages_per_core;
-        reader_run.runtime_arg_values["start_id"][core] = start_tile;
-        reader_run.runtime_arg_values["hw"][core] = hw;
-        reader_run.runtime_arg_values["n"][core] = n;
-        writer_run.runtime_arg_values["num_pages"][core] = num_pages_per_core;
-        writer_run.runtime_arg_values["start_id"][core] = num_pages_read;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        reader_rtas["N"][core] = N;
+        reader_rtas["C"][core] = C;
+        reader_rtas["HtWt"][core] = HtWt;
+        reader_rtas["batch_step"][core] = batch_step;
+        reader_rtas["channel_step"][core] = channel_step;
+        reader_rtas["num_pages"][core] = num_pages_per_core;
+        reader_rtas["start_id"][core] = start_tile;
+        reader_rtas["hw"][core] = hw;
+        reader_rtas["n"][core] = n;
+        writer_rtas["num_pages"][core] = num_pages_per_core;
+        writer_rtas["start_id"][core] = num_pages_read;
 
         num_pages_read += num_pages_per_core;
     }

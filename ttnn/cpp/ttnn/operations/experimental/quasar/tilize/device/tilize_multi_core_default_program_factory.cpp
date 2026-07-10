@@ -195,27 +195,29 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreDefaultProgramFactory::c
     uint32_t tile_start_id = 0;
     uint32_t page_start_id = 0;
     const auto& cores = corerange_to_cores(available_grid);
+    KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+    KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
-        reader_run.runtime_arg_values["num_rows"][core] = nblocks_per_core * TILE_HEIGHT;
-        reader_run.runtime_arg_values["num_tiles_per_block"][core] = ntiles_per_block;
-        reader_run.runtime_arg_values["block_width_size"][core] = page_size;
-        reader_run.runtime_arg_values["num_full_blocks_in_row"][core] = 1u;
-        reader_run.runtime_arg_values["start_page_id"][core] = page_start_id;
-        writer_run.runtime_arg_values["num_pages"][core] = ntiles_per_block * nblocks_per_core;
-        writer_run.runtime_arg_values["start_id"][core] = tile_start_id;
+        reader_rtas["num_rows"][core] = nblocks_per_core * TILE_HEIGHT;
+        reader_rtas["num_tiles_per_block"][core] = ntiles_per_block;
+        reader_rtas["block_width_size"][core] = page_size;
+        reader_rtas["num_full_blocks_in_row"][core] = 1u;
+        reader_rtas["start_page_id"][core] = page_start_id;
+        writer_rtas["num_pages"][core] = ntiles_per_block * nblocks_per_core;
+        writer_rtas["start_id"][core] = tile_start_id;
         tile_start_id += ntiles_per_block * nblocks_per_core;
         page_start_id += TILE_HEIGHT * nblocks_per_core * num_pages_in_row;
     }
     if (has_cliff) {
         const CoreCoord& core = cores[ncores_full];
-        reader_run.runtime_arg_values["num_rows"][core] = nblocks_per_core_cliff * TILE_HEIGHT;
-        reader_run.runtime_arg_values["num_tiles_per_block"][core] = ntiles_per_block;
-        reader_run.runtime_arg_values["block_width_size"][core] = page_size;
-        reader_run.runtime_arg_values["num_full_blocks_in_row"][core] = 1u;
-        reader_run.runtime_arg_values["start_page_id"][core] = page_start_id;
-        writer_run.runtime_arg_values["num_pages"][core] = ntiles_per_block * nblocks_per_core_cliff;
-        writer_run.runtime_arg_values["start_id"][core] = tile_start_id;
+        reader_rtas["num_rows"][core] = nblocks_per_core_cliff * TILE_HEIGHT;
+        reader_rtas["num_tiles_per_block"][core] = ntiles_per_block;
+        reader_rtas["block_width_size"][core] = page_size;
+        reader_rtas["num_full_blocks_in_row"][core] = 1u;
+        reader_rtas["start_page_id"][core] = page_start_id;
+        writer_rtas["num_pages"][core] = ntiles_per_block * nblocks_per_core_cliff;
+        writer_rtas["start_id"][core] = tile_start_id;
     }
 
     run_args.kernel_run_args = {reader_run, writer_run};

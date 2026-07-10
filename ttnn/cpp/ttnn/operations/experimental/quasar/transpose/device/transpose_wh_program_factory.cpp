@@ -229,11 +229,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             }
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values["start_id"][node] = num_sticks_read;
-            reader_run.runtime_arg_values["num_hw_blocks"][node] = num_hw_blocks_per_core;
-            compute_run.runtime_arg_values["num_hw_blocks"][node] = num_hw_blocks_per_core;
-            writer_run.runtime_arg_values["start_id"][node] = num_sticks_write;
-            writer_run.runtime_arg_values["num_hw_blocks"][node] = num_hw_blocks_per_core;
+            KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+            reader_rtas["start_id"][node] = num_sticks_read;
+            reader_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
+            compute_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
+            writer_rtas["start_id"][node] = num_sticks_write;
+            writer_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
 
             num_sticks_read += num_hw_blocks_per_core * H;
             num_sticks_write += num_hw_blocks_per_core * W;
@@ -317,17 +320,19 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             const uint32_t w = num_tiles_read / Ht_walk % Wt_walk;
 
             const NodeCoord node = core;
-            reader_run.runtime_arg_values["num_tiles"][node] = num_tiles_per_core;
-            reader_run.runtime_arg_values["start_id"][node] =
-                tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w;
-            reader_run.runtime_arg_values["start_ht"][node] = h;
-            reader_run.runtime_arg_values["start_wt"][node] = w;
-            reader_run.runtime_arg_values["Ht"][node] = Ht_walk;
-            reader_run.runtime_arg_values["Wt"][node] = Wt_walk;
-            reader_run.runtime_arg_values["HtWt"][node] = HtWt_walk;
-            compute_run.runtime_arg_values["NHtWt"][node] = num_tiles_per_core;
-            writer_run.runtime_arg_values["num_pages"][node] = num_tiles_per_core;
-            writer_run.runtime_arg_values["start_id"][node] = num_tiles_read;
+            KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+            KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+            reader_rtas["num_tiles"][node] = num_tiles_per_core;
+            reader_rtas["start_id"][node] = tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w;
+            reader_rtas["start_ht"][node] = h;
+            reader_rtas["start_wt"][node] = w;
+            reader_rtas["Ht"][node] = Ht_walk;
+            reader_rtas["Wt"][node] = Wt_walk;
+            reader_rtas["HtWt"][node] = HtWt_walk;
+            compute_rtas["NHtWt"][node] = num_tiles_per_core;
+            writer_rtas["num_pages"][node] = num_tiles_per_core;
+            writer_rtas["start_id"][node] = num_tiles_read;
 
             num_tiles_read += num_tiles_per_core;
         }

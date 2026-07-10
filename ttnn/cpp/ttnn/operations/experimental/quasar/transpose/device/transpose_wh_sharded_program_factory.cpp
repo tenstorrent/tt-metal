@@ -172,11 +172,12 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
     for (const NodeCoord& node : cores) {
         reader_run.runtime_arg_values["num_tiles"][node] = num_blocks;
         writer_run.runtime_arg_values["num_units"][node] = num_blocks;
-        compute_run.runtime_arg_values["NHtWt"][node] = num_blocks;
-        compute_run.runtime_arg_values["HtWt"][node] = HtWt_tile_size;
-        compute_run.runtime_arg_values["N"][node] = num_hw_blocks_per_shard;
-        compute_run.runtime_arg_values["Ht"][node] = Ht_per_shard;
-        compute_run.runtime_arg_values["Wt"][node] = Wts;
+        KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
+        compute_rtas["NHtWt"][node] = num_blocks;
+        compute_rtas["HtWt"][node] = HtWt_tile_size;
+        compute_rtas["N"][node] = num_hw_blocks_per_shard;
+        compute_rtas["Ht"][node] = Ht_per_shard;
+        compute_rtas["Wt"][node] = Wts;
     }
 
     WorkUnitSpec wu{

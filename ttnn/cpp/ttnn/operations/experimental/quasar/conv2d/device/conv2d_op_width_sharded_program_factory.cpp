@@ -805,9 +805,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         uint32_t core_y = core_index / full_core_grid.x;
         CoreCoord core(core_x, core_y);
 
-        act_run_args.runtime_arg_values["this_core_x"][core] = core_x;
-        act_run_args.runtime_arg_values["this_core_y"][core] = core_y;
-        act_run_args.runtime_arg_values["num_cores_x"][core] = full_core_grid.x;
+        m2::KernelRunArgs::RuntimeArgValues& act_rtas = act_run_args.runtime_arg_values;
+        act_rtas["this_core_x"][core] = core_x;
+        act_rtas["this_core_y"][core] = core_y;
+        act_rtas["num_cores_x"][core] = full_core_grid.x;
         // X/Y mcast lookup tables as per-node varargs.
         m2::AdvancedKernelRunArgs::Varargs varargs;
         varargs.reserve(act_mcast_noc_x.size() + act_mcast_noc_y.size());
@@ -816,8 +817,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         act_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
 
         if (core_index < total_num_active_cores) {
-            weights_run_args.runtime_arg_values["init_weight_start_tile_id"][core] = core_index * weight_block_w_ntiles;
-            weights_run_args.runtime_arg_values["is_active"][core] = (uint32_t)(core_index < output_num_cores);
+            m2::KernelRunArgs::RuntimeArgValues& weights_rtas = weights_run_args.runtime_arg_values;
+            weights_rtas["init_weight_start_tile_id"][core] = core_index * weight_block_w_ntiles;
+            weights_rtas["is_active"][core] = (uint32_t)(core_index < output_num_cores);
         }
     }
 

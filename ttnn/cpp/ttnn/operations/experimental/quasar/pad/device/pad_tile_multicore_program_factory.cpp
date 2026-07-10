@@ -207,12 +207,14 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
             varargs.push_back(v);
         }
 
-        reader_run.runtime_arg_values["num_pages_to_write"][node] = num_pages_per_core;
-        reader_run.runtime_arg_values["start_offset"][node] = input_page_offset;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        reader_rtas["num_pages_to_write"][node] = num_pages_per_core;
+        reader_rtas["start_offset"][node] = input_page_offset;
         reader_run.advanced_options.runtime_varargs[node] = varargs;
 
-        writer_run.runtime_arg_values["num_pages_to_write"][node] = num_pages_per_core;
-        writer_run.runtime_arg_values["start_offset"][node] = output_page_offset;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        writer_rtas["num_pages_to_write"][node] = num_pages_per_core;
+        writer_rtas["start_offset"][node] = output_page_offset;
         writer_run.advanced_options.runtime_varargs[node] = varargs;
 
         // Advance the running per-dim indices by this core's page count (input id only advances while

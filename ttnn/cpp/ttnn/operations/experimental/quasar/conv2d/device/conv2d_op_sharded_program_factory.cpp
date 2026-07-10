@@ -1708,16 +1708,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     act_mcast_sender_id = core.x;
                     act_mcast_sender_noc_x = core_physical.y;
                 }
-                reader_run_args.runtime_arg_values["mcast_dest_noc_start_x"][core] = mcast[0];
-                reader_run_args.runtime_arg_values["mcast_dest_noc_start_y"][core] = mcast[1];
-                reader_run_args.runtime_arg_values["mcast_dest_noc_end_x"][core] = mcast[2];
-                reader_run_args.runtime_arg_values["mcast_dest_noc_end_y"][core] = mcast[3];
-                reader_run_args.runtime_arg_values["act_mcast_sender_id"][core] = act_mcast_sender_id;
-                reader_run_args.runtime_arg_values["act_mcast_sender_noc_x"][core] = act_mcast_sender_noc_x;
-                reader_run_args.runtime_arg_values["is_receiver_core"][core] = (uint32_t)is_receiver_core;
-                reader_run_args.runtime_arg_values["is_sender_core"][core] = (uint32_t)is_sender_core;
-                reader_run_args.runtime_arg_values["dram_config_reader_index"][core] =
-                    transpose_mcast ? core.x : core.y;
+                m2::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+                reader_rtas["mcast_dest_noc_start_x"][core] = mcast[0];
+                reader_rtas["mcast_dest_noc_start_y"][core] = mcast[1];
+                reader_rtas["mcast_dest_noc_end_x"][core] = mcast[2];
+                reader_rtas["mcast_dest_noc_end_y"][core] = mcast[3];
+                reader_rtas["act_mcast_sender_id"][core] = act_mcast_sender_id;
+                reader_rtas["act_mcast_sender_noc_x"][core] = act_mcast_sender_noc_x;
+                reader_rtas["is_receiver_core"][core] = (uint32_t)is_receiver_core;
+                reader_rtas["is_sender_core"][core] = (uint32_t)is_sender_core;
+                reader_rtas["dram_config_reader_index"][core] = transpose_mcast ? core.x : core.y;
                 m2::AdvancedKernelRunArgs::Varargs varargs(act_mcast_noc_y.begin(), act_mcast_noc_y.end());
                 reader_run_args.advanced_options.runtime_varargs.insert({core, std::move(varargs)});
             }
@@ -1728,10 +1728,11 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // Height-sharded reader: {core_index, remaining_tiles_to_push}.  Activation reuse is deferred, so
         // remaining_tiles_to_push is always 0.
         uint32_t core_index = 0;
+        m2::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
         for (const CoreRange& core_range : input_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
-                reader_run_args.runtime_arg_values["core_index"][core] = core_index;
-                reader_run_args.runtime_arg_values["remaining_tiles_to_push"][core] = 0u;
+                reader_rtas["core_index"][core] = core_index;
+                reader_rtas["remaining_tiles_to_push"][core] = 0u;
                 core_index++;
             }
         }
@@ -1740,20 +1741,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
 
     // ---- Writer SENDER RTAs ----
     m2::KernelRunArgs writer_sender_run_args{.kernel = KERNEL_WRITER_SENDER};
+    m2::KernelRunArgs::RuntimeArgValues& writer_sender_rtas = writer_sender_run_args.runtime_arg_values;
     for (const CoreRange& core_range : mcast_sender_cores.ranges()) {
         for (const CoreCoord& core : core_range) {
             if (populate_skipped_work_cores && !output_cores.contains(core)) {
                 // Pad-out path: zeros with only the bias-flag/skip slots populated.
-                writer_sender_run_args.runtime_arg_values["out_start_tile_id_w"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["bias_tile_offset"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_x"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_y"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_x"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_y"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["weights_mcast_num_dests"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["weights_mcast_num_cores"][core] = 0u;
-                writer_sender_run_args.runtime_arg_values["is_sender_core"][core] = 1u;
-                writer_sender_run_args.runtime_arg_values["skip_work"][core] = 1u;
+                writer_sender_rtas["out_start_tile_id_w"][core] = 0u;
+                writer_sender_rtas["bias_tile_offset"][core] = 0u;
+                writer_sender_rtas["mcast_dest_noc_start_x"][core] = 0u;
+                writer_sender_rtas["mcast_dest_noc_start_y"][core] = 0u;
+                writer_sender_rtas["mcast_dest_noc_end_x"][core] = 0u;
+                writer_sender_rtas["mcast_dest_noc_end_y"][core] = 0u;
+                writer_sender_rtas["weights_mcast_num_dests"][core] = 0u;
+                writer_sender_rtas["weights_mcast_num_cores"][core] = 0u;
+                writer_sender_rtas["is_sender_core"][core] = 1u;
+                writer_sender_rtas["skip_work"][core] = 1u;
                 continue;
             }
             uint32_t weight_slice_i = ((block_sharded && transpose_mcast) || !block_sharded) ? core.y : core.x;
@@ -1778,16 +1780,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         right_core_physical.y,
                         bottom_right_core_physical.x,
                         right_core_physical.y);
-                    writer_sender_run_args.runtime_arg_values["out_start_tile_id_w"][core] = out_start_tile_id_w;
-                    writer_sender_run_args.runtime_arg_values["bias_tile_offset"][core] = bias_tile_offset;
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_x"][core] = mcast[0];
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_y"][core] = mcast[1];
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_x"][core] = mcast[2];
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_y"][core] = mcast[3];
-                    writer_sender_run_args.runtime_arg_values["weights_mcast_num_dests"][core] = num_cores_x - 1;
-                    writer_sender_run_args.runtime_arg_values["weights_mcast_num_cores"][core] = num_cores_x - 1;
-                    writer_sender_run_args.runtime_arg_values["is_sender_core"][core] = (uint32_t)is_sender_core;
-                    writer_sender_run_args.runtime_arg_values["skip_work"][core] = 0u;
+                    writer_sender_rtas["out_start_tile_id_w"][core] = out_start_tile_id_w;
+                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
+                    writer_sender_rtas["mcast_dest_noc_start_x"][core] = mcast[0];
+                    writer_sender_rtas["mcast_dest_noc_start_y"][core] = mcast[1];
+                    writer_sender_rtas["mcast_dest_noc_end_x"][core] = mcast[2];
+                    writer_sender_rtas["mcast_dest_noc_end_y"][core] = mcast[3];
+                    writer_sender_rtas["weights_mcast_num_dests"][core] = num_cores_x - 1;
+                    writer_sender_rtas["weights_mcast_num_cores"][core] = num_cores_x - 1;
+                    writer_sender_rtas["is_sender_core"][core] = (uint32_t)is_sender_core;
+                    writer_sender_rtas["skip_work"][core] = 0u;
                 } else {
                     CoreCoord top_core = {(std::size_t)core.x, 0};
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
@@ -1798,16 +1800,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         top_left_core_plus_one_physical.y,
                         top_core_physical.x,
                         bottom_right_core_physical.y);
-                    writer_sender_run_args.runtime_arg_values["out_start_tile_id_w"][core] = out_start_tile_id_w;
-                    writer_sender_run_args.runtime_arg_values["bias_tile_offset"][core] = bias_tile_offset;
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_x"][core] = mcast[0];
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_y"][core] = mcast[1];
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_x"][core] = mcast[2];
-                    writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_y"][core] = mcast[3];
-                    writer_sender_run_args.runtime_arg_values["weights_mcast_num_dests"][core] = num_cores_y - 1;
-                    writer_sender_run_args.runtime_arg_values["weights_mcast_num_cores"][core] = num_cores_y - 1;
-                    writer_sender_run_args.runtime_arg_values["is_sender_core"][core] = (uint32_t)is_sender_core;
-                    writer_sender_run_args.runtime_arg_values["skip_work"][core] = 0u;
+                    writer_sender_rtas["out_start_tile_id_w"][core] = out_start_tile_id_w;
+                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
+                    writer_sender_rtas["mcast_dest_noc_start_x"][core] = mcast[0];
+                    writer_sender_rtas["mcast_dest_noc_start_y"][core] = mcast[1];
+                    writer_sender_rtas["mcast_dest_noc_end_x"][core] = mcast[2];
+                    writer_sender_rtas["mcast_dest_noc_end_y"][core] = mcast[3];
+                    writer_sender_rtas["weights_mcast_num_dests"][core] = num_cores_y - 1;
+                    writer_sender_rtas["weights_mcast_num_cores"][core] = num_cores_y - 1;
+                    writer_sender_rtas["is_sender_core"][core] = (uint32_t)is_sender_core;
+                    writer_sender_rtas["skip_work"][core] = 0u;
                 }
             } else {
                 std::array<uint32_t, 4> mcast = setup_mcast_args(
@@ -1816,18 +1818,18 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                     top_left_core_physical.y,
                     bottom_right_core_physical.x,
                     bottom_right_core_physical.y);
-                writer_sender_run_args.runtime_arg_values["out_start_tile_id_w"][core] = out_start_tile_id_w;
+                writer_sender_rtas["out_start_tile_id_w"][core] = out_start_tile_id_w;
                 if (has_bias) {
-                    writer_sender_run_args.runtime_arg_values["bias_tile_offset"][core] = bias_tile_offset;
+                    writer_sender_rtas["bias_tile_offset"][core] = bias_tile_offset;
                 }
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_x"][core] = mcast[0];
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_start_y"][core] = mcast[1];
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_x"][core] = mcast[2];
-                writer_sender_run_args.runtime_arg_values["mcast_dest_noc_end_y"][core] = mcast[3];
-                writer_sender_run_args.runtime_arg_values["weights_mcast_num_dests"][core] = total_active_num_cores - 1;
-                writer_sender_run_args.runtime_arg_values["weights_mcast_num_cores"][core] = total_num_cores - 1;
+                writer_sender_rtas["mcast_dest_noc_start_x"][core] = mcast[0];
+                writer_sender_rtas["mcast_dest_noc_start_y"][core] = mcast[1];
+                writer_sender_rtas["mcast_dest_noc_end_x"][core] = mcast[2];
+                writer_sender_rtas["mcast_dest_noc_end_y"][core] = mcast[3];
+                writer_sender_rtas["weights_mcast_num_dests"][core] = total_active_num_cores - 1;
+                writer_sender_rtas["weights_mcast_num_cores"][core] = total_num_cores - 1;
                 // remaining_tiles_to_push is always in the 1D schema (activation reuse deferred -> 0).
-                writer_sender_run_args.runtime_arg_values["remaining_tiles_to_push"][core] = 0u;
+                writer_sender_rtas["remaining_tiles_to_push"][core] = 0u;
             }
         }
     }
@@ -1836,6 +1838,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // ---- Writer RECEIVER RTAs ----
     if (create_writer_mcast_receiver) {
         m2::KernelRunArgs writer_receiver_run_args{.kernel = KERNEL_WRITER_RECEIVER};
+        m2::KernelRunArgs::RuntimeArgValues& writer_receiver_rtas = writer_receiver_run_args.runtime_arg_values;
         for (const CoreRange& core_range : mcast_receiver_cores.ranges()) {
             for (const CoreCoord& core : core_range) {
                 if (block_sharded) {
@@ -1852,18 +1855,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                         sender_noc_y = top_left_core_physical.y;
                     }
                     const bool is_sender_core = input_cores.contains(core);
-                    writer_receiver_run_args.runtime_arg_values["weights_mcast_sender_noc_x"][core] = sender_noc_x;
-                    writer_receiver_run_args.runtime_arg_values["weights_mcast_sender_noc_y"][core] = sender_noc_y;
-                    writer_receiver_run_args.runtime_arg_values["is_sender_core"][core] = (uint32_t)is_sender_core;
+                    writer_receiver_rtas["weights_mcast_sender_noc_x"][core] = sender_noc_x;
+                    writer_receiver_rtas["weights_mcast_sender_noc_y"][core] = sender_noc_y;
+                    writer_receiver_rtas["is_sender_core"][core] = (uint32_t)is_sender_core;
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
-                    writer_receiver_run_args.runtime_arg_values["noop"][core] = (uint32_t)is_no_op_core;
-                    writer_receiver_run_args.runtime_arg_values["weights_mcast_sender_noc_x"][core] =
-                        top_left_core_physical.x;
-                    writer_receiver_run_args.runtime_arg_values["weights_mcast_sender_noc_y"][core] =
-                        top_left_core_physical.y;
+                    writer_receiver_rtas["noop"][core] = (uint32_t)is_no_op_core;
+                    writer_receiver_rtas["weights_mcast_sender_noc_x"][core] = top_left_core_physical.x;
+                    writer_receiver_rtas["weights_mcast_sender_noc_y"][core] = top_left_core_physical.y;
                     // remaining_tiles_to_push is always in the 1D receiver schema (reuse deferred -> 0).
-                    writer_receiver_run_args.runtime_arg_values["remaining_tiles_to_push"][core] = 0u;
+                    writer_receiver_rtas["remaining_tiles_to_push"][core] = 0u;
                 }
             }
         }

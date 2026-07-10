@@ -287,18 +287,20 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreProgramFactory::create_p
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_run_args.runtime_arg_values["Mt"][core] = Mt;
-        reader_run_args.runtime_arg_values["Kt"][core] = Kt;
-        reader_run_args.runtime_arg_values["Nt"][core] = Nt;
-        reader_run_args.runtime_arg_values["MtKt"][core] = MtKt;
-        reader_run_args.runtime_arg_values["KtNt"][core] = KtNt;
-        reader_run_args.runtime_arg_values["batch"][core] = B;
-        reader_run_args.runtime_arg_values["bcast_B"][core] = uint32_t(bcast_batch);
-        reader_run_args.runtime_arg_values["output_tile_start_id"][core] = num_tiles_written;
-        reader_run_args.runtime_arg_values["num_output_tiles"][core] = num_output_tiles_per_core;
-        reader_run_args.runtime_arg_values["MtNt"][core] = MtNt;
-        writer_run_args.runtime_arg_values["num_pages"][core] = num_output_tiles_per_core;
-        writer_run_args.runtime_arg_values["start_id"][core] = num_tiles_written;
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
+        reader_rtas["Mt"][core] = Mt;
+        reader_rtas["Kt"][core] = Kt;
+        reader_rtas["Nt"][core] = Nt;
+        reader_rtas["MtKt"][core] = MtKt;
+        reader_rtas["KtNt"][core] = KtNt;
+        reader_rtas["batch"][core] = B;
+        reader_rtas["bcast_B"][core] = uint32_t(bcast_batch);
+        reader_rtas["output_tile_start_id"][core] = num_tiles_written;
+        reader_rtas["num_output_tiles"][core] = num_output_tiles_per_core;
+        reader_rtas["MtNt"][core] = MtNt;
+        ProgramRunArgs::KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run_args.runtime_arg_values;
+        writer_rtas["num_pages"][core] = num_output_tiles_per_core;
+        writer_rtas["start_id"][core] = num_tiles_written;
         num_tiles_written += num_output_tiles_per_core;
     }
 

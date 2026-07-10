@@ -407,14 +407,15 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
 
         // writer_args = {num_sticks_per_core, start_id, front_pad_n, front_pad_c, front_pad_h,
         //                start_dim_offset[0..3]} (start_dim_offset is always 4 elements: {0,h,c,n}).
-        writer_run.runtime_arg_values["num_sticks_per_core"][node] = writer_args[0];
-        writer_run.runtime_arg_values["start_id"][node] = writer_args[1];
-        writer_run.runtime_arg_values["front_pad_n"][node] = writer_args[2];
-        writer_run.runtime_arg_values["front_pad_c"][node] = writer_args[3];
-        writer_run.runtime_arg_values["front_pad_h"][node] = writer_args[4];
-        writer_run.runtime_arg_values["start_dim_h"][node] = writer_args[6];
-        writer_run.runtime_arg_values["start_dim_c"][node] = writer_args[7];
-        writer_run.runtime_arg_values["start_dim_n"][node] = writer_args[8];
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        writer_rtas["num_sticks_per_core"][node] = writer_args[0];
+        writer_rtas["start_id"][node] = writer_args[1];
+        writer_rtas["front_pad_n"][node] = writer_args[2];
+        writer_rtas["front_pad_c"][node] = writer_args[3];
+        writer_rtas["front_pad_h"][node] = writer_args[4];
+        writer_rtas["start_dim_h"][node] = writer_args[6];
+        writer_rtas["start_dim_c"][node] = writer_args[7];
+        writer_rtas["start_dim_n"][node] = writer_args[8];
     }
 
     WorkUnitSpec wu{

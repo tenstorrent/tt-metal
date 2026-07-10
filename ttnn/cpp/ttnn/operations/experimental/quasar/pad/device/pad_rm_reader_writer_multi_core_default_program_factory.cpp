@@ -276,19 +276,21 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
 
         const NodeCoord node = core;
 
-        reader_run.runtime_arg_values["num_sticks_per_core"][node] = num_sticks_per_core;
-        reader_run.runtime_arg_values["num_sticks_per_barrier"][node] = num_sticks_per_barrier;
-        reader_run.runtime_arg_values["start_page_id"][node] = curr_sticks_read * num_input_pages_in_row;
-        reader_run.runtime_arg_values["front_pad_n"][node] = static_cast<uint32_t>(front_pad[-4]);
-        reader_run.runtime_arg_values["front_pad_c"][node] = static_cast<uint32_t>(front_pad[-3]);
-        reader_run.runtime_arg_values["front_pad_h"][node] = static_cast<uint32_t>(front_pad[-2]);
-        reader_run.runtime_arg_values["start_dim_h"][node] = off_h;
-        reader_run.runtime_arg_values["start_dim_c"][node] = off_c;
-        reader_run.runtime_arg_values["start_dim_n"][node] = off_n;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        reader_rtas["num_sticks_per_core"][node] = num_sticks_per_core;
+        reader_rtas["num_sticks_per_barrier"][node] = num_sticks_per_barrier;
+        reader_rtas["start_page_id"][node] = curr_sticks_read * num_input_pages_in_row;
+        reader_rtas["front_pad_n"][node] = static_cast<uint32_t>(front_pad[-4]);
+        reader_rtas["front_pad_c"][node] = static_cast<uint32_t>(front_pad[-3]);
+        reader_rtas["front_pad_h"][node] = static_cast<uint32_t>(front_pad[-2]);
+        reader_rtas["start_dim_h"][node] = off_h;
+        reader_rtas["start_dim_c"][node] = off_c;
+        reader_rtas["start_dim_n"][node] = off_n;
 
-        writer_run.runtime_arg_values["num_sticks_per_core"][node] = num_sticks_per_core;
-        writer_run.runtime_arg_values["num_sticks_per_barrier"][node] = num_sticks_per_barrier;
-        writer_run.runtime_arg_values["start_page_id"][node] = curr_sticks_write * num_output_pages_in_row;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        writer_rtas["num_sticks_per_core"][node] = num_sticks_per_core;
+        writer_rtas["num_sticks_per_barrier"][node] = num_sticks_per_barrier;
+        writer_rtas["start_page_id"][node] = curr_sticks_write * num_output_pages_in_row;
 
         curr_sticks_write += num_sticks_per_core;
 

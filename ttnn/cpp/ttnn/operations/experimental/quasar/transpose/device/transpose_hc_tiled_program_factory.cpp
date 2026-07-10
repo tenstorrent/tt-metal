@@ -206,21 +206,23 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         uint32_t ct = num_tiles_read / Wt % Ct;
 
         const NodeCoord node = core;
-        reader_run.runtime_arg_values["WT"][node] = Wt;
-        reader_run.runtime_arg_values["H"][node] = H;
-        reader_run.runtime_arg_values["CT"][node] = Ct;
-        reader_run.runtime_arg_values["HW_bytes"][node] = HW_bytes;
-        reader_run.runtime_arg_values["CHW_bytes"][node] = CHW_bytes;
-        reader_run.runtime_arg_values["start_id"][node] = num_tiles_read;
-        reader_run.runtime_arg_values["num_tiles"][node] = num_tiles_per_core;
-        reader_run.runtime_arg_values["batch_addr"][node] = num_tiles_read / CtHWt * CHW_bytes;
-        reader_run.runtime_arg_values["h"][node] = h;
-        reader_run.runtime_arg_values["htWT"][node] = h / TILE_HEIGHT * Wt;
-        reader_run.runtime_arg_values["ct"][node] = ct;
-        reader_run.runtime_arg_values["ctoffs"][node] = ct * TILE_HEIGHT * HW_bytes;
-        reader_run.runtime_arg_values["wt"][node] = num_tiles_read % Wt;
-        writer_run.runtime_arg_values["num_pages"][node] = num_tiles_per_core;
-        writer_run.runtime_arg_values["start_id"][node] = num_tiles_read;
+        KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
+        KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
+        reader_rtas["WT"][node] = Wt;
+        reader_rtas["H"][node] = H;
+        reader_rtas["CT"][node] = Ct;
+        reader_rtas["HW_bytes"][node] = HW_bytes;
+        reader_rtas["CHW_bytes"][node] = CHW_bytes;
+        reader_rtas["start_id"][node] = num_tiles_read;
+        reader_rtas["num_tiles"][node] = num_tiles_per_core;
+        reader_rtas["batch_addr"][node] = num_tiles_read / CtHWt * CHW_bytes;
+        reader_rtas["h"][node] = h;
+        reader_rtas["htWT"][node] = h / TILE_HEIGHT * Wt;
+        reader_rtas["ct"][node] = ct;
+        reader_rtas["ctoffs"][node] = ct * TILE_HEIGHT * HW_bytes;
+        reader_rtas["wt"][node] = num_tiles_read % Wt;
+        writer_rtas["num_pages"][node] = num_tiles_per_core;
+        writer_rtas["start_id"][node] = num_tiles_read;
 
         num_tiles_read += num_tiles_per_core;
     }
