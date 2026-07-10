@@ -18,14 +18,43 @@
 #endif
 #endif  // COMPILE_FOR_TRISC
 
+#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
+#define DFB_IS_COMPUTE_MATH 1
+#else
+#define DFB_IS_COMPUTE_MATH 0
+#endif
+
+#if DFB_IS_COMPUTE_MATH
+inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
+#else
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id)
-    : local_dfb_interface_(get_local_cb_interface(logical_dfb_id)), logical_dfb_id_(logical_dfb_id) {}
+    : logical_dfb_id_(logical_dfb_id), local_dfb_interface_(get_local_cb_interface(logical_dfb_id)) {}
+#endif
 
-inline uint32_t DataflowBuffer::get_entry_size() const { return local_dfb_interface_.fifo_page_size; }
+inline uint32_t DataflowBuffer::get_entry_size() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.fifo_page_size;
+#endif
+}
 
-inline uint32_t DataflowBuffer::get_stride_size() const { return local_dfb_interface_.fifo_page_size; }
+inline uint32_t DataflowBuffer::get_stride_size() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.fifo_page_size;
+#endif
+}
 
-inline uint32_t DataflowBuffer::get_total_num_entries() const { return local_dfb_interface_.fifo_num_pages; }
+inline uint32_t DataflowBuffer::get_total_num_entries() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.fifo_num_pages;
+#endif
+}
+
 
 inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
 #ifdef COMPILE_FOR_TRISC
@@ -56,6 +85,24 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     UNPACK((llk_pop_tiles(logical_dfb_id_, num_entries)));
 #else
     cb_pop_front(logical_dfb_id_, num_entries);
+#endif
+}
+
+inline void DataflowBuffer::finish_impl() {}
+
+inline uint32_t DataflowBuffer::get_write_ptr_impl() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.fifo_wr_ptr;
+#endif
+}
+
+inline uint32_t DataflowBuffer::get_read_ptr_impl() const {
+#if DFB_IS_COMPUTE_MATH
+    return 0;
+#else
+    return local_dfb_interface_.fifo_rd_ptr;
 #endif
 }
 
@@ -100,20 +147,16 @@ inline uint32_t DataflowBuffer::read_tile_value(uint32_t tile_index, uint32_t el
 
 #else
 
-inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const { return cb_pages_reservable_at_back(logical_dfb_id_, num_pages); }
-
-inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const { return cb_pages_available_at_front(logical_dfb_id_, num_pages); }
-
-inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
-    noc.async_write_barrier();
+inline bool DataflowBuffer::pages_reservable_at_back(int32_t num_pages) const {
+    return cb_pages_reservable_at_back(logical_dfb_id_, num_pages);
 }
 
+inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const {
+    return cb_pages_available_at_front(logical_dfb_id_, num_pages);
+}
+
+inline void DataflowBuffer::write_barrier_impl(const Noc& noc) const { noc.async_write_barrier(); }
+
 #endif
-
-inline void DataflowBuffer::finish_impl() {}
-
-inline uint32_t DataflowBuffer::get_write_ptr_impl() const { return local_dfb_interface_.fifo_wr_ptr; }
-
-inline uint32_t DataflowBuffer::get_read_ptr_impl() const { return local_dfb_interface_.fifo_rd_ptr; }
 
 #endif  // !ARCH_QUASAR

@@ -265,8 +265,14 @@ private:
         // TODO: Unregister with the debugger
     }
 
-    DFBInterface& local_dfb_interface_;
     uint16_t logical_dfb_id_;
+
+    // MATH TRISC does not own fifo state (see trisc firmware: cb_interface / g_dfb_interface
+    // exist only on UNPACK/PACK). Compute kernels still construct DataflowBuffer on all TRISC
+    // threads; MATH carries logical_dfb_id_ only and no-ops sync / runtime-interface accessors.
+#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
+    DFBInterface& local_dfb_interface_;
+#endif
 
 #ifdef ARCH_QUASAR
     // Metadata for implicit sync
