@@ -37,7 +37,15 @@ def main():
     print(f"[demo] loading HF reference {pl.HF_MODEL_ID} (this loads the 80B checkpoint) ...")
     model = pl.load_reference_model()
 
-    device = ttnn.open_device(device_id=args.device_id, l1_small_size=24576)
+    # Shard-graduated (TP=8) stubs run tensor-parallel on a mesh; this 6U
+    # Blackhole Galaxy only brings FABRIC_1D up on the FULL physical mesh.
+    # Fabric is enabled via set_fabric_config BEFORE opening the mesh
+    # (open_mesh_device takes no fabric_config kwarg).
+    pl.enable_fabric_1d()
+    device = ttnn.open_mesh_device(
+        mesh_shape=ttnn.MeshShape(*pl._full_mesh_shape()),
+        l1_small_size=24576,
+    )
     try:
         pipe = pl.build_pipeline(device, model, num_layers=args.num_layers, seq_len=args.seq_len)
         print(f"[demo] prompt: {args.prompt!r}")
@@ -52,7 +60,7 @@ def main():
             print(f"[demo] graduated invocations={result['invocations']}")
         else:
             hidden_tt, l_aux_tt = pipe.run_prefill(inputs)
-            hidden = ttnn.to_torch(hidden_tt).to(torch.float32)
+            hidden = pl._mesh_to_torch(hidden_tt, device).to(torch.float32)
             if hidden.dim() == 4:
                 hidden = hidden.reshape(hidden.shape[0], hidden.shape[-2], hidden.shape[-1])
             print(f"[demo] graduated invocations={pipe.graduated_invocations()}")
@@ -64,7 +72,7 @@ def main():
         print(f"[demo] last_hidden_state[0,0,:8]={hidden[0, 0, :8].tolist()}")
         print("[demo] done — real transformer activations produced on device.")
     finally:
-        ttnn.close_device(device)
+        pl._close_device(device)
 
 
 if __name__ == "__main__":

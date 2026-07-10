@@ -74,9 +74,9 @@ class _TtTopKGate:
             self.mesh_shape = tuple(int(x) for x in device.shape)
             self.tp_axis = self._pick_tp_axis()
             self.tp = int(self.mesh_shape[self.tp_axis])
-            assert (
-                self.num_experts % self.tp == 0
-            ), f"TP={self.tp} must divide num_experts={self.num_experts} for column-parallel router"
+            assert self.num_experts % self.tp == 0, (
+                f"TP={self.tp} must divide num_experts={self.num_experts} for column-parallel router"
+            )
             dims = [None, None]
             dims[self.tp_axis] = -1  # split the output (expert) columns across TP
             self.wg = ttnn.from_torch(

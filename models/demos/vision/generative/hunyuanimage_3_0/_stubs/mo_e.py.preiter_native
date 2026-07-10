@@ -152,17 +152,14 @@ class _TtMoE:
     # ------------------------------------------------------------------
     def _build_sharded(self, torch_module):
         tp = self.tp
-        assert self.num_experts % tp == 0, f"TP={tp} must divide num_experts={self.num_experts} for expert-parallel MoE"
+        assert self.num_experts % tp == 0, (
+            f"TP={tp} must divide num_experts={self.num_experts} for expert-parallel MoE"
+        )
         epd = self.num_experts // tp
         self.experts_per_dev = epd
 
-        # Composed graduated gate: HunyuanMoE.gate == HunyuanTopKGate. On a mesh
-        # the gate stub does the column-parallel router matmul + all_gather and
-        # returns the FULL replicated [1, S, E] top-k router weights AND the
-        # load-balance l_aux, so this expert-parallel MoE composes it exactly as
-        # the single-device path does (keeps top_k_gate on the real forward path
-        # instead of an inline duplicate router).
-        self.gate = _top_k_gate.build(self.device, torch_module.gate)
+        # router wg REPLICATED (needs all experts for softmax + top-k)
+        self.wg = self._repl(torch_module.gate.wg.weight.t().contiguous())
 
         # routed experts: stack over experts, shard the expert axis (dim=0)
         # across the TP mesh axis so each TP device owns epd experts.
@@ -189,7 +186,9 @@ class _TtMoE:
     # ------------------------------------------------------------------
     def _mesh_reduce(self, x):
         """All-reduce (sum) a per-device partial across the TP mesh axis."""
-        g = ttnn.all_gather(x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
+        g = ttnn.all_gather(
+            x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear
+        )
         r = ttnn.sum(g, dim=0, keepdim=True)
         ttnn.deallocate(g)
         return r
@@ -210,11 +209,26 @@ class _TtMoE:
     def _forward_sharded(self, hidden_states, return_l_aux=False):
         x = hidden_states
 
-        # --- routing via the composed graduated gate (top_k_gate) ---
-        # The gate returns the load-balance l_aux AND the FULL normalized top-k
-        # router weights [1, S, E] (replicated across the mesh); this device then
-        # selects ITS expert columns out of that replicated router.
-        l_aux, router = self.gate(x, return_router=True)
+        # --- router (REPLICATED): softmax + top-k mask + norm_topk_prob ---
+        logits = ttnn.linear(x, self.wg)  # [1, S, E]
+        gates = ttnn.softmax(logits, dim=-1)
+        ttnn.deallocate(logits)
+        topk_vals, _ = ttnn.topk(gates, self.moe_topk, dim=-1)
+        kth = ttnn.slice(
+            topk_vals,
+            [0, 0, self.moe_topk - 1],
+            [topk_vals.shape[0], topk_vals.shape[1], self.moe_topk],
+        )
+        ttnn.deallocate(topk_vals)
+        mask = ttnn.ge(gates, kth)
+        ttnn.deallocate(kth)
+        masked = ttnn.multiply(gates, mask)
+        ttnn.deallocate(mask)
+        ttnn.deallocate(gates)
+        denom = ttnn.sum(masked, dim=-1, keepdim=True)
+        router = ttnn.multiply(masked, ttnn.reciprocal(denom))  # [1, S, E]
+        ttnn.deallocate(masked)
+        ttnn.deallocate(denom)
 
         router_local = ttnn.matmul(router, self.sel)  # [1, S, epd]
         ttnn.deallocate(router)
@@ -247,8 +261,7 @@ class _TtMoE:
         else:
             out = routed
         if return_l_aux:
-            return out, l_aux
-        ttnn.deallocate(l_aux)
+            return out, None
         return out
 
     # ------------------------------------------------------------------

@@ -12,14 +12,15 @@
 
   "graduated_modules_verification": {
     "rule": "GRADUATED = has _stubs/<name>.py.last_good_native OR .last_good_sharded snapshot; REUSE (no stub) are NOT graduated.",
+    "execution_mode": "All three stubs shard-graduated at TP=8 (each has BOTH .last_good_native and .last_good_sharded). The LIVE _stubs/*.py are the SHARDED bodies. The e2e runs the SHARDED path: full physical mesh MeshShape(8,4) + FabricConfig.FABRIC_1D, TP=8 across the length-8 mesh axis (cluster_axis), DP-replicated across the length-4 axis. This 6U Blackhole Galaxy only brings FABRIC_1D up on the FULL mesh, so partial TP sub-meshes are NOT used. Per Gate 1, a sharded (TP>1) body counts as native — it is NOT downgraded to replication.",
     "graduated": [
-      {"name": "image3_decoder_layer", "kind": "HunyuanImage3DecoderLayer", "status": "NEW", "snapshot": "_stubs/image3_decoder_layer.py.last_good_native", "per_component_pcc": 0.9999974780450809},
-      {"name": "mo_e", "kind": "HunyuanMoE", "status": "ADAPT", "snapshot": "_stubs/mo_e.py.last_good_native", "per_component_pcc": 0.9996237329502411},
-      {"name": "top_k_gate", "kind": "HunyuanTopKGate", "status": "NEW", "snapshot": "_stubs/top_k_gate.py.last_good_native", "per_component_pcc": 1.0}
+      {"name": "image3_decoder_layer", "kind": "HunyuanImage3DecoderLayer", "status": "NEW", "snapshot": "_stubs/image3_decoder_layer.py.last_good_sharded", "also": "_stubs/image3_decoder_layer.py.last_good_native", "per_component_pcc_native": 0.9999974780450809, "shard_scheme": "attn QKV column-parallel by kv-group, o_proj row-parallel (+all-reduce); MoE delegated to mo_e stub (expert-parallel)"},
+      {"name": "mo_e", "kind": "HunyuanMoE", "status": "ADAPT", "snapshot": "_stubs/mo_e.py.last_good_sharded", "also": "_stubs/mo_e.py.last_good_native", "per_component_pcc_native": 0.9996237329502411, "shard_scheme": "64 routed experts expert-parallel (8/device); routing delegated to top_k_gate stub; per-device one-hot column select + all-reduce"},
+      {"name": "top_k_gate", "kind": "HunyuanTopKGate", "status": "NEW", "snapshot": "_stubs/top_k_gate.py.last_good_sharded", "also": "_stubs/top_k_gate.py.last_good_native", "per_component_pcc_native": 1.0, "shard_scheme": "router wg column-parallel + all_gather -> full replicated logits/router; returns (l_aux, router)"}
     ],
     "not_graduated_reuse": ["self_attention", "mlp", "m_l_p", "r_m_s_norm", "image3_s_d_p_a_attention"],
-    "count_check": "3 graduated stubs present; ALL 3 must be invoked in the pipeline (Gate 2).",
-    "nesting": "These three nest: HunyuanImage3DecoderLayer.mlp = HunyuanMoE; HunyuanMoE.gate = HunyuanTopKGate. The pipeline composes them along this exact hierarchy so every graduated stub is on the one real forward path (no coverage sweep)."
+    "count_check": "3 graduated stubs present; ALL 3 must be invoked in the pipeline (Gate 2). Verified invocations={image3_decoder_layer:1, mo_e:1, top_k_gate:1}.",
+    "nesting": "These three nest: HunyuanImage3DecoderLayer.mlp = HunyuanMoE; HunyuanMoE.gate = HunyuanTopKGate. The pipeline composes them along this exact hierarchy on BOTH the native AND the sharded path so every graduated stub is on the one real forward path (no coverage sweep): the sharded decoder delegates its MoE to the sharded mo_e stub, which delegates routing to the sharded top_k_gate stub."
   },
 
   "task_heads": [
@@ -43,7 +44,7 @@
   ],
 
   "pass_criteria": {
-    "gate1_native": "Every routed graduated stub runs real ttnn ops on device (no torch fallback in the hot path). Verified by an import-time / runtime scan (no torch.* compute in run_prefill/__call__/_attention/_moe/_swiglu) and by host_op_selftest firing ZERO host aten ops in the observed forward.",
+    "gate1_native": "Every routed graduated stub runs real ttnn ops on device (no torch fallback in the hot path). A sharded (TP>1) body counts as native and is NOT rewritten to replication — the collectives are real ttnn.all_gather/ttnn.sum over the fabric. Verified by a static scan (no torch.* compute in the stub hot paths) and by host_op_selftest firing ZERO host aten ops in the observed forward.",
     "gate2_invoked": "All 3 graduated stubs (image3_decoder_layer, mo_e, top_k_gate) are invoked on the real forward path with outputs feeding downstream: top_k_gate.router -> mo_e expert-combine -> decoder-layer residual -> last_hidden_state. Asserted via a real per-instance call registry (NOT a coverage sweep).",
     "gate3_pcc": "final e2e PCC(last_hidden_state_TT, last_hidden_state_HF) >= 0.95. Printed as `e2e PCC=<v>` on its own line before the assert on every run. l_aux PCC reported alongside."
   },
@@ -60,6 +61,15 @@
     "5. Command 3: trace_capture_selftest() captures each PIPELINE_STAGE (prefill, decode) host-free and PCC-checks the trace output; build_pipeline(device, model) returns the resident pipeline object exposing the per-stage trace_setup/trace_step/write_inputs hooks."
   ],
 
+  "achieved_results": {
+    "mode": "SHARDED TP=8 on full mesh MeshShape(8,4) + FABRIC_1D",
+    "gate1_native": "PASS — static scan clean; host_op_selftest on_device=True n_host_ops=0 (fully on device, real ttnn.all_gather/ttnn.sum collectives)",
+    "gate2_invoked": "PASS — invocations={image3_decoder_layer:1, mo_e:1, top_k_gate:1}",
+    "gate3_pcc": "PASS — e2e last_hidden_state PCC=0.9997720566361482 (>= 0.95); l_aux_tt=37.50 vs l_aux_ref=37.15",
+    "command3_trace": "PASS — trace_capture_selftest: prefill captured host-free trace PCC=1.0, decode captured host-free trace PCC=1.0",
+    "num_layers": 1,
+    "seq_len": 64
+  },
   "pipeline_stages": ["prefill", "decode"],
   "shared_pipeline_module": "models/demos/vision/generative/hunyuanimage_3_0/tt/pipeline.py",
   "package_layout": {

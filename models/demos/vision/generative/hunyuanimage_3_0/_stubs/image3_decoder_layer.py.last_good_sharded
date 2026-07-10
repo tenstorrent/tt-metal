@@ -223,9 +223,9 @@ class _TtDecoderLayer:
         cfg = torch_module.self_attn
         g, hd = self.groups, self.head_dim
 
-        assert (
-            self.num_kv_heads % tp == 0
-        ), f"TP={tp} must divide num_kv_heads={self.num_kv_heads} for head-parallel attention"
+        assert self.num_kv_heads % tp == 0, (
+            f"TP={tp} must divide num_kv_heads={self.num_kv_heads} for head-parallel attention"
+        )
         kv_per_dev = self.num_kv_heads // tp
         q_per_dev = self.num_heads // tp
         self.tp_num_heads = q_per_dev
@@ -279,7 +279,9 @@ class _TtDecoderLayer:
         all_gather along the TP axis (cluster_axis) then sum, so every device on
         that axis holds the full result. Confined to the TP axis so the
         DP-replicated columns each keep their own identical full result."""
-        g = ttnn.all_gather(x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
+        g = ttnn.all_gather(
+            x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear
+        )
         r = ttnn.sum(g, dim=0, keepdim=True)
         ttnn.deallocate(g)
         return r
@@ -372,7 +374,9 @@ class _TtDecoderLayer:
             q = ttnn.rms_norm(q, epsilon=self.eps, weight=self.q_norm_w)
             k = ttnn.rms_norm(k, epsilon=self.eps, weight=self.k_norm_w)
 
-        attn = ttnn.transformer.scaled_dot_product_attention(q, k, v, is_causal=False, scale=self.scale)
+        attn = ttnn.transformer.scaled_dot_product_attention(
+            q, k, v, is_causal=False, scale=self.scale
+        )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)

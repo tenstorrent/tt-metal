@@ -50,6 +50,73 @@ from models.demos.vision.generative.hunyuanimage_3_0._stubs import image3_decode
 HF_MODEL_ID = "tencent/HunyuanImage-3.0"
 DEFAULT_PROMPT = "A serene mountain lake at sunrise, photorealistic, ultra detailed."
 
+
+# --------------------------------------------------------------------------
+# Mesh helpers. The graduated stubs are shard-graduated (TP=8): when handed a
+# `ttnn.MeshDevice` they run tensor-parallel (ShardTensor2dMesh weights +
+# all_gather/all_reduce collectives over the TP axis) — this counts as native.
+# This 6U Blackhole Galaxy only brings FABRIC_1D up on the FULL physical mesh,
+# so the resident pipeline opens the full mesh and lets the stubs confine TP to
+# the length-8 axis, DP-replicated across the other. The pipeline's OWN prefix
+# tensors (embedding table, input ids, rope cos/sin) are REPLICATED so every
+# device sees the identical inputs the sharded stubs consume.
+# --------------------------------------------------------------------------
+def _is_mesh_device(device) -> bool:
+    try:
+        if isinstance(device, ttnn.MeshDevice):
+            return True
+    except AttributeError:
+        pass
+    return hasattr(device, "get_num_devices") and hasattr(device, "get_device_ids")
+
+
+def _full_mesh_shape():
+    """Full physical mesh shape (e.g. (8, 4) on this 6U Galaxy)."""
+    return tuple(int(x) for x in ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+
+
+def _repl_mapper(device):
+    """ReplicateTensorToMesh mapper on a mesh device, else None (single-device)."""
+    return ttnn.ReplicateTensorToMesh(device) if _is_mesh_device(device) else None
+
+
+def _mesh_to_torch(ttnn_tensor, device):
+    """Mesh-safe readback: ConcatMeshToTensor(dim=0) then slice device-0's shard
+    (the sharded stubs all-reduce their output so every device holds the full
+    replicated result; device-0's shard IS the golden). Plain to_torch on a
+    single device."""
+    if isinstance(ttnn_tensor, torch.Tensor):
+        return ttnn_tensor
+    try:
+        if hasattr(ttnn, "synchronize_device"):
+            ttnn.synchronize_device(device)
+    except Exception:
+        pass
+    if _is_mesh_device(device):
+        for mk in (
+            lambda: ttnn.concat_mesh_to_tensor_composer(device, 0),
+            lambda: ttnn.ConcatMeshToTensor(device, dim=0),
+        ):
+            try:
+                composer = mk()
+            except (AttributeError, TypeError):
+                continue
+            try:
+                t = ttnn.to_torch(ttnn_tensor, mesh_composer=composer)
+            except Exception:
+                continue
+            if t is None:
+                continue
+            try:
+                n = len(device.get_device_ids()) if hasattr(device, "get_device_ids") else 1
+            except Exception:
+                n = 1
+            if t.ndim >= 1 and n > 1 and t.shape[0] % n == 0 and t.shape[0] > 1:
+                t = t[: t.shape[0] // n]
+            return t
+    return ttnn.to_torch(ttnn_tensor)
+
+
 # ForCausalLM-family -> [prefill, decode] (Command 3, derived from the config
 # architecture `HunyuanImage3ForCausalMM` — autoregressive, no encoder).
 PIPELINE_STAGES = ["prefill", "decode"]
@@ -215,13 +282,20 @@ def hf_reference_prefill(model, inputs_embeds, custom_pos_emb, num_layers):
 class _TtEmbedding:
     def __init__(self, device, wte_weight):
         self.device = device
-        # ttnn.embedding wants the [vocab, hidden] table in ROW_MAJOR.
+        # ttnn.embedding wants the [vocab, hidden] table in ROW_MAJOR. On a mesh
+        # the table is REPLICATED so each device embeds locally to the identical
+        # inputs_embeds the sharded decoder consumes.
+        kw = {}
+        mapper = _repl_mapper(device)
+        if mapper is not None:
+            kw["mesh_mapper"] = mapper
         self.weight = ttnn.from_torch(
             wte_weight.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **kw,
         )
         self.num_calls = 0
 
@@ -291,6 +365,10 @@ class HunyuanImage3Pipeline:
             "inputs_embeds": inputs_embeds,
         }
 
+    def _mesh_kw(self):
+        mapper = _repl_mapper(self.device)
+        return {"mesh_mapper": mapper} if mapper is not None else {}
+
     def _input_ids_to_device(self, input_ids):
         tok = input_ids.to(torch.int32)
         return ttnn.from_torch(
@@ -299,11 +377,13 @@ class HunyuanImage3Pipeline:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._mesh_kw(),
         )
 
     def _upload_pos(self, cos, sin):
         """Upload rope cos/sin as persistent [1,1,S,hd] ttnn buffers (the shape
-        the decoder-stub attention consumes directly on the trace fast path)."""
+        the decoder-stub attention consumes directly on the trace fast path).
+        REPLICATED on a mesh (rope tables stay replicated in the shard scheme)."""
 
         def up(t):
             return ttnn.from_torch(
@@ -312,6 +392,7 @@ class HunyuanImage3Pipeline:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **self._mesh_kw(),
             )
 
         return up(cos), up(sin)
@@ -347,10 +428,10 @@ class HunyuanImage3Pipeline:
     def run_and_compare(self, prompt: str, pcc_target: float = 0.95):
         inputs = self.make_inputs(prompt)
         hidden_tt, l_aux_tt = self.run_prefill(inputs)
-        hidden_out = ttnn.to_torch(hidden_tt).to(torch.float32)
+        hidden_out = _mesh_to_torch(hidden_tt, self.device).to(torch.float32)
         if hidden_out.dim() == 4:
             hidden_out = hidden_out.reshape(hidden_out.shape[0], hidden_out.shape[-2], hidden_out.shape[-1])
-        l_aux_out = float(ttnn.to_torch(l_aux_tt).to(torch.float32).flatten()[0])
+        l_aux_out = float(_mesh_to_torch(l_aux_tt, self.device).to(torch.float32).flatten()[0])
 
         hidden_ref, l_aux_ref = hf_reference_prefill(
             self.model, inputs["inputs_embeds"], inputs["custom_pos_emb"], self.num_layers
@@ -475,14 +556,14 @@ class HunyuanImage3Pipeline:
             setup()
             # warm program cache + reference output (eager)
             ref = step()
-            ref_t = ttnn.to_torch(ref).to(torch.float32)
+            ref_t = _mesh_to_torch(ref, device).to(torch.float32)
             ttnn.deallocate(ref)
             try:
                 tid = ttnn.begin_trace_capture(device, cq_id=0)
                 out = step()
                 ttnn.end_trace_capture(device, tid, cq_id=0)
                 ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-                out_t = ttnn.to_torch(out).to(torch.float32)
+                out_t = _mesh_to_torch(out, device).to(torch.float32)
                 ok, pcc = comp_pcc(ref_t, out_t, 0.99)
                 ttnn.release_trace(device, tid)
                 ttnn.deallocate(out)
@@ -525,11 +606,61 @@ class HunyuanImage3Pipeline:
 # --------------------------------------------------------------------------
 # MODULE-LEVEL selftest wrappers (build the resident object, then delegate).
 # --------------------------------------------------------------------------
+def enable_fabric_1d():
+    """Enable FABRIC_1D (mirrors conftest.set_fabric). `open_mesh_device` does
+    NOT take a `fabric_config` kwarg — fabric is enabled via set_fabric_config
+    BEFORE opening the mesh. Must be paired with disable_fabric() after close."""
+    ttnn.set_fabric_config(
+        ttnn.FabricConfig.FABRIC_1D,
+        ttnn.FabricReliabilityMode.STRICT_INIT,
+        None,
+        ttnn.FabricTensixConfig.DISABLED,
+        ttnn.FabricUDMMode.DISABLED,
+        ttnn.FabricManagerMode.DEFAULT,
+    )
+
+
+def disable_fabric():
+    try:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+    except Exception:
+        pass
+
+
 def _open_selftest_device():
     """Open a device for a standalone (no-arg) selftest invocation — the exact
     shape the emit-e2e host-op / trace probes use (they call these module hooks
-    with NO args). `trace_region_size` is sized for the prefill trace capture."""
-    return ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000)
+    with NO args). `trace_region_size` is sized for the prefill trace capture.
+
+    The graduated stubs are shard-graduated (TP=8) and take the tensor-parallel
+    path on a `ttnn.MeshDevice`; that path uses fabric collectives, and this 6U
+    Blackhole Galaxy only brings FABRIC_1D up on the FULL physical mesh, so
+    enable FABRIC_1D and open the full mesh (falls back to a single device only
+    if the mesh open itself is unavailable)."""
+    enable_fabric_1d()
+    try:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*_full_mesh_shape()),
+            l1_small_size=24576,
+            trace_region_size=200_000_000,
+        )
+    except Exception as e:
+        disable_fabric()
+        print(f"[pipeline] full-mesh open failed ({type(e).__name__}: {e}); falling back to single device")
+        return ttnn.open_device(device_id=0, l1_small_size=24576, trace_region_size=200_000_000)
+
+
+def _close_device(device):
+    """Close either a MeshDevice or a single device, then disable fabric."""
+    is_mesh = _is_mesh_device(device)
+    try:
+        if is_mesh and hasattr(ttnn, "close_mesh_device"):
+            ttnn.close_mesh_device(device)
+        else:
+            ttnn.close_device(device)
+    finally:
+        if is_mesh:
+            disable_fabric()
 
 
 def trace_capture_selftest(device=None, model=None, **kwargs):
@@ -550,7 +681,7 @@ def trace_capture_selftest(device=None, model=None, **kwargs):
         return ok_all, results
     finally:
         if own:
-            ttnn.close_device(device)
+            _close_device(device)
 
 
 def host_op_selftest(device=None, model=None, **kwargs):
@@ -565,7 +696,7 @@ def host_op_selftest(device=None, model=None, **kwargs):
         return pipe.host_op_selftest()
     finally:
         if own:
-            ttnn.close_device(device)
+            _close_device(device)
 
 
 # --------------------------------------------------------------------------

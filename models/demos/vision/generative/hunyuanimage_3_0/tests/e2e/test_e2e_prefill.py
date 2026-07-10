@@ -26,7 +26,17 @@ import re
 import pytest
 import torch
 
+import ttnn
 from models.demos.vision.generative.hunyuanimage_3_0.tt import pipeline as pl
+
+# The graduated stubs are shard-graduated (TP=8): on a mesh they run
+# tensor-parallel (counts as native). This 6U Blackhole Galaxy only brings
+# FABRIC_1D up on the FULL physical mesh, so open the full mesh + FABRIC_1D
+# (exactly what the sharded per-component PCC tests use).
+try:
+    _MESH = tuple(int(x) for x in ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
+except Exception:
+    _MESH = (1, 8)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STUBS_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "_stubs"))
@@ -77,11 +87,16 @@ def test_gate1_stub_sources_are_native_ttnn():
     assert not offenders, f"Gate 1 FAIL — torch host compute in graduated stubs: {offenders}"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_e2e_prefill_gates(device_params, device):
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 24576, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [_MESH], indirect=True)
+def test_e2e_prefill_gates(device_params, mesh_device):
     torch.manual_seed(0)
     model = _get_model()
-    pipe = pl.build_pipeline(device, model)
+    pipe = pl.build_pipeline(mesh_device, model)
 
     result = pipe.run_and_compare(PROMPT, pcc_target=PCC_TARGET)
 

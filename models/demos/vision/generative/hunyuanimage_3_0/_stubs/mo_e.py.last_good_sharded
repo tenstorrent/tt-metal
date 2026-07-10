@@ -152,7 +152,9 @@ class _TtMoE:
     # ------------------------------------------------------------------
     def _build_sharded(self, torch_module):
         tp = self.tp
-        assert self.num_experts % tp == 0, f"TP={tp} must divide num_experts={self.num_experts} for expert-parallel MoE"
+        assert self.num_experts % tp == 0, (
+            f"TP={tp} must divide num_experts={self.num_experts} for expert-parallel MoE"
+        )
         epd = self.num_experts // tp
         self.experts_per_dev = epd
 
@@ -189,7 +191,9 @@ class _TtMoE:
     # ------------------------------------------------------------------
     def _mesh_reduce(self, x):
         """All-reduce (sum) a per-device partial across the TP mesh axis."""
-        g = ttnn.all_gather(x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear)
+        g = ttnn.all_gather(
+            x, dim=0, cluster_axis=self.tp_axis, num_links=1, topology=ttnn.Topology.Linear
+        )
         r = ttnn.sum(g, dim=0, keepdim=True)
         ttnn.deallocate(g)
         return r

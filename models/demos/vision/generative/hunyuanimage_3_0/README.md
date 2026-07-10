@@ -33,6 +33,25 @@ Graduated stubs, composed along the real HF nesting
 Every graduated stub is invoked on this one real forward path with its output
 feeding downstream computation (no coverage sweep). All ops are native ttnn.
 
+## Tensor-parallel (TP=8) execution
+
+All three stubs are **shard-graduated at TP=8** (each `_stubs/*.py` carries a
+`.last_good_sharded` snapshot alongside `.last_good_native`). The live stubs are
+the **sharded** bodies, and the pipeline runs them tensor-parallel on the **full
+physical mesh** `MeshShape(8, 4)` with `FabricConfig.FABRIC_1D`:
+
+- TP=8 across the length-8 mesh axis (`cluster_axis`), **DP-replicated** across
+  the length-4 axis. This 6U Blackhole Galaxy only brings FABRIC_1D up on the
+  full physical mesh, so partial TP sub-meshes are not used.
+- attention QKV column-parallel by kv-group, o_proj row-parallel (+ `all_gather`
+  + `sum` all-reduce); MoE experts expert-parallel (8/device, all-reduced);
+  router `wg` column-parallel (+ `all_gather` → full replicated logits).
+- a sharded (TP>1) body **counts as native** (Gate 1) — the collectives are real
+  `ttnn.all_gather` / `ttnn.sum` over the fabric, not a replication downgrade.
+- the sharded decoder delegates its MoE to the sharded `mo_e` stub, which
+  delegates routing to the sharded `top_k_gate` stub — the SAME nesting the
+  single-device path uses, so all three stubs stay on the one forward path.
+
 ## Package layout
 
 ```
@@ -48,15 +67,15 @@ models/demos/vision/generative/hunyuanimage_3_0/
   e2e_plan.json         the planner sketch (Command 1)
 ```
 
-## Results (Blackhole, single chip, N=1 layer, seq_len=64)
+## Results (Blackhole 6U Galaxy, TP=8 full mesh (8,4) + FABRIC_1D, N=1 layer, seq_len=64)
 
 | gate | metric | result |
 |---|---|---|
 | Gate 1 (native) | `host_op_selftest` host aten ops | **0** (fully on device) |
-| Gate 2 (invoked) | graduated stubs invoked | `image3_decoder_layer`, `mo_e`, `top_k_gate` (all) |
-| Gate 3 (PCC) | e2e PCC(last_hidden_state) vs HF golden | **0.9997** (≥ 0.95) |
+| Gate 2 (invoked) | graduated stubs invoked | `image3_decoder_layer`, `mo_e`, `top_k_gate` (all, ×1 each) |
+| Gate 3 (PCC) | e2e PCC(last_hidden_state) vs HF golden | **0.99977** (≥ 0.95) |
 | — | MoE `l_aux` (tt vs ref) | 37.50 vs 37.15 |
-| per-component | image3_decoder_layer / mo_e / top_k_gate PCC | 0.99999 / 0.9996 / 1.0 |
+| per-component (native) | image3_decoder_layer / mo_e / top_k_gate PCC | 0.99999 / 0.9996 / 1.0 |
 | Command 3 (trace) | prefill / decode trace capture, host-free PCC | 1.0 / 1.0 |
 
 ## Run
