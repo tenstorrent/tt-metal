@@ -330,6 +330,30 @@ class TtPrefillRuntime:
             index_kv_cache=kv_caches[1] if len(kv_caches) > 1 else None,
         )
 
+    def read_slot_kv(self, kv_cache: ttnn.Tensor, slot: int):
+        """Pairwise-migration primitive (bring-up only): the slot's raw stored kvpe cache block for a
+        dst==src compare — a single host tensor ``[num_layers, 1, seq_cache, kvpe]`` (one TP replica). No
+        un-rotation: both migration endpoints carry the same block-cyclic layout, so a raw compare is
+        rotation-invariant. The common validator (common/prefill/runners/validation.py) compares src vs
+        dst element-wise. DRAM_MEMORY_CONFIG on the slice is REQUIRED — kvpe_cache is ND-sharded
+        ROUND_ROBIN_1D, and slicing into another ND-shard miscomputes the DRAM core on host read-back."""
+        mesh_device = self.mesh_device
+        num_layers = self.config.num_layers
+        s = list(kv_cache.shape)
+        sl = ttnn.slice(
+            kv_cache,
+            [slot * num_layers, 0, 0, 0],
+            [(slot + 1) * num_layers, s[1], s[2], s[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        block = ttnn.to_torch(
+            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        ).float()[
+            :, :1
+        ]  # [num_layers, 1, seq_cache, kvpe]
+        ttnn.deallocate(sl)
+        return [block]
+
     def kv_cache_pcc_check(
         self, kv_caches: KvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
     ) -> float:

@@ -35,9 +35,12 @@ def _hf_to_meta_rotary_perm(head_dim: int, rotary_dim: int) -> torch.Tensor:
     return torch.tensor(src, dtype=torch.long)
 
 
-def kv_cache_pcc_check(runtime, kv_cache, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0):
+def kv_cache_pcc_check(
+    runtime, kv_cache, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0, real_len=None
+):
     """PCC the populated ``kv_cache`` (slot ``slot_id``) against the golden trace; return the min per-layer
-    PCC across K / V / index_k and assert it clears the threshold (unless record-only).
+    PCC across K / V / index_k and assert it clears the threshold (unless record-only). ``real_len`` further
+    caps the compared extent to the real (non-pad) tokens (used by the migration validators).
 
     Env:
       PREFILL_STANDALONE_CHUNKED_PCC          min PCC threshold (default 0.95)
@@ -54,8 +57,10 @@ def kv_cache_pcc_check(runtime, kv_cache, *, slot_id: int, n_chunks: int, trace_
 
     with open(Path(trace_dir) / "metadata.json") as f:
         token_ids = list(json.load(f)["token_ids"])
-    # Compare only the real prompt tokens this run actually filled (chunk-aligned cap).
+    # Compare only the real prompt tokens this run actually filled (chunk-aligned cap; real_len tightens it).
     n_tokens = min(len(token_ids), n_chunks * chunk_size)
+    if real_len:
+        n_tokens = min(n_tokens, real_len)
 
     head_dim = hf_config.head_dim
     rotary_dim = getattr(hf_config, "rotary_dim", head_dim)

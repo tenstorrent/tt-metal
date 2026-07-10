@@ -11,8 +11,9 @@ it says where M3's config / weights / trace live and how to build its runtime; a
 
 M3 subclasses ``PrefillModelAdapter`` directly (not the DeepSeek MLA base): it is a different
 architecture (GQA + block-sparse MSA) with a REGULAR TP-head-sharded triple KV cache (K / V / index_k),
-not the DeepSeek merged/replicated kvpe cache. Only single-rank prefill is wired — no pipeline (D2D)
-and no migration (the KV-chunk-table builder does not yet support M3's multi-tensor cache).
+not the DeepSeek merged/replicated kvpe cache. Only single-rank prefill is wired — no pipeline (D2D).
+KV-chunk-table migration IS wired: the multi-tensor cache is described by a multi-config table (one
+config per (tensor, head-shard); see ``tt/runners/kv_chunk_table.py``).
 
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough

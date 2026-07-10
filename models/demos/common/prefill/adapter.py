@@ -18,7 +18,7 @@ Two layers:
     DeepSeek-V3 family ships a shared ``MLAPrefillAdapter`` base (MLA attention +
     MoE) with thin ``DeepSeekV3Adapter`` / ``KimiK26Adapter`` subclasses; a
     different architecture subclasses ``PrefillModelAdapter`` directly with its own
-    KV layout. See ``runners/ADDING_A_PREFILL_MODEL.md``.
+    KV layout. See ``docs/ADDING_A_PREFILL_MODEL.md``.
 
 Import-safety: this module and every concrete adapter must stay light enough to
 import in the serving process — NO reference-modeling / safetensors imports at
@@ -129,7 +129,7 @@ class PrefillModelAdapter(ABC):
     # where this model's config / weights live and how to build its runtime. All
     # operational behavior (running a chunk, the KV layout, the migration table,
     # PCC) lives on the runtime that build_runtime returns — see the runtime
-    # contract in runners/ADDING_A_PREFILL_MODEL.md. The engine owns all comms.
+    # contract in docs/ADDING_A_PREFILL_MODEL.md. The engine owns all comms.
     # =====================================================================
     @abstractmethod
     def load_hf_config(self) -> "PretrainedConfig":
@@ -237,7 +237,8 @@ ADAPTER_PATHS = {
     # GLM-5.1: sparse-attention (DSA) variant with a full prefill serving runtime (adapters/glm_5_1.py).
     "glm_5_1": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1:GLM51Adapter",
     # MiniMax-M3 (GQA + block-sparse MSA; regular TP-head-sharded triple KV cache). Single-rank
-    # prefill only — no pipeline (D2D) and no KV-chunk-table migration yet.
+    # prefill only — no pipeline (D2D). KV-chunk-table migration is wired via a multi-config table
+    # (one config per (tensor, head-shard); see tt/runners/kv_chunk_table.py).
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # DeepSeek-V3.2-Exp: DSA, still test-only (config + sparse-MLA reference parity; serving not wired).
     "deepseek_v32": "models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla:DeepSeekV32Adapter",

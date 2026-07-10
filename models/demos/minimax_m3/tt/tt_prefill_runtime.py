@@ -8,7 +8,8 @@ Mirrors the DeepSeek ``TtPrefillRuntime`` contract so the model-agnostic prefill
 ``MiniMaxM3PrefillAdapter``: build model -> compile(kv_cache) -> prefill_chunk(chunk, kv_cache) per
 chunk. The runtime is STATELESS w.r.t. the KV cache — the engine allocates it (via the adapter's
 ``allocate_kv_cache``) and passes it into every call that touches it. Only single-rank prefill is
-wired (no pipeline / D2D, no KV-chunk-table migration).
+wired (no pipeline / D2D). KV-chunk-table migration is supported via ``build_kv_chunk_table`` (a
+multi-config table; see ``tt/runners/kv_chunk_table.py``).
 
 Input convention (shared with the engine's H2D socket): ``make_chunk_input`` returns the chunk's
 token IDs as an SP-sharded uint32 tensor — the SAME per-chip layout the request-mode socket delivers.
@@ -314,15 +315,84 @@ class TtPrefillRuntime:
         index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
         return k, v, index_k
 
+    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+        """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
+        ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
+        comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
+        Single-rank only (asserted in __init__)."""
+        from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
+
+        c = self.config
+        return build_and_serialize_kv_chunk_table(
+            mesh_device=self.mesh_device,
+            kv_cache=kv_cache,
+            seq_len=c.max_seq_len,
+            num_layers=c.num_layers,
+            mesh_shape=c.mesh_shape,
+            sp_axis=c.sp_axis,
+            num_users=c.num_users,
+            chunk_size=c.chunk_size,
+            num_kv_heads=self.hf_config.num_key_value_heads,
+            head_dim=self.hf_config.head_dim,
+            path=path,
+        )
+
+    def read_slot_kv(self, kv_cache, slot: int):
+        """Pairwise-migration primitive (bring-up only): the slot's raw stored cache blocks for a dst==src
+        compare, one host tensor per cache tensor — ``[k, v, index_k]``, each ``[num_layers, heads(or 1),
+        seq_cache, head_dim]`` (index_k collapsed to one TP replica). No un-rotation: both migration
+        endpoints carry the same block-cyclic layout, so a raw compare is rotation-invariant. The common
+        validator (common/prefill/runners/validation.py) compares src vs dst blocks element-wise.
+        DRAM_MEMORY_CONFIG on the slice is REQUIRED — the cache is ND-sharded ROUND_ROBIN_1D, and slicing
+        into another ND-shard miscomputes the DRAM core on host read-back."""
+        mesh_device = self.mesh_device
+        num_layers = self.config.num_layers
+
+        def _block(tensor, collapse_tp: bool):
+            s = list(tensor.shape)
+            sl = ttnn.slice(
+                tensor,
+                [slot * num_layers, 0, 0, 0],
+                [(slot + 1) * num_layers, s[1], s[2], s[3]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            block = ttnn.to_torch(
+                sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+            ).float()  # [num_layers, nkv (or cols), seq_cache, head_dim]
+            ttnn.deallocate(sl)
+            return block[:, :1] if collapse_tp else block
+
+        return [_block(kv_cache.k, False), _block(kv_cache.v, False), _block(kv_cache.index_k, True)]
+
     def kv_cache_pcc_check(
-        self, kv_cache, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self,
+        kv_cache,
+        *,
+        slot_id: int,
+        n_chunks: int,
+        trace_dir=None,
+        first_layer_idx: int = 0,
+        real_len=None,
+        pt_path_override=None,
     ) -> float:
         """Optional bring-up hook (never called in production serving). PCC the populated engine-owned
         ``kv_cache`` for ``slot_id`` against the golden trace; returns the min per-layer PCC and asserts
         on failure (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's
-        validation module so the PCC logic lives in one place."""
+        validation module so the PCC logic lives in one place. ``real_len`` caps the compared extent to the
+        real (non-pad) tokens; ``pt_path_override`` (per-slot .pt golden) is unsupported for M3 (trace-dir
+        goldens only) and rejected if set."""
+        if pt_path_override is not None:
+            raise NotImplementedError(
+                "MiniMax-M3 kv_cache_pcc_check has no per-slot .pt golden path; use PREFILL_TRACE_DIR"
+            )
         from models.demos.minimax_m3.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
-            self, kv_cache, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
+            self,
+            kv_cache,
+            slot_id=slot_id,
+            n_chunks=n_chunks,
+            trace_dir=trace_dir,
+            first_layer_idx=first_layer_idx,
+            real_len=real_len,
         )
