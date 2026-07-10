@@ -551,6 +551,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     }
 
     auto& dispatch_query_manager = MetalContext::instance().get_dispatch_query_manager();
+    // Host enables dispatch_s for this config
     ASSERT_TRUE(dispatch_query_manager.dispatch_s_enabled());
 
     auto& dispatch_core_manager = MetalContext::instance().get_dispatch_core_manager();
@@ -561,6 +562,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
         EXPECT_EQ(dispatch_core_type, CoreType::DISPATCH);
     }
 
+    // dispatch_s is wired in topology/core manager
     const auto dispatch_s_core = quasar_dispatch_s_virtual_core(device);
     ASSERT_TRUE(dispatch_s_core.has_value());
 
@@ -568,6 +570,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarDispatchSInstantiatedAndRunning)
     const uint16_t channel = MetalContext::instance().get_cluster().get_assigned_channel_for_device(chip);
     const auto& dispatch_s_logical = dispatch_core_manager.dispatcher_s_core(chip, channel, 0);
     const auto& dispatch_logical = dispatch_core_manager.dispatcher_core(chip, channel, 0);
+    // dispatch_s and dispatch share the same logical coord
     EXPECT_EQ(dispatch_s_logical.x, dispatch_logical.x);
     EXPECT_EQ(dispatch_s_logical.y, dispatch_logical.y);
 
