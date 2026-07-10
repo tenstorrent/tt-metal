@@ -409,11 +409,7 @@ class DispatcherData:
                 programmable_core_type = self._ProgrammableCoreTypes_DRAM
                 enum_values = self._enum_values_dram
             case "dispatch":
-                if (
-                    self._dispatch_dm_elf is None
-                    or not self._enum_values_dispatch
-                    or not self._dispatch_enabled_flag
-                ):
+                if self._dispatch_dm_elf is None or not self._enum_values_dispatch or not self._dispatch_enabled_flag:
                     raise TTTriageError("Dispatch DM ELF not available for dispatch block type (Quasar only)")
                 programmable_core_type = self._ProgrammableCoreTypes_DISPATCH
                 enum_values = self._enum_values_dispatch
