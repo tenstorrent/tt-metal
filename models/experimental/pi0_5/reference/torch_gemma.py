@@ -248,9 +248,14 @@ class GemmaAttention:
         # Apply RoPE
         q, k = apply_rotary_emb(q, k, cos, sin, position_ids)
 
-        # Handle KV cache
+        # Handle KV cache. The cached prefix KV may be a different dtype than the suffix q/k/v
+        # (e.g. bf16 prefix from a PI0_BF16_VLM run vs fp32 suffix, or vice versa). Align to q's
+        # dtype so the concat + downstream matmuls don't hit a scalar-type mismatch.
         if past_key_value is not None:
             past_k, past_v = past_key_value
+            if past_k.dtype != k.dtype:
+                past_k = past_k.to(k.dtype)
+                past_v = past_v.to(v.dtype)
             k = torch.cat([past_k, k], dim=2)
             v = torch.cat([past_v, v], dim=2)
 
@@ -262,7 +267,10 @@ class GemmaAttention:
         k_expanded = k.expand(batch_size, self.num_heads, kv_len, self.head_dim)
         v_expanded = v.expand(batch_size, self.num_heads, kv_len, self.head_dim)
 
-        # Compute attention scores
+        # Compute attention scores (align K/V dtype to Q — see KV-cache note above).
+        if k_expanded.dtype != q.dtype:
+            k_expanded = k_expanded.to(q.dtype)
+            v_expanded = v_expanded.to(q.dtype)
         attn_weights = torch.matmul(q, k_expanded.transpose(-2, -1)) * self.scale
 
         # Apply mask

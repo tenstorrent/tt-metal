@@ -8,8 +8,17 @@ Tests Pi0.5 model with adaRMS conditioning.
 
 Config:
     - Checkpoint: $TT_METAL_HOME/models/experimental/pi0_5/weights/pi05_base
-    - Full denoising: 10 steps
+    - Full denoising: 10 steps (override with PI05_NUM_DENOISE_STEPS)
     - Batch size: 1
+
+PCC note (pi05_base, action_horizon=50):
+    - PI0_UPSTREAM_MASKS is defaulted on (openpi-compat masks + prefix-offset suffix RoPE) — without
+      it e2e PCC collapses to ~0.60 (wrong suffix positions corrupt the bidirectional attention).
+    - With it, e2e PCC is ~0.95 (5 steps) / ~0.92 (10 steps). The remaining gap to 0.99 is the
+      inherent bf8-weight / bf16-activation compute precision compounding across the 18-layer VLM +
+      18-layer expert + denoise loop (per-block PCC is 0.99+; the fp32 reference itself only reaches
+      ~0.85 vs the bf16-trained checkpoint — see torch_pi0_5_model._use_bf16_vlm). The 0.99 gate was
+      calibrated for the horizon-10 pi05_libero checkpoint (fewer suffix tokens -> less compounding).
 
 Usage:
     python test_pcc_pi05_model.py
@@ -19,6 +28,13 @@ import sys
 import os
 import time
 from pathlib import Path
+
+# pi05_base is the upstream-openpi checkpoint: it needs the openpi-compat attention masks +
+# prefix-offset suffix RoPE positions. Without PI0_UPSTREAM_MASKS the suffix uses [0..seq) positions,
+# which corrupts the bidirectional suffix cross-attention and tanks e2e PCC (~0.60 -> ~0.95).
+# setdefault so an explicit shell export still wins. Must run before any pi0_5 import.
+os.environ.setdefault("PI0_UPSTREAM_MASKS", "1")
+os.environ.setdefault("PI0_DENOISE_FP32", "1")  # fp32 Euler accumulator (parity; marginal +PCC)
 
 import torch
 import ttnn
@@ -58,6 +74,7 @@ def create_pi05_config() -> PI0ModelConfig:
         paligemma_variant="gemma_2b",
         action_expert_variant="gemma_300m",
         pi05=True,  # Enable Pi0.5 mode
+        num_denoising_steps=int(os.environ.get("PI05_NUM_DENOISE_STEPS", "10")),
     )
     config.siglip_config = SigLIPConfig(
         hidden_size=1152,
