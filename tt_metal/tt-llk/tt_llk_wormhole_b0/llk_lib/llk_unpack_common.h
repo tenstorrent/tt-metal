@@ -182,7 +182,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_A)); // update gpr which holds tile size A
 
-    if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
+    if constexpr (true)  // EXPERIMENT #45127/#49266: always reprogram dim+stride to the new operand's geometry
     {
         // Re-establish the canonical Z-stride baseline for srcA. Per-op brackets that mutate
         // this register (unpack-to-dest in unpack_A / unpack_tilize) restore to this baseline,
@@ -263,7 +263,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     cfg_reg_rmw_tensix<THCON_SEC1_REG2_Out_data_format_RMW>(unpack_dst_format);
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size), 0, LO_16(p_gpr_unpack::TILE_SIZE_B)); // update gpr which holds tile size B
 
-    if constexpr (dim_stride_target == p_dim_stride_target::FACE_ROW_MAJOR)
+    if constexpr (true)  // EXPERIMENT #45127/#49266: always reprogram dim+stride to the new operand's geometry
     {
         std::uint32_t unpack_ch1_x_stride = datum_size_in_bytes(unpack_dst_format);
         std::uint32_t unpack_ch1_z_stride = FACE_C_DIM * FACE_R_DIM * unpack_ch1_x_stride;
