@@ -603,10 +603,23 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # On very large graphs (e.g. the gemma-4-26B-A4B all-expert MoE decode,
+                # ~1600 device ops per step) the on-device profiler occasionally drops a
+                # single op's timing row, which otherwise aborts the WHOLE report. When
+                # TT_PERF_ALLOW_MISSING_DEVICE_OPS=1, skip such ops (with a warning) so the
+                # report still assembles for the ~1599 ops that were captured. (Advisor
+                # shard-advise harness change; documented in SHARD_ADVISE_CHANGES.md.)
+                if os.environ.get("TT_PERF_ALLOW_MISSING_DEVICE_OPS") == "1":
+                    logger.warning(
+                        f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                        f"for device {device_id} (trace_id={host_trace_id}) -- skipped (lenient mode)"
+                    )
+                    continue
+                assert candidates, (
+                    f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                    f"for device {device_id} (trace_id={host_trace_id})"
+                )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
