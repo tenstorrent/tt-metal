@@ -6,3 +6,4 @@
 {"event":"test_run","result":"pass","details":"Acceptance test: 28/28 passed (bf16, self/cross, mha/gqa/mqa, none/custom mask, auto/explicit scale). Fix: non-in-place pre-scale cb_q->cb_qs.","ts":"2026-07-10T14:58:30+00:00"}
 {"event":"test_run","result":"pass","details":"Debug multi-KV-block suite 7/7 pass (online-softmax recurrence j>0, Q-chunking, multi-core, D=128, uneven KV). PCC>=0.99.","ts":"2026-07-10T14:59:53+00:00"}
 {"event":"fix_applied","details":"Fixed m_run CB leak between Q-blocks on same core (drain cb_m_run after normalize). Long-context multi-head 4096 PCC 0.9676->0.99998. Also made accumulation-path CBs fp32. Acceptance 28/28, debug 10/10.","ts":"2026-07-10T15:07:54+00:00"}
+{"event":"test_run","result":"pass","details":"Golden bounded subset (bf16 tile_aligned small shapes): 24 passed, 12 xfailed (causal refused), 0 failed, 0 xpassed. SUPPORTED/EXCLUSIONS wiring correct, no drift.","ts":"2026-07-10T15:09:20+00:00"}
