@@ -220,10 +220,30 @@ AllGatherDeviceOperation::create_op_performance_model(
 }
 
 AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_program_factory(
-    const AllGatherParams& /*args*/, const AllGatherInputs& /*tensor_args*/) {
-    // TODO if tensor_size > 1MB && FABRIC_1D_RING || NEIGHBOR_EXCHANGE -> unicast
-    // 0.26MB for 0.5byte, 0.81MB for 1byte, 1.035MB for 2byte, 0.685MB for 4byte
-    return AllGatherMulticastFactory{};
+    const AllGatherParams& /*args*/, const AllGatherInputs& tensor_args) {
+    // Heuristics to pick the kernel algorithm
+    bool use_unicast = false;
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE) {
+        // NeighborExchange only permits 1-hop unicast
+        use_unicast = true;
+    } else if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
+        // Ring: multicast for small tensors and unicast for large tensors
+        const auto& input_tensor = tensor_args.input_tensor;
+        const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
+        const bool large_page = input_tensor.buffer()->page_size() >= 4096;  // fp32 / int32 / wide row-major
+        switch (input_tensor.device()->arch()) {
+            case tt::ARCH::WORMHOLE_B0:
+                use_unicast = num_pages >= (large_page ? 20u : 64u);  // large pages cross far earlier
+                break;
+            case tt::ARCH::BLACKHOLE:
+                use_unicast = !large_page && num_pages >= 128u;  // large pages never lose -> multicast
+                break;
+            default: break;  // uncalibrated arch
+        }
+    }
+
+    return use_unicast ? program_factory_t{AllGatherUnicastFactory{}} : program_factory_t{AllGatherMulticastFactory{}};
 }
 
 std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
