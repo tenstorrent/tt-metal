@@ -108,10 +108,14 @@ void RunTestOnCore(
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
 
-    // IDLE_ETH cores only support SD (FD not yet implemented)
-    // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
+    if (tt::tt_metal::MetalContext::instance().rtoptions().watcher_noc_sanitize_disabled()) {
+        GTEST_SKIP();
+    }
+
+    // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
+    // All other cores (TENSIX/ACTIVE_ETH, including Quasar) run under fast dispatch.
     if (fixture->IsSlowDispatch() && !is_idle_eth_core) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+        GTEST_SKIP() << "Slow Dispatch only runs IDLE_ETH core tests";
     }
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
