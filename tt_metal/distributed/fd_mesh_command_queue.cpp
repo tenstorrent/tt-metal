@@ -25,6 +25,7 @@
 #include "buffer_types.hpp"
 #include "device.hpp"
 #include "impl/device/device_impl.hpp"
+#include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
@@ -184,15 +185,14 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
     }
 
     // Log warnings instead of aborting - destructors should never throw or abort.
-    // These conditions indicate a problem but the process should be allowed to continue
-    // so that subsequent tests can run and the device can be properly reset.
+    // Only observe reader-owned state here: the completion reader thread may still
+    // pop completion_queue_reads_ and update num_outstanding_reads_ until join().
     if (!is_mock) {
         if (!completion_queue_reads_.empty()) {
             log_warning(
                 LogMetal,
                 "FDMeshCommandQueue destructor: completion reader queue is not empty. "
                 "This may indicate a device hang or timeout occurred.");
-            completion_queue_reads_.clear();
         }
 
         for (const auto& queue : read_descriptors_) {
@@ -205,7 +205,7 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
             }
         }
 
-        if (auto reads = num_outstanding_reads_.exchange(0); reads != 0) {
+        if (auto reads = num_outstanding_reads_.load(); reads != 0) {
             log_warning(
                 LogMetal,
                 "FDMeshCommandQueue destructor: {} outstanding reads remaining. "
@@ -221,6 +221,11 @@ FDMeshCommandQueue::~FDMeshCommandQueue() {
         reader_thread_cv_.notify_one();
     }
     completion_queue_reader_thread_.join();
+
+    // After join(), this destructor has exclusive ownership of reader state and
+    // can safely perform destructive cleanup.
+    completion_queue_reads_.clear();
+    num_outstanding_reads_.store(0);
 }
 
 void FDMeshCommandQueue::populate_read_descriptor_queue() {
@@ -253,6 +258,47 @@ void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
 CoreCoord FDMeshCommandQueue::virtual_program_dispatch_core() const { return this->dispatch_core_; }
 
 CoreType FDMeshCommandQueue::dispatch_core_type() const { return this->dispatch_core_type_; }
+
+bool FDMeshCommandQueue::record_watcher_error_in_test_mode(ChipId device_id) {
+    const auto error_message = tt::llrt::internal_::get_watcher_error_message_in_test_mode(device_id);
+    if (!error_message.has_value()) {
+        return false;
+    }
+
+    try {
+        TT_THROW("{}", *error_message);
+    } catch (...) {
+        {
+            std::lock_guard<std::mutex> exception_lock(exception_mutex_);
+            thread_exception_ptr_ = std::current_exception();
+            should_handle_exception_.store(true);
+        }
+
+        thread_exception_state_.store(true);
+        exit_condition_.store(true);
+        reads_processed_cv_.notify_all();
+        reader_thread_cv_.notify_all();
+        return true;
+    }
+}
+
+void FDMeshCommandQueue::wait_for_outstanding_reads(std::unique_lock<std::mutex>& reads_processed_lock) {
+    const auto predicate = [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); };
+
+    const auto& rtoptions = MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions();
+    if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled()) {
+        const ChipId device_id = mesh_device_->get_devices().at(0)->id();
+        constexpr auto poll_interval = std::chrono::milliseconds(100);
+        while (num_outstanding_reads_.load() != 0 && !thread_exception_state_.load()) {
+            if (record_watcher_error_in_test_mode(device_id)) {
+                return;
+            }
+            reads_processed_cv_.wait_for(reads_processed_lock, poll_interval, predicate);
+        }
+    } else {
+        reads_processed_cv_.wait(reads_processed_lock, predicate);
+    }
+}
 
 void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     if (this->get_target_device_type() == tt::TargetDevice::Mock ||
@@ -289,8 +335,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(
-        lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    this->wait_for_outstanding_reads(lock);
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
@@ -621,8 +666,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
     auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
-    reads_processed_cv_.wait(
-        lock, [this] { return num_outstanding_reads_.load() == 0 || thread_exception_state_.load(); });
+    this->wait_for_outstanding_reads(lock);
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
@@ -636,6 +680,7 @@ void FDMeshCommandQueue::finish_nolock(ttsl::Span<const SubDeviceId> sub_device_
             num_outstanding_reads_.store(0);
             reads_processed_cv_.notify_all();
             lock.unlock();
+            in_use_ = false;
             std::rethrow_exception(exception_ptr);
         }
     }
@@ -903,7 +948,7 @@ void FDMeshCommandQueue::read_completion_queue() {
         return;
     }
 
-    while (!thread_exception_state_.load()) {
+    while (!thread_exception_state_.load() && !exit_condition_.load()) {
         try {
             {
                 std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
@@ -915,6 +960,9 @@ void FDMeshCommandQueue::read_completion_queue() {
 
             uint32_t num_reads = num_outstanding_reads_.load();
             for (uint32_t i = 0; i < num_reads; i++) {
+                if (thread_exception_state_.load() || exit_condition_.load()) {
+                    return;
+                }
                 auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
                     [&](auto&& mesh_read_descriptor) {
@@ -928,6 +976,9 @@ void FDMeshCommandQueue::read_completion_queue() {
                         }
                     },
                     mesh_read_descriptor);
+            }
+            if (thread_exception_state_.load() || exit_condition_.load()) {
+                return;
             }
             std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
             num_outstanding_reads_.fetch_sub(num_reads);
@@ -1011,6 +1062,9 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
                                .get_assigned_channel_for_device(device->id());
         device->sysmem_manager().completion_queue_wait_front(id_, exit_condition_);
 
+        if (exit_condition_.load()) {
+            return;
+        }
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor,
             mmio_device_id,

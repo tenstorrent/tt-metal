@@ -156,28 +156,23 @@ CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt
 
 # gtest filter -> test name table. Names match deployment_tests_dram_glx (outlogix).
 # eth_bandwidth uses a trailing wildcard so it picks up BandwidthBidir automatically
-# if/when it gets added to sources.cmake. Today the build only registers Bandwidth.
 TESTS = {
-    # ETH tests are temporarily disabled; they will be re-enabled once the ETH
-    # tests are updated.
-    # "eth_link_up": "*TensixDeploymentEthernetLinkUp",
-    # "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
+    "eth_link_up": "*TensixDeploymentEthernetLinkUp",
+    "eth_bandwidth": "*TensixDeploymentEthernetBandwidth*",
     "gddr_fast": "*DramDeployment_PersistentOptimalWorkersAllDramBanks",
     "gddr_full": "*DramDeployment_*",
-    # Source files for these tests exist in the branch but are NOT in
-    # tests/tt_metal/tt_metal/deployment/sources.cmake, so they never get
-    # compiled into unit_tests_deployment. Uncomment + add to TIER_TESTS once
-    # outlogix lands the CMake change.
-    # "eth_bandwidth_bidir":  "*TensixDeploymentEthernetBandwidthBidir",
-    # "eth_data_integrity":   "*TensixDeploymentEthernetDataIntegrityDram",
 }
 
+# Tests executed per tier. ETH deployment tests (added in tt-metal #49215 and
+# compiled via tests/tt_metal/tt_metal/deployment/sources.cmake) are enabled here
+# to match the tier layout documented in run_diag.sh:
+#   light  -> eth link_up
+#   medium -> light + eth bandwidth + GDDR fast-pattern
+#   deploy -> full GDDR patterns + eth bandwidth
 TIER_TESTS = {
-    # ETH tests are temporarily disabled; they will be re-enabled once the ETH
-    # tests are updated.
-    "light": [],  # "eth_link_up"
-    "medium": ["gddr_fast"],  # "eth_link_up", "eth_bandwidth"
-    "deploy": ["gddr_full"],  # "eth_link_up", "eth_bandwidth"
+    "light": ["eth_link_up"],
+    "medium": ["gddr_fast", "eth_link_up", "eth_bandwidth"],
+    "deploy": ["gddr_full", "eth_link_up", "eth_bandwidth"],
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -56,6 +56,37 @@ _MOE_UNSUPPORTED_REASON = (
     "checkpoints (e.g. gemma-4-26B-A4B). Dense targets (12B, 31B) run this test."
 )
 
+
+def _is_pli_model(model_path):
+    """True for per-layer-input (MatFormer) checkpoints (e.g. gemma-4-E2B/E4B).
+
+    These models carry a per-layer input embedding (``hidden_size_per_layer_input``)
+    that must be fed to every layer. Packed verify drives ``self(...)`` through
+    ``ttnn_packed_verify_forward`` without threading PLI, so a PLI model falls into
+    ``Gemma4Model._compute_per_layer_inputs(None, None)`` and raises. PLI is not
+    wired through the speculative-verify path yet, so packed verify is unsupported
+    on these checkpoints (tracked in #49022). Dense non-PLI targets (12B, 31B) are
+    unaffected. Detect it cheaply from the config (no weights loaded) so we can skip
+    before ``from_pretrained`` — which also avoids writing the weight cache on the
+    read-only NAS mount used by CI e2e.
+    """
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+        tc = getattr(cfg, "text_config", cfg)
+        return bool(getattr(tc, "hidden_size_per_layer_input", 0))
+    except Exception:
+        return False
+
+
+_PLI_UNSUPPORTED_REASON = (
+    "packed verify does not thread per-layer inputs (PLI) through the verify forward, so "
+    "PLI/MatFormer checkpoints (e.g. gemma-4-E2B/E4B) hit _compute_per_layer_inputs(None, None) "
+    "and raise. Unsupported until PLI is wired through the speculative-verify path (see #49022). "
+    "Dense non-PLI targets (12B, 31B) run this test."
+)
+
 _L1_OVERFLOW_REASON = (
     "packed-verify global-layer SDPA (head_dim=512, fp32-accum, P candidates folded into "
     "heads) exceeds this core's L1 at the current TP. The per-core footprint shrinks ~TP×, "
@@ -85,6 +116,9 @@ def test_packed_verify_matches_sequential(mesh_device, reset_seeds):
 
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
+
+    if _is_pli_model(model_path):
+        pytest.skip(_PLI_UNSUPPORTED_REASON)
 
     # Single-device (TP=1) is unsupported for packed verify on the 12B model: the
     # global layers (global_head_dim=512) run the packed SDPA with fp32_dest_acc_en
@@ -235,6 +269,9 @@ def test_packed_verify_batch_perf(mesh_device, reset_seeds):
         pytest.skip("set HF_MODEL (target) to run")
     if _is_moe_model(model_path):
         pytest.skip(_MOE_UNSUPPORTED_REASON)
+
+    if _is_pli_model(model_path):
+        pytest.skip(_PLI_UNSUPPORTED_REASON)
     if mesh_device.get_num_devices() == 1:
         pytest.skip("single-device L1 limit: use a TP mesh (e.g. 1x4)")
 
