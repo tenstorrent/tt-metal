@@ -13,7 +13,6 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels conv2d/device/kernels/*)
 target_sources(
     ttnn_op_conv
     PUBLIC

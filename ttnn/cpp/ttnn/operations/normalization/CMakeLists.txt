@@ -16,11 +16,6 @@ set_target_properties(
 file(
     GLOB_RECURSE kernels
     batch_norm/device/kernels/*
-    groupnorm/device/kernels/*
-    layernorm/device/kernels/*
-    layernorm_distributed/device/kernels/*
-    rmsnorm_distributed/device/kernels/*
-    softmax/device/kernels/*
     kernel_util/compute/*
     kernel_util/dataflow/*
     kernel_util/generic/*

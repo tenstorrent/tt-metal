@@ -6,6 +6,8 @@ from typing import Optional
 
 import ttnn
 
+# SDPA op was nuked for agent evaluation, but the SDPAProgramConfig type
+# (sdpa_config.hpp) survives and is still bound; re-export it for compatibility.
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 
 
@@ -81,16 +83,7 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
     return torch.softmax(input_tensor, -1)
 
 
-ttnn.attach_golden_function(
-    ttnn.transformer.attention_softmax,
-    golden_function=_golden_function,
-)
-
-
-ttnn.attach_golden_function(
-    ttnn.transformer.attention_softmax_,
-    golden_function=_golden_function,
-)
+# attention_softmax / attention_softmax_ nuked for agent evaluation.
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):
