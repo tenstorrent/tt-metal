@@ -83,6 +83,8 @@ from models.experimental.hunyuan_image_3_0.tt.model import HunyuanTtModel, defau
 from models.experimental.hunyuan_image_3_0.tt.image_gen.patch_embed import HunyuanTtUNetDown, HunyuanTtUNetUp
 from models.experimental.hunyuan_image_3_0.tt.image_gen.timestep_embedder import HunyuanTtTimestepEmbedder
 from models.experimental.hunyuan_image_3_0.tt.pipeline import HunyuanTtDenoiseStep, denoise_loop, decode_latent
+from models.experimental.hunyuan_image_3_0.tt.denoise_dual_cq import open_denoise_mesh
+from models.experimental.hunyuan_image_3_0.tt.vae_dual_cq import open_vae_mesh
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
 
 # Host ref TimestepEmbedder for the gen-timestep / guidance / timestep_r continuous tokens
@@ -199,7 +201,7 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
     H = c["H"]
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
+    mesh_device = open_denoise_mesh(ttnn.MeshShape(2, 2), l1_small_size=32768)
     try:
         mesh_device.enable_program_cache()
         ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
@@ -377,7 +379,7 @@ def run_denoise(c, down_sd, up_sd, init_latent, text_embeds, text_embeds_uncond=
 def run_vae_decode(latent_bchw):
     """TTNN VAE decode (H/W-spatial-parallel) on a fresh 2x2 mesh -> RGB [B,3,H,W]."""
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    vae_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
+    vae_mesh = open_vae_mesh(ttnn.MeshShape(2, 2))
     try:
         vae_mesh.enable_program_cache()
         vae_ccl = CCLManager(vae_mesh, num_links=1, topology=ttnn.Topology.Linear)

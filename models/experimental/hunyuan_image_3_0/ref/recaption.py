@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -137,6 +138,130 @@ def default_recaption_sampling_config(
     )
 
 
+_QUAD_RE = re.compile(r"<quad><pos_x_(-?\d+)><pos_y_(-?\d+)><pos_x_(-?\d+)><pos_y_(-?\d+)></quad>")
+_DEFAULT_QUAD = "<quad><pos_x_0><pos_y_0><pos_x_999><pos_y_999></quad>"
+
+
+def _recaption_tail_looks_like_garbage(text: str) -> bool:
+    if not text:
+        return False
+    if "<table>" in text or "<tr>" in text:
+        return True
+    cjk = sum(1 for ch in text if "\u4e00" <= ch <= "\u9fff")
+    if cjk >= 8:
+        return True
+    return len(text) > 300
+
+
+def sanitize_recaption_cot_text(
+    cot_text: str,
+    *,
+    recaption_open: str,
+    recaption_close: str,
+) -> str:
+    """Clamp malformed device AR recaption before it is injected into image gen."""
+    if recaption_open not in cot_text:
+        return cot_text
+
+    body = cot_text.split(recaption_open, 1)[1]
+    if recaption_close in body:
+        body = body.split(recaption_close, 1)[0]
+        return recaption_open + body + recaption_close
+
+    for junk in ("<|endoftext|>", "<|pad|>"):
+        if junk in body:
+            body = body.split(junk, 1)[0]
+    body = body.strip()
+
+    quad_match = _QUAD_RE.search(body)
+    if quad_match:
+        quad = quad_match.group(0)
+        tail = body[quad_match.end() :].strip()
+        if tail and not _recaption_tail_looks_like_garbage(tail):
+            body = f"{quad}{tail}"
+        else:
+            body = quad
+    else:
+        body = re.sub(r"<quad>.*", "", body, flags=re.DOTALL).strip()
+        if body and not _recaption_tail_looks_like_garbage(body):
+            body = f"{_DEFAULT_QUAD}{body}"
+        else:
+            body = _DEFAULT_QUAD
+
+    if _recaption_tail_looks_like_garbage(body):
+        body = _DEFAULT_QUAD
+
+    return recaption_open + body + recaption_close
+
+
+def _strip_recaption_body(cot_text: str, *, recaption_open: str, recaption_close: str) -> str:
+    if recaption_open not in cot_text:
+        return ""
+    body = cot_text.split(recaption_open, 1)[1]
+    if recaption_close in body:
+        body = body.split(recaption_close, 1)[0]
+    return body.strip()
+
+
+def extract_recaption_written_prompt(
+    cot_text: str,
+    *,
+    recaption_open: str,
+    recaption_close: str,
+) -> str:
+    """Human-readable prose inside ``<recaption>`` (after optional ``<quad>`` block)."""
+    body = _strip_recaption_body(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    if not body:
+        return ""
+    quad_match = _QUAD_RE.search(body)
+    if quad_match:
+        body = body[quad_match.end() :].strip()
+    body = re.sub(r"<[^>]+>", "", body)
+    body = re.sub(r"<\|[^|]+\|>", "", body)
+    return body.strip()
+
+
+def extract_think_prose(
+    cot_text: str,
+    *,
+    think_open: str,
+    think_close: str | None = None,
+    recaption_open: str | None = None,
+) -> str:
+    """Thinking prose before ``<recaption>`` when ``bot_task`` includes think."""
+    if think_open not in cot_text:
+        return ""
+    body = cot_text.split(think_open, 1)[1]
+    if recaption_open and recaption_open in body:
+        body = body.split(recaption_open, 1)[0]
+    elif think_close and think_close in body:
+        body = body.split(think_close, 1)[0]
+    body = re.sub(r"<[^>]+>", "", body)
+    body = re.sub(r"<\|[^|]+\|>", "", body)
+    return body.strip()
+
+
+def is_meager_recaption_cot(
+    cot_text: str,
+    *,
+    recaption_open: str,
+    recaption_close: str,
+    min_prose_chars: int = 20,
+) -> bool:
+    """True when AR output has no meaningful rewritten prompt (e.g. quad-only)."""
+    prose = extract_recaption_written_prompt(cot_text, recaption_open=recaption_open, recaption_close=recaption_close)
+    prose = "".join(ch for ch in prose if ch.isalnum() or ch.isspace()).strip()
+    return len(prose) < min_prose_chars
+
+
+def prompt_fallback_recaption_cot(tok: HunyuanTokenizer, prompt: str) -> str:
+    """Wrap the user prompt when on-device AR cannot produce prose."""
+    sp = tok.special
+    recaption_open = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
+    recaption_close = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
+    return f"{recaption_open}{prompt}{recaption_close}"
+
+
 def decode_cot_text(
     tok: HunyuanTokenizer,
     sequences: torch.Tensor,
@@ -178,6 +303,13 @@ def decode_cot_text(
             if end_recaption_str in recaption_part:
                 recaption_part = recaption_part.split(end_recaption_str, 1)[0]
             cot_text = recaption_str + recaption_part + end_recaption_str
+
+        if "recaption" in bot_task:
+            cot_text = sanitize_recaption_cot_text(
+                cot_text,
+                recaption_open=recaption_str,
+                recaption_close=end_recaption_str,
+            )
 
         cot_texts.append(cot_text)
     return cot_texts

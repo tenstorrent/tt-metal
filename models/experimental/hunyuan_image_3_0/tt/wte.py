@@ -94,3 +94,47 @@ class HunyuanTtWte(LightweightModule):
         out = self.to_torch(emb_tt, batch=input_ids.shape[0], seq=input_ids.shape[1]).to(dtype=dtype)
         ttnn.deallocate(emb_tt)
         return out
+
+
+class BackboneWteAdapter:
+    """Reuse ``HunyuanTtModel.embed_weight`` for trace decode (no duplicate wte upload)."""
+
+    def __init__(self, model):
+        if getattr(model, "embed_weight", None) is None:
+            raise ValueError("backbone has no embed_weight; pass wte_weight for HunyuanTtWte")
+        self.model = model
+
+    def embed(self, input_ids: torch.Tensor | ttnn.Tensor) -> ttnn.Tensor:
+        if isinstance(input_ids, torch.Tensor):
+            kwargs = dict(
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.model.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if hasattr(self.model.device, "get_num_devices") and self.model.device.get_num_devices() > 1:
+                kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(self.model.device)
+            ids_tt = ttnn.from_torch(input_ids.to(torch.int32), **kwargs)
+            hidden = self.model.embed(ids_tt)
+            ttnn.deallocate(ids_tt)
+            return hidden
+        return self.model.embed(input_ids)
+
+    def embedding_torch(
+        self,
+        input_ids: torch.Tensor,
+        *,
+        dtype: torch.dtype = torch.float32,
+        mesh_mapper=None,
+    ) -> torch.Tensor:
+        """On-device embed + download (reuses backbone embed_weight, no second upload)."""
+        emb_tt = self.embed(input_ids)
+        bsz, seq = input_ids.shape[0], input_ids.shape[1]
+        if hasattr(self.model.device, "get_num_devices") and self.model.device.get_num_devices() > 1:
+            out = ttnn.to_torch(emb_tt, mesh_composer=ttnn.ConcatMeshToTensor(self.model.device, dim=0))
+            out = out[:bsz]
+        else:
+            out = ttnn.to_torch(emb_tt)
+        out = out.reshape(bsz, seq, self.model.hidden_size).float().to(dtype=dtype)
+        ttnn.deallocate(emb_tt)
+        return out

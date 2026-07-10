@@ -26,7 +26,13 @@
 # Host recaption fallback (requires NVIDIA CUDA): HY_RECAPTION_DEVICE=0
 # On TT-only systems, host recaption auto-falls back to the on-device path.
 #
+# Trace / 2CQ ON (default): HY_TRACE=1 — recaption KV trace; denoise execute_trace when steps > 8.
+# VAE decode + cond VAE/ViT encode trace default OFF: HY_VAE_DECODE_TRACE=1 HY_COND_ENCODE_TRACE=1
+# Trace / 2CQ OFF: HY_TRACE=0 — eager 1CQ everywhere.
+#
 # Debug DiT vs VAE decoder: HY_DIT_HOST=1 runs denoise on host PyTorch, TT VAE decode unchanged.
+#
+# All on-device stages share one pipeline mesh (open once, release between stages, close at end).
 
 from __future__ import annotations
 
@@ -112,6 +118,13 @@ from models.experimental.hunyuan_image_3_0.tt.vision.i2i_bundle import (
 )
 from models.experimental.hunyuan_image_3_0.tt.recaption import run_recaption_on_device
 from models.experimental.hunyuan_image_3_0.tt.scheduler import HunyuanTtScheduler
+from models.experimental.hunyuan_image_3_0.tt.trace_config import (
+    invalidate_cond_encode_traces,
+    open_pipeline_mesh,
+    print_trace_policy,
+    release_pipeline_traces,
+    release_stage_resources,
+)
 from models.experimental.hunyuan_image_3_0.tt.wte import HunyuanTtWte
 
 from models.experimental.hunyuan_image_3_0.ref.system_prompt import get_system_prompt
@@ -431,6 +444,7 @@ def main():
         f"[demo_i2i] model={model_dir}  variant={variant}  bot_task={args.bot_task}  "
         f"image_size={image_size}  steps={steps}  cond={args.cond!r}"
     )
+    print_trace_policy(prefix="[demo_i2i]", denoise_steps=steps)
 
     c = _cfg(model_dir)
     H = c["H"]
@@ -448,132 +462,146 @@ def main():
     timestep_emb_distil = load_timestep_embedder("timestep_emb", model_dir, hidden_size=H)
     t = _mark("1_setup_weights", t)
 
+    recap_system = None
     if args.bot_task != "image":
         sp_key, sp_sub = system_prompt_for_bot_task(args.bot_task)
         recap_system = get_system_prompt(sp_key, sp_sub)
-        print(f"[demo_i2i] recaption stage (bot_task={args.bot_task}) ...")
-
-        if _use_tt_recaption():
-            # Cond encode on its own mesh so VAE/ViT weights are released before the
-            # recaption backbone + ~1GB LM head load (same pattern as denoise below).
-            print("[demo_i2i] opening recaption cond mesh (2x2) ...", flush=True)
-            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-            recap_cond_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
-            try:
-                recap_cond_mesh.enable_program_cache()
-                (
-                    wte_tt,
-                    cond_patch_embed,
-                    cond_time_embed,
-                    cond_timestep_emb,
-                    vision_tt,
-                    aligner_tt,
-                ) = _load_i2i_cond_stack(recap_cond_mesh, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
-                print("[demo_i2i] building recaption AR bundle (wte → VAE encode → ViT inject) ...", flush=True)
-                recap_bundle = prepare_recaption_ar_bundle_tt(
-                    recap_cond_mesh,
-                    tok,
-                    args.prompt,
-                    proc,
-                    wte_tt,
-                    cond_images=cond_for_bundle,
-                    bot_task=args.bot_task,
-                    system_prompt=recap_system,
-                    sequence_template="instruct",
-                    model_dir=model_dir,
-                    vision=vision_tt,
-                    aligner=aligner_tt,
-                    cond_patch_embed=cond_patch_embed,
-                    cond_time_embed=cond_time_embed,
-                    cond_timestep_emb=cond_timestep_emb,
-                    seed=SEED,
-                )
-            finally:
-                ttnn.close_mesh_device(recap_cond_mesh)
-                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-
-            prefix_len = int(recap_bundle.input_ids.shape[1])
-            print(
-                f"[demo_i2i] recaption prefix_len={prefix_len} layers={RECAPTION_LAYERS} "
-                f"max_new_tokens={MAX_NEW_TOKENS} kv_cache={RECAPTION_KV}",
-                flush=True,
-            )
-
-            print("[demo_i2i] opening recaption mesh (2x2) ...", flush=True)
-            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-            recap_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
-            try:
-                recap_mesh.enable_program_cache()
-                recap_ccl = CCLManager(recap_mesh, num_links=1, topology=ttnn.Topology.Linear)
-
-                def rep(t):
-                    return ttnn.from_torch(
-                        t,
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=recap_mesh,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(recap_mesh),
-                    )
-
-                t0 = time.time()
-                recap_sp = 1 if RECAPTION_KV else 2
-                print(
-                    f"[demo_i2i] loading recaption backbone ({RECAPTION_LAYERS} layers, sp={recap_sp}) ...", flush=True
-                )
-                recap_backbone = _build_backbone(
-                    recap_mesh,
-                    recap_ccl,
-                    c,
-                    weights,
-                    num_layers=RECAPTION_LAYERS,
-                    apply_final_norm=True,
-                    sp_factor=recap_sp,
-                    model_cache_name=model_cache_name,
-                )
-                print(f"[demo_i2i] recaption backbone ready ({time.time() - t0:.0f}s)", flush=True)
-                print("[demo_i2i] loading LM head ...", flush=True)
-                lm_head = HunyuanTtLMHead(recap_mesh, {"lm_head.weight": weights.load("lm_head.weight")})
-                recap_config = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
-                recap_result = run_recaption_on_device(
-                    recap_backbone,
-                    lm_head,
-                    recap_mesh,
-                    recap_bundle,
-                    tok,
-                    args.bot_task,
-                    proc,
-                    wte_weight=wte,
-                    image_size=image_size,
-                    config=recap_config,
-                    generator=gen,
-                    replicate_to_mesh=rep,
-                )
-                cot_text = recap_result.cot_text[0]
-                if recap_result.image_size != image_size:
-                    image_size = recap_result.image_size
-            finally:
-                ttnn.close_mesh_device(recap_mesh)
-                ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-        else:
+        if not _use_tt_recaption():
+            print(f"[demo_i2i] recaption stage (bot_task={args.bot_task}) on host CUDA ...")
             cot_text, image_size = _run_recaption_host(
                 model_dir, weights, args.prompt, args.bot_task, recap_system, pil_list, image_size
             )
-
-        print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
-        t = _mark("2_recaption_ar", t)
+            print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
+            t = _mark("2_recaption_ar", t)
 
     denoise_system = get_system_prompt("en_unified", "image")
     guidance_emb = load_timestep_embedder("guidance_emb", model_dir, hidden_size=H) if cfg_distilled else None
     timestep_r_emb = load_timestep_embedder("timestep_r_emb", model_dir, hidden_size=H) if use_meanflow else None
 
-    # Cond encode (VAE + ViT + cond patch/time embed) on its own mesh so weights are
-    # released before the resident denoise backbone loads (~19GB/device).
-    print("[demo_i2i] opening cond mesh (2x2) for VAE/ViT encode ...", flush=True)
+    use_tt_recaption_mesh = args.bot_task != "image" and _use_tt_recaption()
+    recap_bundle = None
+
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    cond_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
+    print("[demo_i2i] opening pipeline mesh (2x2) ...", flush=True)
+    print("[demo_i2i] mesh policy: SINGLE open/close for all on-device stages", flush=True)
+    mesh_device = open_pipeline_mesh(ttnn.MeshShape(2, 2), l1_small_size=32768)
+    invalidate_cond_encode_traces(mesh_device)
+    backbone = None
+    latent = None
     try:
-        cond_mesh.enable_program_cache()
+        mesh_device.enable_program_cache()
+        ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+        def rep(t):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        # 0) optional on-device AR recaption (cond encode → release → backbone + LM head).
+        if use_tt_recaption_mesh:
+            print(f"[demo_i2i] recaption stage (bot_task={args.bot_task}) ...", flush=True)
+            (
+                wte_tt,
+                cond_patch_embed,
+                cond_time_embed,
+                cond_timestep_emb,
+                vision_tt,
+                aligner_tt,
+            ) = _load_i2i_cond_stack(mesh_device, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
+            print("[demo_i2i] building recaption AR bundle (wte → VAE encode → ViT inject) ...", flush=True)
+            recap_bundle = prepare_recaption_ar_bundle_tt(
+                mesh_device,
+                tok,
+                args.prompt,
+                proc,
+                wte_tt,
+                cond_images=cond_for_bundle,
+                bot_task=args.bot_task,
+                system_prompt=recap_system,
+                sequence_template="instruct",
+                model_dir=model_dir,
+                vision=vision_tt,
+                aligner=aligner_tt,
+                cond_patch_embed=cond_patch_embed,
+                cond_time_embed=cond_time_embed,
+                cond_timestep_emb=cond_timestep_emb,
+                seed=SEED,
+            )
+            del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
+            release_stage_resources(mesh_device)
+            invalidate_cond_encode_traces(mesh_device)
+
+            prefix_len = int(recap_bundle.input_ids.shape[1])
+            recap_sp = 1 if RECAPTION_KV else 2
+            print(
+                f"[demo_i2i] recaption prefix_len={prefix_len} layers={RECAPTION_LAYERS} "
+                f"max_new_tokens={MAX_NEW_TOKENS} kv_cache={RECAPTION_KV} sp={recap_sp}",
+                flush=True,
+            )
+            t0 = time.time()
+            print(
+                f"[demo_i2i] loading recaption backbone ({RECAPTION_LAYERS} layers, sp={recap_sp}) ...",
+                flush=True,
+            )
+            backbone = _build_backbone(
+                mesh_device,
+                ccl,
+                c,
+                weights,
+                num_layers=RECAPTION_LAYERS,
+                apply_final_norm=True,
+                sp_factor=recap_sp,
+                model_cache_name=model_cache_name,
+            )
+            print(f"[demo_i2i] recaption backbone ready ({time.time() - t0:.0f}s)", flush=True)
+
+            print("[demo_i2i] loading LM head ...", flush=True)
+            lm_head = HunyuanTtLMHead(mesh_device, {"lm_head.weight": weights.load("lm_head.weight")})
+            recap_config = replace(default_recaption_sampling_config(), max_new_tokens=MAX_NEW_TOKENS)
+            recap_result = run_recaption_on_device(
+                backbone,
+                lm_head,
+                mesh_device,
+                recap_bundle,
+                tok,
+                args.bot_task,
+                proc,
+                wte_weight=wte,
+                image_size=image_size,
+                config=recap_config,
+                generator=gen,
+                replicate_to_mesh=rep,
+            )
+            del lm_head, recap_bundle
+            cot_text = recap_result.cot_text[0]
+            if recap_result.image_size != image_size:
+                image_size = recap_result.image_size
+            print(f"[demo_i2i] cot_text:\n{cot_text}\n[demo_i2i] resolved image_size={image_size}")
+            print(
+                "[demo_i2i] releasing recaption backbone before denoise cond encode "
+                "(VAE/ViT needs DRAM headroom on shared mesh) ...",
+                flush=True,
+            )
+            del backbone
+            backbone = None
+            release_stage_resources(mesh_device)
+            invalidate_cond_encode_traces(mesh_device)
+            t = _mark("2_recaption_ar", t)
+
+        # 1) I2I denoise bundle (cond encode on shared mesh, then release cond weights).
+        if backbone is not None:
+            print(
+                "[demo_i2i] releasing backbone before denoise cond encode (VAE/ViT needs DRAM) ...",
+                flush=True,
+            )
+            del backbone
+            backbone = None
+            release_stage_resources(mesh_device)
         (
             wte_tt,
             cond_patch_embed,
@@ -581,10 +609,10 @@ def main():
             cond_timestep_emb,
             vision_tt,
             aligner_tt,
-        ) = _load_i2i_cond_stack(cond_mesh, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
+        ) = _load_i2i_cond_stack(mesh_device, weights, wte, H=H, LATENT=LATENT, HID=HID, HSZ=HSZ)
         print("[demo_i2i] building I2I denoise bundle (wte → VAE encode → ViT inject) ...", flush=True)
         bundle = prepare_i2i_denoise_bundle_tt(
-            cond_mesh,
+            mesh_device,
             tok,
             args.prompt,
             cond_for_bundle,
@@ -602,73 +630,54 @@ def main():
             cot_text=cot_text,
             seed=SEED,
         )
-    finally:
-        ttnn.close_mesh_device(cond_mesh)
-        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+        del wte_tt, cond_patch_embed, cond_time_embed, cond_timestep_emb, vision_tt, aligner_tt
+        release_stage_resources(mesh_device)
 
-    cond_row, uncond_row = build_i2i_cfg_conds(bundle, wte, proc)
-    img_slice = cond_row["gen_slice"]
-    grid = cond_row["gen_hw"]
-    seq_len = bundle.seq_len
-    print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
-    t = _mark("3_build_i2i_bundle", t)
+        cond_row, uncond_row = build_i2i_cfg_conds(bundle, wte, proc)
+        img_slice = cond_row["gen_slice"]
+        grid = cond_row["gen_hw"]
+        seq_len = bundle.seq_len
+        print(f"[demo_i2i] seq_len={seq_len} gen_span={img_slice} grid={grid}")
+        t = _mark("3_build_i2i_bundle", t)
 
-    torch.manual_seed(SEED + 1)
-    init_latent = torch.randn(1, LATENT, grid[0], grid[1])
-    mode = "distil" if cfg_distilled else "CFG"
+        torch.manual_seed(SEED + 1)
+        init_latent = torch.randn(1, LATENT, grid[0], grid[1])
+        mode = "distil" if cfg_distilled else "CFG"
 
-    if DIT_ON_HOST:
-        from models.experimental.hunyuan_image_3_0.ref.host_denoise import HostDenoiseRunner, denoise_loop_host
+        if DIT_ON_HOST:
+            from models.experimental.hunyuan_image_3_0.ref.host_denoise import HostDenoiseRunner, denoise_loop_host
 
-        print(
-            f"[demo_i2i] denoising {steps} steps on host PyTorch "
-            f"(HY_DIT_HOST=1, {mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
-            flush=True,
-        )
-        t0 = time.time()
-        runner = HostDenoiseRunner(
-            weights,
-            model_dir,
-            num_layers=NUM_LAYERS,
-            down_sd=down_sd,
-            up_sd=up_sd,
-        )
-        latent = denoise_loop_host(
-            runner,
-            init_latent=init_latent,
-            cond=cond_row,
-            uncond=uncond_row,
-            img_slice=img_slice,
-            steps=steps,
-            guidance_scale=GUIDANCE,
-            timestep_emb=timestep_emb_distil,
-            guidance_emb=guidance_emb,
-            timestep_r_emb=timestep_r_emb,
-            cfg_distilled=cfg_distilled,
-            use_meanflow=use_meanflow,
-        )
-        print(f"[demo_i2i] host denoise done ({time.time() - t0:.0f}s), latent {tuple(latent.shape)}")
-        t = _mark("5_denoise_loop", t)
-    else:
-        print("[demo_i2i] opening denoise mesh (2x2) ...", flush=True)
-        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 2), l1_small_size=32768)
-        try:
-            mesh_device.enable_program_cache()
-            ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-
+            print(
+                f"[demo_i2i] denoising {steps} steps on host PyTorch "
+                f"(HY_DIT_HOST=1, {mode}, guidance={GUIDANCE}, seq_len={seq_len}) ...",
+                flush=True,
+            )
+            t0 = time.time()
+            runner = HostDenoiseRunner(
+                weights,
+                model_dir,
+                num_layers=NUM_LAYERS,
+                down_sd=down_sd,
+                up_sd=up_sd,
+            )
+            latent = denoise_loop_host(
+                runner,
+                init_latent=init_latent,
+                cond=cond_row,
+                uncond=uncond_row,
+                img_slice=img_slice,
+                steps=steps,
+                guidance_scale=GUIDANCE,
+                timestep_emb=timestep_emb_distil,
+                guidance_emb=guidance_emb,
+                timestep_r_emb=timestep_r_emb,
+                cfg_distilled=cfg_distilled,
+                use_meanflow=use_meanflow,
+            )
+            print(f"[demo_i2i] host denoise done ({time.time() - t0:.0f}s), latent {tuple(latent.shape)}")
+            t = _mark("5_denoise_loop", t)
+        else:
             print("[demo_i2i] building patch_embed + final_layer ...", flush=True)
-
-            def rep(t):
-                return ttnn.from_torch(
-                    t,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                )
-
             patch_embed = HunyuanTtUNetDown(
                 mesh_device,
                 {f"patch_embed.{k}": v for k, v in down_sd.items()},
@@ -683,18 +692,19 @@ def main():
                 hidden_channels=HID,
                 out_channels=LATENT,
             )
-            print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
-            t0 = time.time()
-            backbone = _build_backbone(
-                mesh_device,
-                ccl,
-                c,
-                weights,
-                num_layers=NUM_LAYERS,
-                apply_final_norm=False,
-                model_cache_name=model_cache_name,
-            )
-            print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
+            if backbone is None:
+                print(f"[demo_i2i] building denoise backbone ({NUM_LAYERS} layers) ...", flush=True)
+                t0 = time.time()
+                backbone = _build_backbone(
+                    mesh_device,
+                    ccl,
+                    c,
+                    weights,
+                    num_layers=NUM_LAYERS,
+                    apply_final_norm=False,
+                    model_cache_name=model_cache_name,
+                )
+                print(f"[demo_i2i] denoise backbone ready ({time.time() - t0:.0f}s)", flush=True)
             print("[demo_i2i] building timestep embedders ...", flush=True)
             te1 = HunyuanTtTimestepEmbedder(
                 mesh_device,
@@ -760,30 +770,36 @@ def main():
                 mesh_device=mesh_device,
             )
             print(f"[demo_i2i] denoised latent {tuple(latent.shape)}")
+            del (
+                patch_embed,
+                final_layer,
+                backbone,
+                te1,
+                te2,
+                step,
+                sched,
+                cond_tt,
+                uncond_tt,
+                bundle,
+            )
+            release_stage_resources(mesh_device)
             t = _mark("5_denoise_loop", t)
-        finally:
-            ttnn.close_mesh_device(mesh_device)
-            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
-    print("[demo_i2i] VAE decode (TTNN spatial) ...")
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    vae_mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
-    try:
-        vae_mesh.enable_program_cache()
-        vae_ccl = CCLManager(vae_mesh, num_links=1, topology=ttnn.Topology.Linear)
+        print("[demo_i2i] VAE decode (TTNN spatial) ...")
         img = decode_latent(
-            vae_mesh,
+            mesh_device,
             latent,
             scaling_factor=SCALING,
             grid_hw=grid,
-            ccl_manager=vae_ccl,
+            ccl_manager=ccl,
             h_mesh_axis=0,
             w_mesh_axis=1,
         )
+        t = _mark("6_vae_decode", t)
     finally:
-        ttnn.close_mesh_device(vae_mesh)
+        release_pipeline_traces(mesh_device)
+        ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
-    t = _mark("6_vae_decode", t)
 
     arr = (img[0].permute(1, 2, 0).cpu().numpy() * 255).round().astype("uint8")
     Image.fromarray(arr).save(args.out)
