@@ -24,11 +24,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR  = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT     = params.TILE_CNT;
-    const std::uint32_t num_faces    = params.num_faces;
-    const std::uint32_t BLOCK_RT_DIM = params.BLOCK_RT_DIM;
-    const std::uint32_t BLOCK_CT_DIM = params.BLOCK_CT_DIM;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t BLOCK_RT_DIM    = params.BLOCK_RT_DIM;
+    const std::uint32_t BLOCK_CT_DIM    = params.BLOCK_CT_DIM;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t FULL_CT_DIM     = params.FULL_CT_DIM;
+    const Operand& buffer_A             = params.buffer_A;
+    const Operand& buffer_B             = params.buffer_B;
 #endif
     const std::uint32_t buf_desc_id_a = 0;
     const std::uint32_t buf_desc_id_b = 1;
@@ -38,9 +43,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val_A {};
-        bd_val_A.f.l1_addr_16B = L1_ADDRESS(params.buffer_A[0]);
+        bd_val_A.f.l1_addr_16B = L1_ADDRESS(buffer_A[0]);
         bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val_A.f.x_dim       = params.TEST_FACE_C_DIM;
+        bd_val_A.f.x_dim       = TEST_FACE_C_DIM;
         bd_val_A.f.y_dim       = 1;
         bd_val_A.f.z_dim       = 1;
 
@@ -50,11 +55,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
         buffer_descriptor_u bd_val_B {};
-        bd_val_B.f.l1_addr_16B = L1_ADDRESS(params.buffer_B[0]);
+        bd_val_B.f.l1_addr_16B = L1_ADDRESS(buffer_B[0]);
         bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
-        bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val_B.f.z_dim       = params.num_faces;
+        bd_val_B.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val_B.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val_B.f.z_dim       = num_faces;
 
         tdma_descriptor_t td_val_B;
         td_val_B.buf_desc        = bd_val_B;
@@ -66,13 +71,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
 
         constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-        _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, params.FULL_CT_DIM, tensor_shape);
+        _llk_unpack_reduce_col_tilizeA_strided_init_(buf_desc_id_a, buf_desc_id_b, FULL_CT_DIM, tensor_shape);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
         constexpr ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE;
-        std::uint32_t y_stride_external             = params.FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
+        std::uint32_t y_stride_external             = FULL_CT_DIM * tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -187,21 +192,26 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
-    const std::uint32_t num_tiles_per_pack = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
-    std::uint32_t const buf_desc_id = 8;
+    std::uint32_t const buf_desc_id        = 8;
+    const std::uint32_t num_tiles_per_pack = TILE_CNT;
 
     {
         ZONE_SCOPED("INIT")
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_Res[0]);
+        bd_val.f.l1_addr_16B       = L1_ADDRESS(buffer_Res[0]);
         bd_val.f.format            = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-        bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-        bd_val.f.z_dim             = params.num_faces;
+        bd_val.f.x_dim             = TEST_FACE_C_DIM;
+        bd_val.f.y_dim             = TEST_FACE_R_DIM;
+        bd_val.f.z_dim             = num_faces;
 
         tdma_descriptor_t tdma_desc;
         tdma_desc.buf_desc        = bd_val;

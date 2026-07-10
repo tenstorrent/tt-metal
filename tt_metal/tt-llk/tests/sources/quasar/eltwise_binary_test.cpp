@@ -28,8 +28,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT = params.INPUT_TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_TILE_CNT  = params.INPUT_TILE_CNT;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_A             = params.buffer_A;
+    const Operand& buffer_B             = params.buffer_B;
 #endif
     tdma_descriptor_t td_val_A, td_val_B;
     const std::uint32_t buf_desc_id_a = 0;
@@ -40,22 +45,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val_A {};
-        bd_val_A.f.l1_addr_16B = params.buffer_A[0] / 16;
+        bd_val_A.f.l1_addr_16B = buffer_A[0] / 16;
         bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val_A.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val_A.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val_A.f.z_dim       = params.num_faces;
+        bd_val_A.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val_A.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val_A.f.z_dim       = num_faces;
 
         td_val_A.buf_desc        = bd_val_A;
         td_val_A.buf_desc_id     = buf_desc_id_a;
         td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
         buffer_descriptor_u bd_val_B {};
-        bd_val_B.f.l1_addr_16B = params.buffer_B[0] / 16;
+        bd_val_B.f.l1_addr_16B = buffer_B[0] / 16;
         bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
-        bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val_B.f.z_dim       = params.num_faces;
+        bd_val_B.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val_B.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val_B.f.z_dim       = num_faces;
 
         td_val_B.buf_desc        = bd_val_B;
         td_val_B.buf_desc_id     = buf_desc_id_b;
@@ -113,9 +118,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR      = params.LOOP_FACTOR;
-    const std::uint32_t INPUT_TILE_CNT   = params.INPUT_TILE_CNT;
-    const std::uint32_t NUM_TILES_IN_BLK = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t INPUT_TILE_CNT     = params.INPUT_TILE_CNT;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
     {
         ZONE_SCOPED("INIT")
@@ -148,9 +153,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 std::uint32_t dest_idx = 0;
-                for (std::uint32_t remaining_tiles = INPUT_TILE_CNT; remaining_tiles > 0; remaining_tiles -= std::min(remaining_tiles, NUM_TILES_IN_BLK))
+                for (std::uint32_t remaining_tiles = INPUT_TILE_CNT; remaining_tiles > 0; remaining_tiles -= std::min(remaining_tiles, NUM_TILES_IN_BLOCK))
                 {
-                    const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLK);
+                    const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLOCK);
                     for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
                     {
                         _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -164,9 +169,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 std::uint32_t dest_idx = 0;
-                for (std::uint32_t remaining_tiles = INPUT_TILE_CNT; remaining_tiles > 0; remaining_tiles -= std::min(remaining_tiles, NUM_TILES_IN_BLK))
+                for (std::uint32_t remaining_tiles = INPUT_TILE_CNT; remaining_tiles > 0; remaining_tiles -= std::min(remaining_tiles, NUM_TILES_IN_BLOCK))
                 {
-                    const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLK);
+                    const std::uint32_t num_tiles_in_block = std::min(remaining_tiles, NUM_TILES_IN_BLOCK);
                     for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
                     {
                         _llk_math_eltwise_binary_<ELTWISE_BINARY_OP>(dest_idx, ckernel::DEFAULT_TENSOR_SHAPE);
@@ -196,6 +201,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifndef SPEED_OF_LIGHT
     const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
     const std::uint32_t OUTPUT_TILE_CNT = params.OUTPUT_TILE_CNT;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces       = params.num_faces;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
     std::uint32_t const buf_desc_id = 8;
 
@@ -204,11 +213,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
         buffer_descriptor_u bd_val {};
-        bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
+        bd_val.f.l1_addr_16B = buffer_Res[0] / 16;
         bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val.f.z_dim       = params.num_faces;
+        bd_val.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val.f.z_dim       = num_faces;
 
         tdma_descriptor_t tdma_desc;
         tdma_desc.buf_desc        = bd_val;

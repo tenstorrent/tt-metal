@@ -25,7 +25,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT                  = params.TILE_CNT;
+    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces                 = params.num_faces;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const Operand& buffer_A                       = params.buffer_A;
 #endif
     const std::uint32_t SELECTED_UNPACKER = unpack_to_dest ? p_unpacr::UNP_DEST : p_unpacr::UNP_A;
     tdma_descriptor_t td_val;
@@ -57,11 +64,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         buffer_descriptor_u bd_val = {0};
-        bd_val.f.l1_addr_16B       = L1_ADDRESS(params.buffer_A[0]);
+        bd_val.f.l1_addr_16B       = L1_ADDRESS(buffer_A[0]);
         bd_val.f.format            = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val.f.x_dim             = params.TEST_FACE_C_DIM;
-        bd_val.f.y_dim             = params.TEST_FACE_R_DIM;
-        bd_val.f.z_dim             = params.num_faces;
+        bd_val.f.x_dim             = TEST_FACE_C_DIM;
+        bd_val.f.y_dim             = TEST_FACE_R_DIM;
+        bd_val.f.z_dim             = num_faces;
 
         td_val.buf_desc        = bd_val;
         td_val.buf_desc_id     = buf_desc_id;
@@ -79,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         if constexpr (unpack_to_dest)
         {
-            const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
+            const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
             _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(
                 buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, tiles_in_block /*num_tiles_per_unpack*/);
         }
@@ -92,8 +99,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-        const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
+        const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
+        const std::uint32_t num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
@@ -106,7 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * params.TILE_CNT);
+                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR * TILE_CNT);
             }
         }
         else if constexpr (unpack_to_dest)
@@ -124,7 +131,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
-                for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     _llk_unpack_unary_operand_<SELECTED_UNPACKER>(i, ckernel::DEFAULT_TENSOR_SHAPE);
                 }
@@ -151,7 +158,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t num_faces                 = params.num_faces;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
 #endif
     if constexpr (!unpack_to_dest)
     {
@@ -175,13 +186,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
 
             _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en>(
-                params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
+                num_faces * TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);
             PROFILER_SYNC();
         }
         {
             ZONE_SCOPED("TILE_LOOP")
-            const std::uint32_t tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
-            const std::uint32_t num_blocks     = static_cast<std::uint32_t>(params.INPUT_NUM_BLOCKS);
+            const std::uint32_t tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
+            const std::uint32_t num_blocks     = static_cast<std::uint32_t>(INPUT_NUM_BLOCKS);
 
             if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
             {
@@ -198,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                         {
-                            _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, tile);
+                            _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, tile);
                         }
                         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                     }
@@ -212,7 +223,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                         {
-                            _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, tile);
+                            _llk_math_eltwise_unary_datacopy_(num_faces * TEST_FACE_R_DIM /*num_rows_per_tile*/, tile);
                         }
                         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                     }
@@ -237,7 +248,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t TEST_FACE_C_DIM           = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM           = params.TEST_FACE_R_DIM;
+    const std::uint32_t num_faces                 = params.num_faces;
+    const int RELU_CONFIG                         = params.RELU_CONFIG;
+    const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
+    const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res                     = params.buffer_Res;
 #endif
 
     std::uint32_t const buf_desc_id = 8;
@@ -256,11 +274,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         buffer_descriptor_u bd_val = {0};
         tdma_descriptor_t tdma_desc;
 
-        bd_val.f.l1_addr_16B = L1_ADDRESS(params.buffer_Res[0]);
+        bd_val.f.l1_addr_16B = L1_ADDRESS(buffer_Res[0]);
         bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val.f.z_dim       = params.num_faces;
+        bd_val.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val.f.z_dim       = num_faces;
 
         tdma_desc.buf_desc        = bd_val;
         tdma_desc.buf_desc_id     = buf_desc_id;
@@ -268,14 +286,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
         _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
         _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-        const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(params.RELU_CONFIG);
+        const ckernel::ReluConfig relu_config = ckernel::ReluConfig::from_packed(RELU_CONFIG);
         _llk_pack_init_<is_fp32_dest_acc_en>(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1 /*num_tiles_per_pack*/, relu_config);
         PROFILER_SYNC();
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(params.OUTPUT_NUM_BLOCKS);
-        const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
+        const std::uint32_t output_num_blocks     = static_cast<std::uint32_t>(OUTPUT_NUM_BLOCKS);
+        const std::uint32_t output_tiles_in_block = OUTPUT_NUM_TILES_IN_BLOCK;
 
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {

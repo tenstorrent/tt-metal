@@ -25,9 +25,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
-    const std::uint32_t num_faces   = params.num_faces;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const Operand& buffer_A             = params.buffer_A;
+    const Operand& buffer_B             = params.buffer_B;
 #endif
     tdma_descriptor_t td_val_A;
     tdma_descriptor_t td_val_B;
@@ -41,21 +45,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         buffer_descriptor_u bd_val_A = {0};
         buffer_descriptor_u bd_val_B = {0};
 
-        bd_val_A.f.l1_addr_16B = params.buffer_A[0] / 16;
+        bd_val_A.f.l1_addr_16B = buffer_A[0] / 16;
         bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-        bd_val_A.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val_A.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val_A.f.z_dim       = params.num_faces;
+        bd_val_A.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val_A.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val_A.f.z_dim       = num_faces;
 
         td_val_A.buf_desc        = bd_val_A;
         td_val_A.buf_desc_id     = buf_desc_id_a;
         td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
 
-        bd_val_B.f.l1_addr_16B = params.buffer_B[0] / 16;
+        bd_val_B.f.l1_addr_16B = buffer_B[0] / 16;
         bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
-        bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val_B.f.z_dim       = params.num_faces;
+        bd_val_B.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val_B.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val_B.f.z_dim       = num_faces;
 
         td_val_B.buf_desc        = bd_val_B;
         td_val_B.buf_desc_id     = buf_desc_id_b;
@@ -168,8 +172,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
-    const std::uint32_t TILE_CNT    = params.TILE_CNT;
+    const std::uint32_t LOOP_FACTOR     = params.LOOP_FACTOR;
+    const std::uint32_t TILE_CNT        = params.TILE_CNT;
+    const std::uint32_t num_faces       = params.num_faces;
+    const std::uint32_t TEST_FACE_C_DIM = params.TEST_FACE_C_DIM;
+    const std::uint32_t TEST_FACE_R_DIM = params.TEST_FACE_R_DIM;
+    const Operand& buffer_Res           = params.buffer_Res;
 #endif
     std::uint32_t const buf_desc_id = 8;
 
@@ -180,11 +188,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         buffer_descriptor_u bd_val = {0};
         tdma_descriptor_t tdma_desc;
 
-        bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
+        bd_val.f.l1_addr_16B = buffer_Res[0] / 16;
         bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-        bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-        bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-        bd_val.f.z_dim       = params.num_faces;
+        bd_val.f.x_dim       = TEST_FACE_C_DIM;
+        bd_val.f.y_dim       = TEST_FACE_R_DIM;
+        bd_val.f.z_dim       = num_faces;
 
         tdma_desc.buf_desc        = bd_val;
         tdma_desc.buf_desc_id     = buf_desc_id;
