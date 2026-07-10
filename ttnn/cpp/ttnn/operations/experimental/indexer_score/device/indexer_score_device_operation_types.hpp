@@ -9,6 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/block_cyclic_layout.hpp"  // ttnn::prim::BlockCyclicLayout (shared)
 #include <tt-metalium/base_types.hpp>
 
 namespace ttnn::operations::experimental::indexer_score {
@@ -37,10 +38,8 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 // sparse_sdpa): the caller names the mesh axis the cache was striped over (block_cyclic_sp_axis) and passes
 // the per-shard chunk length (block_cyclic_chunk_local); sp = the mesh extent on that axis (DERIVED, not
 // free). Hashed (it shapes the reader binary). sp == 1 is the identity, represented as no block_cyclic at all.
-struct BlockCyclicLayout {
-    uint32_t sp;           // SP shard count the cache was gathered across (derived from the mesh sp axis)
-    uint32_t chunk_local;  // per-shard chunk length (elements); == chunk_size_global / sp == per-chip seq_len
-};
+// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp.
+using ttnn::prim::BlockCyclicLayout;
 
 struct operation_attributes_t {
     // Absolute chunk_start of rank 0. Rank r uses chunk_start_idx + r*Sq; the per-device value is derived

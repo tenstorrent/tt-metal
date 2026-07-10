@@ -1,15 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-# Requires TT_MESH_GRAPH_DESC_PATH (the single_bh_galaxy descriptor) in the environment.
+"""sp>1 block-cyclic remap coverage for sparse_sdpa_msa (multi-device).
 
-"""sp>1 block-cyclic remap coverage for sparse_sdpa_msa (galaxy SP=8).
-
-The post-commit file only covers sp=1, where the invP block remap is the identity. This exercises the
-REAL permutation at sp=8: K/V are laid out block-cyclic (shard-major) across the SP axis exactly as the
+The post-commit file only covers sp=1, where the invP block remap is the identity. This runs the REAL
+permutation at sp=2 and sp=4 via the `mesh_device` fixture (auto-skips when the devices aren't present, so
+it's safe off-multi-device): K/V are laid out block-cyclic (shard-major) across the SP axis exactly as the
 AllGather'd chunked-prefill cache is, block-ids stay NATURAL, and the op must remap each logical block to
-its physical block and reproduce the natural-order golden. Inputs are replicated across the mesh (sp is
-read from the mesh shape), so every device computes the same result; each is checked against the golden.
+its physical block and reproduce the natural-order golden. Inputs are replicated across the mesh (sp is read
+from the mesh shape), so every device computes the same result; each is checked against the golden.
 """
 
 import pytest
@@ -37,38 +36,37 @@ def _natural_to_block_cyclic(t, sp, n_chunks, chunk_local):
     return t.reshape(1, H, T, d).contiguous()
 
 
-@pytest.fixture(scope="module")
-def sp_mesh():
-    mesh = ttnn.open_mesh_device(ttnn.MeshShape(8, 4))  # deployed SP=8 x TP=4 galaxy
-    yield mesh
-    ttnn.close_mesh_device(mesh)
+@pytest.mark.parametrize("mesh_device", [(1, 2), (1, 4)], indirect=True)  # SP along cols; fixture skips if absent
+@pytest.mark.parametrize("n_chunks", [8])  # sp*n_chunks = nblk >= topk(16): 2*8=16, 4*8=32
+def test_msa_native_block_cyclic_sp_gt1_pcc(mesh_device, n_chunks):
+    rows, cols = tuple(mesh_device.shape)
+    sp_axis, sp = 1, cols
+    if sp < 2:
+        pytest.skip(f"needs sp>1 (mesh shape {(rows, cols)})")
 
-
-@pytest.mark.parametrize("n_chunks", [2, 4])
-def test_msa_native_block_cyclic_sp8_pcc(sp_mesh, n_chunks):
-    rows, cols = tuple(sp_mesh.shape)
-    sp_axis, sp = 0, rows  # SP is the row axis
     H, n_kv, S, d = 32, 1, BLK_KV, 128
-    chunk_local = S  # == q_isl; guard allows q_isl or tp*q_isl
+    chunk_local = S  # tp=1 (pure-SP mesh) -> guard requires chunk_local == q_isl (= S)
     T = sp * n_chunks * chunk_local
-    topk = 16  # TOPK * idx.element_size() (4B) must be 64B-aligned -> topk a multiple of 16; nblk = T/128 >= 16
+    nblk = T // BLK_KV
+    topk = 16  # multiple of 16 (indices row 64B-aligned) and <= nblk
+    assert nblk >= topk and (T // sp) // chunk_local > 1, f"non-trivial permutation needs nblk>=topk: nblk={nblk}"
     q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk=topk, d=d, causal=False, seed=T)
 
     gold = sparse_attention_ref_msa(q, k, v, indices, d**-0.5)  # natural-order, layout-agnostic
     k_bc = _natural_to_block_cyclic(k, sp, n_chunks, chunk_local)
     v_bc = _natural_to_block_cyclic(v, sp, n_chunks, chunk_local)
 
-    repl = ttnn.ReplicateTensorToMesh(sp_mesh)
+    repl = ttnn.ReplicateTensorToMesh(mesh_device)
 
     def dev_rm(x, dt):
         return ttnn.from_torch(
-            x, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=sp_mesh,
+            x, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=repl,
         )
 
     def dev_tile(x, dt):
         return ttnn.from_torch(
-            x.to(torch.bfloat16), dtype=dt, layout=ttnn.TILE_LAYOUT, device=sp_mesh,
+            x.to(torch.bfloat16), dtype=dt, layout=ttnn.TILE_LAYOUT, device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=repl,
         )
 
