@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "fabric_mux_v2_benchmark_program.hpp"
 
 #include <algorithm>
