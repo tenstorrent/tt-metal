@@ -11,11 +11,11 @@ imports this package at module load.
 """
 
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3 import DeepSeekV3Adapter
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1 import GLM51Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_6 import KimiK26Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla import (
     DeepSeekV32Adapter,
-    GLM51Adapter,
     GLM52Adapter,
     SparseMLAPrefillAdapter,
 )

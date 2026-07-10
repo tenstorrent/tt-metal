@@ -12,6 +12,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.common.prefill.adapter import KvCaches
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -198,15 +199,16 @@ class TtPrefillRuntime:
             )
         return self.make_placeholder_activation()
 
-    def compile(self, kv_cache: ttnn.Tensor) -> None:
-        """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine
-        passes the cache it owns; the warm-up writes into it (slot 0) and is harmless."""
+    def compile(self, kv_caches: KvCaches) -> None:
+        """Warm up one chunk so the per-chunk loop hits no first-run cost. The engine passes the
+        `KvCaches` tuple it owns; the warm-up writes into them (slot 0) and is harmless. The runtime
+        holds NO cache state — the same `kv_caches` is passed back into every prefill_chunk."""
         assert self.model_built
         chunk = self.config.chunk_size
         logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
         tt_input = self.make_chunk_input([0] * chunk)
-        self.prefill_chunk(tt_input, kv_cache, slot_id=0, actual_start=0, actual_end=chunk)
+        self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
@@ -217,12 +219,12 @@ class TtPrefillRuntime:
     def prefill_chunk(
         self,
         input_tensor: ttnn.Tensor,
-        kv_cache: ttnn.Tensor,
+        kv_caches: KvCaches,
         slot_id: int,
         actual_start: int,
         actual_end: int,
     ) -> Optional[ttnn.Tensor]:
-        """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_cache`.
+        """Prefill ONE chunk into user `slot_id`'s slice of the engine-owned `kv_caches`.
 
         On the last rank (and single-rank) this returns None — the populated cache is
         the output (read by the decode stage / migration consumer). On a non-last
@@ -246,8 +248,10 @@ class TtPrefillRuntime:
             input_tensor: on the first rank, one chunk's tokens as an SP-sharded uint32 ROW_MAJOR DRAM
                 tensor (prepare_prefill_input_tensor, block-cyclic, chip-major); on a non-first rank,
                 the upstream hidden-state activation. Deallocated here.
-            kv_cache: the engine-owned KV cache (from the adapter's allocate_kv_cache); this chunk's
-                KV is written into it. The same tensor is passed on every call.
+            kv_caches: the engine-owned KV cache(s) (from the adapter's allocate_kv_cache), an ordered
+                tuple — index 0 the primary KV cache this chunk's KV is written into, index 1+ any
+                secondary caches (a sparse/DSA model's index cache at 1). The same tuple is passed on
+                every call; the runtime holds none of it.
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first real token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real token.
@@ -265,12 +269,13 @@ class TtPrefillRuntime:
 
         out = self.model.forward(
             input_tensor,
-            kv_cache,
+            kv_caches[0],
             actual_isl=actual_end - actual_start,
             on_layer_complete=self._on_layer_complete,
             actual_start=actual_start,
             actual_end=actual_end,
             cache_user_id=slot_id,
+            index_kv_cache=kv_caches[1] if len(kv_caches) > 1 else None,
         )
         ttnn.deallocate(input_tensor)
         # Non-last rank: forward returns the hidden-state activation to forward downstream.
@@ -297,20 +302,24 @@ class TtPrefillRuntime:
 
         self._on_layer_complete = on_layer_complete
 
-    def build_kv_chunk_table(self, kv_cache: ttnn.Tensor, path: str) -> str:
-        """Build + serialize the KV-chunk address table for the engine-owned `kv_cache` to
+    def build_kv_chunk_table(self, kv_caches: KvCaches, path: str) -> str:
+        """Build + serialize the KV-chunk address table for the engine-owned `KvCaches` to
         `path` and return it.
 
         The table maps each natural KV position to its true block-cyclic storage chip + offset
         (the MLA chunked-prefill cache layout), so the migration worker copies the right chunks.
         The runner publishes the serialized table to the worker — this method only describes the
         cache layout; it issues no migration comms. Single-rank only (config.num_layers == the
-        full model)."""
+        full model).
+
+        For a sparse/DSA model (a secondary cache at index 1), the result is a single MERGED table
+        describing BOTH caches — config 0 = the KVPE cache, config 1 = the index-key cache. A dense
+        model (only index 0) → the usual single-config table over the KVPE cache alone."""
         from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
-            kvpe_cache=kv_cache,
+            kvpe_cache=kv_caches[0],
             seq_len=self.config.max_seq_len,
             num_layers=self.config.num_layers,
             mesh_shape=self.config.mesh_shape,
@@ -318,17 +327,18 @@ class TtPrefillRuntime:
             num_users=self.config.num_users,
             chunk_size_global=self.config.chunk_size,  # block-cyclic period (prefill chunk size)
             path=path,
+            index_kv_cache=kv_caches[1] if len(kv_caches) > 1 else None,
         )
 
     def kv_cache_pcc_check(
-        self, kv_cache: ttnn.Tensor, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
+        self, kv_caches: KvCaches, *, slot_id: int, n_chunks: int, trace_dir=None, first_layer_idx: int = 0
     ) -> float:
         """Optional bring-up hook (not part of the core runtime contract; never called in production
-        serving). PCC the populated engine-owned `kv_cache` for `slot_id` against the golden trace;
-        returns the min per-layer PCC and asserts on failure (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1).
-        Thin forwarder into the model's validation module so the PCC logic lives in one place."""
+        serving). PCC the populated engine-owned primary KV cache (`kv_caches[0]`) for `slot_id`
+        against the golden trace; returns the min per-layer PCC and asserts on failure (unless
+        PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1). Thin forwarder into the model's validation module."""
         from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import kv_cache_pcc_check
 
         return kv_cache_pcc_check(
-            self, kv_cache, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
+            self, kv_caches[0], slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir, first_layer_idx=first_layer_idx
         )
