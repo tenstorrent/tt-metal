@@ -18,11 +18,9 @@
 
 #include "context/metal_context.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
-#include "fabric_mux_benchmark_program_utils.hpp"
 #include "fabric_mux_v2_benchmark_program.hpp"
 
 namespace tt::tt_fabric::bench {
-
 namespace {
 
 std::string benchmark_name_for_case(const MuxV2ThroughputCase& benchmark_case) {
@@ -134,91 +132,6 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
     return cases;
 }
 
-}  // namespace
-
-void FabricMuxV2BenchmarkContext::initialize() {
-    shutdown();
-
-    tt::tt_fabric::SetFabricConfig(
-        tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-
-    auto available_device_ids = tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids();
-    TT_FATAL(available_device_ids.contains(0), "Device 0 not available for mux-v2 standalone benchmark");
-
-    const auto system_mesh_shape = tt::tt_metal::MetalContext::instance().get_system_mesh().shape();
-    mesh_device_ =
-        tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(system_mesh_shape));
-    TT_FATAL(mesh_device_ != nullptr, "Failed to create full mesh device for mux-v2 standalone benchmark");
-
-    device_ = nullptr;
-    for (auto* device : mesh_device_->get_devices()) {
-        if (device != nullptr && device->id() == 0) {
-            device_ = device;
-            break;
-        }
-    }
-    TT_FATAL(device_ != nullptr, "Full mesh device did not expose device 0");
-
-    worker_cores_ = enumerate_worker_cores(mesh_device_);
-    TT_FATAL(
-        worker_cores_.size() >= 3,
-        "Standalone mux-v2 throughput benchmark requires at least mux + drainer + one sender core");
-}
-
-void FabricMuxV2BenchmarkContext::shutdown() {
-    if (mesh_device_ != nullptr) {
-        [[maybe_unused]] const bool closed = mesh_device_->close();
-    }
-    mesh_device_.reset();
-    device_ = nullptr;
-    worker_cores_.clear();
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
-}
-
-bool FabricMuxV2BenchmarkContext::can_support_case(
-    const MuxV2ThroughputCase& benchmark_case, std::string* rejection_reason) const {
-    if (mesh_device_ == nullptr || device_ == nullptr) {
-        if (rejection_reason != nullptr) {
-            *rejection_reason = "benchmark context is not initialized";
-        }
-        return false;
-    }
-
-    constexpr std::size_t kReservedStandaloneCores = 2;  // one mux core + one drainer core
-    const std::size_t required_worker_cores = kReservedStandaloneCores + benchmark_case.num_senders;
-    if (worker_cores_.size() < required_worker_cores) {
-        if (rejection_reason != nullptr) {
-            std::ostringstream message;
-            message << "requires " << required_worker_cores << " worker cores but only " << worker_cores_.size()
-                    << " are available on device " << device_->id();
-            *rejection_reason = message.str();
-        }
-        return false;
-    }
-
-    return true;
-}
-
-CoreCoord FabricMuxV2BenchmarkContext::get_mux_logical_core() const {
-    TT_FATAL(worker_cores_.size() >= 1, "No worker cores are available for the standalone mux benchmark");
-    return worker_cores_.at(0);
-}
-
-CoreCoord FabricMuxV2BenchmarkContext::get_drainer_logical_core() const {
-    TT_FATAL(worker_cores_.size() >= 2, "No drainer core is available for the standalone mux benchmark");
-    return worker_cores_.at(1);
-}
-
-std::vector<CoreCoord> FabricMuxV2BenchmarkContext::get_sender_logical_cores(
-    const MuxV2ThroughputCase& benchmark_case) const {
-    TT_FATAL(
-        worker_cores_.size() >= static_cast<std::size_t>(benchmark_case.num_senders + 2),
-        "Not enough worker cores to satisfy sender-core request");
-
-    return std::vector<CoreCoord>(
-        worker_cores_.begin() + 2, worker_cores_.begin() + 2 + static_cast<std::ptrdiff_t>(benchmark_case.num_senders));
-}
-
 void BM_StandaloneMuxV2Throughput(
     benchmark::State& state, FabricMuxV2BenchmarkContext* context, const MuxV2ThroughputCase& benchmark_case) {
     const auto resolved_payload_size_bytes = resolve_packet_payload_size_bytes(benchmark_case);
@@ -261,16 +174,10 @@ void BM_StandaloneMuxV2Throughput(
     }
 }
 
-}  // namespace tt::tt_fabric::bench
+}  // namespace
 
-int main(int argc, char** argv) {
-    benchmark::Initialize(&argc, argv);
-
-    tt::tt_fabric::bench::FabricMuxV2BenchmarkContext context;
-    context.initialize();
-    benchmark::AddCustomContext("arch", tt::arch_to_str(tt::tt_metal::MetalContext::instance().get_cluster().arch()));
-
-    auto benchmark_cases = tt::tt_fabric::bench::get_standalone_mux_v2_throughput_cases();
+void register_and_run_standalone_mux_v2_throughput_benchmarks(FabricMuxV2BenchmarkContext& context) {
+    auto benchmark_cases = get_standalone_mux_v2_throughput_cases();
     std::size_t registered_case_count = 0;
     for (const auto& benchmark_case : benchmark_cases) {
         std::string rejection_reason;
@@ -278,16 +185,16 @@ int main(int argc, char** argv) {
             log_info(
                 tt::LogTest,
                 "Skipping benchmark registration for {}: {}",
-                tt::tt_fabric::bench::benchmark_name_for_case(benchmark_case),
+                benchmark_name_for_case(benchmark_case),
                 rejection_reason);
             continue;
         }
 
-        const auto benchmark_name = tt::tt_fabric::bench::benchmark_name_for_case(benchmark_case);
+        const auto benchmark_name = benchmark_name_for_case(benchmark_case);
         benchmark::RegisterBenchmark(
             benchmark_name.c_str(),
             [&context, benchmark_case](benchmark::State& state) {
-                tt::tt_fabric::bench::BM_StandaloneMuxV2Throughput(state, &context, benchmark_case);
+                BM_StandaloneMuxV2Throughput(state, &context, benchmark_case);
             })
             ->UseManualTime()
             ->Iterations(1)
@@ -301,6 +208,18 @@ int main(int argc, char** argv) {
 
     benchmark::RunSpecifiedBenchmarks();
     benchmark::Shutdown();
+}
+
+}  // namespace tt::tt_fabric::bench
+
+int main(int argc, char** argv) {
+    benchmark::Initialize(&argc, argv);
+
+    tt::tt_fabric::bench::FabricMuxV2BenchmarkContext context;
+    context.initialize();
+    benchmark::AddCustomContext("arch", tt::arch_to_str(tt::tt_metal::MetalContext::instance().get_cluster().arch()));
+
+    tt::tt_fabric::bench::register_and_run_standalone_mux_v2_throughput_benchmarks(context);
 
     context.shutdown();
     return 0;
