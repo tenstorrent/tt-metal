@@ -56,7 +56,7 @@ def test_deepseek_v3_moe_perf_loudbox():
         # Recalibrated 2026-06-24 on BH LoudBox 2x4 for the same in-place direct-write
         # change (no full-buffer device fill per layer): 35.13 ms -> 32.31 ms. UP_SPLIT
         # was already baked in (39_194_517 -> 35_127_772). Was 35_127_772.
-        expected_ns_2x4=32_308_487,
+        expected_ns_2x4=31_331_606,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,

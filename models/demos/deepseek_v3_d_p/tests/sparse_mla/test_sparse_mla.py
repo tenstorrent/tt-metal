@@ -47,10 +47,13 @@ SPARSE_VARIANTS = ["deepseek_v32", "glm_5_1"]
 # ---------------------------------------------------------------------------
 # Box-adaptive candidate meshes (sp, tp), keyed by physical device count. Each box lists ONLY shapes
 # that fit it, so off-box shapes are never generated (no "needs N devices" skips). Shapes must be
-# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). Coverage rationale:
-#   QuietBox (4):  (2,2) TP=2 for GLM + DeepSeek; (1,4) gives DeepSeek a TP=4 point (GLM caps at TP=2).
-#   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 (the full-box GLM shape).
-#   Galaxy   (32): (8,4) production TP=4 + (8,2) TP=2 plane so GLM is exercised.
+# TP>=2 (the dense 128-head epilogue overflows L1 at TP=1). BOTH variants run every listed mesh: GLM's
+# thin per-chip head shard at tp=4 (64/4=16 < 32) is handled by the head→sequence reshard in
+# ttMLA._sparse_mla (#48727) + the head-replicated seq-sharded indexer, so GLM is no longer TP-capped.
+# Coverage rationale:
+#   QuietBox (4):  (2,2) TP=2 and (1,4) TP=4 — both variants at both TP.
+#   LoudBox  (8):  (2,4) TP=4 and (4,2) TP=2 — both variants at both TP.
+#   Galaxy   (32): (8,4) production TP=4 + (8,2) TP=2 plane.
 # Mesh shape is NOT correctness-invariant, so accuracy sweeps the whole box set; determinism and
 # chunked pin to each variant's anchor (highest supported TP) — see _sparse_cases(anchor_only=True).
 SPARSE_MESH_BY_DEVICES = {
