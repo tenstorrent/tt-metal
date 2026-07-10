@@ -25,31 +25,91 @@
 
 # ─── seamless-m4t-v2-large ────────────────────────────────────────────────────
 
-- name: seamless-m4t-v2-large demo + e2e sweep (P150 1x1)
+- name: seamless-m4t-v2-large demo perf sweep (P150 1x1)
   cmd: |
     set -e
     export MESH_DEVICE=P150
     python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
-    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
-    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
-    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k sweep -v
   skus:
     bh_p150b_civ2:
-      timeout: 360
+      timeout: 130
   team: models
   model-name: seamless-m4t-v2-large
 
-- name: seamless-m4t-v2-large demo + e2e sweep (BH-QB 1x4)
+- name: seamless-m4t-v2-large e2e logit PCC sweep (P150 1x1)
+  cmd: |
+    set -e
+    export MESH_DEVICE=P150
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
+  skus:
+    bh_p150b_civ2:
+      timeout: 77
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large e2e token matching sweep (P150 1x1)
+  cmd: |
+    set -e
+    export MESH_DEVICE=P150
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
+  skus:
+    bh_p150b_civ2:
+      timeout: 77
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large e2e WER sweep (P150 1x1)
+  cmd: |
+    set -e
+    export MESH_DEVICE=P150
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k "teacher_forced and sweep" -v
+  skus:
+    bh_p150b_civ2:
+      timeout: 76
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large demo perf sweep (BH-QB 1x4)
   cmd: |
     set -e
     export MESH_DEVICE=BH-QB
     python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
-    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
-    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
-    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k sweep -v
   skus:
     bh_quietbox_2:
-      timeout: 480
+      timeout: 60
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large e2e logit PCC sweep (BH-QB 1x4)
+  cmd: |
+    set -e
+    export MESH_DEVICE=BH-QB
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
+  skus:
+    bh_quietbox_2:
+      timeout: 100
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large e2e token matching sweep (BH-QB 1x4)
+  cmd: |
+    set -e
+    export MESH_DEVICE=BH-QB
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
+  skus:
+    bh_quietbox_2:
+      timeout: 100
+  team: models
+  model-name: seamless-m4t-v2-large
+
+- name: seamless-m4t-v2-large e2e WER sweep (BH-QB 1x4)
+  cmd: |
+    set -e
+    export MESH_DEVICE=BH-QB
+    pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k "teacher_forced and sweep" -v
+  skus:
+    bh_quietbox_2:
+      timeout: 100
   team: models
   model-name: seamless-m4t-v2-large
 

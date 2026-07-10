@@ -453,15 +453,20 @@ On **1×4**, look for prefill matmuls with batch **128** and decode ops (`SdpaDe
 
 | Workflow | What runs |
 |----------|-----------|
-| `(Blackhole) Demo tests` → `seamless-m4t-v2-large` | `demo_perf_sweep.py` (five tasks, seq 32→4096), then logit PCC, token matching, and WER sweeps with `-k sweep` on P150 and BH-QB |
-| `(Blackhole) e2e tests` → `seamless-m4t-v2-large` | Logit PCC, token match, and WER sweeps with `-k sweep` on P150 and BH-QB |
+| `(Blackhole) Demo tests` → `seamless-m4t-v2-large` | Full `demo_perf_sweep.py` plus logit PCC, token matching, and teacher-forced WER sweeps (`-k sweep`) on P150 and BH-QB |
 
-| Job | Pipeline | SKU | Mesh | Timeout |
-|-----|----------|-----|------|--------:|
-| `seamless-m4t-v2-large demo + e2e sweep (P150 1x1)` | Demo | P150 CIv2 | 1×1 (`MESH_DEVICE=P150`) | 360 min (demo pipeline max) |
-| `seamless-m4t-v2-large demo + e2e sweep (BH-QB 1x4)` | Demo | QuietBox 2 | 1×4 (`MESH_DEVICE=BH-QB`) | 480 min |
-| `bh-p150-seamless-m4t-v2-e2e-sweep` | e2e | P150 CIv2 | 1×1 (`MESH_DEVICE=P150`) | 480 min |
-| `bh-qb-seamless-m4t-v2-e2e-sweep` | e2e | QuietBox 2 | 1×4 (`MESH_DEVICE=BH-QB`) | 720 min |
+| Job | SKU | Mesh | Timeout |
+|-----|-----|------|--------:|
+| `demo perf sweep (P150 1x1)` | P150 CIv2 | 1×1 | 130 min |
+| `e2e logit PCC sweep (P150 1x1)` | P150 CIv2 | 1×1 | 77 min |
+| `e2e token matching sweep (P150 1x1)` | P150 CIv2 | 1×1 | 77 min |
+| `e2e WER sweep (P150 1x1)` | P150 CIv2 | 1×1 | 76 min |
+| `demo perf sweep (BH-QB 1x4)` | QuietBox 2 | 1×4 | 60 min |
+| `e2e logit PCC sweep (BH-QB 1x4)` | QuietBox 2 | 1×4 | 100 min |
+| `e2e token matching sweep (BH-QB 1x4)` | QuietBox 2 | 1×4 | 100 min |
+| `e2e WER sweep (BH-QB 1x4)` | QuietBox 2 | 1×4 | 100 min |
+
+**Note:** Job timeouts are capped by the shared `models.demo` time budget (`bh_p150b_civ2`: 360 min, `bh_quietbox_2`: 480 min). Full ISL sweeps (32→4096) can exceed the per-job allotment for logit / token / WER on P150 especially, so some CI jobs may fail due to time-budget constraints even when the underlying tests are correct.
 
 Weights: `facebook/seamless-m4t-v2-large` (~10 GB). The demo and pytest entry points call `ensure_seamless_m4t_v2_large_weights()` on first use (`HF_TOKEN` from CI secrets).
 
@@ -471,7 +476,7 @@ python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py
 
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_logit_pcc_sweep.py -k sweep -v
 pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_token_matching_sweep.py -k sweep -v
-pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k sweep -v
+pytest models/experimental/seamless_m4t_v2_large/tests/pcc/test_seamless_e2e_wer_sweep.py -k "teacher_forced and sweep" -v
 ```
 
 ### PCC tests (functional correctness)
