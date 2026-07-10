@@ -50,25 +50,36 @@ struct ProgramRunArgs {
     struct KernelRunArgs {
         KernelSpecName kernel;
 
-        // A set of runtime argument values unique across nodes.
-        // (argument name, node -> value)
-        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
-
-        // Per-node runtime argument values, keyed by argument name and then by node:
-        // runtime_arg_values[name][node] = value.
-        // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
-        // set, for every node the kernel runs on.
-        // Missing arguments or superfluous arguments will trigger validation errors.
+        // Per-node runtime argument values.
+        // Arguments are keyed by argument name and then by node:
+        //   runtime_arg_values[name][node] = value.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be
+        //  set, for every node the kernel runs on.
+        //  Missing arguments or superfluous arguments will trigger validation errors.
+        //
+        // When calling UpdateProgramRunArgs:
+        //  Only non-enqueue invariant runtime arguments must be set.
+        //  Updated arguments must be updated for every node the kernel runs on.
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes,
         // passing a common runtime argument would provide better dispatch efficiency.
+        //
+        using RuntimeArgValues = Table<std::string, Table<NodeCoord, uint32_t>>;
         RuntimeArgValues runtime_arg_values;
 
-        // A set of common runtime argument values (argument name -> value).
-        using CommonRuntimeArgValues = Table<std::string, uint32_t>;
-
         // Common runtime argument values (broadcast to every node).
-        // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
+        //
+        // When calling SetProgramRunArgs:
+        //  Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names
+        //  must be set.
+        //
+        // When calling UpdateProgramRunArgs:
+        //  Only non-enqueue invariant common runtime arguments must be set.
+        //  (However, CRTAs should seldom-to-never be enqueue invariant!)
+        //
+        using CommonRuntimeArgValues = Table<std::string, uint32_t>;
         CommonRuntimeArgValues common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
