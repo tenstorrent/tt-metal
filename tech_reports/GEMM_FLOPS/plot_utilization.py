@@ -27,6 +27,8 @@ DEVICE_FILES = {
     "P150": DATA_DIR / "bh.csv",
 }
 
+BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
+
 MODE_ORDER = ["tuned_2d_l1", "tuned_2d_dram", "oob"]
 
 MODE_DISPLAY = {
@@ -55,6 +57,23 @@ def safe_read_csv(path):
     return pd.DataFrame()
 
 
+def parse_grid_size(raw):
+    cleaned = str(raw).strip("() ")
+    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
+    return grid_x, grid_y
+
+
+def add_base_shape_columns(df):
+    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
+    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
+        grid_dims = df["grid_size"].apply(parse_grid_size)
+        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
+        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
+        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
+    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
+    return df
+
+
 def find_util_col(df, kind):
     """Find the utilization column that has data. kind is 'Host' or 'Device'."""
     prefix = f"{kind} based utilization"
@@ -76,6 +95,7 @@ def load_device_data(path, device_name):
         print(f"WARNING: No utilization column found in {path}")
     else:
         df["device_utilization"] = pd.to_numeric(df[util_col], errors="coerce")
+    df = add_base_shape_columns(df)
     return df
 
 
@@ -130,6 +150,16 @@ def build_legend_elements():
     return legend_elements
 
 
+def get_best_utilization_by_base_shape(df_slice):
+    best_rows = []
+    df_slice = df_slice.dropna(subset=["device_utilization"])
+    for _, group in df_slice.groupby("base_shape", sort=True):
+        best_rows.append(group.loc[group["device_utilization"].idxmax()])
+    if not best_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(best_rows).sort_values("matrix_elements")
+
+
 def plot_mode_panel(ax, df_mode):
     """Plot utilization curves for one benchmark mode."""
     for dtype_label, dtype_color in dtype_configs:
@@ -138,7 +168,9 @@ def plot_mode_panel(ax, df_mode):
             if subset.empty:
                 continue
 
-            subset_sorted = subset.sort_values("matrix_elements")
+            subset_sorted = get_best_utilization_by_base_shape(subset)
+            if subset_sorted.empty:
+                continue
             if device_name == "N150":
                 markerfacecolor = "white"
                 markeredgewidth = 2

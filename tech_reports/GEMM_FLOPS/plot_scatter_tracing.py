@@ -29,6 +29,8 @@ DEVICE_LABELS = {
     "p150": "P150 (Blackhole)",
 }
 
+BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
+
 dtype_configs = [
     ("BFLOAT4_B_LoFi", "BFLOAT4_B (LoFi)", "#2ca02c"),  # Green
     ("BFLOAT8_B_HiFi2", "BFLOAT8_B (HiFi2)", "#ff7f0e"),  # Orange
@@ -42,6 +44,23 @@ def safe_read_csv(path):
         return pd.read_csv(path)
     print(f"WARNING: {path} not found — skipping that device.")
     return pd.DataFrame()
+
+
+def parse_grid_size(raw):
+    cleaned = str(raw).strip("() ")
+    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
+    return grid_x, grid_y
+
+
+def add_base_shape_columns(df):
+    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
+    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
+        grid_dims = df["grid_size"].apply(parse_grid_size)
+        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
+        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
+        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
+    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
+    return df
 
 
 def load_and_prepare(path, source):
@@ -64,30 +83,31 @@ def load_and_prepare(path, source):
     df["matrix_elements"] = df["m"] * df["k"] * df["n"]
     if df["use_trace"].dtype == object:
         df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
+    df = add_base_shape_columns(df)
     return df
 
 
 def get_best_trace_pairs(df_slice):
-    """Return plotted series and ratio points keyed by exact matrix shape."""
+    """Return plotted series and ratio points keyed by exact base matrix shape."""
     traced_perf = []
     nontraced_perf = []
     ratio_points = []
 
-    for shape, shape_group in df_slice.groupby(["m", "k", "n"], sort=True):
-        m, k, n = shape
-        matrix_elements = m * k * n
-
+    for _, shape_group in df_slice.groupby("base_shape", sort=True):
         traced_group = shape_group[shape_group["use_trace"]]
         nontraced_group = shape_group[~shape_group["use_trace"]]
 
         best_traced_tflops = None
         best_nontraced_tflops = None
+        matrix_elements = shape_group["matrix_elements"].iloc[0]
         if not traced_group.empty:
-            best_traced_tflops = traced_group["tflops"].max()
-            traced_perf.append((matrix_elements, best_traced_tflops))
+            best_traced_row = traced_group.loc[traced_group["tflops"].idxmax()]
+            best_traced_tflops = best_traced_row["tflops"]
+            traced_perf.append((best_traced_row["matrix_elements"], best_traced_tflops))
         if not nontraced_group.empty:
-            best_nontraced_tflops = nontraced_group["tflops"].max()
-            nontraced_perf.append((matrix_elements, best_nontraced_tflops))
+            best_nontraced_row = nontraced_group.loc[nontraced_group["tflops"].idxmax()]
+            best_nontraced_tflops = best_nontraced_row["tflops"]
+            nontraced_perf.append((best_nontraced_row["matrix_elements"], best_nontraced_tflops))
 
         if (
             best_traced_tflops is not None

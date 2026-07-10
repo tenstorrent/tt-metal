@@ -33,6 +33,8 @@ DEVICE_MAP = {
     "wh": "N150 (Wormhole)",
 }
 
+BASE_SHAPE_COLUMNS = ["base_m", "base_k", "base_n"]
+
 DTYPE_MAP = {
     "BFLOAT16": "bf16",
     "BFLOAT8_B": "bf8_b",
@@ -79,6 +81,23 @@ def _read_csv(path):
     return pd.DataFrame()
 
 
+def _parse_grid_size(raw):
+    cleaned = str(raw).strip("() ")
+    grid_x, grid_y = [int(x.strip()) for x in cleaned.split(",")]
+    return grid_x, grid_y
+
+
+def _add_base_shape_columns(df):
+    """Ensure base_m/base_k/base_n exist while preserving full scaled m/k/n."""
+    if not all(col in df.columns for col in BASE_SHAPE_COLUMNS):
+        grid_dims = df["grid_size"].apply(_parse_grid_size)
+        df["base_m"] = [m // grid_y for m, (_, grid_y) in zip(df["m"], grid_dims)]
+        df["base_k"] = [k // grid_x for k, (grid_x, _) in zip(df["k"], grid_dims)]
+        df["base_n"] = [n // grid_x for n, (grid_x, _) in zip(df["n"], grid_dims)]
+    df["base_shape"] = list(zip(df["base_m"], df["base_k"], df["base_n"]))
+    return df
+
+
 def _parse_dtype(raw):
     full = str(raw).split(".")[-1]
     return DTYPE_MAP.get(full, full.lower())
@@ -105,7 +124,20 @@ def _load_csv(path):
     df["dtype_short"] = df["dtype"].apply(_parse_dtype)
     df["fidelity"] = df["math_fidelity"].apply(_parse_fidelity)
     df["matrix_elements"] = df["m"] * df["k"] * df["n"]
+    if df["use_trace"].dtype == object:
+        df["use_trace"] = df["use_trace"].astype(str).str.lower() == "true"
+    df = _add_base_shape_columns(df)
     return df
+
+
+def _get_best_line_by_base_shape(line_data, util_col_name):
+    best_rows = []
+    line_data = line_data.dropna(subset=[util_col_name])
+    for _, group in line_data.groupby("base_shape", sort=True):
+        best_rows.append(group.loc[group[util_col_name].idxmax()])
+    if not best_rows:
+        return pd.DataFrame()
+    return pd.DataFrame(best_rows).sort_values("matrix_elements")
 
 
 def _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label):
@@ -159,7 +191,9 @@ def _plot_dtype_grid(df_all, dtype_short, device_prefix, device_label):
                 line_data = subset[(subset["mode"] == mode) & (subset["fidelity"] == fidelity)]
                 if line_data.empty:
                     continue
-                line_data = line_data.sort_values("matrix_elements")
+                line_data = _get_best_line_by_base_shape(line_data, util_col_name)
+                if line_data.empty:
+                    continue
                 ax.plot(
                     line_data["matrix_elements"],
                     line_data[util_col_name],
