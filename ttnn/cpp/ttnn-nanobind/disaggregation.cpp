@@ -321,6 +321,20 @@ void bind_disaggregation_api(nb::module_& mod) {
         Used to compare KV-table reads against the live KV cache byte-for-byte.
         )");
 
+    mod.def(
+        "tensor_from_bf16_bytes",
+        [](const nb::bytes& raw_bytes, const std::vector<uint32_t>& shape) {
+            return ttnn::experimental_disaggregation::tensor_from_bf16_bytes(
+                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(raw_bytes.c_str()), raw_bytes.size()), shape);
+        },
+        nb::arg("raw_bytes"),
+        nb::arg("shape"),
+        R"(
+        Wrap raw bfloat16 bytes (2 bytes/element, ROW_MAJOR layout) as a host-side ttnn.Tensor
+        with the given shape — no quantization round-trip. The bf16/ROW_MAJOR analogue of
+        tensor_from_bfp8_bytes, for uncompressed (bf16 ROW_MAJOR) KV caches.
+        )");
+
     // Protobuf serialization — the runner publishes the table to the
     // migration_worker (SET_TABLE consumes a serialized protobuf file path).
     mod.def(
