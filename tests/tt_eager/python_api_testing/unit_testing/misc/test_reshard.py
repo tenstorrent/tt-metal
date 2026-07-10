@@ -1655,3 +1655,48 @@ def test_reshard_between_L1_and_DRAM(
     else:
         passing, output = comp_equal(torch_tensor, torch_result)
     assert passing, output
+
+
+def test_reject_legacy_dram_block_sharded(device, expect_error):
+    """
+    The sweep above builds DRAM block sharding via the ND_SHARDED representation (supported). This
+    guards the other side: the *legacy* 2D-grid BLOCK_SHARDED + DRAM config collides on DRAM's 1D
+    banks and is unsupported, so both to_memory_config and reshard must reject it - matching
+    interleaved_to_sharded / untilize / reduce_scatter. See tenstorrent/tt-metal#49224.
+
+    Without this, a future removal/bypass of the validation would go undetected (the sweep never
+    constructs the legacy config).
+    """
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 4 or grid_size.y < 4:
+        pytest.skip("Device grid too small for 4x4 block sharding")
+
+    height, width = 256, 256
+    dram_interleaved = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
+    )
+
+    torch_tensor = random_torch_tensor(ttnn.bfloat16, [1, 1, height, width])
+    tt = ttnn.Tensor(torch_tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, dram_interleaved)
+
+    # Legacy 2D-grid BLOCK_SHARDED + DRAM (memory_layout == BLOCK_SHARDED). This is exactly the
+    # representation _l1_dram_mem_config avoids by building block-DRAM as ND_SHARDED instead.
+    legacy_block_dram = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))}),
+            (height // 4, width // 4),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    # to_memory_config rejects it at the dispatcher (before the ttnn.copy fallback).
+    with expect_error(RuntimeError, "DRAM block sharding"):
+        ttnn.to_memory_config(tt, legacy_block_dram)
+
+    # reshard's validate_inputs rejects it too (route in via a sharded L1 input).
+    l1_hs = _l1_dram_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, height, width, device)
+    tt_l1_hs = ttnn.to_memory_config(tt, l1_hs)
+    with expect_error(RuntimeError, "DRAM block sharding"):
+        ttnn.reshard(tt_l1_hs, legacy_block_dram)
