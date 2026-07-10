@@ -55,7 +55,7 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH arch, DeviceComputeKernelConfig compute_kernel_config);
+    tt::ARCH arch, const DeviceComputeKernelConfig& compute_kernel_config);
 
 // Maps the four hardware knobs (math_fidelity, math_approx_mode, fp32_dest_acc_en,
 // dst_full_sync_en) of a ComputeKernelConfig to a Metal 2.0 ComputeHardwareConfig. The knobs are
