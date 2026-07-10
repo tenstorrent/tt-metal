@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 #include <tracy/TracyTTDevice.hpp>
@@ -93,6 +94,13 @@ private:
     std::mutex mutex_;
     std::unordered_map<uint32_t, ChipAnchor> chip_anchors_;    // chip_id -> current anchor
     std::unordered_map<uint64_t, TracyTTCtx> tracy_contexts_;  // ContextKey(chip,core) -> ctx
+    // Shadow of Tracy's own per-(chip,core,risc) GPU zone stack DEPTH, so we can detect an unmatched
+    // ZONE_END (depth would go negative) on the host BEFORE it reaches tracy-capture, where it pops
+    // an empty stack and SEGVs (TracyWorker::ProcessGpuZoneEnd). We drop the orphan end and log the
+    // offending core so we can see whether it is an active or idle core. Key: (ContextKey<<3)|risc.
+    std::unordered_map<uint64_t, int32_t> lane_depth_;
+    uint64_t orphan_end_count_ = 0;
+    std::unordered_set<uint64_t> orphan_lanes_;  // distinct (chip,core,risc) lanes that saw an orphan end
     SkippedEndBeforeStartStats skipped_end_before_start_stats_;
     tt::ProgramRealtimeProfilerCallbackHandle callback_handle_;
     tt::tt_metal::experimental::ProfilerPacketCallbackHandle packet_callback_handle_;

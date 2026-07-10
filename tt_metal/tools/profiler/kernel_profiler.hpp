@@ -202,6 +202,13 @@ inline __attribute__((always_inline)) void publish_tail() {
     // Hold the tail while this launch is unvalidated/invalid: an idle core's FW zone is written into
     // the ring but never made visible to the X280 drainer (see zoneValid).
     if (zoneValid) {
+        // Release fence: the X280 consumer reads TAIL then the marker slot over the NoC. Blackhole L1
+        // is write-through, but the marker-word stores and this TAIL store can still reach L1 SRAM out
+        // of order, so a remote reader could observe the bumped TAIL before the words land and read a
+        // stale/empty slot. Order the marker stores BEFORE the TAIL publish so TAIL is a true commit
+        // point (paired with the consumer's wait-for-valid in profzone.c -- neither is sufficient
+        // alone: this fence prevents stale-but-valid reads, the consumer wait covers not-yet-visible).
+        asm volatile("fence" ::: "memory");
         profiler_control_buffer[TAIL_INDEX] = wIndex;
     }
 }

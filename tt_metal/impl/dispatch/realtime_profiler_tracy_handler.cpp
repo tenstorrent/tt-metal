@@ -127,6 +127,14 @@ void RealtimeProfilerTracyHandler::AddDevice(
 void RealtimeProfilerTracyHandler::RemoveDevice([[maybe_unused]] uint32_t chip_id) {
 #if defined(TRACY_ENABLE)
     std::lock_guard<std::mutex> lock(mutex_);
+    if (orphan_end_count_ > 0) {
+        log_warning(
+            tt::LogMetal,
+            "[Real-time profiler] SUMMARY: dropped {} orphan ZONE_END(s) across {} distinct lane(s) this "
+            "session (unmatched ends = a lost/late ZONE_START upstream; each would SEGV tracy-capture).",
+            orphan_end_count_,
+            orphan_lanes_.size());
+    }
     for (auto it = tracy_contexts_.begin(); it != tracy_contexts_.end();) {
         if ((it->first >> 40) == chip_id) {
             TracyTTDestroy(it->second);
@@ -349,6 +357,36 @@ void RealtimeProfilerTracyHandler::HandleWorkerZone(
     marker.marker_name = zone.name.empty() ? fmt::format("Zone_{}", zone.timer_id) : std::string(zone.name);
     marker.file = "kernel_profiler";
     marker.line = 0;
+
+    // Mirror Tracy's own per-(context,thread) GPU zone stack depth. An unmatched ZONE_END (this lane
+    // has no open zone) would pop an empty stack in tracy-capture and SEGV. Detect it here, drop it,
+    // and log the offending core once so we can tell whether the unbalance is on an active core (a
+    // drain/relay/pairing bug) or an idle core (an idle-core-filter leak).
+    const uint64_t lane_key = (ContextKey(zone.chip_id, zone.core_noc0_x, zone.core_noc0_y) << 3) | (zone.risc & 0x7);
+    if (zone.is_start) {
+        lane_depth_[lane_key]++;
+    } else {
+        auto& depth = lane_depth_[lane_key];
+        if (depth <= 0) {
+            ++orphan_end_count_;
+            orphan_lanes_.insert(lane_key);
+            if (orphan_end_count_ <= 25) {
+                log_warning(
+                    tt::LogMetal,
+                    "[Real-time profiler] orphan ZONE_END (no open zone on lane) dropped: chip {} "
+                    "noc0=({},{}) risc {} name '{}' id 0x{:x} -- would SEGV tracy-capture; #{}",
+                    zone.chip_id,
+                    zone.core_noc0_x,
+                    zone.core_noc0_y,
+                    zone.risc,
+                    marker.marker_name,
+                    zone.timer_id,
+                    orphan_end_count_);
+            }
+            return;
+        }
+        --depth;
+    }
 
     {
         ZoneScopedN("HWZ-TracyPush");  // the actual enqueue into Tracy (blocks here if Tracy's queue is full)

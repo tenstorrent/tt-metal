@@ -128,11 +128,17 @@ int main(uint64_t hartid) {
                 uint32_t h = head;
                 while (h != tail) {
                     uint32_t w0 = r32(ring_base + (uint64_t)(h % RING_CAP) * 4);
-                    uint32_t w1 = r32(ring_base + (uint64_t)((h + 1) % RING_CAP) * 4);
-                    h += 2;
                     if ((w0 & 0x80000000u) == 0) {
-                        continue;
+                        /* h < tail => the producer COMMITTED this marker (published TAIL past it), but its
+                         * word stores are not yet visible over the NoC. Do NOT skip+advance -- that drops a
+                         * committed marker and surfaces downstream as an orphan ZONE_END that SEGVs the
+                         * capture tool. Stop draining this ring now; the continuous drain loop retries from
+                         * this same h next pass once the store lands. Markers are FIFO, so nothing past h is
+                         * visible yet either. Bounded + lossless: head never advances past an un-relayed
+                         * marker, and we never re-read the ring (tail-head stays <= RING_CAP). */
+                        break;
                     }
+                    uint32_t w1 = r32(ring_base + (uint64_t)((h + 1) % RING_CAP) * 4);
                     /* Raw-marker relay: one page per marker, in ring order (== emission order
                      * == correct nest order per lane). timer_id keeps the packet-type bits
                      * ((id>>16)&0x7: 0=ZONE_START, 1=ZONE_END) and the 16-bit name hash
@@ -180,8 +186,9 @@ int main(uint64_t hartid) {
                     w32(wbase + bsent_off, bytes_sent);
                     total_zones++;
                     w64(RES(0x00), total_zones); /* live counter: markers relayed */
+                    h += 2; /* advance ONLY after a successful relay -- head never passes an un-relayed marker */
                 }
-                w32(cbase + CTRL_HEAD(r) * 4, h); /* advance head so producers unblock */
+                w32(cbase + CTRL_HEAD(r) * 4, h); /* head = last relayed (retry from here next pass) */
             }
         }
         loops++;
