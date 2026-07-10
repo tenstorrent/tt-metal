@@ -31,7 +31,12 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None)
         # w1/w3 DRAM-WIDTH_SHARDED for decode (M=1 tile, ~+10% tok/s); w2 interleaved.
         # Cache uses `.dramshard` suffix — layout incompatible with interleaved cache
         # (as_tensor ignores requested memcfg on reload). Fallback if memcfgs absent.
-        dram_sharded = args is not None and getattr(args, "mlp_w1_weight_memcfg", None) is not None
+        # 1D-decode (default) uses interleaved weights (its mcast decode matmul needs them).
+        dram_sharded = (
+            args is not None
+            and getattr(args, "mlp_w1_weight_memcfg", None) is not None
+            and not getattr(args, "mlp_1d_decode", False)
+        )
 
         def cache(name, tag=""):
             return str(tensor_cache_path / f"mlp.{name}.weight{tag}.tp") if tensor_cache_path else None
@@ -119,9 +124,15 @@ class Qwen36MLP:
         self.args = args
         self.tt_ccl = tt_ccl
         self.num_devices = getattr(args, "num_devices", 1) if args is not None else 1
+        # 1D-decode (default): small-grid 1D matmuls beat the ~80-core DRAM-sharded grid on the
+        # bandwidth-bound skinny decode MLP matmuls (see test_mlp_matmul_sweep). Forces interleaved weights.
+        self._mlp_1d_decode = args is not None and getattr(args, "mlp_1d_decode", False)
         # Match load_mlp_weights dram_sharded condition for layout consistency.
         self._dram_sharded = (
-            self.num_devices > 1 and args is not None and getattr(args, "mlp_w1_weight_memcfg", None) is not None
+            self.num_devices > 1
+            and args is not None
+            and getattr(args, "mlp_w1_weight_memcfg", None) is not None
+            and not self._mlp_1d_decode
         )
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -223,14 +234,52 @@ class Qwen36MLP:
                 w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=mc)
                 w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=mc)
                 _silu_fused = True
+        elif self._mlp_1d_decode and x.shape[-2] <= ttnn.TILE_SIZE:
+            # 1D mcast decode matmuls on a small explicit grid, silu fused in the w1 progcfg.
+            # mcast_in0 needs interleaved in0, but ff-norm hands us a width-shard -> interleave first.
+            x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+            w1_out = ttnn.linear(
+                x_il,
+                w.w1,
+                compute_kernel_config=ckc,
+                program_config=args.mlp_w1_decode_1d_progcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            w3_out = ttnn.linear(
+                x_il,
+                w.w3,
+                compute_kernel_config=ckc,
+                program_config=args.mlp_w3_decode_1d_progcfg,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(x_il)
+            _silu_fused = True
+        elif x.shape[-2] > ttnn.TILE_SIZE:
+            # Prefill (M>1 tile, compute-bound): FPU-tuned 2D config (grid width -> 1x4 subblock,
+            # in0_block_w=4) beats ttnn-auto's 1x1 stall ~2.7x (test_mlp_matmul_sweep_prefill). SILU fused.
+            seq = x.shape[-2]
+            pc_gate = tpc.create_prefill_mlp_matmul_program_config(
+                seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU
+            )
+            pc_up = tpc.create_prefill_mlp_matmul_program_config(seq, args.dim, w.w3.shape[-1])
+            # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
+            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
+            w1_out = ttnn.linear(
+                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            w3_out = ttnn.linear(
+                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+            _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
             w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
             w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
             _silu_fused = True
 
-        # Decode (M=1): the gated activation + down-proj output are tiny, so keep them in L1
-        # (down-proj reads its activation from L1). Prefill keeps DRAM: [seq, dim] would overflow L1.
+        # gated activation (down-proj INPUT): L1 in decode, DRAM in prefill. The L1 win is OUTPUT-only;
+        # keeping both down input (hidden) and output (partial) in L1 at seq 2048 overflows L1.
+        _prefill_tuned = x.shape[-2] > ttnn.TILE_SIZE and _silu_fused
         mc_out = ttnn.L1_MEMORY_CONFIG if x.shape[-2] <= ttnn.TILE_SIZE else mc
         # gate * up. Standalone silu only on DRAM-sharded decode path (SILU not fused there).
         if _silu_fused:
@@ -268,9 +317,15 @@ class Qwen36MLP:
         # feeds reduce-scatter->norm. M=hidden.shape[-2] (x.shape[1] is Z=1 in TP), K=intermediate_tp,
         # N=dim. Decode (M<=32) keeps ttnn-auto (progcfg None).
         w2_pc = None
-        if hidden.shape[-2] > ttnn.TILE_SIZE and getattr(args, "prefill_progcfg", None) is not None:
+        if self._mlp_1d_decode and hidden.shape[-2] <= ttnn.TILE_SIZE:
+            # 1D mcast decode down-proj on a small explicit grid (~16 cores).
+            w2_pc = args.mlp_w2_decode_1d_progcfg
+        elif hidden.shape[-2] > ttnn.TILE_SIZE and getattr(args, "prefill_progcfg", None) is not None:
             w2_pc = args.prefill_progcfg(hidden.shape[-2], hidden.shape[-1], w.w2.shape[-1])
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_out, program_config=w2_pc)
+        # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
+        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
+        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 
         # tt_all_reduce on (1,4) mesh reduce-scatters to hidden dim (dim=3).

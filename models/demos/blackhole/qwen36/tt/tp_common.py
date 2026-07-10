@@ -99,6 +99,49 @@ def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
     )
 
 
+def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, fp32_acc=True):
+    """Explicit-grid 1D (mcast_in0) decode matmul progcfg on exactly `num_cores` cores — small grids beat
+    the ~80-core DRAM-sharded grid on the bandwidth-bound skinny decode matmuls. Weight must be interleaved."""
+    cols = next(d for d in range(8, 0, -1) if num_cores % d == 0)
+    rows = num_cores // cols
+    m_tiles = math.ceil(m / TILE_SIZE)
+    k_tiles = math.ceil(k / TILE_SIZE)
+    n_tiles = math.ceil(n / TILE_SIZE)
+    # mcast_in0: every core streams the full K, so in0_block_w must divide the full k_tiles.
+    per_core_k = _find_largest_divisor(k_tiles)
+    per_core_n = math.ceil(n_tiles / num_cores)
+    cap = 4 if fp32_acc else 8  # fp32_dest_acc caps subblock area at 4
+    sub_w = max(i for i in range(1, cap + 1) if per_core_n % i == 0)
+    sub_h = max(i for i in range(1, cap + 1) if m_tiles % i == 0 and i * sub_w <= cap)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(cols, rows),
+        in0_block_w=per_core_k,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=m_tiles,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=fused_activation,
+        mcast_in0=True,
+    )
+
+
+def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_config=ttnn.L1_MEMORY_CONFIG):
+    """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
+    activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
+    x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+    out = ttnn.linear(
+        x_il,
+        weight,
+        compute_kernel_config=compute_cfg,
+        program_config=decode_1d_progcfg,
+        memory_config=out_memory_config,
+    )
+    if x_il is not x:
+        ttnn.deallocate(x_il)
+    return out
+
+
 def create_activation_shard_config(k):
     """WIDTH_SHARDED L1 activation config for a [*, k] activation."""
     k_tiles = k // TILE_SIZE
@@ -156,6 +199,27 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     )
 
 
+def _best_prefill_cols(n, max_cols):
+    """Grid width (<=max_cols) maximizing the output subblock, tie-broken to more cores — avoids the
+    1x1-subblock stall (e.g. gate/up N=4352 -> 7-wide -> 1x4) the default full width can force."""
+    n_tiles = math.ceil(n / TILE_SIZE)
+    best_cols, best_key = 1, None
+    for cols in range(1, max_cols + 1):
+        sw = _get_out_subblock_w(math.ceil(n_tiles / cols), 1)
+        key = (sw, cols)  # prefer wider subblock, then more columns (more compute cores)
+        if best_key is None or key > best_key:
+            best_key, best_cols = key, cols
+    return best_cols
+
+
+def create_prefill_mlp_matmul_program_config(m, k, n, fused_activation=None):
+    """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
+    subblock (drives prefill FPU) instead of the default full width. gate/up -> 7-wide, down -> 8-wide."""
+    grid = prefill_grid_default()
+    cols = _best_prefill_cols(n, grid[0])
+    return create_prefill_matmul_program_config(m, k, n, grid_size=(cols, grid[1]), fused_activation=fused_activation)
+
+
 # Mesh tensor helpers
 def shard_w(torch_tensor, mesh, dim, memory_config, cache_path, dtype=ttnn.bfloat8_b):
     """Torch weight [out,in] -> sharded mesh tensor. Transpose to [in,out]; dim=-1 column, dim=0 row."""
@@ -181,6 +245,11 @@ def all_gather_matmul_prefill(
     before pack (non-parametrized op, e.g. ttnn.UnaryOpType.SILU). Returns [1,1,S,N] per device (DRAM)."""
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
+    # AG-bound: 2 ethernet links parallelize the gather (P150x4 max; traced_8k TTFT win). grid.x must
+    # = num_links*workers, and the 7-wide default (prime) forces 1 link -> widen to 8 (2 links, 4 workers).
+    num_links = 2
+    grid = (8, grid[1])
+    workers = grid[0] // num_links
     cfg = ttnn.MinimalMatmulConfig(
         M_block_size=4,
         K_block_size=8,
@@ -189,9 +258,6 @@ def all_gather_matmul_prefill(
         subblock_w=4,
         compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
     )
-    # in0-sender axis (grid.x with force_transpose) must equal num_links * num_workers_per_link
-    num_links = next(nl for nl in (4, 3, 2, 1) if grid[0] % nl == 0)
-    workers = max(1, min(8 // num_links, grid[0] // num_links))
     out = ttnn.experimental.all_gather_minimal_matmul_async(
         input_tensor=x4,
         weight_tensor=weight,
@@ -314,11 +380,16 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)
     x4 = ttnn.reshape(x, (1, 1, M, K_local))
+    # RS-bound: 2 ethernet links parallelize the fp32 cross-device reduce (P150x4 max; traced_8k win).
+    # grid (8,8) leaves rows 8-9 for the 2 RS worker rows.
+    num_links = 2
     per_core_N = max(1, math.ceil(N / TILE_SIZE / grid[0]))
     pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=min(4, max(1, K_local // TILE_SIZE // grid[0])),
         out_subblock_h=1,
+        # Keep 1x1: op242 is RS-bound and this op is pipelined to overlap the matmul with the RS.
+        # Widening the subblock desyncs that overlap and measured net-negative on traced_8k TTFT.
         out_subblock_w=1,
         per_core_M=max(1, math.ceil(M / TILE_SIZE / grid[1])),
         per_core_N=per_core_N,
@@ -337,7 +408,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
         multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(),
         reduce_scatter_core_grid_offset=rs_offset,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        num_links=1,
+        num_links=num_links,
         memory_config_rs=ttnn.DRAM_MEMORY_CONFIG,
         topology=topology,
         subdevice_id=None,

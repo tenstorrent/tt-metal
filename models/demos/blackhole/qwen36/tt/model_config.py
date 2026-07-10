@@ -154,6 +154,37 @@ class Qwen36ModelArgs(ModelArgs):
         self.mlp_w3_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
         self.mlp_w2_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.hidden_dim // tp, self.dim)
 
+        # 1D decode MLP matmuls (DEFAULT): small grids beat the ~80-core DRAM-sharded grid on the
+        # bandwidth-bound skinny (M<=1) decode matmuls. Interleaved weights.
+        self.mlp_1d_decode = True
+        self.mlp_w1_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.dim, self.hidden_dim // tp, num_cores=32, fused_activation=ttnn.UnaryOpType.SILU
+        )
+        self.mlp_w3_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.dim, self.hidden_dim // tp, num_cores=32
+        )
+        self.mlp_w2_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.hidden_dim // tp, self.dim, num_cores=16
+        )
+
+        # Input-projection 1D decode (DEFAULT): same idea for attn QKV+gate and GDN QKVZAB in-projections.
+        # Weights load interleaved (prefill AGMM verified bit-identical); tuned grids per test_mlp_matmul_sweep.
+        self.proj_1d_decode = True
+        self.attn_qkv_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
+        )
+        self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=40
+        )
+        # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
+        # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
+        self.attn_wo_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.attn_out_dim_tp, self.dim, num_cores=32
+        )
+        self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            M, self.gdn_value_dim_tp, self.dim, num_cores=32
+        )
+
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
