@@ -104,7 +104,7 @@ ALWI void relu_max_tile_uint32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, sfpi::DataLayout::U32, 8 /*ITERATIONS*/),
+        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
@@ -115,7 +115,7 @@ ALWI void relu_max_tile_uint16(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, sfpi::DataLayout::U16, 8 /*ITERATIONS*/),
+        (APPROX /*APPROXIMATION_MODE*/, false /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
@@ -167,7 +167,7 @@ ALWI void relu_min_tile_uint32(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, sfpi::DataLayout::U32, 8 /*ITERATIONS*/),
+        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt32, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
@@ -178,7 +178,7 @@ ALWI void relu_min_tile_uint16(uint32_t idst, uint32_t param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         relu_clamp_uint,
-        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, sfpi::DataLayout::U16, 8 /*ITERATIONS*/),
+        (APPROX /*APPROXIMATION_MODE*/, true /*IS_LOWER_BOUND*/, DataFormat::UInt16, 8 /*ITERATIONS*/),
         idst,
         VectorMode::RC,
         param0 /*threshold*/));
