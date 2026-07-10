@@ -48,8 +48,20 @@ import ttnn
 HF_MODEL_ID = "tencent/HunyuanVideo-1.5"
 
 
-def build(device, torch_module, ccl_manager=None, tp=1):
-    """Extract all sub-weights of the dual-stream block; return a native forward."""
+def build(device, torch_module, ccl_manager=None, tp=1, sp=1, tp_axis=1, sp_axis=0):
+    """Extract all sub-weights of the dual-stream block; return a native forward.
+
+    Parallelism (all optional, default = single-device):
+      tp (head/tensor parallel, mesh axis `tp_axis`): Megatron column/row-parallel
+        split of the 16 attention heads + FF, all-reduced on tp_axis. Activations
+        replicated across tp_axis.
+      sp (sequence/context parallel, mesh axis `sp_axis`, sp>1): the LATENT stream
+        is sharded along its sequence across sp_axis; the joint attention uses the
+        ring flash kernel (ttnn.transformer.ring_joint_scaled_dot_product_attention)
+        so each sp rank does 1/sp of the O(seq^2) attention. The prompt stream stays
+        replicated across sp_axis. This is the lever for high-frame latency (the
+        attention dominates at 121f, seq~49k). Requires a 2D mesh; weights shard on
+        tp_axis and replicate on sp_axis (ShardTensor2dMesh)."""
     import os
 
     import torch
@@ -75,6 +87,24 @@ def build(device, torch_module, ccl_manager=None, tp=1):
     heads = heads_total // tp if sharded else heads_total  # LOCAL heads (this device's shard)
     inner = heads * dim_head  # LOCAL inner dim (== inner_total when tp==1)
 
+    # Sequence/context parallel (sp>1): 2D mesh, latent seq sharded on sp_axis.
+    seq_parallel = sp > 1 and ccl_manager is not None
+    mesh_shape = tuple(device.shape) if seq_parallel else None
+
+    def _mapper(shard_dim):
+        """Weight mesh-mapper. 2D (seq-parallel): shard `shard_dim` on tp_axis,
+        replicate on sp_axis. 1D (head-TP only): plain shard on tp mesh. None:
+        single device. shard_dim=None -> fully replicated."""
+        if seq_parallel:
+            dims = [None, None]
+            dims[tp_axis] = shard_dim  # None on sp_axis => replicate the sequence axis
+            return ttnn.ShardTensor2dMesh(device, mesh_shape=mesh_shape, dims=dims)
+        if sharded and shard_dim is not None:
+            return ttnn.ShardTensorToMesh(device, dim=shard_dim)
+        if sharded:
+            return ttnn.ReplicateTensorToMesh(device)
+        return None
+
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi2 if _bf16 else ttnn.MathFidelity.HiFi4,
@@ -91,16 +121,30 @@ def build(device, torch_module, ccl_manager=None, tp=1):
     # purpose-built for this exact "two Q/K/V streams, concatenated rear-wise"
     # shape and never materializes that matrix. Chunk sizes are a starting
     # point, not tuned; adjust if the op rejects them for a given seq length.
-    sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=128,
-        k_chunk_size=128,
-        exp_approx_mode=False,
-    )
+    _grid = device.compute_with_storage_grid_size()
+    if seq_parallel:
+        # Ring SDPA needs cores for the K/V all-gather: reserve the last core row
+        # for CCL, run SDPA on the rest (matches tt_dit blocks/attention.py).
+        sdpa_worker_grid = (_grid.x, _grid.y - 1)
+        ccl_core_grid_offset = (0, _grid.y - 1)
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=sdpa_worker_grid,
+            q_chunk_size=128,
+            k_chunk_size=512,
+            exp_approx_mode=False,
+        )
+    else:
+        ccl_core_grid_offset = None
+        sdpa_program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(_grid.x, _grid.y),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
 
     def f32(t, mesh_mapper=None):
-        if mesh_mapper is None and sharded:
-            mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        if mesh_mapper is None and (sharded or seq_parallel):
+            mesh_mapper = _mapper(None)  # fully replicated (2D-aware)
         return ttnn.from_torch(
             t.contiguous().float(),
             dtype=wdt,
@@ -116,16 +160,16 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         return w, b
 
     def lin_col(linear):
-        """Column-parallel: shard the OUTPUT dim across the mesh (no CCL needed)."""
-        mapper = ttnn.ShardTensorToMesh(device, dim=-1) if sharded else None
+        """Column-parallel: shard the OUTPUT dim across tp_axis (no CCL needed)."""
+        mapper = _mapper(-1)
         w = f32(linear.weight.detach().t(), mesh_mapper=mapper)
         b = f32(linear.bias.detach().reshape(1, -1), mesh_mapper=mapper) if linear.bias is not None else None
         return w, b
 
     def lin_row(linear):
-        """Row-parallel: shard the INPUT (contraction) dim; bias stays replicated
-        and is added once, by the caller, after the all-reduce."""
-        mapper = ttnn.ShardTensorToMesh(device, dim=0) if sharded else None
+        """Row-parallel: shard the INPUT (contraction) dim on tp_axis; bias stays
+        replicated and is added once, by the caller, after the all-reduce."""
+        mapper = _mapper(0)
         w = f32(linear.weight.detach().t(), mesh_mapper=mapper)
         b = f32(linear.bias.detach().reshape(1, -1)) if linear.bias is not None else None  # replicated
         return w, b
@@ -214,9 +258,13 @@ def build(device, torch_module, ccl_manager=None, tp=1):
             y = ttnn.add(y, b)
         return y
 
-    def _all_reduce(x, mesh_axis=1):
+    def _all_reduce(x, mesh_axis=None):
         """Megatron all-reduce for a row-parallel output: reduce_scatter + all_gather,
-        the idiom `models/demos/z_image_turbo` uses for its own flat-TP DiT."""
+        the idiom `models/demos/z_image_turbo` uses for its own flat-TP DiT. Reduces
+        across the TENSOR-parallel axis (tp_axis); the sequence-parallel axis is left
+        alone (its shards stay sharded)."""
+        if mesh_axis is None:
+            mesh_axis = tp_axis
         if not sharded:
             return x
         # reduce_scatter's persistent-buffer path hardcodes bf16 ping-pong buffers
@@ -274,7 +322,7 @@ def build(device, torch_module, ccl_manager=None, tp=1):
             sin_b = ttnn.typecast(sin_b, x4.dtype)
         return ttnn.add(ttnn.multiply(x4, cos_b), ttnn.multiply(rot4, sin_b))
 
-    def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None):
+    def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None, logical_n=None):
         """Joint (dual-stream) attention via the fused flash-attention-style
         ttnn.transformer.joint_scaled_dot_product_attention kernel instead of
         an explicit matmul(q,kT)+softmax+matmul(.,v) sequence. The naive form
@@ -349,17 +397,47 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         if attn_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
             q, k, v = (ttnn.typecast(t, ttnn.bfloat16) for t in (q, k, v))
             eq, ek, ev = (ttnn.typecast(t, ttnn.bfloat16) for t in (eq, ek, ev))
-        hid_out, enc_out = ttnn.transformer.joint_scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            eq,
-            ek,
-            ev,
-            joint_strategy="rear",
-            program_config=sdpa_program_config,
-            compute_kernel_config=compute_config,
-        )
+        if seq_parallel:
+            # Sequence-parallel: q/k/v are seq-sharded on sp_axis ([B, H_local,
+            # seq/sp, D]); the ring kernel all-gathers K/V across sp_axis so each
+            # rank's local Q attends the full sequence, doing 1/sp of the work.
+            # `logical_n` is the UNPADDED full spatial seq (the pipeline pads to a
+            # multiple of sp before sharding). The prompt (eq/ek/ev) is replicated
+            # across sp_axis; its output comes back replicated.
+            hid_out, enc_out, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                eq,
+                ek,
+                ev,
+                persistent_output_buffer_k=ccl_manager.get_ag_ping_pong_buffer(k.shape, 2, sp_axis),
+                persistent_output_buffer_v=ccl_manager.get_ag_ping_pong_buffer(v.shape, 2, sp_axis),
+                joint_strategy="rear",
+                logical_n=logical_n,
+                program_config=sdpa_program_config,
+                compute_kernel_config=compute_config,
+                dim=2,
+                multi_device_global_semaphore=ccl_manager.get_ag_ping_pong_semaphore(sp_axis),
+                num_links=ccl_manager.num_links,
+                cluster_axis=sp_axis,
+                mesh_device=device,
+                topology=ccl_manager.topology,
+                subdevice_id=ccl_manager.ccl_sub_device_id,
+                ccl_core_grid_offset=ccl_core_grid_offset,
+            )
+        else:
+            hid_out, enc_out = ttnn.transformer.joint_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                eq,
+                ek,
+                ev,
+                joint_strategy="rear",
+                program_config=sdpa_program_config,
+                compute_kernel_config=compute_config,
+            )
         if attn_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b):
             hid_out = ttnn.typecast(hid_out, attn_dtype)
             enc_out = ttnn.typecast(enc_out, attn_dtype)
@@ -398,7 +476,9 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         nh, gate_msa, shift_mlp, scale_mlp, gate_mlp = _adazero(h, t, ada1_w, ada1_b, ada1_eps)
         ne, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = _adazero(e, t, adac_w, adac_b, adac_eps)
 
-        attn_out, ctx_out = _joint_attention(nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias)
+        attn_out, ctx_out = _joint_attention(
+            nh, ne, freqs_cis=freqs_cis, attn_bias=attn_bias, logical_n=kwargs.get("logical_n")
+        )
 
         h = ttnn.add(h, ttnn.multiply(attn_out, _unsq(gate_msa)))
         e = ttnn.add(e, ttnn.multiply(ctx_out, _unsq(c_gate_msa)))
