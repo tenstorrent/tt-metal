@@ -53,7 +53,6 @@ void kernel_main() {
                 // TILE (equal src/dst page size): page N of the source is logically tile N of the
                 // tensor, so write it straight to page N of the destination. The row/col re-strider
                 // below is only for row-major reshards with differing shard widths.
-                // See tenstorrent/tt-metal#49224.
                 for (const auto& src_page : shard_pages) {
                     const uint32_t src_l1_addr = static_cast<uint32_t>(src_page.noc_addr());
                     CoreLocalMem<uint32_t> src_mem(src_l1_addr);

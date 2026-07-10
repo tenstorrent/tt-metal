@@ -1572,7 +1572,7 @@ def _l1_dram_mem_config(scheme, buffer_type, height, width, device):
     # Block sharding on DRAM: DRAM banks form a 1D grid, so a 2D block core-grid collides (the
     # accessor keys the DRAM bank off core.x only, so cores that share an x land on the same bank).
     # Express it the supported way instead: an ND shard spec with the block shard shape distributed
-    # round-robin over the 1D DRAM banks. See tenstorrent/tt-metal#49224.
+    # round-robin over the 1D DRAM banks.
     if scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED and buffer_type == ttnn.BufferType.DRAM:
         num_dram_banks = device.dram_grid_size().x
         dram_banks = ttnn.CoreRangeSet(
@@ -1616,8 +1616,7 @@ def test_reshard_between_L1_and_DRAM(
     device, dtype, layout, input_buffer_type, input_scheme, output_buffer_type, output_scheme
 ):
     """
-    Sweep ttnn.to_memory_config resharding between L1 and DRAM, see
-    https://github.com/tenstorrent/tt-metal/issues/49224.
+    Sweep ttnn.to_memory_config resharding between L1 and DRAM.
 
     Round-trips a 256x256 tensor: build it in the input memory config, reshard
     to the output memory config (the op under test), read it back through a
