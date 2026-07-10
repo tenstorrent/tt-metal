@@ -52,7 +52,7 @@ class ModelArgs(TTModelArgs):
         Dummy runs keep HF/random weights in state_dict but must not leave
         ``dummy_weights=True`` while building tt_transformers modules: they skip
         cache whenever that flag is set, forcing a live tilize of the 7B QKV
-        tensor that overflows N150 L1.  Call this after the reference model and
+        tensor that overflows P150 L1.  Call this after the reference model and
         state_dict are captured; ``weight_cache_path`` keeps routing to the
         dummy cache namespace so real-weight tilized files are never loaded.
         """
