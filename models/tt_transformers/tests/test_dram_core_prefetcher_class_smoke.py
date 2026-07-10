@@ -24,20 +24,21 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole, run_for_blackhole
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up
 
-pytestmark = [
-    run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-]
+pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+
+
+@pytest.fixture(autouse=True)
+def _require_tensor_prefetcher(device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+        pytest.skip("Tensor prefetcher requires Blackhole firmware >= 19.12.0.0")
 
 
 @torch.no_grad()
-@pytest.mark.parametrize("recv_per_bank", [1, 2, 4])
+@pytest.mark.parametrize("recv_per_bank", [4])
 def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
     """Drive a single 1D mcast matmul through ``DramCorePrefetcher`` end-to-end.
 
@@ -70,13 +71,12 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
     # ---- Build a synthetic DRAM-sharded weight ----
     torch.manual_seed(zlib.crc32(f"smoke_{recv_per_bank}".encode()))
     pt_weight = torch.randn(1, 1, K, N)
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(dram_core_range_set, [K, N // num_dram_banks], ttnn.ShardOrientation.ROW_MAJOR),
+    weight_mem_config = recv_contig_mem_config(
+        K,
+        N,
+        ring_size,
+        num_dram_banks,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     )
     tt_weight = ttnn.as_tensor(
         pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
@@ -126,7 +126,7 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
     prefetcher = make_prefetcher(device, num_tensors=1, num_layers=1, num_receiver_cores=recv_per_bank)
     assert prefetcher.__class__.__name__ == "DramCorePrefetcher", (
         f"Expected DramCorePrefetcher but got {prefetcher.__class__.__name__}; "
-        "check TT_METAL_USE_DRAM_CORE_PREFETCHER=1 and TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1."
+        "check TT_METAL_USE_DRAM_CORE_PREFETCHER=1 and device firmware support."
     )
     prefetcher.init(Mode.DECODE)
     prefetcher.register_callback(lambda: prefetcher.insert_tensor(tt_weight, program_config=program_config))

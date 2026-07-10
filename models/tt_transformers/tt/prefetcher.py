@@ -77,9 +77,9 @@ def make_prefetcher(
 ):
     """Select the prefetcher backend.
 
-    Returns a ``DramCorePrefetcher`` when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` AND
-    Blackhole AND DRAM programmable cores are enabled. Otherwise returns the original
-    worker-core ``Prefetcher``.
+    Returns a ``DramCorePrefetcher`` when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` and
+    the Tensor prefetcher is supported by the device firmware. Otherwise returns the
+    original worker-core ``Prefetcher``.
 
     Both classes expose the same public surface so callers in MLP / attention / model
     code don't need to branch on which backend is in use.
@@ -87,7 +87,7 @@ def make_prefetcher(
     use_dram_core = (
         os.getenv("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") == "1"
         and is_blackhole()
-        and os.getenv("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") == "1"
+        and ttnn.experimental.is_tensor_prefetcher_supported(mesh_device)
     )
     if use_dram_core:
         from models.tt_transformers.tt.dram_core_prefetcher import DramCorePrefetcher

@@ -829,7 +829,12 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_
     torch.manual_seed(zlib.crc32(f"recv_contig_batched_ring32_{name}".encode()))
     pt_weight = torch.randn(1, 1, K, N)
     tt_weight = _make_recv_contig_weight(
-        device, pt_weight, num_dram_banks=num_dram_banks, ring_size=ring_size, dtype=dtype
+        device,
+        pt_weight,
+        num_dram_banks=num_dram_banks,
+        ring_size=ring_size,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     )
 
     pt_act = torch.randn(1, 1, M, K)
@@ -869,8 +874,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_
     in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
     gcb_size = ring_size * in1_block_size_bytes
     bank_to_receivers = [
-        (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
+        (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
     ]
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
@@ -889,8 +893,8 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_
         dst_full_sync_en=True,
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -900,7 +904,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     out_torch = ttnn.to_torch(tt_out)
     expected = pt_act.float() @ pt_weight.float()
@@ -940,7 +944,12 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
     torch.manual_seed(zlib.crc32(seed_name))
     pt_weight = torch.randn(1, 1, K, N)
     weight_mem_config = _make_recv_contig_weight(
-        mesh_device, pt_weight[:, :, :, :n_per_device], num_dram_banks=num_dram_banks, ring_size=ring_size, dtype=dtype
+        mesh_device,
+        pt_weight[:, :, :, :n_per_device],
+        num_dram_banks=num_dram_banks,
+        ring_size=ring_size,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     ).memory_config()
     tt_weight = ttnn.as_tensor(
         pt_weight,
@@ -994,7 +1003,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
         mesh_device,
         [
-            (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
+            (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
             for b in range(num_dram_banks)
         ],
         ring_size * in1_block_size_bytes,
@@ -1014,9 +1023,9 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
         dst_full_sync_en=True,
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(mesh_device)
-    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(mesh_device, 0)
-    ttnn.experimental.queue_dram_core_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
+    ttnn.experimental.start_tensor_prefetcher(mesh_device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(mesh_device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -1026,7 +1035,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(mesh_device)
+    ttnn.experimental.stop_tensor_prefetcher(mesh_device)
 
     out_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
     expected = pt_act.float() @ pt_weight.float()
@@ -1057,7 +1066,12 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_de
     torch.manual_seed(zlib.crc32(b"recv_contig_batched_ring16_mesh_ff2"))
     pt_weight = torch.randn(1, 1, K, N)
     weight_mem_config = _make_recv_contig_weight(
-        mesh_device, pt_weight[:, :, :k_per_device, :], num_dram_banks=num_dram_banks, ring_size=ring_size, dtype=dtype
+        mesh_device,
+        pt_weight[:, :, :k_per_device, :],
+        num_dram_banks=num_dram_banks,
+        ring_size=ring_size,
+        dtype=dtype,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
     ).memory_config()
     tt_weight = ttnn.as_tensor(
         pt_weight,
@@ -1112,7 +1126,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_de
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
         mesh_device,
         [
-            (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
+            (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols))
             for b in range(num_dram_banks)
         ],
         ring_size * in1_block_size_bytes,
@@ -1132,9 +1146,9 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_de
         dst_full_sync_en=True,
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(mesh_device)
-    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(mesh_device, 0)
-    ttnn.experimental.queue_dram_core_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
+    ttnn.experimental.start_tensor_prefetcher(mesh_device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(mesh_device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(mesh_device, [(tt_weight, ring_size)], global_cb=gcb)
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,
@@ -1144,7 +1158,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_de
         dtype=ttnn.bfloat16,
         global_cb=gcb,
     )
-    ttnn.experimental.stop_dram_core_prefetcher(mesh_device)
+    ttnn.experimental.stop_tensor_prefetcher(mesh_device)
 
     out_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     expected = torch.cat(
@@ -1180,8 +1194,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
     )
     bank_to_receivers = [
-        (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
+        (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
     ]
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1206,7 +1219,12 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
         torch.manual_seed(zlib.crc32(f"recv_contig_mixed_ring32_{name}".encode()))
         pt_weight = torch.randn(1, 1, K, N)
         tt_weight = _make_recv_contig_weight(
-            device, pt_weight, num_dram_banks=num_dram_banks, ring_size=ring_size, dtype=dtype
+            device,
+            pt_weight,
+            num_dram_banks=num_dram_banks,
+            ring_size=ring_size,
+            dtype=dtype,
+            distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
         )
 
         pt_act = torch.randn(1, 1, M, K)
@@ -1257,9 +1275,9 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
         device, bank_to_receivers, ring_size * max_in1_block_size
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(device, 0)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, ring_size) for _, tt_weight in tensors], global_cb=gcb
     )
 
@@ -1288,7 +1306,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
             logger.info(f"[recv_contig_batched_mixed_ring32_{name}] {output_str}")
             assert passing, f"[recv_contig_batched_mixed_ring32_{name}] PCC check failed: {output_str}"
     finally:
-        ttnn.experimental.stop_dram_core_prefetcher(device)
+        ttnn.experimental.stop_tensor_prefetcher(device)
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
@@ -1308,8 +1326,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mes
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
     )
     bank_to_receivers = [
-        (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
-        for b in range(num_dram_banks)
+        (b, _bank_receivers_contiguous(b, num_receivers_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
     ]
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1345,6 +1362,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mes
                 num_dram_banks=num_dram_banks,
                 ring_size=ring_size,
                 dtype=dtype,
+                distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
             ).memory_config()
             tt_weight = ttnn.as_tensor(
                 pt_weight,
@@ -1369,6 +1387,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mes
                 num_dram_banks=num_dram_banks,
                 ring_size=ring_size,
                 dtype=dtype,
+                distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
             ).memory_config()
             tt_weight = ttnn.as_tensor(
                 pt_weight,
@@ -1446,9 +1465,9 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mes
         mesh_device, bank_to_receivers, ring_size * max_in1_block_size
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(mesh_device)
-    ttnn.experimental.wait_for_cq_on_dram_core_prefetcher(mesh_device, 0)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(mesh_device)
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(mesh_device, 0)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         mesh_device, [(entry["weight"], ring_size) for entry in tensors], global_cb=gcb
     )
 
@@ -1478,7 +1497,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mes
             logger.info(f"[recv_contig_batched_mixed_ring16_mesh_{entry['name']}] {output_str}")
             assert passing, f"[recv_contig_batched_mixed_ring16_mesh_{entry['name']}] PCC check failed: {output_str}"
     finally:
-        ttnn.experimental.stop_dram_core_prefetcher(mesh_device)
+        ttnn.experimental.stop_tensor_prefetcher(mesh_device)
 
 
 # ---------------------------------------------------------------------------
