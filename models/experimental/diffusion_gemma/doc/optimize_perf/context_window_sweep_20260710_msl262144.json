@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "tuned-prefill-context-table-msl262144",
+  "tt_metal_head": "76b1810ea2a42ef992ac3bacb8a0ca5a20fc138b",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "max_seq_len": 262144,
+    "prompt_lengths": [
+      512,
+      4096,
+      16384,
+      32768
+    ],
+    "prompt_recipe": "token[i] = (i*1103515245 + 12345) % (vocab_size-1) + 1",
+    "canvas_length": 256,
+    "num_blocks": 2,
+    "max_denoise_steps": 4,
+    "gumbel_mode": "argmax",
+    "seed": 0,
+    "steady_block": 1,
+    "timing": "synchronized device wall time"
+  },
+  "environment": {
+    "DG_PREFILL_MOE_TUNED": "<unset>",
+    "DG_SPARSE_MOE": "1",
+    "DG_SPARSE_MOE_TUNED": "1",
+    "DG_SPARSE_MOE_CAPACITY": "32",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_COMMIT_BATCHED": "<unset>",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "DG_SELFCOND_LOGITS_L1": "<unset>",
+    "DG_NORM_FULLCANVAS": "<unset>",
+    "DG_MOE_L1": "<unset>",
+    "DG_DENOISE_TRACED": "<unset>",
+    "DG_DENOISE_TRACED_MULTISTEP": "<unset>",
+    "DG_DENOISE_EARLY_HALT": "<unset>",
+    "DG_PREFIX_CACHE": "<unset>",
+    "TT_METAL_WATCHER": "<unset>",
+    "TT_METAL_DEVICE_PROFILER": "<unset>"
+  },
+  "resolved_defaults": {
+    "prefill_moe_tuned": true,
+    "sparse_moe_tuned": true,
+    "batched_commit": true,
+    "selfcond_prechunk": true,
+    "selfcond_logits_l1": "chain",
+    "denoise_block_fn": "denoise_block"
+  },
+  "model_build": {
+    "dram_before": {
+      "used": 0.0,
+      "free": 31.867186546325684,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "elapsed_s": 27.25305407300766,
+    "dram_after": {
+      "used": 29.703871726989746,
+      "free": 2.1633148193359375,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "num_layers": 30,
+    "prefill_expert_layers_guarded": 30
+  },
+  "rows": [
+    {
+      "prompt_len": 512,
+      "cache_len": 512,
+      "prompt_token_sha256": "65726e16d3353b376418736bf84982afe4eca644a494f19dd73696569fe75ab5",
+      "prefill_s": 2.1362885150010698,
+      "prefill_tokens_per_s": 239.66800195981187,
+      "dram_after_prefill": {
+        "used": 31.114211082458496,
+        "free": 0.7529754638671875,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [
+        {
+          "block_idx": 0,
+          "start_pos": 512,
+          "next_pos": 768,
+          "latency_s": 5.449970097994083,
+          "denoise_latency_s": 4.060176329003298,
+          "commit_latency_s": 1.3895738499995787,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "0081b6626e0823cc446fa6ed23e5e55c04dd8d92843bfa21bb8e935a7a9890a0",
+          "synchronized_wall_s": 5.450747239010525
+        },
+        {
+          "block_idx": 1,
+          "start_pos": 768,
+          "next_pos": 1024,
+          "latency_s": 4.346434164006496,
+          "denoise_latency_s": 3.125603584005148,
+          "commit_latency_s": 1.2206278030062094,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "f4bac192533ff04183b8c943740fc516cd498ab4dca27b9956d0f436840e2df5",
+          "synchronized_wall_s": 4.346754112993949
+        }
+      ],
+      "steady_block_idx": 1,
+      "steady_block_s": 4.346754112993949,
+      "steady_output_tokens_per_s": 58.89452068032273,
+      "steady_denoise_steps": 4,
+      "steady_halted": false,
+      "final_next_pos": 1024
+    },
+    {
+      "prompt_len": 4096,
+      "cache_len": 4096,
+      "prompt_token_sha256": "2caccb1735e6e37cfb83eb4b227195e7823d596485c1c7ee7165c63b37359aa1",
+      "prefill_s": 11.28785132500343,
+      "prefill_tokens_per_s": 362.86799693463854,
+      "dram_after_prefill": {
+        "used": 31.136515617370605,
+        "free": 0.7306709289550781,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [
+        {
+          "block_idx": 0,
+          "start_pos": 4096,
+          "next_pos": 4352,
+          "latency_s": 4.390914150993922,
+          "denoise_latency_s": 3.0656879279995337,
+          "commit_latency_s": 1.325003349003964,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "af5b3c681d5352ba1ded7551ab947eb9c7f1818cbeabaee77f98f917bd89d438",
+          "synchronized_wall_s": 4.391453849006211
+        },
+        {
+          "block_idx": 1,
+          "start_pos": 4352,
+          "next_pos": 4608,
+          "latency_s": 4.405241176995332,
+          "denoise_latency_s": 3.0102342780010076,
+          "commit_latency_s": 1.3948144820024027,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "5235aa98d45bf673373fff150aa165de0ab3646eba23ff7536bc129f6f90083a",
+          "synchronized_wall_s": 4.405775003993767
+        }
+      ],
+      "steady_block_idx": 1,
+      "steady_block_s": 4.405775003993767,
+      "steady_output_tokens_per_s": 58.10555458867962,
+      "steady_denoise_steps": 4,
+      "steady_halted": false,
+      "final_next_pos": 4608
+    },
+    {
+      "prompt_len": 16384,
+      "cache_len": 16384,
+      "prompt_token_sha256": "9d3e382906b5c9544b2e5989c1bc5442a391a783b8282fcb69ee6f0615958de8",
+      "prefill_s": 45.93010625500756,
+      "prefill_tokens_per_s": 356.7159176387432,
+      "dram_after_prefill": {
+        "used": 31.144831657409668,
+        "free": 0.7223548889160156,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [
+        {
+          "block_idx": 0,
+          "start_pos": 16384,
+          "next_pos": 16640,
+          "latency_s": 4.803869609007961,
+          "denoise_latency_s": 3.198283624005853,
+          "commit_latency_s": 1.605361866997555,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "89666e7479ddb12f85fb5d51e52417c7452c062da7fd7bf3cba9741cd5e0b351",
+          "synchronized_wall_s": 4.805992964000325
+        },
+        {
+          "block_idx": 1,
+          "start_pos": 16640,
+          "next_pos": 16896,
+          "latency_s": 4.692155289987568,
+          "denoise_latency_s": 3.1029754109913483,
+          "commit_latency_s": 1.5889779130084207,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "266458c1a90e2a51307255d1cdcb7d2b34a984327923f6fcdf58fd6ffad61b2b",
+          "synchronized_wall_s": 4.694066169991856
+        }
+      ],
+      "steady_block_idx": 1,
+      "steady_block_s": 4.694066169991856,
+      "steady_output_tokens_per_s": 54.53693892015249,
+      "steady_denoise_steps": 4,
+      "steady_halted": false,
+      "final_next_pos": 16896
+    },
+    {
+      "prompt_len": 32768,
+      "cache_len": 32768,
+      "prompt_token_sha256": "910f64be4fb64afc08e44bc25b27aff27f811583f6e7d4067a9ef7742f21d97c",
+      "prefill_s": 99.44692144999863,
+      "prefill_tokens_per_s": 329.5024071356052,
+      "dram_after_prefill": {
+        "used": 31.155375480651855,
+        "free": 0.7118110656738281,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [
+        {
+          "block_idx": 0,
+          "start_pos": 32768,
+          "next_pos": 33024,
+          "latency_s": 5.048586353004794,
+          "denoise_latency_s": 3.1447377909935312,
+          "commit_latency_s": 1.9036261470027966,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "082bef6e6b7ac08b16769863c36d655516c0ff4864c22385190e4d93c813cc38",
+          "synchronized_wall_s": 5.060905279999133
+        },
+        {
+          "block_idx": 1,
+          "start_pos": 33024,
+          "next_pos": 33280,
+          "latency_s": 5.011021403988707,
+          "denoise_latency_s": 3.1202086260018405,
+          "commit_latency_s": 1.8906119149905862,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "73cd5e735625f2712c8e7fc45ceec4adab60d1b6309b93fa10c2903f6b503044",
+          "synchronized_wall_s": 5.023932238997077
+        }
+      ],
+      "steady_block_idx": 1,
+      "steady_block_s": 5.023932238997077,
+      "steady_output_tokens_per_s": 50.95610128115602,
+      "steady_denoise_steps": 4,
+      "steady_halted": false,
+      "final_next_pos": 33280
+    }
+  ],
+  "completed_prompt_lengths": [
+    512,
+    4096,
+    16384,
+    32768
+  ]
+}

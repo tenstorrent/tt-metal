@@ -172,6 +172,13 @@ measured Blackhole TP=4 program geometry locally (`tt/prefill_moe.py`). Gate/up 
   `TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1`; all four devices attached/detached,
   the error scan had zero matches, and exact logits/KV/non-aligned gates passed. See
   `prefill_moe_watcher.json` and `prefill_moe_watcher_summary.json`.
+- Full-depth context rerun (30 layers, QB2, synchronized wall time) measured **239.7–362.9
+  prefill tok/s through 32K**, 275.5 tok/s at 65,024 tokens, and 218.4 tok/s at 130,560
+  tokens. Relative to the 2026-07-08 issue table, prefill improved **4.05–6.78x**:
+  32K fell 562.4 -> 99.4 s, 65K fell 1146.1 -> 236.0 s, and 130K fell
+  2418.3 -> 597.7 s. See `context_window_sweep_20260710_summary.json` and its three
+  `context_window_sweep_20260710_msl*.json` source artifacts. The original prompt recipe was
+  not retained, so this is a directional historical comparison, not a same-input A/B.
 
 ## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)
 

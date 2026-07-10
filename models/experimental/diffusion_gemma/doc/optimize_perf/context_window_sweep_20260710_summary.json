@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-07-10",
+  "status": "passed",
+  "title": "Prefill + output speed vs context after exact prefill-MoE geometry tuning",
+  "hardware": "QB2 P150x4, Blackhole, mesh (1,4), TP=4",
+  "tt_metal_head": "76b1810ea2a42ef992ac3bacb8a0ca5a20fc138b",
+  "contract": {
+    "model": "google/diffusiongemma-26B-A4B-it",
+    "num_layers": 30,
+    "expert_weight_dtype": "bfloat16",
+    "canvas_length": 256,
+    "num_blocks": 2,
+    "steady_block_idx": 1,
+    "max_denoise_steps": 4,
+    "gumbel_mode": "argmax",
+    "batch": 1,
+    "prefill_selector": "DG_PREFILL_MOE_TUNED unset, resolved enabled",
+    "denoise": "eager denoise_block; DG_SPARSE_MOE=1; tuned sparse MoE; capacity=32",
+    "commit": "batched default",
+    "timing": "synchronized device wall time",
+    "prompt_recipe": "deterministic synthetic nested prefixes: token[i] = (i*1103515245 + 12345) % (vocab_size-1) + 1"
+  },
+  "baseline": {
+    "source": "https://github.com/tenstorrent/tt-metal/issues/47465#issuecomment-4918223918",
+    "date_utc": "2026-07-08",
+    "note": "The original harness source and prompt-token recipe were not retained. Prefill comparisons are directional rather than a same-input controlled A/B. Output-path changes include later denoise, self-conditioning, and commit defaults and must not be attributed solely to the prefill geometry."
+  },
+  "rows": [
+    {
+      "context_tokens": 512,
+      "build_max_seq_len": 262144,
+      "old": {
+        "prefill_s": 10.2,
+        "prefill_tokens_per_s": 50.2,
+        "steady_denoise_steps": 2,
+        "steady_block_s": 14.9,
+        "steady_output_tokens_per_s": 17.1
+      },
+      "new": {
+        "prefill_s": 2.1362885150010698,
+        "prefill_tokens_per_s": 239.66800195981187,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 4.346754112993949,
+        "steady_output_tokens_per_s": 58.89452068032273
+      },
+      "comparison": {
+        "prefill_speedup": 4.775,
+        "prefill_time_reduction_percent": 79.1,
+        "steady_block_speedup": 3.428,
+        "steady_output_throughput_gain": 3.444,
+        "block_comparison_note": "Different denoise-step count: old early-halted at 2; new synthetic prompt ran all 4."
+      }
+    },
+    {
+      "context_tokens": 4096,
+      "build_max_seq_len": 262144,
+      "old": {
+        "prefill_s": 76.5,
+        "prefill_tokens_per_s": 53.5,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 24.3,
+        "steady_output_tokens_per_s": 10.5
+      },
+      "new": {
+        "prefill_s": 11.28785132500343,
+        "prefill_tokens_per_s": 362.86799693463854,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 4.405775003993767,
+        "steady_output_tokens_per_s": 58.10555458867962
+      },
+      "comparison": {
+        "prefill_speedup": 6.777,
+        "prefill_time_reduction_percent": 85.2,
+        "steady_block_speedup": 5.515,
+        "steady_output_throughput_gain": 5.534
+      }
+    },
+    {
+      "context_tokens": 16384,
+      "build_max_seq_len": 262144,
+      "old": {
+        "prefill_s": 281.5,
+        "prefill_tokens_per_s": 58.2,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 25.2,
+        "steady_output_tokens_per_s": 10.2
+      },
+      "new": {
+        "prefill_s": 45.93010625500756,
+        "prefill_tokens_per_s": 356.7159176387432,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 4.694066169991856,
+        "steady_output_tokens_per_s": 54.53693892015249
+      },
+      "comparison": {
+        "prefill_speedup": 6.129,
+        "prefill_time_reduction_percent": 83.7,
+        "steady_block_speedup": 5.368,
+        "steady_output_throughput_gain": 5.347
+      }
+    },
+    {
+      "context_tokens": 32768,
+      "build_max_seq_len": 262144,
+      "old": {
+        "prefill_s": 562.4,
+        "prefill_tokens_per_s": 58.3,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 26.5,
+        "steady_output_tokens_per_s": 9.7
+      },
+      "new": {
+        "prefill_s": 99.44692144999863,
+        "prefill_tokens_per_s": 329.5024071356052,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 5.023932238997077,
+        "steady_output_tokens_per_s": 50.95610128115602
+      },
+      "comparison": {
+        "prefill_speedup": 5.655,
+        "prefill_time_reduction_percent": 82.3,
+        "steady_block_speedup": 5.275,
+        "steady_output_throughput_gain": 5.253
+      }
+    },
+    {
+      "context_tokens": 65024,
+      "build_max_seq_len": 65536,
+      "old": {
+        "prefill_s": 1146.1,
+        "prefill_tokens_per_s": 56.7,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 29.3,
+        "steady_output_tokens_per_s": 8.7
+      },
+      "new": {
+        "prefill_s": 236.03476626200427,
+        "prefill_tokens_per_s": 275.48484077054053,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 7.456335481998394,
+        "steady_output_tokens_per_s": 34.333219128626
+      },
+      "comparison": {
+        "prefill_speedup": 4.856,
+        "prefill_time_reduction_percent": 79.4,
+        "steady_block_speedup": 3.93,
+        "steady_output_throughput_gain": 3.946
+      }
+    },
+    {
+      "context_tokens": 130560,
+      "build_max_seq_len": 131072,
+      "old": {
+        "prefill_s": 2418.3,
+        "prefill_tokens_per_s": 54.0,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 37.2,
+        "steady_output_tokens_per_s": 6.9
+      },
+      "new": {
+        "prefill_s": 597.6960306730034,
+        "prefill_tokens_per_s": 218.4387938012403,
+        "steady_denoise_steps": 4,
+        "steady_block_s": 12.835413213004358,
+        "steady_output_tokens_per_s": 19.94481952015619
+      },
+      "comparison": {
+        "prefill_speedup": 4.046,
+        "prefill_time_reduction_percent": 75.3,
+        "steady_block_speedup": 2.898,
+        "steady_output_throughput_gain": 2.891
+      }
+    }
+  ],
+  "headline": {
+    "prefill_speedup_range": [
+      4.046,
+      6.777
+    ],
+    "new_prefill_tokens_per_s_range": [
+      218.4387938012403,
+      362.86799693463854
+    ],
+    "old_128k_prefill_s": 2418.3,
+    "new_128k_prefill_s": 597.6960306730034,
+    "old_128k_prefill_minutes": 40.305,
+    "new_128k_prefill_minutes": 9.961600511216723,
+    "new_steady_output_tokens_per_s_range": [
+      19.94481952015619,
+      58.89452068032273
+    ]
+  },
+  "source_artifacts": [
+    "context_window_sweep_20260710_msl262144.json",
+    "context_window_sweep_20260710_msl65536.json",
+    "context_window_sweep_20260710_msl131072.json"
+  ]
+}

@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "tuned-prefill-context-table-msl65536",
+  "tt_metal_head": "76b1810ea2a42ef992ac3bacb8a0ca5a20fc138b",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "hardware": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "architecture": "Blackhole",
+    "tensor_parallel": 4
+  },
+  "contract": {
+    "num_layers": 30,
+    "max_seq_len": 65536,
+    "prompt_lengths": [
+      65024
+    ],
+    "prompt_recipe": "token[i] = (i*1103515245 + 12345) % (vocab_size-1) + 1",
+    "canvas_length": 256,
+    "num_blocks": 2,
+    "max_denoise_steps": 4,
+    "gumbel_mode": "argmax",
+    "seed": 0,
+    "steady_block": 1,
+    "timing": "synchronized device wall time"
+  },
+  "environment": {
+    "DG_PREFILL_MOE_TUNED": "<unset>",
+    "DG_SPARSE_MOE": "1",
+    "DG_SPARSE_MOE_TUNED": "1",
+    "DG_SPARSE_MOE_CAPACITY": "32",
+    "DG_DEDUP_ARGMAX": "1",
+    "DG_COMMIT_BATCHED": "<unset>",
+    "DG_SELFCOND_PRECHUNK_EMBED": "<unset>",
+    "DG_SELFCOND_LOGITS_L1": "<unset>",
+    "DG_NORM_FULLCANVAS": "<unset>",
+    "DG_MOE_L1": "<unset>",
+    "DG_DENOISE_TRACED": "<unset>",
+    "DG_DENOISE_TRACED_MULTISTEP": "<unset>",
+    "DG_DENOISE_EARLY_HALT": "<unset>",
+    "DG_PREFIX_CACHE": "<unset>",
+    "TT_METAL_WATCHER": "<unset>",
+    "TT_METAL_DEVICE_PROFILER": "<unset>"
+  },
+  "resolved_defaults": {
+    "prefill_moe_tuned": true,
+    "sparse_moe_tuned": true,
+    "batched_commit": true,
+    "selfcond_prechunk": true,
+    "selfcond_logits_l1": "chain",
+    "denoise_block_fn": "denoise_block"
+  },
+  "model_build": {
+    "dram_before": {
+      "used": 0.0,
+      "free": 31.867186546325684,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "elapsed_s": 18.949358982994454,
+    "dram_after": {
+      "used": 17.328871726989746,
+      "free": 14.538314819335938,
+      "usable_total": 31.867186546325684,
+      "banks": 8
+    },
+    "num_layers": 30,
+    "prefill_expert_layers_guarded": 30
+  },
+  "rows": [
+    {
+      "prompt_len": 65024,
+      "cache_len": 65024,
+      "prompt_token_sha256": "9bcf2f367100a759a542827b41688ccd5d8f0ef12d7a68d6a3958c14e455aec1",
+      "prefill_s": 236.03476626200427,
+      "prefill_tokens_per_s": 275.48484077054053,
+      "dram_after_prefill": {
+        "used": 18.77432155609131,
+        "free": 13.092864990234375,
+        "usable_total": 31.867186546325684,
+        "banks": 8
+      },
+      "blocks": [
+        {
+          "block_idx": 0,
+          "start_pos": 65024,
+          "next_pos": 65280,
+          "latency_s": 8.29215683999064,
+          "denoise_latency_s": 5.65567108799587,
+          "commit_latency_s": 2.6362322089989902,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "15126dbd2a0d33caf78466f0fbe207eb4527b506c408911c770ff3389284eaa5",
+          "synchronized_wall_s": 8.324125811996055
+        },
+        {
+          "block_idx": 1,
+          "start_pos": 65280,
+          "next_pos": 65536,
+          "latency_s": 7.424139075999847,
+          "denoise_latency_s": 4.942281139010447,
+          "commit_latency_s": 2.481650282003102,
+          "denoise_steps": 4,
+          "halted": false,
+          "token_sha256": "cc1d3a6eee4de8c3061a8d595ba1c50a84e531ada4ab2efbd7c0f638ff2d3b69",
+          "synchronized_wall_s": 7.456335481998394
+        }
+      ],
+      "steady_block_idx": 1,
+      "steady_block_s": 7.456335481998394,
+      "steady_output_tokens_per_s": 34.333219128626,
+      "steady_denoise_steps": 4,
+      "steady_halted": false,
+      "final_next_pos": 65536
+    }
+  ],
+  "completed_prompt_lengths": [
+    65024
+  ]
+}
