@@ -222,7 +222,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     } else {
         // First/last-row subdevice or full 2-D grid: take the first row, ordered by x (legacy path).
         for (const auto& core : subdevice_cores) {
+#if SENDER_ONE_TO_ROW_Y3
+            if ((core.y == min_y && core.x <= min_x + 4) || (core.y == min_y + 1 && core.x > min_x + 4)) {
+#else
             if (core.y == min_y) {
+#endif
                 all_row_cores.push_back(core);
             }
         }

@@ -71,3 +71,10 @@
 // HOST-FACTORY change -> needs a libttnn rebuild. Set to 0 (and re-comment MOCK above) to restore
 // normal combine (byte-identical). Diagnostics/perf experiment, not a correctness path.
 #define SENDERS_ONLY_MOCK 1
+
+// STAGE 3: move ONE of the 2 senders to physical row y=3 (logical y=1), keeping its column; the other
+// sender stays on y=2. No untilizers, no other changes. Verifies that a sender on a different physical
+// row (its worker->eth NOC path + fabric connection originating from y=3) is safe in isolation. The op
+// stays on the full worker grid, which provides the y=3 worker core + init/exit GlobalSemaphore
+// coverage. Requires SENDERS_ONLY_MOCK=1. Set to 0 to keep both senders on y=2 (Stage 1 behavior).
+#define SENDER_ONE_TO_ROW_Y3 1
