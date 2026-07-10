@@ -34,7 +34,8 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
     };
 
     constexpr uint8_t kDefaultBufferCount = 8;
-    constexpr uint32_t kTuningSenderCount = 8;
+    // Downstream drainer depth is fixed (kDefaultDrainerNumBuffers=16): not a client-facing
+    // knob, and in production it mirrors fabric-router free slots rather than a mux setting.
     constexpr std::array<ForwarderNocConfig, 2> kForwarderNocSweep = {{
         ForwarderNocConfig{.name = "r0", .noc = tt::tt_metal::NOC::RISCV_0_default},
         ForwarderNocConfig{.name = "r1", .noc = tt::tt_metal::NOC::RISCV_1_default},
@@ -43,18 +44,16 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
     constexpr std::array<uint32_t, 5> kPayloadSweep = {64, 1024, 2048, 4096, 0};
     constexpr std::array<uint32_t, 6> kSenderSweep = {1, 2, 4, 8, 16, 32};
     constexpr std::array<uint32_t, 2> kHighSenderSweep = {48, 64};
-    constexpr std::array<uint32_t, 6> kDrainerSlotsSweep = {1, 2, 4, 8, 16, 32};
 
     std::vector<MuxV2ThroughputCase> cases;
     cases.reserve(
-        kForwarderNocSweep.size() * (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() +
-                                     kHighSenderSweep.size() + kDrainerSlotsSweep.size()));
+        kForwarderNocSweep.size() *
+        (kBufferSweep.size() + kPayloadSweep.size() + kSenderSweep.size() + kHighSenderSweep.size()));
 
     for (const auto& noc_config : kForwarderNocSweep) {
         for (const auto buffer_count : kBufferSweep) {
             cases.push_back(MuxV2ThroughputCase{
-                .name_suffix =
-                    "buffer_sweep_1s_max_buf" + std::to_string(buffer_count) + "_" + noc_config.name + "_sb8_trid16",
+                .name_suffix = "buffer_sweep_1s_max_buf" + std::to_string(buffer_count) + "_" + noc_config.name,
                 .num_buffers_per_channel = buffer_count,
                 .forwarder_noc = noc_config.noc,
             });
@@ -63,7 +62,7 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
         for (const auto payload_bytes : kPayloadSweep) {
             const auto payload_name = payload_bytes == 0 ? std::string("max") : std::to_string(payload_bytes) + "B";
             cases.push_back(MuxV2ThroughputCase{
-                .name_suffix = "payload_sweep_1s_" + payload_name + "_buf8_" + noc_config.name + "_sb8_trid16",
+                .name_suffix = "payload_sweep_1s_" + payload_name + "_buf8_" + noc_config.name,
                 .packet_payload_size_bytes = payload_bytes,
                 .num_buffers_per_channel = kDefaultBufferCount,
                 .forwarder_noc = noc_config.noc,
@@ -72,8 +71,7 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
 
         for (const auto sender_count : kSenderSweep) {
             cases.push_back(MuxV2ThroughputCase{
-                .name_suffix =
-                    "sender_sweep_" + std::to_string(sender_count) + "s_max_buf8_" + noc_config.name + "_sb8_trid16",
+                .name_suffix = "sender_sweep_" + std::to_string(sender_count) + "s_max_buf8_" + noc_config.name,
                 .num_senders = sender_count,
                 .num_buffers_per_channel = kDefaultBufferCount,
                 .forwarder_noc = noc_config.noc,
@@ -83,23 +81,10 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
         // High-sender cases use fewer per-channel buffers to stay within mux-core L1.
         for (const auto sender_count : kHighSenderSweep) {
             cases.push_back(MuxV2ThroughputCase{
-                .name_suffix = "high_sender_sweep_" + std::to_string(sender_count) + "s_max_buf4_" +
-                               std::string(noc_config.name) + "_sb8_trid16",
+                .name_suffix = "high_sender_sweep_" + std::to_string(sender_count) + "s_max_buf4_" + noc_config.name,
                 .num_senders = sender_count,
                 .num_buffers_per_channel = 4,
                 .forwarder_noc = noc_config.noc,
-            });
-        }
-
-        for (const auto num_drainer_buffers : kDrainerSlotsSweep) {
-            cases.push_back(MuxV2ThroughputCase{
-                .name_suffix = "drainer_sweep_8s_max_buf8_" + std::string(noc_config.name) + "_sb8_trid16_dr" +
-                               std::string(2 - std::to_string(num_drainer_buffers).size(), '0') +
-                               std::to_string(num_drainer_buffers),
-                .num_senders = kTuningSenderCount,
-                .num_buffers_per_channel = kDefaultBufferCount,
-                .forwarder_noc = noc_config.noc,
-                .num_drainer_buffers = num_drainer_buffers,
             });
         }
     }

@@ -17,7 +17,7 @@ FAMILY_SORT_ORDER = {
     "buffer_sweep": 0,
     "payload_sweep": 1,
     "sender_sweep": 2,
-    "drainer_sweep": 3,
+    "high_sender_sweep": 3,
 }
 
 SUMMARY_HEADERS = [
@@ -151,10 +151,8 @@ def get_family_axis_sort_value(row: dict) -> int:
         return row["Buffers per channel"]
     if case_name.startswith("payload_sweep"):
         return row["Payload bytes"]
-    if case_name.startswith("sender_sweep"):
+    if case_name.startswith("sender_sweep") or case_name.startswith("high_sender_sweep"):
         return row["Senders"]
-    if case_name.startswith("drainer_sweep"):
-        return row.get("Drainer buffers", 0)
     return 0
 
 
