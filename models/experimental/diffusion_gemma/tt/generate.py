@@ -266,14 +266,17 @@ def prefill_prompt_tokens(
     prefill_tokens = _pad_prompt_tokens_for_prefill(prompt_tokens)
     cache_len = prefill_tokens.shape[1]
     prompt_embeds = embed_host_tokens(tt_model, prefill_tokens)
-    logits = tt_model(
-        prompt_embeds,
-        is_decode=False,
-        input_ids_torch=prefill_tokens,
-        get_last_token=((prompt_len - 1) // 32) * 32,
-        page_table=page_table,
-        page_tables_per_layer=page_tables_per_layer,
-    )
+    from models.experimental.diffusion_gemma.tt.prefill_moe import use_tuned_prefill_moe
+
+    with use_tuned_prefill_moe(tt_model):
+        logits = tt_model(
+            prompt_embeds,
+            is_decode=False,
+            input_ids_torch=prefill_tokens,
+            get_last_token=((prompt_len - 1) // 32) * 32,
+            page_table=page_table,
+            page_tables_per_layer=page_tables_per_layer,
+        )
     logits.deallocate(True)
     return PromptPrefill(prompt_len=prompt_len, cache_len=cache_len)
 
