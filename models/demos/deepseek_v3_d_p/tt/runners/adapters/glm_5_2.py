@@ -76,24 +76,27 @@ class GLM52Adapter(MLAPrefillAdapter):
         )
 
     def allocate_index_kv_cache(self, *, mesh_device, hf_config, params):
-        """The lightning-indexer block-cyclic KEY cache (bfp8 TILE, ``index_head_dim`` wide), one shared
-        folded cache of num_users * num_layers user-major slots — same layout as the KVPE cache so the
-        merged migration table addresses both identically.
+        """The lightning-indexer block-cyclic KEY cache (bfp8 TILE, ``index_head_dim`` wide), a folded
+        per-user cache with the same block-cyclic layout as the KVPE cache.
 
-        GLM-5.2 note: with cross-layer reuse only ``full`` layers run the indexer and write their slot;
-        ``shared`` layers reuse indices and never touch this cache, so their slots go unused. That is
-        CORRECT (no layer reads an unwritten slot); allocating full-layer-only slots is a future memory
-        optimization, and migration must then enumerate full layers for the index config (see NOTES)."""
+        GLM-5.2 cross-layer reuse: only ``full`` layers own an indexer and write this cache (``shared``
+        layers reuse a prior full layer's top-k and never write), so it is sized to the FULL-layer count
+        (``num_full_indexer_layers``), not all layers — each full layer writes its compacted rank slot
+        (see ``TtIndexer``). The merged migration table's index config sizes itself from this tensor's
+        shape, so it too holds only full-layer entries. Falls back to ``num_layers`` when there is no
+        ``indexer_types`` map (GLM-5.1: every layer is full)."""
         import ttnn
+        from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
+        num_index_layers = num_full_indexer_layers(hf_config) or params.num_layers
         return init_kvpe_cache(
             kvpe_cache_head_dim=hf_config.index_head_dim,
             mesh_device=mesh_device,
             seq_len=params.max_seq_len,
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
-            num_kvpe_cache_layers=params.num_layers,
+            num_kvpe_cache_layers=num_index_layers,
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
         )
