@@ -172,6 +172,26 @@ if [ -z "${CODEGEN_LOGS_ROOT:-}" ]; then
   fi
 fi
 export LOGS_BASE="${CODEGEN_LOGS_ROOT}/${DASHBOARD_PROJECT_ID}"
+
+# PR_REVIEW_KNOWLEDGE_DIR: bot-local review knowledge for the reviewer stage
+# (Step 5.3). Explicit CODEGEN_PR_REVIEW_KNOWLEDGE wins; then the dashboard tree
+# under llk_code_gen (shared /proj_sw or the sibling checkout next to the main
+# repo); else empty and the reviewer falls back to the in-repo .claude/ rules.
+if [ -n "${CODEGEN_PR_REVIEW_KNOWLEDGE:-}" ] && [ -d "${CODEGEN_PR_REVIEW_KNOWLEDGE}" ]; then
+  export PR_REVIEW_KNOWLEDGE_DIR="${CODEGEN_PR_REVIEW_KNOWLEDGE}"
+elif [ -d "${CODEGEN_LOGS_ROOT}/dashboard/pr_review/knowledge" ]; then
+  export PR_REVIEW_KNOWLEDGE_DIR="${CODEGEN_LOGS_ROOT}/dashboard/pr_review/knowledge"
+elif [ -d /proj_sw/user_dev/llk_code_gen/dashboard/pr_review/knowledge ]; then
+  export PR_REVIEW_KNOWLEDGE_DIR="/proj_sw/user_dev/llk_code_gen/dashboard/pr_review/knowledge"
+else
+  MAIN_REPO_ROOT=${MAIN_REPO_ROOT:-$(dirname "$(git -C "$WORKTREE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" 2>/dev/null)}
+  if [ -n "$MAIN_REPO_ROOT" ] && [ -d "$(dirname "$MAIN_REPO_ROOT")/llk_code_gen/dashboard/pr_review/knowledge" ]; then
+    export PR_REVIEW_KNOWLEDGE_DIR="$(dirname "$MAIN_REPO_ROOT")/llk_code_gen/dashboard/pr_review/knowledge"
+  else
+    export PR_REVIEW_KNOWLEDGE_DIR=""
+  fi
+fi
+
 export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_multi_$(head -c 4 /dev/urandom | xxd -p)
 export LOG_DIR=${LOGS_BASE}/${RUN_ID}
@@ -186,6 +206,8 @@ export TESTS_TOTAL=0
 export TESTS_PASSED=0
 export PERF_RETRIES=0
 export MAX_PERF_RETRIES=2
+export REVIEW_RETRIES=0
+export MAX_REVIEW_RETRIES=2
 export OBSTACLE=
 export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
 export TEST_BACKEND TTSIM_SO_PATHS CREATE_LOCAL_BRANCH CREATE_PR
@@ -211,8 +233,9 @@ PIPELINE_STEPS='[
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement one coordinated multi-arch fix"},
   {"id":"tester","name":"Test","desc":"Run selected backend tests for each target arch"},
+  {"id":"review","name":"Review","desc":"Senior LLK review of the shared fix diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline per BH/WH arch (local only)"},
-  {"id":"fix_tests","name":"Retry","desc":"Debug and update the shared fix after a test or perf failure"}
+  {"id":"fix_tests","name":"Retry","desc":"Debug and update the shared fix after a test, review, or perf failure"}
 ]'
 ```
 
@@ -461,6 +484,55 @@ The retry worker reads the existing plan plus the combined tester evidence, patc
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Mark the affected arch failed with a simulator obstacle. Continue evaluating other arches when possible.
 
+## Step 5.3: Review the Shared Fix and Feed Back
+
+A senior-reviewer pass over the shared multi-arch diff, run as a loop **inside**
+the pipeline — same idea as a `code-review` bot, except findings are fed back to
+the worker instead of posted to a PR. Review is static (reads the diff only), so
+it runs once for the whole run regardless of backend, and cross-arch **parity**
+gaps are especially relevant here (a change that landed on one arch but not the
+others it should).
+
+Run this only once the functional result is **green** for the arches that ran; a
+green functional result implies a shared fix diff exists, so there is always
+something to review.
+
+Advance to the `review` step and run one reviewer over the shared diff:
+
+```bash
+python codegen/scripts/run_json_writer.py advance --log-dir "$LOG_DIR" \
+  --new-step "review" \
+  --new-message "Reviewing shared fix diff for issue #${ISSUE_NUMBER} across ${TARGET_ARCHES_JSON} (attempt $((REVIEW_RETRIES+1))/$((MAX_REVIEW_RETRIES+1)))" \
+  --prev-result "success" --prev-message "Functional tests passed" --agent "tester"
+```
+
+Spawn `reviewer.md` once with: issue number, `TARGET_ARCHES`, changed files,
+`WORKTREE_DIR`, `LOG_DIR`, and `PR_REVIEW_KNOWLEDGE_DIR`. It writes
+`$LOG_DIR/review_result.json` and `$LOG_DIR/agent_reviewer.md`. Patch its result
+into `run.json`:
+
+```bash
+python codegen/scripts/run_json_writer.py metric --log-dir "$LOG_DIR" \
+  --patch-json "{\"review\": $(cat "$LOG_DIR/review_result.json")}"
+```
+
+**Review feedback loop (shared fix).** Read `blocking_total`. If `0`, proceed to
+Step 5.5. If `> 0` and `REVIEW_RETRIES < MAX_REVIEW_RETRIES`, record a `failure`,
+advance to `fix_tests`, and spawn `issue-worker.md` once in
+`FAILURE_CLASS=REVIEW_FINDINGS` mode with `$LOG_DIR/review_result.json`. The
+worker makes one shared correctness-preserving change addressing the blocking
+findings across all arches. Then `REVIEW_RETRIES=$((REVIEW_RETRIES+1))`,
+`DEBUG_CYCLES=$((DEBUG_CYCLES+1))`, re-run **Step 4 (functional Test)** for the
+affected arches, and if still green re-run this Step 5.3. If the worker returns
+`HYPOTHESIS_REFUTED` (the finding cannot be resolved without breaking
+correctness), stop the loop and proceed to Step 5.5.
+
+**When the review budget is exhausted** with blocking findings remaining: the run
+does **not** fail on the review alone. Keep the functional `combined_status`,
+leave `review.verdict=changes_requested` in `run.json`, and set
+`OBSTACLE=unresolved_review_findings` as the terminal record. Then proceed to
+Step 5.5.
+
 ## Step 5.5: Measure Perf Per Arch and Feed Back
 
 Run this only for arches whose functional result is **green**. Perf is gated to
@@ -617,6 +689,7 @@ for agent, filename in [
     ("arch_lookup", "agent_arch_lookup.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
+    ("reviewer", "agent_reviewer.md"),
     ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),
 ]:
@@ -692,6 +765,13 @@ Multi-Arch Issue-Solver Result:
       tests_passed: N
       perf_verdict: improved|neutral|regressed|not_improved|no_baseline|not_measured
       obstacle: ...
+  review:                         # one review over the shared diff (run-level, not per-arch)
+    verdict: ...                  # clean | changes_requested | not_reviewed
+    findings_total: ...           # review.findings_total
+    blocking_total: ...           # review.blocking_total (0 once the loop converges)
+    retries_used: ${REVIEW_RETRIES}/${MAX_REVIEW_RETRIES}
+    advisory:                     # non-blocking findings recorded, not acted on (nits/parity/style)
+      - <severity> <file>:<line> — <title>
   cost:
     tokens: ...                   # "in=<n> out=<n> cache_read=<n> cache_creation=<n>"
     total_tokens: ...             # tokens.total (input + output, whole run, all arches)
@@ -700,6 +780,9 @@ Multi-Arch Issue-Solver Result:
     ...
   obstacle: ...
 ```
+
+Populate the `review:` block from the `review` object in `run.json` (written by
+the reviewer). List every `blocking: false` finding under `advisory:`.
 
 Populate the `cost:` block from the `tokens` object in `run.json` (written by
 the `session_cost.py` refreshes); `est_usd: n/a` if the session could not be
