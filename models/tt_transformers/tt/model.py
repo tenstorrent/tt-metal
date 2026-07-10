@@ -16,7 +16,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.prefetcher import colocating_prefetcher, uses_tensor_prefetcher
+from models.tt_transformers.tt.prefetcher import colocating_prefetcher
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 
 
@@ -850,8 +850,7 @@ class Transformer(LightweightModule):
     def switch_mode(self, mode: Mode):
         if self.prefetcher is not None:
             self.prefetcher.init(mode)
-            if not uses_tensor_prefetcher(self.prefetcher):
-                self.prefetcher.prefetch()
+            self.prefetcher.prefetch()
 
     def forward(
         self,
@@ -870,7 +869,7 @@ class Transformer(LightweightModule):
         page_tables_per_layer=None,
     ):
         if mode == Mode.DECODE:
-            if self.prefetcher is not None and not uses_tensor_prefetcher(self.prefetcher):
+            if self.prefetcher is not None:
                 self.prefetcher.run()
 
         if mode == Mode.PREFILL:
@@ -923,7 +922,7 @@ class Transformer(LightweightModule):
                 batch_size=batch_size,
             )
         if mode == Mode.DECODE:
-            if self.prefetcher is not None and not uses_tensor_prefetcher(self.prefetcher):
+            if self.prefetcher is not None:
                 self.prefetcher.stop()
 
         if mode == Mode.PREFILL and get_last_token == -1:

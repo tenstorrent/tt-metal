@@ -9,7 +9,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
-from models.tt_transformers.tt.prefetcher import uses_tensor_prefetcher
+from models.tt_transformers.tt.prefetcher import prefetcher_linear
 
 
 class MLP(LightweightModule):
@@ -74,7 +74,7 @@ class MLP(LightweightModule):
 
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
         # This is required for the dram_prefetcher to correctly interpret all weights
-        def as_sharded_tensor(name, type, dims, mem_config, cache_key):
+        def as_sharded_tensor(name, type, dims, mem_config):
             # First get the raw weight and transpose it
             raw_weight = torch_weight(name[:2])  # This is 2D: [H, W]
             # Pad if needed
@@ -89,7 +89,7 @@ class MLP(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else mem_config,
-                cache_file_name=cache_name(cache_key + prefetcher_cache_suffix),
+                cache_file_name=cache_name(name + prefetcher_cache_suffix),
             )
             return result
 
@@ -116,10 +116,10 @@ class MLP(LightweightModule):
         # both prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor
         # handles ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config, "w1_sharded"
+            "w1_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, w2_dims, w2_mem_config, "w2_sharded")
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config, "w3_sharded")
+        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, w2_dims, w2_mem_config)
+        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config)
 
         # Default activation is SILU
         self.activation_type = (
@@ -135,10 +135,9 @@ class MLP(LightweightModule):
                 self.prefetcher.insert_tensor(self.w3, program_config=pc_ff1_3)
                 self.prefetcher.insert_tensor(self.w2, program_config=pc_ff2)
 
-            if uses_tensor_prefetcher(self.prefetcher):
-                register_weights()
-            else:
-                self.prefetcher.register_callback(register_weights)
+            # Each backend owns the timing: the worker prefetcher defers to prefetch-time,
+            # the DRAM-core prefetcher runs it immediately (its register_callback is run-now).
+            self.prefetcher.register_callback(register_weights)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         """
@@ -170,56 +169,30 @@ class MLP(LightweightModule):
         # Decode consumes the weights via the prefetcher GCB; prefill's direct matmuls read the same
         # weight from DRAM. The matmul's TensorAccessor reads recv-contig (ND_SHARDED) in1 directly,
         # so no separate width-sharded prefill copy is needed (worker/no-prefetcher use the same).
-        if mode == Mode.DECODE and uses_tensor_prefetcher(self.prefetcher):
-            w1_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-                x,
-                self.w1,
-                global_cb=self.prefetcher.global_cb,
-                program_config=pc_1,
-                cq_id=0,
-                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-                core_grid=None,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            )
-            w3_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-                x,
-                self.w3,
-                global_cb=self.prefetcher.global_cb,
-                program_config=pc_3,
-                cq_id=0,
-                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-                core_grid=None,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-            )
-        else:
-            w1_out = ttnn.linear(
-                x,
-                self.w1,
-                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                program_config=pc_1,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
-            w3_out = ttnn.linear(
-                x,
-                self.w3,
-                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                program_config=pc_3,
-                memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
+        # prefetcher_linear picks prefetch-and-linear (DRAM-core) vs plain linear (worker/none).
+        ff1_3_dtype = ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16
+        w1_out = prefetcher_linear(
+            self.prefetcher,
+            x,
+            self.w1,
+            mode=mode,
+            program_config=pc_1,
+            dtype=ff1_3_dtype,
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+        )
+        w3_out = prefetcher_linear(
+            self.prefetcher,
+            x,
+            self.w3,
+            mode=mode,
+            program_config=pc_3,
+            dtype=ff1_3_dtype,
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+            memory_config=self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher),
+        )
         ttnn.deallocate(x)
 
         if TG:
@@ -331,31 +304,17 @@ class MLP(LightweightModule):
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 config=pc_2,
             )
-        elif mode == Mode.DECODE and uses_tensor_prefetcher(self.prefetcher):
-            w2_out = ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
-                w2_in,
-                self.w2,
-                global_cb=self.prefetcher.global_cb,
-                program_config=pc_2,
-                cq_id=0,
-                compute_kernel_config=li_ff2_compute_kernel_cfg,
-                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
-                core_grid=None,
-            )
         else:
-            w2_out = ttnn.linear(
+            w2_out = prefetcher_linear(
+                self.prefetcher,
                 w2_in,
                 self.w2,
+                mode=mode,
+                program_config=pc_2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
                 dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                program_config=pc_2,
                 memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
                 core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
             )
         ttnn.deallocate(w2_in)
 
