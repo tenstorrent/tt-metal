@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -40,13 +42,18 @@ def fake_ttnn(monkeypatch):
     return fake
 
 
-def test_tuned_prefill_moe_uses_measured_qb2_geometry(monkeypatch, fake_ttnn):
-    monkeypatch.setenv(PM.FLAG, "1")
-
+@pytest.fixture
+def contextual_builder(monkeypatch, fake_ttnn):
     def original(m, n, in0_block_w=1):
         return ("original", m, n, in0_block_w)
 
-    monkeypatch.setattr(PM.gemma4_prefill, "_build_sparse_matmul_config", original)
+    monkeypatch.setattr(PM, "_original_builder", original)
+    monkeypatch.setattr(PM.gemma4_prefill, "_build_sparse_matmul_config", PM._contextual_config_builder)
+    return PM._contextual_config_builder
+
+
+def test_tuned_prefill_moe_uses_measured_qb2_geometry(monkeypatch, contextual_builder):
+    monkeypatch.setenv(PM.FLAG, "1")
 
     with PM.use_tuned_prefill_moe(_model()):
         builder = PM.gemma4_prefill._build_sparse_matmul_config
@@ -61,7 +68,8 @@ def test_tuned_prefill_moe_uses_measured_qb2_geometry(monkeypatch, fake_ttnn):
     assert down["in0_block_w"] == 3
     assert down["per_core_N"] == 2
     assert fallback == ("original", 64, 192, 7)
-    assert PM.gemma4_prefill._build_sparse_matmul_config is original
+    assert PM.gemma4_prefill._build_sparse_matmul_config is contextual_builder
+    assert contextual_builder(32, 192) == ("original", 32, 192, 1)
 
 
 @pytest.mark.parametrize(
@@ -73,25 +81,43 @@ def test_tuned_prefill_moe_uses_measured_qb2_geometry(monkeypatch, fake_ttnn):
         SimpleNamespace(layers=[]),
     ],
 )
-def test_tuned_prefill_moe_leaves_unsupported_models_unchanged(monkeypatch, model):
+def test_tuned_prefill_moe_leaves_unsupported_models_unchanged(monkeypatch, contextual_builder, model):
     monkeypatch.setenv(PM.FLAG, "1")
 
-    def original(*args):
-        return args
-
-    monkeypatch.setattr(PM.gemma4_prefill, "_build_sparse_matmul_config", original)
     with PM.use_tuned_prefill_moe(model):
-        assert PM.gemma4_prefill._build_sparse_matmul_config is original
+        assert contextual_builder(32, 192) == ("original", 32, 192, 1)
 
 
-def test_tuned_prefill_moe_restores_builder_after_error(monkeypatch, fake_ttnn, expect_error):
+def test_tuned_prefill_moe_resets_context_after_error(monkeypatch, contextual_builder, expect_error):
     monkeypatch.setenv(PM.FLAG, "1")
 
-    def original(*args):
-        return args
-
-    monkeypatch.setattr(PM.gemma4_prefill, "_build_sparse_matmul_config", original)
     with expect_error(RuntimeError, match="stop"):
         with PM.use_tuned_prefill_moe(_model()):
             raise RuntimeError("stop")
-    assert PM.gemma4_prefill._build_sparse_matmul_config is original
+    assert contextual_builder(32, 192) == ("original", 32, 192, 1)
+
+
+def test_tuned_prefill_moe_does_not_leak_across_threads(monkeypatch, contextual_builder):
+    monkeypatch.setenv(PM.FLAG, "1")
+    entered = Barrier(2)
+    completed = Barrier(2)
+
+    def tuned_call():
+        with PM.use_tuned_prefill_moe(_model()):
+            entered.wait()
+            result = contextual_builder(32, 192)
+            completed.wait()
+            return result
+
+    def stock_call():
+        entered.wait()
+        result = contextual_builder(32, 192)
+        completed.wait()
+        return result
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        tuned = executor.submit(tuned_call)
+        stock = executor.submit(stock_call)
+
+    assert tuned.result()["compute_with_storage_grid_size"] == (6, 1)
+    assert stock.result() == ("original", 32, 192, 1)
