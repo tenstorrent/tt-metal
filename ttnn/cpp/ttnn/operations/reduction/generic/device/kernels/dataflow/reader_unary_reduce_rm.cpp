@@ -50,7 +50,8 @@ void reduce_rm_reader() {
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(5);
     constexpr uint32_t rm_rows_per_tile = get_compile_time_arg_val(6);
     constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(7);
-    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 8 : 9>();
+    // H path carries H_logical (8) and the H-axis-split geometry (9-10); the W path omits all three.
+    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 8 : 11>();
 
     constexpr uint32_t cb_id_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_id_rm = tt::CBIndex::c_24;
@@ -128,28 +129,36 @@ void reduce_rm_reader() {
         }
     } else {
         // === H reduce ===
-        // H_logical is only meaningful on the H path. The index embeds DIM so the W-branch (where
-        // slot 8 doesn't exist) doesn't eagerly instantiate it.
+        // H_logical / split geometry are only meaningful on the H path. The indices embed DIM so the
+        // W-branch (where slots 8-10 don't exist) doesn't eagerly instantiate them.
         constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
-        constexpr uint32_t Ht_total = (H_logical + rm_rows_per_tile - 1) / rm_rows_per_tile;
+        constexpr uint32_t num_h_shards = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 9 : 0);
+        // Tiles reduced per output work unit == the compute kernel's Ht loop bound. num_h_shards==1
+        // makes shard_Ht == Ht_rm, so a single work unit spans the full H (classic behavior).
+        constexpr uint32_t shard_Ht = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 10 : 0);
 
         // Each owned output tile is one work unit (wt_tiles_per_chunk == 1). Decompose its global id
-        // into (nc, wt_in_nc) and re-read the NC's full H slab per output.
+        // into (nc, shard, wt_in_nc) and read only this shard's contiguous H slice. Tiles that run
+        // past H_logical (last shard's overhang) stage as all-identity (real_rows == 0) → contribute 0.
         for (uint32_t out_idx = 0; out_idx < rt_count; ++out_idx) {
             const uint32_t global_tile_id = rt_start + out_idx;
-            const uint32_t nc = global_tile_id / Wt;
             const uint32_t wt_in_nc = global_tile_id % Wt;
+            const uint32_t tmp = global_tile_id / Wt;
+            const uint32_t shard = tmp % num_h_shards;
+            const uint32_t nc = tmp / num_h_shards;
             const RmWChunkBytes w_range =
                 rm_compute_w_chunk_bytes(wt_in_nc, wt_tiles_per_chunk, valid_row_bytes, elem_bytes);
             const uint32_t nc_base_page = nc * H_logical;
+            const uint32_t shard_first_tile = shard * shard_Ht;
 
-            for (uint32_t h_chunk_base = 0; h_chunk_base < Ht_total; h_chunk_base += ht_tiles_per_chunk) {
+            for (uint32_t h_local = 0; h_local < shard_Ht; h_local += ht_tiles_per_chunk) {
                 const uint32_t ht_in_chunk =
-                    (h_chunk_base + ht_tiles_per_chunk < Ht_total) ? ht_tiles_per_chunk : (Ht_total - h_chunk_base);
+                    (h_local + ht_tiles_per_chunk < shard_Ht) ? ht_tiles_per_chunk : (shard_Ht - h_local);
 
                 for (uint32_t hti = 0; hti < ht_in_chunk; ++hti) {
-                    const uint32_t slab_base_row_in_nc = (h_chunk_base + hti) * rm_rows_per_tile;
-                    const uint32_t slab_rows_avail = H_logical - slab_base_row_in_nc;
+                    const uint32_t slab_base_row_in_nc = (shard_first_tile + h_local + hti) * rm_rows_per_tile;
+                    const uint32_t slab_rows_avail =
+                        (slab_base_row_in_nc < H_logical) ? (H_logical - slab_base_row_in_nc) : 0;
                     const uint32_t real_rows =
                         (slab_rows_avail < rm_rows_per_tile) ? slab_rows_avail : rm_rows_per_tile;
                     stage_slab(nc_base_page + slab_base_row_in_nc, real_rows, w_range);

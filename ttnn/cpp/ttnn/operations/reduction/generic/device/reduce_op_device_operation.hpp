@@ -71,6 +71,7 @@ ttnn::Tensor reduce(
     float post_mul_scaler = 1.0f,
     bool row_major_w_dense_path = false,
     bool row_major_h_dense_path = false,
-    bool use_sfpu_reduce = false);
+    bool use_sfpu_reduce = false,
+    uint32_t h_num_shards = 1);
 
 }  // namespace ttnn::prim

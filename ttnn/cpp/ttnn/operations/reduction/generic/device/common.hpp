@@ -127,11 +127,21 @@ void validate_rm_preconditions(
 
 // Build the reader compile-time args vector for the RM path (slots match
 // reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
+// `h_num_shards` / `shard_Ht` are H-axis-split geometry (H path only; 1 shard / full Ht_rm =
+// normal reduce). The H branch always emits them (unified layout), so the TensorAccessor args
+// follow at slot 11 on the H path (slot 8 on the W path, which omits them).
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan,
+    uint32_t scaler_bits,
+    const tt::tt_metal::MeshTensor& src,
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t h_num_shards = 1,
+    uint32_t shard_Ht = 0);
 
 // Build the writer compile-time args vector for the RM path (slots match
 // writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst).
+// Unaffected by H-axis split: the writer derives the output page from global_tile_id / Wt, which
+// already equals nc*num_h_shards + shard under the split's (nc, shard, wt) work ordering.
 std::vector<uint32_t> build_rm_writer_ct_args(
     const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim);
 
