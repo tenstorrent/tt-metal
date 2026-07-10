@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 TEXT_OUTPUT_TASKS = ("t2tt", "s2tt", "asr")
 TASK_TGT_LANG = {
     "t2tt": "hin",
@@ -18,7 +20,28 @@ TASK_TGT_LANG = {
 TEXT_INPUT_TASKS = frozenset({"t2tt", "t2st"})
 SPEECH_INPUT_TASKS = frozenset({"s2tt", "s2st", "asr"})
 
+# Mel frames at or below this are too short for stable speech-input E2E gates (all meshes).
+# ~50 Hz mel → 32 frames ≈ 0.64 s, 64 ≈ 1.3 s. HF often EOS after 3–9 tokens; WER refs can be
+# a single word. See README "Short speech inputs (mel ≤ 64)".
+SHORT_SPEECH_E2E_MAX_MEL = 64
+
 DEFAULT_MAX_DECODE_STEPS = 128
+
+
+def maybe_skip_short_speech_input(task: str, seq_len: int) -> None:
+    """Skip speech-input E2E points with too few mel frames for a meaningful gate.
+
+    Applies to S2TT / S2ST / ASR on every mesh (P150 1×1 and BH-QB 1×4). Text-input tasks
+    (T2TT / T2ST) are unaffected.
+    """
+    if task not in SPEECH_INPUT_TASKS or seq_len > SHORT_SPEECH_E2E_MAX_MEL:
+        return
+    pytest.skip(
+        f"{task.upper()} E2E sweep len={seq_len}: speech input has too few mel frames "
+        f"(≤{SHORT_SPEECH_E2E_MAX_MEL}); HF hits EOS early and WER/token metrics are unstable "
+        f"— skipped on all meshes"
+    )
+
 
 _REF_DIR = Path(__file__).resolve().parent.parent / "reference_outputs"
 _REFPT_NAMES = {

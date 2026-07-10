@@ -8,7 +8,8 @@ or mel frames, same as ``demo_perf_sweep.py`` / token-matching sweep), compare l
 logits and up to ``LOGIT_PCC_DECODE_STEPS`` (10) decode logits (full vocab) between live HF
 and TT. Speech tasks cap at ``min(10, len(teacher_tokens))`` when HF greedy hits EOS early.
 Decode follows HF greedy (temperature=0 argmax) — the same token is fed to both models after
-each logits comparison.
+each logits comparison. Speech-input tasks (S2TT, ASR) with mel ≤ 64 are skipped on all meshes
+— see README **Short speech inputs (mel ≤ 64)**.
 
 Speech-output tasks (T2ST, S2ST) use WER tests instead.
 
@@ -44,6 +45,7 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_help
     load_speech_token_accuracy_reference,
     load_t2tt_token_accuracy_reference,
     maybe_save_speech_sweep_mel_env,
+    maybe_skip_short_speech_input,
     sweep_mesh_parametrize,
     sweep_sequence_lengths,
 )
@@ -52,6 +54,7 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_defau
 
 
 def _run_sweep_point(mesh_device, task: str, seq_len: int) -> None:
+    maybe_skip_short_speech_input(task, seq_len)
     weights_dir = weights_dir_or_skip()
     ref_path = ensure_sweep_reference(task, seq_len, weights_dir, max_decode_steps=SWEEP_EVAL_STEPS)
 

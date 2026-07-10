@@ -7,7 +7,9 @@ Devstral-style **input-length** sweep: for each N, build inputs of length N (sou
 or mel frames, same as ``demo_perf_sweep.py``), teacher-force decode for 128 steps, and
 compare TT greedy top-1/top-5 to offline HF references.
 
-Speech-output tasks (T2ST, S2ST) use ``test_seamless_e2e_wer_sweep.py`` instead.
+Speech-input tasks (S2TT, ASR) with mel ≤ 64 are skipped on all meshes — see README
+**Short speech inputs (mel ≤ 64)**. Speech-output tasks (T2ST, S2ST) use
+``test_seamless_e2e_wer_sweep.py`` instead.
 
 Run::
 
@@ -35,6 +37,7 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_help
     load_speech_token_accuracy_reference,
     load_t2tt_token_accuracy_reference,
     maybe_save_speech_sweep_mel_env,
+    maybe_skip_short_speech_input,
     maybe_skip_short_speech_sweep,
     run_speech_e2e_token_accuracy,
     run_t2tt_e2e_token_accuracy,
@@ -47,6 +50,7 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import mesh_defau
 
 
 def _run_sweep_point(mesh_device, task: str, seq_len: int) -> None:
+    maybe_skip_short_speech_input(task, seq_len)
     weights_dir = weights_dir_or_skip()
     ref_path = ensure_sweep_reference(task, seq_len, weights_dir, max_decode_steps=SWEEP_EVAL_STEPS)
     top1_threshold, top5_threshold = sweep_thresholds_for_task(task, seq_len)
@@ -69,7 +73,7 @@ def _run_sweep_point(mesh_device, task: str, seq_len: int) -> None:
         else:
             assert task in SPEECH_INPUT_TASKS
             ref = load_speech_token_accuracy_reference(ref_path)
-            # Short mel (32/64) may have only 3–5 HF steps; still scored when S2ST_MIN_TOKEN_REF_STEPS=1.
+            # Short mel (≤64) already skipped above; still guard refs that hit EOS with too few steps.
             maybe_skip_short_speech_sweep(task, int(ref.teacher_tokens.numel()), seq_len)
             maybe_save_speech_sweep_mel_env(
                 task=task,

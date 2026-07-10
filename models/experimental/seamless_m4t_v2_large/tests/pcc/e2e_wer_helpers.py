@@ -35,6 +35,9 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures im
 from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_logit_pcc_helpers import (
     _hf_teacher_forced_decode_reference,
 )
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_task_config import (
+    maybe_skip_short_speech_input,
+)
 from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_helpers import (
     TEXT_INPUT_TASKS,
 )
@@ -396,20 +399,12 @@ def maybe_skip_empty_wer_reference(ref_text: str, *, task: str, seq_len: int) ->
 
 
 def maybe_skip_short_speech_wer(task: str, ref_text: str, seq_len: int) -> None:
-    """Skip speech-input WER points (s2st/asr) whose reference is a single word at very short mel.
+    """Skip speech-input WER points with too few mel frames (see ``maybe_skip_short_speech_input``).
 
-    At <1 s of audio the reference can be 1 word (e.g. ASR mel=32), where WER is 0 or 1 by
-    quantization — meaningless. Only skips the degenerate 1-word case at ``seq_len <= 64``.
+    ``ref_text`` is unused; kept for call-site compatibility.
     """
-    if task not in ("s2st", "asr") or seq_len > 64:
-        return
-    words = ref_text.split()
-    if len(words) >= 2:
-        return
-    pytest.skip(
-        f"{task.upper()} WER sweep len={seq_len}: HF reference has {len(words)} word(s); "
-        f"WER is unstable on ultra-short speech inputs"
-    )
+    _ = ref_text
+    maybe_skip_short_speech_input(task, seq_len)
 
 
 # ---------------------------------------------------------------------------

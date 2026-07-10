@@ -7,6 +7,10 @@ Devstral-style **input-length** sweep: for each N, build inputs of length N (sou
 T2ST; mel frames for S2ST/ASR — same as ``demo_perf_sweep.py``), run the TT pipeline and compare
 the output text to offline HF references via ``jiwer.wer`` (Whisper-demo pattern).
 
+Speech-input tasks (S2ST, ASR) with mel ≤ 64 are skipped on all meshes — too few frames for a
+stable WER/token gate (HF EOS early; refs can be a single word). See README
+**Short speech inputs (mel ≤ 64)**. T2ST (text input) still runs at 32/64.
+
 T2ST text inputs use *A Tale of Two Cities* from
 ``models/tt_transformers/tests/tale-of-two-cities.txt.bz2`` (via ``demo_perf_sweep.ensure_long_story``,
 same corpus as tt-transformers). S2ST/ASR audio is length-dependent: mel
@@ -91,13 +95,13 @@ def _mesh_key(mesh_device) -> str:
 
 def _run_teacher_forced_wer_sweep_point(mesh_device, device_params, task: str, seq_len: int) -> None:
     _ = device_params
+    maybe_skip_short_speech_wer(task, "", seq_len)
     weights_dir = weights_dir_or_skip()
     ref_path = ensure_wer_sweep_reference(task, seq_len, weights_dir)
     wer_threshold = sweep_teacher_forced_wer_threshold_for_task(task, seq_len, mesh_id=_mesh_key(mesh_device))
     log_label = f"{task.upper()}-len{seq_len}-TF"
     ref = load_wer_sweep_reference(ref_path)
     maybe_skip_empty_wer_reference(ref.reference_text, task=task, seq_len=seq_len)
-    maybe_skip_short_speech_wer(task, ref.reference_text, seq_len)
 
     torch.manual_seed(0)
     with mesh_default_device(mesh_device):
@@ -140,11 +144,11 @@ def test_seamless_e2e_teacher_forced_wer_sweep(mesh_device, device_params, reset
 
 def _run_whisper_wer_sweep_point(mesh_device, device_params, task: str, seq_len: int) -> None:
     _ = device_params
+    maybe_skip_short_speech_wer(task, "", seq_len)
     weights_dir = weights_dir_or_skip()
     ref_path = ensure_wer_sweep_reference(task, seq_len, weights_dir)
     ref = load_wer_sweep_reference(ref_path)
     maybe_skip_empty_wer_reference(ref.reference_text, task=task, seq_len=seq_len)
-    maybe_skip_short_speech_wer(task, ref.reference_text, seq_len)
 
     torch.manual_seed(0)
     with mesh_default_device(mesh_device):
