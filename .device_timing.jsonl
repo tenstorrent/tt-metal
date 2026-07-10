@@ -1,0 +1,5 @@
+{"event": "phase", "phase": "planner", "state": "start", "at_ms": 1783692177511}
+{"event": "phase", "phase": "planner", "state": "end", "at_ms": 1783693060498}
+{"event": "phase", "phase": "implementer", "state": "start", "at_ms": 1783693195134}
+{"source":"run_safe_pytest","pid":1595265,"started_at_ms":1783694611646,"wait_ms":2,"run_ms":11009,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py::test_scaled_dot_product_attention[auto-none-q_shape0-k_shape0-v_shape0-bfloat16]","exit_code":3}
+{"source":"run_safe_pytest","pid":1596776,"started_at_ms":1783694628557,"wait_ms":2,"run_ms":53136,"test_path":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/test_scaled_dot_product_attention.py","exit_code":2}

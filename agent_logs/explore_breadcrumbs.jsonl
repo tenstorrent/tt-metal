@@ -1,0 +1,2 @@
+{"event":"read_files","details":"Read all files in .claude/references/generic_op_template/ including python and kernel cpp files","ts":"2026-07-10T14:05:08+00:00"}
+{"event":"explore_registry_ops","details":"Investigated rms_norm/softmax/layer_norm_rm registry ops for SDPA design. Op modules absent in this fresh clone (ttnn/ttnn/operations/{rms_norm,softmax,layer_norm_rm} do not exist). Gathered contract from _op_contract.py, golden feature_spec/axes, precision_convention.md, and toy_* reference ops + generic_op_template.","ts":"2026-07-10T14:07:33+00:00"}

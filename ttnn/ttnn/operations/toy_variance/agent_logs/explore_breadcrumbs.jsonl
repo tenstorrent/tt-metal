@@ -1,0 +1,2 @@
+{"event":"start","details":"Exploring 4 toy generic_op examples for reader/writer/program_descriptor structure","ts":"2026-07-10T14:22:04+00:00"}
+{"event":"complete","details":"Read all 4 toy program descriptors, reader/writer kernels, reduce helper header. Found toy ops are single-core (no split_work_to_cores); use prepare_reduce_scaler not calculate_and_prepare.","ts":"2026-07-10T14:22:53+00:00"}
