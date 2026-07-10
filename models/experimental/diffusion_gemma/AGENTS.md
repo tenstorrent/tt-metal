@@ -20,11 +20,19 @@ Block-autoregressive **multi-canvas diffusion**. Per 256-token block, the SAME b
 
 **Noise = RANDOM tokens, not a `[MASK]` token.** The canvas is initialized to random token ids and rejected positions are re-noised to random tokens (uniform discrete diffusion, not absorbing-mask).
 
-**Per denoise step** (≤48 steps, often halts 12–16): temperature-scale (linear 0.8→0.4) → **Gumbel-max** `argmax(logits/T + gumbel)` → **entropy-budget acceptance** (accept most→least confident until accumulated entropy exceeds a budget) → re-noise the rest → stop when the argmax canvas is stable AND mean entropy < threshold. **Commit = clean argmax**, not the noisy sampled values.
+**Per denoise step** (≤48 steps): temperature-scale (linear 0.8→0.4) → **Gumbel-max** `argmax(logits/T + gumbel)` → **entropy-budget acceptance** (accept most→least confident until accumulated entropy exceeds a budget) → re-noise the rest → stop when the argmax canvas is stable AND mean entropy < threshold. **Commit = clean argmax**, not the noisy sampled values. Early halt is possible in principle, but the current real-prompt serving evidence runs the full model-faithful 48 steps under #48291.
 
 **Self-conditioning** (extra weights beyond the backbone): previous-step softmax → probability-weighted average of token embeddings → through a small **gated MLP** → added to canvas embeddings. Active only in denoise; zeroed on encoder passes.
 
 Algorithm reference: transformers `modeling_diffusion_gemma.py`; vLLM blog <https://vllm-project.github.io/2026/06/10/diffusion-gemma.html>.
+
+### Live serving status (2026-07-10)
+- The real patched `tenstorrent/vllm` OpenAI `/v1/completions` path runs full-depth, emits four real 256-token blocks, and exercises the TT adapter plus block-granular runner/scheduler changes. It is no longer a static/reduced-driver-only integration.
+- Metal trace capture/replay is live: the model captures one trace per denoise step on block 0, reuses the same IDs for later blocks, and releases request-owned traces before row removal.
+- The optimized fixed-256-token-context K=1/4/8/12/16/20/24/32/40/48 sweep measured 166.80/108.28/72.94/54.88/44.46/37.06/32.00/25.54/21.34/18.28 output tok/s. K=48 remains model-faithful; lower caps are performance-only.
+- Primary warmed context evidence is complete for logical prompts 32/256/1024/2048 at `max_model_len=4096`; the lower-priority 3072 warmed rerun was intentionally omitted.
+- Current serving remains one active sequence (`max_num_seqs=1`) on the model-owned contiguous cache. `decode_block` rejects a whole-canvas context overrun before denoise/commit device execution.
+- Evidence: `doc/vllm_integration/live_context_sweep_results_20260710.md` and `live_denoise_step_sweep_results_20260710.md`.
 
 ## Reuse vs build (tt-metal)
 **Reuse — the backbone is already in-repo.** `models/demos/gemma4/` is a near-complete, trace-compatible on-device Gemma-4 26B-A4B MoE: `tt/model.py`, `tt/moe.py`, `tt/router.py`, `tt/experts/`, `tt/shared_mlp.py`, `tt/attention/`, weight loading, CCL/TP. MoE / softcap / dual-RoPE / weight-loading match the target. On-device sampling: `models/common/sampling/generator.py`.
@@ -47,7 +55,9 @@ We serve via the [tenstorrent/vllm](https://github.com/tenstorrent/vllm) TT plug
 - **Continuous batching is phase-based** (a step is all-prefill OR all-decode; `docs/SCHEDULING.md`).
 - **APC is model-gated and force-disabled for sliding-window models** (`platform.py:512-521`) → likely off for Gemma. **Not a Functional gate** — the parent #47452 lists APC under success criteria, but treat it as best-effort unless the plugin's sliding-window gating changes.
 - Integration = implement a TT model class (`initialize_vllm_model` `loader.py:39`, `allocate_kv_cache_per_layer`, `prefill_forward` `model_runner.py:1999`, `decode_forward` `async_decode.py:473`, `model_capabilities`) + register in `register_tt_models()` (`platform.py`; HF arch auto-prefixed `TT`). Copy the existing gemma4 bridge `TTGemma4ForCausalLM`.
-- Emitting a 256-token block per decode step likely needs an upstream tenstorrent/vllm runner+scheduler change (#47488).
+- Emitting a 256-token block per decode step uses the implemented and live-validated companion
+  `tenstorrent/vllm` runner+scheduler changes (#47488). Patch artifacts and tests live under
+  `doc/vllm_integration/`; the fork worktree is committed separately.
 
 ## Correctness / determinism gotchas
 - **Determinism:** token-for-token PCC vs torch requires **injecting the torch run's exact Gumbel noise + random-renoise token ids into the TT path** — on-device RNG won't match bit-exactly. Reserve regenerated noise for distributional checks.

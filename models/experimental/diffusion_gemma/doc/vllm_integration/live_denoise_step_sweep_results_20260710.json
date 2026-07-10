@@ -1,0 +1,468 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "date_utc": "2026-07-10",
+  "hardware": "bhqb QB2 (P150x4, 4 Blackhole devices)",
+  "server": "real patched tenstorrent/vllm OpenAI /v1/completions",
+  "experiment": "performance-only fixed maximum denoise-step cap sweep",
+  "quality_contract": {
+    "model_faithful_max_denoise_steps": 48,
+    "issue": 48291,
+    "warning": "Budgets below 48 can change diffusion decisions and output quality. This sweep makes no quality claim."
+  },
+  "fixed_contract": {
+    "logical_prompt_tokens": 256,
+    "aligned_cache_tokens": 256,
+    "max_model_len": 4096,
+    "max_num_batched_tokens": 4096,
+    "max_num_seqs": 1,
+    "canvas_tokens": 256,
+    "blocks_per_request": 4,
+    "completion_tokens": 1024,
+    "temperature": 0,
+    "ignore_eos": true,
+    "sample_on_device_mode": "all",
+    "trace_scheme": "one Metal trace per denoise step",
+    "trace_region_size_bytes": 10737418240,
+    "warmup_requests_per_server": 1,
+    "timed_requests_per_server": 1,
+    "steady_blocks_per_timed_request": 3,
+    "require_no_compile_markers": true,
+    "isolated_server_lifecycle_per_budget": true,
+    "env": {
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_TRACE_REGION_SIZE": "10737418240"
+    }
+  },
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "baseline_comparison": {
+    "source": "live_context_sweep_results_20260710.json actual_prompt_scaling_msl4096 logical_prompt_tokens=256",
+    "baseline_output_tokens_per_s": 18.246764,
+    "baseline_steady_mean_s": 14.029885,
+    "current_k48_output_tokens_per_s": 18.27632,
+    "current_k48_steady_mean_s": 14.007196,
+    "output_tokens_per_s_delta": 0.029556,
+    "relative_delta_percent": 0.161979,
+    "interpretation": "Immaterial run-to-run variation. The new row used an isolated server, an explicit same-shape warmup, and a compile-marker-free timed request."
+  },
+  "rows": [
+    {
+      "max_denoise_steps": 1,
+      "model_build_s": 15.820073,
+      "prefill_s": 2.960596,
+      "capture_inclusive_block0_ttft_s": 9.216541,
+      "block_latencies_s": [4.374289, 1.528526, 1.542884, 1.532908],
+      "steady": {
+        "mean_s": 1.534773,
+        "median_s": 1.532908,
+        "pstdev_s": 0.006008,
+        "output_tokens_per_s": 166.799947,
+        "denoise_ms_per_step": 253.587667,
+        "speedup_vs_k48": 9.126561
+      },
+      "request_wall_s": 13.833628,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.891826, "free": 6.975361},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 1,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 4,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k01_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k01-20260710.log",
+      "server_log_sha256": "7edf379c4559fdab7f394b8c4bddb2b06851dcfd34b5d875c2d0c9405d0e5e5e"
+    },
+    {
+      "max_denoise_steps": 4,
+      "model_build_s": 14.873362,
+      "prefill_s": 2.920321,
+      "capture_inclusive_block0_ttft_s": 16.233498,
+      "block_latencies_s": [11.451336, 2.368354, 2.351974, 2.372304],
+      "steady": {
+        "mean_s": 2.364211,
+        "median_s": 2.368354,
+        "pstdev_s": 0.008802,
+        "output_tokens_per_s": 108.281383,
+        "denoise_ms_per_step": 251.76625,
+        "speedup_vs_k48": 5.924682
+      },
+      "request_wall_s": 23.338857,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.891917, "free": 6.975269},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 4,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 16,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k04_20260710_retry.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k04-20260710-retry.log",
+      "server_log_sha256": "7d2ba3e37be1cfbc285e93617fb3ec8bf340166d2502a6faa1e88b8e83b2621f"
+    },
+    {
+      "max_denoise_steps": 8,
+      "model_build_s": 15.076334,
+      "prefill_s": 2.973371,
+      "capture_inclusive_block0_ttft_s": 26.093162,
+      "block_latencies_s": [21.312162, 3.526849, 3.49409, 3.508901],
+      "steady": {
+        "mean_s": 3.509947,
+        "median_s": 3.508901,
+        "pstdev_s": 0.013394,
+        "output_tokens_per_s": 72.935581,
+        "denoise_ms_per_step": 251.597125,
+        "speedup_vs_k48": 3.990715
+      },
+      "request_wall_s": 36.640327,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.892039, "free": 6.975147},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 8,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 32,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k08_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k08-20260710.log",
+      "server_log_sha256": "6cfe77b51b4d5d7615923c032362ec7b0d45f8c0675a0aecb56982964d66b2af"
+    },
+    {
+      "max_denoise_steps": 12,
+      "model_build_s": 15.29921,
+      "prefill_s": 2.91432,
+      "capture_inclusive_block0_ttft_s": 36.426746,
+      "block_latencies_s": [31.682628, 4.657532, 4.699316, 4.638052],
+      "steady": {
+        "mean_s": 4.664967,
+        "median_s": 4.657532,
+        "pstdev_s": 0.025557,
+        "output_tokens_per_s": 54.877134,
+        "denoise_ms_per_step": 251.441472,
+        "speedup_vs_k48": 3.002636
+      },
+      "request_wall_s": 50.43817,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.892161, "free": 6.975025},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 12,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 48,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k12_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k12-20260710.log",
+      "server_log_sha256": "c354f002a89648a5af023ffe9f3243a66094a0c0f38836f14e783c1fec3041d6"
+    },
+    {
+      "max_denoise_steps": 16,
+      "model_build_s": 15.294416,
+      "prefill_s": 2.936163,
+      "capture_inclusive_block0_ttft_s": 46.554356,
+      "block_latencies_s": [41.814895, 5.739886, 5.747883, 5.786847],
+      "steady": {
+        "mean_s": 5.758205,
+        "median_s": 5.747883,
+        "pstdev_s": 0.020514,
+        "output_tokens_per_s": 44.458296,
+        "denoise_ms_per_step": 251.395312,
+        "speedup_vs_k48": 2.432563
+      },
+      "request_wall_s": 63.847569,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.892283, "free": 6.974903},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 16,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 64,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k16_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k16-20260710.log",
+      "server_log_sha256": "ba3e84e2f8f4db5d2fcc329160f14e3032e7dbc88e08529a2914001a72a19144"
+    },
+    {
+      "max_denoise_steps": 20,
+      "model_build_s": 15.277496,
+      "prefill_s": 2.989163,
+      "capture_inclusive_block0_ttft_s": 58.13373,
+      "block_latencies_s": [53.269287, 6.896323, 6.933608, 6.891516],
+      "steady": {
+        "mean_s": 6.907149,
+        "median_s": 6.896323,
+        "pstdev_s": 0.018812,
+        "output_tokens_per_s": 37.063049,
+        "denoise_ms_per_step": 251.3122,
+        "speedup_vs_k48": 2.027927
+      },
+      "request_wall_s": 78.871293,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.892406, "free": 6.974781},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 20,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 80,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k20_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k20-20260710.log",
+      "server_log_sha256": "f1e77c32b82dfec01d30d63f38f543e4f0ef9ae44aaa5f3028ddcdef9da2052a"
+    },
+    {
+      "max_denoise_steps": 24,
+      "model_build_s": 15.307819,
+      "prefill_s": 2.975297,
+      "capture_inclusive_block0_ttft_s": 68.309141,
+      "block_latencies_s": [63.4717, 7.953608, 8.021989, 8.026036],
+      "steady": {
+        "mean_s": 8.000544,
+        "median_s": 8.021989,
+        "pstdev_s": 0.03323,
+        "output_tokens_per_s": 31.997823,
+        "denoise_ms_per_step": 251.326847,
+        "speedup_vs_k48": 1.75078
+      },
+      "request_wall_s": 92.325835,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.892528, "free": 6.974659},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 24,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 96,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k24_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k24-20260710.log",
+      "server_log_sha256": "bfbf05f05caedccfe0200e0528fc9a46c40c0d033f08ca9e7f6e2161c61ffd3b"
+    },
+    {
+      "max_denoise_steps": 32,
+      "model_build_s": 15.271104,
+      "prefill_s": 2.922512,
+      "capture_inclusive_block0_ttft_s": 89.817493,
+      "block_latencies_s": [85.050415, 10.102765, 9.964661, 10.005684],
+      "steady": {
+        "mean_s": 10.02437,
+        "median_s": 10.005684,
+        "pstdev_s": 0.057908,
+        "output_tokens_per_s": 25.537764,
+        "denoise_ms_per_step": 251.337271,
+        "speedup_vs_k48": 1.397314
+      },
+      "request_wall_s": 119.908148,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.892772, "free": 6.974415},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 32,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 128,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k32_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k32-20260710.log",
+      "server_log_sha256": "aa07642c165121dbb29c96301b285fb3ad0abfae794e2196f0c6a22e1d32bd90"
+    },
+    {
+      "max_denoise_steps": 40,
+      "model_build_s": 15.389378,
+      "prefill_s": 2.921979,
+      "capture_inclusive_block0_ttft_s": 111.424218,
+      "block_latencies_s": [106.716543, 11.972977, 12.029015, 11.991247],
+      "steady": {
+        "mean_s": 11.997746,
+        "median_s": 11.991247,
+        "pstdev_s": 0.023334,
+        "output_tokens_per_s": 21.337341,
+        "denoise_ms_per_step": 251.359092,
+        "speedup_vs_k48": 1.167486
+      },
+      "request_wall_s": 147.431824,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.893016, "free": 6.974171},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 40,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 160,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k40_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k40-20260710.log",
+      "server_log_sha256": "2fffc69eb2bf47d543c0283949d0f75a48991772a26d0447184b3f466edd17ba"
+    },
+    {
+      "max_denoise_steps": 48,
+      "model_build_s": 15.212005,
+      "prefill_s": 2.949738,
+      "capture_inclusive_block0_ttft_s": 134.948975,
+      "block_latencies_s": [130.128229, 13.998189, 13.975989, 14.047411],
+      "steady": {
+        "mean_s": 14.007196,
+        "median_s": 13.998189,
+        "pstdev_s": 0.029845,
+        "output_tokens_per_s": 18.27632,
+        "denoise_ms_per_step": 251.307257,
+        "speedup_vs_k48": 1.0
+      },
+      "request_wall_s": 176.985339,
+      "compile_markers_in_timed_request": 0,
+      "dram_gib_per_chip": {
+        "model_build": {"used": 13.461654, "free": 8.405533},
+        "trace_resident_after_block0": {"used": 14.89326, "free": 6.973927},
+        "after_request_release": {"used": 13.481212, "free": 8.385975}
+      },
+      "trace": {
+        "capture_events": 1,
+        "distinct_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "same_trace_ids_all_blocks": true,
+        "recapture_after_block0": false,
+        "eager_fallback": false,
+        "released_at_request_end": true
+      },
+      "raw_json": "live_denoise_step_k48_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k48-20260710.log",
+      "server_log_sha256": "b2defc02a7b30eacc7b41a45d3a6a975b633421b365f4fd39855073fbb6f4971"
+    }
+  ],
+  "excluded_runs": [
+    {
+      "classification": "excluded_hardware_fault",
+      "max_denoise_steps": 4,
+      "phase": "server startup before model build or request",
+      "reason": "Device 0 active Ethernet core 29-25 did not resume; bounded list/reset/list and 1x4 mesh smoke passed before the single retry.",
+      "raw_json": "live_denoise_step_k04_20260710.json",
+      "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k04-20260710.log",
+      "server_log_sha256": "2b09b326c971328bd5012056522bd96814f3b5ebf04de68fc0b13f486a116e02",
+      "recovery": {
+        "no_active_process_check": {
+          "command": "ps -eo pid=,etimes=,args= | rg -i '(vllm\\.entrypoints|api_server|EngineCore|live_context_sweep\\.py|serving_smoke|tt-smi|tt-triage)' | rg -v 'rg -i' || true",
+          "matched_processes": [],
+          "exit_code": 0
+        },
+        "list_before": {
+          "command": "timeout 60 tt-smi -ls --local",
+          "umd_chip_ids": [0, 1, 2, 3],
+          "board_type": "Blackhole p300c",
+          "exit_code": 0
+        },
+        "reset": {
+          "command": "timeout 180 tt-smi -r",
+          "output": "Resetting all PCI devices: [0, 1, 2, 3]; Re-initializing boards after reset",
+          "exit_code": 0
+        },
+        "list_after": {
+          "command": "timeout 60 tt-smi -ls --local",
+          "umd_chip_ids": [0, 1, 2, 3],
+          "board_type": "Blackhole p300c",
+          "exit_code": 0
+        },
+        "mesh_smoke": {
+          "command": "timeout 120 python: open_mesh_device(MeshShape(1, 4), trace_region_size=0); close_mesh_device(mesh)",
+          "firmware_bundle_version": "19.8.0",
+          "output_sentinel": "MESH_SMOKE_OK",
+          "exit_code": 0
+        },
+        "single_retry": {
+          "raw_json": "live_denoise_step_k04_20260710_retry.json",
+          "server_log": "/home/zni/dg-agent-runs/dg-vllm-step-k04-20260710-retry.log",
+          "server_log_sha256": "7d2ba3e37be1cfbc285e93617fb3ec8bf340166d2502a6faa1e88b8e83b2621f",
+          "status": "passed",
+          "included_in_metrics": true
+        }
+      },
+      "included_in_metrics": false
+    }
+  ],
+  "dense_controls": {
+    "attempted": false,
+    "included": false
+  }
+}

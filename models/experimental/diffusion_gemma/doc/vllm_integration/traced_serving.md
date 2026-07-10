@@ -67,24 +67,39 @@ Post-build per-chip DRAM vs `max_model_len` (measured `ttnn.get_memory_view` DRA
 | max_model_len | DRAM used (GiB) | DRAM free (GiB) | vs prev | traced-serving fit |
 |---:|---:|---:|---|---|
 | 1024 | 13.27 | 8.60 | base (weights + KV) | ✓ (dg-08) |
-| 4096 | 13.46 | 8.41 | +0.19 (+3072 tok) | ✓ (traced 17.93 t/s) |
-| 32768 | 15.27 | 6.60 | +1.81 (+28672 tok) | eager ✓; **traced trace-region-gated** (see below) |
+| 4096 | 13.46 | 8.41 | +0.19 (+3072 tok) | ✓ live 48-trace (18.27 t/s @ prompt 256) |
+| 8192 | 13.72 | 8.15 | +0.26 (+4096 tok) | ✓ live 48-trace |
+| 16384 | 14.24 | 7.63 | +0.52 (+8192 tok) | ✓ live 48-trace |
+| 32768 | 15.27 | 6.60 | +1.03 (+16384 tok) | ✓ live 48-trace |
 
 Contiguous KV ≈ **66 KiB/tok** (`(15.27−13.46) GiB / (32768−4096) tok` = 66.2 KiB/tok;
-`(13.46−13.27)/(4096−1024)` = 64.8), matching `dg-context-window-oom` (~66 KiB/tok). **DRAM-fit
-finding:** the traced serving path also
-reserves `DG_TRACE_REGION_SIZE` (~8 GiB for the 48 single-step @30L traces); at `max_model_len=32768`
-the free DRAM (6.60 GiB) is already **below** that trace region, so **traced serving is DRAM-gated by
-the trace region well before the eager KV ceiling**. Traced serving therefore fits a smaller context
-than eager on QB2; right-size `--max-model-len` (or shrink the trace budget via a smaller
-early-halt/multistep window, or the #47488 paged path) per `doc/context_contract.json` (target 262144).
+`(13.46−13.27)/(4096−1024)` = 64.8), matching `dg-context-window-oom` (~66 KiB/tok).
+The earlier estimate incorrectly treated `DG_TRACE_REGION_SIZE` as immediately resident DRAM.
+The live server proves it is a capacity limit: the 48 traces increased used DRAM by only
+~1.41–1.44 GiB/chip. At `max_model_len=32768`, both a 32-token prompt and a real 16384-token prompt
+captured/replayed all 48 traces, leaving 5.17/5.16 GiB free while trace-resident. The bounded probes
+therefore establish 32768 as passing, not as trace-region-gated; they do not establish the absolute
+ceiling and did not force 256K.
 
-Decode throughput is **context-flat** (per-block cost is 48×30-layer MoE compute, not
-attention/prefix): eager **6.86 t/s @ max_model_len 4096 → 6.51 @ 32768** (the longer frozen-prefix
-read adds only ~5%), matching `vllm_speed_by_context.md`'s eager 7.1–7.4 t/s across prompt_len 10→265;
-trace scales the whole block down uniformly (17.93 t/s where the trace region fits). The served
-context ceiling / `--max-model-len` follows `doc/context_contract.json` (target 262144); a smaller
-`--max-model-len` here is an inner-loop / DRAM-fit choice, **not** a capability cut.
+Allocation scaling and actual-prompt scaling are distinct. A fixed 32-token prompt stayed flat at
+18.83–18.89 t/s for allocated limits 4096→32768. The primary warmed,
+compile-marker-free 32/256/1024/2048-token targets at msl=4096 measured
+18.49/18.27/17.57/16.72 t/s over nine steady blocks each; the 3072 warmed rerun was intentionally
+omitted. Longer 6144/8192/16384 prompts measured 12.68/11.88/9.49 t/s. The frozen-prefix read is
+therefore material at real long context even though allocation alone is not. Full live metrics,
+per-block timing, trace counters, and DRAM snapshots are in `live_context_sweep_results_20260710.md`.
+
+### Fixed denoise-step cap scaling
+
+The real OpenAI path was also swept with isolated servers at
+K=1/4/8/12/16/20/24/32/40/48 while holding the logical prompt at 256 tokens.
+Output speed was 166.80/108.28/72.94/54.88/44.46/37.06/32.00/25.54/21.34/18.28 t/s.
+Warmed denoise time stayed approximately 251.3–251.8 ms/step for K=4–48; each row captured exactly
+K traces once and made exactly `4*K` execute calls across four blocks. See
+`live_denoise_step_sweep_results_20260710.md`.
+
+This is performance-only evidence: 48 remains model-faithful under #48291, and smaller caps can
+change output decisions or quality.
 
 ## TASK 3 — realized early-halt steps per block
 
@@ -139,13 +154,11 @@ one 256-token block per decode call (`steps=[48,48]` → two committed blocks, `
 
 The live tenstorrent/vllm fork server serves DiffusionGemma end-to-end (see `README.md` § Live serving
 verification): #47488 runner+scheduler patches applied, real OpenAI requests → HTTP 200, multi-block
-serve `32→288→544`. That live run used the **eager** decode path (~7.3 t/s, `vllm_speed_by_context.md`).
-The decode compute traced here lives entirely inside `session.decode_block` — the identical code the
-live adapter's `decode_forward` delegates to — so the eager→traced decode win measured via the
-reduced-surface driver is the win the live server realizes once launched with `DG_VLLM_TRACE=1`
-(or `DG_DENOISE_TRACED=1`) + a sized `DG_TRACE_REGION_SIZE`. A fresh live traced run was NOT re-stood-up
-here to avoid the device-wedge risk the skills warn about (re-applying the fork patches + a long live
-server run); the faithful decode-path measurement is the session driver the adapter wraps.
+serve `32→288→544`. The original 2026-07-03 run used the **eager** decode path (~7.3 t/s,
+`vllm_speed_by_context.md`). That historical gap is now closed: the 2026-07-10 real OpenAI-server
+sweep launched with `DG_VLLM_TRACE=1`, captured exactly 48 traces on block 0, replayed the same IDs
+through three `decode_forward` blocks, and released them per request. Actual 32→3072-token prompt
+results and larger-context probes are in `live_context_sweep_results_20260710.md`.
 
 ## Files
 - `tt/generate.py`, `tt/serving.py`, `tt/generator_vllm.py` — the trace wiring.

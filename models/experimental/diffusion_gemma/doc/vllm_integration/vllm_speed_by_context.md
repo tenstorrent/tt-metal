@@ -1,5 +1,9 @@
 # vLLM serving speed vs context (model-faithful, #47488/#47465)
 
+> **Historical eager baseline (superseded for traced-serving performance).** These measurements
+> predate the live `DG_VLLM_TRACE=1` wiring. Current real OpenAI-server traced results are in
+> `live_context_sweep_results_20260710.md`; retain the rows below only as the eager control.
+
 Live vLLM OpenAI server, DiffusionGemma 26B-A4B-it, QB2 (1,4) mesh, #47488 fork patches applied,
 `DG_SPARSE_MOE=1 DG_DEDUP_ARGMAX=1 DG_SPARSE_MOE_TUNED=1`, `--generation-config vllm`, on-device
 sampling. **DG_DENOISE_TRACED / DG_COMMIT_BATCHED are OFF on the vLLM paged path** (expected) — so

@@ -84,6 +84,7 @@ def test_denoise_and_commit_block_threads_position_and_commits():
     gumbel_noise_fn = object()
     noise_tokens_fn = object()
     page_tables_per_layer = ["pages"]
+    timings = {}
 
     out = denoise_and_commit_block(
         "model",
@@ -96,6 +97,7 @@ def test_denoise_and_commit_block_threads_position_and_commits():
         page_tables_per_layer=page_tables_per_layer,
         denoise_block_fn=fake_denoise_block,
         commit_fn=fake_commit,
+        timings=timings,
     )
 
     assert logits_fn.q_rope_offset == 544
@@ -104,12 +106,15 @@ def test_denoise_and_commit_block_threads_position_and_commits():
     assert out.committed is committed
     assert out.next_pos == 547
     assert out.trajectory is trajectory
+    assert timings.keys() == {"denoise_s", "commit_s"}
+    assert timings["denoise_s"] >= 0
+    assert timings["commit_s"] >= 0
 
 
-def test_denoise_and_commit_block_rejects_missing_commit():
+def test_denoise_and_commit_block_rejects_missing_commit(expect_error):
     trajectory = DenoiseTrajectory(committed=None, num_steps=0, halted=False, per_step=[])
 
-    with pytest.raises(RuntimeError, match="did not produce committed"):
+    with expect_error(RuntimeError, match="did not produce committed"):
         denoise_and_commit_block(
             object(),
             object(),
@@ -121,7 +126,7 @@ def test_denoise_and_commit_block_rejects_missing_commit():
         )
 
 
-def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit():
+def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit(expect_error):
     trajectory = DenoiseTrajectory(
         committed=torch.tensor([[7, 8]], dtype=torch.long), num_steps=1, halted=True, per_step=[]
     )
@@ -129,7 +134,7 @@ def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit():
     def fail_commit(*args, **kwargs):
         raise AssertionError("commit should not run for malformed committed canvas")
 
-    with pytest.raises(ValueError, match="block.committed"):
+    with expect_error(ValueError, match="block.committed"):
         denoise_and_commit_block(
             object(),
             object(),
@@ -150,12 +155,12 @@ def test_denoise_and_commit_block_rejects_bad_committed_shape_before_commit():
         (torch.iinfo(torch.int32).max, "fit int32"),
     ],
 )
-def test_commit_canvas_tokens_rejects_bad_position_before_model_call(start_pos, message):
+def test_commit_canvas_tokens_rejects_bad_position_before_model_call(start_pos, message, expect_error):
     class _FailModel:
         def prepare_inputs_decode(self, *args, **kwargs):
             raise AssertionError("prepare_inputs_decode should not run for invalid positions")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         commit_canvas_tokens(
             _FailModel(),
             torch.tensor([[7, 8]], dtype=torch.long),
@@ -171,12 +176,12 @@ def test_commit_canvas_tokens_rejects_bad_position_before_model_call(start_pos, 
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_commit_canvas_tokens_rejects_invalid_token_ids_before_model_call(canvas_tokens, message):
+def test_commit_canvas_tokens_rejects_invalid_token_ids_before_model_call(canvas_tokens, message, expect_error):
     class _FailModel:
         def prepare_inputs_decode(self, *args, **kwargs):
             raise AssertionError("prepare_inputs_decode should not run for invalid canvas tokens")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         commit_canvas_tokens(_FailModel(), canvas_tokens, start_pos=0)
 
 
@@ -282,7 +287,7 @@ def test_generate_blocks_advances_position_and_concatenates_commits():
     ]
 
 
-def test_generate_blocks_deallocates_init_canvas_if_block_fails():
+def test_generate_blocks_deallocates_init_canvas_if_block_fails(expect_error):
     class _FakeDeviceCanvas:
         deallocated = False
 
@@ -294,7 +299,7 @@ def test_generate_blocks_deallocates_init_canvas_if_block_fails():
     def failing_block(*args, **kwargs):
         raise RuntimeError("device op failed")
 
-    with pytest.raises(RuntimeError, match="device op failed"):
+    with expect_error(RuntimeError, match="device op failed"):
         generate_blocks(
             "model",
             "logits",
@@ -308,8 +313,8 @@ def test_generate_blocks_deallocates_init_canvas_if_block_fails():
     assert init_canvas.deallocated is True
 
 
-def test_generate_blocks_rejects_negative_num_blocks():
-    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+def test_generate_blocks_rejects_negative_num_blocks(expect_error):
+    with expect_error(ValueError, match="num_blocks must be non-negative"):
         generate_blocks(
             "model",
             "logits",
@@ -327,8 +332,8 @@ def test_generate_blocks_rejects_negative_num_blocks():
         (True, "integer"),
     ],
 )
-def test_generate_blocks_rejects_non_integer_num_blocks(num_blocks, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_blocks_rejects_non_integer_num_blocks(num_blocks, message, expect_error):
+    with expect_error(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",
@@ -339,8 +344,8 @@ def test_generate_blocks_rejects_non_integer_num_blocks(num_blocks, message):
         )
 
 
-def test_generate_blocks_rejects_non_positive_canvas_length():
-    with pytest.raises(ValueError, match="canvas_length must be positive"):
+def test_generate_blocks_rejects_non_positive_canvas_length(expect_error):
+    with expect_error(ValueError, match="canvas_length must be positive"):
         generate_blocks(
             "model",
             "logits",
@@ -358,8 +363,8 @@ def test_generate_blocks_rejects_non_positive_canvas_length():
         (True, "integer"),
     ],
 )
-def test_generate_blocks_rejects_non_integer_canvas_length(canvas_length, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_blocks_rejects_non_integer_canvas_length(canvas_length, message, expect_error):
+    with expect_error(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",
@@ -379,8 +384,8 @@ def test_generate_blocks_rejects_non_integer_canvas_length(canvas_length, messag
         (torch.iinfo(torch.int32).max, "fit int32"),
     ],
 )
-def test_generate_blocks_rejects_bad_prompt_position_span(prompt_len, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_blocks_rejects_bad_prompt_position_span(prompt_len, message, expect_error):
+    with expect_error(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",
@@ -392,14 +397,14 @@ def test_generate_blocks_rejects_bad_prompt_position_span(prompt_len, message):
         )
 
 
-def test_generate_blocks_rejects_committed_span_beyond_model_context_before_init_canvas():
+def test_generate_blocks_rejects_committed_span_beyond_model_context_before_init_canvas(expect_error):
     class _Model:
         max_seq_len = 37
 
     def fail_init(*args, **kwargs):
         raise AssertionError("init_canvas_fn should not run for an impossible context span")
 
-    with pytest.raises(ValueError, match="context window"):
+    with expect_error(ValueError, match="context window"):
         generate_blocks(
             _Model(),
             "logits",
@@ -433,8 +438,8 @@ def test_generate_blocks_allows_zero_blocks_without_init_canvas():
         (True, "integer"),
     ],
 )
-def test_generate_blocks_rejects_non_integer_batch_size(batch_size, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_blocks_rejects_non_integer_batch_size(batch_size, message, expect_error):
+    with expect_error(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",
@@ -445,7 +450,7 @@ def test_generate_blocks_rejects_non_integer_batch_size(batch_size, message):
         )
 
 
-def test_generate_blocks_rejects_block_next_pos_mismatch():
+def test_generate_blocks_rejects_block_next_pos_mismatch(expect_error):
     def bad_block(tt_model, logits_fn, init_canvas, config, **kwargs):
         committed = torch.full((1, config.canvas_length), 7, dtype=torch.long)
         trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
@@ -455,7 +460,7 @@ def test_generate_blocks_rejects_block_next_pos_mismatch():
             trajectory=trajectory,
         )
 
-    with pytest.raises(ValueError, match="block.next_pos"):
+    with expect_error(ValueError, match="block.next_pos"):
         generate_blocks(
             "model",
             "logits",
@@ -475,7 +480,7 @@ def test_generate_blocks_rejects_block_next_pos_mismatch():
         torch.tensor([[7, 7, 7, 7], [8, 8, 8, 8]], dtype=torch.long),
     ],
 )
-def test_generate_blocks_rejects_bad_committed_shape(committed):
+def test_generate_blocks_rejects_bad_committed_shape(committed, expect_error):
     def bad_block(tt_model, logits_fn, init_canvas, config, **kwargs):
         trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
         return GeneratedBlock(
@@ -484,7 +489,7 @@ def test_generate_blocks_rejects_bad_committed_shape(committed):
             trajectory=trajectory,
         )
 
-    with pytest.raises(ValueError, match="block.committed"):
+    with expect_error(ValueError, match="block.committed"):
         generate_blocks(
             "model",
             "logits",
@@ -504,7 +509,7 @@ def test_generate_blocks_rejects_bad_committed_shape(committed):
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1, 3, 4]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_generate_blocks_rejects_invalid_committed_token_ids(committed, message):
+def test_generate_blocks_rejects_invalid_committed_token_ids(committed, message, expect_error):
     def bad_block(tt_model, logits_fn, init_canvas, config, **kwargs):
         trajectory = DenoiseTrajectory(committed=committed, num_steps=1, halted=True, per_step=[])
         return GeneratedBlock(
@@ -513,7 +518,7 @@ def test_generate_blocks_rejects_invalid_committed_token_ids(committed, message)
             trajectory=trajectory,
         )
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",
@@ -572,7 +577,7 @@ def test_generate_blocks_stops_after_committed_stop_token():
         ([9, torch.iinfo(torch.int32).max + 1], "fit int32"),
     ],
 )
-def test_generate_blocks_rejects_invalid_stop_token_ids(stop_token_ids, message):
+def test_generate_blocks_rejects_invalid_stop_token_ids(stop_token_ids, message, expect_error):
     committed = torch.tensor([[1, 2]], dtype=torch.long)
 
     def fake_block(tt_model, logits_fn, init_canvas, config, **kwargs):
@@ -583,7 +588,7 @@ def test_generate_blocks_rejects_invalid_stop_token_ids(stop_token_ids, message)
             trajectory=trajectory,
         )
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_blocks(
             "model",
             "logits",
@@ -735,13 +740,13 @@ def test_generate_from_prompt_tokens_threads_aligned_prefill_cache_len():
     assert torch.equal(generation_sequences(prompt_tokens, out), torch.tensor([[1, 2, 3, 4, 5, 7, 8]]))
 
 
-def test_generate_from_prompt_tokens_rejects_prefill_prompt_len_mismatch_before_blocks():
+def test_generate_from_prompt_tokens_rejects_prefill_prompt_len_mismatch_before_blocks(expect_error):
     prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
 
     def fail_blocks(*args, **kwargs):
         raise AssertionError("blocks should not run for a bad prefill length")
 
-    with pytest.raises(ValueError, match="prefill prompt_len"):
+    with expect_error(ValueError, match="prefill prompt_len"):
         generate_from_prompt_tokens(
             "model",
             "logits",
@@ -754,13 +759,13 @@ def test_generate_from_prompt_tokens_rejects_prefill_prompt_len_mismatch_before_
         )
 
 
-def test_generate_from_prompt_tokens_rejects_prefill_cache_len_shorter_than_prompt():
+def test_generate_from_prompt_tokens_rejects_prefill_cache_len_shorter_than_prompt(expect_error):
     prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
 
     def fail_blocks(*args, **kwargs):
         raise AssertionError("blocks should not run for a bad prefill length")
 
-    with pytest.raises(ValueError, match="cache_len"):
+    with expect_error(ValueError, match="cache_len"):
         generate_from_prompt_tokens(
             "model",
             "logits",
@@ -773,7 +778,7 @@ def test_generate_from_prompt_tokens_rejects_prefill_cache_len_shorter_than_prom
         )
 
 
-def test_generate_from_prompt_tokens_rejects_context_overrun_after_prefill_before_blocks():
+def test_generate_from_prompt_tokens_rejects_context_overrun_after_prefill_before_blocks(expect_error):
     class _Model:
         max_seq_len = 5
 
@@ -785,7 +790,7 @@ def test_generate_from_prompt_tokens_rejects_context_overrun_after_prefill_befor
     def fail_blocks(*args, **kwargs):
         raise AssertionError("blocks should not run for an impossible context span")
 
-    with pytest.raises(ValueError, match="context window"):
+    with expect_error(ValueError, match="context window"):
         generate_from_prompt_tokens(
             _Model(),
             None,
@@ -826,13 +831,13 @@ def test_generate_from_prompt_tokens_allows_exact_256k_context_boundary():
 
 
 @pytest.mark.parametrize("prompt_len", [4.0, True])
-def test_generate_from_prompt_tokens_rejects_non_integer_prefill_prompt_len(prompt_len):
+def test_generate_from_prompt_tokens_rejects_non_integer_prefill_prompt_len(prompt_len, expect_error):
     prompt_tokens = torch.tensor([[1, 2, 3, 4]], dtype=torch.long)
 
     def fail_blocks(*args, **kwargs):
         raise AssertionError("blocks should not run for a bad prefill length")
 
-    with pytest.raises(ValueError, match="prefill prompt_len"):
+    with expect_error(ValueError, match="prefill prompt_len"):
         generate_from_prompt_tokens(
             "model",
             "logits",
@@ -890,8 +895,8 @@ def test_generate_from_prompt_tokens_zero_blocks_preserves_prompt_batch():
     assert torch.equal(out.generated, torch.empty((2, 0), dtype=torch.long))
 
 
-def test_generate_from_prompt_tokens_rejects_bad_prompt_shape_before_zero_block_fast_path():
-    with pytest.raises(ValueError, match="prompt_tokens must have shape"):
+def test_generate_from_prompt_tokens_rejects_bad_prompt_shape_before_zero_block_fast_path(expect_error):
+    with expect_error(ValueError, match="prompt_tokens must have shape"):
         generate_from_prompt_tokens(
             "model",
             None,
@@ -909,8 +914,10 @@ def test_generate_from_prompt_tokens_rejects_bad_prompt_shape_before_zero_block_
         (torch.empty((1, 0), dtype=torch.long), "length"),
     ],
 )
-def test_generate_from_prompt_tokens_rejects_empty_prompt_tokens_before_zero_block_fast_path(prompt_tokens, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_from_prompt_tokens_rejects_empty_prompt_tokens_before_zero_block_fast_path(
+    prompt_tokens, message, expect_error
+):
+    with expect_error(ValueError, match=message):
         generate_from_prompt_tokens(
             "model",
             None,
@@ -929,8 +936,10 @@ def test_generate_from_prompt_tokens_rejects_empty_prompt_tokens_before_zero_blo
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_generate_from_prompt_tokens_rejects_invalid_token_ids_before_zero_block_fast_path(prompt_tokens, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_from_prompt_tokens_rejects_invalid_token_ids_before_zero_block_fast_path(
+    prompt_tokens, message, expect_error
+):
+    with expect_error(ValueError, match=message):
         generate_from_prompt_tokens(
             "model",
             None,
@@ -941,8 +950,8 @@ def test_generate_from_prompt_tokens_rejects_invalid_token_ids_before_zero_block
         )
 
 
-def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
-    with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
+def test_generate_from_prompt_tokens_rejects_logits_and_builder_together(expect_error):
+    with expect_error(ValueError, match="either logits_fn or logits_fn_builder"):
         generate_from_prompt_tokens(
             "model",
             "logits",
@@ -956,11 +965,11 @@ def test_generate_from_prompt_tokens_rejects_logits_and_builder_together():
         )
 
 
-def test_generate_from_prompt_tokens_rejects_logits_and_builder_together_for_zero_blocks():
+def test_generate_from_prompt_tokens_rejects_logits_and_builder_together_for_zero_blocks(expect_error):
     def fail_prefill(*args, **kwargs):
         raise AssertionError("prefill should not run for conflicting logits inputs")
 
-    with pytest.raises(ValueError, match="either logits_fn or logits_fn_builder"):
+    with expect_error(ValueError, match="either logits_fn or logits_fn_builder"):
         generate_from_prompt_tokens(
             "model",
             "logits",
@@ -973,11 +982,11 @@ def test_generate_from_prompt_tokens_rejects_logits_and_builder_together_for_zer
         )
 
 
-def test_generate_from_prompt_tokens_rejects_negative_num_blocks_before_prefill():
+def test_generate_from_prompt_tokens_rejects_negative_num_blocks_before_prefill(expect_error):
     def fail_prefill(*args, **kwargs):
         raise AssertionError("prefill should not run for invalid num_blocks")
 
-    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+    with expect_error(ValueError, match="num_blocks must be non-negative"):
         generate_from_prompt_tokens(
             "model",
             "logits",
@@ -1044,12 +1053,12 @@ def test_generate_text_tokenizes_generates_and_decodes():
     assert calls[1][3]["stop_token_ids"] == 9
 
 
-def test_generate_text_rejects_negative_num_blocks_before_tokenize():
+def test_generate_text_rejects_negative_num_blocks_before_tokenize(expect_error):
     class _FailTokenizer:
         def apply_chat_template(self, *args, **kwargs):
             raise AssertionError("tokenizer should not run for invalid num_blocks")
 
-    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+    with expect_error(ValueError, match="num_blocks must be non-negative"):
         generate_text(
             "model",
             "logits",
@@ -1069,12 +1078,12 @@ def test_generate_text_rejects_negative_num_blocks_before_tokenize():
         (True, "integer"),
     ],
 )
-def test_generate_text_rejects_non_integer_num_blocks_before_tokenize(num_blocks, message):
+def test_generate_text_rejects_non_integer_num_blocks_before_tokenize(num_blocks, message, expect_error):
     class _FailTokenizer:
         def apply_chat_template(self, *args, **kwargs):
             raise AssertionError("tokenizer should not run for invalid num_blocks")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text(
             "model",
             "logits",
@@ -1087,12 +1096,12 @@ def test_generate_text_rejects_non_integer_num_blocks_before_tokenize(num_blocks
         )
 
 
-def test_generate_text_rejects_non_positive_canvas_length_before_tokenize():
+def test_generate_text_rejects_non_positive_canvas_length_before_tokenize(expect_error):
     class _FailTokenizer:
         def apply_chat_template(self, *args, **kwargs):
             raise AssertionError("tokenizer should not run for invalid canvas_length")
 
-    with pytest.raises(ValueError, match="canvas_length must be positive"):
+    with expect_error(ValueError, match="canvas_length must be positive"):
         generate_text(
             "model",
             "logits",
@@ -1112,12 +1121,12 @@ def test_generate_text_rejects_non_positive_canvas_length_before_tokenize():
         (True, "integer"),
     ],
 )
-def test_generate_text_rejects_non_integer_canvas_length_before_tokenize(canvas_length, message):
+def test_generate_text_rejects_non_integer_canvas_length_before_tokenize(canvas_length, message, expect_error):
     class _FailTokenizer:
         def apply_chat_template(self, *args, **kwargs):
             raise AssertionError("tokenizer should not run for invalid canvas_length")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text(
             "model",
             "logits",
@@ -1130,12 +1139,12 @@ def test_generate_text_rejects_non_integer_canvas_length_before_tokenize(canvas_
         )
 
 
-def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_tokenize():
+def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_tokenize(expect_error):
     class _FailTokenizer:
         def apply_chat_template(self, *args, **kwargs):
             raise AssertionError("tokenizer should not run for impossible length budget")
 
-    with pytest.raises(ValueError, match="num_blocks is too small"):
+    with expect_error(ValueError, match="num_blocks is too small"):
         generate_text(
             "model",
             "logits",
@@ -1156,12 +1165,12 @@ def test_generate_text_rejects_max_new_tokens_beyond_block_capacity_before_token
         (True, "integer"),
     ],
 )
-def test_generate_text_rejects_non_integer_max_new_tokens_before_tokenize(max_new_tokens, message):
+def test_generate_text_rejects_non_integer_max_new_tokens_before_tokenize(max_new_tokens, message, expect_error):
     class _FailTokenizer:
         def apply_chat_template(self, *args, **kwargs):
             raise AssertionError("tokenizer should not run for invalid max_new_tokens")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text(
             "model",
             "logits",
@@ -1369,11 +1378,11 @@ def test_generate_text_from_checkpoint_state_derives_num_blocks_from_max_new_tok
         (True, "integer"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_non_integer_max_new_tokens(max_new_tokens, message):
+def test_generate_text_from_checkpoint_state_rejects_non_integer_max_new_tokens(max_new_tokens, message, expect_error):
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid max_new_tokens")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -1673,11 +1682,13 @@ def test_generate_text_from_checkpoint_state_allows_zero_base_seed_for_default_h
         (-1, "host random token seed must be non-negative"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_invalid_base_seed_before_derived_hooks(seed, message):
+def test_generate_text_from_checkpoint_state_rejects_invalid_base_seed_before_derived_hooks(
+    seed, message, expect_error
+):
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid base seed")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -1925,7 +1936,9 @@ def test_generate_text_from_checkpoint_state_uses_tokenizer_eos_by_default():
         (torch.iinfo(torch.int32).max + 1, "fit int32"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_invalid_tokenizer_eos_before_builder(eos_token_id, message):
+def test_generate_text_from_checkpoint_state_rejects_invalid_tokenizer_eos_before_builder(
+    eos_token_id, message, expect_error
+):
     class _Tokenizer:
         pass
 
@@ -1934,7 +1947,7 @@ def test_generate_text_from_checkpoint_state_rejects_invalid_tokenizer_eos_befor
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid tokenizer eos")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             _Tokenizer(),
@@ -1983,11 +1996,13 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_eos():
         (torch.iinfo(torch.int32).max + 1, "fit int32"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_invalid_explicit_eos_before_builder(eos_token_id, message):
+def test_generate_text_from_checkpoint_state_rejects_invalid_explicit_eos_before_builder(
+    eos_token_id, message, expect_error
+):
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid explicit eos")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2048,8 +2063,8 @@ def test_generate_text_from_checkpoint_state_preserves_explicit_decode_kwargs():
     assert calls["generate"]["decode_kwargs"] == {"clean_up_tokenization_spaces": False}
 
 
-def test_generate_text_from_checkpoint_state_requires_canvas_source():
-    with pytest.raises(ValueError, match="init_canvas_fn"):
+def test_generate_text_from_checkpoint_state_requires_canvas_source(expect_error):
+    with expect_error(ValueError, match="init_canvas_fn"):
         generate_text_from_checkpoint_state(
             object(),
             "tokenizer",
@@ -2062,8 +2077,8 @@ def test_generate_text_from_checkpoint_state_requires_canvas_source():
         )
 
 
-def test_generate_text_from_checkpoint_state_requires_length_budget():
-    with pytest.raises(ValueError, match="num_blocks"):
+def test_generate_text_from_checkpoint_state_requires_length_budget(expect_error):
+    with expect_error(ValueError, match="num_blocks"):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2076,8 +2091,8 @@ def test_generate_text_from_checkpoint_state_requires_length_budget():
         )
 
 
-def test_generate_text_from_checkpoint_state_rejects_non_positive_canvas_length():
-    with pytest.raises(ValueError, match="canvas_length must be positive"):
+def test_generate_text_from_checkpoint_state_rejects_non_positive_canvas_length(expect_error):
+    with expect_error(ValueError, match="canvas_length must be positive"):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2098,11 +2113,11 @@ def test_generate_text_from_checkpoint_state_rejects_non_positive_canvas_length(
         (True, "integer"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_non_integer_canvas_length(canvas_length, message):
+def test_generate_text_from_checkpoint_state_rejects_non_integer_canvas_length(canvas_length, message, expect_error):
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid canvas_length")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2116,8 +2131,8 @@ def test_generate_text_from_checkpoint_state_rejects_non_integer_canvas_length(c
         )
 
 
-def test_generate_text_from_checkpoint_state_rejects_negative_num_blocks():
-    with pytest.raises(ValueError, match="num_blocks must be non-negative"):
+def test_generate_text_from_checkpoint_state_rejects_negative_num_blocks(expect_error):
+    with expect_error(ValueError, match="num_blocks must be non-negative"):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2138,11 +2153,11 @@ def test_generate_text_from_checkpoint_state_rejects_negative_num_blocks():
         (True, "integer"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_non_integer_num_blocks(num_blocks, message):
+def test_generate_text_from_checkpoint_state_rejects_non_integer_num_blocks(num_blocks, message, expect_error):
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid num_blocks")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2156,8 +2171,8 @@ def test_generate_text_from_checkpoint_state_rejects_non_integer_num_blocks(num_
         )
 
 
-def test_generate_text_from_checkpoint_state_rejects_max_new_tokens_beyond_explicit_blocks():
-    with pytest.raises(ValueError, match="num_blocks is too small"):
+def test_generate_text_from_checkpoint_state_rejects_max_new_tokens_beyond_explicit_blocks(expect_error):
+    with expect_error(ValueError, match="num_blocks is too small"):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2172,8 +2187,8 @@ def test_generate_text_from_checkpoint_state_rejects_max_new_tokens_beyond_expli
         )
 
 
-def test_generate_text_from_checkpoint_state_rejects_nonpositive_batch_before_seeded_hooks():
-    with pytest.raises(ValueError, match="batch_size must be positive"):
+def test_generate_text_from_checkpoint_state_rejects_nonpositive_batch_before_seeded_hooks(expect_error):
+    with expect_error(ValueError, match="batch_size must be positive"):
         generate_text_from_checkpoint_state(
             object(),
             object(),
@@ -2198,8 +2213,10 @@ def test_generate_text_from_checkpoint_state_rejects_nonpositive_batch_before_se
         (True, "integer"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_non_integer_batch_before_seeded_hooks(batch, message):
-    with pytest.raises(ValueError, match=message):
+def test_generate_text_from_checkpoint_state_rejects_non_integer_batch_before_seeded_hooks(
+    batch, message, expect_error
+):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             object(),
             object(),
@@ -2217,8 +2234,8 @@ def test_generate_text_from_checkpoint_state_rejects_non_integer_batch_before_se
         )
 
 
-def test_generate_text_from_checkpoint_state_rejects_nonpositive_vocab_before_seeded_hooks():
-    with pytest.raises(ValueError, match="vocab_size must be positive"):
+def test_generate_text_from_checkpoint_state_rejects_nonpositive_vocab_before_seeded_hooks(expect_error):
+    with expect_error(ValueError, match="vocab_size must be positive"):
         generate_text_from_checkpoint_state(
             object(),
             object(),
@@ -2236,11 +2253,11 @@ def test_generate_text_from_checkpoint_state_rejects_nonpositive_vocab_before_se
 
 
 @pytest.mark.parametrize("vocab_size", [1.5, True, "99"])
-def test_generate_text_from_checkpoint_state_rejects_non_integer_vocab_before_builder(vocab_size):
+def test_generate_text_from_checkpoint_state_rejects_non_integer_vocab_before_builder(vocab_size, expect_error):
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid vocab_size")
 
-    with pytest.raises(ValueError, match="vocab_size must be an integer"):
+    with expect_error(ValueError, match="vocab_size must be an integer"):
         generate_text_from_checkpoint_state(
             "model",
             "tokenizer",
@@ -2263,7 +2280,9 @@ def test_generate_text_from_checkpoint_state_rejects_non_integer_vocab_before_bu
         (0, "vocab_size must be positive"),
     ],
 )
-def test_generate_text_from_checkpoint_state_rejects_invalid_inferred_vocab_before_builder(vocab_size, message):
+def test_generate_text_from_checkpoint_state_rejects_invalid_inferred_vocab_before_builder(
+    vocab_size, message, expect_error
+):
     class _Tokenizer:
         pass
 
@@ -2272,7 +2291,7 @@ def test_generate_text_from_checkpoint_state_rejects_invalid_inferred_vocab_befo
     def fail_builder_factory(*args, **kwargs):
         raise AssertionError("logits builder should not run for invalid inferred vocab_size")
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generate_text_from_checkpoint_state(
             "model",
             _Tokenizer(),
@@ -2286,8 +2305,8 @@ def test_generate_text_from_checkpoint_state_rejects_invalid_inferred_vocab_befo
         )
 
 
-def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_noise():
-    with pytest.raises(ValueError, match="noise_tokens_fn requires vocab_size"):
+def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_noise(expect_error):
+    with expect_error(ValueError, match="noise_tokens_fn requires vocab_size"):
         generate_text_from_checkpoint_state(
             object(),
             object(),
@@ -2303,8 +2322,8 @@ def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_noise():
         )
 
 
-def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_gumbel():
-    with pytest.raises(ValueError, match="gumbel_noise_fn requires vocab_size"):
+def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_gumbel(expect_error):
+    with expect_error(ValueError, match="gumbel_noise_fn requires vocab_size"):
         generate_text_from_checkpoint_state(
             object(),
             object(),
@@ -2320,8 +2339,8 @@ def test_generate_text_from_checkpoint_state_requires_vocab_for_seeded_gumbel():
         )
 
 
-def test_generate_text_from_checkpoint_state_rejects_nonpositive_gumbel_seed():
-    with pytest.raises(ValueError, match="positive nonzero"):
+def test_generate_text_from_checkpoint_state_rejects_nonpositive_gumbel_seed(expect_error):
+    with expect_error(ValueError, match="positive nonzero"):
         generate_text_from_checkpoint_state(
             object(),
             object(),
@@ -2382,7 +2401,7 @@ def test_generation_sequences_allows_aligned_cache_prompt_len():
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1, 3]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_generation_sequences_rejects_invalid_prompt_token_ids(prompt_tokens, message):
+def test_generation_sequences_rejects_invalid_prompt_token_ids(prompt_tokens, message, expect_error):
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
         prompt_len=3,
@@ -2390,7 +2409,7 @@ def test_generation_sequences_rejects_invalid_prompt_token_ids(prompt_tokens, me
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generation_sequences(prompt_tokens, generation)
 
 
@@ -2402,7 +2421,7 @@ def test_generation_sequences_rejects_invalid_prompt_token_ids(prompt_tokens, me
         (torch.tensor([[4, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_generation_sequences_rejects_invalid_generated_token_ids(generated, message):
+def test_generation_sequences_rejects_invalid_generated_token_ids(generated, message, expect_error):
     generation = G.DeviceGeneration(
         generated=generated,
         prompt_len=3,
@@ -2410,11 +2429,11 @@ def test_generation_sequences_rejects_invalid_generated_token_ids(generated, mes
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
-def test_generation_sequences_rejects_prompt_len_mismatch():
+def test_generation_sequences_rejects_prompt_len_mismatch(expect_error):
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
         prompt_len=2,
@@ -2422,12 +2441,12 @@ def test_generation_sequences_rejects_prompt_len_mismatch():
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match="prompt_tokens length"):
+    with expect_error(ValueError, match="prompt_tokens length"):
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
 @pytest.mark.parametrize("prompt_len", [3.0, True])
-def test_generation_sequences_rejects_non_integer_prompt_len(prompt_len):
+def test_generation_sequences_rejects_non_integer_prompt_len(prompt_len, expect_error):
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
         prompt_len=prompt_len,
@@ -2435,11 +2454,11 @@ def test_generation_sequences_rejects_non_integer_prompt_len(prompt_len):
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match="generation.prompt_len"):
+    with expect_error(ValueError, match="generation.prompt_len"):
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
-def test_generation_sequences_rejects_next_pos_mismatch():
+def test_generation_sequences_rejects_next_pos_mismatch(expect_error):
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
         prompt_len=3,
@@ -2447,12 +2466,12 @@ def test_generation_sequences_rejects_next_pos_mismatch():
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match="generation.next_pos"):
+    with expect_error(ValueError, match="generation.next_pos"):
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
 @pytest.mark.parametrize("next_pos", [5.0, True])
-def test_generation_sequences_rejects_non_integer_next_pos(next_pos):
+def test_generation_sequences_rejects_non_integer_next_pos(next_pos, expect_error):
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5]], dtype=torch.long),
         prompt_len=3,
@@ -2460,7 +2479,7 @@ def test_generation_sequences_rejects_non_integer_next_pos(next_pos):
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match="generation.next_pos"):
+    with expect_error(ValueError, match="generation.next_pos"):
         generation_sequences(torch.tensor([[1, 2, 3]], dtype=torch.long), generation)
 
 
@@ -2529,7 +2548,7 @@ def test_generation_token_ids_can_return_full_trimmed_sequences():
         ([9, torch.iinfo(torch.int32).max + 1], "fit int32"),
     ],
 )
-def test_generation_token_ids_rejects_invalid_eos_token_ids(eos_token_id, message):
+def test_generation_token_ids_rejects_invalid_eos_token_ids(eos_token_id, message, expect_error):
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(
         generated=torch.tensor([[4, 5, 9, 6]], dtype=torch.long),
@@ -2538,7 +2557,7 @@ def test_generation_token_ids_rejects_invalid_eos_token_ids(eos_token_id, messag
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         generation_token_ids(prompt_tokens, generation, eos_token_id=eos_token_id)
 
 
@@ -2550,7 +2569,7 @@ def test_generation_token_ids_rejects_invalid_eos_token_ids(eos_token_id, messag
         (True, "integer"),
     ],
 )
-def test_decode_generation_rejects_invalid_max_new_tokens(max_new_tokens, message):
+def test_decode_generation_rejects_invalid_max_new_tokens(max_new_tokens, message, expect_error):
     tokenizer = _FakeTokenizer()
     prompt_tokens = torch.tensor([[1, 2, 3]], dtype=torch.long)
     generation = G.DeviceGeneration(
@@ -2560,7 +2579,7 @@ def test_decode_generation_rejects_invalid_max_new_tokens(max_new_tokens, messag
         trajectories=[],
     )
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         decode_generation(tokenizer, prompt_tokens, generation, max_new_tokens=max_new_tokens)
 
 
@@ -2602,8 +2621,8 @@ def test_host_canvas_to_device_uses_controller_token_layout(monkeypatch):
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_host_canvas_to_device_rejects_invalid_token_ids(canvas_tokens, message):
-    with pytest.raises(ValueError, match=message):
+def test_host_canvas_to_device_rejects_invalid_token_ids(canvas_tokens, message, expect_error):
+    with expect_error(ValueError, match=message):
         host_canvas_to_device("mesh", canvas_tokens)
 
 
@@ -2637,10 +2656,10 @@ def test_host_gumbel_noise_to_device_uses_logits_layout(monkeypatch):
     assert kwargs["mesh_mapper"] == ("replicate", kwargs["device"])
 
 
-def test_host_gumbel_noise_to_device_rejects_bad_shape():
-    with pytest.raises(ValueError, match="gumbel_noise"):
+def test_host_gumbel_noise_to_device_rejects_bad_shape(expect_error):
+    with expect_error(ValueError, match="gumbel_noise"):
         host_gumbel_noise_to_device("mesh", torch.zeros(1, 2, 3, 4, 5))
-    with pytest.raises(ValueError, match="gumbel_noise"):
+    with expect_error(ValueError, match="gumbel_noise"):
         host_gumbel_noise_to_device("mesh", torch.zeros(1, 2, 4, 6))
 
 
@@ -2655,8 +2674,8 @@ def test_host_gumbel_noise_to_device_rejects_bad_shape():
         torch.zeros(1, 1, 4, 0),
     ],
 )
-def test_host_gumbel_noise_to_device_rejects_empty_dimensions(noise):
-    with pytest.raises(ValueError, match="dimensions must be positive"):
+def test_host_gumbel_noise_to_device_rejects_empty_dimensions(noise, expect_error):
+    with expect_error(ValueError, match="dimensions must be positive"):
         host_gumbel_noise_to_device("mesh", noise)
 
 
@@ -2697,8 +2716,8 @@ def test_host_tokens_to_device_uses_embedding_token_layout(monkeypatch):
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_host_tokens_to_device_rejects_invalid_token_ids(tokens, message):
-    with pytest.raises(ValueError, match=message):
+def test_host_tokens_to_device_rejects_invalid_token_ids(tokens, message, expect_error):
+    with expect_error(ValueError, match=message):
         host_tokens_to_device("mesh", tokens)
 
 
@@ -2756,8 +2775,8 @@ def test_tokenize_prompt_accepts_existing_token_tensor():
         (torch.empty((1, 0), dtype=torch.long), "length"),
     ],
 )
-def test_tokenize_prompt_rejects_empty_token_ids(token_ids, message):
-    with pytest.raises(ValueError, match=message):
+def test_tokenize_prompt_rejects_empty_token_ids(token_ids, message, expect_error):
+    with expect_error(ValueError, match=message):
         tokenize_prompt(object(), token_ids)
 
 
@@ -2769,8 +2788,8 @@ def test_tokenize_prompt_rejects_empty_token_ids(token_ids, message):
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_tokenize_prompt_rejects_invalid_token_ids(token_ids, message):
-    with pytest.raises(ValueError, match=message):
+def test_tokenize_prompt_rejects_invalid_token_ids(token_ids, message, expect_error):
+    with expect_error(ValueError, match=message):
         tokenize_prompt(object(), token_ids)
 
 
@@ -2859,10 +2878,10 @@ def test_make_host_canvas_init_fn_replays_fixed_canvases(monkeypatch):
     assert torch.equal(calls[2][1], torch.tensor([[4, 5]]))
 
 
-def test_make_host_canvas_init_fn_rejects_bad_replay_shapes():
-    with pytest.raises(ValueError, match="host_canvases"):
+def test_make_host_canvas_init_fn_rejects_bad_replay_shapes(expect_error):
+    with expect_error(ValueError, match="host_canvases"):
         make_host_canvas_init_fn("mesh", [torch.tensor([4, 5])])
-    with pytest.raises(ValueError, match="host_canvases"):
+    with expect_error(ValueError, match="host_canvases"):
         make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]]), torch.tensor([[6, 7, 8]])])
 
 
@@ -2874,23 +2893,23 @@ def test_make_host_canvas_init_fn_rejects_bad_replay_shapes():
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_make_host_canvas_init_fn_rejects_invalid_replay_token_ids(canvas, message):
-    with pytest.raises(ValueError, match=message):
+def test_make_host_canvas_init_fn_rejects_invalid_replay_token_ids(canvas, message, expect_error):
+    with expect_error(ValueError, match=message):
         make_host_canvas_init_fn("mesh", [canvas])
 
 
-def test_make_host_canvas_init_fn_rejects_bad_block_index():
+def test_make_host_canvas_init_fn_rejects_bad_block_index(expect_error):
     init_fn = make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]])])
 
-    with pytest.raises(IndexError, match="host canvas replay block index 1 out of range for 1 blocks"):
+    with expect_error(IndexError, match="host canvas replay block index 1 out of range for 1 blocks"):
         init_fn(1, 32)
 
 
 @pytest.mark.parametrize("block_idx", [0.5, True])
-def test_make_host_canvas_init_fn_rejects_non_integer_block_index(block_idx):
+def test_make_host_canvas_init_fn_rejects_non_integer_block_index(block_idx, expect_error):
     init_fn = make_host_canvas_init_fn("mesh", [torch.tensor([[4, 5]])])
 
-    with pytest.raises(IndexError, match="host canvas replay block index must be an integer"):
+    with expect_error(IndexError, match="host canvas replay block index must be an integer"):
         init_fn(block_idx, 32)
 
 
@@ -2976,11 +2995,11 @@ def test_seeded_host_token_helpers_allow_zero_seed(monkeypatch):
         make_seeded_gumbel_noise_fn,
     ],
 )
-def test_seeded_generation_helpers_reject_non_integer_shapes(factory, kwargs, message):
+def test_seeded_generation_helpers_reject_non_integer_shapes(factory, kwargs, message, expect_error):
     args = {"batch": 1, "canvas_len": 4, "vocab_size": 16, "seed": 123}
     args.update(kwargs)
 
-    with pytest.raises(ValueError, match=message):
+    with expect_error(ValueError, match=message):
         factory("mesh", **args)
 
 
@@ -2999,8 +3018,8 @@ def test_seeded_generation_helpers_reject_non_integer_shapes(factory, kwargs, me
         make_seeded_host_noise_tokens_fn,
     ],
 )
-def test_seeded_host_token_helpers_reject_invalid_seeds(factory, seed, message):
-    with pytest.raises(ValueError, match=message):
+def test_seeded_host_token_helpers_reject_invalid_seeds(factory, seed, message, expect_error):
+    with expect_error(ValueError, match=message):
         factory("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)
 
 
@@ -3030,12 +3049,12 @@ def test_make_host_noise_tokens_fn_replays_fixed_tokens(monkeypatch):
     assert torch.equal(calls[3][1], torch.tensor([[7, 8, 9]]))
 
 
-def test_make_host_noise_tokens_fn_rejects_bad_shapes():
-    with pytest.raises(ValueError, match="host_canvases"):
+def test_make_host_noise_tokens_fn_rejects_bad_shapes(expect_error):
+    with expect_error(ValueError, match="host_canvases"):
         make_host_noise_tokens_fn("mesh", [[torch.tensor([1, 2, 3])]])
-    with pytest.raises(ValueError, match="host_canvases"):
+    with expect_error(ValueError, match="host_canvases"):
         make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]]), torch.tensor([[4, 5]])]])
-    with pytest.raises(ValueError, match="host_noise_tokens"):
+    with expect_error(ValueError, match="host_noise_tokens"):
         make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])], [torch.tensor([[4, 5]])]])
 
 
@@ -3047,33 +3066,33 @@ def test_make_host_noise_tokens_fn_rejects_bad_shapes():
         (torch.tensor([[1, torch.iinfo(torch.int32).max + 1]], dtype=torch.long), "fit int32"),
     ],
 )
-def test_make_host_noise_tokens_fn_rejects_invalid_replay_token_ids(tokens, message):
-    with pytest.raises(ValueError, match=message):
+def test_make_host_noise_tokens_fn_rejects_invalid_replay_token_ids(tokens, message, expect_error):
+    with expect_error(ValueError, match=message):
         make_host_noise_tokens_fn("mesh", [[tokens]])
 
 
-def test_make_host_noise_tokens_fn_rejects_bad_block_or_step_index():
+def test_make_host_noise_tokens_fn_rejects_bad_block_or_step_index(expect_error):
     noise_fn = make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])]])
 
-    with pytest.raises(IndexError, match="host noise-token replay block index 1 out of range for 1 blocks"):
+    with expect_error(IndexError, match="host noise-token replay block index 1 out of range for 1 blocks"):
         noise_fn(1)
-    with pytest.raises(IndexError, match="host noise-token replay step index 1 out of range for block 0 with 1 steps"):
+    with expect_error(IndexError, match="host noise-token replay step index 1 out of range for block 0 with 1 steps"):
         noise_fn(0)(1)
 
 
 @pytest.mark.parametrize("block_idx", [0.5, True])
-def test_make_host_noise_tokens_fn_rejects_non_integer_block_index(block_idx):
+def test_make_host_noise_tokens_fn_rejects_non_integer_block_index(block_idx, expect_error):
     noise_fn = make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])]])
 
-    with pytest.raises(IndexError, match="host noise-token replay block index must be an integer"):
+    with expect_error(IndexError, match="host noise-token replay block index must be an integer"):
         noise_fn(block_idx)
 
 
 @pytest.mark.parametrize("step", [0.5, True])
-def test_make_host_noise_tokens_fn_rejects_non_integer_step_index(step):
+def test_make_host_noise_tokens_fn_rejects_non_integer_step_index(step, expect_error):
     noise_fn = make_host_noise_tokens_fn("mesh", [[torch.tensor([[1, 2, 3]])]])
 
-    with pytest.raises(IndexError, match="host noise-token replay step index must be an integer"):
+    with expect_error(IndexError, match="host noise-token replay step index must be an integer"):
         noise_fn(0)(step)
 
 
@@ -3103,10 +3122,10 @@ def test_make_host_gumbel_noise_fn_replays_fixed_noise(monkeypatch):
     assert torch.equal(calls[3][1], torch.full((1, 4, 8), 3.0))
 
 
-def test_make_host_gumbel_noise_fn_rejects_bad_shape():
-    with pytest.raises(ValueError, match="gumbel_noise"):
+def test_make_host_gumbel_noise_fn_rejects_bad_shape(expect_error):
+    with expect_error(ValueError, match="gumbel_noise"):
         make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3, 4, 5)]])
-    with pytest.raises(ValueError, match="host_gumbel_noise"):
+    with expect_error(ValueError, match="host_gumbel_noise"):
         make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 4, 8)], [torch.zeros(1, 4, 9)]])
 
 
@@ -3121,8 +3140,8 @@ def test_make_host_gumbel_noise_fn_rejects_bad_shape():
         torch.zeros(1, 1, 4, 0),
     ],
 )
-def test_make_host_gumbel_noise_fn_rejects_empty_dimensions(noise):
-    with pytest.raises(ValueError, match="dimensions must be positive"):
+def test_make_host_gumbel_noise_fn_rejects_empty_dimensions(noise, expect_error):
+    with expect_error(ValueError, match="dimensions must be positive"):
         make_host_gumbel_noise_fn("mesh", [[noise]])
 
 
@@ -3141,28 +3160,28 @@ def test_make_host_gumbel_noise_fn_allows_equivalent_3d_and_4d_shapes(monkeypatc
     assert calls == [("mesh", (1, 4, 8)), ("mesh", (1, 1, 4, 8))]
 
 
-def test_make_host_gumbel_noise_fn_rejects_bad_block_or_step_index():
+def test_make_host_gumbel_noise_fn_rejects_bad_block_or_step_index(expect_error):
     noise_fn = make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3)]])
 
-    with pytest.raises(IndexError, match="host gumbel replay block index 1 out of range for 1 blocks"):
+    with expect_error(IndexError, match="host gumbel replay block index 1 out of range for 1 blocks"):
         noise_fn(1)
-    with pytest.raises(IndexError, match="host gumbel replay step index 1 out of range for block 0 with 1 steps"):
+    with expect_error(IndexError, match="host gumbel replay step index 1 out of range for block 0 with 1 steps"):
         noise_fn(0)(1)
 
 
 @pytest.mark.parametrize("block_idx", [0.5, True])
-def test_make_host_gumbel_noise_fn_rejects_non_integer_block_index(block_idx):
+def test_make_host_gumbel_noise_fn_rejects_non_integer_block_index(block_idx, expect_error):
     noise_fn = make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3)]])
 
-    with pytest.raises(IndexError, match="host gumbel replay block index must be an integer"):
+    with expect_error(IndexError, match="host gumbel replay block index must be an integer"):
         noise_fn(block_idx)
 
 
 @pytest.mark.parametrize("step", [0.5, True])
-def test_make_host_gumbel_noise_fn_rejects_non_integer_step_index(step):
+def test_make_host_gumbel_noise_fn_rejects_non_integer_step_index(step, expect_error):
     noise_fn = make_host_gumbel_noise_fn("mesh", [[torch.zeros(1, 2, 3)]])
 
-    with pytest.raises(IndexError, match="host gumbel replay step index must be an integer"):
+    with expect_error(IndexError, match="host gumbel replay step index must be an integer"):
         noise_fn(0)(step)
 
 
@@ -3196,20 +3215,20 @@ def test_make_seeded_chunked_gumbel_noise_fn_generates_block_step_descriptors():
 
 
 @pytest.mark.parametrize("seed", [0, -3])
-def test_make_seeded_chunked_gumbel_noise_fn_rejects_nonpositive_seed(seed):
-    with pytest.raises(ValueError, match="positive nonzero"):
+def test_make_seeded_chunked_gumbel_noise_fn_rejects_nonpositive_seed(seed, expect_error):
+    with expect_error(ValueError, match="positive nonzero"):
         make_seeded_chunked_gumbel_noise_fn(seed=seed)
 
 
 @pytest.mark.parametrize("vocab_chunk_size", [0, -3])
-def test_make_seeded_chunked_gumbel_noise_fn_rejects_nonpositive_chunk_size(vocab_chunk_size):
-    with pytest.raises(ValueError, match="vocab_chunk_size"):
+def test_make_seeded_chunked_gumbel_noise_fn_rejects_nonpositive_chunk_size(vocab_chunk_size, expect_error):
+    with expect_error(ValueError, match="vocab_chunk_size"):
         make_seeded_chunked_gumbel_noise_fn(seed=31, vocab_chunk_size=vocab_chunk_size)
 
 
 @pytest.mark.parametrize("seed", [0, -3])
-def test_make_seeded_gumbel_noise_fn_rejects_nonpositive_seed(seed):
-    with pytest.raises(ValueError, match="positive nonzero"):
+def test_make_seeded_gumbel_noise_fn_rejects_nonpositive_seed(seed, expect_error):
+    with expect_error(ValueError, match="positive nonzero"):
         make_seeded_gumbel_noise_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)
 
 
@@ -3244,6 +3263,6 @@ def test_make_seeded_host_gumbel_noise_fn_generates_deterministic_noise(monkeypa
 
 
 @pytest.mark.parametrize("seed", [-1, 1.5, True])
-def test_make_seeded_host_gumbel_noise_fn_rejects_invalid_seed(seed):
-    with pytest.raises(ValueError):
+def test_make_seeded_host_gumbel_noise_fn_rejects_invalid_seed(seed, expect_error):
+    with expect_error(ValueError):
         make_seeded_host_gumbel_noise_fn("mesh", batch=1, canvas_len=4, vocab_size=16, seed=seed)

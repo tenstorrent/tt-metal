@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "denoise-step-k04-retry",
+  "max_model_len": 4096,
+  "prompt_length_targets": [
+    256
+  ],
+  "blocks_requested": 4,
+  "warmup_requests_per_target": 1,
+  "measured_repetitions_per_target": 1,
+  "require_no_compile_markers": true,
+  "canvas_length": 256,
+  "max_denoise_steps": 4,
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "4096",
+      "--max-num-batched-tokens",
+      "4096",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":10737418240}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_VLLM_MAX_DENOISE_STEPS": "4",
+      "DG_TRACE_REGION_SIZE": "10737418240",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 10737418240
+      }
+    },
+    "log_path": "/home/zni/dg-agent-runs/dg-vllm-step-k04-20260710-retry.log",
+    "pid": 1864407,
+    "startup_s": 36.016591,
+    "health": "ok",
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "diffusiongemma-26B-A4B-it",
+          "object": "model",
+          "created": 1783706379,
+          "owned_by": "vllm",
+          "root": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+          "parent": null,
+          "max_model_len": 4096,
+          "permission": [
+            {
+              "id": "modelperm-b3285441a330d108",
+              "object": "model_permission",
+              "created": 1783706379,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "model_build": {
+      "dram": {
+        "free_gib": 8.405533,
+        "total_gib": 21.867187,
+        "used_gib": 13.461654
+      },
+      "event": "model_build",
+      "gumbel_mode": "argmax",
+      "max_denoise_steps": 4,
+      "max_seq_len": 4096,
+      "model_build_s": 14.873362,
+      "num_layers": 30,
+      "selfcond_logits_l1": "chain",
+      "selfcond_prechunk_embed": "1",
+      "trace_region_size_env": 10737418240
+    },
+    "shutdown": {
+      "method": "SIGINT",
+      "returncode": 0
+    },
+    "log_bytes": 31619,
+    "log_sha256": "7d2ba3e37be1cfbc285e93617fb3ec8bf340166d2502a6faa1e88b8e83b2621f"
+  },
+  "warmups": [
+    {
+      "logical_prompt_tokens": 256,
+      "warmup_index": 0,
+      "block_latencies_s": [
+        12.165014,
+        2.266253,
+        2.268566,
+        2.244081
+      ],
+      "compile_markers": 0,
+      "trace_released": true
+    }
+  ],
+  "requests": [
+    {
+      "target_logical_prompt_tokens": 256,
+      "actual_logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "repeat_index": 0,
+      "max_denoise_steps": 4,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 21,
+        "source_token_count": 442,
+        "source_char_count": 2982,
+        "prompt_token_sha256": "4a63704a2a0d8fec725ef609ccc8c55aec60dad1d1d8daf4c444b6e673713479"
+      },
+      "request_wall_s": 23.338857,
+      "prefill_s": 2.920321,
+      "block0_ttft_s": 16.233498,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 11.451336,
+          "denoise_latency_s": 10.114308,
+          "commit_latency_s": 1.336705,
+          "denoise_steps": 4,
+          "committed_tokens": 256,
+          "start_pos": 256,
+          "next_pos": 512,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 2.368354,
+          "denoise_latency_s": 1.007228,
+          "commit_latency_s": 1.360975,
+          "denoise_steps": 4,
+          "committed_tokens": 256,
+          "start_pos": 512,
+          "next_pos": 768,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 2.351974,
+          "denoise_latency_s": 1.007077,
+          "commit_latency_s": 1.34474,
+          "denoise_steps": 4,
+          "committed_tokens": 256,
+          "start_pos": 768,
+          "next_pos": 1024,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 2.372304,
+          "denoise_latency_s": 1.00689,
+          "commit_latency_s": 1.365258,
+          "denoise_steps": 4,
+          "committed_tokens": 256,
+          "start_pos": 1024,
+          "next_pos": 1280,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          2.368354,
+          2.351974,
+          2.372304
+        ],
+        "mean_s": 2.364211,
+        "median_s": 2.368354,
+        "p99_s": 2.372304,
+        "pstdev_s": 0.008802,
+        "blocks_per_s": 0.422974,
+        "output_tokens_per_s": 108.281383,
+        "denoise_mean_s": 1.007065,
+        "denoise_ms_per_step": 251.76625,
+        "commit_mean_s": 1.356991,
+        "commit_p99_s": 1.365258,
+        "p99_method": "nearest-rank",
+        "samples": 3
+      },
+      "compile_markers_in_request": 0,
+      "denoise_steps_per_block": [
+        4,
+        4,
+        4,
+        4
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        256,
+        512,
+        768,
+        1024,
+        1280
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 4,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 16,
+        "steady_execute_trace_calls": 12,
+        "trace_ids": [
+          "MeshTraceId(4)",
+          "MeshTraceId(5)",
+          "MeshTraceId(6)",
+          "MeshTraceId(7)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.975269,
+          "total_gib": 21.867187,
+          "used_gib": 14.891917
+        },
+        "after_request_release": {
+          "free_gib": 8.385975,
+          "total_gib": 21.867187,
+          "used_gib": 13.481212
+        }
+      },
+      "response": {
+        "id": "cmpl-b8c77b6344a3a891",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 256,
+          "total_tokens": 1280,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "fbb4d95a54d418d2d81a27ee71953aa9941a384bfb2b1b0c41cece2fecf84eea",
+        "text_chars": 919,
+        "text_sha256": "522d01d43d9fe26e8818c779f9a85113fb129f5b78d457f8603ca14650086d3d"
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "max_denoise_steps": 4,
+      "measured_requests": 1,
+      "steady_block_samples": 3,
+      "mean_s": 2.364211,
+      "median_s": 2.368354,
+      "p99_s": 2.372304,
+      "p99_method": "nearest-rank",
+      "pstdev_s": 0.008802,
+      "blocks_per_s": 0.422974,
+      "output_tokens_per_s": 108.281383,
+      "denoise_mean_s": 1.007065,
+      "denoise_ms_per_step": 251.76625,
+      "commit_mean_s": 1.356991,
+      "commit_p99_s": 1.365258,
+      "compile_markers_in_timed_requests": 0
+    }
+  ]
+}

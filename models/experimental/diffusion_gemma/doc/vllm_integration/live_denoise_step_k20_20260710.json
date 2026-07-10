@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "denoise-step-k20",
+  "max_model_len": 4096,
+  "prompt_length_targets": [
+    256
+  ],
+  "blocks_requested": 4,
+  "warmup_requests_per_target": 1,
+  "measured_repetitions_per_target": 1,
+  "require_no_compile_markers": true,
+  "canvas_length": 256,
+  "max_denoise_steps": 20,
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "4096",
+      "--max-num-batched-tokens",
+      "4096",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":10737418240}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_VLLM_MAX_DENOISE_STEPS": "20",
+      "DG_TRACE_REGION_SIZE": "10737418240",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 10737418240
+      }
+    },
+    "log_path": "/home/zni/dg-agent-runs/dg-vllm-step-k20-20260710.log",
+    "pid": 1867052,
+    "startup_s": 36.01646,
+    "health": "ok",
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "diffusiongemma-26B-A4B-it",
+          "object": "model",
+          "created": 1783707086,
+          "owned_by": "vllm",
+          "root": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+          "parent": null,
+          "max_model_len": 4096,
+          "permission": [
+            {
+              "id": "modelperm-bf15047227928f81",
+              "object": "model_permission",
+              "created": 1783707086,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "model_build": {
+      "dram": {
+        "free_gib": 8.405533,
+        "total_gib": 21.867187,
+        "used_gib": 13.461654
+      },
+      "event": "model_build",
+      "gumbel_mode": "argmax",
+      "max_denoise_steps": 20,
+      "max_seq_len": 4096,
+      "model_build_s": 15.277496,
+      "num_layers": 30,
+      "selfcond_logits_l1": "chain",
+      "selfcond_prechunk_embed": "1",
+      "trace_region_size_env": 10737418240
+    },
+    "shutdown": {
+      "method": "SIGINT",
+      "returncode": 0
+    },
+    "log_bytes": 36215,
+    "log_sha256": "f1e77c32b82dfec01d30d63f38f543e4f0ef9ae44aaa5f3028ddcdef9da2052a"
+  },
+  "warmups": [
+    {
+      "logical_prompt_tokens": 256,
+      "warmup_index": 0,
+      "block_latencies_s": [
+        51.257141,
+        6.433599,
+        6.411853,
+        6.602444
+      ],
+      "compile_markers": 0,
+      "trace_released": true
+    }
+  ],
+  "requests": [
+    {
+      "target_logical_prompt_tokens": 256,
+      "actual_logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "repeat_index": 0,
+      "max_denoise_steps": 20,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 21,
+        "source_token_count": 442,
+        "source_char_count": 2982,
+        "prompt_token_sha256": "4a63704a2a0d8fec725ef609ccc8c55aec60dad1d1d8daf4c444b6e673713479"
+      },
+      "request_wall_s": 78.871293,
+      "prefill_s": 2.989163,
+      "block0_ttft_s": 58.13373,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 53.269287,
+          "denoise_latency_s": 51.155768,
+          "commit_latency_s": 2.113245,
+          "denoise_steps": 20,
+          "committed_tokens": 256,
+          "start_pos": 256,
+          "next_pos": 512,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 6.896323,
+          "denoise_latency_s": 5.025435,
+          "commit_latency_s": 1.870735,
+          "denoise_steps": 20,
+          "committed_tokens": 256,
+          "start_pos": 512,
+          "next_pos": 768,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 6.933608,
+          "denoise_latency_s": 5.025823,
+          "commit_latency_s": 1.90762,
+          "denoise_steps": 20,
+          "committed_tokens": 256,
+          "start_pos": 768,
+          "next_pos": 1024,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 6.891516,
+          "denoise_latency_s": 5.027474,
+          "commit_latency_s": 1.863868,
+          "denoise_steps": 20,
+          "committed_tokens": 256,
+          "start_pos": 1024,
+          "next_pos": 1280,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          6.896323,
+          6.933608,
+          6.891516
+        ],
+        "mean_s": 6.907149,
+        "median_s": 6.896323,
+        "p99_s": 6.933608,
+        "pstdev_s": 0.018812,
+        "blocks_per_s": 0.144778,
+        "output_tokens_per_s": 37.063049,
+        "denoise_mean_s": 5.026244,
+        "denoise_ms_per_step": 251.3122,
+        "commit_mean_s": 1.880741,
+        "commit_p99_s": 1.90762,
+        "p99_method": "nearest-rank",
+        "samples": 3
+      },
+      "compile_markers_in_request": 0,
+      "denoise_steps_per_block": [
+        20,
+        20,
+        20,
+        20
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        256,
+        512,
+        768,
+        1024,
+        1280
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 20,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 80,
+        "steady_execute_trace_calls": 60,
+        "trace_ids": [
+          "MeshTraceId(20)",
+          "MeshTraceId(21)",
+          "MeshTraceId(22)",
+          "MeshTraceId(23)",
+          "MeshTraceId(24)",
+          "MeshTraceId(25)",
+          "MeshTraceId(26)",
+          "MeshTraceId(27)",
+          "MeshTraceId(28)",
+          "MeshTraceId(29)",
+          "MeshTraceId(30)",
+          "MeshTraceId(31)",
+          "MeshTraceId(32)",
+          "MeshTraceId(33)",
+          "MeshTraceId(34)",
+          "MeshTraceId(35)",
+          "MeshTraceId(36)",
+          "MeshTraceId(37)",
+          "MeshTraceId(38)",
+          "MeshTraceId(39)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.974781,
+          "total_gib": 21.867187,
+          "used_gib": 14.892406
+        },
+        "after_request_release": {
+          "free_gib": 8.385975,
+          "total_gib": 21.867187,
+          "used_gib": 13.481212
+        }
+      },
+      "response": {
+        "id": "cmpl-a633b58141606824",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 256,
+          "total_tokens": 1280,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "dd8d1d5bb1d5923b649eb59694b5f7994b54951d67f0fb8e6d85aad4f43bdbe5",
+        "text_chars": 1043,
+        "text_sha256": "628516fad626552ddaf1f7012118c25c376552a64fda2281ab8c655d9e577dc9"
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "max_denoise_steps": 20,
+      "measured_requests": 1,
+      "steady_block_samples": 3,
+      "mean_s": 6.907149,
+      "median_s": 6.896323,
+      "p99_s": 6.933608,
+      "p99_method": "nearest-rank",
+      "pstdev_s": 0.018812,
+      "blocks_per_s": 0.144778,
+      "output_tokens_per_s": 37.063049,
+      "denoise_mean_s": 5.026244,
+      "denoise_ms_per_step": 251.3122,
+      "commit_mean_s": 1.880741,
+      "commit_p99_s": 1.90762,
+      "compile_markers_in_timed_requests": 0
+    }
+  ]
+}

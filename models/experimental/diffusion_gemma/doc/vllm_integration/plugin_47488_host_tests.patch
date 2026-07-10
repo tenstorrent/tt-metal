@@ -1,0 +1,139 @@
+# tenstorrent/vllm (fork) — host-only #47488 block-contract tests
+# Target repo: github.com/tenstorrent/vllm (branch dev, base 6b4a3a7)
+# Target file: plugins/vllm-tt-plugin/tests/test_lane_model_runner.py
+# Purpose: directly test 256-token runner writes, exact/overrun capacity,
+# scheduler placeholder/computed-token accounting after full and stop-trimmed
+# block commits, and request-owned resource release.
+# Apply with: git apply --unidiff-zero plugin_47488_host_tests.patch
+#
+diff --git a/plugins/vllm-tt-plugin/tests/test_lane_model_runner.py b/plugins/vllm-tt-plugin/tests/test_lane_model_runner.py
+index 8fdba85..231aab1 100644
+--- a/plugins/vllm-tt-plugin/tests/test_lane_model_runner.py
++++ b/plugins/vllm-tt-plugin/tests/test_lane_model_runner.py
+@@ -13,0 +14 @@ from types import SimpleNamespace
++import numpy as np
+@@ -24,0 +26 @@ from vllm_tt_plugin.model_runner import TTModelRunner
++from vllm_tt_plugin.scheduler import TTScheduler
+@@ -25,0 +28 @@ from vllm_tt_plugin.model_runner import TTModelRunner
++from vllm.v1.core.sched.scheduler import Scheduler
+@@ -26,0 +30 @@ from vllm.v1.core.sched.output import SchedulerOutput
++from vllm.v1.request import RequestStatus
+@@ -69,0 +74,118 @@ def _capturing_host_sampler(captured: dict):
++def test_finished_request_releases_model_resources_before_row_removal():
++    released = []
++    runner = SimpleNamespace(
++        input_batch=SimpleNamespace(req_id_to_index={"req-0": 3}),
++        model=SimpleNamespace(release_request=released.append),
++    )
++
++    TTModelRunner._release_finished_model_request(runner, "req-0")
++
++    assert released == [3]
++
++
++def test_block_output_updates_full_runner_state_at_exact_capacity():
++    output_tokens = []
++    runner = SimpleNamespace(
++        input_batch=SimpleNamespace(
++            num_reqs=1,
++            num_tokens=np.array([0], dtype=np.int32),
++            token_ids_cpu=np.zeros((1, MAX_MODEL_LEN), dtype=np.int32),
++            req_output_token_ids=[output_tokens],
++        ),
++        model_config=SimpleNamespace(max_model_len=MAX_MODEL_LEN),
++    )
++    block = torch.arange(MAX_MODEL_LEN, dtype=torch.int32).reshape(1, -1)
++
++    TTModelRunner._apply_sampled_tokens_to_state(runner, block)
++
++    assert runner.input_batch.num_tokens.tolist() == [MAX_MODEL_LEN]
++    assert runner.input_batch.token_ids_cpu[0].tolist() == list(range(MAX_MODEL_LEN))
++    assert output_tokens == list(range(MAX_MODEL_LEN))
++
++
++def test_block_output_rejects_max_length_overrun_before_state_write():
++    output_tokens = []
++    runner = SimpleNamespace(
++        input_batch=SimpleNamespace(
++            num_reqs=1,
++            num_tokens=np.array([1], dtype=np.int32),
++            token_ids_cpu=np.zeros((1, MAX_MODEL_LEN), dtype=np.int32),
++            req_output_token_ids=[output_tokens],
++        ),
++        model_config=SimpleNamespace(max_model_len=MAX_MODEL_LEN),
++    )
++    block = torch.arange(MAX_MODEL_LEN, dtype=torch.int32).reshape(1, -1)
++
++    with pytest.raises(AssertionError, match="exceed the max model length"):
++        TTModelRunner._apply_sampled_tokens_to_state(runner, block)
++
++    assert runner.input_batch.num_tokens.tolist() == [1]
++    assert output_tokens == []
++    assert not runner.input_batch.token_ids_cpu.any()
++
++
++def _scheduler_request(*, placeholders=1, computed=33):
++    return SimpleNamespace(
++        discard_latest_async_tokens=False,
++        status=RequestStatus.RUNNING,
++        num_output_placeholders=placeholders,
++        num_computed_tokens=computed,
++    )
++
++
++def test_scheduler_accounts_for_full_256_token_block(monkeypatch):
++    monkeypatch.setattr(
++        Scheduler,
++        "_update_request_with_output",
++        lambda self, request, token_ids: (token_ids, False),
++    )
++    cached = []
++    scheduler = SimpleNamespace(
++        kv_cache_manager=SimpleNamespace(cache_blocks=lambda *args: cached.append(args))
++    )
++    request = _scheduler_request()
++    block = list(range(256))
++
++    returned, stopped = TTScheduler._update_request_with_output(
++        scheduler, request, block
++    )
++
++    assert returned == block
++    assert stopped is False
++    assert request.num_output_placeholders == 0
++    assert request.num_computed_tokens == 288
++    assert cached == []
++
++
++@pytest.mark.parametrize(
++    ("surviving_tokens", "expected_computed"),
++    [
++        ([17] * 17, 49),  # max-length trim keeps part of a committed canvas
++        ([2], 33),  # EOS at the first position keeps one token
++    ],
++)
++def test_scheduler_accounts_after_stop_trimming(
++    monkeypatch, surviving_tokens, expected_computed
++):
++    monkeypatch.setattr(
++        Scheduler,
++        "_update_request_with_output",
++        lambda self, request, token_ids: (surviving_tokens, True),
++    )
++    cached = []
++    scheduler = SimpleNamespace(
++        kv_cache_manager=SimpleNamespace(cache_blocks=lambda *args: cached.append(args))
++    )
++    request = _scheduler_request()
++
++    returned, stopped = TTScheduler._update_request_with_output(
++        scheduler, request, list(range(256))
++    )
++
++    assert returned == surviving_tokens
++    assert stopped is True
++    assert request.num_output_placeholders == 0
++    assert request.num_computed_tokens == expected_computed
++    assert bool(cached) is (len(surviving_tokens) == 1)
++
++

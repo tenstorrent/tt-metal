@@ -1,0 +1,796 @@
+{
+  "schema_version": 1,
+  "status": "interrupted",
+  "interruption": {
+    "type": "KeyboardInterrupt",
+    "message": "Cleanly stopped after four completed requests when the 3072-token prefill remained unscheduled under the old 2048 max-num-batched-tokens default",
+    "completed_requests": 4,
+    "completed_targets": [32, 256, 1024, 2048]
+  },
+  "label": "optimized-actual-prompt-scaling",
+  "max_model_len": 4096,
+  "prompt_length_targets": [
+    32,
+    256,
+    1024,
+    2048,
+    3072
+  ],
+  "blocks_requested": 4,
+  "canvas_length": 256,
+  "max_denoise_steps": 48,
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "4096",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":10737418240}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_TRACE_REGION_SIZE": "10737418240",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 10737418240
+      }
+    },
+    "log_path": "/home/zni/dg-agent-runs/dg-live-context-msl4096-optimized-20260710.log",
+    "pid": 1815234,
+    "startup_s": 36.015923,
+    "health": "ok",
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "diffusiongemma-26B-A4B-it",
+          "object": "model",
+          "created": 1783697226,
+          "owned_by": "vllm",
+          "root": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+          "parent": null,
+          "max_model_len": 4096,
+          "permission": [
+            {
+              "id": "modelperm-971e760cc9d90f07",
+              "object": "model_permission",
+              "created": 1783697226,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "model_build": {
+      "dram": {
+        "free_gib": 8.405533,
+        "total_gib": 21.867187,
+        "used_gib": 13.461654
+      },
+      "event": "model_build",
+      "gumbel_mode": "argmax",
+      "max_seq_len": 4096,
+      "model_build_s": 15.522923,
+      "num_layers": 30,
+      "selfcond_logits_l1": "chain",
+      "selfcond_prechunk_embed": "1",
+      "trace_region_size_env": 10737418240
+    },
+    "shutdown": {
+      "method": "SIGINT",
+      "returncode": 0
+    },
+    "log_bytes": 196753,
+    "log_sha256": "e8d4c6d96923fce0972648e8966d34bd2272ce1a381ec977c158240d991b9f22"
+  },
+  "requests": [
+    {
+      "target_logical_prompt_tokens": 32,
+      "actual_logical_prompt_tokens": 32,
+      "aligned_cache_tokens": 32,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 2,
+        "source_token_count": 43,
+        "source_char_count": 284,
+        "prompt_token_sha256": "c2ab967a3313b819f7888b87d7eb3fec914567384921bf7d4a551fde14bbf037"
+      },
+      "request_wall_s": 168.339542,
+      "prefill_s": 0.616255,
+      "block0_ttft_s": 127.514466,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 126.13177,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 32,
+          "next_pos": 288,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 13.65263,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 288,
+          "next_pos": 544,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 13.599936,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 544,
+          "next_pos": 800,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 13.542379,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 800,
+          "next_pos": 1056,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          13.65263,
+          13.599936,
+          13.542379
+        ],
+        "mean_s": 13.598315,
+        "median_s": 13.599936,
+        "pstdev_s": 0.045024,
+        "output_tokens_per_s": 18.825862
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        32,
+        288,
+        544,
+        800,
+        1056
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(0)",
+          "MeshTraceId(1)",
+          "MeshTraceId(2)",
+          "MeshTraceId(3)",
+          "MeshTraceId(4)",
+          "MeshTraceId(5)",
+          "MeshTraceId(6)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(9)",
+          "MeshTraceId(10)",
+          "MeshTraceId(11)",
+          "MeshTraceId(12)",
+          "MeshTraceId(13)",
+          "MeshTraceId(14)",
+          "MeshTraceId(15)",
+          "MeshTraceId(16)",
+          "MeshTraceId(17)",
+          "MeshTraceId(18)",
+          "MeshTraceId(19)",
+          "MeshTraceId(20)",
+          "MeshTraceId(21)",
+          "MeshTraceId(22)",
+          "MeshTraceId(23)",
+          "MeshTraceId(24)",
+          "MeshTraceId(25)",
+          "MeshTraceId(26)",
+          "MeshTraceId(27)",
+          "MeshTraceId(28)",
+          "MeshTraceId(29)",
+          "MeshTraceId(30)",
+          "MeshTraceId(31)",
+          "MeshTraceId(32)",
+          "MeshTraceId(33)",
+          "MeshTraceId(34)",
+          "MeshTraceId(35)",
+          "MeshTraceId(36)",
+          "MeshTraceId(37)",
+          "MeshTraceId(38)",
+          "MeshTraceId(39)",
+          "MeshTraceId(40)",
+          "MeshTraceId(41)",
+          "MeshTraceId(42)",
+          "MeshTraceId(43)",
+          "MeshTraceId(44)",
+          "MeshTraceId(45)",
+          "MeshTraceId(46)",
+          "MeshTraceId(47)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.974995,
+          "total_gib": 21.867187,
+          "used_gib": 14.892192
+        },
+        "after_request_release": {
+          "free_gib": 8.385426,
+          "total_gib": 21.867187,
+          "used_gib": 13.481761
+        }
+      },
+      "response": {
+        "id": "cmpl-9fdd6d4c56316360",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 32,
+          "total_tokens": 1056,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "365f0902612c8217d2132cac18e3e4bea44c9a2906d891b5f1f6b202bb319095",
+        "text_chars": 1657,
+        "text_sha256": "38e9dcc1303e8d3bb33403d1d2610439e2fa01b0c39c743af7aad30b200c98b9"
+      }
+    },
+    {
+      "target_logical_prompt_tokens": 256,
+      "actual_logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 21,
+        "source_token_count": 442,
+        "source_char_count": 2982,
+        "prompt_token_sha256": "4a63704a2a0d8fec725ef609ccc8c55aec60dad1d1d8daf4c444b6e673713479"
+      },
+      "request_wall_s": 176.894153,
+      "prefill_s": 2.994338,
+      "block0_ttft_s": 134.788539,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 129.894566,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 256,
+          "next_pos": 512,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 14.040424,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 512,
+          "next_pos": 768,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 13.996632,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 768,
+          "next_pos": 1024,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 14.0526,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 1024,
+          "next_pos": 1280,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          14.040424,
+          13.996632,
+          14.0526
+        ],
+        "mean_s": 14.029885,
+        "median_s": 14.040424,
+        "pstdev_s": 0.024033,
+        "output_tokens_per_s": 18.246764
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        256,
+        512,
+        768,
+        1024,
+        1280
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(48)",
+          "MeshTraceId(49)",
+          "MeshTraceId(50)",
+          "MeshTraceId(51)",
+          "MeshTraceId(52)",
+          "MeshTraceId(53)",
+          "MeshTraceId(54)",
+          "MeshTraceId(55)",
+          "MeshTraceId(56)",
+          "MeshTraceId(57)",
+          "MeshTraceId(58)",
+          "MeshTraceId(59)",
+          "MeshTraceId(60)",
+          "MeshTraceId(61)",
+          "MeshTraceId(62)",
+          "MeshTraceId(63)",
+          "MeshTraceId(64)",
+          "MeshTraceId(65)",
+          "MeshTraceId(66)",
+          "MeshTraceId(67)",
+          "MeshTraceId(68)",
+          "MeshTraceId(69)",
+          "MeshTraceId(70)",
+          "MeshTraceId(71)",
+          "MeshTraceId(72)",
+          "MeshTraceId(73)",
+          "MeshTraceId(74)",
+          "MeshTraceId(75)",
+          "MeshTraceId(76)",
+          "MeshTraceId(77)",
+          "MeshTraceId(78)",
+          "MeshTraceId(79)",
+          "MeshTraceId(80)",
+          "MeshTraceId(81)",
+          "MeshTraceId(82)",
+          "MeshTraceId(83)",
+          "MeshTraceId(84)",
+          "MeshTraceId(85)",
+          "MeshTraceId(86)",
+          "MeshTraceId(87)",
+          "MeshTraceId(88)",
+          "MeshTraceId(89)",
+          "MeshTraceId(90)",
+          "MeshTraceId(91)",
+          "MeshTraceId(92)",
+          "MeshTraceId(93)",
+          "MeshTraceId(94)",
+          "MeshTraceId(95)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.972416,
+          "total_gib": 21.867187,
+          "used_gib": 14.894771
+        },
+        "after_request_release": {
+          "free_gib": 8.382862,
+          "total_gib": 21.867187,
+          "used_gib": 13.484324
+        }
+      },
+      "response": {
+        "id": "cmpl-b01bb49205bcc341",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 256,
+          "total_tokens": 1280,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "d9565e31f077090ac243eb203e8a6c4ca1b0b0db5252e71ecdec9623e432f3cd",
+        "text_chars": 852,
+        "text_sha256": "2d65f560c727a3b66b0c86ba3f5971c44316e8ebbf60cc3757e51aa7675b327e"
+      }
+    },
+    {
+      "target_logical_prompt_tokens": 1024,
+      "actual_logical_prompt_tokens": 1024,
+      "aligned_cache_tokens": 1024,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 85,
+        "source_token_count": 1786,
+        "source_char_count": 12070,
+        "prompt_token_sha256": "123d3db4239a40979d9e02a2075a1e6bfa3ef4c3d11ff4c960a41bc30756c65a"
+      },
+      "request_wall_s": 194.345731,
+      "prefill_s": 15.203124,
+      "block0_ttft_s": 148.899429,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 131.402749,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 1024,
+          "next_pos": 1280,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 14.629272,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 1280,
+          "next_pos": 1536,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 14.631071,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 1536,
+          "next_pos": 1792,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 16.171676,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 1792,
+          "next_pos": 2048,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          14.629272,
+          14.631071,
+          16.171676
+        ],
+        "mean_s": 15.144006,
+        "median_s": 14.631071,
+        "pstdev_s": 0.726673,
+        "output_tokens_per_s": 16.904378
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        1024,
+        1280,
+        1536,
+        1792,
+        2048
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(96)",
+          "MeshTraceId(97)",
+          "MeshTraceId(98)",
+          "MeshTraceId(99)",
+          "MeshTraceId(100)",
+          "MeshTraceId(101)",
+          "MeshTraceId(102)",
+          "MeshTraceId(103)",
+          "MeshTraceId(104)",
+          "MeshTraceId(105)",
+          "MeshTraceId(106)",
+          "MeshTraceId(107)",
+          "MeshTraceId(108)",
+          "MeshTraceId(109)",
+          "MeshTraceId(110)",
+          "MeshTraceId(111)",
+          "MeshTraceId(112)",
+          "MeshTraceId(113)",
+          "MeshTraceId(114)",
+          "MeshTraceId(115)",
+          "MeshTraceId(116)",
+          "MeshTraceId(117)",
+          "MeshTraceId(118)",
+          "MeshTraceId(119)",
+          "MeshTraceId(120)",
+          "MeshTraceId(121)",
+          "MeshTraceId(122)",
+          "MeshTraceId(123)",
+          "MeshTraceId(124)",
+          "MeshTraceId(125)",
+          "MeshTraceId(126)",
+          "MeshTraceId(127)",
+          "MeshTraceId(128)",
+          "MeshTraceId(129)",
+          "MeshTraceId(130)",
+          "MeshTraceId(131)",
+          "MeshTraceId(132)",
+          "MeshTraceId(133)",
+          "MeshTraceId(134)",
+          "MeshTraceId(135)",
+          "MeshTraceId(136)",
+          "MeshTraceId(137)",
+          "MeshTraceId(138)",
+          "MeshTraceId(139)",
+          "MeshTraceId(140)",
+          "MeshTraceId(141)",
+          "MeshTraceId(142)",
+          "MeshTraceId(143)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.968388,
+          "total_gib": 21.867187,
+          "used_gib": 14.898799
+        },
+        "after_request_release": {
+          "free_gib": 8.378803,
+          "total_gib": 21.867187,
+          "used_gib": 13.488383
+        }
+      },
+      "response": {
+        "id": "cmpl-855a7936e66b991e",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 1024,
+          "total_tokens": 2048,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "274eb1d57dee54f88788d3ec3c35743a2e340f39b607029e1129b2fc2d7bb142",
+        "text_chars": 1360,
+        "text_sha256": "1eaad7fc04a1facaa9f28323c44c0b0f7731e2a59fb7ba00aa14fee59c0aba91"
+      }
+    },
+    {
+      "target_logical_prompt_tokens": 2048,
+      "actual_logical_prompt_tokens": 2048,
+      "aligned_cache_tokens": 2048,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 170,
+        "source_token_count": 3571,
+        "source_char_count": 24140,
+        "prompt_token_sha256": "e5de948b73172630986206005dd6b55bbf7bf1e58aefc0cc2ff1c92eda4b1556"
+      },
+      "request_wall_s": 228.827526,
+      "prefill_s": 38.824768,
+      "block0_ttft_s": 178.405312,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 137.221676,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 2048,
+          "next_pos": 2304,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 16.904689,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 2304,
+          "next_pos": 2560,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 16.630814,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 2560,
+          "next_pos": 2816,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 16.870824,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 2816,
+          "next_pos": 3072,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          16.904689,
+          16.630814,
+          16.870824
+        ],
+        "mean_s": 16.802109,
+        "median_s": 16.870824,
+        "pstdev_s": 0.12191,
+        "output_tokens_per_s": 15.236183
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        2048,
+        2304,
+        2560,
+        2816,
+        3072
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(144)",
+          "MeshTraceId(145)",
+          "MeshTraceId(146)",
+          "MeshTraceId(147)",
+          "MeshTraceId(148)",
+          "MeshTraceId(149)",
+          "MeshTraceId(150)",
+          "MeshTraceId(151)",
+          "MeshTraceId(152)",
+          "MeshTraceId(153)",
+          "MeshTraceId(154)",
+          "MeshTraceId(155)",
+          "MeshTraceId(156)",
+          "MeshTraceId(157)",
+          "MeshTraceId(158)",
+          "MeshTraceId(159)",
+          "MeshTraceId(160)",
+          "MeshTraceId(161)",
+          "MeshTraceId(162)",
+          "MeshTraceId(163)",
+          "MeshTraceId(164)",
+          "MeshTraceId(165)",
+          "MeshTraceId(166)",
+          "MeshTraceId(167)",
+          "MeshTraceId(168)",
+          "MeshTraceId(169)",
+          "MeshTraceId(170)",
+          "MeshTraceId(171)",
+          "MeshTraceId(172)",
+          "MeshTraceId(173)",
+          "MeshTraceId(174)",
+          "MeshTraceId(175)",
+          "MeshTraceId(176)",
+          "MeshTraceId(177)",
+          "MeshTraceId(178)",
+          "MeshTraceId(179)",
+          "MeshTraceId(180)",
+          "MeshTraceId(181)",
+          "MeshTraceId(182)",
+          "MeshTraceId(183)",
+          "MeshTraceId(184)",
+          "MeshTraceId(185)",
+          "MeshTraceId(186)",
+          "MeshTraceId(187)",
+          "MeshTraceId(188)",
+          "MeshTraceId(189)",
+          "MeshTraceId(190)",
+          "MeshTraceId(191)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.962696,
+          "total_gib": 21.867187,
+          "used_gib": 14.90449
+        },
+        "after_request_release": {
+          "free_gib": 8.373219,
+          "total_gib": 21.867187,
+          "used_gib": 13.493968
+        }
+      },
+      "response": {
+        "id": "cmpl-acb756086c18b5c1",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 2048,
+          "total_tokens": 3072,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "11057f3dac3bd181b11225175f265b22e7af2b539a5070177851f0d67e9ea60c",
+        "text_chars": 443,
+        "text_sha256": "717564957555b1670af665d7dd1cca043ef2a260620b81703ac7214c781c0a4b"
+      }
+    }
+  ]
+}

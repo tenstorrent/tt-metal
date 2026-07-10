@@ -1,16 +1,47 @@
 # tenstorrent/vllm (fork) — #47488 block-granular runner change for DiffusionGemma
 # Target repo:  github.com/tenstorrent/vllm  (branch dev, head 6b4a3a7)
-# Target file:  plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py
+# Target file: plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py
 # Purpose: generalize the runner's hard 'one committed token per decode step'
 #   assumption to N-token blocks (num_out_tokens = sampled_token_ids.shape[1]),
 #   so DiffusionGemma can emit a 256-token committed canvas per step. N=1 keeps
-#   the autoregressive path byte-identical. Applied + verified live on QB2.
+#   the autoregressive path byte-identical. Also invoke an optional model
+#   release_request(row) callback before removing a finished row, so per-request
+#   Metal traces and persistent buffers are released. Applied + verified live on QB2.
 # Apply from the vllm repo root with:  git apply doc/.../plugin_47488_model_runner.patch
 #
 diff --git a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py
 index a3e1a88..74236cb 100644
 --- a/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py
 +++ b/plugins/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py
+@@ -599,6 +599,19 @@ class TTModelRunner:
+             )
+         return per_layer  # type: ignore[return-value]
+-
++
++    def _release_finished_model_request(self, req_id: str) -> None:
++        """Let stateful TT models release row-owned resources before removal.
++
++        Most autoregressive models have no per-request model state and therefore
++        expose no callback. Block-diffusion models can own Metal traces and
++        persistent buffers keyed by the current batch row; release them before
++        ``InputBatch.remove_request`` invalidates that row mapping.
++        """
++        req_index = self.input_batch.req_id_to_index.get(req_id)
++        release_request = getattr(self.model, "release_request", None)
++        if req_index is not None and callable(release_request):
++            release_request(req_index)
++
+     def _update_states(self, scheduler_output: SchedulerOutput) -> None:
+         """Update the cached states and the persistent batch with the
+         scheduler output.
+@@ -620,6 +633,7 @@ class TTModelRunner:
+         # and handling the second as a new request.
+         removed_req_indices: list[int] = []
+         for req_id in scheduler_output.finished_req_ids:
++            self._release_finished_model_request(req_id)
+             req_index = self.input_batch.remove_request(req_id)
+             if req_index is not None:
+                 removed_req_indices.append(req_index)
 @@ -2249,8 +2249,11 @@ class TTModelRunner:
              if token_ids.numel() == 0:
                  token_ids = torch.zeros((B, 1), dtype=torch.int32)

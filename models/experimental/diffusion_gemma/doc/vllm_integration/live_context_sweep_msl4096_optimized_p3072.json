@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "optimized-actual-prompt-scaling-p3072",
+  "max_model_len": 4096,
+  "prompt_length_targets": [
+    3072
+  ],
+  "blocks_requested": 4,
+  "canvas_length": 256,
+  "max_denoise_steps": 48,
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "4096",
+      "--max-num-batched-tokens",
+      "4096",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":10737418240}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_TRACE_REGION_SIZE": "10737418240",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 10737418240
+      }
+    },
+    "log_path": "/home/zni/dg-agent-runs/dg-live-context-msl4096-optimized-p3072-20260710.log",
+    "pid": 1825084,
+    "startup_s": 36.016262,
+    "health": "ok",
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "diffusiongemma-26B-A4B-it",
+          "object": "model",
+          "created": 1783698810,
+          "owned_by": "vllm",
+          "root": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+          "parent": null,
+          "max_model_len": 4096,
+          "permission": [
+            {
+              "id": "modelperm-954fea300d1b5ff1",
+              "object": "model_permission",
+              "created": 1783698810,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "model_build": {
+      "dram": {
+        "free_gib": 8.405533,
+        "total_gib": 21.867187,
+        "used_gib": 13.461654
+      },
+      "event": "model_build",
+      "gumbel_mode": "argmax",
+      "max_seq_len": 4096,
+      "model_build_s": 15.457229,
+      "num_layers": 30,
+      "selfcond_logits_l1": "chain",
+      "selfcond_prechunk_embed": "1",
+      "trace_region_size_env": 10737418240
+    },
+    "shutdown": {
+      "method": "SIGINT",
+      "returncode": 0
+    },
+    "log_bytes": 135996,
+    "log_sha256": "23b877c12105e866a01a057e4d03da50740912ce5976da076bb2c2782da2d0e0"
+  },
+  "requests": [
+    {
+      "target_logical_prompt_tokens": 3072,
+      "actual_logical_prompt_tokens": 3072,
+      "aligned_cache_tokens": 3072,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 256,
+        "source_token_count": 5377,
+        "source_char_count": 36352,
+        "prompt_token_sha256": "94be45a796abcc1eb00c8bd8740250830dceff48df2685eb0b0bf94110f40e98"
+      },
+      "request_wall_s": 239.625209,
+      "prefill_s": 57.575714,
+      "block0_ttft_s": 187.834994,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 129.483716,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 3072,
+          "next_pos": 3328,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 17.276873,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 3328,
+          "next_pos": 3584,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 17.25109,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 3584,
+          "next_pos": 3840,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 17.231086,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 3840,
+          "next_pos": 4096,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          17.276873,
+          17.25109,
+          17.231086
+        ],
+        "mean_s": 17.253016,
+        "median_s": 17.25109,
+        "pstdev_s": 0.018742,
+        "output_tokens_per_s": 14.837985
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        3072,
+        3328,
+        3584,
+        3840,
+        4096
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(0)",
+          "MeshTraceId(1)",
+          "MeshTraceId(2)",
+          "MeshTraceId(3)",
+          "MeshTraceId(4)",
+          "MeshTraceId(5)",
+          "MeshTraceId(6)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(9)",
+          "MeshTraceId(10)",
+          "MeshTraceId(11)",
+          "MeshTraceId(12)",
+          "MeshTraceId(13)",
+          "MeshTraceId(14)",
+          "MeshTraceId(15)",
+          "MeshTraceId(16)",
+          "MeshTraceId(17)",
+          "MeshTraceId(18)",
+          "MeshTraceId(19)",
+          "MeshTraceId(20)",
+          "MeshTraceId(21)",
+          "MeshTraceId(22)",
+          "MeshTraceId(23)",
+          "MeshTraceId(24)",
+          "MeshTraceId(25)",
+          "MeshTraceId(26)",
+          "MeshTraceId(27)",
+          "MeshTraceId(28)",
+          "MeshTraceId(29)",
+          "MeshTraceId(30)",
+          "MeshTraceId(31)",
+          "MeshTraceId(32)",
+          "MeshTraceId(33)",
+          "MeshTraceId(34)",
+          "MeshTraceId(35)",
+          "MeshTraceId(36)",
+          "MeshTraceId(37)",
+          "MeshTraceId(38)",
+          "MeshTraceId(39)",
+          "MeshTraceId(40)",
+          "MeshTraceId(41)",
+          "MeshTraceId(42)",
+          "MeshTraceId(43)",
+          "MeshTraceId(44)",
+          "MeshTraceId(45)",
+          "MeshTraceId(46)",
+          "MeshTraceId(47)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.970341,
+          "total_gib": 21.867187,
+          "used_gib": 14.896846
+        },
+        "after_request_release": {
+          "free_gib": 8.615208,
+          "total_gib": 21.867187,
+          "used_gib": 13.251979
+        }
+      },
+      "response": {
+        "id": "cmpl-b67ce2f0986d7851",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 3072,
+          "total_tokens": 4096,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "ff2333122a50d5160d988437e11f6e15801a1dd0f08f77984cc2a09523105855",
+        "text_chars": 513,
+        "text_sha256": "0cd1006075cfe475c63351036d7a78d73fbd1c2b5fb10de5d16839d458a24bb6"
+      }
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "denoise-step-k32",
+  "max_model_len": 4096,
+  "prompt_length_targets": [
+    256
+  ],
+  "blocks_requested": 4,
+  "warmup_requests_per_target": 1,
+  "measured_repetitions_per_target": 1,
+  "require_no_compile_markers": true,
+  "canvas_length": 256,
+  "max_denoise_steps": 32,
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "4096",
+      "--max-num-batched-tokens",
+      "4096",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":10737418240}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_VLLM_MAX_DENOISE_STEPS": "32",
+      "DG_TRACE_REGION_SIZE": "10737418240",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 10737418240
+      }
+    },
+    "log_path": "/home/zni/dg-agent-runs/dg-vllm-step-k32-20260710.log",
+    "pid": 1868740,
+    "startup_s": 36.015439,
+    "health": "ok",
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "diffusiongemma-26B-A4B-it",
+          "object": "model",
+          "created": 1783707590,
+          "owned_by": "vllm",
+          "root": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+          "parent": null,
+          "max_model_len": 4096,
+          "permission": [
+            {
+              "id": "modelperm-b2b7cfbc5eff4163",
+              "object": "model_permission",
+              "created": 1783707590,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "model_build": {
+      "dram": {
+        "free_gib": 8.405533,
+        "total_gib": 21.867187,
+        "used_gib": 13.461654
+      },
+      "event": "model_build",
+      "gumbel_mode": "argmax",
+      "max_denoise_steps": 32,
+      "max_seq_len": 4096,
+      "model_build_s": 15.271104,
+      "num_layers": 30,
+      "selfcond_logits_l1": "chain",
+      "selfcond_prechunk_embed": "1",
+      "trace_region_size_env": 10737418240
+    },
+    "shutdown": {
+      "method": "SIGINT",
+      "returncode": 0
+    },
+    "log_bytes": 39904,
+    "log_sha256": "aa07642c165121dbb29c96301b285fb3ad0abfae794e2196f0c6a22e1d32bd90"
+  },
+  "warmups": [
+    {
+      "logical_prompt_tokens": 256,
+      "warmup_index": 0,
+      "block_latencies_s": [
+        82.433104,
+        9.54911,
+        9.597828,
+        9.620579
+      ],
+      "compile_markers": 0,
+      "trace_released": true
+    }
+  ],
+  "requests": [
+    {
+      "target_logical_prompt_tokens": 256,
+      "actual_logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "repeat_index": 0,
+      "max_denoise_steps": 32,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 21,
+        "source_token_count": 442,
+        "source_char_count": 2982,
+        "prompt_token_sha256": "4a63704a2a0d8fec725ef609ccc8c55aec60dad1d1d8daf4c444b6e673713479"
+      },
+      "request_wall_s": 119.908148,
+      "prefill_s": 2.922512,
+      "block0_ttft_s": 89.817493,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 85.050415,
+          "denoise_latency_s": 83.09392,
+          "commit_latency_s": 1.956231,
+          "denoise_steps": 32,
+          "committed_tokens": 256,
+          "start_pos": 256,
+          "next_pos": 512,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 10.102765,
+          "denoise_latency_s": 8.042582,
+          "commit_latency_s": 2.060028,
+          "denoise_steps": 32,
+          "committed_tokens": 256,
+          "start_pos": 512,
+          "next_pos": 768,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 9.964661,
+          "denoise_latency_s": 8.042757,
+          "commit_latency_s": 1.92174,
+          "denoise_steps": 32,
+          "committed_tokens": 256,
+          "start_pos": 768,
+          "next_pos": 1024,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 10.005684,
+          "denoise_latency_s": 8.043039,
+          "commit_latency_s": 1.962486,
+          "denoise_steps": 32,
+          "committed_tokens": 256,
+          "start_pos": 1024,
+          "next_pos": 1280,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          10.102765,
+          9.964661,
+          10.005684
+        ],
+        "mean_s": 10.02437,
+        "median_s": 10.005684,
+        "p99_s": 10.102765,
+        "pstdev_s": 0.057908,
+        "blocks_per_s": 0.099757,
+        "output_tokens_per_s": 25.537764,
+        "denoise_mean_s": 8.042793,
+        "denoise_ms_per_step": 251.337271,
+        "commit_mean_s": 1.981418,
+        "commit_p99_s": 2.060028,
+        "p99_method": "nearest-rank",
+        "samples": 3
+      },
+      "compile_markers_in_request": 0,
+      "denoise_steps_per_block": [
+        32,
+        32,
+        32,
+        32
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        256,
+        512,
+        768,
+        1024,
+        1280
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 32,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 128,
+        "steady_execute_trace_calls": 96,
+        "trace_ids": [
+          "MeshTraceId(32)",
+          "MeshTraceId(33)",
+          "MeshTraceId(34)",
+          "MeshTraceId(35)",
+          "MeshTraceId(36)",
+          "MeshTraceId(37)",
+          "MeshTraceId(38)",
+          "MeshTraceId(39)",
+          "MeshTraceId(40)",
+          "MeshTraceId(41)",
+          "MeshTraceId(42)",
+          "MeshTraceId(43)",
+          "MeshTraceId(44)",
+          "MeshTraceId(45)",
+          "MeshTraceId(46)",
+          "MeshTraceId(47)",
+          "MeshTraceId(48)",
+          "MeshTraceId(49)",
+          "MeshTraceId(50)",
+          "MeshTraceId(51)",
+          "MeshTraceId(52)",
+          "MeshTraceId(53)",
+          "MeshTraceId(54)",
+          "MeshTraceId(55)",
+          "MeshTraceId(56)",
+          "MeshTraceId(57)",
+          "MeshTraceId(58)",
+          "MeshTraceId(59)",
+          "MeshTraceId(60)",
+          "MeshTraceId(61)",
+          "MeshTraceId(62)",
+          "MeshTraceId(63)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.974415,
+          "total_gib": 21.867187,
+          "used_gib": 14.892772
+        },
+        "after_request_release": {
+          "free_gib": 8.385975,
+          "total_gib": 21.867187,
+          "used_gib": 13.481212
+        }
+      },
+      "response": {
+        "id": "cmpl-ba39fcb3f8f53bed",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 256,
+          "total_tokens": 1280,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "b2ea09f7190d27c86739e3abe176f6d09fa235a592e90032638226eb9245b8f8",
+        "text_chars": 663,
+        "text_sha256": "f300570e92d5fb910e59e0a8a70bde985e39f54736005e6d2b9b63f0f9e06c57"
+      }
+    }
+  ],
+  "aggregates": [
+    {
+      "logical_prompt_tokens": 256,
+      "aligned_cache_tokens": 256,
+      "max_denoise_steps": 32,
+      "measured_requests": 1,
+      "steady_block_samples": 3,
+      "mean_s": 10.02437,
+      "median_s": 10.005684,
+      "p99_s": 10.102765,
+      "p99_method": "nearest-rank",
+      "pstdev_s": 0.057908,
+      "blocks_per_s": 0.099757,
+      "output_tokens_per_s": 25.537764,
+      "denoise_mean_s": 8.042793,
+      "denoise_ms_per_step": 251.337271,
+      "commit_mean_s": 1.981418,
+      "commit_p99_s": 2.060028,
+      "compile_markers_in_timed_requests": 0
+    }
+  ]
+}

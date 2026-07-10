@@ -54,10 +54,12 @@ need it (the mesh close frees everything).
 """
 from __future__ import annotations
 
+import json
 import os
 from typing import List
 
 import ttnn
+from loguru import logger
 
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
@@ -83,6 +85,11 @@ def traced_denoise_enabled() -> bool:
     return os.environ.get("DG_DENOISE_TRACED", "0").lower() in ("1", "true", "yes", "on")
 
 
+def _trace_metric(event: str, **fields) -> None:
+    """Emit a stable, machine-readable live-serving trace marker."""
+    logger.info("DG_TRACE_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
+
+
 class TracedDenoiseController:
     """Stateful traced denoise loop bound to one serving session's logits adapter.
 
@@ -102,6 +109,21 @@ class TracedDenoiseController:
         self.canvas_buf = None
         self.committed_buf = None
         self.noise_bufs: List = []
+        self.capture_events = 0
+        self.traces_captured = 0
+        self.replay_blocks = 0
+        self.execute_trace_calls = 0
+
+    def stats(self) -> dict:
+        """Return counters used by live-server evidence and request cleanup."""
+        return {
+            "controller": type(self).__name__,
+            "capture_events": self.capture_events,
+            "traces_captured": self.traces_captured,
+            "replay_blocks": self.replay_blocks,
+            "execute_trace_calls": self.execute_trace_calls,
+            "trace_ids": [str(tid) for tid in self.traces],
+        }
 
     # -- capture (first block only) ------------------------------------------------
     def _fill_noise_buffers_from(self, noise_tokens_fn) -> None:
@@ -189,6 +211,9 @@ class TracedDenoiseController:
             self.traces.append(tid)
         ttnn.synchronize_device(self.mesh)
         self.captured = True
+        self.capture_events += 1
+        self.traces_captured += len(self.traces)
+        _trace_metric("capture", start_pos=start_pos, **self.stats())
 
     # -- per-block denoise ---------------------------------------------------------
     def denoise_block(
@@ -211,6 +236,7 @@ class TracedDenoiseController:
             raise ValueError("traced denoise requires a per-step noise_tokens_fn")
         cfg = self.config
         start_pos = getattr(adapter, "q_rope_offset", None)
+        captured_this_block = not self.captured
 
         if not self.captured:
             # Block 0: capture consumes block-0 noise into the persistent buffers.
@@ -229,11 +255,21 @@ class TracedDenoiseController:
         for tid in self.traces:
             ttnn.execute_trace(self.mesh, tid, blocking=False)
         ttnn.synchronize_device(self.mesh)
+        self.replay_blocks += 1
+        self.execute_trace_calls += len(self.traces)
+        _trace_metric(
+            "replay",
+            start_pos=start_pos,
+            captured_this_block=captured_this_block,
+            steady_replay=not captured_this_block,
+            **self.stats(),
+        )
 
         committed_host = _ids_to_torch(self.committed_buf)
         return DenoiseTrajectory(committed_host, cfg.max_denoise_steps, False, [])
 
     def release(self) -> None:
+        final_stats = self.stats()
         for tid in self.traces:
             ttnn.release_trace(self.mesh, tid)
         self.traces = []
@@ -244,6 +280,7 @@ class TracedDenoiseController:
         self.committed_buf = None
         self.noise_bufs = []
         self.captured = False
+        _trace_metric("release", **final_stats)
 
 
 def traced_denoise_block(

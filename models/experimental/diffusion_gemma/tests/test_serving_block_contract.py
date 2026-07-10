@@ -17,6 +17,7 @@ RUN-first: text quality is NOT gated (degenerate output expected until #48291).
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,8 +40,8 @@ def test_argmax_gumbel_hook_returns_none_per_step():
     assert per_step(5) is None
 
 
-def test_argmax_gumbel_hook_rejects_bad_block_index():
-    with pytest.raises(ValueError):
+def test_argmax_gumbel_hook_rejects_bad_block_index(expect_error):
+    with expect_error(ValueError):
         serving._argmax_gumbel_noise_fn(True)  # bool is not a valid block index
 
 
@@ -54,27 +55,85 @@ def test_block_emission_fields():
         "halted",
         "stop",
         "latency_s",
+        "denoise_latency_s",
+        "commit_latency_s",
     )
 
 
-def test_session_rejects_unknown_gumbel_mode():
+def test_session_rejects_unknown_gumbel_mode(expect_error):
     class _M:
         mesh_device = None
         hf_config = None
 
-    with pytest.raises(ValueError):
+    with expect_error(ValueError):
         serving.BlockDiffusionServingSession(_M(), {}, vocab_size=262144, gumbel_mode="nope")
 
 
-def test_session_requires_vocab_size_source():
+def test_session_requires_vocab_size_source(expect_error):
     class _M:
         mesh_device = None
         hf_config = None
         vocab_size = None
 
-    with pytest.raises(ValueError):
+    with expect_error(ValueError):
         # No tokenizer, no vocab_size, no model vocab metadata → must raise.
         serving.BlockDiffusionServingSession(_M(), {}, gumbel_mode="argmax")
+
+
+def test_session_reset_releases_traced_controller_before_logits_state():
+    events = []
+    controller = SimpleNamespace(
+        release=lambda: events.append("trace_release"),
+        stats=lambda: {"traces_captured": 48},
+    )
+    logits_fn = SimpleNamespace(
+        _traced_denoise_controller=controller,
+        reset=lambda: events.append("logits_reset"),
+    )
+    session = object.__new__(serving.BlockDiffusionServingSession)
+    session._logits_fn = logits_fn
+    session.next_pos = 288
+    session.finished = False
+    session.block_idx = 1
+
+    assert session.trace_stats() == [{"traces_captured": 48}]
+    session.reset()
+
+    assert events == ["trace_release", "logits_reset"]
+    assert not hasattr(logits_fn, "_traced_denoise_controller")
+    assert session._logits_fn is None
+    assert session.next_pos is None
+    assert session.block_idx == 0
+
+
+def test_next_block_capacity_accepts_exact_boundary_after_nonaligned_prompt():
+    # A 265-token prompt aligns to cache position 288; one 256-token block
+    # exactly fills a 544-token model-owned cache.
+    model = SimpleNamespace(max_seq_len=544)
+    serving._validate_next_block_capacity(model, start_pos=288, canvas_length=256)
+
+
+def test_decode_rejects_block_overrun_before_device_execution(monkeypatch, expect_error):
+    # A 289-token prompt aligns to 320, so a whole 256-token canvas would end at
+    # 576 and must be rejected before denoise or commit touches the device/cache.
+    device_called = False
+
+    def _unexpected_device_call(*args, **kwargs):
+        nonlocal device_called
+        device_called = True
+        raise AssertionError("device execution must not begin")
+
+    monkeypatch.setattr(serving, "denoise_and_commit_block", _unexpected_device_call)
+    session = object.__new__(serving.BlockDiffusionServingSession)
+    session._logits_fn = object()
+    session.next_pos = 320
+    session.finished = False
+    session.tt_model = SimpleNamespace(max_seq_len=544)
+    session.canvas_length = 256
+
+    with expect_error(ValueError, match=r"320 \+ 256 = 576 > 544"):
+        session.decode_block()
+    assert device_called is False
 
 
 # ── Device: block-granular emission through the serving driver ──────────

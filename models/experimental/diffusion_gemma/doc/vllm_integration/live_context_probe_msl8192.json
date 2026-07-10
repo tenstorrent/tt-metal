@@ -1,0 +1,459 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "label": "allocation-vs-prompt-msl8192",
+  "max_model_len": 8192,
+  "prompt_length_targets": [
+    32,
+    6144
+  ],
+  "blocks_requested": 4,
+  "canvas_length": 256,
+  "max_denoise_steps": 48,
+  "tt_metal_head": "12735af7a5e3251f6b0f09afe057ae79b4a4adda",
+  "vllm_head": "6b4a3a7b4e04c3b7f4f60dea97a7e156c3956d46",
+  "server": {
+    "cwd": "/home/zni/tt-vllm",
+    "command": [
+      "/home/zni/venvs/tt-diffusion-gemma/bin/python",
+      "-m",
+      "vllm.entrypoints.openai.api_server",
+      "--model",
+      "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "--served-model-name",
+      "diffusiongemma-26B-A4B-it",
+      "--generation-config",
+      "vllm",
+      "--max-model-len",
+      "8192",
+      "--max-num-batched-tokens",
+      "8192",
+      "--max-num-seqs",
+      "1",
+      "--block-size",
+      "64",
+      "--additional-config",
+      "{\"tt\":{\"sample_on_device_mode\":\"all\",\"enable_model_warmup\":false,\"trace_mode\":\"all\",\"trace_region_size\":10737418240}}",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "8000"
+    ],
+    "env": {
+      "PYTHONPATH": "/home/zni/tt-metal:/home/zni/tt-metal/ttnn",
+      "TT_METAL_HOME": "/home/zni/tt-metal",
+      "TT_METAL_RUNTIME_ROOT": "/home/zni/tt-metal",
+      "MESH_DEVICE": "P150x4",
+      "ARCH_NAME": "blackhole",
+      "DG_CKPT": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+      "DG_VLLM_TRACE": "1",
+      "DG_VLLM_GUMBEL_MODE": "argmax",
+      "DG_SPARSE_MOE": "1",
+      "DG_DEDUP_ARGMAX": "1",
+      "DG_SPARSE_MOE_TUNED": "1",
+      "DG_TRACE_REGION_SIZE": "10737418240",
+      "VLLM_ENABLE_V1_MULTIPROCESSING": "0",
+      "VLLM_RPC_TIMEOUT": "1800000",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "TT_LOGGER_LEVEL": "ERROR",
+      "LOGURU_LEVEL": "INFO",
+      "PYTHONUNBUFFERED": "1"
+    },
+    "additional_config": {
+      "tt": {
+        "sample_on_device_mode": "all",
+        "enable_model_warmup": false,
+        "trace_mode": "all",
+        "trace_region_size": 10737418240
+      }
+    },
+    "log_path": "/home/zni/dg-agent-runs/dg-live-context-msl8192-20260710.log",
+    "pid": 1829539,
+    "startup_s": 38.016942,
+    "health": "ok",
+    "models": {
+      "object": "list",
+      "data": [
+        {
+          "id": "diffusiongemma-26B-A4B-it",
+          "object": "model",
+          "created": 1783699202,
+          "owned_by": "vllm",
+          "root": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+          "parent": null,
+          "max_model_len": 8192,
+          "permission": [
+            {
+              "id": "modelperm-91cc33344f294b8e",
+              "object": "model_permission",
+              "created": 1783699202,
+              "allow_create_engine": false,
+              "allow_sampling": true,
+              "allow_logprobs": true,
+              "allow_search_indices": false,
+              "allow_view": true,
+              "allow_fine_tuning": false,
+              "organization": "*",
+              "group": null,
+              "is_blocking": false
+            }
+          ]
+        }
+      ]
+    },
+    "model_build": {
+      "dram": {
+        "free_gib": 8.14769,
+        "total_gib": 21.867187,
+        "used_gib": 13.719497
+      },
+      "event": "model_build",
+      "gumbel_mode": "argmax",
+      "max_seq_len": 8192,
+      "model_build_s": 16.639926,
+      "num_layers": 30,
+      "selfcond_logits_l1": "chain",
+      "selfcond_prechunk_embed": "1",
+      "trace_region_size_env": 10737418240
+    },
+    "shutdown": {
+      "method": "SIGINT",
+      "returncode": 0
+    },
+    "log_bytes": 150535,
+    "log_sha256": "ec6864e730b75913b468c50557a0e4c114e950ffaa826877305f385dda3df7d6"
+  },
+  "requests": [
+    {
+      "target_logical_prompt_tokens": 32,
+      "actual_logical_prompt_tokens": 32,
+      "aligned_cache_tokens": 32,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 2,
+        "source_token_count": 43,
+        "source_char_count": 284,
+        "prompt_token_sha256": "c2ab967a3313b819f7888b87d7eb3fec914567384921bf7d4a551fde14bbf037"
+      },
+      "request_wall_s": 169.896348,
+      "prefill_s": 0.897323,
+      "block0_ttft_s": 129.127984,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 127.465414,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 32,
+          "next_pos": 288,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 13.602737,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 288,
+          "next_pos": 544,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 13.613098,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 544,
+          "next_pos": 800,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 13.522287,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 800,
+          "next_pos": 1056,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          13.602737,
+          13.613098,
+          13.522287
+        ],
+        "mean_s": 13.579374,
+        "median_s": 13.602737,
+        "pstdev_s": 0.040588,
+        "output_tokens_per_s": 18.852121
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        32,
+        288,
+        544,
+        800,
+        1056
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(0)",
+          "MeshTraceId(1)",
+          "MeshTraceId(2)",
+          "MeshTraceId(3)",
+          "MeshTraceId(4)",
+          "MeshTraceId(5)",
+          "MeshTraceId(6)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(9)",
+          "MeshTraceId(10)",
+          "MeshTraceId(11)",
+          "MeshTraceId(12)",
+          "MeshTraceId(13)",
+          "MeshTraceId(14)",
+          "MeshTraceId(15)",
+          "MeshTraceId(16)",
+          "MeshTraceId(17)",
+          "MeshTraceId(18)",
+          "MeshTraceId(19)",
+          "MeshTraceId(20)",
+          "MeshTraceId(21)",
+          "MeshTraceId(22)",
+          "MeshTraceId(23)",
+          "MeshTraceId(24)",
+          "MeshTraceId(25)",
+          "MeshTraceId(26)",
+          "MeshTraceId(27)",
+          "MeshTraceId(28)",
+          "MeshTraceId(29)",
+          "MeshTraceId(30)",
+          "MeshTraceId(31)",
+          "MeshTraceId(32)",
+          "MeshTraceId(33)",
+          "MeshTraceId(34)",
+          "MeshTraceId(35)",
+          "MeshTraceId(36)",
+          "MeshTraceId(37)",
+          "MeshTraceId(38)",
+          "MeshTraceId(39)",
+          "MeshTraceId(40)",
+          "MeshTraceId(41)",
+          "MeshTraceId(42)",
+          "MeshTraceId(43)",
+          "MeshTraceId(44)",
+          "MeshTraceId(45)",
+          "MeshTraceId(46)",
+          "MeshTraceId(47)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.717152,
+          "total_gib": 21.867187,
+          "used_gib": 15.150035
+        },
+        "after_request_release": {
+          "free_gib": 8.127583,
+          "total_gib": 21.867187,
+          "used_gib": 13.739604
+        }
+      },
+      "response": {
+        "id": "cmpl-bf880df54c9b0146",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 32,
+          "total_tokens": 1056,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "365f0902612c8217d2132cac18e3e4bea44c9a2906d891b5f1f6b202bb319095",
+        "text_chars": 1657,
+        "text_sha256": "38e9dcc1303e8d3bb33403d1d2610439e2fa01b0c39c743af7aad30b200c98b9"
+      }
+    },
+    {
+      "target_logical_prompt_tokens": 6144,
+      "actual_logical_prompt_tokens": 6144,
+      "aligned_cache_tokens": 6144,
+      "prompt": {
+        "recipe": "prefix of tokenizer(FILLER_UNIT * repeats, add_special_tokens=True)",
+        "repeats": 512,
+        "source_token_count": 10753,
+        "source_char_count": 72704,
+        "prompt_token_sha256": "dfaee866534c3734dfe64a76e56688da75875e34f867040c47512210b0abe732"
+      },
+      "request_wall_s": 306.381979,
+      "prefill_s": 106.640342,
+      "block0_ttft_s": 245.803941,
+      "blocks": [
+        {
+          "block_idx": 0,
+          "latency_s": 136.55924,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 6144,
+          "next_pos": 6400,
+          "capture_inclusive": true
+        },
+        {
+          "block_idx": 1,
+          "latency_s": 20.170233,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 6400,
+          "next_pos": 6656,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 2,
+          "latency_s": 19.947653,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 6656,
+          "next_pos": 6912,
+          "capture_inclusive": false
+        },
+        {
+          "block_idx": 3,
+          "latency_s": 20.445083,
+          "denoise_steps": 48,
+          "committed_tokens": 256,
+          "start_pos": 6912,
+          "next_pos": 7168,
+          "capture_inclusive": false
+        }
+      ],
+      "steady": {
+        "latencies_s": [
+          20.170233,
+          19.947653,
+          20.445083
+        ],
+        "mean_s": 20.187656,
+        "median_s": 20.170233,
+        "pstdev_s": 0.203448,
+        "output_tokens_per_s": 12.681016
+      },
+      "denoise_steps_per_block": [
+        48,
+        48,
+        48,
+        48
+      ],
+      "committed_tokens": 1024,
+      "position_progression": [
+        6144,
+        6400,
+        6656,
+        6912,
+        7168
+      ],
+      "trace": {
+        "capture_events": 1,
+        "metal_traces_captured": 48,
+        "block_replays_total": 4,
+        "steady_block_replays": 3,
+        "execute_trace_calls_total": 192,
+        "steady_execute_trace_calls": 144,
+        "trace_ids": [
+          "MeshTraceId(48)",
+          "MeshTraceId(49)",
+          "MeshTraceId(50)",
+          "MeshTraceId(51)",
+          "MeshTraceId(52)",
+          "MeshTraceId(53)",
+          "MeshTraceId(54)",
+          "MeshTraceId(55)",
+          "MeshTraceId(56)",
+          "MeshTraceId(57)",
+          "MeshTraceId(58)",
+          "MeshTraceId(59)",
+          "MeshTraceId(60)",
+          "MeshTraceId(61)",
+          "MeshTraceId(62)",
+          "MeshTraceId(63)",
+          "MeshTraceId(64)",
+          "MeshTraceId(65)",
+          "MeshTraceId(66)",
+          "MeshTraceId(67)",
+          "MeshTraceId(68)",
+          "MeshTraceId(69)",
+          "MeshTraceId(70)",
+          "MeshTraceId(71)",
+          "MeshTraceId(72)",
+          "MeshTraceId(73)",
+          "MeshTraceId(74)",
+          "MeshTraceId(75)",
+          "MeshTraceId(76)",
+          "MeshTraceId(77)",
+          "MeshTraceId(78)",
+          "MeshTraceId(79)",
+          "MeshTraceId(80)",
+          "MeshTraceId(81)",
+          "MeshTraceId(82)",
+          "MeshTraceId(83)",
+          "MeshTraceId(84)",
+          "MeshTraceId(85)",
+          "MeshTraceId(86)",
+          "MeshTraceId(87)",
+          "MeshTraceId(88)",
+          "MeshTraceId(89)",
+          "MeshTraceId(90)",
+          "MeshTraceId(91)",
+          "MeshTraceId(92)",
+          "MeshTraceId(93)",
+          "MeshTraceId(94)",
+          "MeshTraceId(95)"
+        ],
+        "released": true,
+        "eager_fallback": false,
+        "recapture_after_block0": false
+      },
+      "dram": {
+        "trace_resident_after_block0": {
+          "free_gib": 6.708851,
+          "total_gib": 21.867187,
+          "used_gib": 15.158336
+        },
+        "after_request_release": {
+          "free_gib": 8.119267,
+          "total_gib": 21.867187,
+          "used_gib": 13.74792
+        }
+      },
+      "response": {
+        "id": "cmpl-89a9994643f7a835",
+        "finish_reason": "length",
+        "usage": {
+          "prompt_tokens": 6144,
+          "total_tokens": 7168,
+          "completion_tokens": 1024,
+          "prompt_tokens_details": null
+        },
+        "output_token_count_returned": 1024,
+        "output_token_sha256": "abea7b3f597e4e7fe261267a74f4fb67bf0a1192f5f3af306640faf3a97bd665",
+        "text_chars": 1353,
+        "text_sha256": "5bb7512d6ddfbd3f2805e4e2ce2d9e21e221a517bdd1af6e102b84b35033b87c"
+      }
+    }
+  ]
+}

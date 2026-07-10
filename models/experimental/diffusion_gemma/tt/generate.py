@@ -12,6 +12,7 @@ the DiffusionGemma-local commit decode path.
 from __future__ import annotations
 
 import os
+import time
 from numbers import Integral
 from typing import Callable, NamedTuple
 
@@ -901,6 +902,7 @@ def denoise_and_commit_block(
     page_tables_per_layer=None,
     denoise_block_fn: Callable[..., DenoiseTrajectory] | None = None,
     commit_fn: Callable[..., None] | None = None,
+    timings: dict[str, float] | None = None,
 ) -> GeneratedBlock:
     """Denoise one canvas, commit the clean argmax, and advance position.
 
@@ -918,6 +920,7 @@ def denoise_and_commit_block(
     if denoise_block_fn is None:
         denoise_block_fn = _resolve_default_denoise_block_fn()
     _set_q_rope_offset(logits_fn, start_pos)
+    denoise_t0 = time.perf_counter()
     trajectory = denoise_block_fn(
         logits_fn,
         init_canvas,
@@ -925,9 +928,11 @@ def denoise_and_commit_block(
         gumbel_noise_fn=gumbel_noise_fn,
         noise_tokens_fn=noise_tokens_fn,
     )
+    denoise_s = time.perf_counter() - denoise_t0
     if trajectory.committed is None:
         raise RuntimeError("denoise trajectory did not produce committed canvas tokens")
     _validate_committed_block_shape(trajectory.committed, batch_size=1, canvas_length=config.canvas_length)
+    commit_t0 = time.perf_counter()
     commit_fn(
         tt_model,
         trajectory.committed,
@@ -935,6 +940,9 @@ def denoise_and_commit_block(
         page_table=page_table,
         page_tables_per_layer=page_tables_per_layer,
     )
+    commit_s = time.perf_counter() - commit_t0
+    if timings is not None:
+        timings.update(denoise_s=denoise_s, commit_s=commit_s)
     return GeneratedBlock(
         committed=trajectory.committed,
         next_pos=start_pos + trajectory.committed.shape[1],

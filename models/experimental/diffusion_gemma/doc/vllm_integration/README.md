@@ -60,6 +60,34 @@ early-halt over a 5-prompt set (`DG_DENOISE_EARLY_HALT`, seed 0, threshold 0.005
 0/5 halted** — a measured no-op under #48291. Default stays fixed-48 traced. See `traced_serving.md`
 + `bench_vllm_traced.py` + `vllmtraced_msl{4096,32768}.json`.
 
+### Live OpenAI-server context sweep (2026-07-10)
+
+The real patched `tenstorrent/vllm` server now has full-depth, four-block trace evidence with the
+optimized stack explicitly enabled (`DG_SPARSE_MOE=1`, `DG_DEDUP_ARGMAX=1`,
+`DG_SPARSE_MOE_TUNED=1`). At `max_model_len=4096`, the primary warmed,
+compile-marker-free 32/256/1024/2048-token targets measured
+**18.495 / 18.270 / 17.571 / 16.722 output tok/s** over nine steady blocks each.
+The lower-priority 3072 warmed rerun was intentionally omitted at handoff; its earlier
+single-request result remains non-primary provenance.
+Bounded 8192/16384/32768 allocation probes all fit; a fixed 32-token prompt stayed ~18.85 tok/s
+across those allocations, while real 6144/8192/16384-token prompts measured
+12.681/11.884/9.489 tok/s. Every request captured exactly 48 traces once, replayed the same IDs for
+three steady blocks, and released them. See `live_context_sweep_results_20260710.md` and its compact
+JSON companion.
+
+### Live denoise-step cap sweep (2026-07-10)
+
+With logical prompt context fixed at 256 tokens and one isolated server per budget,
+K=1/4/8/12/16/20/24/32/40/48 measured
+**166.800 / 108.281 / 72.936 / 54.877 / 44.458 / 37.063 / 31.998 / 25.538 /
+21.337 / 18.276 output tok/s**. Every row captured exactly K traces once, replayed
+four blocks using the same IDs, made exactly `4*K` execute calls, avoided eager fallback and
+recapture, and released at request end. See
+`live_denoise_step_sweep_results_20260710.md` and its compact JSON companion.
+
+This is performance-only evidence. The model-faithful setting remains K=48 under #48291;
+smaller caps can change diffusion decisions and output quality.
+
 ## How it works
 
 DiffusionGemma emits a **256-token block per decode step**. The whole denoise loop lives inside
@@ -381,10 +409,8 @@ commands in **§ Live serving verification (fresh vLLM)** above.
   path reproduces the RUN-path output; the EOS-first block gives empty text under the default stop
   policy and the `ignore_eos` control surfaces the same canvas content vLLM would; see the live
   request above and `plan.md` R0.5).
-- The vLLM adapter *class* methods (`prefill_forward`, `decode_forward`, `get_kv_cache_spec`,
-  `allocate_kv_cache*`, `initialize_vllm_model`) import `vllm.*` / need the runner, so they are
-  proven by static inspection + `py_compile` + the device-tested block-emission core
-  (`BlockDiffusionServingSession`, driven by `serving_smoke.py` / the block-contract test), not by
-  running the adapter class itself. Adapter-class execution coverage lands when #47488 + the
-  installed plugin make the engine path runnable.
+- The vLLM adapter class is now exercised by the real engine: the 2026-07-10 live sweep ran
+  `initialize_vllm_model`, `get_kv_cache_spec`, `allocate_kv_cache*`, `prefill_forward`, and
+  `decode_forward` through OpenAI requests. Static inspection and `serving_smoke.py` remain faster
+  reduced-surface controls, not substitutes for that live coverage.
 - No Tracy / tt-perf-report / device-profiler collection in the vLLM stage (per skill).

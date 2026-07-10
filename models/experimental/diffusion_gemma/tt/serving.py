@@ -52,6 +52,7 @@ from models.experimental.diffusion_gemma.tt.denoise_forward import (
 from models.experimental.diffusion_gemma.tt.generate import (
     _contains_stop_token,
     _infer_generation_vocab_size,
+    _infer_context_limit,
     _normalize_eos_token_ids,
     _pad_prompt_tokens_for_prefill,
     _validate_prompt_tokens,
@@ -70,6 +71,19 @@ from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache, p
 # "chunked" is the no-materialize on-device Gumbel that also fits 256K; "host"
 # and "device" are the seeded-Gumbel debug/reference paths.
 GUMBEL_MODES = ("argmax", "chunked", "host", "device")
+
+
+def _validate_next_block_capacity(tt_model, *, start_pos: int, canvas_length: int) -> None:
+    """Reject a whole-canvas commit before any denoise/device execution."""
+    context_limit = _infer_context_limit(tt_model)
+    if context_limit is None:
+        return
+    end_pos = start_pos + canvas_length
+    if end_pos > context_limit:
+        raise ValueError(
+            "next committed canvas exceeds the model context window: "
+            f"{start_pos} + {canvas_length} = {end_pos} > {context_limit}"
+        )
 
 
 def _argmax_gumbel_noise_fn(block_idx: int):
@@ -100,6 +114,8 @@ class BlockEmission(NamedTuple):
     halted: bool  # denoise loop hit the stable+confident early halt
     stop: bool  # an EOS / stop token was committed in this block
     latency_s: float
+    denoise_latency_s: float
+    commit_latency_s: float
 
 
 class BlockDiffusionServingSession:
@@ -320,11 +336,13 @@ class BlockDiffusionServingSession:
             raise RuntimeError("decode_block called after the sequence already emitted a stop token")
 
         start_pos = self.next_pos
+        _validate_next_block_capacity(self.tt_model, start_pos=start_pos, canvas_length=self.canvas_length)
         block_idx = self.block_idx
         gumbel_for_block = self._gumbel_noise_fn(block_idx) if self._gumbel_noise_fn else None
         noise_for_block = self._noise_tokens_fn(block_idx) if self._noise_tokens_fn else None
         init_canvas = self._init_canvas_fn(block_idx, start_pos)
 
+        timings: dict[str, float] = {}
         t0 = time.perf_counter()
         block = denoise_and_commit_block(
             self.tt_model,
@@ -337,6 +355,7 @@ class BlockDiffusionServingSession:
             page_table=self.page_table,
             page_tables_per_layer=self.page_tables_per_layer,
             denoise_block_fn=self._denoise_block_fn,
+            timings=timings,
         )
         latency_s = time.perf_counter() - t0
 
@@ -355,12 +374,39 @@ class BlockDiffusionServingSession:
             halted=bool(trajectory.halted),
             stop=stop,
             latency_s=latency_s,
+            denoise_latency_s=timings["denoise_s"],
+            commit_latency_s=timings["commit_s"],
         )
 
+    def trace_stats(self) -> list[dict]:
+        """Snapshot any per-request traced-controller counters before reset."""
+        if self._logits_fn is None:
+            return []
+        stats = []
+        for attr in (
+            "_traced_denoise_controller",
+            "_traced_denoise_multistep_controller",
+            "_traced_early_halt_controller",
+        ):
+            controller = getattr(self._logits_fn, attr, None)
+            if controller is not None and hasattr(controller, "stats"):
+                stats.append(controller.stats())
+        return stats
+
     def reset(self) -> None:
-        """Release the stateful logits fn (self-conditioning prev-logits)."""
-        if self._logits_fn is not None and hasattr(self._logits_fn, "reset"):
-            self._logits_fn.reset()
+        """Release per-request Metal traces, buffers, and logits state."""
+        if self._logits_fn is not None:
+            for attr in (
+                "_traced_denoise_controller",
+                "_traced_denoise_multistep_controller",
+                "_traced_early_halt_controller",
+            ):
+                controller = getattr(self._logits_fn, attr, None)
+                if controller is not None:
+                    controller.release()
+                    delattr(self._logits_fn, attr)
+            if hasattr(self._logits_fn, "reset"):
+                self._logits_fn.reset()
         self._logits_fn = None
         self.next_pos = None
         self.finished = False

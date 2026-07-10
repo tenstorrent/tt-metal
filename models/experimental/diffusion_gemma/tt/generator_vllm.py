@@ -59,7 +59,10 @@ imported) so this adapter stays self-contained.
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from dataclasses import replace
 
 import torch
 from loguru import logger
@@ -75,6 +78,8 @@ from models.experimental.diffusion_gemma.tt.prefix_cache import PrefixKVCache
 from models.experimental.diffusion_gemma.tt.serving import BlockDiffusionServingSession
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
 
+MAX_DENOISE_STEPS = 48
+
 
 def _resolve_checkpoint_dir(hf_config):
     """Locate the DiffusionGemma checkpoint from the vLLM hf_config / env."""
@@ -86,6 +91,37 @@ def _resolve_checkpoint_dir(hf_config):
     if env_path:
         return env_path
     raise ValueError("DiffusionGemma checkpoint path not found on hf_config (_name_or_path) or DG_CKPT env var")
+
+
+def _with_vllm_max_denoise_steps(config: DiffusionConfig) -> DiffusionConfig:
+    """Apply the DG-local serving step cap, rejecting non-model budgets."""
+    raw = os.environ.get("DG_VLLM_MAX_DENOISE_STEPS")
+    if raw is None:
+        return config
+    try:
+        steps = int(raw)
+    except ValueError as exc:
+        raise ValueError("DG_VLLM_MAX_DENOISE_STEPS must be an integer in [1, 48]") from exc
+    if not 1 <= steps <= MAX_DENOISE_STEPS:
+        raise ValueError("DG_VLLM_MAX_DENOISE_STEPS must be in [1, 48]")
+    return replace(config, max_denoise_steps=steps)
+
+
+def _metric(event: str, **fields) -> None:
+    """Emit a stable JSON marker for live OpenAI-server evidence."""
+    logger.info("DG_VLLM_METRIC " + json.dumps({"event": event, **fields}, sort_keys=True, default=str))
+
+
+def _dram_snapshot(mesh_device, *, synchronize: bool = True) -> dict:
+    if synchronize:
+        ttnn.synchronize_device(mesh_device)
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    gib = 2**30
+    return {
+        "used_gib": round(view.num_banks * view.total_bytes_allocated_per_bank / gib, 6),
+        "free_gib": round(view.num_banks * view.total_bytes_free_per_bank / gib, 6),
+        "total_gib": round(view.num_banks * view.total_bytes_per_bank / gib, 6),
+    }
 
 
 class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
@@ -122,7 +158,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         super().__init__(*args, **kwargs)
         self._dg_state_dict = dg_state_dict
         self._tokenizer = tokenizer
-        self._config = DiffusionConfig() if config is None else config
+        self._config = _with_vllm_max_denoise_steps(DiffusionConfig() if config is None else config)
         self.canvas_length = self._config.canvas_length
         # Sampler memory strategy at the served context. "argmax" (RUN-first) and
         # "chunked" both fit full-depth 256K; the full-vocab Gumbel materialization
@@ -171,6 +207,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             raise ValueError("DiffusionGemma TT serving is TP=4 single-replica (tt_data_parallel must be 1)")
 
         checkpoint_dir = _resolve_checkpoint_dir(hf_config)
+        diffusion_config = _with_vllm_max_denoise_steps(DiffusionConfig())
         model_kwargs = dict(
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
@@ -180,10 +217,26 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         if n_layers is not None:
             model_kwargs["num_layers"] = n_layers
 
+        build_t0 = time.perf_counter()
         bundle = build_tt_model_from_checkpoint_dir(mesh_device, checkpoint_dir, **model_kwargs)
+        ttnn.synchronize_device(mesh_device)
+        model_build_s = time.perf_counter() - build_t0
+        dram = _dram_snapshot(mesh_device, synchronize=False)
         logger.info(
             f"[DiffusionGemma vLLM] built model: max_seq_len={max_seq_len} "
             f"n_layers={n_layers or 'full'} gumbel_mode={os.environ.get('DG_VLLM_GUMBEL_MODE', 'argmax')}"
+        )
+        _metric(
+            "model_build",
+            max_seq_len=max_seq_len,
+            num_layers=n_layers or 30,
+            model_build_s=round(model_build_s, 6),
+            gumbel_mode=os.environ.get("DG_VLLM_GUMBEL_MODE", "argmax"),
+            max_denoise_steps=diffusion_config.max_denoise_steps,
+            trace_region_size_env=int(os.environ.get("DG_TRACE_REGION_SIZE", "0")),
+            selfcond_prechunk_embed=os.environ.get("DG_SELFCOND_PRECHUNK_EMBED", "1"),
+            selfcond_logits_l1=os.environ.get("DG_SELFCOND_LOGITS_L1", "chain"),
+            dram=dram,
         )
         return cls(
             [bundle.tt_model],
@@ -191,6 +244,7 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             mesh_device,
             dg_state_dict=bundle.state_dict,
             tokenizer=bundle.tokenizer,
+            config=diffusion_config,
         )
 
     @property
@@ -330,8 +384,10 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             )
             return False
         if want:
-            logger.info("[DiffusionGemma vLLM] traced serving decode ENABLED (Metal capture/replay); "
-                        "ensure DG_TRACE_REGION_SIZE is set at mesh open")
+            logger.info(
+                "[DiffusionGemma vLLM] traced serving decode ENABLED (Metal capture/replay); "
+                "ensure DG_TRACE_REGION_SIZE is set at mesh open"
+            )
         return want
 
     def _make_session(self, seed: int = 0) -> BlockDiffusionServingSession:
@@ -345,6 +401,15 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         # stop point (block-diffusion #47488 scheduler-half contract). The
         # standalone ``serving_smoke`` driver keeps its own session-level stop.
         denoise_block_fn = select_traced_denoise_block_fn() if self._trace_enabled else None
+        _metric(
+            "session_create",
+            trace_enabled=self._trace_enabled,
+            denoise_path=getattr(denoise_block_fn, "__name__", "env_dispatch"),
+            gumbel_mode=self._gumbel_mode,
+            canvas_length=self.canvas_length,
+            max_denoise_steps=self._config.max_denoise_steps,
+            seed=seed,
+        )
         return BlockDiffusionServingSession(
             self.model[0],
             self._dg_state_dict,
@@ -393,14 +458,39 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
             )
         blocks = []
         for row in range(num_reqs):
+            if row in self._sessions:
+                # Defensive cleanup if a runner does not deliver its finished-request
+                # callback before reusing the single active row.
+                self.release_request(row)
             session = self._make_session()
             prompt_tokens = self._prompt_tokens_for_row(tokens, prompt_lens, row)
+            ttft_t0 = time.perf_counter()
             cache_len = session.prefill(prompt_tokens)
             emission = session.decode_block()
+            ttft_s = time.perf_counter() - ttft_t0
+            dram = _dram_snapshot(self.model[0].mesh_device)
             logger.info(
                 f"[DiffusionGemma vLLM] prefill row={row} prompt_len={session.prompt_len} "
                 f"cache_len={cache_len} block0 next_pos={emission.next_pos} "
                 f"steps={emission.num_denoise_steps} latency={emission.latency_s:.3f}s"
+            )
+            _metric(
+                "prefill_block0",
+                row=row,
+                prompt_len=session.prompt_len,
+                cache_len=cache_len,
+                prefill_s=round(session.prefill_time_s, 6),
+                ttft_s=round(ttft_s, 6),
+                block_idx=emission.block_idx,
+                block_latency_s=round(emission.latency_s, 6),
+                denoise_latency_s=round(emission.denoise_latency_s, 6),
+                commit_latency_s=round(emission.commit_latency_s, 6),
+                denoise_steps=emission.num_denoise_steps,
+                committed_tokens=int(emission.tokens.numel()),
+                start_pos=emission.start_pos,
+                next_pos=emission.next_pos,
+                halted=emission.halted,
+                dram=dram,
             )
             self._sessions[row] = session
             blocks.append(emission.tokens.reshape(1, self.canvas_length))
@@ -466,11 +556,38 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
                 f"steps={emission.num_denoise_steps} halted={emission.halted} "
                 f"stop={emission.stop} latency={emission.latency_s:.3f}s"
             )
+            _metric(
+                "decode_block",
+                row=row,
+                block_idx=emission.block_idx,
+                block_latency_s=round(emission.latency_s, 6),
+                denoise_latency_s=round(emission.denoise_latency_s, 6),
+                commit_latency_s=round(emission.commit_latency_s, 6),
+                denoise_steps=emission.num_denoise_steps,
+                committed_tokens=int(emission.tokens.numel()),
+                start_pos=emission.start_pos,
+                next_pos=emission.next_pos,
+                halted=emission.halted,
+                stop=emission.stop,
+            )
             blocks.append(emission.tokens.reshape(1, self.canvas_length))
         return torch.cat(blocks, dim=0)
 
     def release_request(self, row: int) -> None:
-        """Drop a finished request's session and release its logits-fn state."""
+        """Drop a finished request and release its Metal traces and logits state."""
         session = self._sessions.pop(row, None)
         if session is not None:
+            trace_stats = session.trace_stats()
+            prompt_len = session.prompt_len
+            cache_len = session.cache_len
+            blocks_emitted = session.block_idx
             session.reset()
+            _metric(
+                "request_release",
+                row=row,
+                prompt_len=prompt_len,
+                cache_len=cache_len,
+                blocks_emitted=blocks_emitted,
+                trace_stats=trace_stats,
+                dram=_dram_snapshot(self.model[0].mesh_device),
+            )

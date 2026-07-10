@@ -25,6 +25,35 @@ Single source of truth for the DiffusionGemma bring-up branch. **This file merge
 >
 > The original four device workstreams (W1–W4, Part II) are now mostly done or blocked. This roadmap is authoritative for "what to do next"; W1–W4 in Part II are the detailed specs for the pieces they cover.
 
+### Current live-serving/performance addendum (2026-07-10)
+
+This addendum is the current status and supersedes older "open", "immediate next
+step", and "Beyond Functional" wording in the dated June/July 2 narrative below.
+The older sections remain as bring-up history and standing design context.
+
+- The real full-depth `tenstorrent/vllm` OpenAI `/v1/completions` path is live on
+  QB2. The companion fork has the #47488 block-granular runner and scheduler
+  accounting, model registration, and request-release callback; four-block
+  1024-token requests have run through the real engine.
+- Traced serving is live rather than inferred from the reduced driver. Block 0
+  captures one Metal trace per denoise step, later blocks replay the same IDs,
+  and request completion releases traces before row removal.
+- Primary warmed context evidence is complete for logical prompts
+  32/256/1024/2048 at `max_model_len=4096`; bounded allocated contexts through
+  32768 and real prompts through 16384 passed. The lower-priority 3072 warmed
+  rerun was intentionally omitted at handoff.
+- The isolated fixed-256-token-context K=1/4/8/12/16/20/24/32/40/48 sweep
+  measured 166.80/108.28/72.94/54.88/44.46/37.06/32.00/25.54/21.34/18.28
+  output tok/s. This is performance-only; K=48 remains model-faithful under
+  #48291.
+- Current serving is still one active sequence on the model-owned contiguous
+  cache (`max_num_seqs=1`). Paged-cache ownership/concurrency, the absolute
+  served-context ceiling, near-limit prefill hardening, production quality
+  (#48291), and multimodal serving remain open. Whole-canvas context overruns
+  are rejected before denoise/commit execution.
+- Current evidence lives in `doc/vllm_integration/live_context_sweep_results_20260710.md`
+  and `live_denoise_step_sweep_results_20260710.md`.
+
 ### Where we are (2026-06-26)
 
 Foundation (torch reference + PCC harness #47468 ✅ closed, causal backbone #47461 ✅, QB2 fit #47487) plus the device attention/KV/sampling pieces are validated: KV-phase machine (W1/#47474) ✅, bidirectional masked SDPA — **both** ≤32768 (W2a) **and** the long-prompt >32768 path (W2b, resolved with regular non-causal SDPA — no new kernel) (#47462) ✅, on-device canvas sampling (W4/#47472) ✅. The decode-loop control flow (W3/#47463) is built and validated on synthetic logits but **blocked on decision fidelity (#48291)**.
