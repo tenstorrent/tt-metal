@@ -464,6 +464,21 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
+# ── Janus Pro ──────────────────────────────────────────────────────
+
+# Janus Pro e2e tests: Blackhole only (P150)
+- name: Janus Pro-7B e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=deepseek-community/Janus-Pro-7B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/deepseek-community/Janus-Pro-7B MESH_DEVICE=P150
+    pytest --timeout 1000 models/experimental/janus_pro/tests/test_e2e.py
+  model: janus-pro-7b
+  skus:
+    bh_p150:
+      timeout: 15
+      tier: 3
+  owner_id: U0B25UFEEAX # Milos Micic
+  team: models
+
 # ── Mistral / Mixtral ──────────────────────────────────────────────
 
 - name: Mistral-7B e2e tests
