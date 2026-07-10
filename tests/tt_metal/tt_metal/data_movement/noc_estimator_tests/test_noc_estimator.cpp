@@ -838,7 +838,10 @@ static void sweep_one_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     struct GridConfig {
         CoreCoord size;
     };
-    vector<GridConfig> grids = {{{2, 2}}, {{3, 3}}, {{5, 5}}, {{8, 8}}, {device_grid}};
+    vector<GridConfig> grids = {{{2, 2}}, {{3, 3}}, {{5, 5}}, {{8, 8}}};
+    if (device_grid.x > 8 || device_grid.y > 8) {
+        grids.push_back({device_grid});
+    }
 
     for (auto& grid : grids) {
         // Skip grid sizes larger than device grid
@@ -924,7 +927,10 @@ static void sweep_all_to_all(const shared_ptr<distributed::MeshDevice>& mesh_dev
     IDevice* device = mesh_device->impl().get_device(0);
     CoreCoord device_grid = device->compute_with_storage_grid_size();
 
-    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}, device_grid};
+    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
+    if (device_grid.x > 8 || device_grid.y > 8) {
+        grid_sizes.push_back({device_grid});
+    }
 
     for (auto& grid_size : grid_sizes) {
         // Skip grid sizes larger than device grid
@@ -950,7 +956,10 @@ static void sweep_all_from_all(const shared_ptr<distributed::MeshDevice>& mesh_d
     IDevice* device = mesh_device->impl().get_device(0);
     CoreCoord device_grid = device->compute_with_storage_grid_size();
 
-    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}, device_grid};
+    vector<CoreCoord> grid_sizes = {{2, 2}, {3, 3}, {5, 5}, {8, 8}};
+    if (device_grid.x > 8 || device_grid.y > 8) {
+        grid_sizes.push_back({device_grid});
+    }
 
     for (auto& grid_size : grid_sizes) {
         // Skip grid sizes larger than device grid
