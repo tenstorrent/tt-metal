@@ -459,6 +459,12 @@ Tensor fold(
         // the golden.
         const auto l1_interleaved =
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+        // Step-6 reshapes target DRAM interleaved: an interleaved target makes the quasar reshape skip the
+        // final interleaved_to_sharded reshard (which would allocate the full folded tensor on one core and
+        // OOM the already-packed 2-core L1), and keeps the large [N*Ho*Wo, groups*C_aligned] intermediates
+        // in DRAM instead of L1.
+        const auto dram_interleaved =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
         uint32_t real_c;
         CoreRangeSet in_grid;
@@ -549,7 +555,8 @@ Tensor fold(
                 static_cast<uint32_t>(fs[0]),
                 static_cast<uint32_t>(fs[1]),
                 static_cast<uint32_t>(fs[2]) * groups,
-                c_aligned});
+                c_aligned},
+            dram_interleaved);
         folded = ttnn::operations::experimental::quasar::slice(
             folded,
             tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -559,10 +566,10 @@ Tensor fold(
                  static_cast<uint32_t>(fs[2]) * groups,
                  c_keep}),
             tt::tt_metal::Array4D({1, 1, 1, 1}),
-            folded.memory_config());
+            dram_interleaved);
         // Un-flatten the fold's [1,1,N*Ho*Wo, groups*c_keep] back to NHWC [N, Ho, Wo, groups*c_keep].
         folded = ttnn::operations::experimental::quasar::reshape(
-            folded, ttnn::Shape{out_n, out_ho, out_wo, groups * c_keep});
+            folded, ttnn::Shape{out_n, out_ho, out_wo, groups * c_keep}, dram_interleaved);
         return folded;
     }
     // Interleaved tensor path (DRAM or L1)
