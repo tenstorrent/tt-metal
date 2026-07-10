@@ -124,10 +124,6 @@ def run_bias_routed_expert(mesh_device, num_tokens, emb_dim, hidden_dim):
     assert passing, f"PCC below threshold: {pcc}"
 
 
-@pytest.mark.skip(
-    reason="WIP: unified_routed_expert_ffn has no expert-bias support yet (needed for gpt-oss). "
-    "Spec test — enable once bias fusion + the TtRoutedExpert bias API land (tracked in this PR)."
-)
 @pytest.mark.skipif(not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
 @pytest.mark.parametrize("num_tokens", [128, 1024], ids=["t128", "t1k"])
 @pytest.mark.parametrize(

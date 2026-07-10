@@ -155,6 +155,57 @@ class TtRoutedExpert(LightweightModule):
         return (gate_tensors, up_tensors, down_tensors) if device else None
 
     @staticmethod
+    def _convert_expert_biases(
+        torch_biases: list[dict],
+        experts_per_chip: int,
+        mesh_device: ttnn.MeshDevice,
+        bias_dtype=ttnn.bfloat16,
+    ):
+        """Convert per-expert gate/up/down biases to mesh-distributed ttnn tensors.
+
+        Each torch bias dict has keys gate_proj_bias/up_proj_bias/down_proj_bias (1D,
+        length = projection N). Returns (gate, up, down) lists of one (1, N) TILE tensor
+        per local expert, distributed across the mesh exactly like the routed weights
+        (reusing the weight gather + mesh mapper by remapping the bias keys).
+        """
+        mesh_rows, mesh_cols = mesh_device.shape
+        mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
+        # Remap bias keys so the weight-distribution gather can be reused verbatim.
+        as_weights = [
+            {
+                "gate_proj": d["gate_proj_bias"],
+                "up_proj": d["up_proj_bias"],
+                "down_proj": d["down_proj_bias"],
+            }
+            for d in torch_biases
+        ]
+
+        def _to_tt(per_pos_biases):
+            # each entry is 1D (N,) -> (1, N); stack per mesh position -> (rows, cols, 1, N)
+            stacked = torch.stack([b.reshape(1, -1) for b in per_pos_biases], dim=0)
+            n = stacked.shape[-1]
+            stacked = stacked.reshape(mesh_rows, mesh_cols, 1, n)
+            tt = ttnn.as_tensor(
+                stacked,
+                mesh_mapper=mapper,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                dtype=bias_dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            return ttnn.squeeze(ttnn.squeeze(tt, dim=0), dim=0)  # per device: (1, N)
+
+        gate_biases, up_biases, down_biases = [], [], []
+        for local_expert_idx in range(experts_per_chip):
+            gb, ub, db = ExpertMapping.gather_weights_for_mesh_distribution(
+                as_weights, local_expert_idx, mesh_rows, mesh_cols, experts_per_chip
+            )
+            gate_biases.append(_to_tt(gb))
+            up_biases.append(_to_tt(ub))
+            down_biases.append(_to_tt(db))
+        return gate_biases, up_biases, down_biases
+
+    @staticmethod
     def build_ttnn_cache(
         torch_weights: list[dict],
         experts_per_chip: int,
@@ -257,18 +308,11 @@ class TtRoutedExpert(LightweightModule):
             )
         self.activation = activation
 
-        # Optional per-expert projection biases (gpt-oss). WIP: the op accepts,
-        # validates, and caches bias inputs, but the fused kernel does not add
-        # them yet (program-factory CBs + reader reads + compute broadcast-add
-        # are the remaining work — PR #49619). Guard so a caller can't silently
-        # get bias-free results. Wire the conversion + forward pass-through once
-        # the kernel supports bias.
-        if torch_biases is not None:
-            raise NotImplementedError(
-                "TtRoutedExpert expert-bias support is WIP (gpt-oss): the fused kernel does not add gate/up/down "
-                "biases yet. Tracked in PR #49619."
-            )
-        self.torch_biases = None
+        # Optional per-expert projection biases (gpt-oss). Only supported with
+        # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
+        # after the down matmul). Converted + distributed like the weights below.
+        if torch_biases is not None and activation != ttnn.RoutedExpertActivation.SwiGluOai:
+            raise ValueError("TtRoutedExpert expert biases are only supported with RoutedExpertActivation.SwiGluOai")
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -336,6 +380,19 @@ class TtRoutedExpert(LightweightModule):
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
         self.gate_projs, self.up_projs, self.down_projs = result
+
+        # Convert + distribute optional per-expert biases (gpt-oss), one (1, N)
+        # tensor per local expert, mesh-distributed like the weights.
+        self.gate_biases = None
+        self.up_biases = None
+        self.down_biases = None
+        if torch_biases is not None:
+            assert (
+                len(torch_biases) == total_experts
+            ), f"Expected {total_experts} expert biases, got {len(torch_biases)}"
+            self.gate_biases, self.up_biases, self.down_biases = self._convert_expert_biases(
+                torch_biases, experts_per_chip, self.mesh_device
+            )
 
     @staticmethod
     def shard_expert_token_counts(
@@ -448,9 +505,15 @@ class TtRoutedExpert(LightweightModule):
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
                 activation=self.activation,
+                gate_biases=self.gate_biases,
+                up_biases=self.up_biases,
+                down_biases=self.down_biases,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs
+
+        if self.gate_biases is not None:
+            raise NotImplementedError("Expert bias is only supported on the Blackhole fused path")
 
         # Wormhole fallback: the per-expert extract → FFN → insert loop needs a
         # TILE activations_dtype buffer. A ROW_MAJOR input is tilized and cast in

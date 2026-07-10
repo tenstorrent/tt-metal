@@ -246,15 +246,13 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
                 b.padded_shape()[-1],
                 expected_n);
         }
-        // WIP (gpt-oss): the host plumbing (API/prim/inputs/cache-key/validation)
-        // is in place, but the fused kernel does not add biases yet — the
-        // program-factory bias CBs, reader bias reads, and the compute-kernel
-        // broadcast-add are the remaining work. Fail loudly rather than silently
-        // dropping the bias. Tracked in PR #49619.
+        // Bias fusion is implemented only for the SwiGLU-OAI activation (gpt-oss):
+        // the kernel adds gate/up bias before the clamp and down bias after the
+        // down matmul. The SiLU path has no bias branch.
         TT_FATAL(
-            !op.fuse_bias,
-            "unified_routed_expert_ffn: expert-bias fusion is not implemented yet (gpt-oss WIP). Bias tensors are "
-            "accepted and validated, but the fused kernel does not add them — do not rely on this path yet.");
+            op.activation == RoutedExpertActivation::SwiGluOai,
+            "unified_routed_expert_ffn: expert biases are only supported with RoutedExpertActivation::SwiGluOai "
+            "(got the SiLU path).");
     }
 }
 
