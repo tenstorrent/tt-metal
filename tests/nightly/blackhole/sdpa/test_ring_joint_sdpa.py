@@ -3870,6 +3870,31 @@ def test_ring_joint_attention_minimax3_gqa_chunked_accuracy():
     )
 
 
+def test_ring_joint_attention_minimax3_gqa_chunked_reuse_kv_hang_regression():
+    """Liveness gate for the RingJointSDPA cross-call chunked-prefill hang.
+
+    GQA chunked prefill reusing one oversized KV buffer: successive chunks share one cached program
+    while logical_n grows. Before the idle-core cache-hit patch, an idle core kept a stale
+    active_ring_iter_mask and skipped a ring iter the injector still multicast to, hanging forever.
+
+    Runs only on bh_quietbox_2_iommu (QuietBox 2, 4 chips, single ring sp_size=4). The hang needs an
+    idle core inside an active row-wide mcast row; on the fixed 10x10 grid that requires
+    all_heads_num_q_chunks = NH*ceil(640/q_chunk) to not be a multiple of the row width. Production
+    q=128 -> 80 = full rows (idle cores only in fully-idle rows, never hangs); q=320 -> 32 leaves a
+    partial active row of 8 idle cores that reproduces it. Verified: hangs without the patch, passes
+    with it. reuse_kv_buffer permutes the output, so this is liveness-only (do_check=False).
+    """
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        MINIMAX3_GQA_CHUNKED_MODEL_CONFIGS["minimax3_55k"],
+        chunk_size=CHUNKED_PREFILL_CHUNK_SIZE,
+        qk_configs=[(320, 512)],
+        persistent_buffer_mode="reuse_max",
+        do_check=False,
+        reuse_kv_buffer=True,
+    )
+
+
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.parametrize("reuse_kv_buffer", [False, True], ids=["fresh_kv", "reuse_kv"])
 @pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
