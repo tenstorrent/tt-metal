@@ -107,7 +107,7 @@ void BM_StandaloneMuxV2Throughput(
 
     std::string rejection_reason;
     if (!context->can_support_case(benchmark_case, &rejection_reason)) {
-        state.SkipWithError(rejection_reason.c_str());
+        state.SkipWithError(rejection_reason);
         return;
     }
 
@@ -115,7 +115,7 @@ void BM_StandaloneMuxV2Throughput(
     for ([[maybe_unused]] auto _ : state) {
         const auto run_result = run_standalone_mux_v2_benchmark_once(*context, benchmark_case);
         if (!run_result.success) {
-            state.SkipWithError(run_result.error_message.c_str());
+            state.SkipWithError(run_result.error_message);
             return;
         }
 
@@ -148,7 +148,7 @@ void register_and_run_standalone_mux_v2_throughput_benchmarks(FabricMuxV2Benchma
 
         const auto benchmark_name = benchmark_name_for_case(benchmark_case);
         benchmark::RegisterBenchmark(
-            benchmark_name.c_str(),
+            benchmark_name,
             [&context, benchmark_case](benchmark::State& state) {
                 BM_StandaloneMuxV2Throughput(state, &context, benchmark_case);
             })

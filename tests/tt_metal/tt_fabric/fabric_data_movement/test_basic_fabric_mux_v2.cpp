@@ -643,8 +643,7 @@ std::vector<uint32_t> make_sender_runtime_args(
     const SenderMemoryLayout& sender_memory,
     const CoreCoord& receiver_virtual_core) {
     const uint32_t effective_stage_count = std::min(
-        test_case.stage_count,
-        std::min(test_case.num_packets, static_cast<uint32_t>(test_case.num_buffers_per_channel)));
+        {test_case.stage_count, test_case.num_packets, static_cast<uint32_t>(test_case.num_buffers_per_channel)});
 
     return {
         sender_memory.packet_header_buffer_address,

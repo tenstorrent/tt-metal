@@ -319,11 +319,11 @@ private:
     size_t noc_aligned_address_size_bytes_ = 0;
     uint8_t num_buffers_ = 0;
     size_t buffer_size_bytes_ = 0;
-    MemoryRegion status_region_{};
-    MemoryRegion connection_info_region_{};
-    MemoryRegion connection_handshake_region_{};
-    MemoryRegion buffer_index_region_{};
-    MemoryRegion channel_region_{};
+    MemoryRegion status_region_;
+    MemoryRegion connection_info_region_;
+    MemoryRegion connection_handshake_region_;
+    MemoryRegion buffer_index_region_;
+    MemoryRegion channel_region_;
     size_t memory_map_end_address_ = 0;
 };
 
@@ -584,7 +584,7 @@ bool FabricMuxV2BenchmarkContext::can_support_case(
 }
 
 CoreCoord FabricMuxV2BenchmarkContext::get_mux_logical_core() const {
-    TT_FATAL(worker_cores_.size() >= 1, "No worker cores are available for the standalone mux benchmark");
+    TT_FATAL(!worker_cores_.empty(), "No worker cores are available for the standalone mux benchmark");
     return worker_cores_.at(0);
 }
 
