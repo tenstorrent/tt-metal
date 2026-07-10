@@ -1537,6 +1537,9 @@ def test_reshard_variant6_reverse_dealloc_order(device):
 # cross-/same-orientation reshards in both directions, interleaved<->interleaved uint8 (ttnn.copy),
 # block-float dtypes, row-major width-sharded to DRAM (Blackhole alignment), and block-on-DRAM via
 # the ND_SHARDED representation.
+#
+# Scope: these cases cross the L1<->DRAM boundary . Same-buffer DRAM<->DRAM
+# sharded reshard also works and is covered by test_reshard_dram_to_dram below.
 # ---------------------------------------------------------------------------
 
 _HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -1707,3 +1710,41 @@ def test_reject_legacy_dram_block_sharded(device, expect_error):
     tt_l1_hs = ttnn.to_memory_config(tt, l1_hs)
     with expect_error(RuntimeError, "DRAM block sharding"):
         ttnn.reshard(tt_l1_hs, legacy_block_dram)
+
+
+# DRAM -> DRAM sharded reshard (both buffers on DRAM).
+# Block-DRAM here uses the ND_SHARDED form.
+_DRAM_TO_DRAM_CASES = [
+    pytest.param(_HS, _WS, ttnn.float32, id="DRAM_HS-DRAM_WS-f32"),
+    pytest.param(_WS, _HS, ttnn.bfloat16, id="DRAM_WS-DRAM_HS-bf16"),
+    pytest.param(_HS, _WS, ttnn.uint32, id="DRAM_HS-DRAM_WS-u32"),
+    pytest.param(_BS, _HS, ttnn.float32, id="DRAM_BS_nd-DRAM_HS-f32"),
+    pytest.param(_HS, _BS, ttnn.float32, id="DRAM_HS-DRAM_BS_nd-f32"),
+]
+
+
+@pytest.mark.parametrize("input_scheme, output_scheme, dtype", _DRAM_TO_DRAM_CASES)
+def test_reshard_dram_to_dram(device, input_scheme, output_scheme, dtype):
+    """DRAM sharded -> DRAM sharded reshard round-trips (see _DRAM_TO_DRAM_CASES)."""
+    grid_size = device.compute_with_storage_grid_size()
+    if grid_size.x < 8 or grid_size.y < 4:
+        pytest.skip("Device grid too small")
+
+    height, width = 256, 256
+    dram = ttnn.BufferType.DRAM
+    dram_interleaved = ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=dram)
+    input_mem_config = _l1_dram_mem_config(input_scheme, dram, height, width, device)
+    output_mem_config = _l1_dram_mem_config(output_scheme, dram, height, width, device)
+
+    torch_tensor = random_torch_tensor(dtype, [1, 1, height, width])
+    tt = ttnn.Tensor(torch_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, dram_interleaved)
+    tt_input = ttnn.to_memory_config(tt, input_mem_config)  # interleaved -> DRAM input config
+
+    tt_output = ttnn.to_memory_config(tt_input, output_mem_config)  # DRAM -> DRAM (op under test)
+
+    torch_result = ttnn.to_memory_config(tt_output, dram_interleaved).cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        passing, output = comp_pcc(torch_tensor, torch_result, 0.9889)
+    else:
+        passing, output = comp_equal(torch_tensor, torch_result)
+    assert passing, output
