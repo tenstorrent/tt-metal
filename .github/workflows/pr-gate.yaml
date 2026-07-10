@@ -136,7 +136,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: 'ASan'
-      build-wheel: true
+      # Package the wheel from the compiled tree (self-contained) instead of a second manylinux compile.
+      build-wheel: false
+      build-wheel-from-precompiled: true
       publish-artifact: false
       publish-package: true
       tracy: true
@@ -226,7 +228,7 @@ jobs:
       # build-docs runs on ubuntu-latest (external runner) — no harbor access.
       # Use raw GHCR tag from build-docker-images, not the harbor-prefixed ref from asan-build.
       docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.asan-build.outputs.wheel-from-precompiled-artifact-name }}
       build-type: 'ASan'
 
   metalium-examples:
