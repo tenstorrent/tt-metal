@@ -810,7 +810,7 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
     ],
     ids=["qkv", "wo", "ff1_ff3", "ff2"],
 )
-def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_tiles_per_shard, n_tiles_per_receiver):
+def test_tensor_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_tiles_per_shard, n_tiles_per_receiver):
     num_dram_banks = device.dram_grid_size().x
     num_receivers_per_bank = 4
     ring_size = num_dram_banks * num_receivers_per_bank
@@ -923,7 +923,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_
     ],
     indirect=["mesh_device"],
 )
-def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
+def test_tensor_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
     mesh_device, num_receivers_per_bank, n_per_device, seed_name
 ):
     num_dram_banks = mesh_device.dram_grid_size().x
@@ -1045,7 +1045,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring32_mesh_qkv(
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-def test_dram_core_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_device):
+def test_tensor_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_device):
     num_dram_banks = mesh_device.dram_grid_size().x
     num_receivers_per_bank = 2
     ring_size = num_dram_banks * num_receivers_per_bank
@@ -1174,7 +1174,7 @@ def test_dram_core_prefetcher_recv_contig_batched_matmul_ring16_mesh_ff2(mesh_de
     assert passing, f"[recv_contig_batched_ring16_mesh_ff2] PCC check failed: {output_str}"
 
 
-def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
+def test_tensor_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
     num_dram_banks = device.dram_grid_size().x
     num_receivers_per_bank = 4
     ring_size = num_dram_banks * num_receivers_per_bank
@@ -1310,7 +1310,7 @@ def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring32(device):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-def test_dram_core_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mesh_device):
+def test_tensor_prefetcher_recv_contig_batched_mixed_sequence_ring16_mesh(mesh_device):
     num_dram_banks = mesh_device.dram_grid_size().x
     num_receivers_per_bank = 2
     ring_size = num_dram_banks * num_receivers_per_bank

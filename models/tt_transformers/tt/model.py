@@ -64,7 +64,7 @@ class Transformer(LightweightModule):
 
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
-        # Only the worker-core backend co-locates rope on its grid; the DRAM-core backend uses
+        # Only the worker-core backend co-locates rope on its grid; the Tensor Prefetcher backend uses
         # the default rope placement.
         rope_prefetcher = colocating_prefetcher(prefetcher)
         self.rope_setup = ActualRopeSetupClass(

@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Receiver-contiguous DRAM layout: the single source of truth shared by the
-DRAM-core prefetcher (``dram_core_prefetcher.py``) and its tests
+Tensor Prefetcher (``tensor_prefetcher.py``) and its tests
 (``tests/ttnn/unit_tests/operations/prefetcher_common.py``).
 
 The strided receiver placement (``bank_receivers_strided``) and the round-robin
