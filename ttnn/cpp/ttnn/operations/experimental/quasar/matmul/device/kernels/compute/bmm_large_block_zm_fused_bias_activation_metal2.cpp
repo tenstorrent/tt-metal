@@ -437,7 +437,12 @@ void kernel_main() {
 
                             } else {
                                 tile_regs_commit();
+                                // [DEBUG mm_partials TILE_COUNTERS localization] which producer step faults?
+                                // 0xC0FFEE03 = pre-reserve (+block idx next); 04 = reserved; 05 = packed; 06 = pushed.
+                                PACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE03u)));
+                                PACK((WATCHER_RING_BUFFER_PUSH((uint32_t)block)));
                                 mm_partials_cb.reserve_back(out_subblock_num_tiles);
+                                PACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE04u)));
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -454,9 +459,11 @@ void kernel_main() {
 
                                 uint32_t start_dst_index = 0;
                                 pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
+                                PACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE05u)));
 
                                 tile_regs_release();
                                 mm_partials_cb.push_back(out_subblock_num_tiles);
+                                PACK((WATCHER_RING_BUFFER_PUSH(0xC0FFEE06u)));
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
