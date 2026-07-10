@@ -7,9 +7,11 @@
 #include <cstdint>
 
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "extract.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::extract::detail {
 
@@ -41,6 +43,12 @@ void bind_extract(nb::module_& mod) {
                 max_dispatched_tokens_per_expert (int): Host-known upper bound on the number of
                     rows/tokens that can be extracted per expert. Must be a multiple of TILE_HEIGHT (32).
                     Defines the output tensor's row/token dimension.
+                subdevice_id (ttnn.SubDeviceId, optional): When set, run the op on this sub-device's
+                    worker cores instead of the full compute grid. Defaults to None (full grid).
+                optional_output_tensor (ttnn.Tensor, optional): Preallocated output buffer to write
+                    into instead of allocating a fresh one. Must match the op's output spec:
+                    [.., max_dispatched_tokens_per_expert, hidden_dim], global_tensor dtype, TILE
+                    layout, DRAM interleaved. Defaults to None (allocate a new output).
 
             Returns:
                 ttnn.Tensor: [max_dispatched_tokens_per_expert, hidden_dim] BFLOAT8_B TILE-layout
@@ -53,7 +61,9 @@ void bind_extract(nb::module_& mod) {
         nb::arg("global_expert_idx_table").noconvert(),
         nb::kw_only(),
         nb::arg("local_expert_id"),
-        nb::arg("max_dispatched_tokens_per_expert"));
+        nb::arg("max_dispatched_tokens_per_expert"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("optional_output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::extract::detail

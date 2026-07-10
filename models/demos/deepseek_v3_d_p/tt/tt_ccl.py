@@ -131,6 +131,10 @@ class TT_CCL:
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Single global semaphore shared by every MoE layer's routed-expert/combine overlap.
+        # Lazily created once per mesh (in L1_SMALL). See get_routed_expert_global_semaphore.
+        self.routed_expert_global_semaphore = None
+
     def get_mla_ring_attention_buffers(
         self,
         *,
@@ -245,6 +249,15 @@ class TT_CCL:
         tt_ccl (one instance for the whole model), NOT on the per-layer TtSharedExpert object — the
         latter would pin one RS input per layer for the model's lifetime, leaking DRAM every layer."""
         self.shared_rs_input_keepalive = input_tensor
+
+    def get_routed_expert_global_semaphore(self, cores):
+        """Lazily create (once per mesh) and return the global semaphore used to overlap the routed
+        expert with the combine. Every MoE layer shares this single handle."""
+        if self.routed_expert_global_semaphore is None:
+            self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
+                self.mesh_device, cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
+            )
+        return self.routed_expert_global_semaphore
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis

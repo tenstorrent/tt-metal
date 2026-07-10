@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
@@ -25,6 +26,9 @@ struct CombineParams {
     bool init_zeros;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_combine = false;
+    // Optional routed-expert global semaphore for overlapping the routed expert with the combine.
+    // Only consumed by the reader_untilize kernel (waits on it before processing each expert).
+    std::optional<tt::tt_metal::GlobalSemaphore> global_semaphore = std::nullopt;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -38,7 +42,8 @@ struct CombineParams {
         "worker_core_range_set",
         "init_zeros",
         "use_l1_small_for_semaphores",
-        "use_fp8_combine");
+        "use_fp8_combine",
+        "global_semaphore");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -53,7 +58,8 @@ struct CombineParams {
             worker_core_range_set,
             init_zeros,
             use_l1_small_for_semaphores,
-            use_fp8_combine);
+            use_fp8_combine,
+            global_semaphore);
     };
 };
 
