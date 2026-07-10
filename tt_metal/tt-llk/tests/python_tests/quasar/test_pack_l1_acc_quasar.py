@@ -118,11 +118,7 @@ def generate_qsr_pack_l1_acc_combinations(
 @parametrize(
     formats_dest_acc=generate_qsr_pack_l1_acc_combinations(PACK_L1_ACC_FORMATS),
     # don't generate the No variant for them. formats_dest_acc[0] is the InputOutputFormat (input/output pair).
-    implied_math_format=lambda formats_dest_acc: (
-        [ImpliedMathFormat.Yes]
-        if formats_dest_acc[0].input_format.is_mx_format()
-        else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-    ),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     input_dimensions=runtime(INPUT_DIMENSIONS),
 )
@@ -226,9 +222,6 @@ def test_pack_l1_acc_quasar(
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
         boot_mode=boot_mode,
-        # MX inputs need format inference disabled so the C++ side's
-        # IMPLIED_MATH_FORMAT setting drives the math format.
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

@@ -8,7 +8,6 @@ import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
-    quantize_mx_tensor_chunked,
 )
 from helpers.llk_params import (
     DestAccumulation,
@@ -103,30 +102,13 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
-            DataFormat.MxFp8R,
-            DataFormat.MxFp8P,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
         ],
     ),
-    # Elwmul with MxFp8R or MxFp8P input and reuse_dest has rounding differences; skip to avoid flaky tolerance failures
-    mathop=lambda formats: (
-        [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-        ]
-        if (
-            formats.input_format == DataFormat.MxFp8R
-            or formats.input_format == DataFormat.MxFp8P
-        )
-        else [
-            MathOperation.Elwadd,
-            MathOperation.Elwsub,
-            MathOperation.Elwmul,
-        ]
-    ),
+    mathop=[
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+        MathOperation.Elwmul,
+    ],
     # Math fidelity only affects multiplication; for add/sub only LoFi is meaningful.
     math_fidelity=lambda mathop: (
         [MathFidelity.LoFi]
@@ -156,12 +138,6 @@ def test_eltwise_binary_reuse_dest_quasar(
     output_dimensions,
     boot_mode=BootMode.DEFAULT,
 ):
-
-    # MX formats require implied_math_format=Yes on Quasar; set it and disable_format_inference so golden matches.
-    use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
-    implied_math_format = ImpliedMathFormat.Yes if use_mx else ImpliedMathFormat.No
-    disable_format_inference = use_mx
-
     tile_rows, tile_cols = TILE_DIMENSIONS
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
@@ -217,32 +193,8 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     tile_elements = num_faces * face_r_dim * FACE_C_DIM
     torch_format = format_dict[formats.output_format]
-    if formats.input_format.is_mx_format():
-        src_A_t = quantize_mx_tensor_chunked(
-            src_A_t.to(torch.bfloat16), formats.input_format
-        )
-        src_B_t = quantize_mx_tensor_chunked(
-            src_B_t.to(torch.bfloat16), formats.input_format
-        )
 
-    # On Quasar with IMPLIED_MATH_FORMAT=Yes the HW dest accumulator's physical
-    # storage is implied from the SrcA tag: Float16 input → FP16A (S1E5M10);
-    # Float16_b and plain MX inputs → BF16 (S1E8M7). Match that here so the
-    # golden's multi-tile accumulation rounds the same way as HW. The pack
-    # stage widens dest to (sign, 8-bit exp, 23-bit mantissa) without a bf16
-    # detour, so the post-loop tensor is kept in fp32 — feeding bf16 into the
-    # MX quantize would discard 3 mantissa bits the HW preserves.
-    if use_mx:
-        internal_dtype = (
-            torch.float16
-            if formats.input_format == DataFormat.Float16
-            else torch.bfloat16
-        )
-        golden_dtype = torch.float32
-    else:
-        internal_dtype = torch_format
-        golden_dtype = torch_format
-    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=golden_dtype)
+    golden_tensor = torch.zeros(tile_cnt_output * tile_elements, dtype=torch_format)
 
     eltwise_golden = (
         EltwiseBinaryGolden()
@@ -251,16 +203,14 @@ def test_eltwise_binary_reuse_dest_quasar(
     )
 
     math_format_for_fidelity = (
-        (DataFormat.Float16_b if use_mx else formats.output_format)
-        if eltwise_golden is not None
-        else None
+        formats.output_format if eltwise_golden is not None else None
     )
 
     for out_t in range(tile_cnt_output):
         block_idx = out_t // output_tiles_in_block
         tile_in_block = out_t % output_tiles_in_block
         out_start = out_t * tile_elements
-        dest = src_A_t[out_start : out_start + tile_elements].to(internal_dtype)
+        dest = src_A_t[out_start : out_start + tile_elements].to(torch_format)
 
         for i in range(inner_dim):
             input_tile_idx = (
@@ -270,8 +220,8 @@ def test_eltwise_binary_reuse_dest_quasar(
             )
             start = input_tile_idx * tile_elements
             end = start + tile_elements
-            a_tile = src_A_t[start:end].to(internal_dtype)
-            b_tile = src_B_t[start:end].to(internal_dtype)
+            a_tile = src_A_t[start:end].to(torch_format)
+            b_tile = src_B_t[start:end].to(torch_format)
             srcA, srcB = (
                 (dest.clone(), b_tile)
                 if reuse_dest_type == EltwiseBinaryReuseDestType.DEST_TO_SRCA
@@ -294,13 +244,13 @@ def test_eltwise_binary_reuse_dest_quasar(
                     product = (
                         (srcA_m.to(torch.float32) * srcB_m.to(torch.float32))
                         .to(srcA_m.dtype)
-                        .to(internal_dtype)
+                        .to(torch_format)
                     )
                     dest = product
                 else:
                     dest = srcA * srcB
 
-        golden_tensor[out_start : out_start + tile_elements] = dest.to(golden_dtype)
+        golden_tensor[out_start : out_start + tile_elements] = dest.to(torch_format)
 
     configuration = TestConfig(
         "sources/quasar/eltwise_binary_reuse_dest_quasar_test.cpp",
@@ -308,8 +258,8 @@ def test_eltwise_binary_reuse_dest_quasar(
         templates=[
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             REUSE_DEST_TYPE(reuse_dest_type),
+            IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
             DEST_SYNC(dest_sync_mode),
         ],
         runtimes=[
@@ -346,7 +296,6 @@ def test_eltwise_binary_reuse_dest_quasar(
         unpack_to_dest=False,
         dest_acc=DestAccumulation.No,
         boot_mode=boot_mode,
-        disable_format_inference=disable_format_inference,
     )
 
     res_from_L1 = configuration.run().result

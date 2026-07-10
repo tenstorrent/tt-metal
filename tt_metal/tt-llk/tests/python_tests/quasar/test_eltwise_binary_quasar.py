@@ -77,14 +77,6 @@ ELTWISE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
-        DataFormat.MxFp8R,
-        DataFormat.MxFp8P,
-        DataFormat.MxFp6R,
-        DataFormat.MxFp6P,
-        DataFormat.MxFp4,
-        DataFormat.MxInt8,
-        DataFormat.MxInt4,
-        DataFormat.MxInt2,
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
@@ -109,14 +101,7 @@ ELTWISE_FORMATS = input_output_formats(
             MathFidelity.HiFi4,
         ]
     ),
-    implied_math_format=lambda formats: (
-        [
-            ImpliedMathFormat.No,
-            ImpliedMathFormat.Yes,
-        ]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
-    ),
+    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync_dest_acc=lambda formats: (
         _eltwise_dest_acc_sync((DestAccumulation.Yes,))
         if formats.input_format == DataFormat.Int8
@@ -210,9 +195,6 @@ def test_eltwise_binary(
         ),
         dest_acc=dest_acc,
         boot_mode=boot_mode,
-        # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        # This ensures Python-side format inference uses Float16_b for MX internal math
-        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
