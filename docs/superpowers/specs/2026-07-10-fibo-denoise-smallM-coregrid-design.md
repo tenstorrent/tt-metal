@@ -52,3 +52,26 @@ shrinks and forward time drops.
 
 L1/`memory_config` residency (bounded upside at 15.7% roofline; deferred), attention/CCL tuning,
 the big-M matmuls (already tuned in Phase 1).
+
+## Step 1 outcome (2026-07-10): GATE FAILED — approach abandoned
+
+Swept the small-M shapes at smaller grids vs the 12×10 baseline. Result: **12×10 is already
+optimal**; every smaller grid is strictly, monotonically worse:
+
+| Shape | 12×10 | 8×10 | 4×10 | 4×8 | 2×10 |
+|---|---|---|---|---|---|
+| proj_out prompt `128×7680×3072` | **184 µs** | 246 (+34%) | 450 (+144%) | 436 (+137%) | 864 (+369%) |
+| qkv prompt `128×3072×4608` | **114 µs** | 158 (+39%) | 283 (+150%) | 274 (+141%) | — |
+| modulation `32×3072×9216` | **226 µs** | — | 533 (+136%) | 525 (+132%) | 1034 (+358%) |
+
+The hypothesis (few M-tiles smeared across `grid_x` → idle cores) was wrong: `minimal_matmul`
+fills the grid via the large **N** dimension (N = 3072–9216), so 120 cores are already well used.
+Shrinking the grid removes parallelism. The low FLOP-% on these ops is inherent to small-M matmuls
+(low arithmetic intensity, per-op-overhead bound), not a grid-occupancy problem — so it is not
+fixable by grid, block (already tuned in Phase 1), or L1 (workload is only 15.7% bandwidth-bound).
+
+**Conclusion:** Phase 1 (matmul block tuning: −2.2% forward, PCC 99.53%) is the ceiling for the
+`minimal_matmul`-config lever. Further denoise gains would require *reducing op count* — fusing the
+many small per-block matmuls (46 blocks × prompt/modulation projections) — which is a structural
+change to shared block code, higher effort/risk, and a separate future project. No code shipped for
+Phase 2 (sweeper validation entries reverted; get_matmul_config unchanged).
