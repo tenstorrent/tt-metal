@@ -91,6 +91,7 @@ on:
       - "Git bisect dispatch"
       - "Custom test dispatch"
       - "Validate installation step from instructions"
+      - "LLK perf"
     types:
       - completed
 

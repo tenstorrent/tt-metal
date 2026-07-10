@@ -14,7 +14,7 @@ on:
           kimi_prefill_block, kimi_chunked, dsa_mla, dsa_mla_glm, glm_moe, prefill_block_determinism,
           prefill_transformer_determinism.
           The "module" group also runs every stage; the "sdpa_perf" group runs the
-          ring joint SDPA perf checks (built with the profiler).
+          ring joint SDPA perf checks.
         required: false
         type: string
         default: "all"
@@ -77,8 +77,6 @@ jobs:
 
   build-artifact:
     needs: [validate-test-type, check-harbor]
-    # Skip when only the perf checks were requested — they use the profiler build below.
-    if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -87,33 +85,13 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      enable-lto: ${{ inputs.enable-lto || false }}
-
-  # Separate profiler (tracy) build used only by the ring joint SDPA perf checks, which
-  # call run_device_profiler. Keeps the functional prefill jobs on the plain build above.
-  build-artifact-profiler:
-    needs: [validate-test-type, check-harbor]
-    # Only build the profiler artifact when the perf job will actually run: the normalized
-    # selection is "all" or contains the sdpa_perf group (e.g. "mla,sdpa_perf").
-    if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      contents: read
-      packages: write
-    secrets: inherit
-    with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
-      build-type: ${{ inputs.build-type || 'Release' }}
-      tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
   Galaxy-DeepSeek-Prefill-tests:
     needs: [validate-test-type, check-harbor, build-artifact]
-    # Skip when only the perf checks were requested (they run on the profiler build below).
+    # Skip when only the perf checks were requested (they run in the focused job below).
     if: ${{ needs.validate-test-type.outputs.test-type != 'sdpa_perf' }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
@@ -123,19 +101,19 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: bh_galaxy
       test-type: ${{ needs.validate-test-type.outputs.test-type }}
-      # Perf checks need the profiler build, so keep them out of the "all" plain-build run.
+      # Keep the perf checks in a focused job so the long functional run remains unchanged.
       exclude-test-group: sdpa_perf
 
   Galaxy-DeepSeek-Prefill-SDPA-Perf-tests:
-    needs: [validate-test-type, check-harbor, build-artifact-profiler]
+    needs: [validate-test-type, check-harbor, build-artifact]
     # Runs for the default "all" and when the sdpa_perf group is selected (alone or with others).
     if: ${{ needs.validate-test-type.outputs.test-type == 'all' || contains(needs.validate-test-type.outputs.test-type, 'sdpa_perf') }}
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: bh_galaxy
       # Select the perf entry by its test_group so adding more perf checks needs no workflow edit.
       test-type: sdpa_perf

@@ -172,7 +172,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     // DEVICE_PRINT L1 buffers. Only enable the DRAM-aggregation work on cq_id 0 so the buffers
     // aren't drained twice (which would race the host's rpos updates and reorder/drop messages).
     if (cq_id_ == 0 && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
-        descriptor_.metal_context().dprint_server()) {
+        descriptor_.metal_context().dprint_server() && device_->arch() != tt::ARCH::QUASAR) {
         auto print_cores = descriptor_.metal_context().dprint_server()->get_print_cores(device_->id());
         if (!print_cores.empty()) {
             const auto& hal = descriptor_.hal();
@@ -334,7 +334,7 @@ void DispatchSKernel::CreateKernel() {
     };
     configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
-    if (GetCoreType() == CoreType::WORKER) {
+    if (GetCoreType() == CoreType::WORKER && device_->arch() != tt::ARCH::QUASAR) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
         std::map<std::string, std::string> compute_defines = {
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
