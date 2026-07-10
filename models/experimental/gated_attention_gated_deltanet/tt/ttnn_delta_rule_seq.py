@@ -85,6 +85,23 @@ def _spc(name):
         _tracy_signpost(name)
 
 
+def _l2norm_qk(t, cached_masks):
+    """L2-normalize q/k for the delta rule.
+
+    bfloat16 payload (Stage A) -> a single fused ``ttnn.rms_norm`` with weight = 1/sqrt(D)
+    (exactly L2, since rms = L2*sqrt(D)) + HiFi4/fp32-acc: one op vs the 5-op manual sequence,
+    and slightly MORE accurate than the manual bf16 l2_norm here. float32 -> the exact 5-op
+    ``l2_norm_ttnn``, because fused ``ttnn.rms_norm`` fp32 accuracy is capped ~bf16 by hard-coded
+    bf16 intermediate CBs (tenstorrent/tt-metal#43946). Kill switch: QWEN_GDN_L2_FUSED=0 forces
+    the exact path even in bf16.
+    """
+    gamma = cached_masks.get("l2_gamma") if cached_masks else None
+    if t.dtype == ttnn.bfloat16 and gamma is not None and _os.environ.get("QWEN_GDN_L2_FUSED", "1") != "0":
+        D = t.shape[-1]
+        return ttnn.rms_norm(t, epsilon=1e-6 / D, weight=gamma, compute_kernel_config=cached_masks.get("l2_cfg"))
+    return l2_norm_ttnn(t, dim=-1)
+
+
 def chunk_gated_delta_rule_seq_adapter(
     q,  # [B, T, H, K]
     k,  # [B, T, H, K]
@@ -141,8 +158,8 @@ def chunk_gated_delta_rule_seq_adapter(
     k_bh = _to_bhtd(k, K)
     v_bh = _to_bhtd(v, V)
 
-    q_bh = l2_norm_ttnn(q_bh, dim=-1)
-    k_bh = l2_norm_ttnn(k_bh, dim=-1)
+    q_bh = _l2norm_qk(q_bh, cached_masks)
+    k_bh = _l2norm_qk(k_bh, cached_masks)
     g_bh = _to_bht(g)
     beta_bh = ttnn.reshape(_to_bht(beta), [BH, T, 1])
 
@@ -179,10 +196,12 @@ def chunk_gated_delta_rule_seq_adapter(
     return o, new_state
 
 
-def create_chunk_masks_seq(chunk_size, device):
+def create_chunk_masks_seq(chunk_size, device, head_dim=None):
     """Pre-create the float32 masks the seq chunk kernel reads from `cached_masks`.
 
     Keys: triu_ones, tril_mask, eye ([1,C,C]), lower_causal, eye_32 ([1,32,32]).
+    When ``head_dim`` is given, also caches ``l2_gamma`` (a [head_dim] constant = 1/sqrt(head_dim))
+    and ``l2_cfg`` (HiFi4 + fp32 dest-acc) used by the fused-rms L2-norm of q/k (see _l2norm_qk).
 
     IMPORTANT: built via from_torch (NOT ttnn.tril/triu). On this ttnn build,
     ttnn.tril/ttnn.triu produce INCORRECT results at size 128 (wrong diagonal +
@@ -207,13 +226,28 @@ def create_chunk_masks_seq(chunk_size, device):
         )
 
     ones = torch.ones(chunk_size, chunk_size)
-    return {
+    masks = {
         "triu_ones": _from(torch.triu(ones, diagonal=0)),
         "tril_mask": _from(torch.tril(ones, diagonal=0)),
         "lower_causal": _from(torch.tril(ones, diagonal=0)),
         "eye": _from(torch.eye(chunk_size)),
         "eye_32": _from(torch.eye(32)),
     }
+    if head_dim is not None:
+        # gamma = 1/sqrt(D): turns ttnn.rms_norm into an exact L2-norm (rms = L2*sqrt(D)).
+        masks["l2_gamma"] = ttnn.from_torch(
+            torch.full((head_dim,), 1.0 / _math.sqrt(head_dim), dtype=torch.float32),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=_mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # HiFi4 + fp32 dest-acc: without it the fused rms is ~bf16-CB-capped (tenstorrent/tt-metal#43946).
+        masks["l2_cfg"] = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+        )
+    return masks
 
 
 def _solve_lower_triangular_ttnn(L, eye_1cc, mesh_device):

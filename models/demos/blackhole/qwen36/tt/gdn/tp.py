@@ -166,7 +166,7 @@ class TPGatedDeltaNet:
         # The from_torch fallback is a host write that TT_FATALs inside the captured chunk-outer
         # trace; pre-allocating here (outside any trace) makes the GDN prefill trace-safe. Mirrors
         # the single-device gdn/weights.py create_chunk_masks_seq usage.
-        self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
+        self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh, head_dim=args.gdn_dk)
         # Depthwise conv1d for prefill
         self._conv1d_w = tw.get("conv1d_w")
         self._conv1d_w_dev = None

@@ -261,7 +261,9 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
     # ONLY supports chunk_size=128 (= long_prefill_chunk_size). Precompute its
     # float32 masks (incl. eye_32) once.
     use_chunk_seq_prefill = True
-    chunk_seq_masks_long = create_chunk_masks_seq(config.long_prefill_chunk_size, mesh_device)
+    chunk_seq_masks_long = create_chunk_masks_seq(
+        config.long_prefill_chunk_size, mesh_device, head_dim=config.head_k_dim
+    )
 
     return GDNWeights(
         qkv_proj_weight=qkv_proj_weight,
