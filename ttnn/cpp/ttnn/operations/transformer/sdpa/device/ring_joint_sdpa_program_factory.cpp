@@ -1639,6 +1639,29 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         next_global_chunk += chunk_count;
     }
 
+    {
+        std::string participating;
+        bool col0_participates = false;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            if (core_work.at(i).global_q_count > 0) {
+                const auto c = core_work.at(i).logical_core;
+                participating += fmt::format("({},{}):{} ", c.x, c.y, core_work.at(i).global_q_count);
+                if (c.x == 0) {
+                    col0_participates = true;
+                }
+            }
+        }
+        log_info(
+            tt::LogOp,
+            "[RING_SDPA_CORES] grid={}x{} num_cores={} total_q_chunks={} col0_participates={} participating={}",
+            grid_size.x,
+            grid_size.y,
+            num_cores,
+            total_q_chunks,
+            col0_participates,
+            participating);
+    }
+
     // Helper: build a linear chain from sorted (core_idx, q_chunk_count) pairs.
     // - chain_segs[i].second = q iterations the i-th core will process in this chain scope
     // - injector = first core with head_work.size() == 1 (single head segment = no straddling)
