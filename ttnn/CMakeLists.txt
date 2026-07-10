@@ -266,6 +266,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::CNN
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::Copy
+        TTNN::Ops::Experimental::DeltaNet
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::DeepSeekPrefill::H2dSocketSync
@@ -537,6 +538,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(cpp/ttnn/operations/experimental/cnn)
 add_subdirectory(cpp/ttnn/operations/experimental/conv3d)
 add_subdirectory(cpp/ttnn/operations/experimental/copy)
+add_subdirectory(cpp/ttnn/operations/experimental/deltanet)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce)
 add_subdirectory(cpp/ttnn/operations/experimental/tensor_prefetcher)
