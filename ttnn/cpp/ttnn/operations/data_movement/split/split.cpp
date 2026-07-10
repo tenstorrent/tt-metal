@@ -128,6 +128,42 @@ std::vector<ttnn::Tensor> split(
     const ttsl::SmallVector<int64_t>& split_sizes,
     int64_t dim,
     const std::optional<MemoryConfig>& memory_config_arg) {
+    const auto& input_shape = input_tensor.logical_shape();
+
+    // Normalize negative dimension to positive index.
+    const int64_t normalized_dim = input_shape.get_normalized_index(dim);
+    const int64_t dim_size = static_cast<int64_t>(input_shape[normalized_dim]);
+
+    // Validate the requested sizes BEFORE deriving the output memory config: the desired_mem_cfg
+    // lambda dereferences split_sizes[0] and computes padded_dim % split_sizes.size(), which are
+    // undefined behavior / divide-by-zero for an empty list.
+    TT_FATAL(!split_sizes.empty(), "split_sizes must not be empty");
+    TT_FATAL(
+        std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
+        "split_size should be greater than 0, instead got: {}",
+        split_sizes);
+
+    // Coverage: the sizes must cover the split dim exactly. Subtract each (positive) size from the
+    // remaining extent instead of summing, so an oversized list cannot overflow int64_t; remaining
+    // stays >= 0 because the per-size check rejects any entry that would exceed it.
+    int64_t remaining = dim_size;
+    for (const auto& s : split_sizes) {
+        TT_FATAL(
+            s <= remaining,
+            "split_sizes must sum exactly to the size of dimension {} ({}), but sizes {} over-cover it",
+            normalized_dim,
+            dim_size,
+            split_sizes);
+        remaining -= s;
+    }
+    TT_FATAL(
+        remaining == 0,
+        "split_sizes must sum exactly to the size of dimension {} ({}), but sizes {} under-cover it by {}",
+        normalized_dim,
+        dim_size,
+        split_sizes,
+        remaining);
+
     // Default output MC: mirror input; rescale shard_spec per-chunk; DRAM on rescale fail or L1 overflow.
     const MemoryConfig desired_mem_cfg = [&]() -> MemoryConfig {
         const auto& in_mc = input_tensor.memory_config();
@@ -263,28 +299,6 @@ std::vector<ttnn::Tensor> split(
         return in_mc;
     }();
 
-    TT_FATAL(!split_sizes.empty(), "split_sizes must not be empty");
-    TT_FATAL(
-        std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
-        "split_size should be greater than 0, instead got: {}",
-        split_sizes);
-
-    const auto& input_shape = input_tensor.logical_shape();
-
-    // Normalize negative dimension to positive index
-    int64_t normalized_dim = input_shape.get_normalized_index(dim);
-
-    // Match torch.split semantics: the requested chunk sizes must sum exactly to the size of
-    // the split dimension. torch raises for both under- and over-covering size lists.
-    const int64_t split_sizes_sum = std::accumulate(split_sizes.begin(), split_sizes.end(), int64_t{0});
-    TT_FATAL(
-        split_sizes_sum == static_cast<int64_t>(input_shape[normalized_dim]),
-        "split_sizes must sum exactly to the size of dimension {} ({}), but got sizes {} summing to {}",
-        normalized_dim,
-        input_shape[normalized_dim],
-        split_sizes,
-        split_sizes_sum);
-
     std::vector<ttnn::Tensor> results;
 
     const uint32_t num_chunks = static_cast<uint32_t>(split_sizes.size());
@@ -414,12 +428,13 @@ std::vector<ttnn::Tensor> split(
     const auto& input_shape = input_tensor.logical_shape();
     int64_t normalized_dim = input_shape.get_normalized_index(dim);
 
-    // Match torch.split: ceil(dim_size / split_size) chunks of size split_size, with a
-    // smaller final chunk when the dimension is not evenly divisible. Build the size list
-    // so it sums exactly to the dimension (the last entry holds the remainder), which keeps
-    // the list overload's strict torch-parity sum check satisfied.
+    // ceil(dim_size / split_size) chunks of size split_size, with a smaller final chunk when the
+    // dimension is not evenly divisible. Build the size list so it sums exactly to the dimension
+    // (the last entry holds the remainder), which keeps the list overload's strict sum check
+    // satisfied. Compute the quotient and remainder separately to avoid overflowing
+    // dim_size + split_size for a large split_size.
     const int64_t dim_size = static_cast<int64_t>(input_shape[normalized_dim]);
-    const int64_t num_chunks = (dim_size + split_size - 1) / split_size;
+    const int64_t num_chunks = dim_size / split_size + (dim_size % split_size != 0 ? 1 : 0);
 
     ttsl::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     if (num_chunks > 0) {

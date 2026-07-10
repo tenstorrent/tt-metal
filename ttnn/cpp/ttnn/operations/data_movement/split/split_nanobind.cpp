@@ -24,38 +24,33 @@ void bind_split(nb::module_& mod) {
         R"doc(
             Splits :attr:`input_tensor` into chunks along dimension :attr:`dim` and returns them as a list of tensors.
 
-            This matches the semantics of :func:`torch.split`:
+            The behavior depends on the type of :attr:`split_size`:
 
-            * If :attr:`split_size` is an ``int``, the tensor is split into equally sized chunks of
-              ``split_size`` along :attr:`dim`. If the dimension is not evenly divisible by
-              ``split_size``, the last chunk is smaller. The number of outputs is
-              ``ceil(input_tensor.shape[dim] / split_size)``.
+            * If :attr:`split_size` is an ``int``, the tensor is split into contiguous chunks of
+              ``split_size`` elements along :attr:`dim`. When ``input_tensor.shape[dim]`` is not an
+              exact multiple of ``split_size``, the final chunk holds the remainder and is smaller.
+              The number of outputs is ``ceil(input_tensor.shape[dim] / split_size)``.
             * If :attr:`split_size` is a ``list[int]``, the tensor is split into ``len(split_size)``
-              chunks whose sizes along :attr:`dim` are given by the list entries. The sizes must sum
-              exactly to ``input_tensor.shape[dim]``; an error is raised otherwise.
+              contiguous chunks whose sizes along :attr:`dim` are the list entries, in order. The
+              entries must sum exactly to ``input_tensor.shape[dim]``.
 
-            .. note::
-                The following degenerate cases differ from :func:`torch.split` (they involve
-                zero-volume tensors, which are not supported by the device kernels):
+            Constraints:
 
-                * A zero-size split dimension (``input_tensor.shape[dim] == 0``) with an integer
-                  :attr:`split_size` raises an error instead of returning a single empty chunk.
-                * Zero-size entries in a :attr:`split_size` list (e.g. ``[0, 10]``) raise an error;
-                  every chunk size must be greater than 0.
+            * Every chunk size must be greater than 0 (both a zero entry in a :attr:`split_size`
+              list and a zero-size split dimension raise an error; zero-volume tensors are not
+              supported by the device kernels).
+            * For a :attr:`split_size` list, the entries must sum exactly to ``input_tensor.shape[dim]``;
+              an error is raised for both under- and over-covering lists.
 
-            Equivalent pytorch code:
+            Example:
 
             .. code-block:: python
 
-                # split_size as an int
-                output_tensors = ttnn.split(input_tensor, 2, dim=1)
-                # equivalent to
-                output_tensors = torch.split(input_tensor, 2, dim=1)
+                # int split_size: 6 along dim=1 -> chunks of size 2
+                a, b, c = ttnn.split(input_tensor, 2, dim=1)  # input_tensor.shape[1] == 6
 
-                # split_size as a list
-                output_tensors = ttnn.split(input_tensor, [2, 3], dim=1)
-                # equivalent to
-                output_tensors = torch.split(input_tensor, [2, 3], dim=1)
+                # list split_size: explicit per-chunk sizes summing to shape[1]
+                a, b = ttnn.split(input_tensor, [2, 4], dim=1)  # input_tensor.shape[1] == 6
 
             Args:
                 * :attr:`input_tensor`: Input Tensor.
