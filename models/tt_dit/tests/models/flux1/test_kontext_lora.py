@@ -40,10 +40,11 @@ from ....pipelines.flux1.pipeline_flux1_kontext import Flux1KontextPipeline, Flu
 def test_flux1_kontext_lora(
     *, mesh_device, sp, tp, encoder_tp, vae_tp, topology, num_links, mesh_test_id, model_location_generator
 ) -> None:
-    lora_path = os.environ.get("LORA_PATH") or None
+    lora_path = os.environ.get("LORA_PATH")
+    if not lora_path:
+        pytest.skip("Set LORA_PATH to a FLUX.1 LoRA .safetensors to exercise fuse-in-load path")
     lora_scale = float(os.environ.get("LORA_SCALE", "1.0"))
-    tag = os.environ.get("LORA_TAG", "lora" if lora_path else "base")
-    logger.info(f"LoRA test: lora_path={lora_path!r} scale={lora_scale} tag={tag}")
+    tag = os.environ.get("LORA_TAG", "lora")
 
     pipeline = Flux1KontextPipeline(
         device=mesh_device,
