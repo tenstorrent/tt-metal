@@ -9,7 +9,7 @@ import torch
 import random
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, select_tile
 
 
 def random_torch_tensor(dtype, shape):
@@ -111,10 +111,11 @@ def test_slice_write_nd(rank, layout, device):
     torch_out_ref[slices] = torch_src
 
     # TTNN copies
-    tt_out = ttnn.from_torch(torch_out_ref * 0, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    tt_out = ttnn.from_torch(torch_out_ref * 0, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
     tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
 
-    tt_in = ttnn.from_torch(torch_src, device=device, layout=layout, dtype=ttnn.bfloat16)
+    tt_in = ttnn.from_torch(torch_src, device=device, layout=layout, dtype=ttnn.bfloat16, tile=tile)
     tt_in = ttnn.to_memory_config(tt_in, ttnn.L1_MEMORY_CONFIG)
 
     # Perform the slice write

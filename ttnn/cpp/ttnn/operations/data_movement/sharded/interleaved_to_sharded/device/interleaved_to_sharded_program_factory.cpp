@@ -130,7 +130,6 @@ ProgramDescriptor InterleavedToShardedProgramFactory::create_descriptor(
             num_units_per_shard_width -
             (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
-        log_info(tt::LogOp, "input_unit_size: {}, output_unit_size: {}, num_units_per_shard_height: {}, num_units_per_shard_width: {}, num_units_per_shard: {}, num_units_per_row: {}, num_units_offset: {}, num_units_height: {}, num_units_per_shard_height_last: {}, num_units_per_shard_width_last: {}, padded_offset_bytes: {}", input_unit_size, output_unit_size, num_units_per_shard_height, num_units_per_shard_width, num_units_per_shard, num_units_per_row, num_units_offset, num_units_height, num_units_per_shard_height_last, num_units_per_shard_width_last, padded_offset_bytes);
     } else {
         input_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * input.element_size());
         output_unit_size = static_cast<uint32_t>(shard_spec.shape[1] * output.element_size());

@@ -31,6 +31,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_height = tile.get_height();
+    const uint32_t tile_width = tile.get_width();
+
     // WIDTH_SHARDED <-> BLOCK_SHARDED with a matching column shard width (enforced in validate()).
     // Unlike the same-shard-type out_sharded path below (a same-core L1-to-L1 copy via a CB bound
     // directly to the output buffer), the executing core here may not be the physically-owning
@@ -46,12 +50,16 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     // writer_unary_stick_layout_interleaved_blocks.cpp) expect the normal untilized row-major rows
     // produced by untilize.cpp and cannot consume the tiled data, so the fast path must be gated on
     // out_sharded in addition to !cross_shard_type.
-    bool unpad_tensor_w_16 = out_sharded && !cross_shard_type && output.padded_shape()[-1] == 16 &&
-                             output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    // Special handling for tensors of W=16 and H%tile_height==0 on standard 32x32 tiles.
+    // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
+    // and skip face1 and face3.
+    bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % tile_height == 0 &&
+                             tile_height == TILE_HEIGHT && tile_width == TILE_WIDTH;
+                             
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
+    uint32_t output_single_tile_size = tile.get_tile_size(output_cb_data_format);
 
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
@@ -64,8 +72,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto all_cores = shard_spec.grid;
-    uint32_t ntiles_per_block = shard_spec.shape[1] / TILE_WIDTH;
-    uint32_t nblocks_per_core = shard_spec.shape[0] / TILE_HEIGHT;
+    uint32_t ntiles_per_block = shard_spec.shape[1] / tile_width;
+    uint32_t nblocks_per_core = shard_spec.shape[0] / tile_height;
     uint32_t global_batch = a.physical_volume() / (a.padded_shape()[-2] * a.padded_shape()[-1]);
     uint32_t batch =
         a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED
@@ -148,6 +156,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             .buffer_index = src0_cb_index,
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
         .buffer = src_sharded ? a.buffer() : nullptr,
     });
@@ -162,6 +171,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             .buffer_index = output_cb_index,
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -223,7 +233,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
         // and drops both interior (row) and column padding per matrix. It handles any alignment of
         // matrices to core boundaries (whole matrices per core, a single matrix split across cores,
         // or a batch whose matrices straddle cores), so there is no unbatched restriction.
-        std::vector<uint32_t> writer_ct_args;
+        std::vector<uint32_t> writer_ct_args = {tile_height};
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         writer_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"

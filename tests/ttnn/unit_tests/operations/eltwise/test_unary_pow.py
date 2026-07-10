@@ -9,6 +9,7 @@ from tests.ttnn.utils_for_testing import (
     assert_with_ulp,
     generate_all_bfloat16_bitpatterns,
     flush_subnormal_values_to_zero,
+    select_tile,
 )
 
 
@@ -30,7 +31,8 @@ def test_pow(exponent, device):
     torch.manual_seed(42)
     torch_base = torch.rand([4, 4], dtype=torch.bfloat16)
     torch_output = torch.pow(torch_base, exponent)
-    ttnn_base = ttnn.from_torch(torch_base, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    ttnn_base = ttnn.from_torch(torch_base, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
 
     ttnn_output = ttnn.pow(ttnn_base, exponent)
     ttnn_output = ttnn.to_torch(ttnn_output)
@@ -45,12 +47,14 @@ def test_pow_arange_masking(exponent, device):
     # If input is subnormal then we assume hardware will flush it to 0.0
     tt_input = flush_subnormal_values_to_zero(tt_input)
 
+    tile = select_tile(ttnn.bfloat16)
     tt_in = ttnn.from_torch(
         tt_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     golden_function = ttnn.get_golden_function(ttnn.pow)
@@ -89,7 +93,8 @@ def test_power_as_activation(device, op_type, exponent):
     x_torch = torch.rand([16, 16], dtype=torch.bfloat16) + 1.5
     z_torch = torch.pow(x_torch + x_torch, exponent)
 
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(ttnn.bfloat16)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     z_tt = ttnn.add(x_tt, x_tt, activations=[ttnn.UnaryWithParam(op_type, exponent)])
     tt_out = ttnn.to_torch(z_tt)
 

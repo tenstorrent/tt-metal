@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, select_tile
 from models.common.utility_functions import is_watcher_enabled, is_n300
 
 torch.manual_seed(0)
@@ -37,8 +37,9 @@ def test_tiled_concat(device, concat_spec, dtype):
     torch_input_tensors = [random_torch_tensor(dtype, shape) for shape in shapes]
     torch_output_tensor = torch.concat(torch_input_tensors, dim=dim)
 
+    tile = select_tile(dtype)
     input_tensors = [
-        ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+        ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, tile=tile)
         for torch_input_tensor in torch_input_tensors
     ]
 
@@ -57,8 +58,13 @@ def test_concat(device, height, width, dim, dtype):
     torch_input_tensor_b = random_torch_tensor(dtype, (height, width))
     torch_output_tensor = torch.concat([torch_input_tensor_a, torch_input_tensor_b], dim=dim)
 
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    tile = select_tile(dtype)
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, tile=tile
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype, tile=tile
+    )
 
     output = ttnn.concat([input_tensor_a, input_tensor_b], dim=dim)
     output = ttnn.to_torch(output)
@@ -68,10 +74,12 @@ def test_concat(device, height, width, dim, dtype):
 
 def test_concat_size_switches(device):
     def to_tt(t, device):
+        tile = select_tile(ttnn.bfloat16)
         return ttnn.from_torch(
             t,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            tile=tile,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -220,7 +228,8 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
                 use_height_and_width_as_shard_shape=True,
             )
             torch_input_tensor = random_torch_tensor(dtype, shape)
-            input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype)
+            tile = select_tile(dtype, layout=layout)
+            input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device, dtype=dtype, tile=tile)
             input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_memory_config)
             input_tensors.append((torch_input_tensor, input_tensor))
         return input_tensors
@@ -300,8 +309,9 @@ def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, gro
         )
         for x in torch_input_tensors
     ]
+    tile = select_tile(dtype, layout=layout)
     ttnn_input_tensors = [
-        ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+        ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config, tile=tile)
         for x, memory_config in zip(torch_input_tensors, sharded_memory_configs)
     ]
 
@@ -391,8 +401,9 @@ def test_concat_1d(device, layout, dim, input_shapes):
     b = torch.randn(input_shapes[1], dtype=torch.bfloat16)
     torch_output_tensor = torch.concat([a, b], dim=dim)
 
-    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout)
-    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout, tile=tile)
+    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout, tile=tile)
 
     output = ttnn.concat([in1, in2], dim=dim)
     output = ttnn.to_torch(output)
@@ -461,8 +472,9 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     torch_output_tensor = torch.concat([a, b], dim=dim)
 
     # Create input tensors with interleaved memory config
-    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config)
-    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config)
+    tile = select_tile(ttnn.bfloat16, layout=layout)
+    in1 = ttnn.from_torch(a, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config, tile=tile)
+    in2 = ttnn.from_torch(b, dtype=ttnn.bfloat16, device=device, layout=layout, memory_config=memory_config, tile=tile)
 
     # Run concat with sub_core_grids
     output = ttnn.concat([in1, in2], dim=dim, memory_config=memory_config, sub_core_grids=sub_core_grids)
@@ -481,8 +493,9 @@ def test_concat_large_page_l1_budget(device, shapes, dim):
     torch_inputs = [torch.rand(*shape, dtype=torch.float32) for shape in shapes]
     torch_output_tensor = torch.concat(torch_inputs, dim=dim)
 
+    tile = select_tile(ttnn.float32)
     input_tensors = [
-        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32) for t in torch_inputs
+        ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32, tile=tile) for t in torch_inputs
     ]
     output = ttnn.concat(input_tensors, dim=dim)
     output = ttnn.to_torch(output)
@@ -510,10 +523,12 @@ def test_concat_int32_2d_dim1_regression(device):
     torch_b = torch.randint(-(2**31), 2**31, [rows, 1], dtype=torch.int32)
     torch_output = torch.cat([torch_a, torch_b], dim=1)
 
+    tile = select_tile(ttnn.int32)
     tt_a = ttnn.from_torch(
         torch_a,
         dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -521,6 +536,7 @@ def test_concat_int32_2d_dim1_regression(device):
         torch_b,
         dtype=ttnn.int32,
         layout=ttnn.TILE_LAYOUT,
+        tile=tile,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
