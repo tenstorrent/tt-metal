@@ -70,7 +70,7 @@ pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1_kontext.py -k "2x4sp
 - [x] Pipeline scaffolding (host VAE encode, id offset, concat/slice, SP-safe layout)
 - [ ] Numerical bring-up on Wormhole (`sp=1` tp-only) — PCC vs diffusers reference
 - [ ] Sequence-parallel enablement (verify ring attention over combined sequence)
-- [ ] Variable aspect ratio (`PREFERRED_KONTEXT_RESOLUTIONS`)
+- [x] Preferred-resolution snapping / variable aspect ratio (`PREFERRED_KONTEXT_RESOLUTIONS`)
 - [ ] On-device VAE encoder
 - [ ] Performance tuning + tracing
 - [ ] tt-inference-server registration (`TTFluxKontextRunner`, `/v1/images/edits`)
