@@ -8,6 +8,13 @@ import pytest
 from models.experimental.diffusion_gemma.tt import prefill_moe as PM
 
 
+def test_tuned_prefill_moe_defaults_on_and_can_be_disabled(monkeypatch):
+    monkeypatch.delenv(PM.FLAG, raising=False)
+    assert PM.tuned_prefill_moe_enabled()
+    monkeypatch.setenv(PM.FLAG, "0")
+    assert not PM.tuned_prefill_moe_enabled()
+
+
 def _model(*, hidden_size=2816, intermediate_size=192, grid=(13, 10)):
     experts = SimpleNamespace(
         config=SimpleNamespace(hidden_size=hidden_size),

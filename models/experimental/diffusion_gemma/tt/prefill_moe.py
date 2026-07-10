@@ -31,9 +31,9 @@ _MIN_GRID = (11, 4)
 
 
 def tuned_prefill_moe_enabled() -> bool:
-    """Whether the exact dense prefill-MoE geometry is enabled (default off)."""
+    """Whether the exact dense prefill-MoE geometry is enabled (default on)."""
 
-    return os.environ.get(FLAG, "0").strip().lower() in ("1", "true", "yes", "on")
+    return os.environ.get(FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _find_supported_experts(model):
