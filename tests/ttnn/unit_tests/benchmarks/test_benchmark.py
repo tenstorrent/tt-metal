@@ -252,18 +252,37 @@ matmul_shapes = [
     (256, 384, 384),
     (384, 384, 384),
     (384, 384, 512),
+    (416, 320, 320),  # P150 square: 4160x4160x4160
     (384, 512, 512),
     (512, 512, 512),
     (1024, 1024, 1024),
     (2048, 2048, 2048),
 ]
 
-# Per-dtype overrides for tuning params: (in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
+# Per-dtype, per-mode overrides for tuning params: (in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 # Default is (1, 1, 1) for shapes not listed here.
-tuning_overrides = {
+#
+# L1-sharded output (tuned_2d_l1) must satisfy matmul validation:
+#   out_block_w == per_core_N or out_block_h == 1
+# so only one of num_out_blocks_h / num_out_blocks_w may be > 1 (and only when it yields out_block_h == 1).
+# DRAM output (tuned_2d_dram) can use more aggressive multi-block splits to reduce L1 pressure.
+tuning_overrides_l1 = {
     ttnn.bfloat16: {
         (256, 384, 384): (2, 1, 1),
         (384, 384, 384): (4, 1, 1),
+    },
+    ttnn.bfloat8_b: {
+        (384, 384, 384): (2, 1, 1),
+        (384, 384, 512): (2, 1, 1),
+    },
+    ttnn.bfloat4_b: {
+        (384, 512, 512): (2, 1, 1),
+        (512, 512, 512): (2, 1, 1),
+    },
+}
+
+tuning_overrides_dram = {
+    ttnn.bfloat16: {
         (384, 384, 512): (2, 1, 1),
         (384, 512, 512): (2, 1, 1),
         (512, 512, 512): (1, 2, 2),
@@ -271,16 +290,11 @@ tuning_overrides = {
         (2048, 2048, 2048): (4, 8, 8),
     },
     ttnn.bfloat8_b: {
-        (384, 384, 384): (2, 1, 1),
-        (384, 384, 512): (2, 1, 1),
         (512, 512, 512): (1, 2, 2),
         (1024, 1024, 1024): (2, 4, 4),
         (2048, 2048, 2048): (4, 8, 8),
     },
     ttnn.bfloat4_b: {
-        (384, 384, 512): (1, 1, 1),
-        (384, 512, 512): (2, 1, 1),
-        (512, 512, 512): (2, 1, 1),
         (1024, 1024, 1024): (2, 2, 2),
         (2048, 2048, 2048): (4, 4, 4),
     },
@@ -300,9 +314,14 @@ dtype_fidelities = {
 matmul_modes = ["oob", "tuned_2d_l1", "tuned_2d_dram"]
 
 
-def get_tuning_params(dtype, shape):
-    """Get (in0_block_w_div, num_out_blocks_h, num_out_blocks_w) for a given dtype and shape."""
-    overrides = tuning_overrides.get(dtype, {})
+def get_tuning_params(dtype, shape, mode):
+    """Get (in0_block_w_div, num_out_blocks_h, num_out_blocks_w) for a given dtype, shape, and mode."""
+    if mode == "tuned_2d_l1":
+        overrides = tuning_overrides_l1.get(dtype, {})
+    elif mode == "tuned_2d_dram":
+        overrides = tuning_overrides_dram.get(dtype, {})
+    else:
+        return (1, 1, 1)
     return overrides.get(shape, (1, 1, 1))
 
 
@@ -387,7 +406,7 @@ def test_matmul_2d_host_perf(
                             n = base_n * grid_size[0]
 
                             in0_block_w_div, num_out_blocks_h, num_out_blocks_w = get_tuning_params(
-                                dtype, (base_m, base_k, base_n)
+                                dtype, (base_m, base_k, base_n), mode
                             )
 
                             in0_sharded = mode == "tuned_2d_l1"
