@@ -30,6 +30,7 @@
 #include "device/device_manager.hpp"
 #include <dispatch/dispatch_query_manager.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hostdev/realtime_profiler_msgs.h"
 
 #include "impl/context/metal_context.hpp"
@@ -116,6 +117,9 @@ DispatchSKernel::DispatchSKernel(
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     this->logical_core_ = dispatch_core_manager.dispatcher_s_core(device_id, channel, cq_id_);
     this->kernel_type_ = FDKernelType::DISPATCH;
+    if (dispatch_core_manager.get_dispatch_core_type() == CoreType::DISPATCH) {
+        this->quasar_dm_processor_ = detail::dispatch_s_dm_processor();
+    }
     // Log dispatch_s core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     Inspector::set_dispatch_s_core_info(virtual_core, DISPATCH_S, cq_id, device_id, servicing_device_id);

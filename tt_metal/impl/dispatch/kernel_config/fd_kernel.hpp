@@ -250,7 +250,7 @@ protected:
     noc_selection_t noc_selection_;
     bool send_to_brisc_ = false;            // WH/BH only: selects RISCV_0 (true) vs RISCV_1 (false)
     bool force_watcher_no_inline_ = false;  // Prefetcher enables to fit in code region when watcher is enabled
-    // Quasar dispatch-engine FD: explicit DM pinning via CreateDispatchEngineKernel (DM0 prefetch, DM1 dispatch).
+    // Quasar dispatch-engine FD: explicit DM pinning via CreateDispatchEngineKernel (DM0 prefetch, DM1 dispatch, DM2 dispatch_s).
     DataMovementProcessor quasar_dm_processor_ = DataMovementProcessor::RISCV_0;
 
     std::vector<FDKernel*> upstream_kernels_;
