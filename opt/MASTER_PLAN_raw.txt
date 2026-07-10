@@ -1,0 +1,494 @@
+{
+  "summary": "Fan out read-only investigation of the unexplored LTX no-finetune + finetune levers, synthesize a ranked plan",
+  "agentCount": 5,
+  "logs": [
+    "investigations complete: ccl-overlap, adaln-fusion, vae-decode, finetune-path"
+  ],
+  "result": {
+    "investigations": [
+      {
+        "lever": "ccl-overlap",
+        "findings": [
+          {
+            "idea": "STOP: the provided CSV cannot measure the inter-op gap at all — it is a cache-miss eager (untraced) COMPILE run. Before any CCL-overlap work, capture a trace-replay per-op profile. The '~1.75s S2 = 50% inter-op gap' number is a top-down wall-minus-FW inference, not measured, and cannot be attributed from this file.",
+            "mechanism": "The lever's entire premise ('is the block serialized gather->wait->matmul->wait->scatter, quantify the stall from END->START cycles') requires a steady-state timeline. This CSV's OP TO OP LATENCY is dominated by host JIT compilation (every op cache-miss), so its gaps measure compiler bubbles, not device stalls. Production runs traced, which eliminates host dispatch entirely — so even a correct eager-gap measurement would not transfer.",
+            "ceiling": "Enabler, not a saving itself. Unlocks correct attribution of the claimed ~1.75s S2 + ~1.4s S1 gap. Without it, every ceiling below is an estimate with >2x uncertainty. A 1-2 hour traced re-profile de-risks the whole lever.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Re-run the S2 single-block (or full denoise) profile with the pipeline's traced path enabled (from_pretrained(..., traced=True)) so METAL TRACE ID is populated and PROGRAM CACHE HIT=True",
+              "Enable the dispatch/CB-wait profiler columns (DISPATCH TOTAL CQ CMD OP TIME, DISPATCH GO SEND WAIT TIME, DEVICE COMPUTE CB WAIT FRONT) — all empty in this capture — to separate dispatch latency from cross-device sync wait",
+              "Recompute END[i]->START[i+1] cycle gaps on the traced timeline; only then attribute the 1.75s to (a) collective sync, (b) dispatch, or (c) genuine idle"
+            ],
+            "evidence": [
+              "ops_perf_results_full.csv: PROGRAM CACHE HIT == False for all 9664 rows; METAL TRACE ID == NaN for all rows",
+              "device-0: first-start->last-end span = 26025.19 ms vs DEVICE FW sum = 24.36 ms => device idle 26000.83 ms (99.9% of wall) — pure host-compile bubbles",
+              "OP TO OP LATENCY sum on device-0 block region = 11.58e9 ns (11.6s) for 195 ops; median 1.97ms/op — host compile, not device gap",
+              "pipeline_ltx_distilled.py:259-349 uses ttnn trace (_traced, execute_trace, trace_key s1/s2) => production hides host dispatch that this CSV is dominated by",
+              "DISPATCH TOTAL CQ CMD OP TIME / DISPATCH GO SEND WAIT / DEVICE COMPUTE CB WAIT FRONT columns: n=0 populated in this capture"
+            ]
+          },
+          {
+            "idea": "The obvious lever — 'de-serialize gather->matmul->scatter' — does not exist to be captured: every TP/SP collective is ALREADY fused into its consumer matmul/SDPA, and cold fabric BW util is only ~55%, meaning the all-gather is already hidden behind matmul compute. The 47.5% 'CCL-collective matmul' bucket is dominated by the MATMUL, not collective wait.",
+            "mechanism": "to_qkv/to_out/ff1/to_q/to_kv use all_gather_minimal_matmul_async (TP all-gather fused + chunked-pipelined into the matmul, N_chunks e.g. 3 for QKV); ff2 uses matmul+reduce_scatter (MinimalMatmulStridedReduceScatterAsync); ring_joint_sdpa fuses the SP K/V all-gather into the SDPA ring. So there is no standalone gather op preceding these matmuls to overlap — the fabric moves shards while Tensix matmuls the already-arrived shards. Fabric BW util ~55% (cold) is the signature of a matmul-bound fused op where the gather completes before the matmul does.",
+            "ceiling": "~0 ms from 'overlapping the collective better' on the fused matmuls — the overlap is already built in. Value = prevents burning the budget chasing a non-existent serialization; redirects effort to the matmul compute itself (SDPA worker) and to op-count/dispatch.",
+            "needs_finetune": false,
+            "needs_device_verify": false,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Do NOT attempt to split/prefetch the gathers out of the fused CCL-matmuls — they are single fused ops (attention_ltx.py:328, feedforward.py forward_fused_addcmul, ring_joint_sdpa)",
+              "Treat the 5.78ms CCL-matmul bucket as matmul-compute-bound; any reduction comes from the matmul (grid, fidelity, K/N tiling) not the collective"
+            ],
+            "evidence": [
+              "attention_ltx.py:328-347 all_gather_minimal_matmul_async (fused AG+matmul, barrier_semaphore=None, force_transpose)",
+              "attention_ltx.py:497-525 ring_joint_scaled_dot_product_attention fuses persistent_output_buffer_k/v SP all-gather into SDPA; :554-577 ring cross fuses K/V gather",
+              "transformer_ltx.py:306-314 _modulated_ffn Ring path -> forward_fused_addcmul (ff1 AG-matmul + ff2 matmul-RS + addcmul)",
+              "all_gather_minimal_matmul_async_program_factory.cpp: fabric-mux + N_tiles_per_chunk chunked pipeline (line 269-270), chunks=3 QKV fits L1 (line 365)",
+              "CSV video-path AllGatherMinimalMatmul: CCL FABRIC BW UTIL = 44-56% (13-14 GB/s of ~25 GB/s peak) => fabric not saturated, gather hidden behind matmul; MatmulReduceScatter = 56.1%"
+            ]
+          },
+          {
+            "idea": "Raise BH Galaxy num_links 2->4 (and/or tune the fabric hyperparams num_buffers_per_channel / num_workers_per_link / chunks_per_sync) to shrink the EXPOSED fabric-transfer tail of the collectives. BH is configured at num_links=2 while the WH Galaxy 4x8 config uses num_links=4 — the BH value looks conservative/untuned.",
+            "mechanism": "More parallel ETH links => higher aggregate fabric bandwidth => the portion of each collective that is NOT hidden behind matmul (the exposed tail, and the fully-exposed RMSNorm stat gathers / ring-SDPA final chunk) transfers faster, reducing the semaphore-wait the dependent op incurs. Only helps to the extent collectives are bandwidth-bound in the WARM run.",
+            "ceiling": "Bounded and uncertain. Cold fabric util is only ~55% (headroom-limited signal), but cold FW is peer-wait-inflated so warm util is higher and possibly BW-bound. If ~1-2 ms/block of collective time is exposed and BW-bound, doubling links could recover ~0.5-1 ms/block => ~0.07-0.14s S2 + similar S1 => realistic ~0.1-0.2s E2E. Could be near-zero if latency-bound.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Override num_links=4 for the BH (4,8) config at pipeline_ltx.py:537-543 (or via the from_pretrained num_links kwarg) and re-measure S2 wall on device",
+              "Independently sweep get_ag_hyperparams/get_rs_hyperparams (manager.py:523-542: chunks_per_sync, num_workers_per_link, num_buffers_per_channel) and the fused-op num_buffers_per_channel=24 (attention_ltx.py:342) — these tune fabric pipeline depth with zero numeric change",
+              "Watch for the documented fabric router-channel hang when raising link/worker counts (memory: shared TENSIX_FABRIC_CONNECTIONS/router channel); validate no hang across all 32 chips before keeping"
+            ],
+            "evidence": [
+              "pipeline_ltx.py:537-543 BH (4,8): num_links=2, topology=Ring; vs :563-570 WH (4,8): num_links=4, Ring — BH is half the links",
+              "attention_ltx.py:336-342 passes ccl_manager.num_links, num_workers_per_link=full_grid.x//num_links, num_buffers_per_channel=24 (BH)",
+              "manager.py:523-542 get_ag/rs_hyperparams (chunks_per_sync, num_workers_per_link, num_buffers_per_channel) — fabric pipeline knobs",
+              "CSV CCL FABRIC BW ~14 GB/s at ~55% util on video collectives (peak ~25 GB/s at num_links=2)",
+              "memory ltx-fabric-coldtime-rootcauses: fabric router-channel contention is the real shared state (hang risk when pushing fabric harder)"
+            ]
+          },
+          {
+            "idea": "Cut the ~20 standalone DistributedRMSNorm stat all-gathers per block — they sit fully exposed on the critical path (pre-AG -> AllGather(stats) -> post-AG -> matmul) and are pure, un-hideable cross-TP sync latency. Merge norm_q+norm_k stat gathers into one AG, and generally reduce the ~302 ops/block that each cost a dispatch + sync.",
+            "mechanism": "Each DistributedRMSNorm gathers a tiny partial-stats tensor across TP=4 as a separate op whose output the very next op needs, so it cannot overlap anything — it is latency-bound exposed gap. Two of these run back-to-back for norm_q and norm_k in every attention (6 attentions/block). Concatenating the two stat tensors and gathering once halves those syncs; fewer ops also cuts the per-program dispatch/go-signal that is the component of the 'gap' that actually survives into the traced run.",
+            "ceiling": "~20 exposed AG syncs/block; if each is ~10-20us warm exposed latency => ~0.2-0.4 ms/block => ~0.03-0.06s S2 + S1 from stat-gather merging alone. Broader op-count reduction (302 ops/block) attacks the dispatch-latency share of the gap: at ~43k program launches across S2, even 2-3us/op saved is ~0.1s. Combined realistic ~0.05-0.15s E2E. Overlaps the tilize/adaLN workers' op-count reductions.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "low",
+            "concrete_steps": [
+              "In LTXAttention.forward, concatenate norm_q and norm_k pre-allgather stats and issue a single all_gather_persistent_buffer, then split — halves 12 AGs/block to 6 (normalization.py:214-223 is the per-norm stat gather)",
+              "Audit the 302-op/block sequence for standalone AllGatherAsync that could piggyback on an adjacent collective's fabric window",
+              "Verify PCC unchanged (stat concatenation is numerically identical; only the gather is batched)"
+            ],
+            "evidence": [
+              "normalization.py:196-237 DistributedRMSNorm.forward: wan_fused_rmsnorm_pre_allgather -> all_gather_persistent_buffer(stats) -> wan_fused_rmsnorm_post_allgather (3-op serial chain per norm)",
+              "CSV device-0 block: FusedRMSNormPreAllGather=20, PostAllGather=20, AllGatherAsync=23 => ~20 of 23 standalone AGs are RMSNorm stat syncs (the other ~3 are data gathers e.g. transformer_ltx.py:468 a2v audio_kv)",
+              "CSV: standalone AllGatherAsync FW (video) ~34-35us cold, tiny stats tensor => latency-bound, on critical path",
+              "302 ops/block on device-0 (each a dispatched program in the traced stream)"
+            ]
+          },
+          {
+            "idea": "Second command queue / second CCL sub-device to overlap the small AUDIO-path collectives with the heavy VIDEO-path compute. Today everything runs on one sub-device (SubDeviceId(0)) and one CQ, so audio and video serialize even where they are data-independent.",
+            "mechanism": "Within a block, audio self-attn and audio text-cross-attn are independent of the video self/cross/FFN until the A<->V cross-attention couples them. Running the audio collectives (tiny ~41us AG-matmuls) on a second CQ could hide them entirely behind the video RingJoint SDPA (3.07ms) and video FFN. Requires a second sub-device grid and cross-CQ sync at the A2V/V2A boundary.",
+            "ceiling": "Bounded by total audio-path collective+compute that is independent, ~0.3-0.5 ms/block => ~0.05-0.07s S2. High engineering cost (2nd sub-device, trace across 2 CQs, event sync at A<->V), and the A<->V coupling caps how much can overlap. Likely NOT worth it vs the effort.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "med",
+            "concrete_steps": [
+              "Prototype a 2nd SubDevice grid split (audio cores vs video cores) in CCLManager (_init_subdevice currently allocates one grid spanning all cores, manager.py:48-59)",
+              "Issue audio attn1/attn2 collectives on cq_id=1 with a ttnn event join before the A2V/V2A cross-attn reads both modalities",
+              "Measure; abandon if the A<->V sync cost exceeds the hidden audio time"
+            ],
+            "evidence": [
+              "manager.py:48-59 single ccl_sub_device_id = SubDeviceId(0) spanning the full compute grid; no per-modality split",
+              "No cq_id / num_command_queues usage anywhere in models/tt_dit/pipelines/ltx or transformers/ltx (grep empty)",
+              "CSV audio-path AllGatherMinimalMatmul FW ~41us each and CCL FABRIC BW UTIL ~2.4% (tiny, latency-bound) vs video RingJointSDPA 1.3-4.6ms — huge asymmetry to hide behind",
+              "transformer_ltx.py:418-450 audio self/text-cross independent of video path until :453-506 A<->V cross-attn couples them"
+            ]
+          }
+        ],
+        "honest_verdict": "This lever is oversold by the top-down '~1.75s S2 = 50% inter-op gap' framing, and — critically — that gap CANNOT be measured from the provided CSV, which is a cache-miss eager COMPILE run (all 9664 rows PROGRAM CACHE HIT=False, METAL TRACE ID=NaN, device idle 26000ms of 26025ms wall). Its OP-TO-OP latency is host JIT-compile bubbles, not device stalls, and production runs traced (dispatch hidden), so no eager-gap measurement transfers. Source is unambiguous that the hypothesized 'gather->wait->matmul->wait->scatter' serialization does not exist: every TP/SP collective is already fused into its consumer (all_gather_minimal_matmul_async, matmul_reduce_scatter, ring_joint_sdpa), there is no barrier/Finish (barrier_semaphore=None), and the fused matmuls run at only ~55% fabric BW util (cold) — the all-gather is already hidden behind matmul compute, so the 47.5% 'CCL-matmul' bucket is matmul-bound, not collective-wait-bound. Realistic CCL-SPECIFIC savings: num_links 2->4 + fabric hyperparam tuning (~0.1-0.2s E2E, uncertain, fabric-hang risk, device-verify required) + merging the ~20 exposed RMSNorm stat all-gathers and cutting op count (~0.05-0.15s E2E) = roughly 0.15-0.35s E2E combined, NOT the 1.75s implied by the lever description. The residual real 'gap', to the extent it exists in the traced run, is distributed dispatch/sync across ~43k program launches plus cross-device compute-imbalance inside the heavy ops (RingJoint SDPA) — which is attacked by OP-COUNT REDUCTION and the SDPA/tilize/adaLN levers, not by 'overlapping CCL better.' Mandatory first step before any code change: capture a traced per-op profile with the dispatch columns populated to actually attribute the 1.75s; there is a real risk it is largely dispatch latency (fixable by fewer/bigger ops) rather than CCL sync (which is already well-overlapped)."
+      },
+      {
+        "lever": "adaln-fusion",
+        "findings": [
+          {
+            "idea": "Fuse the a2v / v2a / audio-attn2 gated-residual addcmul into the attention to_out matmul epilogue using the EXISTING _to_out_fused_addcmul primitive (pass addcmul_residual + addcmul_gate to the call, delete the standalone ttnn.addcmul). These three cross-attentions are the only ones in the block that still do the gated residual as a separate full-tensor op; attn1/attn2/FFN already fuse it.",
+            "mechanism": "The standalone ttnn.addcmul(residual, attn_out, gate) is a memory-bound full-sequence pass (read attn_out + read/write residual) sitting on the critical path. The fused path folds it into the to_out matmul write-back epilogue (all_gather_minimal_matmul_async with addcmul_input_tensor1/2, or dit_minimal_matmul_addcmul_fused for non-TP), so the op disappears entirely - no extra dispatch, no extra full-seq read/write. Math identical: residual + (matmul+bias)*gate.",
+            "ceiling": "a2v is the valuable one: full video tensor [1,1,4864,1024] = 115.8us cold FW (idx266, gcc273408) ~ 58us warm. v2a and audio-attn2 are audio-dim (tiny FW ~2.8us) but each removes a dispatched op. Realistic ~58us/block warm FW + 2 fewer audio dispatches; x144 block-forwards ~ 8ms warm FW, ~6ms wall if on critical path. Best-case ~0.006-0.010s E2E.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "low",
+            "concrete_steps": [
+              "transformer_ltx.py a2v call (lines 394-403): add addcmul_residual=video_1BND, addcmul_gate=v_ca_gate; delete line 404; assign video_1BND = self.audio_to_video_attn(...).",
+              "v2a call (lines 412-424): add addcmul_residual=audio_1BND, addcmul_gate=a_ca_gate; delete line 425.",
+              "audio_attn2 call (lines 360-362): add addcmul_residual=audio_1BND, addcmul_gate=a_gate_ca; delete line 363.",
+              "Fused path is auto-selected in LTXAttention.forward (line 591 addcmul_fused -> _to_out_fused_addcmul, 598-605); a2v/v2a to_out are ColParallelLinear TP, same layout as attn1's fused to_out.",
+              "Device PCC check vs baseline; each attn output has a single consumer so no aliasing risk."
+            ],
+            "evidence": [
+              "transformer_ltx.py:404 video_1BND = ttnn.addcmul(video_1BND, a2v_output, v_ca_gate) standalone; a2v call 394-403 omits addcmul args",
+              "transformer_ltx.py:425 and :363 v2a and audio_attn2 same standalone-addcmul pattern",
+              "transformer_ltx.py:267-274 attn1 already passes addcmul_residual/addcmul_gate (pattern to copy)",
+              "attention_ltx.py:288-357 _to_out_fused_addcmul = residual+(matmul+bias)*gate; attention_ltx.py:591-605 selects it when both addcmul args set",
+              "CSV device0 idx266 gcc273408 Ternary 115.8us out=(1,1,4864,1024) inputs=[full,full,per-batch-gate] = the a2v gated residual that would vanish"
+            ]
+          },
+          {
+            "idea": "Fold the three single-consumer AdaLN pre-modulation addcmuls - (1+scale)*RMSNorm(x)+shift before self-attn (line 266), text-cross (line 280), FFN (line 429) - into DistributedRMSNorm by extending wan_fused_rmsnorm_post_allgather with a dynamic per-batch weight (scale_p1) + bias (shift), exactly as dit_layernorm_post_allgather already does and as norm_out already uses at model level (transformer_ltx.py:902-904).",
+            "mechanism": "Each pre-mod is a full-seq [1,1,4864,1024] addcmul reading the norm output and writing the modulated tensor - a whole extra memory pass on the strict norm->addcmul->matmul dependency chain (not overlapped with CCL). The RMS post kernel already streams the full tensor and, when weight present, multiplies by [1,D] gamma broadcast over rows (rmsnorm_post_allgather.cpp:127-155 mul_tiles_bcast_rows). For B=1 (production) AdaLN scale/shift are also [1,D] broadcast-over-rows, so scale plugs into the existing weight slot; only a mirror add_tiles_bcast_rows(bias) is needed to also apply shift. Affine then runs inside the norm's fp32 accumulate for free, addcmul eliminated.",
+            "ceiling": "3 full-seq Ternary at ~116us cold each = 351us cold (idx120/142/293) minus a few-us added norm work ~ 330us cold ~ 165us warm/AV-block; x144 = ~24ms warm FW, ~18-22ms wall if on critical path. Audio norms add negligible FW but 3 fewer dispatches. Best-case ~0.018-0.025s E2E.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "low",
+            "concrete_steps": [
+              "Extend wan_fused_rmsnorm_post_allgather (hpp + nanobind + program_factory + compute/rmsnorm_post_allgather.cpp) with optional bias + per-batch weight, mirroring dit_layernorm_post_allgather (.hpp:14-23 carries weight+bias); the compute add is one add_tiles_bcast_rows after the weight mul (line 127-155).",
+              "Add dynamic_weight/dynamic_bias to DistributedRMSNorm.forward (normalization.py:196-237), copying the DistributedLayerNorm dynamic path (normalization.py:334-372).",
+              "Replace `normed=norm(x); addcmul(shift,normed,scale_p1)` at lines 265-266 / 279-280 / 428-429 with norm(x, dynamic_weight=scale_p1, dynamic_bias=shift). scale_p1 already has +1 baked in (line 197-219).",
+              "Reshape scale_p1/shift [1,B,1,D_local] -> [1,D_local]; already TP-sharded on D (mesh_partition line 792) matching the norm weight shard.",
+              "Device PCC: fused affine runs fp32 pre-pack (vs current bf16 addcmul) so PCC matches or improves; B>1 needs per-batch weight indexing (dit_layernorm dynamic path), production is B=1 (CSV modulation tensors [1,1,32,1024], Z=B=1)."
+            ],
+            "evidence": [
+              "transformer_ltx.py:265-266 (SA), :279-280 (CA), :428-429 (FFN) norm -> standalone addcmul, single-consumer pre-mods",
+              "normalization.py:196-237 DistributedRMSNorm.forward has NO dynamic weight/bias; nanobind args (rmsnorm_distributed_nanobind.cpp:160-171) expose weight but no bias",
+              "dit_layernorm_post_all_gather.hpp:14-23 already takes weight+bias; transformer_ltx.py:902-904 norm_out fuses AdaLN via dynamic_weight/dynamic_bias (proven)",
+              "rmsnorm_post_allgather.cpp:61,127-155 weight applied as mul_tiles_bcast_rows over [1,D] gamma; a bias add mirrors it",
+              "CSV device0 idx120 (115.5us), idx142 (117.9us), idx293 (117.7us) Ternary out=(1,1,4864,1024) = the 3 fusable pre-mods"
+            ]
+          },
+          {
+            "idea": "HARD CONSTRAINT (negative finding): the a2v-Q pre-mod (line 384) and v2a-KV pre-mod (line 408) CANNOT be cleanly folded into their RMSNorm, because both consume the SAME norm3 output (video_normed_xattn, line 380) with two DIFFERENT affines. A norm can emit only one affined output.",
+            "mechanism": "norm3(video_1BND) at line 380 is reused by addcmul(v_ca_shift,normed,v_ca_scale) at 384 AND addcmul(a_ca_shift_v,normed,a_ca_scale_v) at 408. Folding one affine into norm3 forces a second norm3 call (~130us: RMSpre 30 + AG 35 + RMSpost 65) to serve the other affine - trading a 116us addcmul for a ~130us extra norm + an added AG dispatch. Net break-even-to-negative.",
+            "ceiling": "0 - do NOT attempt. Leaving idx243 (116.1us) and idx268 (118.4us) as standalone addcmuls is correct. Documents why only 3 of 5 video pre-mods and only 1 of the video gated-residuals are worth fusing.",
+            "needs_finetune": false,
+            "needs_device_verify": false,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Do not fuse lines 384/408 into norm3; keep the shared single-pass norm3 (line 380) feeding both affines as addcmul.",
+              "If ever revisited, the only lever is norm3-reuse itself (already done): one norm3 correctly feeds both consumers since video_1BND is unchanged between 380 and 384/408."
+            ],
+            "evidence": [
+              "transformer_ltx.py:380 video_normed_xattn = self.norm3(video_1BND)",
+              "transformer_ltx.py:384 video_q_a2v = ttnn.addcmul(v_ca_shift, video_normed_xattn, v_ca_scale_p1)",
+              "transformer_ltx.py:408 video_kv_v2a = ttnn.addcmul(a_ca_shift_v, video_normed_xattn, a_ca_scale_v_p1) same normed, different affine",
+              "CSV norm3 cost: RMSpre 30us + AG 35us + RMSpost 65us = ~130us > the 116us addcmul it would replace"
+            ]
+          },
+          {
+            "idea": "Dispatch-count reality check: this lever does NOT unlock a large inter-op-gap win. The two fusions remove only ~4-7 dispatched ops per AV block (3 pre-mods + a2v residual + 2-3 tiny audio residuals) of ~150 ops/block. The bulk of adaLN dispatch - 32 SliceDeviceOperation from ttnn.chunk(dim=0) plus the per-block table-add (shifted = scale_shift_table + temb) - is UNTOUCHED, since those PRODUCE the shift/scale/gate tensors the addcmuls CONSUME.",
+            "mechanism": "The chunk slices (idx108-116, 165-173, ...) are ~2us dispatched SliceDeviceOperation each (the 'free tile-aligned slice' comment overstates - they still dispatch). They are inherent to per-block modulation (each block owns a scale_shift_table added to the shared timestep emb, line 257/329). Folding addcmul into norm/matmul removes CONSUMERS not PRODUCERS, so the gap benefit is small; the FW benefit (Findings 1-2) is the real, modest prize.",
+            "ceiling": "Collapsing chunk+table-add would need a restructure (concat all 48 blocks' tables -> one add + strided index, or a custom addcmul taking packed modulation + slot index) - out of scope for 'fusion', low value (~64us FW/block of slices + ~3-7us table-add), higher risk. Not recommended. Confirms adaln-fusion is a cleanup lever, not a headliner.",
+            "needs_finetune": false,
+            "needs_device_verify": false,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Do not chase chunk/table-add elimination under this lever; note and move on.",
+              "If dispatch-count becomes the goal, target the 32 slices/block via packed-modulation indexing as a separate larger effort - but measure the traced gap first (CSV op-to-op latencies here are host-profiling noise, 1e5-1.4e7 ns, not the traced gap)."
+            ],
+            "evidence": [
+              "CSV device0: 32 SliceDeviceOperation (~2us each), e.g. idx108-116 (chunk of shifted_v), idx165-173 (audio)",
+              "transformer_ltx.py:257-260 shifted_v = table + temb; ttnn.chunk(shifted_v, 9, dim=0) per-block produces the 9 shift/scale/gate tensors",
+              "Op-to-op latency column unusable for gap analysis: values 1e5-1.4e7 ns (host profiling overhead; non-traced run with cold tilize prefix idx0-106)"
+            ]
+          }
+        ],
+        "honest_verdict": "adaln-fusion is a REAL but SMALL lever - cleanup, not a path to 6.0s. The measured elementwise/adaLN bucket is 7.4% of FW (0.90ms/block warm). The CSV I analyzed is a cold, profiler-inflated single AV block at exactly 2x the memory's per-block numbers (24.36ms total, with a ~3.4ms cold-tilize prefix, idx0-106). Of the six full-seq video addcmuls (~116us cold each), only FOUR are cleanly fusable: three single-consumer pre-mods (SA/CA/FFN) fold into DistributedRMSNorm, and the a2v gated-residual folds into to_out. The a2v-Q and v2a-KV pre-mods provably CANNOT fuse (shared norm3 output, two affines) - folding them is net-negative. Total realistic ceiling ~ 165us (pre-mods) + 58us (a2v) ~ 220us warm FW/block ~ 0.024-0.035s E2E (< 1.6% of the 2.2s 8.2->6.0 gap), and only if these on-critical-path ops translate ~1:1 to wall. Priority: (1) a2v/v2a/audio-attn2 to_out fusion is Python-only, near-bit-exact, zero-kernel, using the primitive attn1 already uses - do it regardless (~0.006-0.010s + fewer dispatches). (2) The RMSNorm dynamic scale+shift fusion is a well-templated kernel change (mirror dit_layernorm_post_allgather, which already carries weight+bias) worth ~0.02s - only worth it if someone is already in that kernel. Dispatch-count reduction is NOT a hidden prize: the fusion removes ~4-7 of ~150 ops/block and leaves the 32 chunk-slices + table-adds intact. The 2.2s must come from the CCL-collective matmuls (47.5%) and closing the inter-op gap; adaLN is a ~1% side dish. PCC risk low throughout (fused affine runs fp32, math-identical), but every change needs a device PCC check - I am read-only and did not run the device."
+      },
+      {
+        "findings": [
+          {
+            "idea": "TRACE the production VAE decode. It is the single biggest, currently-unrealized VAE lever: the production decode runs UNTRACED (pipeline_ltx.py:858 = a plain self.vae_decoder(latent_spatial) forward), while another dev (kevinmi) has already measured the same decode's device-only region at ~435ms captured as one ttnn trace. The ~0.9-1.05s production wall minus ~435ms device minus host I/O = ~0.3-0.4s of pure host-dispatch bubble that tracing eliminates.",
+            "mechanism": "The decode is ~150 device ops (42 conv3d + ~40 RMSNorm + ~40 halo exchanges + 4 depth-to-space + denorm/adds) issued one-at-a-time from host. Same ~50% inter-op-gap pattern the task documents for S2 denoise. A captured trace replays the whole device graph as one command, removing the per-op host-dispatch serialization; device-active time (~435ms) is unchanged, the ~350ms gap collapses. Host upload/gather/unpatchify stay outside the trace (kevinmi already split decode_device exactly for this). Capture during the existing _warmup_decode (which already compiles every program) so gen#1 decode is a pure replay.",
+            "ceiling": "~0.30-0.40s E2E (most-likely ~0.35s). Floor of the mechanism: untraced device-region wall (~785ms = 435 device + ~350 gap) drops to ~435ms replay; host upload+gather+unpatchify (~150ms, unchanged) sets the residual. Realistic traced decode wall ~0.55-0.65s vs ~0.95s today. Bounded ABOVE by host I/O which trace cannot touch.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Port kevinmi's decode_device() split (vae_ltx.py:991 on branch kevinmi/np-halo-fabric-mux) into the current vae_ltx.py: it isolates denorm->conv_in->up_blocks->norm_out->conv_out on an already-sharded input, host upload/gather kept in forward()",
+              "Wire a decode trace into pipeline_ltx.py mirroring the denoise _prealloc_trace_io pattern: pre-allocate the sharded input buffer + output buffer with baked addresses, capture during _warmup_decode (pipeline_ltx.py:911), replay in decode_latents by copying the real latent into the baked input",
+              "Confirm the current halo op (ccl_manager.neighbor_pad_persistent_buffer, vae_ltx.py:241) is trace-safe (semaphore reset across replays) or port kevinmi's trace-safe np_halo; the learn-trace-ccl-deadlock note + kevinmi's 'trace-safe sem reset' commits show halo semaphores are the known trace hazard",
+              "Device-verify: measure untraced vs traced decode wall at 4x8/1080p/145f (kevinmi's test_prof_vae_ltx_trace already prints TRACED_DECODE_WALL_MS and SINGLE_FORWARD_HOST_WALL_MS); confirm PCC=1.0 vs untraced (identical ops)"
+            ],
+            "evidence": [
+              "pipeline_ltx.py:858 return self.vae_decoder(latent_spatial) — direct untraced forward; the _traced flag is only threaded to S1/S2 denoise (pipeline_ltx_distilled.py:496-497,535-536)",
+              "pipeline_ltx.py:550-552 'VAE decode (forward)' timing brackets decode_latents only (not _prepare_vae)",
+              "~/.tt-buddy/notes/ltx-1080high-rt.md:11-12,43 — VAE 0.9-1.05s at BH Galaxy 4x8, 1088x1920, 145f",
+              "kevinmi wiki/np-halo-4x8.md — traced device-only decode 435.31ms (10 iters, 1088x1920 145f, 4x8); harness models/tt_dit/tests/models/ltx/prof_vae_ltx.py::test_prof_vae_ltx_trace (git branch kevinmi/np-halo-fabric-mux @ed225f5fc2b) captures decode_device as one trace, replays TRACE_ITERS, prints TRACED_DECODE_WALL_MS",
+              "kevinmi vae_ltx.py:991 decode_device() docstring: 'Split out from forward() so it can be captured as a single ttnn trace (the host upload/gather must stay outside the trace)'",
+              "current vae_ltx.py has NO decode_device/trace/use_fused (grep empty) — the split exists only on kevinmi's branch"
+            ]
+          },
+          {
+            "idea": "NEGATIVE finding — conv3d blocking is already fully tuned for the exact production shapes; item 5 of the note's lever backlog ('1080p VAE conv3d coverage: fallback vs tuned blockings') is a dead end. Every one of the 11 prod conv shapes at 4x8/1080p has a swept exact _BLOCKINGS entry, so none falls to the generic fallback.",
+            "mechanism": "get_conv3d_config keys on (h_factor,w_factor,Cin,Cout,kernel,T,H,W) exact-match first (conv3d.py:594). The 4x8 1080p decoder block (conv3d.py:431-443) has all 11 entries: s0_conv_in/s0_res/s0_up/s1_res/s1_up/s2_res/s3_res/s3_chg/s4_res/s4_out. Runtime T values (21/39/75/147) produced by _compute_ltx_decoder_dims (T=cur_T+2, vae_ltx.py:585) exactly match the table keys, so the lookup hits [exact], not [fallback]. bf16 weights path uses _BLOCKINGS (fp32 path would differ but VAE runs bf16, vae_ltx.py:621).",
+            "ceiling": "0ms — no lever here. Documenting it saves the team from re-sweeping blockings.",
+            "needs_finetune": false,
+            "needs_device_verify": false,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Do NOT pursue conv3d blocking retuning for prod 4x8 1080p — verify only that the (h,w,Cin,Cout,k,T,H,W) key produced at runtime matches the table (it does for 145f/1088x1920)",
+              "If a NEW resolution/mesh is targeted, THEN re-sweep (bruteforce_conv3d_sweep.py) since a shape miss falls to _DEFAULT_BLOCKINGS conservative (Cin,32,1,1,1)-ish which is slow"
+            ],
+            "evidence": [
+              "conv3d.py:594 blocking_key = (h_factor,w_factor,in,out,kernel,T,H,W); exact match logged [exact], miss -> [fallback] warning",
+              "conv3d.py:431-443 — 11 swept LTX-2.3 4x8 1080p decoder entries with per-conv us (e.g. ltx_s1_up 16547us, ltx_s2_res 13752us, ltx_s3_chg 12013us)",
+              "vae_ltx.py:581-596 _compute_ltx_decoder_dims: cur_T=(num_frames-1)//8+1=19; T=cur_T+2=21; upsamples give 39/75/147 — matches table T keys"
+            ]
+          },
+          {
+            "idea": "NEGATIVE finding — halo-transport fusion and interior-copy elimination are MEASURED DEAD; ~435ms is the practical device floor for the halo/copy angle. Do not spend effort here. This rules out two intuitively-appealing VAE levers.",
+            "mechanism": "kevinmi tracy-profiled the traced decode: halo transport (NpHalo 1.9% + NpHaloScatter 4.1%) = 6% total, and the interior copy in halo_scatter is a LOCAL repack (not fabric-transported) so folding can't remove it — fold ceiling <2-5ms of 435ms. Full copy-elimination (block chaining, border-only strided scatters) was built + validated PCC=1.0 but measured +14-22ms SLOWER: a coalesced bulk DRAM copy is cheaper than strided per-stick border scatters, and depth-to-space upsamples interleave channels into space so no padded layout survives a stage boundary (per-stage re-pad forced).",
+            "ceiling": "0ms (or negative). Halo fold <5ms and gated behind a high-risk mux corner-routing rewrite; copy-elim is net-negative.",
+            "needs_finetune": false,
+            "needs_device_verify": false,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "Skip halo-fold / copy-free-chaining as a VAE perf lever — keep the shipped conv2-direct copy-free path if porting kevinmi's ops, but expect ~0 wall gain",
+              "If porting kevinmi's branch for tracing, take the 435ms 'no fuse, no chain' default (LTX_FUSE_NORM_ADD=0, TT_LTX_CHAIN=0), not the copy-free chain"
+            ],
+            "evidence": [
+              "kevinmi wiki/np-halo-4x8.md: 'halo transport (np_halo 1.9% + halo_scatter 4.1% = 6%) is minor ... Realistic wall ceiling ~2-5ms of 435ms (<1%)'; '452.42 ms — fused + FULL chain, ALL literal copies eliminated ← +17ms vs shipped'; '435ms is the practical floor'",
+              "ladder: 477ms halo-READ conv -> 443ms repack -> 435ms conv2-direct copy-free (shipped) -> 434.98 +chain (~0 gain); commits ac49eb38b99 (478ms), 008f5d700b6 (448ms), 37726707cde (432.7ms)"
+            ]
+          },
+          {
+            "idea": "Fold the per-conv width-mask multiply and cut the RMSNorm->conv RM<->TILE layout churn. These live in the BinaryNg (14.7%) + LayerNorm (18.3%) device buckets. A dedicated ttnn.mul W-mask runs on the FULL activation before EVERY W-sharded halo conv (~42 sites), and every RMSNorm output (TILE) is converted to ROW_MAJOR for the following conv (~40 to_layout ops).",
+            "mechanism": "vae_ltx.py:214 multiplies the whole activation by a 0/1 width-pad mask before each conv when logical_w masking is active — pure overhead on a growing tensor. kevinmi's in-kernel logical mask (commit ac49eb38b99) folds this zeroing INTO the conv3d kernel, dropping the standalone mul. Separately, the norm->to_layout(ROW_MAJOR)->conv sequence (vae_ltx.py:391-397) pays a layout conversion per conv; an RMSNorm variant emitting ROW_MAJOR directly (or conv3d accepting TILE input) removes it.",
+            "ceiling": "~20-50ms device (a fraction of the ~64ms BinaryNg + layout overhead inside the 435ms). Only realized AFTER tracing (it is device-active time, not gap). Modest.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "low",
+            "concrete_steps": [
+              "Port kevinmi's in-kernel logical-mask conv (ac49eb38b99) so the vae_ltx.py:214 W-mask ttnn.mul is dropped; verify PCC=1.0 (kevinmi reports pcc=1.0 for the halo conv with in-kernel mask)",
+              "Measure the RM<->TILE to_layout share via LTX_ABLATE-style skip (kevinmi's harness supports ablation); if material, evaluate an RMSNorm ROW_MAJOR output path",
+              "Device-verify each fold against the traced decode wall + full-decode PCC"
+            ],
+            "evidence": [
+              "vae_ltx.py:209-217 _get_w_mask + ttnn.mul per conv (full-activation multiply, W-sharded convs)",
+              "vae_ltx.py:391-397 norm1->to_layout(ROW_MAJOR)->conv1->norm2->to_layout(ROW_MAJOR)->conv2 per resnet block",
+              "kevinmi wiki: BinaryNg 14.7% + LayerNorm 18.3% of traced device work; commit ac49eb38b99 'in-kernel logical mask for 4x8 halo conv (halo 478ms, pcc=1.0)'"
+            ]
+          },
+          {
+            "idea": "Attack the depth-to-space Permute bucket (19.3% of device, ~84ms) — the single largest non-conv device cost and UNEXPLORED (kevinmi optimized the pad around it, never the permute itself). Each of the 4 upsamples does reshape->permute->reshape on the (growing) full activation; the physical data movement is the permute.",
+            "mechanism": "LTXDepthToSpaceUpsample._depth_to_space_channels_last (vae_ltx.py:504-511) reshapes (B,T,H,W,p1p2p3*C)->permute(8D)->reshape to expand spatial. An 8-D permute on the largest-stage activation is expensive. A fused/dedicated depth-to-space kernel (or a channels-last memory layout that makes the permute a no-op / cheaper strided write) could cut it. kevinmi's depth_to_space_pad op fused permute+pad for -8ms but did not target the permute's core data-movement cost.",
+            "ceiling": "Speculative ~10-30ms device if a cheaper depth-to-space kernel exists; unknown without a kernel prototype. Only realized after tracing.",
+            "needs_finetune": false,
+            "needs_device_verify": true,
+            "pcc_risk": "low",
+            "concrete_steps": [
+              "Confirm the 19.3% Permute share with a clean LTX_ABLATE (skip depth-to-space) traced-wall delta on kevinmi's harness",
+              "Prototype a fused depth-to-space kernel (or evaluate an existing ttnn depth_to_space) that avoids the reshape->permute->reshape round-trip; validate bit-exact vs the current permute",
+              "Device-verify wall + PCC"
+            ],
+            "evidence": [
+              "kevinmi wiki/np-halo-4x8.md op shares: 'Permute (depth-to-space) 19.3%' of traced device work — larger than LayerNorm and near Conv3d",
+              "vae_ltx.py:490-511 _depth_to_space_bthwc / _depth_to_space_channels_last = ttnn.reshape->ttnn.permute(8D)->ttnn.reshape, called by all 4 upsamples (vae_ltx.py:538)"
+            ]
+          },
+          {
+            "idea": "Speculative: bf8 weights/activations on the large late-stage residual convs (Conv3d = 32.4% / ~141ms device). The s2/s3/s4 res convs operate on full-resolution 145-frame activations and are the heaviest; if bandwidth-bound, bf8 halves activation+weight DRAM traffic.",
+            "mechanism": "conv3d weight+activation DRAM bandwidth on the largest stages (e.g. ltx_s2_res 512->512 at T=75,H=34,W=30 x8 blocks) may dominate over FPU math; bf8 halves the bytes moved. Contrasts with the DiT where weight-bf8 was NULL (overhead-bound); VAE convs are far larger/compute-heavy so the outcome may differ.",
+            "ceiling": "Speculative; up to ~30-60ms device IF bw-bound and IF PCC holds. High uncertainty — could be null like the DiT.",
+            "needs_finetune": true,
+            "needs_device_verify": true,
+            "pcc_risk": "high",
+            "concrete_steps": [
+              "Set VAE conv dtype bf8 only on the largest stages (s2/s3/s4 res) and measure traced-wall delta",
+              "Gate hard on full-decode video PCC vs bf16 reference (qgate mean-PCC floor 0.85, prefer >=0.95) — VAE output feeds pixels directly with no downstream denoiser to absorb error",
+              "If PCC fails, try bf8 weights only (keep bf16 activations) or restrict to a subset of convs"
+            ],
+            "evidence": [
+              "kevinmi wiki: Conv3d 32.4% of traced device work; conv3d.py:439-443 heaviest swept convs (ltx_s2_res 13752us, ltx_s3_chg 12013us, s3_res 6145us, s4_res 5647us isolated per-conv)",
+              "task preamble: DiT all_bf8_lofi measured NULL (-0.04s, overhead-bound); SDPA-input bf8 rejected at PCC 0.876 — establishes VAE-pixel bf8 as PCC-risky and possibly null"
+            ]
+          }
+        ],
+        "lever": "vae-decode",
+        "honest_verdict": "One real, high-value lever: TRACE the production VAE decode (~0.35s E2E, realistic 0.3-0.4s). The production pipeline runs the decode UNTRACED (pipeline_ltx.py:858), so ~0.35s of the ~0.95s wall is pure host-dispatch bubble — the exact ~50% inter-op-gap pattern the S2 denoise shows. The fix is already BUILT: kevinmi (branch origin/kevinmi/np-halo-fabric-mux, unmerged) split decode_device() specifically to be trace-captured and measured the device-only decode at ~435ms over 10 traced iters. This is a PORT + wire job (mirror the existing denoise _prealloc_trace_io baked-address machinery, capture during warmup), not a research problem; PCC-neutral. The main integration risk is trace-safe halo semaphores (kevinmi already solved this on his branch). Everything else on the VAE decode is either measured-dead or small: conv3d blocking is already swept-optimal for the exact prod 4x8/1080p shapes (NOT a lever, kills backlog item 5); halo-transport fusion (<5ms) and copy-elimination (net NEGATIVE +14-22ms) are empirically closed by kevinmi at a 435ms floor. After tracing, the residual device buckets are Conv3d 32% / depth-to-space Permute 19% / RMSNorm 18% / BinaryNg 15%; the only cheap wins there are folding the per-conv W-mask mul into the conv (kevinmi's in-kernel logical mask, ~tens of ms) and possibly a fused depth-to-space kernel (unexplored, ~10-30ms speculative). bf8 VAE convs are high PCC-risk (output is pixels, qgate 0.85) and may be null like the DiT. Bottom line: realistic total VAE saving toward 8.2->6.0 is ~0.35s from tracing plus maybe 0.05-0.1s from the W-mask/layout folds — worth doing (it is unrealized and largely pre-built), but bounded; it is not, by itself, the path to the full 2.2s."
+      },
+      {
+        "lever": "finetune-path",
+        "findings": [
+          {
+            "idea": "STEP-REDUCTION DISTILLATION (the decisive finetune lever): obtain/train a NEW few-step distilled LTX-2.3 checkpoint or distilled-LoRA (e.g. S1 8->5 or 4, S2 3->2) via DMD2-style distribution-matching, then hot-swap it in. Denoise is 79% of E2E and step-count sets the pass-count, so this is the only finetune lever that clears the 6.0s goal.",
+            "mechanism": "Denoise = 6.4s = 79% of the 8.2s E2E and is fixed device-FW per forward pass; the ONLY way to make it cheaper at high quality is fewer passes. The served model is ALREADY distilled to 8+3=11 passes (loads ltx-2.3-22b-distilled-1.1.safetensors with hardcoded sigma schedules), so it has zero step slack — naive config truncation produces a DIFFERENT scene, not a degraded one (measured: LTX_FAST 7-step min-PCC 0.36; medium S1 6->4 qgate 0.27). A DMD2/step-distillation retrain teaches a fresh few-step sampler that holds quality. Cost scales with passes cut, and S2 passes are ~3x an S1 pass (full-res vs quarter-area): S2 3->2 ~= -1.17s, each S1 step ~= -0.36s.",
+            "ceiling": "~2.2-2.9s E2E. To just hit 6.0s: a 5+2 distilled model = -1.08s (S1 8->5) -1.17s (S2 3->2) = -2.25s -> E2E ~5.95s. Aggressive 4+2 (the deep-research target) = ~-2.6 to -2.9s -> E2E ~5.3-5.6s. Arithmetic: denoise 6.4s over 11 passes, S1 2.9s/8 = 0.36s/pass, S2 3.5s/3 = 1.17s/pass.",
+            "needs_finetune": true,
+            "needs_device_verify": true,
+            "pcc_risk": "med",
+            "concrete_steps": [
+              "FIRST (near-zero effort, do before any training): check whether Lightricks already publishes a more-distilled public checkpoint on HF Lightricks/LTX-2.3 (the current one is ltx-2.3-22b-distilled-1.1.safetensors; a fewer-step variant would be a ~1-day drop-in). If it exists, this whole lever collapses to a download + 2 constant edits.",
+              "Delivery is a SOLVED, production-tested path with ZERO tt-metal kernel/code change: point create_pipeline(checkpoint_name=...) at the new safetensors (pipeline_ltx.py:410-419 auto-resolves local path or HF ref), OR ship a distilled-LoRA via distilled_lora_path -> LoraSpec (the two-stage pipeline already fuses ltx-2.3-22b-distilled-lora-384-1.1.safetensors as 'variant 1' on CPU at load).",
+              "Then edit exactly two Python constants to match the new step count: DISTILLED_SIGMA_VALUES and STAGE_2_DISTILLED_SIGMA_VALUES in pipeline_ltx_distilled.py:24-25 (generate() consumes the full lists at :486/:523).",
+              "The TRAINING itself is OFF-DEVICE and OUT-OF-REPO: this repo is forward-only ttnn (no autograd) and has NO distillation code. Prefer the distilled-LoRA vehicle (rank-384, frozen base) over full fine-tune — cheaper to train, and the consumption path is already validated in-repo. Requires Lightricks' LTX training stack + GPU cluster + AV distillation data.",
+              "Verify on device at real scale: inference-only run of the new checkpoint at 1080-high, gate on skip-audio frame-PCC vs the 8+3 bf16 reference (with-audio is non-deterministic ~0.77-0.80 floor; skip-audio is deterministic PCC 1.0 per prior methodology)."
+            ],
+            "evidence": [
+              "pipeline_ltx_distilled.py:24-25 DISTILLED_SIGMA_VALUES (9 sigmas = 8 S1 steps) + STAGE_2_DISTILLED_SIGMA_VALUES (4 sigmas = 3 S2 steps); :486/:523 generate() uses the full lists",
+              "test_pipeline_ltx_distilled.py:81,104 served pipeline loads ltx-2.3-22b-distilled-1.1.safetensors (already a distilled checkpoint, not base 22b-dev)",
+              "pipeline_ltx.py:410-419 _resolve_checkpoint_file/hf_hub_download (checkpoint hot-swap); :565-573 _build_transformer_state_dict + fuse_loras_into (LoRA fuse at load); fuse_loras.py:20 LoraSpec, :47-97 fuse_loras_into does W += strength*(B@A) on CPU",
+              "pipeline_ltx_two_stages.py:37-48 distilled_lora_path -> LoraSpec variant-1; test_pipeline_ltx_two_stages.py:35 HF ltx-2.3-22b-distilled-lora-384-1.1.safetensors (rank-384 distilled-LoRA precedent already wired + tested)",
+              "memory ltx-3s-opt-state: LTX_FAST 7-step (6+1) min-PCC 0.36 'different generation'; bf8 8-step (6+2) 6.52s mean-PCC 0.81; medium S1 step-cut 6->4 qgate 0.27, 6->5 qgate 0.57 (distilled model has no step slack)",
+              "task profile: denoise 6.4s = 79% of 8.2s E2E; S1 2.9s @8 steps (544x960), S2 3.5s @3 steps (N=38760)"
+            ]
+          },
+          {
+            "idea": "WINDOW-AWARE SPARSE-ATTENTION FINETUNE: finetune (or distill) the model WITH a temporal-band SDPA mask in the forward so ALL 48 blocks tolerate windowing, unlocking the L4 sparse-attention kernel that today only ~2/48 blocks accept training-free.",
+            "mechanism": "L4 temporal windowing (attend +/-2-3 frames, full spatial) is training-free tolerated by only ~2/48 blocks at 1080-high (block 12 PCC 0.94; blocks 4/16 fail 0.56-0.64). A window-aware finetune (Native-Sparse-Attention / windowed-attn objective) teaches the model to route information within the band, recovering the intolerant early/mid blocks -> every block windowable. But it attacks ONLY RingJoint SDPA = 25.2% of the 12.18ms block (3.07ms); the 47.5% CCL matmuls are untouched, and denoise is ~50% inter-op gap not kernel FW.",
+            "ceiling": "~0.4-0.5s E2E even if finetune makes all 48 blocks windowable. A ~60% SDPA-compute cut = 0.15 x 12.18ms = ~1.8ms off the block FW; over the S2 blocks (~1.75s device-FW) that is ~0.26s S2 + a similar slice of S1 = ~0.4-0.5s. Bounded because SDPA is only a quarter of the block and half the denoise wall is inter-op gap.",
+            "needs_finetune": true,
+            "needs_device_verify": true,
+            "pcc_risk": "med",
+            "concrete_steps": [
+              "This is a STACKED project: it needs BOTH the L4 masked ring-SDPA kernel (~2wk C++, per prior L4 work: compile-time #ifdef KV_WINDOW gate on ring_joint_sdpa compute/reader/writer to keep dense byte-identical) AND a window-aware finetune of the 22B (off-device, ~2-3wk + compute).",
+              "Only worth doing AFTER step-distillation (finding 1) as an additional lever toward a sub-6s / 3s target — on its own the ~0.5s ceiling does not justify a combined ~5-6 week kernel+training effort.",
+              "If pursued, finetune with the frame-major F*H*W temporal band mask (a contiguous per-query-frame K-range, expressible in the ring kernel unlike a spatial sliding window), then re-run the per-block depth-map PCC screen to confirm all blocks now pass >=0.85, and gate on e2e decoded skip-audio quality."
+            ],
+            "evidence": [
+              "memory ltx-3s-opt-state: 1080-high L4 temporal windowing tolerated by only ~2/48 blocks at PCC>=0.85 training-free (depth_map_ltxperftip: block 12 pass 0.94, 8/20 marginal, 4/16 fail); non-monotonic depth map (not 'dense first N')",
+              "task profile: RingJoint SDPA = 25.2% of block (3.07ms/12.18ms); CCL matmuls 47.5% untouched by attention windowing",
+              "memory: denoise is ~50% inter-op gap (async-CCL wait + dispatch), so device-FW cuts are diluted; prior L4 kernel is real but the quality-safe (per-block-mask) win was ~0.1-0.2s training-free"
+            ]
+          },
+          {
+            "idea": "QUANTIZATION-AWARE FINETUNE (QAT) to make bf8 / lower-precision lossless on the quantization-sensitive ops (SDPA inputs, K/V collectives).",
+            "mechanism": "QAT would recover the PCC that killed the training-free bf8 attempts (SDPA-input bf8 rejected at PCC 0.876/0.832). But it is chasing perf that DOES NOT EXIST here: the denoise is measured NOT FPU-math-bound (bf16 LoFi fidelity null, ~7.4-7.5 vs 7.6s), all-bf8 weights measured NULL (-0.04s, overhead-bound), and the SP K/V all-gather is hop/latency-bound not bandwidth-bound (bf8 K/V perf-flat). So even a perfectly lossless QAT quantization yields ~0 speedup.",
+            "ceiling": "~0s E2E. Quantization is the wrong lever for this workload regardless of how well finetune preserves quality.",
+            "needs_finetune": true,
+            "needs_device_verify": false,
+            "pcc_risk": "none",
+            "concrete_steps": [
+              "DO NOT pursue. Documented dead: the levers QAT would enable (bf8 weights, bf8 SDPA, bf8 K/V collective) were all measured perf-null or perf-flat because the denoise is overhead/latency-bound, not compute- or bandwidth-bound."
+            ],
+            "evidence": [
+              "memory ltx-3s-opt-state: all_bf8_lofi weights NULL (-0.04s, overhead-bound); SDPA-input bf8 rejected PCC 0.876; bf8 K/V collective PERF-FLAT (gather hop-bound not bw-bound); bf16 LoFi null -> denoise NOT FPU-math-bound",
+              "task: non-collective matmul only 0.5% of block; the 47.5% CCL matmuls are collective/latency-shaped, not arithmetic-shaped"
+            ]
+          }
+        ],
+        "honest_verdict": "FINETUNE IS THE ONLY route that clears 8.2s->6.0s at high quality, but 100% of the training is OFF-DEVICE and OUT-OF-REPO. Hard constraint verified: this repo is a forward-only ttnn inference stack with ZERO training infra — no .backward/optimizer.step/requires_grad(True)/torch.optim anywhere in models/tt_dit (only a torch.autograd.Variable in an FID-eval helper), and no DMD/consistency/LCM/distillation code at all. Everything 'distill/LoRA' in-repo is INFERENCE-side consumption of externally-trained weights. The served model is ALREADY a Lightricks-distilled 8+3-step checkpoint with hardcoded sigma schedules, so it has no step slack (measured: 7-step -> min-PCC 0.36, a different scene). RANKED: (1) STEP-REDUCTION DISTILLATION is decisive — a 5+2 (or 4+2) distilled checkpoint/LoRA cuts denoise 6.4s by ~2.2-2.9s -> E2E ~5.3-6.0s, clearing the goal. The consumption path is FREE and production-tested (checkpoint_name= or distilled_lora_path= LoRA fuse + edit two sigma constants; the rank-384 distilled-LoRA vehicle is already wired and tested), but the DMD2 training is a ~1-3 week off-device project needing Lightricks' LTX training stack + GPU compute + AV data (prefer the LoRA vehicle — cheaper, and consumption already validated). FIRST ACTION is near-zero cost: check if Lightricks has published a fewer-step checkpoint (a ~1-day drop-in that skips training entirely). (2) WINDOW-AWARE SPARSE-ATTENTION FINETUNE unlocks all 48 blocks for the L4 kernel (vs ~2/48 training-free) but the arithmetic ceiling is only ~0.4-0.5s (SDPA is 25% of the block, denoise is half inter-op gap), and it stacks a ~2wk kernel on a ~2-3wk finetune — only justified as a post-step-distill stack toward 3s, not to hit 6.0s. (3) QAT is DEAD — the quantization it would make lossless yields ~0 perf because the denoise is overhead/latency-bound, not compute-bound. Bottom line: fund the step-distillation LoRA (best-case a 1-day published-checkpoint drop-in; realistically 1-3 weeks eng + compute) as THE 6.0s finetune path; treat window-aware sparse-attn finetune as a later 3s stack; skip QAT."
+      }
+    ],
+    "master_plan": "All three linchpins verified in this worktree (line numbers drifted from the sub-findings but substance holds, and two are actually easier to test than claimed). I have what I need to synthesize. No file will be written — the plan is my return value below.\n\n---\n\n# LTX 8.2s → 6.0s — Ranked Master Plan\n\n## Bottom line (the true floor, no optimism)\n\n**No-finetune levers cannot reach 6.0s. They bank ~0.5–0.7s realistic and floor at ~7.5s (best case ~7.3s).** The 2.2s goal is ~68% un-addressable without finetune. **Only step-reduction distillation clears 6.0s**, and 100% of that training is off-device / out-of-repo. The realistic path is: **a 6+2 (or 5+2) step-distilled checkpoint (finetune long-pole) + the VAE-decode trace (no-finetune, pre-built) ≈ 5.96s.** Everything else is margin/insurance, not a path.\n\n## Linchpins I verified (this worktree)\n\n- **VAE video decode is untraced — CONFIRMED, and it's the ONLY decode left untraced.** `pipeline_ltx.py:1180` `video = self.vae_decoder(latent_spatial, ...)` is a plain forward under a `Watchdog`, no `execute_trace`. Yet the audio decoder (`:1879 forward_traced`), vocoder (`:1792 use_trace`), and BWE (`:1798`) ARE traced, and the video denoise IS traced (`pipeline_ltx_distilled.py:288/325 traced=capture_traced`). So the 0.35s VAE-trace win is genuinely unrealized, and the \"trace the denoise\" idea is already done (do not re-attempt).\n- **Step-cut is a zero-code env-var flip — CONFIRMED, better than claimed.** `pipeline_ltx_distilled.py:39-51`: sigmas are `_sigma_override(\"LTX_S1_SIGMAS\"/\"LTX_S2_SIGMAS\", …)` with validation (≥2, ends 0.0, strictly decreasing). Default S1=9 sigmas (8 steps), S2=4 (3 steps). The A/B harness for fewer steps already exists; the comment literally says \"A/B fewer-step schedules (L2 step cut).\" There is even keyframe few-step machinery (`:60-61`) — evidence the team already hit the quality wall memory records.\n- **num_links BH=2 vs WH=4 — CONFIRMED, and it's a one-kwarg override.** `pipeline_ltx.py:537-542` BH (4,8) `num_links=2, Ring`; `:563-568` WH (4,8) `num_links=4, Ring`; `:507/:574` a `num_links` kwarg overrides the default. Trivial to A/B.\n\n## Master ranked table — value density = realistic-E2E-saved ÷ (effort-days × PCC-risk-mult)\n\nRisk mult: none=1.0, low=1.5, med=3, high=6. **Density orders the cheap banks; it is a trap for the goal** (see note after table).\n\n| Rank | Idea (lever) | Saved (s) | Effort (d) | Risk | Density | Confidence |\n|---|---|---|---|---|---|---|\n| 1 | **B1a Check HF for published fewer-step LTX-2.3 checkpoint/LoRA** (finetune) | 2.25 *if hit* | 0.5 | med | **1.50** | asymmetric bet |\n| 2 | **A2 num_links 2→4 + fabric hyperparam sweep** (ccl) | 0.10–0.20 | 1.5 | none | 0.10 | LOW — may be ~0 (latency-bound); hang risk |\n| 3 | **A1 VAE decode trace** (vae) | 0.30–0.40 | 3–5 | none | 0.088 | **HIGH** — pre-built, 435ms device floor measured |\n| 4 | **B1b Train DMD2 step-distill LoRA** (finetune) | 2.2–2.9 | ~15 | med | 0.050 | the ONLY lever that clears 6.0s |\n| 5 | A3 RMSNorm stat-gather merge + op-count cut (ccl) | 0.05–0.15 | 3.5 | low | 0.019 | LOW-MED — needs traced profile first |\n| 6 | A4 VAE per-conv W-mask fold (in-kernel mask) (vae) | 0.02–0.05 | 2 | low | 0.012 | MED — kevinmi `ac49eb38b99`, post-trace only |\n| 7 | A7 adaln to_out fusion a2v/v2a/attn2 (adaln) | 0.006–0.010 | 0.5 | low | 0.011 | HIGH — Python-only, primitive exists |\n| 8 | B2 Window-aware sparse-attn finetune (finetune) | 0.4–0.5 | ~30 | med | 0.005 | 3s-stack only, NOT for 6.0s |\n| 9 | A8 2nd command-queue audio overlap (ccl) | 0.05–0.07 | 5+ | med | 0.004 | author says NOT worth it |\n| 10 | A5 adaln pre-mod RMSNorm scale+shift fold (adaln) | 0.018–0.025 | 3.5 | low | 0.004 | MED — bundle w/ A3 |\n| 11 | A6 depth-to-space permute kernel (vae) | 0.01–0.03 | 4 | low | 0.003 | speculative, post-trace only |\n| 12 | (vae) bf8 late-stage convs | 0.03–0.06 | 4 | high | 0.002 | may be NULL like DiT; pixel PCC risk |\n| — | B3 QAT (finetune) | 0 | ~20 | — | 0 | **DEAD** — quantization is wrong lever |\n| — | A0 Traced per-op denoise profile (ccl) | 0 (enabler) | 0.25 | none | — | MANDATORY before A2/A3 |\n\n**Why density is a trap here:** ranks 2–3 look best per-second, but stacking every no-finetune idea floors at ~7.5s. The goal is a hard 6.0s that **only ranks 1/4 (step-distillation) reach.** Density sequences the cheap banks; it does not choose the path. Lead with the floor, not the density.\n\n## Bucket A — NO-FINETUNE, bankable now (device PCC-gated)\n\nOrder to execute (highest-confidence + cheapest first):\n\n1. **A0 (enabler, ~2h):** capture a traced per-op denoise profile with dispatch columns populated. The provided CSV is a cache-miss COMPILE run (all 9664 rows `PROGRAM CACHE HIT=False`, `METAL TRACE ID=NaN`, 26000ms of 26025ms device-idle) — its op-to-op latencies are host JIT bubbles, not device gaps. **Do not authorize A2/A3 code until this attributes the gap.**\n2. **A1 VAE decode trace (~0.35s, PCC-neutral, HIGH):** port kevinmi's `decode_device()` split (`origin/kevinmi/np-halo-fabric-mux`, measured 435ms device over 10 traced iters) + wire the trace via the existing denoise `_prealloc_trace_io` baked-address machinery; the one risk is trace-safe halo semaphores (already solved on that branch). Stacks cleanly with everything (runs once/gen).\n3. **A7 adaln to_out fusion (~0.008s, ~0.5d):** Python-only, pass `addcmul_residual/gate` into the a2v/v2a/audio-attn2 `to_out` calls, delete the 3 standalone `ttnn.addcmul`; uses the primitive attn1 already uses. Free cleanup.\n4. **A2 num_links 2→4 + fabric sweep (~0.1–0.2s, UNCERTAIN):** one-kwarg override; sweep `chunks_per_sync/num_workers_per_link/num_buffers_per_channel`. **Validate no fabric router-channel hang across all 32 chips** (memory: shared `TENSIX_FABRIC_CONNECTIONS`). May land near-zero if latency-bound.\n5. **A4 VAE W-mask fold (~0.02–0.05s, post-A1):** port kevinmi's in-kernel logical mask, drop the per-conv `ttnn.mul`.\n6. **A3 + A5 as ONE kernel change (~0.07–0.17s combined):** both touch `DistributedRMSNorm`/`wan_fused_rmsnorm_post_allgather` — merge the ~20 exposed stat-gathers AND fold the dynamic scale+shift affine (mirror `dit_layernorm_post_allgather`, which already carries weight+bias) in a single visit. Only after A0 confirms the gap is dispatch/sync-bound.\n7. **Skip A6 (speculative), A8 (author: not worth it), vae-bf8 (high pixel-PCC risk, likely null).**\n\n**Honest summed no-finetune floor:**\n- Realistic (mid): **−0.68s → ~7.5s**\n- Optimistic (all high-ends land): −0.87s → ~7.3s\n- Pessimistic (A2/A3 come in latency-bound near-zero): −0.44s → ~7.8s\n\n**This does not reach 6.0s and does not even clear 7.2s except in the optimistic stack.** Even generously adding the *separate* Tilize worker's best case (~0.3–0.4s if fully eliminated) lands ~7.1–7.2s. **The no-finetune true floor is ~7.2–7.5s.** ~1.2–1.5s of the 2.2s has no no-finetune path in these four levers.\n\n## Bucket B — FINETUNE, required to reach 6.0s\n\n**B1 Step-reduction distillation — THE lever (−2.2 to −2.9s).**\n- Consumption path is FREE and production-tested: env-var `LTX_S1_SIGMAS/LTX_S2_SIGMAS` (verified `:39-51`) or `distilled_lora_path` LoRA-fuse (rank-384 vehicle already wired/tested). Zero kernel/code change.\n- **B1a (hours):** check HF `Lightricks/LTX-2.3` for a published fewer-step checkpoint/LoRA. If it exists → **~1-day drop-in**, whole goal collapses.\n- **B1b (~1–3 weeks off-device):** DMD2 distribution-matching LoRA train — needs Lightricks' LTX training stack + GPU cluster + AV data. This repo is forward-only ttnn (no autograd/optimizer/DMD anywhere) — training is out-of-repo. Prefer the LoRA vehicle (cheaper, consumption validated).\n- **Target the LEAST aggressive cut that clears the goal:** 6+2 = −1.89s → 6.31s; **+ A1 VAE trace −0.35 → 5.96s (clears 6.0).** 5+2 = −2.25s → 5.60s (more margin, more quality risk). **Banking A1 first lets the distillation be 6+2 instead of 4+2 — materially lower quality risk.** Memory says the *current* checkpoint fails few-step (7-step min-PCC 0.36), so a NEW checkpoint is required; the env-var A/B only re-confirms/quantifies the wall.\n\n**B2 Window-aware sparse-attn finetune (−0.4–0.5s):** stacks an L4 masked ring-SDPA kernel (~2wk) on a window-aware 22B finetune (~2–3wk). Ceiling is bounded (SDPA is 25% of the block, denoise is half inter-op gap). **Justified only as a later 3s stack, never to hit 6.0s.**\n\n**B3 QAT — DEAD (~0s):** the levers it would make lossless (bf8 weights, bf8 SDPA, bf8 K/V collective) all measured perf-null/flat because denoise is overhead/latency-bound, not compute/bandwidth-bound (all_bf8 −0.04s; bf16-LoFi null; K/V gather hop-bound). Do not fund.\n\n## Contradiction / interaction flags\n\n- **C1 (headline contradiction):** the task-preamble/memory premise \"**~1.75s S2 = 50% inter-op gap, recoverable via CCL overlap**\" is refuted by ccl-findings 1+2. (a) That gap is **unmeasurable from the provided CSV** (compile run). (b) Every TP/SP collective is **already fused** into its consumer (`all_gather_minimal_matmul_async`, `matmul_reduce_scatter`, `ring_joint_sdpa`, `barrier_semaphore=None`) at ~55% fabric util — there is no `gather→matmul→scatter` serialization to de-serialize. The residual gap is distributed dispatch across ~43k launches, attacked by op-count/tracing, not \"CCL overlap.\" **The CCL-overlap lever banks ~0.15–0.35s, not 1.75s.**\n- **C2 (resolved trap):** vae-decode reuses the *same* \"50% gap = trace it\" mechanism ccl says is not recoverable in denoise. Resolution (verified): video **denoise is already traced** (not recoverable), video **VAE decode is not** (`:1180`, recoverable). Apply the mechanism only to the untraced stage.\n- **C3 (bundling, not conflict):** ccl-A3 and adaln-A5 both edit `DistributedRMSNorm`/`wan_fused_rmsnorm_post_allgather`. Adaln-A5's own verdict says it's \"only worth it if someone is already in that kernel\" — A3 puts someone there. **Do them as one change** or A5 is not worth its effort alone.\n- **C4 (cannibalization, quantify before summing):** A2/A3/A5/A7 are per-block-forward *denoise* savings. B1 cuts passes 11→~7 (~36% fewer), shrinking those banks ~36%. **Only A1/A4/A6 (VAE, once/gen) stack cleanly with step-distillation.** Do not add the denoise-side no-finetune banks and the step-cut at face value.\n- **C5 (reinforcement):** vae-bf8 (finetune-flagged, high risk, possibly null) + QAT (dead) agree — quantization is not a path for this overhead-bound workload.\n\n## Single highest-value next action to dispatch\n\n**Check Hugging Face / `Lightricks/LTX-2.3` for an already-published fewer-step distilled checkpoint or distilled-LoRA (e.g. ≤6-step S1, 2-step S2).** Rationale: the true floor proves no-finetune cannot reach 6.0s, so the only critical path runs through step-distillation (B1); this check is hours of effort with asymmetric upside (a ~1-day env-var + checkpoint-swap drop-in to the *entire* goal, since consumption is verified-wired at `pipeline_ltx_distilled.py:39-51`), and its outcome immediately scopes the long-pole: hit → done in a day; miss → kick off the 1–3 week DMD2 LoRA training now, as it is the schedule bottleneck and nothing else reaches 6.0s.\n\n**Dispatch in parallel (independent, pre-built, PCC-neutral):** the **A1 VAE decode trace** (~0.35s) — highest-confidence bankable win, stacks with any step-distillation, and lowers the required step-cut aggressiveness from 4+2 to 6+2 (less quality risk). Precede any CCL/adaln code with the **A0 traced per-op profile** to avoid burning budget on an already-fused, already-traced gap."
+  },
+  "workflowProgress": [
+    {
+      "type": "workflow_phase",
+      "index": 1,
+      "title": "Investigate"
+    },
+    {
+      "type": "workflow_phase",
+      "index": 2,
+      "title": "Synthesize"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 1,
+      "label": "dig:ccl-overlap",
+      "phaseIndex": 1,
+      "phaseTitle": "Investigate",
+      "agentId": "aff5ed04b8c74f762",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1783646299837,
+      "queuedAt": 1783646299808,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "ccl-overlap",
+      "promptPreview": "MEASURED definitive per-op profile of ONE S2 transformer block (LTX-2.3 distilled AV DiT, BH Galaxy 4x8, SP=8 axis1 × TP=4 axis0, production shape F19×H34×W60 video_N=38760, device-0 clean timeline): 12.18ms device-FW/block.\nBuckets: CCL-collective matmuls (AllGatherMinimalMatmulAsync + MatmulStridedReduceScatterAsync + AllGatherAsync) = 47.5% (5.78ms); RingJoint SDPA = 25.2% (3.07ms); Tilize (44 …",
+      "lastProgressAt": 1783647142934,
+      "tokens": 139489,
+      "toolCalls": 28,
+      "durationMs": 843097,
+      "resultPreview": "{\"lever\":\"ccl-overlap\",\"findings\":[{\"idea\":\"STOP: the provided CSV cannot measure the inter-op gap at all — it is a cache-miss eager (untraced) COMPILE run. Before any CCL-overlap work, capture a trace-replay per-op profile. The '~1.75s S2 = 50% inter-op gap' number is a top-down wall-minus-FW inference, not measured, and cannot be attributed from this file.\",\"mechanism\":\"The lever's entire premis…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 2,
+      "label": "dig:adaln-fusion",
+      "phaseIndex": 1,
+      "phaseTitle": "Investigate",
+      "agentId": "a3d561810ce544ef0",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1783646299838,
+      "queuedAt": 1783646299808,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "adaln-fusion",
+      "promptPreview": "MEASURED definitive per-op profile of ONE S2 transformer block (LTX-2.3 distilled AV DiT, BH Galaxy 4x8, SP=8 axis1 × TP=4 axis0, production shape F19×H34×W60 video_N=38760, device-0 clean timeline): 12.18ms device-FW/block.\nBuckets: CCL-collective matmuls (AllGatherMinimalMatmulAsync + MatmulStridedReduceScatterAsync + AllGatherAsync) = 47.5% (5.78ms); RingJoint SDPA = 25.2% (3.07ms); Tilize (44 …",
+      "lastProgressAt": 1783647146590,
+      "tokens": 143714,
+      "toolCalls": 26,
+      "durationMs": 846752,
+      "resultPreview": "{\"lever\":\"adaln-fusion\",\"findings\":[{\"idea\":\"Fuse the a2v / v2a / audio-attn2 gated-residual addcmul into the attention to_out matmul epilogue using the EXISTING _to_out_fused_addcmul primitive (pass addcmul_residual + addcmul_gate to the call, delete the standalone ttnn.addcmul). These three cross-attentions are the only ones in the block that still do the gated residual as a separate full-tensor…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 3,
+      "label": "dig:vae-decode",
+      "phaseIndex": 1,
+      "phaseTitle": "Investigate",
+      "agentId": "adb73b14a666e3212",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1783646299838,
+      "queuedAt": 1783646299808,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "vae-decode",
+      "promptPreview": "MEASURED definitive per-op profile of ONE S2 transformer block (LTX-2.3 distilled AV DiT, BH Galaxy 4x8, SP=8 axis1 × TP=4 axis0, production shape F19×H34×W60 video_N=38760, device-0 clean timeline): 12.18ms device-FW/block.\nBuckets: CCL-collective matmuls (AllGatherMinimalMatmulAsync + MatmulStridedReduceScatterAsync + AllGatherAsync) = 47.5% (5.78ms); RingJoint SDPA = 25.2% (3.07ms); Tilize (44 …",
+      "lastProgressAt": 1783646913989,
+      "tokens": 133773,
+      "toolCalls": 30,
+      "durationMs": 614151,
+      "resultPreview": "{\"findings\":[{\"idea\":\"TRACE the production VAE decode. It is the single biggest, currently-unrealized VAE lever: the production decode runs UNTRACED (pipeline_ltx.py:858 = a plain self.vae_decoder(latent_spatial) forward), while another dev (kevinmi) has already measured the same decode's device-only region at ~435ms captured as one ttnn trace. The ~0.9-1.05s production wall minus ~435ms device mi…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 4,
+      "label": "dig:finetune-path",
+      "phaseIndex": 1,
+      "phaseTitle": "Investigate",
+      "agentId": "a47215de7ecbdf5db",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1783646299838,
+      "queuedAt": 1783646299809,
+      "attempt": 1,
+      "lastToolName": "StructuredOutput",
+      "lastToolSummary": "finetune-path",
+      "promptPreview": "MEASURED definitive per-op profile of ONE S2 transformer block (LTX-2.3 distilled AV DiT, BH Galaxy 4x8, SP=8 axis1 × TP=4 axis0, production shape F19×H34×W60 video_N=38760, device-0 clean timeline): 12.18ms device-FW/block.\nBuckets: CCL-collective matmuls (AllGatherMinimalMatmulAsync + MatmulStridedReduceScatterAsync + AllGatherAsync) = 47.5% (5.78ms); RingJoint SDPA = 25.2% (3.07ms); Tilize (44 …",
+      "lastProgressAt": 1783646563324,
+      "tokens": 62356,
+      "toolCalls": 13,
+      "durationMs": 263485,
+      "resultPreview": "{\"lever\":\"finetune-path\",\"findings\":[{\"idea\":\"STEP-REDUCTION DISTILLATION (the decisive finetune lever): obtain/train a NEW few-step distilled LTX-2.3 checkpoint or distilled-LoRA (e.g. S1 8->5 or 4, S2 3->2) via DMD2-style distribution-matching, then hot-swap it in. Denoise is 79% of E2E and step-count sets the pass-count, so this is the only finetune lever that clears the 6.0s goal.\",\"mechanism\"…"
+    },
+    {
+      "type": "workflow_agent",
+      "index": 5,
+      "label": "synthesize",
+      "phaseIndex": 2,
+      "phaseTitle": "Synthesize",
+      "agentId": "a58015943b454863c",
+      "model": "claude-opus-4-8[1m]",
+      "state": "done",
+      "startedAt": 1783647146599,
+      "queuedAt": 1783647146598,
+      "attempt": 1,
+      "lastToolName": "Bash",
+      "lastToolSummary": "grep -rn \"num_links\" models/tt_dit/pipelines/ltx/pipeline_l…",
+      "promptPreview": "MEASURED definitive per-op profile of ONE S2 transformer block (LTX-2.3 distilled AV DiT, BH Galaxy 4x8, SP=8 axis1 × TP=4 axis0, production shape F19×H34×W60 video_N=38760, device-0 clean timeline): 12.18ms device-FW/block.\nBuckets: CCL-collective matmuls (AllGatherMinimalMatmulAsync + MatmulStridedReduceScatterAsync + AllGatherAsync) = 47.5% (5.78ms); RingJoint SDPA = 25.2% (3.07ms); Tilize (44 …",
+      "lastProgressAt": 1783647479762,
+      "tokens": 58889,
+      "toolCalls": 5,
+      "durationMs": 333162,
+      "resultPreview": "All three linchpins verified in this worktree (line numbers drifted from the sub-findings but substance holds, and two are actually easier to test than claimed). I have what I need to synthesize. No file will be written — the plan is my return value below.\n\n---\n\n# LTX 8.2s → 6.0s — Ranked Master Plan\n\n## Bottom line (the true floor, no optimism)\n\n**No-finetune levers cannot reach 6.0s. They bank ~…"
+    }
+  ],
+  "totalTokens": 538221,
+  "totalToolCalls": 102
+}

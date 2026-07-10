@@ -40,6 +40,31 @@ NOT 50%.** The denoise is **compute/CCL-bound, not overhead-bound** — my earli
 ⇒ 86% of the block is collective-matmul + SDPA, both near pure-compute floor (bf8 null). No-finetune runway is thin.
 **Open (needs WARM/TRACED profile):** is cold CCL FW inflated by fabric setup? Real warm per-block + real gap %. Re-measuring.
 
+## ⭐ MASTER PLAN + HONEST FLOOR (Workflow wi7rr4cw5 synthesis, 5 Opus/xhigh digs — full text: opt/MASTER_PLAN_raw.txt)
+**No-finetune levers CANNOT reach 6.0s — they floor at ~7.2–7.5s.** Only step-reduction distillation clears 6.0s, and
+100% of that training is OFF-DEVICE / OUT-OF-REPO (this repo is forward-only ttnn: zero autograd/optimizer/DMD infra).
+Path to 6.0s (verified in-repo): **6+2 step-distilled checkpoint (−1.89s) + VAE-decode trace (−0.35s) ≈ 5.96s.**
+
+Verified linchpins: VAE video decode is the ONE stage left untraced (pipeline_ltx.py:1180) → **~0.35s pre-built win**
+(kevinmi branch np-halo-fabric-mux, decode_device() split, 435ms device measured). Step-cut = env-var flip
+(LTX_S1_SIGMAS/LTX_S2_SIGMAS, pipeline_ltx_distilled.py:39-51) but the CURRENT checkpoint fails few-step (7-step min-PCC
+0.36) → needs a NEW checkpoint. num_links BH=2 vs WH=4 (pipeline_ltx.py:537-542) = 1-kwarg A/B, ~0.1-0.2s uncertain.
+**B1a HF check (2026-07-10): MISS** — HF has only the same 8+3-step distilled family (distilled / distilled-1.1 /
+distilled-lora-384); NO published fewer-step/turbo checkpoint. So no 1-day drop-in; 6.0s needs the ~1-3wk DMD2 train.
+
+REFUTED (this session's earlier claims): "50% inter-op gap recoverable via CCL overlap" — every TP/SP collective is
+ALREADY fused into its consumer (all_gather_minimal_matmul_async / matmul_reduce_scatter / ring_joint_sdpa, ~55% fabric
+util, no barrier). CCL-overlap banks ~0.15-0.35s, not 1.75s. QAT/quant DEAD (overhead-bound). Tilize DEAD (cold artifact).
+
+### No-finetune bank (autonomous, PCC-gated) — realistic −0.5 to 0.7s → ~7.5s floor:
+| # | lever | E2E saving | confidence | status |
+|---|---|---|---|---|
+| A1 | VAE decode trace (port kevinmi decode_device) | ~0.35s | HIGH (pre-built) | 🔄 worker dispatched |
+| A2 | num_links 2→4 + fabric sweep | 0.1-0.2s (uncertain) | LOW (hang risk) | ⏳ device A/B |
+| A7 | adaLN to_out fusion (a2v/v2a/attn2) | ~0.008s | HIGH (python-only) | ⏳ trivial |
+| A3/A5 | RMSNorm stat-gather merge + scale/shift fold (one kernel) | 0.07-0.17s | LOW-MED | ⏳ needs A0 traced profile |
+| A0 | traced per-op profile (enabler, attribute the real gap) | 0 | — | ⏳ prereq for A3 |
+
 ## LEVER PLAN (ranked; status)
 | # | lever | expected | status |
 |---|---|---|---|

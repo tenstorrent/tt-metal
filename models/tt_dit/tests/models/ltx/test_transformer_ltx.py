@@ -868,7 +868,14 @@ def test_ltx_transformer_block(
         logger.info(f"LTX_QUANT='{_quant_preset}': quantizing block for PCC gate")
         apply_quant_config_to_block(tt_block, _factory(), mesh_device.arch(), has_audio)
 
-    tt_out = tt_block(**forward_kwargs)
+    # LTX_PROFILE_ITERS>1 re-runs the same forward so warm (program-cache-hit) iterations exist for a
+    # steady-state profile; the block is functional (no input mutation) so every iteration is identical.
+    # Drain each lap so warm markers reach profile_log_device.csv even if teardown is cut short.
+    _prof_iters = int(os.environ.get("LTX_PROFILE_ITERS", "1"))
+    for _i in range(_prof_iters):
+        tt_out = tt_block(**forward_kwargs)
+        if _prof_iters > 1:
+            ttnn.ReadDeviceProfiler(mesh_device)
     if has_audio:
         tt_v, tt_a = tt_out
     else:
