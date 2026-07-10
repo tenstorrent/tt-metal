@@ -7,3 +7,6 @@
 {"event":"test_run","result":"pass","details":"Debug multi-KV-block suite 7/7 pass (online-softmax recurrence j>0, Q-chunking, multi-core, D=128, uneven KV). PCC>=0.99.","ts":"2026-07-10T14:59:53+00:00"}
 {"event":"fix_applied","details":"Fixed m_run CB leak between Q-blocks on same core (drain cb_m_run after normalize). Long-context multi-head 4096 PCC 0.9676->0.99998. Also made accumulation-path CBs fp32. Acceptance 28/28, debug 10/10.","ts":"2026-07-10T15:07:54+00:00"}
 {"event":"test_run","result":"pass","details":"Golden bounded subset (bf16 tile_aligned small shapes): 24 passed, 12 xfailed (causal refused), 0 failed, 0 xpassed. SUPPORTED/EXCLUSIONS wiring correct, no drift.","ts":"2026-07-10T15:09:20+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-07-10T15:29:54+00:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/","detail":"42 passed after adding float32+bfloat8_b to SUPPORTED[dtype]; probe PCC fp32=0.999999 bf8b=0.9997","ts":"2026-07-10T15:33:01+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_precision_matrix.py","detail":"240 passed 48 skipped(fp32+bf16_acc EXCLUSION). fp32 D=128 large-S OOMs (R4 territory), not excluded.","ts":"2026-07-10T15:37:35+00:00"}
