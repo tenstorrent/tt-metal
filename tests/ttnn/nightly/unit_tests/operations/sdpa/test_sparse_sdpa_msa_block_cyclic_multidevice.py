@@ -60,14 +60,22 @@ def test_msa_native_block_cyclic_sp_gt1_pcc(mesh_device, n_chunks):
 
     def dev_rm(x, dt):
         return ttnn.from_torch(
-            x, dtype=dt, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=repl,
+            x,
+            dtype=dt,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=repl,
         )
 
     def dev_tile(x, dt):
         return ttnn.from_torch(
-            x.to(torch.bfloat16), dtype=dt, layout=ttnn.TILE_LAYOUT, device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=repl,
+            x.to(torch.bfloat16),
+            dtype=dt,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=repl,
         )
 
     out = ttnn.transformer.sparse_sdpa_msa(

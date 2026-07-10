@@ -289,7 +289,9 @@ def test_msa_native_block_cyclic_sp1_bit_exact(device):
     q, k, v, indices = make_msa_inputs(H, n_kv, S, T, topk, d, causal=False, seed=7)
     plain = run_op_msa_native(q, k, v, indices, device)
     bc = run_op_msa_native(q, k, v, indices, device, block_cyclic_sp_axis=0, block_cyclic_chunk_local=S)
-    assert torch.equal(plain, bc), f"block-cyclic sp=1 must be bit-identical to non-BC; max|delta|={(plain - bc).abs().max().item()}"
+    assert torch.equal(
+        plain, bc
+    ), f"block-cyclic sp=1 must be bit-identical to non-BC; max|delta|={(plain - bc).abs().max().item()}"
 
 
 @run_for_blackhole()
