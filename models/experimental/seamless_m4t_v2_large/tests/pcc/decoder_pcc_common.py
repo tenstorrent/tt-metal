@@ -18,7 +18,8 @@ from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import (
     SeamlessM4Tv2DecoderLayer,
 )
 
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.common.utility_functions import nearest_32
+from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import load_hf_model_and_processor
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_causal_with_padding_4d,
@@ -215,9 +216,9 @@ def run_prefill_layer_pcc(mesh_device, hf_model, *, seq_len: int) -> None:
         ttnn.deallocate(t)
     _dealloc_kv_caches(kv_cache, cross_attn_cache)
 
-    passing, pcc_val = comp_pcc(ref_out, tt_cpu, PCC_REQUIRED)
-    logger.info(comp_allclose(ref_out, tt_cpu))
-    assert passing, f"prefill seq_len={seq_len} PCC {pcc_val} < {PCC_REQUIRED}"
+    ok, msg = check_with_pcc(ref_out, tt_cpu, pcc=PCC_REQUIRED)
+    logger.info(f"prefill seq_len={seq_len}: {msg} (threshold {PCC_REQUIRED})")
+    assert ok, f"prefill seq_len={seq_len} PCC below {PCC_REQUIRED}: {msg}"
 
 
 def run_decode_layer_pcc(mesh_device, hf_model) -> None:
@@ -281,9 +282,9 @@ def run_decode_layer_pcc(mesh_device, hf_model) -> None:
         ttnn.deallocate(hidden_tt)
         ttnn.deallocate(tt_out)
 
-        passing, pcc_val = comp_pcc(ref_out, tt_cpu, PCC_REQUIRED)
-        logger.info(comp_allclose(ref_out, tt_cpu))
-        assert passing, f"decode step={step} pos={step} PCC {pcc_val} < {PCC_REQUIRED}"
+        ok, msg = check_with_pcc(ref_out, tt_cpu, pcc=PCC_REQUIRED)
+        logger.info(f"decode step={step} pos={step}: {msg} (threshold {PCC_REQUIRED})")
+        assert ok, f"decode step={step} pos={step} PCC below {PCC_REQUIRED}: {msg}"
 
     ttnn.deallocate(enc_tt)
     ttnn.deallocate(enc_mask_tt)
