@@ -1530,8 +1530,7 @@ def test_reshard_variant6_reverse_dealloc_order(device):
 
 
 # ---------------------------------------------------------------------------
-# Resharding between L1 and DRAM - tracked in
-# https://github.com/tenstorrent/tt-metal/issues/49224
+# Resharding between L1 and DRAM
 #
 # Sweeps ttnn.to_memory_config across every combination of input/output buffer
 # type (L1/DRAM), memory layout (height/width/block sharded, interleaved), data
@@ -1563,10 +1562,29 @@ _L1_DRAM_DTYPE_IDS = ["f32", "bf16", "i32", "u16", "u32", "u8", "bf8_b", "bf4_b"
 _L1_DRAM_INT_DTYPES = {ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8}
 
 
-def _l1_dram_mem_config(scheme, buffer_type, height, width, grid_size):
+def _l1_dram_mem_config(scheme, buffer_type, height, width, device):
     """Build a MemoryConfig for a 256x256 tensor for the given scheme/buffer type."""
+    grid_size = device.compute_with_storage_grid_size()
+
     if scheme == ttnn.TensorMemoryLayout.INTERLEAVED:
         return ttnn.MemoryConfig(memory_layout=scheme, buffer_type=buffer_type)
+
+    # Block sharding on DRAM: DRAM banks form a 1D grid, so a 2D block core-grid collides (the
+    # accessor keys the DRAM bank off core.x only, so cores that share an x land on the same bank).
+    # Express it the supported way instead: an ND shard spec with the block shard shape distributed
+    # round-robin over the 1D DRAM banks. See tenstorrent/tt-metal#49224.
+    if scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED and buffer_type == ttnn.BufferType.DRAM:
+        num_dram_banks = device.dram_grid_size().x
+        dram_banks = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(num_dram_banks)]
+        )
+        nd_shard_spec = ttnn.NdShardSpec(
+            shard_shape=ttnn.Shape([1, 1, height // 4, width // 4]),
+            grid=dram_banks,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        )
+        return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
     if scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
         if grid_size.x < 8:
@@ -1605,10 +1623,7 @@ def test_reshard_between_L1_and_DRAM(
     to the output memory config (the op under test), read it back through a
     DRAM-interleaved tensor and check it matches the input.
     """
-    if layout == ttnn.ROW_MAJOR_LAYOUT and dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
-        pytest.skip("Illegal layout/dtype config: block-float requires TILE layout")
-
-    grid_size = device.compute_with_storage_grid_size()
+    # No need to explicitly skip bf8_b/bf4_b with ROW_MAJOR: ttnn.Tensor(...).to(layout) implicitly converts them to TILE.
 
     height, width = 256, 256
     shape = [1, 1, height, width]
@@ -1616,8 +1631,8 @@ def test_reshard_between_L1_and_DRAM(
     dram_interleaved = ttnn.MemoryConfig(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
     )
-    input_mem_config = _l1_dram_mem_config(input_scheme, input_buffer_type, height, width, grid_size)
-    output_mem_config = _l1_dram_mem_config(output_scheme, output_buffer_type, height, width, grid_size)
+    input_mem_config = _l1_dram_mem_config(input_scheme, input_buffer_type, height, width, device)
+    output_mem_config = _l1_dram_mem_config(output_scheme, output_buffer_type, height, width, device)
 
     torch_tensor = random_torch_tensor(dtype, shape)
 
@@ -1633,13 +1648,11 @@ def test_reshard_between_L1_and_DRAM(
     tt_output = ttnn.to_memory_config(tt_output, dram_interleaved)
     torch_result = tt_output.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
 
-    # Golden: the reshard *input* read back through the same interleaved path. Comparing
-    # against this (rather than the original torch tensor) measures only reshard fidelity,
-    # which is a bit-exact page copy, and excludes the block-float (bf8_b/bf4_b) rounding
-    # applied when the tensor was first created - otherwise bf8_b/bf4_b would show PCC ~0.99
-    # purely from that quantization, not from the reshard.
-    tt_input_golden = ttnn.to_memory_config(tt_input, dram_interleaved)
-    torch_golden = tt_input_golden.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
-
-    passing, output = comp_equal(torch_golden, torch_result)
+    # Compare against the original torch tensor (ground truth). Reshard is a bit-exact page copy, so
+    # every dtype must match exactly - except bf8_b/bf4_b, which are block-float formats that lose
+    # precision when the tensor is first created, so relax those to a PCC check.
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        passing, output = comp_pcc(torch_tensor, torch_result, 0.9889)
+    else:
+        passing, output = comp_equal(torch_tensor, torch_result)
     assert passing, output
