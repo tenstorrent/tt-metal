@@ -242,6 +242,14 @@ class TtIndexer:
         # match BF16 within bf16 noise, ~5e-4 PCC — so it can be allocated BF8 to halve the memory).
         # self._index_kbuf below is the NATURAL (single-shot) path's internal concat-grown cache only.
         self._index_kbuf = None
+        # GLM-5.2 cross-layer indexer reuse: only "full" layers own a TtIndexer (shared layers bind
+        # ReuseIndexer and never write), so the index key cache is allocated full-layers-only and THIS
+        # layer writes/reads its COMPACTED rank among full layers, not its global layer index. Gated by
+        # _index_compact; absent an indexer_types map (v3.1 / v3.2 / GLM-5.1) the per-call (all-layers)
+        # coords passed into forward() are used unchanged.
+        self._num_index_layers = num_full_indexer_layers(config)
+        self._index_compact = self._num_index_layers is not None
+        self._index_layer_idx = full_indexer_rank(config, layer_idx) if self._index_compact else layer_idx
         self._upload_weights(idx_host)
         self._build_rope_tables()
         # DS block-cyclic uses the interleaved rotary_embedding_indexed op, but DS weights emit the
@@ -533,6 +541,13 @@ class TtIndexer:
         scoring. Scoring currently spans the full preallocated cache width (see the kv_len TODO below).
         Natural path ignores rope_tensors/cache_user_id."""
         a = self.index_args
+        # GLM-5.2 reuse: write/score this layer's keys at its COMPACTED full-layer slot of the
+        # full-layers-only index cache. cache_layer_idx / num_cache_layers feed ONLY the index cache
+        # (write_k + cache_batch_idx below), so overriding them here is self-contained. No-op (passed
+        # all-layers coords used) for models without an indexer_types map.
+        if self._index_compact:
+            cache_layer_idx = self._index_layer_idx
+            num_cache_layers = self._num_index_layers
         glob = seq_len * self.sp_factor  # global query/key count this chunk
         end_pos = start_pos + glob
         # Block-cyclic key cache is caller-owned (like the KVPE cache) — required, never self-allocated.
@@ -719,3 +734,25 @@ def indexer_layer_is_reused(config, layer_idx: int) -> bool:
     device construction (ReuseIndexer binding) and the cache build (skip the indexer tensorbins)."""
     types = getattr(config, "indexer_types", None)
     return bool(types) and layer_idx < len(types) and types[layer_idx] == "shared"
+
+
+def num_full_indexer_layers(config):
+    """GLM-5.2 reuse: number of ``full`` DSA layers — the ones that own an indexer and write the index
+    key cache (``shared`` layers reuse a prior full layer's top-k and never write). The index cache and
+    its migration-table config are sized to this instead of the full layer count. Returns ``None`` when
+    there is no ``indexer_types`` map (v3.1 / v3.2 / GLM-5.1: every sparse layer is full), so callers fall
+    back to the all-layers count."""
+    types = getattr(config, "indexer_types", None)
+    if not types:
+        return None
+    return sum(1 for t in types if t == "full")
+
+
+def full_indexer_rank(config, layer_idx: int) -> int:
+    """GLM-5.2 reuse: a ``full`` layer's compacted slot in the full-layers-only index cache — its rank
+    among the full layers before it (count of ``full`` in ``indexer_types[:layer_idx]``). Absent the map,
+    identity (``layer_idx``), so the index cache stays per-(all-)layer as on GLM-5.1."""
+    types = getattr(config, "indexer_types", None)
+    if not types:
+        return layer_idx
+    return sum(1 for t in types[:layer_idx] if t == "full")
