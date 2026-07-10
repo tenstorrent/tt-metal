@@ -728,7 +728,7 @@
       timeout: 150
       tier: 1
     wh_galaxy:
-      timeout: 120
+      timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
