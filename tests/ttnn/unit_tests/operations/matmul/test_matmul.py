@@ -4059,7 +4059,9 @@ _CROSSBLOCK_RELOAD_FACTORY_CONFIGS = {
 
 
 @pytest.mark.parametrize("factory", list(_CROSSBLOCK_RELOAD_FACTORY_CONFIGS))
-def test_matmul_fp32_crossblock_reload_precision(device, factory):
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["reload", "packer_l1_acc"])
+@pytest.mark.parametrize("has_bias", [False, True], ids=["no_bias", "bias"])
+def test_matmul_fp32_crossblock_reload_precision(device, factory, packer_l1_acc, has_bias):
     """Precision of fp32 accumulation over a long K reduction in the multicast matmul factories.
 
     Matrix A (M x K) holds a large constant offset plus a small random signal. Matrix B (K x N) has
@@ -4070,22 +4072,122 @@ def test_matmul_fp32_crossblock_reload_precision(device, factory):
     result and PCC collapses.
 
     The matmul runs with fp32 accumulation enabled (see compute_kernel_config below) and a small
-    in0_block_w so K is split into many blocks and the reduction accumulates across them - the
-    configuration whose correctness depends on the partial sums staying at full fp32 precision. Both
-    the 1D and 2D multicast program factories are exercised.
+    in0_block_w so K is split into many blocks. Cross-block accumulation takes one of two paths
+    depending on packer_l1_acc: the packer accumulates the partials in SRAM (packer_l1_acc=True), or
+    the fp32 partials are reloaded into DEST between blocks (packer_l1_acc=False). Both must keep the
+    partial sums at full fp32 precision to stay accurate. All combinations of the two accumulation
+    paths and the 1D/2D multicast program factories are exercised.
     """
     m, k, n = 64, 8192, 64
-    in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the reload path is exercised
+    in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the K reduction spans many blocks
     a, b, ref = _offset_cancellation_inputs(m, k, n, offset=1000.0)
 
+    # An optional fused bias is a second consumer of the intermediate partials CB, so it is exercised
+    # alongside the accumulation to guard against the fp32 handling corrupting the bias path.
+    bias = None
+    if has_bias:
+        torch.manual_seed(1)
+        bias = torch.randn(1, n).bfloat16()
+        ref = ref + bias.float()  # broadcast over M
+
     program_config = _CROSSBLOCK_RELOAD_FACTORY_CONFIGS[factory](m // 32, n // 32, in0_block_w)
-    # fp32_dest_acc_en=True with packer_l1_acc=False is the configuration whose correctness
-    # depends on a lossless fp32 reload of the K-partials.
+    # fp32_dest_acc_en=True keeps the K-partials in fp32; packer_l1_acc selects the cross-block
+    # accumulation path (accumulate in SRAM via the packer, vs reload into DEST). Both must preserve
+    # fp32 precision.
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
-        packer_l1_acc=False,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    a_t = ttnn.from_torch(
+        a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    b_t = ttnn.from_torch(
+        b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    if has_bias:
+        # ttnn.linear fuses the bias add into the matmul kernel (a raw ttnn.matmul does not take bias).
+        bias_t = ttnn.from_torch(
+            bias, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        out = ttnn.linear(
+            a_t,
+            b_t,
+            bias=bias_t,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    else:
+        out = ttnn.matmul(
+            a_t,
+            b_t,
+            program_config=program_config,
+            compute_kernel_config=compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    out = ttnn.to_torch(out).float()
+
+    # Correct fp32 accumulation gives PCC ~0.996 / rel-Frobenius ~0.09; a precision loss mid-reduction
+    # collapses it (e.g. PCC ~0.2 / rel-Frobenius ~8). allclose/ULP are not meaningful for a
+    # deliberately ill-conditioned bf16 matmul, so only PCC and Frobenius are checked.
+    assert_numeric_metrics(
+        ref,
+        out,
+        pcc_threshold=0.99,
+        frobenius_threshold=0.2,
+        check_allclose=False,
+        check_pcc=True,
+        check_frobenius=True,
+        check_ulp=False,
+    )
+
+
+@pytest.mark.xfail(
+    reason=(
+        "The untilize_out reblock stage loses precision independently of the K accumulation: with an "
+        "ill-conditioned offset-cancellation input, even exact fp32 accumulation (packer_l1_acc=True, "
+        "which uses no reload) only reaches PCC ~0.13. Fixing the fp32 reload therefore cannot lift "
+        "this above threshold; the untilize precision loss is a separate issue from the cross-block "
+        "reload precision this test family targets."
+    ),
+    strict=False,
+)
+@pytest.mark.parametrize("packer_l1_acc", [False, True], ids=["reload", "packer_l1_acc"])
+def test_matmul_fp32_crossblock_reload_untilize_precision(device, packer_l1_acc):
+    """fp32 accumulation precision with untilize_out=True, where the untilize/reblock stage is a
+    second reader of the intermediate partials CB alongside the cross-block accumulation.
+
+    Same ill-conditioned offset-cancellation setup as test_matmul_fp32_crossblock_reload_precision,
+    on the 1D multicast factory, no bias. Parametrized over the two accumulation paths so the reload
+    (packer_l1_acc=False) can be compared against the reload-free packer path (packer_l1_acc=True).
+
+    Marked xfail: the untilize_out path has a precision loss unrelated to the reload fix (see the
+    xfail reason), so both parametrizations currently land at PCC ~0.12-0.13.
+    """
+    m, k, n = 64, 8192, 64
+    in0_block_w = 2  # tiles per K-block; Kt=256 -> 128 blocks, so the K reduction spans many blocks
+    a, b, ref = _offset_cancellation_inputs(m, k, n, offset=1000.0)
+
+    # out_subblock == out_block (single subblock) as required for untilize_out.
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(1, 1),
+        in0_block_w=in0_block_w,
+        out_subblock_h=m // 32,
+        out_subblock_w=n // 32,
+        per_core_M=m // 32,
+        per_core_N=n // 32,
+        fuse_batch=True,
+        mcast_in0=True,
+        untilize_out=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
     )
 
     a_t = ttnn.from_torch(
@@ -4101,11 +4203,8 @@ def test_matmul_fp32_crossblock_reload_precision(device, factory):
         compute_kernel_config=compute_kernel_config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out = ttnn.to_torch(out).float()
+    out = ttnn.to_torch(out).float().reshape(m, n)
 
-    # A lossless fp32 reload gives PCC ~0.996 / rel-Frobenius ~0.09; the TF32-truncated reload
-    # collapses to PCC ~0.2 / rel-Frobenius ~8. allclose/ULP are not meaningful for a
-    # deliberately ill-conditioned bf16 matmul, so only PCC and Frobenius are checked.
     assert_numeric_metrics(
         ref,
         out,
