@@ -39,7 +39,7 @@ from models.common.utility_functions import (
             3,
             ttnn.TILE_LAYOUT,
             ttnn.bfloat16,
-            512,
+            256,
             256,
             128,
             2,
