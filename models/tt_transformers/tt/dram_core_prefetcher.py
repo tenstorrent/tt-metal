@@ -2,21 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DRAM-core prefetcher class for tt-transformers models on Blackhole.
+"""DRAM-core tensor prefetcher for tt-transformers models on Blackhole.
 
-Drop-in alternative to ``Prefetcher`` (``prefetcher.py``) that pushes weights from
-programmable DRAM cores (DRISC kernels) into the receiver ring instead of from
-worker cores. Public surface mirrors ``Prefetcher`` so MLP/attention/model code
-swaps without changes.
-
-Lifecycle differs internally: a single ``ttnn.experimental.start_tensor_prefetcher``
-runs for the model's life, with ``queue_tensor_prefetcher_request`` called once
-per ``run()`` (per decode ``forward()``). ``stop()`` is a no-op between forwards;
-the real shutdown happens in ``teardown()`` or when the MeshDevice closes.
+Weights are registered while the model is constructed so one shared GCB can be
+sized for every decode matmul. ``init(Mode.DECODE)`` builds that GCB and starts
+the long-running DRISC daemon. Each consuming matmul then uses
+``prefetch_and_linear`` to queue exactly its own weight immediately before the
+linear op; trace capture records those requests alongside their consumers.
 """
 
 import os
-from typing import Callable, List, Optional, Union
+from typing import List, Optional, Union
 
 from loguru import logger
 
@@ -125,7 +121,7 @@ def is_dram_core_prefetcher_supported(
 
 
 class DramCorePrefetcher(LightweightModule):
-    """DRAM-core (DRISC) prefetcher with the same public surface as ``Prefetcher``.
+    """Tensor-prefetcher state shared by DRAM-core-prefetched model matmuls.
 
     Receiver layout is a ``num_dram_banks × recv_per_bank`` rectangle anchored at ``(0,0)``
     on the worker grid. Bank ``b``'s receivers occupy ring positions ``[b*r, (b+1)*r)`` in
@@ -148,6 +144,7 @@ class DramCorePrefetcher(LightweightModule):
         assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
         self.dual_senders_per_bank: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_DUAL_SENDERS", "0") == "1"
         self.stream_in1: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1"
+        self.uses_tensor_prefetcher: bool = True
 
         # Pick recv_per_bank. Auto-mode walks 8,4,2,1 (descending) and takes the largest supported.
         candidates: List[int] = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
@@ -194,21 +191,11 @@ class DramCorePrefetcher(LightweightModule):
         # State.
         self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
-        self.prefetcher_sub_device = None  # filled in init()
-        self.callbacks: List[Callable[[], None]] = []
-        self.prefetched_tensors: List[ttnn.Tensor] = []
-        self.prefetched_program_configs: List = []
-        self._queue_payload: Optional[List] = None  # cached (weight, block_count) list, built once
-        self.mode: Mode = Mode.PREFILL  # set by init(); read by lm_head.py
-        self.init_decode_done: bool = False
-        self.init_prefill_done: bool = False
-        self.prefetch_done: bool = False
-        self._started: bool = False  # Tracks lazy StartDramCorePrefetcher
-        self._stopped: bool = False  # Set by teardown(); blocks re-entry
-        # QueueDramCorePrefetcherRequest writes a one-shot H2D socket payload; keep it outside
-        # decode traces and queue it explicitly before each trace capture/replay.
-        self.requires_external_trace_run: bool = True
-        self.skip_run_in_forward: bool = False
+        self.registered_weights: List[ttnn.Tensor] = []
+        self.registered_program_configs: List = []
+        self.mode: Mode = Mode.PREFILL
+        self._started: bool = False
+        self._stopped: bool = False
         # Surrounding (non-GCB-matmul) ops — SDPA, create/concat heads, lm_head, rope — are NOT
         # co-located on the prefetcher's cores: the DRISC senders are off the worker grid and the
         # receiver ring is a small rectangle, so those ops use the model's default placement (the
@@ -222,14 +209,9 @@ class DramCorePrefetcher(LightweightModule):
             f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
         )
 
-    # ---- Public surface compatible with Prefetcher ----
-
-    def register_callback(self, callback: Callable[[], None]) -> None:
-        self.callbacks.append(callback)
-
     def insert_tensor(self, tensor: ttnn.Tensor, program_config=None) -> None:
-        """Register a tensor to be prefetched. ``program_config`` is required for GCB sizing."""
-        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
+        """Register one weight and its consuming decode program config for GCB sizing."""
+        assert not self._started, "Cannot register weights after the Tensor prefetcher has started."
         assert program_config is not None, (
             "DramCorePrefetcher.insert_tensor requires program_config (the 1D mcast gather_in0 matmul "
             "program config that will consume this weight). Threaded through from MLP/Attention."
@@ -245,84 +227,27 @@ class DramCorePrefetcher(LightweightModule):
             )
         if tensor.volume() % self.ring_size != 0:
             raise ValueError(f"Tensor volume ({tensor.volume()}) must be divisible by ring_size ({self.ring_size}).")
-        self.prefetched_tensors.append(tensor)
-        self.prefetched_program_configs.append(program_config)
+        self.registered_weights.append(tensor)
+        self.registered_program_configs.append(program_config)
         logger.info(
-            f"[DramCorePrefetcher] Inserted tensor of shape {tensor.shape} ({len(self.prefetched_tensors)}/{self.num_tensors})"
+            f"[DramCorePrefetcher] Registered tensor of shape {tensor.shape} "
+            f"({len(self.registered_weights)}/{self.num_tensors * self.num_layers})"
         )
 
     def init(self, mode: Mode = Mode.DECODE) -> None:
-        # Called for BOTH modes via model.switch_mode() (prefill then decode); prefetching itself is
-        # decode-only. Unlike the worker-core Prefetcher, the DRAM-core path creates NO consumer
-        # sub-device: the DRISC senders live on a separate programmable core type, so there are no
-        # worker-grid sender columns to fence off, and consumer ops run on the device's default
-        # (whole-grid) sub-device. worker_sub_device_id stays None, so every op the model places
-        # with `sub_device_id=prefetcher.worker_sub_device_id` runs on the default sub-device —
-        # exactly like the no-prefetcher path.
-        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
-            return
+        """Set model mode and start the Tensor prefetcher when decode is first entered."""
         self.mode = mode
-        logger.info(f"[DramCorePrefetcher.init] mode={mode} ring={self.ring_size} (no consumer sub-device)")
-        self.init_decode_done = mode == Mode.DECODE
-        self.init_prefill_done = mode == Mode.PREFILL
-
-    def prefetch(self) -> None:
-        if self.mode != Mode.DECODE:
+        if mode != Mode.DECODE or self._started:
             return
-        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode."
-        assert self.callbacks, "No callbacks registered for the prefetcher."
-        if self.prefetch_done:
-            return
-        for cb in self.callbacks:
-            cb()
-        self.prefetch_done = True
-
-    def run(self) -> None:
-        """Start DRISC daemon (lazy, first call) and queue one request per call."""
-        if self.skip_run_in_forward:
-            return
-        assert self.init_decode_done, "Prefetcher has not been initialized for decode mode."
         assert not self._stopped, "DramCorePrefetcher has been torn down; cannot run again."
-        # The model registers num_tensors weights per decoder layer, so prefetch() collects
-        # num_tensors * num_layers DISTINCT tensors (in construction order). This mirrors the
-        # worker Prefetcher contract (create_address_tensor asserts the same count).
-        assert len(self.prefetched_tensors) == self.num_tensors * self.num_layers, (
+        assert len(self.registered_weights) == self.num_tensors * self.num_layers, (
             f"Expected {self.num_tensors} * {self.num_layers} = {self.num_tensors * self.num_layers} inserted "
-            f"tensors (num_tensors per layer), got {len(self.prefetched_tensors)}."
+            f"tensors (num_tensors per layer), got {len(self.registered_weights)}."
         )
-
-        if self.global_cb is None:
-            self._build_global_cb()
-        if not self._started:
-            ttnn.experimental.start_tensor_prefetcher(
-                self.mesh_device, dual_senders_per_bank=self.dual_senders_per_bank
-            )
-            self._started = True
-
-        # One request per forward(): queue every inserted weight once, in construction order, so
-        # each decoder layer gets its OWN weights (NOT layer-0's replayed). The matmuls consume
-        # them in the same order across the decode pass; per-GCB state is preserved so successive
-        # Queue calls resume where the previous stopped. The queue API takes a flattened list of
-        # (weight, block_count) pairs — block_count = ring_size K-blocks per tensor. The payload
-        # list is invariant after prefetch(), so it's cached in _queue_payload.
-        if self._queue_payload is None:
-            if self.stream_in1:
-                rotation = list(range(self.ring_size))
-                self._queue_payload = [(t, self.ring_size, rotation) for t in self.prefetched_tensors]
-            else:
-                self._queue_payload = [(t, self.ring_size) for t in self.prefetched_tensors]
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            self.mesh_device,
-            self._queue_payload,
-            global_cb=self.global_cb,
-        )
-
-    def stop(self) -> None:
-        """Per-forward stop. NO-OP for the DRAM-core path — DRISC daemon stays up.
-
-        Real shutdown happens in ``teardown()`` or when the MeshDevice closes.
-        """
-        return
+        self._build_global_cb()
+        ttnn.experimental.start_tensor_prefetcher(self.mesh_device, dual_senders_per_bank=self.dual_senders_per_bank)
+        self._started = True
+        logger.info(f"[DramCorePrefetcher.init] started decode prefetcher with ring={self.ring_size}")
 
     def teardown(self) -> None:
         if self._started and not self._stopped:
@@ -447,12 +372,12 @@ class DramCorePrefetcher(LightweightModule):
         # Lazy import to avoid hard dep order at module load (see is_dram_core_prefetcher_supported).
         from models.tt_transformers.tt.prefetcher import TILE_BYTES
 
-        assert len(self.prefetched_tensors) == len(self.prefetched_program_configs)
-        assert len(self.prefetched_tensors) == self.num_tensors * self.num_layers
+        assert len(self.registered_weights) == len(self.registered_program_configs)
+        assert len(self.registered_weights) == self.num_tensors * self.num_layers
 
         # Size over every inserted weight (all layers), taking the largest block across all.
         max_in1_block_size = 0
-        for tensor, pc in zip(self.prefetched_tensors, self.prefetched_program_configs):
+        for tensor, pc in zip(self.registered_weights, self.registered_program_configs):
             tile_bytes = TILE_BYTES[tensor.dtype]
             # gather_in0 matmul splits in0_block_w to weight_K_tiles / ring_size, NOT pc.in0_block_w
             # (see gcb_block_bytes).
@@ -488,8 +413,8 @@ class DramCorePrefetcher(LightweightModule):
         )
         self.global_cb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
             self.mesh_device,
-            self.prefetched_program_configs,
-            self.prefetched_tensors,
+            self.registered_program_configs,
+            self.registered_weights,
             self._bank_to_receivers,
             gcb_size,
             dual_senders_per_bank=self.dual_senders_per_bank,
