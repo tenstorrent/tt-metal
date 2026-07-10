@@ -53,7 +53,10 @@ void kernel_main() {
     constexpr uint32_t mask_mode = get_compile_time_arg_val(11);
     constexpr uint32_t scale_bits = get_compile_time_arg_val(12);
     constexpr uint32_t skv_non_aligned = get_compile_time_arg_val(13);
-    constexpr bool has_mask = (mask_mode == 1);
+    // mask_mode: 0 none, 1 custom (DRAM tensor), 2 causal (generated on-device).
+    // Both custom and causal feed the additive mask-add -> softmax path.
+    constexpr bool has_mask = (mask_mode >= 1);
+    constexpr bool is_causal = (mask_mode == 2);
 
     constexpr uint32_t cb_q = 0;
     constexpr uint32_t cb_k = 1;
@@ -106,7 +109,18 @@ void kernel_main() {
             ckl::MulUnary<>{scale_bits},
             ckl::PackTile<cb_qs, ckl::OutputLifecycle::Streaming>{});
 
-        for (uint32_t j = 0; j < num_kv_blocks; ++j) {
+        // Causal: process only KV blocks up to and including the diagonal block
+        // for this Q-block (must match the reader's identical cap). Later blocks
+        // are fully -inf and are skipped entirely.
+        uint32_t kv_blocks_this_q = num_kv_blocks;
+        if constexpr (is_causal) {
+            kv_blocks_this_q = (q_row0 + q_cnt - 1) / kv_chunk_t + 1;
+            if (kv_blocks_this_q > num_kv_blocks) {
+                kv_blocks_this_q = num_kv_blocks;
+            }
+        }
+
+        for (uint32_t j = 0; j < kv_blocks_this_q; ++j) {
             const uint32_t kv_row0 = j * kv_chunk_t;
             uint32_t kv_cnt = kv_chunk_t;
             if (kv_row0 + kv_cnt > Skv_t) {

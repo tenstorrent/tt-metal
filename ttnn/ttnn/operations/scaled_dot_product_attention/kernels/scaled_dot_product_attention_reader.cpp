@@ -19,6 +19,69 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
+// ---------------------------------------------------------------------------
+// On-device causal mask generation (mask_mode == 2).
+//
+// The additive causal bias depends only on tile indices (not on Q/K/V data),
+// so it is produced here in the reader by direct L1 byte writes — the
+// production SDPA pattern (see transformer/sdpa dataflow_common.hpp). We never
+// materialize the full S_q x S_kv mask: only one [q_cnt x kv_cnt] block of
+// tiles per (Q-block, KV-block), and future blocks are skipped entirely.
+//
+// A 32x32 tile is 4 row-major 16x16 faces; element (r,c) lives at
+// face = (r>=16)*2 + (c>=16), local (r%16, c%16), linear index
+//   face*256 + (r%16)*16 + (c%16).
+// Per mask tile: all-valid (0) when the key tile is strictly below the Q tile,
+// all-masked (-inf) when strictly above, per-element upper-triangular (mask
+// c>r) on the block-diagonal tile.
+// ---------------------------------------------------------------------------
+static inline uint32_t causal_elem_index(uint32_t r, uint32_t c) {
+    uint32_t face = ((r >= 16) ? 2u : 0u) + ((c >= 16) ? 1u : 0u);
+    return face * 256u + (r & 15u) * 16u + (c & 15u);
+}
+
+// klass: 0 = all valid (0), 1 = all masked (-inf), 2 = diagonal (mask c>r).
+template <uint32_t elem_bytes>
+static inline void fill_causal_mask_tile(uint32_t base_addr, uint32_t klass) {
+    if constexpr (elem_bytes == 2) {
+        volatile tt_l1_ptr uint16_t* p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(base_addr);
+        constexpr uint16_t NINF = 0xFF80;  // bf16 -inf
+        if (klass == 0) {
+            for (uint32_t i = 0; i < 1024; ++i) {
+                p[i] = 0;
+            }
+        } else if (klass == 1) {
+            for (uint32_t i = 0; i < 1024; ++i) {
+                p[i] = NINF;
+            }
+        } else {
+            for (uint32_t r = 0; r < 32; ++r) {
+                for (uint32_t c = 0; c < 32; ++c) {
+                    p[causal_elem_index(r, c)] = (c > r) ? NINF : (uint16_t)0;
+                }
+            }
+        }
+    } else {
+        volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_addr);
+        constexpr uint32_t NINF = 0xFF800000u;  // fp32 -inf
+        if (klass == 0) {
+            for (uint32_t i = 0; i < 1024; ++i) {
+                p[i] = 0;
+            }
+        } else if (klass == 1) {
+            for (uint32_t i = 0; i < 1024; ++i) {
+                p[i] = NINF;
+            }
+        } else {
+            for (uint32_t r = 0; r < 32; ++r) {
+                for (uint32_t c = 0; c < 32; ++c) {
+                    p[causal_elem_index(r, c)] = (c > r) ? NINF : 0u;
+                }
+            }
+        }
+    }
+}
+
 void kernel_main() {
     uint32_t q_addr = get_arg_val<uint32_t>(0);
     uint32_t k_addr = get_arg_val<uint32_t>(1);
@@ -42,7 +105,9 @@ void kernel_main() {
     constexpr uint32_t mask_H = get_compile_time_arg_val(12);
     constexpr uint32_t skv_non_aligned = get_compile_time_arg_val(13);
     constexpr uint32_t skv_last_valid = get_compile_time_arg_val(14);
-    constexpr bool has_mask = (mask_mode == 1);
+    constexpr uint32_t mask_elem_bytes = get_compile_time_arg_val(15);
+    constexpr bool has_mask = (mask_mode == 1);   // custom additive mask read from DRAM
+    constexpr bool is_causal = (mask_mode == 2);  // triangular bias generated on-device
 
     constexpr uint32_t cb_q = 0;
     constexpr uint32_t cb_k = 1;
@@ -81,7 +146,7 @@ void kernel_main() {
     }
 
     // TensorAccessors (all declared unconditionally; mask is a no-arg placeholder when absent).
-    constexpr auto q_args = TensorAccessorArgs<15>();
+    constexpr auto q_args = TensorAccessorArgs<16>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -128,7 +193,21 @@ void kernel_main() {
         const uint32_t mask_head = (mask_H == 1) ? 0 : h_q;
         const uint32_t mask_head_base = (b * mask_H + mask_head) * Sq_t;
 
-        for (uint32_t j = 0; j < num_kv_blocks; ++j) {
+        // Causal: skip fully-future KV blocks. The last KV block that can carry
+        // an unmasked key for this Q-block is the one containing the last valid
+        // query tile-row (q_row0 + q_cnt - 1). Blocks past it are entirely -inf
+        // and are not processed (≈½ KV-work win; also avoids all-(-inf) rows).
+        uint32_t kv_blocks_this_q = num_kv_blocks;
+        if constexpr (is_causal) {
+            kv_blocks_this_q = (q_row0 + q_cnt - 1) / kv_chunk_t + 1;
+            if (kv_blocks_this_q > num_kv_blocks) {
+                kv_blocks_this_q = num_kv_blocks;
+            }
+        }
+
+        const uint32_t mask_tile_bytes = get_tile_size(cb_mask);
+
+        for (uint32_t j = 0; j < kv_blocks_this_q; ++j) {
             const uint32_t kv_row0 = j * kv_chunk_t;
             uint32_t kv_cnt = kv_chunk_t;
             if (kv_row0 + kv_cnt > Skv_t) {
@@ -175,11 +254,31 @@ void kernel_main() {
                 for (uint32_t st = q_row0; st < q_row0 + q_cnt; ++st) {
                     for (uint32_t kv = kv_row0; kv < kv_row0 + kv_cnt; ++kv) {
                         uint32_t tid = (mask_head_base + st) * Skv_t + kv;
-                        noc_async_read_tile(tid, mask_acc, w + idx * tile_bytes);
+                        noc_async_read_tile(tid, mask_acc, w + idx * mask_tile_bytes);
                         ++idx;
                     }
                 }
                 noc_async_read_barrier();
+                cb_push_back(cb_mask, q_cnt * kv_cnt);
+            }
+
+            // --- Causal mask block (generated on-device): for tr(q): for tc(kv) ---
+            // Same [q_cnt x kv_cnt] row-major layout the compute mask-add expects.
+            // Classify each tile by global tile indices: key tile below the Q
+            // tile => all valid (0); above => all -inf; equal => triangular.
+            if constexpr (is_causal) {
+                cb_reserve_back(cb_mask, q_cnt * kv_cnt);
+                uint32_t w = get_write_ptr(cb_mask);
+                uint32_t idx = 0;
+                for (uint32_t tr = 0; tr < q_cnt; ++tr) {
+                    const uint32_t q_tile = q_row0 + tr;
+                    for (uint32_t tc = 0; tc < kv_cnt; ++tc) {
+                        const uint32_t k_tile = kv_row0 + tc;
+                        const uint32_t klass = (k_tile < q_tile) ? 0u : ((k_tile > q_tile) ? 1u : 2u);
+                        fill_causal_mask_tile<mask_elem_bytes>(w + idx * mask_tile_bytes, klass);
+                        ++idx;
+                    }
+                }
                 cb_push_back(cb_mask, q_cnt * kv_cnt);
             }
         }

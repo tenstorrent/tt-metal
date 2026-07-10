@@ -66,6 +66,7 @@ def create_program_descriptor(
     output_tensor: ttnn.Tensor,
     *,
     attn_mask: ttnn.Tensor = None,
+    is_causal: bool = False,
     scale: float,
     compute_kernel_config,
 ):
@@ -85,9 +86,12 @@ def create_program_descriptor(
     num_q_blocks = B * H_q * q_blocks_per_bh
     gqa_factor = H_q // H_kv
 
-    has_mask = attn_mask is not None
-    mask_mode = 1 if has_mask else 0
-    mask_H = int(attn_mask.shape[1]) if has_mask else 1
+    # mask_mode: 0 = none, 1 = custom (additive tensor read from DRAM),
+    #            2 = causal (triangular bias generated on-device in the reader).
+    read_dram_mask = attn_mask is not None
+    mask_mode = 2 if is_causal else (1 if read_dram_mask else 0)
+    emit_mask = mask_mode >= 1  # cb_mask + additive mask-add path is active
+    mask_H = int(attn_mask.shape[1]) if read_dram_mask else 1
     scale_bits = _f32_bits(scale)
 
     # Non-tile-aligned S_kv: the physical last KV tile carries (32 - skv_last_valid)
@@ -151,6 +155,15 @@ def create_program_descriptor(
     def cbs_(idx, pages):
         return cb(idx, pages, fmt=score_dtype, psize=score_bytes)
 
+    # Causal mask is generated on-device in score_dtype (bf16 for bf16/bf8b,
+    # fp32 for fp32) so the additive mask-add stays same-format. The reader
+    # writes -inf/0/triangular tiles element-by-element, so it needs the element
+    # size: 4 bytes for fp32, else 2 (bf16). Custom masks stay in the caller
+    # dtype (read from DRAM). mask_elem_bytes is only consumed on the causal path.
+    mask_fmt = score_dtype if mask_mode == 2 else tile_dtype
+    mask_bytes = ttnn.tile_size(mask_fmt)
+    mask_elem_bytes = 4 if mask_fmt == ttnn.float32 else 2
+
     # fp32 accumulation path: the running output/sum are updated over up to
     # num_kv_blocks (long context => dozens) online-softmax steps; bf16 storage
     # loses precision there. The matmul/reduce already accumulate in fp32 DEST.
@@ -165,7 +178,7 @@ def create_program_descriptor(
         cb(CB_QS, qcb * Dt),
         cb(CB_K, 2 * kcb * Dt),
         cb(CB_V, 2 * kcb * Dt),
-        cb(CB_MASK, 2 * block_pages if has_mask else 1),
+        cb(CB_MASK, 2 * block_pages if emit_mask else 1, fmt=mask_fmt, psize=mask_bytes),
         cb(CB_SCALER_MAX, 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
         # 2 tiles when S_kv is non-aligned: [full scaler, partial scaler].
         cb(CB_SCALER_SUM, 2 if skv_non_aligned else 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
@@ -174,7 +187,7 @@ def create_program_descriptor(
         cbf(CB_O_RUN, 2 * o_pages),
         cbf(CB_O_NEW, 2 * o_pages),
         cbf(CB_L_INV, 2 * qcb),
-        cbs_(CB_MASKED, 2 * block_pages if has_mask else 1),
+        cbs_(CB_MASKED, 2 * block_pages if emit_mask else 1),
         cb(CB_OUT, 2 * o_pages),
         cbs_(CB_SCORES, 2 * block_pages),
         cbs_(CB_PROBS, 2 * block_pages),
@@ -203,6 +216,7 @@ def create_program_descriptor(
         mask_H,
         skv_non_aligned,
         skv_last_valid,
+        mask_elem_bytes,
     ]
     reader_ct = list(reader_base)
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
@@ -210,7 +224,7 @@ def create_program_descriptor(
     reader_ct.extend(ttnn.TensorAccessorArgs(value).get_compile_time_args())
     reader_ct.extend(
         ttnn.TensorAccessorArgs(attn_mask).get_compile_time_args()
-        if has_mask
+        if read_dram_mask
         else ttnn.TensorAccessorArgs().get_compile_time_args()
     )
 
@@ -220,7 +234,7 @@ def create_program_descriptor(
             query.buffer_address(),
             key.buffer_address(),
             value.buffer_address(),
-            attn_mask.buffer_address() if has_mask else 0,
+            attn_mask.buffer_address() if read_dram_mask else 0,
             start_qb,
             count,
         ]
@@ -278,7 +292,7 @@ def create_program_descriptor(
     )
 
     tensors = [query, key, value]
-    if has_mask:
+    if read_dram_mask:
         tensors.append(attn_mask)
     tensors.append(output_tensor)
 

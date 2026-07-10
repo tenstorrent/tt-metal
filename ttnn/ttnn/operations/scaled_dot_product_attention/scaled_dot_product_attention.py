@@ -81,7 +81,7 @@ SUPPORTED = {
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
-    "mask_mode": ["none", "custom"],
+    "mask_mode": ["none", "custom", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
 
@@ -91,8 +91,15 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 # float32 + fp32_dest_acc_en=False is legal-but-lossy (maxed input, non-maxed
 # accumulation). Armed for when the dtype refinement lands.
+#
+# causal + cross: native causal masking requires a square score matrix
+# (S_q == S_kv) — the on-device triangular mask is generated relative to the
+# block-diagonal, which only aligns when Q and KV share the sequence tiling.
+# A rectangular S_q x S_kv causal mask corresponds to no real workload
+# (causal masking implies decoder self-attention). Refused as a cell.
 EXCLUSIONS = [
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    {"mask_mode": "causal", "attention_kind": "cross"},
 ]
 
 
@@ -220,6 +227,7 @@ def scaled_dot_product_attention(
         value,
         output_tensor,
         attn_mask=attn_mask,
+        is_causal=is_causal,
         scale=float(scale),
         compute_kernel_config=resolved_cfg,
     )
