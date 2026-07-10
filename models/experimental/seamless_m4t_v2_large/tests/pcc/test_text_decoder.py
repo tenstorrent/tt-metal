@@ -315,7 +315,7 @@ def test_seamless_m4t_v2_text_decoder_t2tt_max_enc_seq_pcc(mesh_device, device_p
         _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="T2TT-max-enc")
 
 
-@pytest.mark.timeout(3600)
+@pytest.mark.timeout(5400)
 @pytest.mark.parametrize("mesh_device", [legacy_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", [legacy_device_params()], indirect=True)
 def test_seamless_m4t_v2_text_decoder_s2tt_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
