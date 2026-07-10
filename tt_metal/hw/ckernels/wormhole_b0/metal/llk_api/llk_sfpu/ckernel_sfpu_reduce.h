@@ -1200,10 +1200,8 @@ inline void init_reduce_max_min_int32_signed() {
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, bool clear_high_bits>
 inline void init_reduce_max_min(std::uint32_t num_cols) {
 #ifdef DISABLE_SFPLOADMACRO
-    if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP && !clear_high_bits) {
-        init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
-        return;
-    }
+    init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
+    return;
 #endif
 
     // Initialize SFPU config and set swap direction before defining LOADMACRO sequences
@@ -1529,10 +1527,10 @@ inline void calculate_reduce_max_min(const std::uint32_t block_ct_dim = 1, const
         "Only column reduction (REDUCE_COL) and row MAX/MIN reduction (REDUCE_ROW with MAX/MIN) are supported");
 
 #ifdef DISABLE_SFPLOADMACRO
-    if constexpr (
-        reduce_dim == ReduceDim::REDUCE_COL && INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP &&
-        !clear_high_bits) {
-        calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>();
+    if constexpr (reduce_dim == ReduceDim::REDUCE_COL) {
+        // LOADMACRO-disabled builds use the manual load/swap column reducer instead of recording
+        // SFPLOADMACRO instructions in the generic column MAX/MIN path.
+        calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         return;
     }
 #endif
