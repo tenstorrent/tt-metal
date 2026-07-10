@@ -1064,38 +1064,56 @@ def run_chunked_transformer_no_pcc(
         signpost("PROFILE_MEASURE_START")
 
     profiler.start("tt_forward")
-    for it in range(num_iters):
-        iter_start = time.time()
-        chunk_times: list[float] = []
-        for c in range(n_chunks):
-            kv_actual = c * CHUNK
-            tt_tokens = ttnn.from_torch(
-                chunk_tok_host[c],
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
-            )
-            chunk_start = time.time()
-            # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
-            # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
-            # uses self.indexed_rope. The small (first_token) return is discarded.
-            transformer.forward(
-                tt_tokens,
-                tt_kvpe_cache,
-                actual_isl=CHUNK,
-                actual_start=kv_actual,
-                actual_end=kv_actual + CHUNK,
-                cache_user_id=0,
-                return_intermediates=False,
-            )
-            ttnn.synchronize_device(mesh_device)
-            ttnn.deallocate(tt_tokens)
-            chunk_times.append(time.time() - chunk_start)
-        iter_total = time.time() - iter_start
-        iteration_chunk_times.append(chunk_times)
-        logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
+    # Silence per-op host logging for the timed region so the perf gate measures device + dispatch,
+    # not terminal I/O. Two high-volume sources fire from inside every layer's forward:
+    #   * models.demos.deepseek_v3_d_p.tt.*  -- MLA / MoE dispatch / routed+shared experts / rms-norm /
+    #     ffn logger.debug() calls (~30k lines/iter). loguru defaults to DEBUG so these are live.
+    #   * tracy                              -- signpost() echoes every marker via logger.info()
+    #     (forward_layer_N_start/end, MLA_START, MoERoutingSetup, ...; ~11k lines/iter). Only the loguru
+    #     echo is silenced here; signpost's ttnn.tracy_message() profiler hook still runs, so profiling
+    #     is unaffected.
+    # That is what inflates the per-chunk medians (~2.5s vs ~1.4s once silenced) and blows up the stddev
+    # (0.3-0.9s vs ~0.03s). The test module's own INFO progress lines are a different namespace and stay.
+    # Restored in finally so logging survives for later tests in the session.
+    quiet_log_ns = ("models.demos.deepseek_v3_d_p.tt", "tracy")
+    for ns in quiet_log_ns:
+        logger.disable(ns)
+    try:
+        for it in range(num_iters):
+            iter_start = time.time()
+            chunk_times: list[float] = []
+            for c in range(n_chunks):
+                kv_actual = c * CHUNK
+                tt_tokens = ttnn.from_torch(
+                    chunk_tok_host[c],
+                    device=mesh_device,
+                    dtype=ttnn.uint32,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+                )
+                chunk_start = time.time()
+                # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
+                # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
+                # uses self.indexed_rope. The small (first_token) return is discarded.
+                transformer.forward(
+                    tt_tokens,
+                    tt_kvpe_cache,
+                    actual_isl=CHUNK,
+                    actual_start=kv_actual,
+                    actual_end=kv_actual + CHUNK,
+                    cache_user_id=0,
+                    return_intermediates=False,
+                )
+                ttnn.synchronize_device(mesh_device)
+                ttnn.deallocate(tt_tokens)
+                chunk_times.append(time.time() - chunk_start)
+            iter_total = time.time() - iter_start
+            iteration_chunk_times.append(chunk_times)
+            logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_total:.3f} seconds")
+    finally:
+        for ns in quiet_log_ns:
+            logger.enable(ns)
     profiler.end("tt_forward")
 
     profiler.end("total_test_time")
