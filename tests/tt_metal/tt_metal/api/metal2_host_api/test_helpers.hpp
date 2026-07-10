@@ -95,11 +95,14 @@ inline KernelSpec MakeMinimalGen2DMKernel(std::string name, uint32_t num_threads
 // that always defaulted to NOC_0 would produce a pair that fails validation.
 inline KernelSpec MakeMinimalGen1DMKernel(
     std::string name, tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0) {
+    const tt::tt_metal::NOC noc = (processor == tt::tt_metal::DataMovementProcessor::RISCV_0)
+                                      ? tt::tt_metal::NOC::NOC_0
+                                      : tt::tt_metal::NOC::NOC_1;
     return KernelSpec{
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = DataMovement1xxConfig{.processor = processor}};
+        .hw_config = DataMovement1xxConfig{.processor = processor, .noc = noc}};
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built

@@ -24,10 +24,10 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
-using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 
 constexpr CoreCoord kCore{0, 0};
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/kernel_thread_barrier.cpp";
@@ -106,9 +106,10 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
             spec.advanced_options.num_runtime_varargs_per_node = {{node, kKernelArgsCount}};
             return KernelConfig{*spec.unique_id, std::move(spec), make_layout(layout_base, kRounds)};
         };
-        // BRISC (RISCV_0) pinned to {RISCV_0, NOC_0}; NCRISC stays on the reader helper.
-        kernel_configs.push_back(make_gen1(
-            MakeMinimalGen1DMKernel("brisc_barrier_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0), l1_base));
+        // BRISC uses the writer role (RISCV_0/NOC_1); NCRISC uses the reader helper (RISCV_1/NOC_0).
+        // The two DM kernels thus land on distinct processors AND distinct NOCs, as spec validation
+        // requires for dedicated-NOC data movement kernels sharing a node.
+        kernel_configs.push_back(make_gen1(MakeMinimalWriterDMKernel("brisc_barrier_kernel"), l1_base));
         uint32_t ncrisc_base = l1_base + kernel_configs[0].layout.total_words * sizeof(uint32_t);
         kernel_configs.push_back(make_gen1(MakeMinimalReaderDMKernel("ncrisc_barrier_kernel"), ncrisc_base));
         work_unit_kernel_names = {"brisc_barrier_kernel", "ncrisc_barrier_kernel"};

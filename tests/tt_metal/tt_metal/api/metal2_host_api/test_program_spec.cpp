@@ -3034,13 +3034,15 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
-    // Two DM kernels on different processors (RISCV_0 producer, RISCV_1 consumer)
+    // Two DM kernels on different processors: a writer-role producer (RISCV_0/NOC_1) and a reader-role
+    // consumer (RISCV_1/NOC_0). Distinct processors AND distinct NOCs, so the pair satisfies the
+    // dedicated-NOC distinctness rule.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "dm_only_program";
 
-    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    auto producer = MakeMinimalWriterDMKernel("producer");
     auto consumer = MakeMinimalReaderDMKernel("consumer");
     auto dfb = MakeMinimalDFB("dfb");
 

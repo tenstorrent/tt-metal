@@ -36,11 +36,11 @@ namespace {
 
 using namespace experimental;
 using test_helpers::MakeMinimalGen1ComputeKernel;
-using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::MakeMinimalWriterDMKernel;
 
 // Kernel paths shared with the standard DFB tests.
 constexpr const char* DFB_PRODUCER_KERNEL =
@@ -112,9 +112,8 @@ void run_borrowed_memory_dfb_program(
     spec.name = "borrowed_memory_dfb_test";
 
     // --- Producer kernel (dfb_producer.cpp) ---
-    KernelSpec producer_spec = (arch == ARCH::QUASAR)
-                                   ? MakeMinimalGen2DMKernel("producer", cfg.num_producers)
-                                   : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    KernelSpec producer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("producer", cfg.num_producers)
+                                                      : MakeMinimalWriterDMKernel("producer");
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer},
@@ -307,9 +306,11 @@ void run_update_address_test(
     ProgramSpec spec;
     spec.name = "borrowed_dfb_update_address";
 
-    KernelSpec producer_spec = (arch == ARCH::QUASAR)
-                                   ? MakeMinimalGen2DMKernel("producer")
-                                   : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    // Gen1 producer uses the writer role (RISCV_0/NOC_1) so it pairs with the reader-role DM consumer
+    // (RISCV_1/NOC_0) on distinct processors AND distinct NOCs; two dedicated-NOC DM kernels sharing a
+    // NOC would fail spec validation.
+    KernelSpec producer_spec =
+        (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("producer") : MakeMinimalWriterDMKernel("producer");
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", num_entries},
