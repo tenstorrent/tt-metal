@@ -104,13 +104,6 @@ Tensor reduce(
     const auto arch = input_tensor.device()->arch();
     const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
 
-    // Accurate fp32 mean: run fp32 AVG on the SFPU (full fp32), lowered to SUM + 1/N post-mul below.
-    // fast_and_approximate_mode=false (the ttnn-convention default) selects this accurate path. Quasar
-    // lacks the SFPU fp32 binary add (add_binary_tile), so fall back to the FPU there instead of
-    // tripping the kernel static_assert.
-    const bool use_sfpu_fp32_mean = !fast_and_approximate_mode &&
-                                    input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
-                                    reduce_math == tt::tt_metal::ReduceOpMath::AVG && arch != tt::ARCH::QUASAR;
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         arch,
         std::nullopt,
@@ -118,6 +111,11 @@ Tensor reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
     ttnn::verify_numerical_configuration(arch, compute_kernel_config);
+
+    // Accurate fp32 mean: SFPU AVG (lowered to SUM + 1/N below); FPU fallback without fp32_dest_acc_en or on Quasar.
+    const bool use_sfpu_fp32_mean =
+        !fast_and_approximate_mode && input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 &&
+        reduce_math == tt::tt_metal::ReduceOpMath::AVG && arch != tt::ARCH::QUASAR && config.fp32_dest_acc_en;
 
     // Dense row-major reduce: a fast path that consumes ROW_MAJOR input directly (no host tilize)
     // and is currently restricted to mean (AVG) / sum (SUM) on 4D BF16/FLOAT32 tensors with
