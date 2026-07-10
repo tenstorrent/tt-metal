@@ -203,8 +203,8 @@ ttsl::hash::hash_t SparseSDPAMsaOperation::compute_program_hash(
     const SparseSDPAMsaParams& attrs, const SparseSDPAMsaInputs& t) {
     // Hash compile-time choices. Interleaved K/V T and cache_batch_idx are patched at dispatch.
     // Sharded K/V shapes stay hashed because accessor strides depend on them. The block-cyclic path also
-    // hashes T: BC_SHARD_STRIDE_GAP (= T/sp - chunk_local) is baked as a compile-time define, so a different
-    // cache size must be a distinct program.
+    // hashes T: BC_SHARD_STRIDE_GAP (= (T/sp - chunk_local)/block_size, in blocks) is baked as a compile-time
+    // define, so a different cache size must be a distinct program.
     return tt::tt_metal::operation::hash_operation<SparseSDPAMsaOperation>(
         std::bit_cast<uint32_t>(attrs.scale),
         attrs.block_size,

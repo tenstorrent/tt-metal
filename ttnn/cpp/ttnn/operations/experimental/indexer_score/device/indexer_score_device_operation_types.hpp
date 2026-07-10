@@ -28,17 +28,8 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
     return cfg.head_group_size == 0 ? Hi : static_cast<uint32_t>(cfg.head_group_size);
 }
 
-// Block-cyclic (per-SP-shard) K cache layout. Chunked prefill stores each of `sp` SP shards' per-chunk slab
-// (chunk_local keys) back-to-back in its local cache, so after the SP all-gather the [B,1,T,D] k holds keys in
-// a PERMUTED physical order: physical row r holds the natural token at
-// P[r] = (lr/chunk_local)*chunk_global + c*chunk_local + (lr%chunk_local), where c = r/sll, lr = r%sll,
-// sll = T/sp, chunk_global = sp*chunk_local. The reader reads K back in LOGICAL token order (invP per tile),
-// so the causal mask and block-max-pool -- both keyed on the logical column -- stay byte-identical and the
-// score columns come out in natural token order. RESOLVED at the ttnn entry (interface + naming match
-// sparse_sdpa): the caller names the mesh axis the cache was striped over (block_cyclic_sp_axis) and passes
-// the per-shard chunk length (block_cyclic_chunk_local); sp = the mesh extent on that axis (DERIVED, not
-// free). Hashed (it shapes the reader binary). sp == 1 is the identity, represented as no block_cyclic at all.
-// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp.
+// Shared type (sp, chunk_local) with sparse_sdpa / sparse_sdpa_msa — see block_cyclic_layout.hpp; the
+// indexer reader reads K in logical order via this invP (reader_indexer_score.cpp).
 using ttnn::prim::BlockCyclicLayout;
 
 struct operation_attributes_t {

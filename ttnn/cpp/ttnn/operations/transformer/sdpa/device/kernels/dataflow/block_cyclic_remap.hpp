@@ -16,7 +16,7 @@ namespace tt::block_cyclic {
 
 // invP of the (slab, shard) transpose (see file header). Args are compile-time constants at every call
 // site, so this folds to one divide (mul+shift) + shift/mask.
-inline uint32_t logical_to_chunked_physical(
+FORCE_INLINE uint32_t logical_to_chunked_physical(
     uint32_t n, uint32_t chunk_local, uint32_t sp, uint32_t shard_stride_gap, uint32_t slab_stride_gap) {
     const uint32_t block_idx = n / chunk_local;  // = slab*sp + shard
     const uint32_t slab = block_idx / sp;
