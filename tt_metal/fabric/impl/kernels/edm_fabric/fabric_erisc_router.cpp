@@ -3436,6 +3436,32 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                     c->att_other);
                             }
                         }
+                        // [debug][cmb-place] Emit this eth router's placement at the combine STOP marker:
+                        // its own eth core coords + the downstream (next-hop) eth core(s) it forwards
+                        // in-transit packets to + the forwarding NoC. Coords are VIRTUAL (translated) NOC
+                        // space -- the space my_x/my_y and the adapter's edm_noc_x/y both live in -- so an
+                        // upstream sender's [cmb-place sender] eth_virt and a downstream[] virt below join
+                        // to the [cmb-place eth] self_virt printed by that same eth core. Only self_logical
+                        // is known on-core (active-erisc FW sets it); the downstream core's logical is
+                        // recovered by joining downstream[] virt to its own self line. ERISC0-only.
+                        if constexpr (combine_debug_owner) {
+                            DEVICE_PRINT(
+                                "[cmb-place eth] self_virt=({},{}) self_logical=({},{}) fwd_noc={} "
+                                "num_downstream={}\n",
+                                (uint32_t)my_x[noc_index],
+                                (uint32_t)my_y[noc_index],
+                                (uint32_t)get_absolute_logical_x(),
+                                (uint32_t)get_absolute_logical_y(),
+                                (uint32_t)tt::tt_fabric::edm_to_downstream_noc,
+                                (uint32_t)VC0_DOWNSTREAM_EDM_SIZE);
+                            for (uint32_t i = 0; i < VC0_DOWNSTREAM_EDM_SIZE; i++) {
+                                DEVICE_PRINT(
+                                    "[cmb-place eth]   downstream[{}] virt=({},{})\n",
+                                    i,
+                                    (uint32_t)downstream_edm_noc_interfaces_vc0[i].get_edm_noc_x(),
+                                    (uint32_t)downstream_edm_noc_interfaces_vc0[i].get_edm_noc_y());
+                            }
+                        }
                         // [debug] Dump the per-eRisc traces at window close (each is a no-op on the eRisc that
                         // does not service that role).
                         dump_receiver_log();

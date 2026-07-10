@@ -456,6 +456,62 @@ std::vector<uint32_t> get_forwarding_link_indices(
         control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
 }
 
+FabricLinkEthInfo get_link_eth_info(
+    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, uint32_t link_idx) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+
+    // Resolve the forwarding direction EXACTLY as append_fabric_connection_rt_args does, so the eth
+    // channel we report is the one the sender's connection will actually use. The 1D path uses the
+    // neighbor-scan workaround (#22524) rather than get_forwarding_direction.
+    std::optional<RoutingDirection> forwarding_direction;
+    if (is_2d_fabric) {
+        forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    } else {
+        for (const auto& direction : FabricContext::routing_directions) {
+            auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, direction);
+            auto neighbor_mesh_chips = neighbors.find(dst_fabric_node_id.mesh_id);
+            if (neighbor_mesh_chips == neighbors.end() ||
+                std::find(
+                    neighbor_mesh_chips->second.begin(),
+                    neighbor_mesh_chips->second.end(),
+                    dst_fabric_node_id.chip_id) == neighbor_mesh_chips->second.end()) {
+                continue;
+            }
+            forwarding_direction = direction;
+            break;
+        }
+    }
+    TT_FATAL(
+        forwarding_direction.has_value(),
+        "get_link_eth_info: no forwarding direction from src {} to dst {}",
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto candidate_eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
+    TT_FATAL(
+        link_idx < candidate_eth_chans.size(),
+        "get_link_eth_info: link index {} out of bounds ({} eth channels available src {} -> dst {})",
+        link_idx,
+        candidate_eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
+    const auto fabric_router_channel = candidate_eth_chans[link_idx];
+
+    const auto routing_plane = control_plane.get_routing_plane_id(src_fabric_node_id, fabric_router_channel);
+
+    const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    const auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(physical_chip_id);
+    // Default coord system is NOC0 (physical) — the space NoC routing actually happens in.
+    const auto eth_noc0 = soc_desc.get_eth_core_for_channel(fabric_router_channel);
+
+    return FabricLinkEthInfo{
+        tt::tt_metal::CoreCoord{static_cast<std::size_t>(eth_noc0.x), static_cast<std::size_t>(eth_noc0.y)},
+        static_cast<uint32_t>(routing_plane)};
+}
+
 tt::tt_fabric::Topology get_fabric_topology() {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();

@@ -387,6 +387,30 @@ void kernel_main() {
         }
     }
     // DPRINT << "[combine-marker] writer START value=" << combine_marker_value << ENDL();
+
+    // [debug][cmb-place] Log this sender's placement + the eth (EDM) cores it injects tokens into, so
+    // the combine placement can be reconstructed from HW. Coords are VIRTUAL (translated) NOC space:
+    // my_x/my_y and the fabric adapter's edm_noc_x/y both live here, so each eth_virt below joins to
+    // the [cmb-place eth] self_virt that eth core prints (which carries its logical coords). send_noc =
+    // the NoC the sender->EDM payload writes use (the fabric worker NoC, == noc_index for combine).
+    DEVICE_PRINT(
+        "[cmb-place sender] idx={} self_virt=({},{}) self_logical=({},{}) send_noc={}\n",
+        combine_sender_index,
+        (uint32_t)my_x[noc_index],
+        (uint32_t)my_y[noc_index],
+        (uint32_t)get_absolute_logical_x(),
+        (uint32_t)get_absolute_logical_y(),
+        (uint32_t)noc_index);
+    for (uint32_t d = 0; d < 4; d++) {
+        if (directions[d]) {
+            DEVICE_PRINT(
+                "[cmb-place sender]   idx={} dir={} eth_virt=({},{})\n",
+                combine_sender_index,
+                d,
+                (uint32_t)fabric_connections[d].edm_noc_x,
+                (uint32_t)fabric_connections[d].edm_noc_y);
+        }
+    }
 #endif
 
 #if INIT_ZEROS

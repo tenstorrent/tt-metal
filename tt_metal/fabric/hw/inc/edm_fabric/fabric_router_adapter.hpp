@@ -207,6 +207,11 @@ public:
     // Only for debug/watcher asserts
     FORCE_INLINE uint32_t get_worker_credits_stream_id() const { return this->worker_credits_stream_id; }
 
+    // [debug] Virtual (translated) NOC coords of the downstream EDM (next-hop eth core) this adapter
+    // forwards in-transit packets to. Read-only accessors for placement diagnostics ([cmb-place]).
+    FORCE_INLINE uint8_t get_edm_noc_x() const { return this->edm_noc_x; }
+    FORCE_INLINE uint8_t get_edm_noc_y() const { return this->edm_noc_y; }
+
 private:
     mutable uint64_t noc_sem_addr_;
     std::array<uint32_t, EDM_NUM_BUFFER_SLOTS> edm_buffer_slot_addrs;

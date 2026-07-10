@@ -28,6 +28,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/debug/device_print.h"  // [debug] DEVICE_PRINT for [cmb-place] placement logging
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/overlap_config.hpp"
 
@@ -174,6 +175,20 @@ void kernel_main() {
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
+
+    // [debug][cmb-place] Log this untilizer's placement + the sender core it forwards untilized tokens
+    // to. Coords are VIRTUAL (translated) NOC space: my_x/my_y and the sender_noc_x/y RT args both live
+    // here, so sender_virt below joins to the sender's own [cmb-place sender] self_virt line (which
+    // carries its logical coords). send_noc = the NoC the untilizer->sender row writes use (noc_index).
+    DEVICE_PRINT(
+        "[cmb-place untilizer] self_virt=({},{}) self_logical=({},{}) sender_virt=({},{}) send_noc={}\n",
+        (uint32_t)my_x[noc_index],
+        (uint32_t)my_y[noc_index],
+        (uint32_t)get_absolute_logical_x(),
+        (uint32_t)get_absolute_logical_y(),
+        sender_noc_x,
+        sender_noc_y,
+        (uint32_t)noc_index);
 
     Semaphore<> credits_sem(credits_semaphore_id);
     Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
