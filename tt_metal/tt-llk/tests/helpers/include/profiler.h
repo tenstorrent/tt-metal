@@ -88,12 +88,11 @@ constexpr std::uint32_t BUFFERS_END = 0x16E000;
 constexpr std::uint32_t BUFFERS_START = BUFFERS_END - (NUM_CORES * BUFFER_LENGTH * sizeof(std::uint32_t));
 
 constexpr std::uint32_t BARRIER_END   = BUFFERS_START;
-constexpr std::uint32_t BARRIER_START = BARRIER_END - (NUM_CORES * sizeof(std::uint32_t));
+constexpr std::uint32_t BARRIER_START = BARRIER_END - sizeof(ReentrantBarrier<4>);
 
-using barrier_ptr_t = volatile std::uint32_t (*)[NUM_CORES];
 using buffer_ptr_t  = std::uint32_t (*)[BUFFER_LENGTH];
 
-extern barrier_ptr_t barrier_ptr;
+extern ReentrantBarrier<NUM_CORES>* barrier_ptr;
 extern buffer_ptr_t buffer;
 extern std::uint32_t write_idx;
 extern std::uint32_t open_zone_cnt;
@@ -120,7 +119,7 @@ __attribute__((always_inline)) inline void sync_threads()
 
 __attribute__((always_inline)) inline void reset()
 {
-    barrier_ptr   = reinterpret_cast<barrier_ptr_t>(BARRIER_START);
+    barrier_ptr   = reinterpret_cast<ReentrantBarrier<NUM_CORES>*>(BARRIER_START);
     buffer        = reinterpret_cast<buffer_ptr_t>(BUFFERS_START);
     write_idx     = 0;
     open_zone_cnt = 0;
