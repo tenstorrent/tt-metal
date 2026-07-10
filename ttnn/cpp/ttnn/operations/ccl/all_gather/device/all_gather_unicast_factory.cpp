@@ -170,6 +170,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
         constexpr uint64_t bw_bound_link_bytes = 4500000ULL;  // gathered bytes/link where fabric link saturates
         if (txn_bytes >= bw_bound_txn_bytes && per_link_bytes >= bw_bound_link_bytes) {
             workers_per_dir = 4;
+        } else {
+            workers_per_dir = 2;
         }
     }
 
