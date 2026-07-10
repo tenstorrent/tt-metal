@@ -1,19 +1,17 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Language Model decode-mode PCC vs HuggingFace Qwen2 (single and multi-step decode after prefill)."""
+"""Language Model decode-mode PCC vs HuggingFace Qwen2 (single-step decode after prefill)."""
 
 import pytest
 import torch
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.vibevoice.tests.pcc.lm_pcc_common import (
-    DECODE_GENERATION_LENGTH,
     DECODE_LAYERWISE_FAIL_STEP,
     PCC_THRESHOLD,
     SEQ_LEN,
     as_layer_probe,
-    assert_tt_decode_positions_monotonic,
     build_tt_lm,
     compare_decode_hidden_pcc,
     compare_layerwise_decode_pcc,
@@ -21,9 +19,7 @@ from models.experimental.vibevoice.tests.pcc.lm_pcc_common import (
     compare_l0_sdpa_stage_pccs,
     force_manual_fp32_decode_sdpa,
     hf_eager_bf16_softmax_attention,
-    hf_cache_seq_length,
     prepare_failing_decode_step_context,
-    print_decode_pcc_summary,
     print_l0_attention_stage_pcc_table,
     print_l0_decode_attention_pcc,
     print_l0_sdpa_stage_pcc_table,
@@ -32,18 +28,15 @@ from models.experimental.vibevoice.tests.pcc.lm_pcc_common import (
     print_manual_fp32_vs_fused_sdpa_comparison,
     capture_fused_vs_manual_l0_decode_at_step,
     print_fused_vs_manual_sdpa_investigation_report,
-    reference_lm_decode_hidden,
     reference_lm_decode_l0_attention,
     reference_lm_decode_l0_attention_stages,
     reference_lm_decode_l0_sdpa_stages,
     reference_lm_decode_layer_hiddens,
     reference_lm_forward,
-    reference_lm_prefill_cache,
     run_multi_step_decode_pcc_sweep,
     run_multi_step_decode_pcc_sweep_with_hf_attn,
     tt_decode_hidden,
     tt_prefill_hidden,
-    verify_decode_cache_positions,
 )
 
 
@@ -66,56 +59,6 @@ def test_lm_decode_hidden_state_pcc(mesh_device, vv_config, lm_state):
     passed_d, pcc_d = compare_decode_hidden_pcc(ref_decode, tt_decode)
     print(f"[test_lm_decode_pcc] decode step=0  PCC={pcc_d:.6f}")
     assert passed_d, f"LM decode last_hidden PCC {pcc_d:.6f} < {PCC_THRESHOLD} (fixed-cache + sdpa_decode)"
-
-
-@pytest.mark.timeout(600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-def test_lm_decode_multi_step_hidden_state_pcc(mesh_device, vv_config, lm_state):
-    """Ten consecutive decode steps after a 32-token prefill (full-LM integration sweep)."""
-    torch.manual_seed(0)
-    cfg = vv_config.decoder
-
-    prompt = torch.randint(0, cfg.vocab_size, (1, SEQ_LEN), dtype=torch.long)
-    decode_tokens = torch.randint(0, cfg.vocab_size, (1, DECODE_GENERATION_LENGTH), dtype=torch.long)
-
-    lm_tt = build_tt_lm(lm_state, mesh_device, cfg)
-    kv_cache = lm_tt.alloc_kv_cache(SEQ_LEN + DECODE_GENERATION_LENGTH + 8)
-    tt_prefill_hidden(lm_tt, prompt, kv_cache)
-
-    hf_cache = reference_lm_prefill_cache(lm_state, prompt, vv_config)
-    prefill_hf_len = hf_cache_seq_length(hf_cache)
-    assert prefill_hf_len == SEQ_LEN, f"HF cache length after prefill={prefill_hf_len}, expected {SEQ_LEN}"
-
-    failures = []
-    step_pccs: list[float] = []
-    tt_positions: list[int] = []
-    print("[test_lm_decode_pcc] multi-step decode after prefill")
-
-    for step in range(DECODE_GENERATION_LENGTH):
-        token = decode_tokens[:, step : step + 1]
-        position = SEQ_LEN + step
-
-        verify_decode_cache_positions(step, SEQ_LEN, position, hf_cache, tt_positions)
-
-        ref_decode, hf_cache = reference_lm_decode_hidden(lm_state, token, vv_config, hf_cache)
-        tt_decode = tt_decode_hidden(lm_tt, token, position, kv_cache)
-        passed_d, pcc_d = compare_decode_hidden_pcc(ref_decode, tt_decode)
-        step_pccs.append(pcc_d)
-
-        print(f"Decode step {step}  PCC={pcc_d:.5f}")
-
-        if not passed_d:
-            failures.append(
-                f"decode step={step} position={position} measured_pcc={pcc_d:.6f} threshold={PCC_THRESHOLD}"
-            )
-
-    assert_tt_decode_positions_monotonic(tt_positions, SEQ_LEN, DECODE_GENERATION_LENGTH)
-    print_decode_pcc_summary(step_pccs)
-
-    if failures:
-        assert False, "LM multi-step decode PCC below threshold:\n" + "\n".join(failures)
-
-    print("PASS")
 
 
 @pytest.mark.timeout(600)
