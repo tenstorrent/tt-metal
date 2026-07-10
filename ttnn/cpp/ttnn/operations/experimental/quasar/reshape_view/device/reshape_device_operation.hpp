@@ -16,7 +16,8 @@ struct ReshapeViewDeviceOperation {
     using tensor_args_t = ReshapeViewInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<ReshapeViewRMProgramFactory, ReshapeViewTiledProgramFactory>;
+    using program_factory_t =
+        std::variant<ReshapeViewRMProgramFactory, ReshapeViewRMMetalV2ProgramFactory, ReshapeViewTiledProgramFactory>;
 
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

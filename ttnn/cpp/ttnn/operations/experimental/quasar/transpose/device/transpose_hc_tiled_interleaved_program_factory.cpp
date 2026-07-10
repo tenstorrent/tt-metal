@@ -205,7 +205,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
             },
         .runtime_arg_schema =
             {.runtime_arg_names = {"start_tile_idx", "end_tile_idx", "start_padding_tile_idx", "end_padding_tile_idx"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // Quasar: writer drains SRC/PAD CBs with ~32B face-line (sub-tile) writes; implicit sync
+        // mis-credits per NOC op and stalls. Revert to explicit credits. See ~/implicit_sync.md.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     spec.kernels.push_back(std::move(reader));

@@ -109,7 +109,12 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
         KernelSpec k{
             .unique_id = KernelSpecName{name},
             .source = std::filesystem::path(kernel_path),
-            .hw_config = DataMovementHardwareConfig{.role = role},
+            // Quasar: reader+writer co-write the borrowed shard_cb address-only (no push/wait); implicit
+            // sync mis-credits per NOC op and stalls. Revert to explicit credits. See ~/implicit_sync.md.
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .role = role,
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
         k.tensor_bindings.push_back(TensorBinding{
             .tensor_parameter_name = TensorParamName{kSHRemoteTensorParam}, .accessor_name = kSHRemoteTensorParam});

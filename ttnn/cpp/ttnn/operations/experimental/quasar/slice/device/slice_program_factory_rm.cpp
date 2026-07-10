@@ -296,7 +296,12 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                  {"start_id", "num_sticks_per_core", "num_sticks_per_core_read", "num_read_per_barrier"},
              .common_runtime_arg_names =
                  {"addr_offset", "padded_stick_size", "unpadded_stick_size", "stick_size_offset", "misalignment"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // Quasar: the misalignment / sharded-split read path issues >1 NOC op per pushed stick (sub-tile),
+        // over-posting under implicit sync. Revert to explicit credits. See ~/implicit_sync.md.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         .advanced_options = {.num_runtime_varargs = num_dims, .num_common_runtime_varargs = 2 * num_dims},
     };
 
@@ -319,7 +324,10 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
                   "num_read_per_barrier",
                   "start_id",
                   "page_size_override"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // --- Per-core runtime args ---

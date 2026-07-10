@@ -12,6 +12,12 @@ namespace ttnn::prim::qsr {
 ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     if (tensor_args.input.layout() == Layout::ROW_MAJOR) {
+        // Quasar cannot build the legacy DataMovementKernel the RM descriptor path emits
+        // (kernel.hpp:382), so route Quasar to the Metal-2 (ProgramSpec + QuasarDataMovementKernel)
+        // factory. WH/BH keep the legacy descriptor path unchanged.
+        if (tensor_args.input.device()->arch() == tt::ARCH::QUASAR) {
+            return ReshapeViewRMMetalV2ProgramFactory{};
+        }
         return ReshapeViewRMProgramFactory{};
     }
     return ReshapeViewTiledProgramFactory{};

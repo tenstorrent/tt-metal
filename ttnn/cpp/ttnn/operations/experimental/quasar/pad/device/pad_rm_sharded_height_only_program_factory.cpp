@@ -326,7 +326,12 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
              {"row_major_min_bytes", row_major_min_bytes},
              {"num_sticks_padded_read", static_cast<uint32_t>(stick_size_padded / row_major_min_bytes)}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_cores_read"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // Quasar: reader fills cb_pad in 16B/<=512B chunks (sub-tile); implicit sync mis-credits per NOC
+        // op and stalls. Revert to explicit credits. See ~/implicit_sync.md.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ------------------------------------------------------------------------
@@ -356,7 +361,10 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
                   "start_dim_h",
                   "start_dim_c",
                   "start_dim_n"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ------------------------------------------------------------------------
