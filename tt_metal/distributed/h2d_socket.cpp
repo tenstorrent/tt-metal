@@ -268,6 +268,14 @@ H2DSocket::H2DSocket(
 
     init_config_buffer(mesh_device);
     init_data_buffer(mesh_device, pcie_alignment);
+    log_info(
+        LogMetal,
+        "SOCK_IOVA H2D bytes_acked pcie={:#x} addr_hi={:#x} addr_lo={:#x} data addr_hi={:#x} addr_lo={:#x}",
+        bytes_acked_info.pcie_xy_enc,
+        bytes_acked_info.addr_hi,
+        bytes_acked_info.addr_lo,
+        data_info.addr_hi,
+        data_info.addr_lo);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
 

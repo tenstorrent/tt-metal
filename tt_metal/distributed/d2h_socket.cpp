@@ -282,6 +282,14 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
         bytes_sent_info.addr_hi = 0;
     }
 
+    log_info(
+        LogMetal,
+        "SOCK_IOVA D2H bytes_sent pcie={:#x} addr_hi={:#x} addr_lo={:#x} data addr_hi={:#x} addr_lo={:#x}",
+        bytes_sent_info.pcie_xy_enc,
+        bytes_sent_info.addr_hi,
+        bytes_sent_info.addr_lo,
+        data_info.addr_hi,
+        data_info.addr_lo);
     write_socket_metadata(mesh_device, data_info, bytes_sent_info);
     init_sender_tlb(mesh_device);
 
