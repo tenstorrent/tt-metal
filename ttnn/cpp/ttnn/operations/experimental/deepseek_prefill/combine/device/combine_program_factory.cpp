@@ -302,6 +302,23 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     uint32_t untilizer_cores_per_sender = num_untilizer_cores / num_cores;
     uint32_t senders_with_extra_untilizer = num_untilizer_cores % num_cores;
 
+#if SENDERS_ONLY_MOCK
+    // [experiment STAGE 1] Drop every untilizer core (senders keep their default positions; no placement
+    // change in this stage). Safe because MOCK_COMBINE_INTERNALS makes the untilizer kernels no-ops and,
+    // with 0 untilizers, the sender reader's untilizer wait is a no-op (num_total_untilizer_cores==0) /
+    // compiled out and its untilizer polling loop is skipped by the mock return -> no sender<->untilizer
+    // runtime dependency. Downstream untilizer allocations are guarded by `if (num_untilizer_cores > 0)`.
+    static_assert(MOCK_COMBINE_INTERNALS, "SENDERS_ONLY_MOCK requires MOCK_COMBINE_INTERNALS=1");
+    for (auto& g : sender_untilizer_groups) {
+        g.clear();
+    }
+    all_untilizer_cores.clear();
+    untilizer_sender_map.clear();
+    num_untilizer_cores = 0;
+    untilizer_cores_per_sender = 0;
+    senders_with_extra_untilizer = 0;
+#endif
+
     // Build sender_core_grid from selected sender cores
     std::set<CoreRange> sender_ranges_set;
     for (const auto& sc : sender_cores) {
@@ -413,6 +430,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // untilizer pipeline, so c_18/c_19 are always allocated (no sender-side dispatched_buffer CB).
         for (uint32_t s = 0; s < num_cores; s++) {
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
+            if (k_s == 0) {
+                continue;  // SENDERS_ONLY_MOCK: no untilizers -> no receive_buf (c_18)/metadata ring (c_19)
+            }
             CoreRangeSet single_sender_crs({CoreRange(sender_cores[s])});
             detail::create_tensor_cb(
                 desc,
@@ -624,11 +644,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // Each sender multicasts only to its own dedicated untilizer group so both senders
     // can run their multicast in parallel without interfering.
     struct SenderMcastCfg {
-        uint32_t mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y;
+        uint32_t mcast_start_x = 0, mcast_start_y = 0, mcast_end_x = 0, mcast_end_y = 0;
         std::vector<std::pair<uint32_t, uint32_t>> untilizer_noc_coords;
     };
     std::vector<SenderMcastCfg> sender_mcast_cfgs(num_cores);
-    {
+    // SENDERS_ONLY_MOCK: no untilizers -> leave the zero-initialized default cfgs (the reader reads a
+    // (0,0,0,0) mcast box + 0 per-untilizer entries but never multicasts in the mock path).
+    if (num_untilizer_cores > 0) {
         // Compute per-sender NOC multicast bounding box (min/max x,y over untilizer cores)
         // and collect individual untilizer core NOC coordinates for semaphore signaling.
         for (uint32_t s = 0; s < num_cores; s++) {
@@ -713,7 +735,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         --block_ct_dim;
     }
 
-    {
+    if (num_untilizer_cores > 0) {  // SENDERS_ONLY_MOCK: no untilizer cores -> skip all untilizer CBs
         // c_1 on untilizer cores: receives the expert_token_counts multicast from the owning sender.
         // MUST be allocated BEFORE c_0/c_2 so its L1 address matches the sender's c_1 address.
         // Both layouts use the untilizer pipeline, so these CBs are always allocated; only c_0
@@ -873,7 +895,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // (c_2 — produced by the compute kernel in TILE, or directly by reader_untilize in ROW_MAJOR)
     // and forwards each row to the owning sender's receive_buf (c_18) / metadata ring (c_19).  It
     // also performs the optional per-bank output-zeroing when init_zeros=True (INIT_ZEROS define).
-    const bool create_writer_untilize_kernel = true;
+    // SENDERS_ONLY_MOCK: no untilizer cores -> don't create the writer_untilize kernel.
+    const bool create_writer_untilize_kernel = (num_untilizer_cores > 0);
 
     if (init_zeros) {
         uint32_t noc_max_burst_size;
@@ -1034,7 +1057,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // so the compiler can prove definite-initialization for the !is_tile_layout case (the
     // SetRuntimeArgs call below is guarded by the same is_tile_layout flag).
     tt::tt_metal::KernelHandle untilize_compute_kernel_id = 0;
-    if (is_tile_layout) {
+    if (is_tile_layout && num_untilizer_cores > 0) {  // SENDERS_ONLY_MOCK: no untilizer cores -> no compute kernel
         tt::tt_metal::KernelDescriptor compute_kd;
         compute_kd.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/compute/"

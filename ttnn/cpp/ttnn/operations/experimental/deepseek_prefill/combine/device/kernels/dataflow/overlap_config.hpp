@@ -54,5 +54,20 @@
 // SLOTS_PER_UNTILIZER in the factory.
 #define OVERLAP_ROUTE_INFO_CB_SLOTS (2 * OVERLAP_POOL_DEPTH)
 
-// #define MOCK_COMBINE_INTERNALS 1
-// #define MOCK_COMBINE_TOKENS_PER_DEST 200
+#define MOCK_COMBINE_INTERNALS 1
+#define MOCK_COMBINE_TOKENS_PER_DEST 200
+
+// ============================================================================
+// SENDERS_ONLY_MOCK — STAGE 1: remove untilizer cores (no placement change)
+// ============================================================================
+//
+// Incremental experiment, built in stages so a hang can be pinpointed early.
+//   STAGE 1 (this): the factory allocates NO untilizer cores/kernels/CBs/semaphores. Senders keep
+//     their DEFAULT positions (no placement change). Requires MOCK_COMBINE_INTERNALS=1: sender
+//     writer runs synthetic fabric traffic; sender reader exits early (its existing mock return) and
+//     never blocks on untilizers (with 0 untilizers the INIT_ZEROS output-zeroing wait is a no-op /
+//     compiled out, and the untilizer polling loop is skipped).
+//   Later stages will add custom sender placement under a SEPARATE toggle.
+// HOST-FACTORY change -> needs a libttnn rebuild. Set to 0 (and re-comment MOCK above) to restore
+// normal combine (byte-identical). Diagnostics/perf experiment, not a correctness path.
+#define SENDERS_ONLY_MOCK 1

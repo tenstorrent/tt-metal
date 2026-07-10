@@ -179,11 +179,15 @@ void kernel_main() {
     // Both the wait-side L1 ptr (on this sender) and the inc-side NOC address (on untilizer)
     // refer to the same logical sem; pair-scoped allocation guarantees the L1 offset is
     // identical on both cores.
-    volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[num_untilizer_cores_group];
-    [[maybe_unused]] uint64_t self_data_ready_noc_addrs[num_untilizer_cores_group];
-    uint64_t untilizer_credits_noc_addrs[num_untilizer_cores_group];
-    uint32_t untilizer_noc_x[num_untilizer_cores_group];
-    uint32_t untilizer_noc_y[num_untilizer_cores_group];
+    // SENDERS_ONLY_MOCK removes untilizers (num_untilizer_cores_group == 0). Zero-length arrays are
+    // ill-formed, so size to at least 1; every loop below is bounded by num_untilizer_cores_group and
+    // simply doesn't run when it's 0 (and the MOCK path returns before any of this is used).
+    constexpr uint32_t NUC_ARR = num_untilizer_cores_group > 0 ? num_untilizer_cores_group : 1;
+    volatile tt_l1_ptr uint32_t* data_ready_sem_ptrs[NUC_ARR];
+    [[maybe_unused]] uint64_t self_data_ready_noc_addrs[NUC_ARR];
+    uint64_t untilizer_credits_noc_addrs[NUC_ARR];
+    uint32_t untilizer_noc_x[NUC_ARR];
+    uint32_t untilizer_noc_y[NUC_ARR];
     for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
         uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args++);
@@ -277,7 +281,7 @@ void kernel_main() {
     //   untilize_base    + c * SLOTS_PER_UNTILIZER * aligned_output_page_size
     //   metadata_buf_base + c * SLOTS_PER_UNTILIZER * aligned_dispatched_metadata_page_size
     // read_slots[c] tracks the next slot index (mod SLOTS_PER_UNTILIZER) to pull from for untilizer c.
-    uint32_t read_slots[num_untilizer_cores_group];
+    uint32_t read_slots[NUC_ARR];  // NUC_ARR (>=1) avoids a zero-length array when untilizers are removed
     for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
         read_slots[c] = 0;
     }
@@ -292,14 +296,14 @@ void kernel_main() {
         constexpr uint32_t SLOTS_PER_UNTILIZER_MASK = SLOTS_PER_UNTILIZER - 1;
 
         uint32_t untilizer_done_count = 0;
-        bool untilizer_finished[num_untilizer_cores_group];
+        bool untilizer_finished[NUC_ARR];
         // consumed[c] tracks how many data_ready increments we've processed for untilizer core c.
         // The untilizer core only ever INCREMENTS data_ready_sem; the sender never decrements it.
         // Replaces the per-row noc_semaphore_inc(-1) + noc_async_atomic_barrier round-trip
         // with a local register-resident counter compare.
-        uint32_t consumed[num_untilizer_cores_group];
-        uint32_t ring_meta_addr[num_untilizer_cores_group][SLOTS_PER_UNTILIZER];
-        uint64_t buffer_scratch_noc_addr_table[num_untilizer_cores_group][SLOTS_PER_UNTILIZER];
+        uint32_t consumed[NUC_ARR];
+        uint32_t ring_meta_addr[NUC_ARR][SLOTS_PER_UNTILIZER];
+        uint64_t buffer_scratch_noc_addr_table[NUC_ARR][SLOTS_PER_UNTILIZER];
         for (uint32_t c = 0; c < num_untilizer_cores_group; c++) {
             untilizer_finished[c] = false;
             consumed[c] = 0;
