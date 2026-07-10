@@ -300,6 +300,11 @@ class CMakeBuild(build_ext):
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
         lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so"]
+        if metal_build_config.from_precompiled_dir:
+            # This path skips auditwheel, which would otherwise bundle the full dependency closure.
+            # Bundle every built .so from build/lib instead of the hand-listed subset above (which
+            # omits e.g. libtracy) so the wheel is self-contained. System libs live in the image.
+            lib_patterns = ["*.so", "*.so.*"]
         runtime_patterns = [
             "hw/**/*",
         ]
