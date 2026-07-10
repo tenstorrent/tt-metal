@@ -90,6 +90,17 @@ def create_program_descriptor(
     mask_H = int(attn_mask.shape[1]) if has_mask else 1
     scale_bits = _f32_bits(scale)
 
+    # Non-tile-aligned S_kv: the physical last KV tile carries (32 - skv_last_valid)
+    # zero-padded key columns. Those padded keys score 0 (Q·0) and would leak
+    # exp(0 - row_max) into the softmax row-sum, inflating l and shrinking the
+    # output magnitude. Exclude them from the SUM reduce via a partial reduce
+    # scaler on the last kv-tile of the last KV block. (Row-MAX is left on the
+    # full scaler: an inflated max cancels in the normalized softmax; PV is
+    # unaffected because padded V rows are zero.) D (head_dim) non-alignment
+    # needs no handling — padded Q/K/V columns are zero, so QKᵀ/PV are exact.
+    skv_last_valid = S_kv % TILE_DIM
+    skv_non_aligned = 1 if skv_last_valid != 0 else 0
+
     # --- Work distribution: contiguous Q-block run per core ---
     device = query.device()
     grid = device.compute_with_storage_grid_size()
@@ -156,7 +167,8 @@ def create_program_descriptor(
         cb(CB_V, 2 * kcb * Dt),
         cb(CB_MASK, 2 * block_pages if has_mask else 1),
         cb(CB_SCALER_MAX, 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
-        cb(CB_SCALER_SUM, 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
+        # 2 tiles when S_kv is non-aligned: [full scaler, partial scaler].
+        cb(CB_SCALER_SUM, 2 if skv_non_aligned else 1, fmt=ttnn.bfloat16, psize=scaler_bytes),
         cbf(CB_L_NEW, 2 * qcb),
         cbf(CB_PV, 2 * o_pages),
         cbf(CB_O_RUN, 2 * o_pages),
@@ -189,6 +201,8 @@ def create_program_descriptor(
         gqa_factor,
         mask_mode,
         mask_H,
+        skv_non_aligned,
+        skv_last_valid,
     ]
     reader_ct = list(reader_base)
     reader_ct.extend(ttnn.TensorAccessorArgs(query).get_compile_time_args())
@@ -234,6 +248,7 @@ def create_program_descriptor(
         gqa_factor,
         mask_mode,
         scale_bits,
+        skv_non_aligned,
     ]
     compute_rt = ttnn.RuntimeArgs()
     for x, y, start_qb, count in per_core:

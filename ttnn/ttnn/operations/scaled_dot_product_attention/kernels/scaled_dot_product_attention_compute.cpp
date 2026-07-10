@@ -52,6 +52,7 @@ void kernel_main() {
     constexpr uint32_t gqa_factor = get_compile_time_arg_val(10);
     constexpr uint32_t mask_mode = get_compile_time_arg_val(11);
     constexpr uint32_t scale_bits = get_compile_time_arg_val(12);
+    constexpr uint32_t skv_non_aligned = get_compile_time_arg_val(13);
     constexpr bool has_mask = (mask_mode == 1);
 
     constexpr uint32_t cb_q = 0;
@@ -202,13 +203,25 @@ void kernel_main() {
             }
 
             // Phase 6: block row-sum -> cb_l_cur (keep cb_probs for the PV matmul).
+            // When S_kv is non-aligned, the last kv-tile of the LAST KV block
+            // carries zero-padded key columns; the partial SUM scaler zeroes them
+            // so they don't leak into the softmax row-sum. Non-last blocks (and the
+            // aligned case) use the full scaler at tile 0 via none().
+            const bool last_kv = (j == num_kv_blocks - 1);
+            const auto sum_partial = (skv_non_aligned && last_kv) ? ckl::ReducePartialScaler::last_tile_at(1)
+                                                                  : ckl::ReducePartialScaler::none();
             ckl::reduce<
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
                 cb_probs,
                 cb_scaler_sum,
                 cb_l_cur,
-                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::of(q_cnt, kv_cnt));
+                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+                ckl::ReduceInputBlockShape::of(q_cnt, kv_cnt),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::NoAccumulation{},
+                ckl::NoOp{},
+                sum_partial);
 
             if (!first) {
                 // Phase 7: corr = exp(m_run - m_new). Pops old m_run; keeps m_new for commit.

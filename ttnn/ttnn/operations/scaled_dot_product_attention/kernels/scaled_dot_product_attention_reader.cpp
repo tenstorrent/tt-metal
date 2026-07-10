@@ -40,6 +40,8 @@ void kernel_main() {
     constexpr uint32_t gqa_factor = get_compile_time_arg_val(10);
     constexpr uint32_t mask_mode = get_compile_time_arg_val(11);
     constexpr uint32_t mask_H = get_compile_time_arg_val(12);
+    constexpr uint32_t skv_non_aligned = get_compile_time_arg_val(13);
+    constexpr uint32_t skv_last_valid = get_compile_time_arg_val(14);
     constexpr bool has_mask = (mask_mode == 1);
 
     constexpr uint32_t cb_q = 0;
@@ -52,11 +54,34 @@ void kernel_main() {
     // Reduce scalers (MAX / SUM, both REDUCE_ROW). Prepared once; reduce never pops them.
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    if constexpr (skv_non_aligned) {
+        // Non-aligned S_kv: emit the [full, partial] SUM scaler tile pair. The
+        // partial tile zeroes the (32 - skv_last_valid) padded key columns so
+        // they are excluded from the softmax row-sum (compute applies it on the
+        // last kv-tile of the last KV block via ReducePartialScaler::last_tile_at(1)).
+        //
+        // NOTE: the convenience wrapper calculate_and_prepare_partial_reduce_scalers
+        // is unusable as shipped — it forwards a 4th `compute_uses_reduce_tile`
+        // template arg to prepare_reduce_scaler, which only declares 3 (reduce_helpers_
+        // dataflow.inl:270), so it fails to compile for every instantiation. We build
+        // the same tile pair directly from the working 3-arg primitive: each call
+        // reserves+fills+pushes exactly one tile (full fill when valid==32, partial
+        // fill otherwise), giving tile 0 = full, tile 1 = partial in CB order.
+        dataflow_kernel_lib::
+            prepare_reduce_scaler<cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                1.0f, /*valid_reduce_dim_elements_in_tile=*/32);
+        dataflow_kernel_lib::
+            prepare_reduce_scaler<cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                1.0f, /*valid_reduce_dim_elements_in_tile=*/skv_last_valid);
+    } else {
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_scaler_sum,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW>();
+    }
 
     // TensorAccessors (all declared unconditionally; mask is a no-arg placeholder when absent).
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    constexpr auto q_args = TensorAccessorArgs<15>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
