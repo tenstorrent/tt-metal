@@ -152,8 +152,21 @@ static void validate_result(
     bool pass = true;
     if (test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A_B) {
         pass &= (golden.size() == result_vec.size());
-        pass &= is_close_packed_vectors<bfloat16, std::uint32_t>(
-            result_vec, golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.01f); });
+        if (test_config.output_fmt == tt::DataFormat::Float32) {
+            std::vector<float> golden_f(golden.size());
+            std::vector<float> result_f(result_vec.size());
+            std::transform(golden.begin(), golden.end(), golden_f.begin(), [](std::uint32_t w) {
+                return std::bit_cast<float>(w);
+            });
+            std::transform(result_vec.begin(), result_vec.end(), result_f.begin(), [](std::uint32_t w) {
+                return std::bit_cast<float>(w);
+            });
+            pass &=
+                is_close_vectors<float>(result_f, golden_f, [&](float a, float b) { return is_close(a, b, 0.01f); });
+        } else {
+            pass &= is_close_packed_vectors<bfloat16, std::uint32_t>(
+                result_vec, golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b, 0.01f); });
+        }
     } else {
         pass &= (golden.size() == result_vec.size());
         pass &= (golden == result_vec);
