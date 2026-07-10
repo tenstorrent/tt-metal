@@ -27,7 +27,6 @@ SUMMARY_HEADERS = [
     "Num packets",
     "Buffers per channel",
     "Forwarder NOC",
-    "Target payload bytes",
     "Aggregate bytes",
     "Max sender cycles",
     "Bytes per cycle",
@@ -44,7 +43,6 @@ GOLDEN_HEADERS = [
     "Num packets",
     "Buffers per channel",
     "Forwarder NOC",
-    "Target payload bytes",
     "Bytes per cycle",
     "Throughput GB/s",
 ]
@@ -122,7 +120,6 @@ def normalize_benchmark_row(benchmark: dict) -> dict:
         "Num packets": num_packets,
         "Buffers per channel": as_int(benchmark["buffers_per_channel"]),
         "Forwarder NOC": infer_forwarder_noc(case_name),
-        "Target payload bytes": as_int(benchmark["target_payload_bytes"]),
         "Aggregate bytes": as_int(benchmark["aggregate_case_bytes"]),
         "Max sender cycles": max_sender_cycles,
         "Bytes per cycle": bytes_per_cycle,

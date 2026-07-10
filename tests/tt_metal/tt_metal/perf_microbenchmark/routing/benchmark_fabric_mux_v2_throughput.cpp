@@ -95,7 +95,7 @@ std::vector<MuxV2ThroughputCase> get_standalone_mux_v2_throughput_cases() {
 void BM_StandaloneMuxV2Throughput(
     benchmark::State& state, FabricMuxV2BenchmarkContext* context, const MuxV2ThroughputCase& benchmark_case) {
     const auto resolved_payload_size_bytes = resolve_packet_payload_size_bytes(benchmark_case);
-    const auto num_packets = derive_num_packets(benchmark_case);
+    const auto num_packets = benchmark_case.num_packets;
 
     state.counters["senders"] = benchmark::Counter(static_cast<double>(benchmark_case.num_senders));
     state.counters["payload_bytes"] = benchmark::Counter(static_cast<double>(resolved_payload_size_bytes));
@@ -103,8 +103,6 @@ void BM_StandaloneMuxV2Throughput(
     state.counters["buffers_per_channel"] =
         benchmark::Counter(static_cast<double>(benchmark_case.num_buffers_per_channel));
     state.counters["drainer_buffers"] = benchmark::Counter(static_cast<double>(benchmark_case.num_drainer_buffers));
-    state.counters["target_payload_bytes"] =
-        benchmark::Counter(static_cast<double>(benchmark_case.target_aggregate_payload_bytes));
     state.counters["clock_mhz"] = benchmark::Counter(static_cast<double>(get_tt_npu_clock(context->get_device())));
 
     std::string rejection_reason;

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -19,7 +18,10 @@
 
 namespace tt::tt_fabric::bench {
 
-inline constexpr uint64_t kDefaultTargetAggregatePayloadBytes = 256ull * 1024ull * 1024ull;
+// Fixed per-sender packet count across the matrix so fan-in comparisons hold offered
+// load constant. open() is outside the timed region; close() remains inside as the
+// completion barrier, so P should be large enough that the send loop dominates close().
+inline constexpr uint32_t kPacketsPerSender = 10000;
 inline constexpr uint32_t kDefaultDrainerNumBuffers = 16;
 
 struct MuxV2ThroughputCase {
@@ -29,7 +31,7 @@ struct MuxV2ThroughputCase {
     uint8_t num_buffers_per_channel = 1;
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default;
     uint32_t num_drainer_buffers = kDefaultDrainerNumBuffers;
-    uint64_t target_aggregate_payload_bytes = kDefaultTargetAggregatePayloadBytes;
+    uint32_t num_packets = kPacketsPerSender;
 };
 
 inline uint32_t resolve_packet_payload_size_bytes(const MuxV2ThroughputCase& benchmark_case) {
@@ -37,14 +39,6 @@ inline uint32_t resolve_packet_payload_size_bytes(const MuxV2ThroughputCase& ben
         return benchmark_case.packet_payload_size_bytes;
     }
     return static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
-}
-
-inline uint32_t derive_num_packets(const MuxV2ThroughputCase& benchmark_case) {
-    const auto packet_payload_size_bytes = resolve_packet_payload_size_bytes(benchmark_case);
-    const uint64_t bytes_per_round =
-        std::max<uint64_t>(1, static_cast<uint64_t>(benchmark_case.num_senders) * packet_payload_size_bytes);
-    return static_cast<uint32_t>(
-        std::max<uint64_t>(1, (benchmark_case.target_aggregate_payload_bytes + bytes_per_round - 1) / bytes_per_round));
 }
 
 class FabricMuxV2BenchmarkContext {

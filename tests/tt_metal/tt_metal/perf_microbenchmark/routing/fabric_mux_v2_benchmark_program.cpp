@@ -611,7 +611,7 @@ StandaloneMuxV2BenchmarkRunResult run_standalone_mux_v2_benchmark_once(
     TT_FATAL(mesh_device != nullptr, "Standalone mux-v2 benchmark requires an initialized mesh device");
 
     const auto resolved_payload_size_bytes = resolve_packet_payload_size_bytes(benchmark_case);
-    const auto num_packets = derive_num_packets(benchmark_case);
+    const auto num_packets = benchmark_case.num_packets;
     const uint64_t expected_total_packets = static_cast<uint64_t>(benchmark_case.num_senders) * num_packets;
     const uint64_t expected_sender_bytes = static_cast<uint64_t>(resolved_payload_size_bytes) * num_packets;
     const uint64_t expected_aggregate_bytes = expected_sender_bytes * benchmark_case.num_senders;
