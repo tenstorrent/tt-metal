@@ -56,14 +56,20 @@ REFUTED (this session's earlier claims): "50% inter-op gap recoverable via CCL o
 ALREADY fused into its consumer (all_gather_minimal_matmul_async / matmul_reduce_scatter / ring_joint_sdpa, ~55% fabric
 util, no barrier). CCL-overlap banks ~0.15-0.35s, not 1.75s. QAT/quant DEAD (overhead-bound). Tilize DEAD (cold artifact).
 
-### No-finetune bank (autonomous, PCC-gated) — realistic −0.5 to 0.7s → ~7.5s floor:
-| # | lever | E2E saving | confidence | status |
+### No-finetune bank (autonomous, PCC-gated) — ⚠️ VAE trace DIED on measurement → floor is ~7.9s, not 7.5s:
+| # | lever | predicted | MEASURED | status |
 |---|---|---|---|---|
-| A1 | VAE decode trace (port kevinmi decode_device) | ~0.35s | HIGH (pre-built) | 🔄 worker dispatched |
-| A2 | num_links 2→4 + fabric sweep | 0.1-0.2s (uncertain) | LOW (hang risk) | ⏳ device A/B |
-| A7 | adaLN to_out fusion (a2v/v2a/attn2) | ~0.008s | HIGH (python-only) | ⏳ trivial |
-| A3/A5 | RMSNorm stat-gather merge + scale/shift fold (one kernel) | 0.07-0.17s | LOW-MED | ⏳ needs A0 traced profile |
-| A0 | traced per-op profile (enabler, attribute the real gap) | 0 | — | ⏳ prereq for A3 |
+| A1 | VAE decode trace (port kevinmi decode_device) | ~0.35s | **0.19ms (DEAD)** | ✅ verified: PCC=1.0 but decode is device-bound (async CQ already hides dispatch); untraced 552.08ms = traced 551.88ms. Refactor kept on branch (65a3a1c), NOT worth shipping. |
+| A2 | num_links 2→4 + fabric sweep | 0.1-0.2s (uncertain) | ? | ⏳ device A/B (watched, hang risk) — the one untested >0.1s lever |
+| A7 | adaLN to_out fusion (a2v/v2a/attn2) | ~0.008s | ? | ⏳ trivial python-only |
+| A3/A5 | RMSNorm stat-gather merge + scale/shift fold | 0.07-0.17s | ? | ⏳ kernel change, needs warm-gap attribution first |
+
+**CORRECTED no-finetune floor: ~7.8–8.0s.** The VAE trace (biggest predicted no-finetune win, 0.35s) is measured-DEAD;
+the VAE stage is device-bound (552ms decode + ~400ms host I/O, neither trace-addressable). Remaining levers (num_links
++ adaLN + RMSNorm-merge) sum to a *predicted* ~0.2–0.4s and are unproven. **The only real win this whole effort was the
+shipped audio-trace fix (8.5→8.2s).** Every predicted kernel lever (VAE-trace, CCL-overlap, tilize, quant) is measured
+DEAD or already-done. **6.0s is 100% gated on out-of-repo step-distillation — a training-investment decision, not a
+kernel grind.** Continuing to chase sub-0.4s levers against a 2.2s gap is polish, not progress.
 
 ## LEVER PLAN (ranked; status)
 | # | lever | expected | status |
@@ -105,3 +111,7 @@ capped by the ~53% overhead structure. Banking every real gain; reporting the tr
 - 2026-07-10 00:58Z — LEVER B COMPLETE: definitive per-op S2 block profile (see table above). Named targets: CCL-matmul 47.5%, SDPA 25%, Tilize 14%, adaLN 7%. Inter-op gap ~50% of wall.
 - 2026-07-10 01:00Z — dispatched worker a9dc1ceb (Opus/xhigh): investigate Tilize elimination (44 ops/block) → ranked removability plan. In flight.
 - 2026-07-10 01:16Z — TTSUP_TICK #1 (heartbeat healthy). Ultracode on. Launched Workflow wi7rr4cw5 (4 parallel Opus/xhigh digs + max synthesis): CCL-overlap/inter-op-gap (highest ceiling ~1.75s S2), adaLN-fusion, VAE-decode (1.0s unexplored stage), finetune-path scoping (DMD/QAD honest 6s route). All read-only. In flight alongside tilize worker.
+- 2026-07-10 01:30Z — Workflow DONE. Master plan synthesized (opt/MASTER_PLAN_raw.txt). Honest floor delivered: no-finetune ~7.2-7.5s, 6.0s needs out-of-repo DMD2 step-distill. CCL-overlap refuted (already fused). B1a HF check MISS. Committed becc22a.
+- 2026-07-10 01:40Z — dispatched VAE-trace port worker a333a87b (kevinmi np-halo-fabric-mux → decode_device trace, ~0.35s, patch-only).
+- 2026-07-10 01:45Z — A0 warm profile 014542-5 PASSED (145s, LTX_PROFILE_ITERS=4). Retires the cold-capture error: warm rows now exist. Processing 42.8M-row raw log off-device (PID 106265) → warm per-block FW + warm inter-op gap (dispatch vs sync).
+- 2026-07-10 01:56Z — TTSUP_TICK #3. Device free; NOT firing num_links (fabric-hang risk on shared broker) fire-and-forget — will test it watched. VAE verification is the next device job.

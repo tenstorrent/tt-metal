@@ -132,6 +132,15 @@ def test_prof_vae_ltx_trace(mesh_device, device_params):
     _ = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
     ttnn.synchronize_device(mesh)
 
+    # Warm UNTRACED wall (programs cached, host dispatch NOT hidden) — the baseline the trace win is
+    # measured against; delta = untraced - traced = the per-op host-dispatch gap tracing removes.
+    _u0 = time.perf_counter()
+    for _ in range(_TRACE_ITERS):
+        _uo = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
+        ttnn.deallocate(_uo)
+    ttnn.synchronize_device(mesh)
+    untraced_ms = (time.perf_counter() - _u0) * 1000 / _TRACE_ITERS
+
     tid = ttnn.begin_trace_capture(mesh, cq_id=0)
     out = tt_decoder.decode_device(sample_tt, logical_h, logical_w)
     ttnn.end_trace_capture(mesh, tid, cq_id=0)
@@ -146,7 +155,8 @@ def test_prof_vae_ltx_trace(mesh_device, device_params):
     ttnn.deallocate(out)
 
     print(
-        f"\nTRACED_DECODE_WALL_MS={wall_ms:.2f}  frames={_NUM_FRAMES}  {_HEIGHT}x{_WIDTH}  " f"iters={_TRACE_ITERS}",
+        f"\nTRACED_DECODE_WALL_MS={wall_ms:.2f}  UNTRACED_DECODE_WALL_MS={untraced_ms:.2f}  "
+        f"TRACE_WIN_MS={untraced_ms - wall_ms:.2f}  frames={_NUM_FRAMES}  {_HEIGHT}x{_WIDTH}  iters={_TRACE_ITERS}",
         flush=True,
     )
 
