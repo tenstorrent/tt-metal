@@ -83,8 +83,7 @@ void kernel_main() {
     const uint32_t up_done_sem_id = get_arg_val<uint32_t>(32);
     volatile tt_l1_ptr uint32_t* up_go_local =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_go_sem_id));
-    volatile tt_l1_ptr uint32_t* up_done_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_done_sem_id));
+    Semaphore<> up_done_local(up_done_sem_id);
 
     // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 33.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
@@ -481,7 +480,7 @@ void kernel_main() {
 
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
-                    noc_semaphore_wait_min(up_done_local, up_seq);
+                    up_done_local.wait_min(up_seq);
                 }
 
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the

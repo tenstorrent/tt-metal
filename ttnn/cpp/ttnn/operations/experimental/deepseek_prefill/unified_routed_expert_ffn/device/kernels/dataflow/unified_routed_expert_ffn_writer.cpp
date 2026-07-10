@@ -39,6 +39,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 #include "api/debug/assert.h"
 
@@ -166,8 +167,7 @@ void kernel_main() {
     // up_done (writer: up landed in L1), monotonic counters.
     constexpr uint8_t kUpNoc = 1;
     const uint32_t up_tile_bytes = get_tile_size(cb_in1_up);
-    volatile tt_l1_ptr uint32_t* up_go_local =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_go_sem_id));
+    Semaphore<> up_go_local(up_go_sem_id);
     volatile tt_l1_ptr uint32_t* up_done_local =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(up_done_sem_id));
     uint32_t up_seq = 0;
@@ -192,7 +192,7 @@ void kernel_main() {
                 const uint32_t up_slot_bytes = g_in1_block_num_tiles * up_tile_bytes;
                 for (uint32_t kb = 0; kb < num_blocks_gu; ++kb) {
                     ++up_seq;
-                    noc_semaphore_wait_min(up_go_local, up_seq);
+                    up_go_local.wait_min(up_seq);
                     uint32_t l1_w_up = up_cb_base + ((up_seq - 1) % kUpNumSlots) * up_slot_bytes;
                     for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
                         for (uint32_t n = 0; n < per_core_N_gu; ++n) {
