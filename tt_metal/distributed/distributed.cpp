@@ -18,6 +18,7 @@
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -112,10 +113,16 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+    auto& ctx = tt::tt_metal::MetalContext::instance();
+    if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
+    } else if (ctx.get_cluster().is_mock_or_emulated()) {
+        // Slow dispatch normally JIT-compiles inside LaunchProgram, but the SD mesh CQ
+        // short-circuits for mock devices (no hardware to dispatch to). Compile here so
+        // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
+        mesh_workload.impl().compile(mesh_cq.device());
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
