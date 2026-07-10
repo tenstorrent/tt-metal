@@ -161,6 +161,8 @@ def check_core_magic(
         other_elfs_to_try.append(("ACTIVE_ETH", dispatcher_data._active_erisc_elf))
     if expected_type != "DRAM" and dispatcher_data._drisc_elf is not None:
         other_elfs_to_try.append(("DRAM", dispatcher_data._drisc_elf))
+    if expected_type != "DISPATCH" and dispatcher_data._dispatch_dm_elf is not None:
+        other_elfs_to_try.append(("DISPATCH", dispatcher_data._dispatch_dm_elf))
 
     found_type = None
     for type_name, other_elf in other_elfs_to_try:
@@ -190,10 +192,10 @@ def check_core_magic(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram", "dispatch"]
     # Only check one RISC per core since magic is core-wide, not per-RISC
-    # Use brisc for tensix, erisc/erisc0 for eth, drisc for dram
-    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "drisc"]
+    # Use brisc for tensix, erisc/erisc0 for eth, drisc for dram, dispatch_dm0 for dispatch
+    RISC_CORES_TO_CHECK = ["brisc", "erisc", "erisc0", "drisc", "dispatch_dm0"]
 
     dispatcher_data = get_dispatcher_data(args, context)
     run_checks = get_run_checks(args, context)
