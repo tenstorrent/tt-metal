@@ -160,6 +160,10 @@ timeout 1200 python -m tracy -r -p -v -m pytest models/autoports/meta_llama_llam
 - `test_reports/optimized_decoder_pytest.xml` and `test_reports/optimized_decoder_pytest_stdout.log`: final 12-test optimized correctness run with exact PCC/KV dtype output.
 - `test_reports/optimized_decoder_watcher_pytest.xml`, `test_reports/optimized_decoder_watcher_stdout.log`, and `test_reports/optimized_decoder_watcher.log`: watcher-clean 12-test run with exact PCC/KV dtype output.
 
+## Commit Log
+
+- Stage checkpoint commit: `3d6a972a5c2` (`Add optimized Llama 3.1 8B decoder`).
+
 ## Checklist
 
 - Operation-topology audit completed.
