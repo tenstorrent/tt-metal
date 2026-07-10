@@ -52,3 +52,32 @@ as many small sub-tile (face) writes with a barrier each.
 on this move faster than, writing it as 4 × 512 B faces — bigger coalesced transactions hit higher
 achieved DRAM bandwidth. Reader on NoC0, writer on NoC1 to overlap.
 **Gist:** on a DRAM-bound move, move whole pages and batch barriers; don't scatter sub-tile faces.
+
+## ⭐⭐ T2 — [`tensix_all_reduce_compute`](tensix_all_reduce_compute/README.md)
+**Concept:** FPU destination reuse for a multi-block tile reduction already resident in L1.
+**Situation:** a reducer copies each contributor into DST, repeatedly calls
+`add_binary_tile_init()`, and uses one SFPU binary add per contributor.
+**Measured win:** pairwise FPU `add_tiles(..., acc_to_dest=true)` with FP32 DST is **2.70× faster**
+for 2 blocks and **5.92× faster** for 8 blocks (six tiles, one Wormhole B0 core). At 16 blocks it
+is **6.75× faster** (**3.46 µs** versus **23.31 µs**).
+**Gist:** initialize FPU add once per DST batch, pair source blocks, accumulate directly into DST,
+and pack only the final sum. Seed DST with one copy only for an odd contributor count.
+
+## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
+**Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.
+**Situation:** a reduce-and-forward ring is much slower when a rectangular group spans two rows.
+**Measured result:** for a 12 KiB payload on 64 Wormhole B0 cores, NoC0 forwards 8-core lines in
+**4.34–4.49 µs**, while NoC1 takes **26.30–27.57 µs** (**6.07–6.14× slower**) because the fixed
+ring order opposes NoC1 routing. A `2x8` serpentine costs **47.17 µs** on NoC0 and **48.55 µs** on
+NoC1 because it contains equal traffic in both horizontal directions. tt-npe predicts the same
+geometry reversal: **3,066 → 20,097 cycles** for lines and **43,065 cycles** on either NoC for
+`2x8`.
+
+## ⭐⭐⭐ T3 — [`tensix_all_reduce`](tensix_all_reduce/README.md)
+**Concepts:** Tensix-to-Tensix collective topology and reduction work distribution.
+**Situation:** every core in each rectangular L1-sharded group contributes the same tile block,
+and every member needs the elementwise group sum.
+**Measured result:** with FPU destination-reuse reduction, two-phase worker reduction beats ring
+push by **4.64–4.73×** on 8-core lines and **6.48×** on a 16-core `2x8` group (**8.36 µs** versus
+**54.18 µs**, 9.8% noise). On 4-core groups, root reduction is fastest at **4.00 µs** because the
+extra two-phase handoff is not amortized.
