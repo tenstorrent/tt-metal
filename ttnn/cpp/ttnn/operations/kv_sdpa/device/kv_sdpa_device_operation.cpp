@@ -29,7 +29,11 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
     TT_FATAL(qs[0] == 1, "kv_sdpa: batch must be 1 (got {})", qs[0]);
     const uint32_t NQH = qs[1], NKH = ks[1];
     TT_FATAL(NKH >= 1 && NQH % NKH == 0, "kv_sdpa: NQH ({}) must be a multiple of NKH ({})", NQH, NKH);
-    TT_FATAL(qs[2] == TILE_HEIGHT, "kv_sdpa: query length must be exactly one tile ({}); got {}", TILE_HEIGHT, qs[2]);
+    TT_FATAL(
+        qs[2] % TILE_HEIGHT == 0 && qs[2] >= TILE_HEIGHT,
+        "kv_sdpa: query length must be a positive multiple of one tile ({}); got {}",
+        TILE_HEIGHT,
+        qs[2]);
     TT_FATAL(qs[3] == ks[3] && qs[3] == vs[3], "kv_sdpa: head_dim must match across q/k/v");
     TT_FATAL(qs[3] % TILE_WIDTH == 0, "kv_sdpa: head_dim ({}) must be tile-aligned", qs[3]);
     TT_FATAL(ks[2] % TILE_HEIGHT == 0 && ks[2] == vs[2], "kv_sdpa: kv length must be tile-aligned and match k/v");
@@ -53,9 +57,10 @@ void KvSdpaDeviceOperation::validate_on_program_cache_miss(const operation_attri
         const uint32_t kv_total = prefix + ks[2];
         TT_FATAL(ta.mask->layout() == Layout::TILE, "kv_sdpa: attn_mask must be TILE layout");
         TT_FATAL(ms.rank() == 4, "kv_sdpa: attn_mask must be rank-4 [1, 1, Sq, KV]");
-        // Mask is broadcast across Q heads (dim 1) and shares the single Sq tile-row; its KV (last)
-        // dim must cover the full folded [prefix ; suffix] KV so column-tile g aligns with KV-tile g.
-        TT_FATAL(ms[2] == TILE_HEIGHT, "kv_sdpa: attn_mask Sq must be one tile ({}); got {}", TILE_HEIGHT, ms[2]);
+        // Mask is broadcast across Q heads (dim 1); its Sq (dim 2) must match the query Sq (each Q
+        // tile-row uses its own mask tile-row), and its KV (last) dim must cover the full folded
+        // [prefix ; suffix] KV so column-tile g aligns with KV-tile g.
+        TT_FATAL(ms[2] == qs[2], "kv_sdpa: attn_mask Sq ({}) must match query Sq ({})", ms[2], qs[2]);
         TT_FATAL(ms[3] == kv_total, "kv_sdpa: attn_mask KV ({}) must equal prefix+suffix KV ({})", ms[3], kv_total);
         TT_FATAL(ms[3] % TILE_WIDTH == 0, "kv_sdpa: attn_mask KV ({}) must be tile-aligned", ms[3]);
     }

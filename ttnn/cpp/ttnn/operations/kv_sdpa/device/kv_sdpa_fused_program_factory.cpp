@@ -41,6 +41,11 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const auto& ks = ta.k.padded_shape();
     const uint32_t NQH = qs[1];
     const uint32_t NKH = ks[1];
+    // Q tiles along the seq dim. Sqt==1 is the decode/1-tile suffix (pi05_libero horizon<=32); Sqt>1
+    // is the multi-tile suffix (e.g. pi05_base action_horizon=50 -> 64 -> Sqt=2). We spatially tile Q
+    // across cores: one core per (Q head, Q tile), each running the validated 1-tile flash at its own
+    // q_tile row offset. No compute-kernel change; Sqt==1 reproduces the original single-tile program.
+    const uint32_t Sqt = qs[2] / tt::constants::TILE_HEIGHT;
     const uint32_t DHt = qs[3] / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = DHt;
     const uint32_t group = NQH / NKH;
@@ -78,8 +83,10 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     const uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
     const uint32_t out_tiles = Sq_chunk_t * vDHt;
 
+    // One core per (Q head, Q tile). core index i -> q_head = i / Sqt, q_tile = i % Sqt.
+    const uint32_t num_cores = NQH * Sqt;
     const CoreRangeSet cores =
-        tt::tt_metal::num_cores_to_corerangeset(NQH, device->compute_with_storage_grid_size(), /*row_wise=*/true);
+        tt::tt_metal::num_cores_to_corerangeset(num_cores, device->compute_with_storage_grid_size(), /*row_wise=*/true);
     const auto core_vec = corerange_to_cores(cores, std::nullopt, true);
 
     ProgramDescriptor desc;
@@ -117,7 +124,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     // ---- Reader ----
     // Suffix-relative geometry: prefix_Kt tiles come from past_k/past_v, the rest (suffix_Kt) from k/v.
     KernelDescriptor::CompileTimeArgs reader_cta = {
-        NQH, DHt, Kt, Sk_chunk_t, k_num_chunks, prefix_Kt, (uint32_t)has_past, (uint32_t)use_provided_mask};
+        NQH, DHt, Kt, Sk_chunk_t, k_num_chunks, prefix_Kt, (uint32_t)has_past, (uint32_t)use_provided_mask, Sqt};
     TensorAccessorArgs(*ta.q.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.k.buffer()).append_to(reader_cta);
     TensorAccessorArgs(*ta.v.buffer()).append_to(reader_cta);
@@ -139,7 +146,7 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
     reader.config = DataMovementConfigDescriptor{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0};
 
     // ---- Writer (generates the sdpa scalars + drains cb_out to this core's Q head of the output) ----
-    KernelDescriptor::CompileTimeArgs writer_cta = {DHt, identity_scalar_packed};
+    KernelDescriptor::CompileTimeArgs writer_cta = {DHt, identity_scalar_packed, Sqt};
     TensorAccessorArgs(*out.buffer()).append_to(writer_cta);
     KernelDescriptor writer{};
     writer.kernel_source = "ttnn/cpp/ttnn/operations/kv_sdpa/device/kernels/dataflow/writer_fused.cpp";
@@ -178,11 +185,14 @@ ProgramDescriptor KvSdpaDeviceOperation::FlashFused::create_descriptor(
         .dst_full_sync_en = ckc.dst_full_sync_en,
         .math_approx_mode = ckc.math_approx_mode};
 
-    for (uint32_t h = 0; h < NQH; ++h) {
-        const uint32_t kv_head = h / group;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const uint32_t q_head = i / Sqt;
+        const uint32_t q_tile = i % Sqt;
+        const uint32_t kv_head = q_head / group;
         reader.emplace_runtime_args(
-            core_vec[h], {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), h, kv_head, pk_buf, pv_buf, mask_buf});
-        writer.emplace_runtime_args(core_vec[h], {out.buffer(), h});
+            core_vec[i],
+            {ta.q.buffer(), ta.k.buffer(), ta.v.buffer(), q_head, kv_head, pk_buf, pv_buf, mask_buf, q_tile});
+        writer.emplace_runtime_args(core_vec[i], {out.buffer(), q_head, q_tile});
     }
     desc.kernels.push_back(std::move(reader));
     desc.kernels.push_back(std::move(writer));

@@ -11,10 +11,12 @@
 void kernel_main() {
     constexpr uint32_t DHt = get_compile_time_arg_val(0);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(1);
-    constexpr auto out_args = TensorAccessorArgs<2>();
+    constexpr uint32_t Sqt = get_compile_time_arg_val(2);  // total Q tiles along seq (this core owns one)
+    constexpr auto out_args = TensorAccessorArgs<3>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t q_head = get_arg_val<uint32_t>(1);
+    const uint32_t q_tile = get_arg_val<uint32_t>(2);  // which Q seq-tile-row this core wrote
 
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
@@ -32,8 +34,10 @@ void kernel_main() {
     const auto out_acc = TensorAccessor(out_args, out_addr, o_tb);
     cb_wait_front(cb_out, DHt);
     uint32_t l1 = get_read_ptr(cb_out);
+    // Output is [1, NQH, Sqt tiles, DHt]; this core writes its seq-tile-row q_tile of head q_head.
+    const uint32_t out_row_base = (q_head * Sqt + q_tile) * DHt;
     for (uint32_t d = 0; d < DHt; ++d) {
-        noc_async_write_tile(q_head * DHt + d, out_acc, l1);
+        noc_async_write_tile(out_row_base + d, out_acc, l1);
         l1 += o_tb;
     }
     noc_async_write_barrier();

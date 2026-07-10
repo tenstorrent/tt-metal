@@ -15,9 +15,10 @@ struct NlpCreateQkvHeadsRopeSharedVariables {
     tt::tt_metal::KernelHandle v_reader_kernel_id = 0;   // copy reader (v cores)
     std::vector<CoreCoord> cores;
     uint32_t Wt = 0;
-    uint32_t num_q_rows = 0;
+    uint32_t num_q_rows = 0;  // head counts (num_q_heads / num_kv_heads); NOT scaled by Sqt
     uint32_t num_k_rows = 0;
     uint32_t num_v_rows = 0;
+    uint32_t Sqt = 1;  // number of seq tile-rows; cores = (nq + 2*nkv) * Sqt (one core per head-row x seq-tile)
 };
 
 struct NlpCreateQkvHeadsRopeProgramFactory {

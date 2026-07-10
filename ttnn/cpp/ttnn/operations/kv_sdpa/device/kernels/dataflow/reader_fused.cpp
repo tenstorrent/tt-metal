@@ -19,8 +19,9 @@ void kernel_main() {
     constexpr uint32_t prefix_Kt = get_compile_time_arg_val(5);
     constexpr bool has_past = get_compile_time_arg_val(6) == 1;
     constexpr bool use_provided_mask = get_compile_time_arg_val(7) == 1;
+    constexpr uint32_t Sqt = get_compile_time_arg_val(8);  // total Q tiles along seq (this core owns one)
     constexpr uint32_t suffix_Kt = Kt - prefix_Kt;
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr auto q_args = TensorAccessorArgs<9>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto pk_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -35,6 +36,7 @@ void kernel_main() {
     const uint32_t pk_addr = get_arg_val<uint32_t>(5);
     const uint32_t pv_addr = get_arg_val<uint32_t>(6);
     const uint32_t mask_addr = get_arg_val<uint32_t>(7);
+    const uint32_t q_tile = get_arg_val<uint32_t>(8);  // which Q seq-tile-row this core computes
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -52,11 +54,13 @@ void kernel_main() {
     const auto pv_acc = TensorAccessor(pv_args, pv_addr, v_tb);
     const auto mask_acc = TensorAccessor(mask_args, mask_addr, mask_tb);
 
-    // Q: head q_head, single seq-tile chunk -> DHt tiles. page = q_head*DHt + d.
+    // Q: head q_head, this core's seq-tile-row q_tile -> DHt tiles. Q is [1, NQH, Sqt tiles, DHt];
+    // page of (head, seq-tile, dim) = (q_head*Sqt + q_tile)*DHt + d.
+    const uint32_t q_row_base = (q_head * Sqt + q_tile) * DHt;
     cb_reserve_back(cb_q_in, DHt);
     uint32_t l1 = get_write_ptr(cb_q_in);
     for (uint32_t d = 0; d < DHt; ++d) {
-        noc_async_read_tile(q_head * DHt + d, q_acc, l1);
+        noc_async_read_tile(q_row_base + d, q_acc, l1);
         l1 += q_tb;
     }
     noc_async_read_barrier();
@@ -97,10 +101,12 @@ void kernel_main() {
         // index g the loop above uses, so the mask column ordering matches the folded KV by
         // construction (fold and non-fold both produce KV in [0..Kt) global order).
         if constexpr (use_provided_mask) {
+            // Mask is [1, 1, Sqt tiles, Kt]; this core uses its own Sq tile-row q_tile. Page of
+            // (row-tile q_tile, col-tile g) = q_tile*Kt + g, with g == kt0+kt the global KV tile.
             cb_reserve_back(cb_mask_in, Sk_chunk_t);
             uint32_t lm = get_write_ptr(cb_mask_in);
             for (uint32_t kt = 0; kt < Sk_chunk_t; ++kt) {
-                noc_async_read_tile(kt0 + kt, mask_acc, lm);
+                noc_async_read_tile(q_tile * Kt + kt0 + kt, mask_acc, lm);
                 lm += mask_tb;
             }
         }

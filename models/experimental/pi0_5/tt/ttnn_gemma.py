@@ -870,12 +870,13 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
         else:
             seq_len = hidden_states.shape[1]
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
-        # The fused concat_heads_matmul O-projection is only valid for a <=1-tile suffix (contiguous
-        # head tiles). Fail loudly rather than silently mis-compute if used outside that regime.
-        assert seq_len <= 32, (
-            f"AdaRMSExpertAttentionTTNN requires suffix seq_len<=32 (1 tile), got {seq_len}. "
-            f"action_horizon>32 is unsupported on the fused expert path."
-        )
+        # Multi-tile suffix support: seq_len may span >1 tile (e.g. pi05_base action_horizon=50 ->
+        # tile-padded 64 -> 2 tiles). nlp_create_qkv_heads_rope and kv_sdpa were extended to tile the
+        # seq dim across cores (one core per head-row/Q-tile x seq-tile), so both run natively at
+        # Sq>32. The fused concat_heads_matmul O-projection stays 1-tile-only (its zero-copy view is a
+        # valid concat only for one tile-row); for seq_len>32 the O-proj below uses the general
+        # nlp_concat_heads + linear instead. seq_len<=32 keeps the original all-fused fast path.
+        assert seq_len % 32 == 0, f"AdaRMSExpertAttentionTTNN requires seq_len tile-aligned; got {seq_len}."
 
         # Fused QKV linear (bf8_b), interleaved path (the expert never passes bs_norm_factory).
         m_tiles = (batch_size * seq_len) // 32
@@ -926,7 +927,7 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
         # when prefix-KV is present and we are NOT caching, folds past_k/past_v into its reader as
         # two ranges so the two ttnn.concat ops are skipped. Requires the small-query MQA shape:
         # Sq == 1 tile (32) and a single KV head.
-        assert int(q_rope.shape[-2]) == 32, f"kv_sdpa requires Sq == 32 (1 tile); got {int(q_rope.shape[-2])}"
+        assert int(q_rope.shape[-2]) % 32 == 0, f"kv_sdpa requires Sq tile-aligned; got {int(q_rope.shape[-2])}"
         assert int(self.num_kv_heads) == 1, f"kv_sdpa requires num_kv_heads == 1 (MQA); got {self.num_kv_heads}"
         if past_key_value is not None and not use_cache:
             # Fold path: kv_sdpa reads past_k/past_v + suffix k/v as two KV ranges — no pre-concat.
@@ -944,14 +945,38 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
             new_cache = (k_rope, v) if use_cache else None
             attn_output = ttnn.kv_sdpa(q_rope, k_rope, v, attn_mask=attention_mask, scale=self.scale)
 
-        # Fused concat-heads + O-projection in ONE dispatch (bf16 out so it can feed the bf16 fused
-        # addcmul gated residual). Uses the tuned 1D-mcast O-matmul program config.
+        # Concat-heads + O-projection (bf16 out so it can feed the bf16 fused addcmul gated residual).
         oproj_k = (self.num_heads * self.head_dim) // 32
         oproj_n = self.hidden_size // 32
         oproj_pcfg = build_matmul_pcfg(m_tiles, oproj_k, oproj_n, self.grid_size[0], self.grid_size[1], in0_block_w=8)
-        output = ttnn.experimental.concat_heads_matmul(
-            attn_output, self.o_proj, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=oproj_pcfg
-        )
+        if seq_len <= 32:
+            # Fused concat-heads + O-proj in ONE dispatch (tuned 1D-mcast). Valid only for a 1-tile
+            # suffix: the op's [1,nh,S,hd]->[1,1,S,nh*hd] view IS the concat only when S is one tile.
+            output = ttnn.experimental.concat_heads_matmul(
+                attn_output, self.o_proj, memory_config=ttnn.L1_MEMORY_CONFIG, program_config=oproj_pcfg
+            )
+        else:
+            # >1-tile suffix: the zero-copy view is not a valid concat, so do a real multi-tile
+            # concat (nlp_concat_heads) + linear. Force bf16 out to match the fused path's dtype.
+            attn_concat = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if oproj_pcfg is not None:
+                output = ttnn.linear(
+                    attn_concat,
+                    self.o_proj,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                    program_config=oproj_pcfg,
+                )
+            else:
+                output = ttnn.linear(
+                    attn_concat,
+                    self.o_proj,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                    core_grid=self.core_grid,
+                )
         output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))
         return output, new_cache
 

@@ -60,7 +60,9 @@ os.environ.setdefault("PI0_NUM_CAMERAS", "3")
 
 import ttnn  # noqa: E402
 
-CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", "/home/tt-admin/pi05_cache/pi05_libero_upstream"))
+CHECKPOINT_DIR = Path(
+    os.environ.get("PI05_CHECKPOINT_DIR", str(Path(__file__).resolve().parents[2] / "weights" / "pi05_base"))
+)
 SEED = 42
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256

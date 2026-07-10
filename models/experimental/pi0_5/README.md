@@ -250,6 +250,57 @@ Results (trace + 2CQ, N=5 — per-chunk ms):
 |---|---|---|
 | **8 BH chips (1×8)** | 25.52 ms | 27.99 ms |
 
+### Single chip (Blackhole) — `pi05_base`
+
+The single-device path (`tt/ttnn_pi0_5_model.py`) runs the **base** checkpoint
+(`pi05_base`, action_horizon = **50** → tile-padded to 64). The fused expert kernels
+`kv_sdpa` and `nlp_create_qkv_heads_rope` are extended to a **2-tile suffix** (Q/seq
+tiled across cores), so horizon-50 runs natively on one chip; `concat_heads_matmul`
+stays 1-tile and the O-projection falls back to `nlp_concat_heads` + `linear` for
+seq > 32. Pin one device with `TT_VISIBLE_DEVICES=0`. The checkpoint default is
+`weights/pi05_base`:
+
+```bash
+export PI05_CHECKPOINT_DIR=$PWD/models/experimental/pi0_5/weights/pi05_base
+```
+
+**Perf — e2e trace + 2CQ (device 0).** Same knobs as the 1×8 test:
+
+```bash
+TT_VISIBLE_DEVICES=0 PI0_NUM_CAMERAS=3 PI05_NUM_DENOISE_STEPS=5 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace_2cq.py
+```
+
+#### Single Chip BH, e2e trace + 2CQ (pi05_base, horizon 50)
+
+| Denoise steps | 2 cameras | 3 cameras |
+|---|---|---|
+| **5 steps** | 35.96 ms | 41.76 ms |
+| **10 steps** | 49.90 ms | 56.07 ms |
+
+**PCC — TTNN vs torch (device 0).** The full-model e2e needs `PI0_UPSTREAM_MASKS=1`
+(correct prefix-offset suffix RoPE positions for the base checkpoint; the default
+`[0..seq)` positions corrupt the bidirectional suffix attention). `PI0_DENOISE_FP32=1`
+tightens Euler-accumulation parity:
+
+```bash
+# full model e2e
+TT_VISIBLE_DEVICES=0 PI0_DEVICE_ID=0 PI0_UPSTREAM_MASKS=1 PI0_DENOISE_FP32=1 PI0_NUM_CAMERAS=2 \
+  python_env/bin/pytest -sq models/experimental/pi0_5/tests/pcc/test_pcc_pi05_model_libero.py
+
+# per-block components (siglip / prefix / suffix / paligemma vs torch)
+TT_VISIBLE_DEVICES=0 python_env/bin/pytest -sq \
+  models/experimental/pi0_5/tests/pcc/test_pcc_siglip_vs_torch.py \
+  models/experimental/pi0_5/tests/pcc/test_pcc_prefix_vs_torch.py \
+  models/experimental/pi0_5/tests/pcc/test_pcc_suffix_vs_torch.py \
+  models/experimental/pi0_5/tests/pcc/test_pcc_paligemma_vs_torch.py
+```
+
+Component PCC clears 0.99 (siglip 0.9950, prefix 0.99998, suffix 0.9992, paligemma
+0.9994). Full-model e2e is ~0.93 at horizon 50 — bf16/bf8 compute precision propagated
+through the 50-token bidirectional suffix (uniform, no tile-seam artifact), a lower
+ceiling than the horizon-10 `pi05_libero` path the 0.99 gate was tuned for.
+
 ---
 
 ## LIBERO simulator rollout

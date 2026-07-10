@@ -62,16 +62,22 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
     uint32_t hd = operation_attributes.head_dim;
     uint32_t Wt = hd / TILE_WIDTH;
     uint32_t half_Wt = Wt / 2;
-    uint32_t Ht = 1;     // enforced in validate
-    uint32_t HtWt = Wt;  // Ht * Wt
+    uint32_t Ht = 1;     // each core still processes ONE seq tile-row (Ht==1); the seq dim is tiled
+    uint32_t HtWt = Wt;  // across cores (see Sqt) so the reused rotary_embedding kernels stay 1-tile.
     uint32_t nq = operation_attributes.num_q_heads;
     uint32_t nkv = operation_attributes.num_kv_heads;
 
-    uint32_t num_q_rows = nq;  // Ht == 1
+    // Tile the seq dim across cores: one core per (head-row, seq tile-row). Sqt==1 reproduces the
+    // original single-tile program; Sqt>1 (e.g. pi05_base action_horizon=50 -> 64 -> Sqt=2) adds
+    // Sqt cores per head-row, each handling its own seq tile-row at the right qkv/cos/out offsets.
+    uint32_t Sqt = qkv.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_head_rows = nq + 2 * nkv;     // q heads + k heads + v heads
+    uint32_t row_stride = num_head_rows * Wt;  // column-tiles per seq tile-row in the fused qkv
+    uint32_t num_q_rows = nq;                  // head counts (kept for shared-vars / override)
     uint32_t num_k_rows = nkv;
     uint32_t num_v_rows = nkv;
-    uint32_t num_qk = num_q_rows + num_k_rows;
-    uint32_t total = num_qk + num_v_rows;
+    uint32_t num_qk_cores = (nq + nkv) * Sqt;
+    uint32_t total = num_head_rows * Sqt;  // total cores
 
     IDevice* device = qkv.device();
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -83,11 +89,13 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
 
     CoreRangeSet all_cores = num_cores_to_corerangeset(total, grid, true);
     const auto& cores = grid_to_cores(total, gx, gy, true);
+    // Core i -> (head-row r = i / Sqt, seq tile-row t = i % Sqt). qk cores (r < nq+nkv) are the first
+    // num_qk_cores contiguous indices; v cores (r >= nq+nkv) are the rest.
     std::vector<CoreRange> qk_ranges, v_ranges;
-    for (uint32_t i = 0; i < num_qk; ++i) {
+    for (uint32_t i = 0; i < num_qk_cores; ++i) {
         qk_ranges.emplace_back(cores[i], cores[i]);
     }
-    for (uint32_t i = num_qk; i < total; ++i) {
+    for (uint32_t i = num_qk_cores; i < total; ++i) {
         v_ranges.emplace_back(cores[i], cores[i]);
     }
     CoreRangeSet qk_cores(qk_ranges);
@@ -157,23 +165,28 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
     auto* sin_buf = sin.buffer();
     for (uint32_t i = 0; i < total; ++i) {
         const CoreCoord& core = cores[i];
-        if (i < num_qk) {
-            bool is_q = i < num_q_rows;
-            uint32_t within = is_q ? i : (i - num_q_rows);
-            uint32_t qkv_start = is_q ? (within * Wt) : ((nq + within) * Wt);
+        const uint32_t r = i / Sqt;  // head-row (q0..k0..v0..)
+        const uint32_t t = i % Sqt;  // seq tile-row this core owns
+        // Fused qkv is [1, 1, Sqt*32, num_head_rows*hd]; page of (seq-tile t, head-row r, dim w) =
+        // t*row_stride + r*Wt + w. cos/sin are [1,1,Sqt*32,hd]; page of (seq-tile t, w) = t*Wt + w.
+        const uint32_t qkv_start = t * row_stride + r * Wt;
+        const uint32_t cos_sin_start = t * Wt;
+        if (r < nq + nkv) {
+            bool is_q = r < nq;
+            uint32_t within = is_q ? r : (r - nq);
             SetRuntimeArgs(
                 program,
                 qk_reader,
                 core,
-                {qkv_buf->address(), cos_buf->address(), sin_buf->address(), 1u, qkv_start, 0u, 0u});
+                {qkv_buf->address(), cos_buf->address(), sin_buf->address(), 1u, qkv_start, 0u, cos_sin_start});
             auto* dst = is_q ? q_out.buffer() : k_out.buffer();
-            SetRuntimeArgs(program, writer, core, {dst->address(), Wt, within * Wt});
+            // Output [1, heads, Sqt*32, hd]; page of (head within, seq-tile t, w) = (within*Sqt+t)*Wt + w.
+            SetRuntimeArgs(program, writer, core, {dst->address(), Wt, (within * Sqt + t) * Wt});
         } else {
-            uint32_t within = i - num_qk;
-            uint32_t qkv_start = (nq + nkv + within) * Wt;
+            uint32_t within = r - nq - nkv;
             SetRuntimeArgs(program, v_reader, core, {qkv_buf->address(), Wt, qkv_start});
             SetRuntimeArgs(program, v_compute, core, {Wt});  // per_core_tile_cnt
-            SetRuntimeArgs(program, writer, core, {v_out.buffer()->address(), Wt, within * Wt});
+            SetRuntimeArgs(program, writer, core, {v_out.buffer()->address(), Wt, (within * Sqt + t) * Wt});
         }
     }
 
@@ -185,7 +198,8 @@ NlpCreateQkvHeadsRopeProgramFactory::cached_program_t NlpCreateQkvHeadsRopeProgr
         .Wt = Wt,
         .num_q_rows = num_q_rows,
         .num_k_rows = num_k_rows,
-        .num_v_rows = num_v_rows};
+        .num_v_rows = num_v_rows,
+        .Sqt = Sqt};
     return cached_program_t{std::move(program), std::move(sv)};
 }
 
@@ -198,7 +212,7 @@ void NlpCreateQkvHeadsRopeProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& sv = cached_program.shared_variables;
     const auto& cores = sv.cores;
-    uint32_t num_qk = sv.num_q_rows + sv.num_k_rows;
+    const uint32_t nq = sv.num_q_rows, nkv = sv.num_k_rows, Sqt = sv.Sqt;
 
     auto* qkv = tensor_args.qkv.buffer();
     auto* cos = tensor_args.cos.buffer();
@@ -209,8 +223,9 @@ void NlpCreateQkvHeadsRopeProgramFactory::override_runtime_arguments(
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
-        if (i < num_qk) {
-            bool is_q = i < sv.num_q_rows;
+        const uint32_t r = i / Sqt;  // head-row (same mapping as create())
+        if (r < nq + nkv) {
+            bool is_q = r < nq;
             {
                 auto& ra = GetRuntimeArgs(program, sv.qk_reader_kernel_id, core);
                 ra[0] = qkv->address();

@@ -39,9 +39,11 @@ void NlpCreateQkvHeadsRopeDeviceOperation::validate_on_program_cache_miss(
     uint32_t hd = args.head_dim;
     TT_FATAL(hd % (TILE_WIDTH * 2) == 0, "head_dim ({}) must be divisible by {}", hd, TILE_WIDTH * 2);
     TT_FATAL(
-        qkv.padded_shape()[-2] == TILE_HEIGHT,
-        "this op requires Ht == 1 (seq one tile row); got seq {}",
-        qkv.padded_shape()[-2]);
+        qkv.padded_shape()[-2] % TILE_HEIGHT == 0 && qkv.padded_shape()[-2] >= TILE_HEIGHT,
+        "seq ({}) must be a positive multiple of one tile ({}); the op tiles the seq dim across cores "
+        "(one core per head-row x seq-tile)",
+        qkv.padded_shape()[-2],
+        TILE_HEIGHT);
     uint32_t expected_w = (args.num_q_heads + 2 * args.num_kv_heads) * hd;
     TT_FATAL(
         qkv.padded_shape()[-1] == expected_w,
