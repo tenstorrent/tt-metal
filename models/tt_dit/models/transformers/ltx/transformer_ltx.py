@@ -993,6 +993,13 @@ class LTXTransformerModel(Module):
                 video_1BND, audio_1BND = result
             else:
                 video_1BND = result
+            # Profiler drain every 16 blocks (LTX_PROFILE_FLUSH): 16 blocks × ~35 ops stays under the
+            # 12k-marker DRAM buffer, so markers are never dropped, while a per-BLOCK drain (a host
+            # readback of all 32 devices each block) is far too slow. Profiling only; no effect traced.
+            if os.environ.get("LTX_PROFILE_FLUSH") and (
+                block_idx % 16 == 15 or block_idx == len(self.transformer_blocks) - 1
+            ):
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_inner_local = video_emb_ts.shape[-1]
         if self.image_conditioning:
