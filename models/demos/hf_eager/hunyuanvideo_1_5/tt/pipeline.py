@@ -179,11 +179,29 @@ class HunyuanVideo15Pipeline:
         # stub behaves exactly as it did single-device.
         self.is_mesh = isinstance(device, ttnn.MeshDevice) and device.get_num_devices() > 1
         self.tp = device.get_num_devices() if self.is_mesh else 1
+        # Sequence/context parallelism (HY_DIT_SP=1 on a 2D mesh): shard the latent
+        # sequence across sp_axis and run the joint attention with the ring kernel so
+        # each rank does 1/sp of the O(seq^2) attention (the 121f latency lever). The
+        # 16 heads are tensor-parallel on tp_axis. Requires a 2D mesh, e.g. HY_MESH=2,8
+        # -> sp=2 (axis0), tp=8 (axis1). Off => flat head-TP across all mesh devices.
+        self.sp, self.sp_axis, self.tp_axis = 1, 0, 1
+        if self.is_mesh and os.environ.get("HY_DIT_SP", "0") == "1":
+            shp = tuple(self.device.shape)
+            self.sp = int(shp[self.sp_axis])
+            self.tp = int(shp[self.tp_axis])  # head-TP is only along tp_axis now
         self.ccl_manager = (
             CCLManager(mesh_device=device, num_links=2, topology=ttnn.Topology.Linear) if self.is_mesh else None
         )
         if self.is_mesh:
             device.enable_program_cache()  # repeated denoise steps reuse the same op shapes
+        if self.sp > 1:
+            # Ring joint SDPA needs a loaded sub-device manager over the CCL cores
+            # (CCLManager sets ccl_sub_device_id but does not load the manager).
+            _g = device.compute_with_storage_grid_size()
+            _crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_g.x - 1, _g.y - 1))})
+            _mgr = device.create_sub_device_manager([ttnn.SubDevice([_crs])], 0)
+            device.load_sub_device_manager(_mgr)
+            device.set_sub_device_stall_group([ttnn.SubDeviceId(0)])
 
         def wrap(name, fwd):
             def _call(*a, **k):
@@ -204,7 +222,15 @@ class HunyuanVideo15Pipeline:
         self.s_byt5 = build("hunyuan_video15_by_t5_text_projection", m.context_embedder_2)
         self.s_image = build("hunyuan_video15_image_projection", m.image_embedder)
         self.s_blocks = [
-            build("hunyuan_video15_transformer_block", blk, ccl_manager=self.ccl_manager, tp=self.tp)
+            build(
+                "hunyuan_video15_transformer_block",
+                blk,
+                ccl_manager=self.ccl_manager,
+                tp=self.tp,
+                sp=self.sp,
+                tp_axis=self.tp_axis,
+                sp_axis=self.sp_axis,
+            )
             for blk in m.transformer_blocks
         ]
         self.s_norm_out = build("ada_layer_norm_continuous", m.norm_out)
@@ -236,6 +262,16 @@ class HunyuanVideo15Pipeline:
         self.proj_out_w, self.proj_out_b = _lin_w(device, m.proj_out)
         ce = m.cond_type_embed.weight.detach()
         self.cond = [_f32(device, ce[i].reshape(1, 1, self.inner)) for i in range(3)]
+
+        # Seq-parallel path: patchify a sequence-sharded latent manually (the s_patch
+        # stub expects the full replicated 5D latent). Unit patch => a plain linear.
+        # Replicated weight; cache the (seq-sharded) RoPE across steps (shape-only).
+        _pw = m.x_embedder.proj.weight.detach()
+        self.patch_w = _f32(device, _pw.reshape(_pw.shape[0], -1).t())
+        self.patch_b = (
+            _f32(device, m.x_embedder.proj.bias.detach().reshape(1, -1)) if m.x_embedder.proj.bias is not None else None
+        )
+        self._sp_rope_cache = None
 
         # transformer-block joint-attention weights (for mid block-from-parts)
         self.block_attn = [self._extract_joint_attn(blk.attn) for blk in m.transformer_blocks]
@@ -487,6 +523,60 @@ class HunyuanVideo15Pipeline:
         ehs2, mask_b = self._trim_to_valid(inputs["encoder_hidden_states_2"], mask_b)
 
         cos, sin = self.s_rope(hidden)  # rope stub (positional constant)
+
+        if self.sp > 1:
+            # Sequence-parallel: patchify a seq-sharded latent (BNC) + seq-shard RoPE.
+            import torch
+
+            from models.tt_dit.utils.padding import get_padded_vision_seq_len
+
+            N = F * H * W
+            padded_N = get_padded_vision_seq_len(N, self.sp)
+            ms = tuple(d.shape)
+            h_bnc = hidden.reshape(B, C, N).permute(0, 2, 1).contiguous()  # (B, N, C_in)
+            if padded_N > N:
+                h_bnc = torch.nn.functional.pad(h_bnc, (0, 0, 0, padded_N - N))
+            sdims = [None, None]
+            sdims[self.sp_axis] = 1  # shard the sequence (dim1) across sp_axis
+            hidden_sp = ttnn.from_torch(
+                h_bnc,
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=d,
+                mesh_mapper=ttnn.ShardTensor2dMesh(d, mesh_shape=ms, dims=sdims),
+            )
+            # RoPE depends only on shape -> compute once, reshard, cache across steps.
+            if self._sp_rope_cache is None or self._sp_rope_cache[0] != (F, H, W):
+                cos_t = ttnn.to_torch(ttnn.get_device_tensors(cos)[0]).float()  # (N, dim_head)
+                sin_t = ttnn.to_torch(ttnn.get_device_tensors(sin)[0]).float()
+                if padded_N > N:
+                    cos_t = torch.nn.functional.pad(cos_t, (0, 0, 0, padded_N - N))
+                    sin_t = torch.nn.functional.pad(sin_t, (0, 0, 0, padded_N - N))
+                rdims = [None, None]
+                rdims[self.sp_axis] = 0  # shard the sequence (dim0 of (N, dim_head))
+                mk = lambda t: ttnn.from_torch(
+                    t,
+                    dtype=ttnn.float32,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=d,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(d, mesh_shape=ms, dims=rdims),
+                )
+                self._sp_rope_cache = ((F, H, W), mk(cos_t), mk(sin_t))
+            _, cos_sp, sin_sp = self._sp_rope_cache
+            return dict(
+                hidden_sp=hidden_sp,
+                logical_n=N,
+                timestep=_f32(d, inputs["timestep"]),
+                ehs=_f32(d, ehs),
+                ehs2=_f32(d, ehs2),
+                image=_f32(d, inputs["image_embeds"]),
+                cos=cos_sp,
+                sin=sin_sp,
+                attn_bias=None,
+                task=task,
+                out_shape=(B, C, F, H, W),
+            )
+
         return dict(
             hidden=ttnn.from_torch(
                 hidden.contiguous().float(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=d
@@ -516,7 +606,14 @@ class HunyuanVideo15Pipeline:
         else:
             temb = self.s_time(timestep)
 
-        x = self.s_patch(ctx["hidden"])  # (B, N, inner)
+        if self.sp > 1:
+            # Seq-parallel: patchify the already-seq-sharded latent (unit patch == a
+            # linear); x stays sequence-sharded through the whole block stack.
+            x = _linear(ctx["hidden_sp"], self.patch_w, self.patch_b, cc)  # (B, padded_N/sp, inner)
+            logical_n = ctx["logical_n"]
+        else:
+            x = self.s_patch(ctx["hidden"])  # (B, N, inner)
+            logical_n = None
 
         enc_m = ttnn.add(self._context_embedder(ctx["ehs"], timestep, granularity), self.cond[0])
         enc_b = ttnn.add(self.s_byt5(ctx["ehs2"]), self.cond[1])
@@ -530,7 +627,7 @@ class HunyuanVideo15Pipeline:
             if granularity == "mid":
                 x, enc = self._transformer_block_from_parts(i, x, enc, temb, freqs, attn_bias)
             else:
-                x, enc = self.s_blocks[i](x, enc, temb, freqs_cis=freqs, attn_bias=attn_bias)
+                x, enc = self.s_blocks[i](x, enc, temb, freqs_cis=freqs, attn_bias=attn_bias, logical_n=logical_n)
 
         x = self.s_norm_out(x, temb)  # AdaLayerNormContinuous
         x = _linear(x, self.proj_out_w, self.proj_out_b, cc)  # proj_out (glue)
@@ -539,6 +636,21 @@ class HunyuanVideo15Pipeline:
     def _unpatchify(self, dev_out, out_shape):
         """(B, N, out_ch) -> (B, out_ch, F, H, W).  Pure layout (unit patch)."""
         B, _, F, H, W = out_shape
+        if self.sp > 1:
+            # dev_out is sequence-sharded on sp_axis + tp-replicated on tp_axis.
+            # Concat the seq shards along dim1 and the tp copies along dim0 (batch),
+            # take the first batch copy, then drop the sequence padding.
+            ttnn.synchronize_device(self.device)
+            ms = tuple(self.device.shape)
+            oc = [None, None]
+            oc[self.sp_axis] = 1
+            oc[self.tp_axis] = 0
+            t = ttnn.to_torch(
+                dev_out, mesh_composer=ttnn.ConcatMesh2dToTensor(self.device, mesh_shape=ms, dims=oc)
+            ).float()[:B]
+            t = t[:, : F * H * W]  # drop sequence padding
+            out = t.reshape(B, F, H, W, self.out_channels)
+            return out.permute(0, 4, 1, 2, 3).contiguous()
         if self.is_mesh:
             # dev_out is REPLICATED across the mesh (every device agrees after the
             # last block's all-reduce). Bare ttnn.to_torch on a mesh tensor isn't a
