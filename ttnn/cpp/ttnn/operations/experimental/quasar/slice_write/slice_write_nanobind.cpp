@@ -12,7 +12,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "slice_write.hpp"
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::operations::experimental::quasar::detail {
 namespace nb = nanobind;
 
 void bind_slice_write(nb::module_& mod) {
@@ -48,14 +48,14 @@ void bind_slice_write(nb::module_& mod) {
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    ttnn::bind_function<"slice_write", "ttnn.experimental.">(
+    ttnn::bind_function<"slice_write", "ttnn.experimental.quasar.">(
         mod,
         doc,
-        &ttnn::experimental::slice_write,
+        &ttnn::operations::experimental::quasar::slice_write,
         nb::arg("input_tensor"),
         nb::arg("output_tensor"),
         nb::arg("start"),
         nb::arg("end"),
         nb::arg("step"));
 }
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::operations::experimental::quasar::detail

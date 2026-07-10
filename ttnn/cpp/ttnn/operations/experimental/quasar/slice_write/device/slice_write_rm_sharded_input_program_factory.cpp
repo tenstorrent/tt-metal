@@ -15,10 +15,14 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 using namespace tt::tt_metal;
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
+
+using namespace tt::tt_metal::experimental;
 
 namespace {
 
@@ -203,154 +207,142 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 }
 }  // namespace
 
-SliceWriteRMShardedInputProgramFactory::cached_program_t SliceWriteRMShardedInputProgramFactory::create(
+namespace {
+const TensorParamName SW_IN{"slice_write_in"};
+const TensorParamName SW_OUT{"slice_write_out"};
+const DFBSpecName SW_IN_DFB{"slice_write_in_dfb"};
+const KernelSpecName SW_READER{"slice_write_reader"};
+const KernelSpecName SW_WRITER{"slice_write_writer"};
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts SliceWriteRMShardedInputProgramFactory::create_program_artifacts(
     const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
     const auto& output_tensor_end = operation_attributes.slice_end;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+    const auto input_shape = input.logical_shape();
 
-    auto input_shape = input.logical_shape();
-    auto output_shape = output.logical_shape();
-
-    TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
+    TT_FATAL(input.shard_spec().has_value(), "slice_write input must be sharded");
     TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
             input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
-        "Input tensor should be height or block sharded");
+        "slice_write input must be height or block sharded");
     auto shard_spec = input.shard_spec().value();
-    auto input_cores = shard_spec.grid;
-    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    CoreRangeSet input_cores = shard_spec.grid;
+    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    log_debug(tt::LogOp, "Input cores = {}", input_cores);
-    log_debug(tt::LogOp, "Input shard spec = {}", shard_spec);
+    const uint32_t num_input_sticks_per_core = shard_spec.shape[0];
+    const uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
+    const auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
+                                          ? ::hal::get_dram_alignment()
+                                          : ::hal::get_l1_alignment();
+    const uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
+    const uint32_t max_read_size = 4096;
+    const uint32_t num_dims = static_cast<uint32_t>(input_shape.rank());
 
-    auto num_input_sticks_per_core = shard_spec.shape[0];
-
-    uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
-
-    auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
-
-    uint32_t max_read_size = 4096;
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
-
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
-    std::vector<uint32_t> id_per_dim(num_dims);
-
-    std::vector<uint32_t> accumulated_total_per_dim(num_dims);
-    num_input_sticks_per_dim[0] = 1;
-    num_output_sticks_per_dim[0] = 0;
-    accumulated_total_per_dim[0] = 1;
-
-    for (int32_t i = 1; i < num_dims; i++) {
-        uint32_t num_unpadded_dim = input_shape[-(i + 1)];
-        uint32_t num_total_dim = output_shape[-(i + 1)];
-        uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-        num_input_sticks_per_dim[i] = num_unpadded_dim;
-        num_output_sticks_per_dim[i] = num_padded_dim;
-        accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
-    }
-
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     TT_FATAL(
-        input_cb_data_format == output_cb_data_format,
-        "Input & output should have the same data format, {} , {}",
-        input_cb_data_format,
-        output_cb_data_format);
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_sticks_per_core * input_row_size_bytes_offset, {{src0_cb_index, input_cb_data_format}})
-            .set_page_size(src0_cb_index, input_row_size_bytes_offset)
-            .set_globally_allocated_address(*input.buffer());
+        cb_data_format == tt::tt_metal::datatype_to_dataformat_converter(output.dtype()),
+        "slice_write input/output data formats must match");
 
-    auto input_cb_handle = tt::tt_metal::CreateCircularBuffer(program, input_cores, cb_src0_config);
+    std::vector<CoreCoord> iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
+    // ---- ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "slice_write_rm";
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = SW_IN, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = SW_OUT, .spec = output.tensor_spec()},
+    };
 
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        input_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    // INPUT DFB borrowed onto the resident sharded input shard (reader produces, writer drains to dst).
+    DataflowBufferSpec in_dfb{
+        .unique_id = SW_IN_DFB,
+        .entry_size = input_row_size_bytes_offset,
+        .num_entries = num_input_sticks_per_core,
+        .data_format_metadata = cb_data_format,
+    };
+    in_dfb.borrowed_from = SW_IN;
+    spec.dataflow_buffers.push_back(in_dfb);
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
-        "slice_write_writer_interleaved.cpp",
-        input_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec));
+    // Reader: mark the resident input shard available (no data fetch).
+    KernelSpec reader{
+        .unique_id = SW_READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/slice_write/device/kernels/dataflow/"
+            "slice_write_reader_sharded.cpp"};
+    reader.dfb_bindings = {ProducerOf(SW_IN_DFB, "in0")};
+    reader.runtime_arg_schema = {.runtime_arg_names = {"num_sticks"}};
+    reader.hw_config = DataMovementHardwareConfig{
+        .role = DataMovementRoleHint::READER,
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}};
 
-    const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
+    // Writer: drain the input DFB -> interleaved output at start_id + the padded-dim walk.
+    KernelSpec writer{
+        .unique_id = SW_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/slice_write/device/kernels/dataflow/"
+            "slice_write_writer_interleaved.cpp"};
+    writer.dfb_bindings = {ConsumerOf(SW_IN_DFB, "in0")};
+    writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = SW_OUT, .accessor_name = "dst"}};
+    writer.runtime_arg_schema = {
+        .runtime_arg_names = {
+            "dst_byte_offset",
+            "output_stick_size",
+            "input_stick_size",
+            "stick_size_offset",
+            "num_dims",
+            "start_id",
+            "num_sticks_per_core",
+            "num_sticks_per_core_read",
+            "num_read_per_barrier"}};
+    writer.advanced_options.num_runtime_varargs = 3 * num_dims;
+    writer.hw_config = DataMovementHardwareConfig{
+        .role = DataMovementRoleHint::WRITER,
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}};
 
-    auto all_runtime_args = get_slice_write_runtime_args_rm_sharded_input(
+    spec.kernels = {reader, writer};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {SW_READER, SW_WRITER}, .target_nodes = input_cores}};
+
+    // ---- Per-core runtime args ----
+    auto per_core = get_slice_write_runtime_args_rm_sharded_input(
         input, output, output_tensor_start, output_tensor_end, iter_cores, max_read_size);
+    const uint32_t out_addr = output.buffer()->address();
 
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = SW_READER};
+    KernelRunArgs writer_run{.kernel = SW_WRITER};
     uint32_t i = 0;
     for (const auto& core : iter_cores) {
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
+        const auto& r = per_core[i].first;   // {num_sticks_per_core}
+        const auto& w = per_core[i].second;  // writer args
+        reader_run.runtime_arg_values.push_back(
+            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_sticks", r[0]}}});
+        // w[0] is the (aligned) dst base addr + width_offset; recover the per-core byte offset from the base.
+        const uint32_t dst_byte_offset = w[0] - out_addr;
+        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+            .node = core,
+            .args = {
+                {"dst_byte_offset", dst_byte_offset},
+                {"output_stick_size", w[1]},
+                {"input_stick_size", w[2]},
+                {"stick_size_offset", w[3]},
+                {"num_dims", w[4]},
+                {"start_id", w[5]},
+                {"num_sticks_per_core", w[6]},
+                {"num_sticks_per_core_read", w[7]},
+                {"num_read_per_barrier", w[8]}}});
+        writer_run.advanced_options.runtime_varargs[core] = std::vector<uint32_t>(w.begin() + 9, w.end());
         i++;
     }
+    run_args.kernel_run_args.push_back(reader_run);
+    run_args.kernel_run_args.push_back(writer_run);
+    run_args.tensor_args.emplace(SW_IN, TensorArgument{input.mesh_tensor()});
+    run_args.tensor_args.emplace(SW_OUT, TensorArgument{output.mesh_tensor()});
 
-    return cached_program_t(
-        std::move(program),
-        shared_variables_t{
-            .iter_cores = iter_cores,
-            .unary_reader_kernel_id = unary_reader_kernel_id,
-            .unary_writer_kernel_id = unary_writer_kernel_id,
-            .output_tensor_start = output_tensor_start,
-            .output_tensor_end = output_tensor_end,
-            .max_read_size = max_read_size,
-            .input_cb_handle = input_cb_handle});
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-void SliceWriteRMShardedInputProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SliceWriteParams& /*operation_attributes*/,
-    const SliceWriteInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& src_tensor = tensor_args.input;
-    const auto& dst_tensor = tensor_return_value;
-
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, cached_program.shared_variables.input_cb_handle, *src_tensor.buffer());
-
-    auto all_runtime_args = get_slice_write_runtime_args_rm_sharded_input(
-        src_tensor,
-        dst_tensor,
-        cached_program.shared_variables.output_tensor_start,
-        cached_program.shared_variables.output_tensor_end,
-        cached_program.shared_variables.iter_cores,
-        cached_program.shared_variables.max_read_size);
-
-    uint32_t i = 0;
-    for (const auto& core : cached_program.shared_variables.iter_cores) {
-        tt::tt_metal::SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_reader_kernel_id,
-            core,
-            all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_writer_kernel_id,
-            core,
-            all_runtime_args[i].second);
-        i++;
-    }
-}
-
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr

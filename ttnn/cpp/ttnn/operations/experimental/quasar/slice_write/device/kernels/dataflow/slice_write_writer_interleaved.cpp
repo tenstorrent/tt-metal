@@ -2,83 +2,63 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Quasar (Metal-2) slice_write writer. Ported from the shared experimental/slice_write writer to the
+// Metal-2 bound/named model (the mirror of the quasar padded_slice reader):
+//   * input CB  -> bound DataflowBuffer `dfb::in0` (the resident sharded input; drained here).
+//   * dst       -> bound TensorAccessor `tensor::dst` (the interleaved output; per-core last-dim/width
+//                  byte offset applied via the dst-side offset_bytes on each write).
+//   * per-dim geometry (num_input_sticks/num_output_sticks/id_per_dim) -> positional runtime varargs.
+// Writes each input stick to the interleaved output at start_id + the padded-dim walk.
+
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
-#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t output_stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t input_stick_size = get_arg_val<uint32_t>(2);
-    const uint32_t stick_size_offset = get_arg_val<uint32_t>(3);
-    const uint32_t num_dims = get_arg_val<uint32_t>(4);
-    const uint32_t start_id = get_arg_val<uint32_t>(5);
-    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
-    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
+    const uint32_t dst_byte_offset = get_arg(args::dst_byte_offset);  // per-core dst offset (begins_last + width)
+    const uint32_t output_stick_size = get_arg(args::output_stick_size);
+    const uint32_t input_stick_size = get_arg(args::input_stick_size);
+    const uint32_t stick_size_offset = get_arg(args::stick_size_offset);
+    const uint32_t num_dims = get_arg(args::num_dims);
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    const uint32_t num_sticks_per_core_read = get_arg(args::num_sticks_per_core_read);
+    const uint32_t num_read_per_barrier = get_arg(args::num_read_per_barrier);
+    // Positional runtime varargs: [ num_input_sticks[0..num_dims) , num_output_sticks[0..num_dims) ,
+    //   id_per_dim[0..num_dims) ]. id_per_dim is mutated locally as the write walks the padded output.
+    constexpr uint32_t MAX_RANK = 8;
+    uint32_t num_unpadded_sticks[MAX_RANK];
+    uint32_t num_padded_sticks[MAX_RANK];
+    uint32_t id_per_dim[MAX_RANK];
+    for (uint32_t j = 0; j < num_dims; ++j) {
+        num_unpadded_sticks[j] = get_vararg(j);
+        num_padded_sticks[j] = get_vararg(num_dims + j);
+        id_per_dim[j] = get_vararg(2 * num_dims + j);
+    }
 
-#ifdef UNPAD_INPUT_WIDTH
-    const uint32_t padding_width_ntiles = get_arg_val<uint32_t>(21);
-#endif
-
-#ifdef DEBUG
-    DPRINT("dst_addr: {}\n", dst_addr);
-    DPRINT("output_stick_size: {}\n", output_stick_size);
-    DPRINT("input_stick_size: {}\n", input_stick_size);
-    DPRINT("stick_size_offset: {}\n", stick_size_offset);
-    DPRINT("num_dims: {}\n", num_dims);
-    DPRINT("start_id: {}\n", start_id);
-    DPRINT("num_sticks_per_core: {}\n", num_sticks_per_core);
-    DPRINT("num_sticks_per_core_read: {}\n", num_sticks_per_core_read);
-    DPRINT("num_read_per_barrier: {}\n", num_read_per_barrier);
-#ifdef UNPAD_INPUT_WIDTH
-    DPRINT("padding_width_ntiles: {}\n", padding_width_ntiles);
-#endif
-
-#endif
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
-    volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
-    volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t page_offset = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
-
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
+    const auto s0 = TensorAccessor(tensor::dst);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
 
     Noc noc;
-    experimental::CB cb_out0(cb_id_out0);
+    DataflowBuffer cb_in0(dfb::in0);
 
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
-        cb_out0.wait_front(num_read_per_barrier);
+        cb_in0.wait_front(num_read_per_barrier);
         uint32_t src_offset = 0;
-
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-#ifdef UNPAD_INPUT_WIDTH
-            if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
-                noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
-            }
-#else
             noc.async_write(
-                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
-#endif
-#ifdef DEBUG
-            DPRINT(
-                "SRC L1 : {} Dst Stick ID {} sticks_read: {} Coord {}, {}, {}, {}\n",
-                src_offset,
-                dst_stick_id,
-                sticks_read,
-                id_per_dim[0],
-                id_per_dim[1],
-                id_per_dim[2],
-                id_per_dim[3]);
-#endif
+                cb_in0,
+                s0,
+                noc_write_size,
+                {.offset_bytes = src_offset},
+                {.page_id = dst_stick_id, .offset_bytes = dst_byte_offset});
             src_offset += stick_size_offset;
             dst_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
@@ -92,6 +72,6 @@ void kernel_main() {
             }
         }
         noc.async_write_barrier();
-        cb_out0.pop_front(num_read_per_barrier);
+        cb_in0.pop_front(num_read_per_barrier);
     }
 }

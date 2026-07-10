@@ -9,7 +9,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
 
 SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -94,9 +94,9 @@ Tensor SliceWriteDeviceOperation::create_output_tensors(
     return tensor_args.output;
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr
 
-namespace ttnn::prim {
+namespace ttnn::prim::qsr {
 
 Tensor slice_write(
     const Tensor& input_tensor,
@@ -104,7 +104,7 @@ Tensor slice_write(
     const ttnn::Shape& slice_start,
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step) {
-    using OperationType = ttnn::experimental::prim::SliceWriteDeviceOperation;
+    using OperationType = ttnn::prim::qsr::SliceWriteDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .slice_start = slice_start,
@@ -116,4 +116,4 @@ Tensor slice_write(
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::prim::qsr

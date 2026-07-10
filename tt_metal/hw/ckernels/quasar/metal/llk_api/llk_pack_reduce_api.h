@@ -4,6 +4,7 @@
 
 #pragma once
 #include "llk_pack_common_api.h"
+#include "llk_operands.h"  // get_operand_tensor_shape (used non-dependently in llk_pack_reduce_mask_config)
 
 /*************************************************************************
  * LLK PACK REDUCE MASK CONFIGURATION

@@ -13,7 +13,7 @@
 #include "slice_write_tiled_sharded_input_program_factory.hpp"
 #include "slice_write_rm_interleaved_program_factory.hpp"
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
 
 struct SliceWriteDeviceOperation {
     using operation_attributes_t = SliceWriteParams;
@@ -35,9 +35,9 @@ struct SliceWriteDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr
 
-namespace ttnn::prim {
+namespace ttnn::prim::qsr {
 
 Tensor slice_write(
     const Tensor& input_tensor,
@@ -46,4 +46,4 @@ Tensor slice_write(
     const ttnn::Shape& slice_end,
     const ttnn::Shape& step);
 
-}  // namespace ttnn::prim
+}  // namespace ttnn::prim::qsr

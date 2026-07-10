@@ -6,7 +6,7 @@
 
 #include <ttnn/tensor/tensor.hpp>
 
-namespace ttnn::experimental {
+namespace ttnn::operations::experimental::quasar {
 
 ttnn::Tensor slice_write(
     const ttnn::Tensor& input_tensor,
@@ -15,4 +15,4 @@ ttnn::Tensor slice_write(
     const ttnn::SmallVector<uint32_t>& ends,
     const ttnn::SmallVector<uint32_t>& step);
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn::operations::experimental::quasar

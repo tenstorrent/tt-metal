@@ -26,6 +26,7 @@
 #include "ttnn/operations/experimental/quasar/reallocate/reallocate_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/to_device/to_device_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/padded_slice/padded_slice_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/slice_write/slice_write_nanobind.hpp"
 
 namespace ttnn::operations::experimental::quasar {
 
@@ -80,8 +81,9 @@ void bind_quasar(nb::module_& mod) {
     // to_device (thin host->device transfer wrapper).
     detail::bind_to_device(m_quasar);
 
-    // padded_slice (RM Metal-2 port; the DRAM-slicing helper used by conv2d on Quasar).
+    // padded_slice + slice_write (RM Metal-2 ports; the DRAM-slicing read/write-back used by conv2d on Quasar).
     detail::bind_padded_slice(m_quasar);
+    detail::bind_slice_write(m_quasar);
 
     // NOTE: halo and binary_ng have no python binding (internal device backends).
 }

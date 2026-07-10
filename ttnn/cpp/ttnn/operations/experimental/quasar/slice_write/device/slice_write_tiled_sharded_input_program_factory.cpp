@@ -22,7 +22,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 using namespace ttnn::operations::experimental::detail;
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
 
 namespace {
 constexpr uint32_t cb_input_index = 0;
@@ -362,4 +362,4 @@ void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr

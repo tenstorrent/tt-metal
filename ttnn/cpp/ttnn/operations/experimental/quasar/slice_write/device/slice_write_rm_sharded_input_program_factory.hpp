@@ -6,31 +6,16 @@
 
 #include "slice_write_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
 
-struct SliceWriteRMShardedInputSharedVariables {
-    std::vector<tt::tt_metal::CoreCoord> iter_cores;
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = 0;
-    ttnn::Shape output_tensor_start;
-    ttnn::Shape output_tensor_end;
-    uint32_t max_read_size = 0;
-    tt::tt_metal::CBHandle input_cb_handle = 0;
-};
-
+// Metal-2.0 (Quasar) row-major slice_write, sharded input -> interleaved output. Mirror of the quasar
+// padded_slice factory (borrowed INPUT DFB; reader marks the resident shard available; the writer drains
+// it and writes each stick to the interleaved output at start_id + the padded-dim walk).
 struct SliceWriteRMShardedInputProgramFactory {
-    using shared_variables_t = SliceWriteRMShardedInputSharedVariables;
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_program_t& cached_program,
-        const SliceWriteParams& operation_attributes,
-        const SliceWriteInputs& tensor_args,
-        Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr

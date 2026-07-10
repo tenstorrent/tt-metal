@@ -35,6 +35,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     to_device/to_device.hpp
     typecast/typecast.hpp
     padded_slice/padded_slice.hpp
+    slice_write/slice_write.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -77,6 +78,12 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     padded_slice/device/padded_slice_utils.cpp
     padded_slice/device/padded_slice_rm_program_factory.cpp
     padded_slice/device/padded_slice_tile_program_factory.cpp
+    # slice_write (RM sharded-input Metal-2 port; conv2d DRAM slice write-back on Quasar)
+    slice_write/slice_write.cpp
+    slice_write/device/slice_write_device_operation.cpp
+    slice_write/device/slice_write_rm_sharded_input_program_factory.cpp
+    slice_write/device/slice_write_rm_interleaved_program_factory.cpp
+    slice_write/device/slice_write_tiled_sharded_input_program_factory.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
     # transpose

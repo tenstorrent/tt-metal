@@ -7,7 +7,7 @@
 #include "slice_write_device_operation_types.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
 
 struct SliceWriteRMInterleavedSharedVariables {
     tt::tt_metal::KernelHandle unary_reader_kernel_id = 0;
@@ -30,4 +30,4 @@ struct SliceWriteRMInterleavedProgramFactory {
         Tensor& tensor_return_value);
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr

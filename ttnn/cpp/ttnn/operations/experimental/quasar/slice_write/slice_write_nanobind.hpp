@@ -6,10 +6,10 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::slice_write {
+namespace ttnn::operations::experimental::quasar::detail {
 
 namespace nb = nanobind;
 
 void bind_slice_write(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::slice_write
+}  // namespace ttnn::operations::experimental::quasar::detail

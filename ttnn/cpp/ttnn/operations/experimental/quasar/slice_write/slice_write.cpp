@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::experimental {
+namespace ttnn::operations::experimental::quasar {
 
 ttnn::Tensor slice_write(
     const ttnn::Tensor& input_tensor,
@@ -118,7 +118,7 @@ ttnn::Tensor slice_write(
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, Layout::ROW_MAJOR);
         }
-        (void)ttnn::prim::slice_write(
+        (void)ttnn::prim::qsr::slice_write(
             input, output_tensor, ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step));
         if (rm_only_not_sharded) {
             output_tensor = ttnn::to_layout(output_tensor, original_output_layout);
@@ -130,4 +130,4 @@ ttnn::Tensor slice_write(
     return output_tensor;
 }
 
-}  // namespace ttnn::experimental
+}  // namespace ttnn::operations::experimental::quasar

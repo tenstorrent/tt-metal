@@ -16,7 +16,7 @@
 
 using namespace tt::tt_metal;
 
-namespace ttnn::experimental::prim {
+namespace ttnn::prim::qsr {
 
 namespace {
 
@@ -362,4 +362,4 @@ void SliceWriteRMInterleavedProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::prim::qsr
