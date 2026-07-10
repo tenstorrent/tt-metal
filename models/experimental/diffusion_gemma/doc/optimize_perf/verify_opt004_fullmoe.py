@@ -74,8 +74,7 @@ def run(num_layers, canvas_length, max_seq_len, capacity, iters, skip_dense):
                 moe = layer.moe
                 break
 
-        def mk_hidden(scale=0.1):
-            host = torch.randn(1, 1, canvas_length, H, dtype=torch.float32) * scale
+        def to_device(host):
             return ttnn.from_torch(
                 host,
                 device=mesh,
@@ -84,19 +83,25 @@ def run(num_layers, canvas_length, max_seq_len, capacity, iters, skip_dense):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
             )
 
-        ri = mk_hidden()
+        ri = to_device(torch.randn(1, 1, canvas_length, H, dtype=torch.float32) * 0.1)
         dense_routing = DF._denoise_router_forward(moe.router, ri)
         ri.deallocate(True)
-        expert_input = mk_hidden()
+        expert_input_host = torch.randn(1, 1, canvas_length, H, dtype=torch.float32) * 0.1
+        expert_input = to_device(expert_input_host)
 
         # dense reference (moe.experts dense-128 path) — OPTIONAL: its first-call compile is very slow,
         # and the UNTUNED sparse path is already the verified-correct baseline (PCC 0.9997 vs dense,
         # verify_sparse_moe.py). So pcc_tuned_vs_untuned on all 5 configs is the real land gate.
         dense_host = None
         if not skip_dense:
-            dense_out = moe.experts(expert_input, dense_routing)
+            # A one-tile dense prefill aliases and deallocates its hidden-state input while reshaping it.
+            # Give it a separate device allocation so the sparse candidates always see live, identical data.
+            dense_input = to_device(expert_input_host)
+            dense_out = moe.experts(dense_input, dense_routing)
             dense_host = _to_host(dense_out)
             dense_out.deallocate(True)
+            if dense_input.is_allocated():
+                dense_input.deallocate(True)
 
         os.environ["DG_SPARSE_MOE_TUNED"] = "0"
         un_ms, un_host = _time_sparse(moe, expert_input, dense_routing, capacity, iters, mesh)
