@@ -246,6 +246,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::NeighborPadConv3d
         TTNN::Ops::Experimental::NeighborPadHalo
+        TTNN::Ops::Experimental::YUVConversion
         TTNN::Ops::Moreh
         TTNN::Ops::Transformer
 )

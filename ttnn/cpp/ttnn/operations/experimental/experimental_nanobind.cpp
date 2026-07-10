@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_nanobind.hpp"
+#include "ttnn/operations/experimental/yuv_conversion/yuv_conversion_nanobind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_nanobind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_conv3d/neighbor_pad_conv3d_nanobind.hpp"
@@ -98,6 +99,7 @@ namespace ttnn::operations::experimental {
 void py_module(nb::module_& mod) {
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
+    ttnn::experimental::detail::bind_yuv_conversion(mod);
 
     transformer::detail::bind_concatenate_heads(mod);
     transformer::detail::bind_split_qkv(mod);
