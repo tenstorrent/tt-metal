@@ -460,7 +460,7 @@ def test_sdpa_perf_check(sdpa_realtime_profiled_device, shape_id, q_chunk_size, 
         run_sdpa,
     )
 
-    core_count = 11 * 10
+    core_count = 11 * 10  # full Blackhole Tensix grid (11x10 = 110 cores); SDPA runs on the whole grid
     duration_ns = perf_record["duration_ns"]
     utilization = compute_sdpa_utilization(s, d, nh, duration_ns, core_count)
 

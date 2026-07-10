@@ -7,6 +7,13 @@ import time
 
 DEFAULT_RT_PROFILER_RECORD_TIMEOUT_SECONDS = 1.0
 
+# collect_all: records are delivered asynchronously from the RT profiler receiver thread, and
+# UnregisterProgramRealtimeProfilerCallback only waits for in-flight callbacks — not for records that
+# have not yet been delivered. For a multi-chip mesh run, breaking on the first record would capture
+# only a subset (possibly a single chip's), making the downstream max(duration_ns) non-deterministic.
+# Once the first record arrives, keep polling until no new record has landed for this settle window.
+RT_PROFILER_RECORD_SETTLE_SECONDS = 0.1
+
 
 def profile_realtime_program(
     device,
@@ -46,7 +53,18 @@ def profile_realtime_program(
         ttnn.synchronize_device(device)
 
         deadline = time.monotonic() + record_timeout_seconds
-        while not profile_records and time.monotonic() < deadline:
+        last_count = 0
+        last_change = time.monotonic()
+        while time.monotonic() < deadline:
+            count = len(profile_records)
+            if count and not collect_all:
+                break
+            if count != last_count:
+                last_count = count
+                last_change = time.monotonic()
+            elif count and (time.monotonic() - last_change) >= RT_PROFILER_RECORD_SETTLE_SECONDS:
+                # collect_all: records have stopped arriving for the settle window.
+                break
             time.sleep(0.01)
     finally:
         ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
