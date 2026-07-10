@@ -211,8 +211,8 @@ inline void _llk_math_face_compressed_mm_addrmod_config_() {
 
     addr_mod_t{
         .srca = {.incr = 0, .clr = 0, .cr = 0},
-        .srcb = {.incr = 16, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 1, .cr = 0},
+        .srcb = {.incr = 1, .clr = 0, .cr = 0},
+        .dest = {.incr = 16, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_1);  // incB
 
@@ -230,11 +230,11 @@ inline void _llk_math_face_compressed_mm_mop_config_() {
     auto instr_for_code = [](char code) {
         switch (code) {
             case 'n': TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_0, 0xff); break;
-            case 'N': TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_0, 0); break;
+            case 'N': TTI_MVMUL(p_setrwc::CLR_A, 1, ADDR_MOD_0, 0); break;
             case 'i': TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_1, 0xff); break;
-            case 'I': TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_1, 0); break;
+            case 'I': TTI_MVMUL(p_setrwc::CLR_A, 1, ADDR_MOD_1, 0); break;
             case 'c': TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD); break;
-            case 'C': TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 0); break;
+            case 'C': TTI_MVMUL(p_setrwc::CLR_AB, 1, ADDR_MOD_2, 0); break;
             default: LLK_ASSERT(false, "Invalid code for math instruction"); break;
         }
     };

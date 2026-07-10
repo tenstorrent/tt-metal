@@ -8,6 +8,12 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 import torch
+from helpers.compressed_assignment import (
+    DEEPSEEK_R1,
+    expand_tiles_to_faces,
+    generate_exact_face_assignment,
+    generate_exact_tile_assignment,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -784,4 +790,63 @@ def test_matmul_face_compressed_clustered_tile_matched(shape, formats):
 def test_matmul_face_compressed_interleaved_tile_matched(shape, formats, interleave_n):
     M, K, N = shape
     assignment = assign_tile_matched(assign_interleaved, K, N, formats, interleave_n=interleave_n)
+    run_compressed(M, K, N, assignment, tile_dim=TILE_DIM)
+
+
+# ---------------------------------------------------------------------------
+# Realistic DeepSeek-R1 assignments: a controlled tile-granular vs face-granular
+# comparison. Both are driven by the SAME per-format tile statistics (shares +
+# mean run lengths, see helpers/compressed_assignment.py) from the SAME seed, so
+# the underlying tile substrate is identical — the only thing that differs is the
+# granularity at which precision is assigned:
+#   * _deepseek_tile: a 32x32-tile exact-count assignment homogeneously expanded to
+#     faces (every face of a tile shares its format) — a tile-granular allocator.
+#   * _deepseek_face: the same tile substrate refined to 16x16 faces with isolated
+#     sub-tile precision flips, at density switch_mult x the tile-granular switch
+#     count (2.0 = isotropic-field estimate) — a face-granular allocator.
+# switch_mult=1.0 is a built-in anchor: it reproduces the _deepseek_tile assignment
+# exactly, so that row of _face must match _tile for the same shape.
+#
+# These shapes are all small (kt*ct in the tens), where the Markov sampler's
+# realized format mix swings wildly seed-to-seed and rarely matches DEEPSEEK_R1's
+# shares (a shape can come out bfp2-dominated even though bfp4 is the majority
+# format). The exact-count generators plant round(share_i * n) tiles of each
+# format on the nose (mean_run still drives the run layout), so the on-device mix
+# reflects the target proportions regardless of shape size or seed.
+#
+# DeepSeek precisions map onto the kernel's format codes (zero == bfp0), in the
+# same order as DEEPSEEK_R1's statistics.
+DEEPSEEK_CODES = [FMT_CODE["bfp4"], FMT_CODE["bfp2"], FMT_CODE["bfp0"]]
+assert DEEPSEEK_R1.names == ("bfp4", "bfp2", "zero"), "DEEPSEEK_CODES must track DEEPSEEK_R1 order"
+
+# Face reconfigs relative to the tile-granular baseline: 1.0 = homogeneous floor
+# (== the _tile row), 2.0 = isotropic estimate, 3.0 = vertical/zigzag bracket.
+FACE_SWITCH_MULTS = [1.0, 2.0, 3.0]
+
+DEEPSEEK_SHAPES = [
+    (1, 8 * 32, 2 * 32),
+    (1, 28 * 32, 32),
+    (1, 8 * 32, 7 * 32),
+    (1, 56 * 32, 32),
+]
+
+
+@parametrize(
+    shape=DEEPSEEK_SHAPES,
+    seed=[0],
+)
+def test_matmul_face_compressed_deepseek_tile(shape, seed):
+    M, K, N = shape
+    tiles = generate_exact_tile_assignment(K // 32, N // 32, DEEPSEEK_CODES, seed=seed)
+    assignment = expand_tiles_to_faces(tiles, K // 32, N // 32)
+    run_compressed(M, K, N, assignment, tile_dim=TILE_DIM)
+
+
+@parametrize(
+    shape=DEEPSEEK_SHAPES,
+    switch_mult=FACE_SWITCH_MULTS,
+)
+def test_matmul_face_compressed_deepseek_face(shape, switch_mult):
+    M, K, N = shape
+    assignment = generate_exact_face_assignment(K // 32, N // 32, DEEPSEEK_CODES, switch_mult=switch_mult, seed=0)
     run_compressed(M, K, N, assignment, tile_dim=TILE_DIM)

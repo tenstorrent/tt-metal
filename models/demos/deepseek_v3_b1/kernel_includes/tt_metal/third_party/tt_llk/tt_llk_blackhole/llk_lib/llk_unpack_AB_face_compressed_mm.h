@@ -18,7 +18,7 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
-static constexpr char _llk_unpack_AB_face_compressed_mm_code_sequence_[] = "SvbvBS0S1S0S111S00S1S000S11S0S11";
+static constexpr char _llk_unpack_AB_face_compressed_mm_code_sequence_[] = "SBS0S1S0S111S00S1S000S11S0S11";
 static_assert(
     sizeof(_llk_unpack_AB_face_compressed_mm_code_sequence_) - 1 <= 32,
     "Code sequence length must not be greater than 32");
@@ -116,9 +116,9 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_() {
             case '0': TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 0, 1, 1); break;  // Ch0Y += 1
             case '1': TTI_UNPACR_COMMON_EXPLICIT_CONTEXT_AND_COUNTER(SrcA, 0b00'00'01'00, 1, 2, 1); break;  // Ch0Y += 1
             case 'S': TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::CLR_SRC); break;
-            case 'v': TTI_UNPACR_COMMON(SrcB, 0b00'01'00'01, 0); break;  // Ch0Z += 1 Ch1Z += 1
-            case 'b': TTI_UNPACR_COMMON(SrcB, 0b00'01'01'00, 0); break;  // Ch0Y += 1 Ch1Z += 1
-            case 'B': TTI_UNPACR_COMMON(SrcB, 0b00'01'01'00, 1); break;  // Ch0Y += 1 Ch1Z += 1
+            case 'v': TTI_UNPACR_COMMON(SrcB, 0b00'00'00'01, 0); break;  // Ch0Z += 1 Ch1Z += 1
+            case 'b': TTI_UNPACR_COMMON(SrcB, 0b00'00'01'00, 0); break;  // Ch0Y += 1 Ch1Z += 1
+            case 'B': TTI_UNPACR_COMMON(SrcB, 0b00'00'10'10, 1); break;  // Ch0Y += 1 Ch1Z += 1
             default: LLK_ASSERT(false, "Invalid code for unpack instruction"); break;
         }
     };
@@ -134,18 +134,18 @@ inline void _llk_unpack_AB_face_compressed_mm_mop_config_() {
         emit(emit, std::integral_constant<std::size_t, 0>{});
     });
 
-    constexpr std::uint32_t SvbvB = _llk_unpack_AB_face_compressed_mm_find_("SvbvB");
+    constexpr std::uint32_t SB = _llk_unpack_AB_face_compressed_mm_find_("SB");
     constexpr std::uint32_t op0 = _llk_unpack_AB_face_compressed_mm_find_("0");
     constexpr std::uint32_t op1 = _llk_unpack_AB_face_compressed_mm_find_("1");
 
     ckernel_unpack_template tmp = ckernel_unpack_template(
         true,       // unpackB    = true
         false,      // unpackHalo = false
-        SvbvB,      // A
+        SB,         // A
         TT_OP_NOP,  // A1 (unused)
         TT_OP_NOP,  // A2 (unused)
         TT_OP_NOP,  // A3 (unused)
-        SvbvB,      // skipA
+        SB,         // skipA
         op0,        // B
         op1         // skipB
     );
@@ -175,7 +175,7 @@ inline void _llk_unpack_AB_face_compressed_mm_init_(const std::uint32_t unpB_fac
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, 0xFF0000>(1);
 
     constexpr std::uint32_t unpA_x_end = FACE_R_DIM * FACE_C_DIM - 1;
-    const std::uint32_t unpB_x_end = unpB_face_r_dim * FACE_C_DIM - 1;
+    const std::uint32_t unpB_x_end = 4 * unpB_face_r_dim * FACE_C_DIM - 1;
 
     _llk_unpack_AB_face_compressed_mm_mop_config_();
 

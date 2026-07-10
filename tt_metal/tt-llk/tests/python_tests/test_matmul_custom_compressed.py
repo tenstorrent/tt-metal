@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 import pytest
 import torch
+from helpers.compressed_assignment import DEEPSEEK_R1, generate_exact_tile_assignment
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -483,4 +484,41 @@ def test_matmul_custom_compressed_clustered(shape, formats):
 def test_matmul_custom_compressed_interleaved(shape, formats, interleave_n):
     M, K, N = shape
     assignment = assign_interleaved(K, N, formats, interleave_n, tile_dim=TILE_DIM)
+    run_compressed(M, K, N, assignment, tile_dim=TILE_DIM)
+
+
+# ---------------------------------------------------------------------------
+# Realistic DeepSeek-R1 tile assignment on the native 32x32-tile algorithm.
+# Uses the SAME exact-count generator and seed as test_matmul_face_compressed's
+# _deepseek_tile row (helpers/compressed_assignment.py), so the tile substrate is
+# identical: this runs it natively at 32x32, while the face test expands the same
+# tiles homogeneously onto the 16x16 face kernel. That makes tile-algorithm vs
+# face-algorithm a controlled comparison on identical compression (and the face
+# test's _deepseek_face adds the face-granular refinement on top).
+#
+# Exact-count (not Markov): these shapes are small (kt*ct in the tens), where the
+# Markov sampler's realized mix swings seed-to-seed and rarely matches DEEPSEEK_R1's
+# shares. generate_exact_tile_assignment plants round(share_i * n) tiles of each
+# format on the nose (mean_run still drives the run layout).
+#
+# DeepSeek precisions map onto the kernel's format codes (zero == bfp0), in the
+# same order as DEEPSEEK_R1's statistics.
+DEEPSEEK_CODES = [FMT_CODE["bfp4"], FMT_CODE["bfp2"], FMT_CODE["bfp0"]]
+assert DEEPSEEK_R1.names == ("bfp4", "bfp2", "zero"), "DEEPSEEK_CODES must track DEEPSEEK_R1 order"
+
+DEEPSEEK_SHAPES = [
+    (1, 8 * 32, 2 * 32),
+    (1, 28 * 32, 32),
+    (1, 8 * 32, 7 * 32),
+    (1, 56 * 32, 32),
+]
+
+
+@parametrize(
+    shape=DEEPSEEK_SHAPES,
+    seed=[0],
+)
+def test_matmul_custom_compressed_deepseek(shape, seed):
+    M, K, N = shape
+    assignment = generate_exact_tile_assignment(K // 32, N // 32, DEEPSEEK_CODES, seed=seed)
     run_compressed(M, K, N, assignment, tile_dim=TILE_DIM)
