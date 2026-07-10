@@ -26,8 +26,7 @@ std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_f
     tt::ChipId device_id,
     uint8_t num_hw_cqs,
     const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const tt::core_descriptor_t& core_desc =
-        tt::get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
+    const tt::core_descriptor_t& core_desc = env.get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
     if (!core_desc.relative_dispatch_cores.empty()) {
         const tt::tt_metal::CoreCoord grid_size =
             env.get_cluster().get_soc_desc(device_id).get_grid_size(tt::CoreType::TENSIX);
