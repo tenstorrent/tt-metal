@@ -8,10 +8,13 @@
 
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/arch.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>  // tt::ChipId
 #include <umd/device/types/core_coordinates.hpp>  // CoreType
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
+
+class MetalEnvImpl;
 
 enum DispatchWorkerType : uint32_t {
     PREFETCH = 0,
@@ -39,7 +42,7 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 
 // Resolve effective dispatch core type (Quasar dispatch-engine vs interim Tensix; WH/BH from config).
 CoreType resolve_dispatch_core_type(
-    tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
+    MetalEnvImpl& env, tt::ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
 
 // Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
 // Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.

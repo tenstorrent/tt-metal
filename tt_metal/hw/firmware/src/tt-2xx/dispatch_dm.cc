@@ -83,7 +83,7 @@ inline void wait_subordinates() {
 thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
-volatile KernelBarrier g_kernel_barrier __attribute__((used));
+volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
 
 extern "C" uint32_t _start1() {
     configure_csr();

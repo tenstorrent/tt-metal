@@ -114,9 +114,9 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     const tt::ARCH arch = cluster.arch();
     // Quasar 1-CQ topology has no DISPATCH_S node (prefetch + dispatch share one core).
     dispatch_s_enabled_ = (num_hw_cqs == 1 or resolved_dispatch_core_type == CoreType::WORKER) and
-                          resolved_dispatch_core_type != CoreType::DISPATCH and arch != tt::ARCH::QUASAR;
+                          resolved_dispatch_core_type != CoreType::DISPATCH;
     distributed_dispatcher_ = (num_hw_cqs == 1 and resolved_dispatch_core_type == CoreType::ETH);
-    go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
+    go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
     const CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     worker_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::WORKER, dispatch_core_type, num_hw_cqs);
     eth_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::ETH, dispatch_core_type, num_hw_cqs);
