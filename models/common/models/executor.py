@@ -140,7 +140,16 @@ def select_batched_prefill_padded_batch(model_args, batch_size, prefill_seq_lens
     group = min(batch_size, cap)
     padded_batch = next((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= group), group)
     if padded_batch > batch_size:
-        padded_batch = batch_size
+        # Never clamp to a non-power-of-2 count. The folded QKV matmul reshapes [1,1,padded_batch*seq,·]
+        # into MAX_QKV_MM_SEQ_LEN(2048)-length chunks (attention_1d.py); a fold longer than 2048 that is
+        # not a multiple of 2048 raises. Clamping padded_batch straight to batch_size produced exactly
+        # that for group sizes in (16,32) — e.g. a 30-user rotation folded to 3840 and crashed. Snap to
+        # the largest SUPPORTED (power-of-2) bucket <= batch_size instead: the fold is then always
+        # reshape-safe (power-of-2 * 128), and the sub-group loop prefills the trailing remainder as a
+        # partial (eager) sub-group — the same partial path the default cap=8 already exercises. So 32
+        # users fold in one pass while a 30-user group folds as 16 + 14. (TTTv1 instead pads UP to the
+        # bucket and fills padding slots; this keeps TTTv2's no-pad-waste design and stays safe.)
+        padded_batch = max((b for b in SUPPORTED_PREFILL_BATCH_SIZES if b <= batch_size), default=1)
     if padded_batch <= 1:
         return None
     if padded_batch * seq >= MAX_BATCHED_PREFILL_SEQ_LEN:
@@ -888,15 +897,25 @@ class EagerLLMExecutor:
                 }
             )
 
-        for res in prefill_results:
+        # One device barrier drains every pending ``logits.cpu(blocking=False)`` transfer dispatched
+        # above; ``_process_output_prefill`` then runs on the already-resident HOST tensors (no device
+        # work). One barrier suffices (an idle ``synchronize_device`` is cheap), so the old per-user
+        # barrier was redundant — kept hoisted as a cleanup. Batched extraction returns ONE shared host
+        # logits tensor for a whole group (each user is a distinct row); concat its shards once per
+        # unique tensor and slice each user's row instead of re-concatenating per user (32 host concats
+        # -> 1 on batch-32). Cache keyed by tensor identity, so the sequential path is unchanged.
+        if prefill_results:
             ttnn.synchronize_device(self.mesh_device)
+        _concat_cache: dict = {}
+        for res in prefill_results:
+            key = id(res["logits"])
+            full = _concat_cache.get(key)
+            if full is None:
+                assert res["logits"].storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
+                full = _concat_host_output(res["logits"], cluster_shape)
+                _concat_cache[key] = full
             last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
-            output_tensor[res["idx"]] = _process_output_prefill(
-                res["logits"],
-                last_relative % 32,
-                vocab_size,
-                cluster_shape,
-            )
+            output_tensor[res["idx"]] = full[0, 0, last_relative % 32, :vocab_size]
 
         return output_tensor
 
@@ -1737,15 +1756,28 @@ class TracedLLMExecutor:
                 }
             )
 
-        for res in prefill_results:
+        # One device barrier drains every pending ``logits.cpu(blocking=False)`` transfer dispatched
+        # above (batched extraction + sequential loop); ``_process_output_prefill`` then runs on the
+        # already-resident HOST tensors (it asserts HOST storage; no device work). One barrier suffices
+        # (an idle ``synchronize_device`` is cheap), so the old per-user barrier was redundant — kept
+        # hoisted purely as a cleanup. Batched extraction returns ONE shared host logits tensor for a
+        # whole group (each user is a distinct row); concat its shards once per unique tensor and slice
+        # each user's row instead of re-concatenating per user in ``_process_output_prefill`` (32 host
+        # concats -> 1 on batch-32). On batch-32 this host work was ~52ms (fold-invariant), the largest
+        # non-forward term in the TTTv2->TTTv1 batch-32 TTFT gap. Cache is keyed by tensor identity, so
+        # the sequential path (a unique tensor per user) is unchanged (one concat each).
+        if prefill_results:
             ttnn.synchronize_device(self.mesh_device)
+        _concat_cache: dict = {}
+        for res in prefill_results:
+            key = id(res["logits"])
+            full = _concat_cache.get(key)
+            if full is None:
+                assert res["logits"].storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
+                full = _concat_host_output(res["logits"], cluster_shape)
+                _concat_cache[key] = full
             last_relative = res["last_token_idx"] - (int(start_pos[res["idx"]]) if start_pos is not None else 0)
-            output_tensor[res["idx"]] = _process_output_prefill(
-                res["logits"],
-                last_relative % 32,
-                vocab_size,
-                cluster_shape,
-            )
+            output_tensor[res["idx"]] = full[0, 0, last_relative % 32, :vocab_size]
 
         return output_tensor
 

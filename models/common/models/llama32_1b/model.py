@@ -306,10 +306,17 @@ class Llama32_1BExecutorRuntimeConfig:
     # Batched prefill (parity caveat #12): fuse equal-length users into batched passes to close the
     # batch-32 TTFT gap. ``supports_batched_prefill`` is the per-model opt-in (the shared engine only
     # batches models whose prefill_forward threads ``batch_size``). ``max_prefill_batch_size`` caps the
-    # per-group batch (8 = partial batching, design rec); ``disable_batched_prefill`` is the escape
-    # hatch back to the sequential loop.
+    # per-group batch; ``disable_batched_prefill`` is the escape hatch back to the sequential loop.
+    #
+    # Set to 32 (== max_batch_size) so a 32-user batch folds in a SINGLE traced pass, matching TTTv1's
+    # full-batch fold. On T3K this ~halves the number of folded passes vs the old cap of 8 (4 passes ->
+    # 1) and, together with the shared-engine batch-32 prefill fixes (single-concat last-token assembly
+    # + power-of-2 fold clamp in executor.py), closes the T3K batch-32-ci prefill TTFT gap vs TTTv1
+    # (7.4ms -> 4.0ms per user, vs TTTv1 3.67ms; #49118). The clamp guarantees any partially-filled
+    # group still folds to a reshape-safe power-of-2, so raising the cap is safe (eval-32's mixed-bucket
+    # rotations verified). 1B weights are tiny, so the single-pass fold fits DRAM on every SKU.
     supports_batched_prefill: bool = True
-    max_prefill_batch_size: int = 8
+    max_prefill_batch_size: int = 32
     disable_batched_prefill: bool = False
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).

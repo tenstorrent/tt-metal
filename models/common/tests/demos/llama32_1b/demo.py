@@ -175,11 +175,16 @@ EXPECTED_METRICS_BATCH32 = {
 # region (TTTv1's traced generator overlaps read-back), NOT a model/kernel regression -- both pay
 # the same ttnn.topk. tok_s_u is stable to 0.1 across two on-device runs, so this is not noise.
 #
-# ttft_ms is a single per-path value chosen to cover BOTH the batched-prefill knob states: the
-# batched-ON prefill is ~7.5ms but the DISABLE_BATCHED_PREFILL=1 (sequential) path is ~16.4ms, so
-# the target sits above the sequential value (17ms) and both the ON and OFF legs pass. This is a
-# large TIGHTENING vs the old stale 22ms gate (batched prefill made prefill much faster on this
-# base), not a weakening; the +/-PERF_TOLERANCE band absorbs run-to-run variance.
+# ttft_ms tracks the shipped batched-ON prefill (the CI default; ttft is sampler-independent so host
+# and on_device_topk share one bound per SKU). The batch-32 prefill was rewritten to reach TTTv1
+# parity (#49118): the last-token assembly now concatenates each group's shared logits tensor ONCE
+# instead of once per user (32 host concats -> 1 on batch-32 -- the largest non-forward TTFT term),
+# the fold snaps to a reshape-safe power-of-2, and 1B folds all 32 users in a SINGLE traced pass
+# (max_prefill_batch_size=32) like TTTv1's full-batch fold. Same-box T3K batch-32-ci prefill went
+# 7.4ms -> 3.8ms (TTTv1 ci-32 = 3.67ms same-box, i.e. parity); N300 7.5 -> 5.8ms; N150 -> 6.5ms.
+# Gates tightened to match (was a stale 17ms sized for the pre-fix sequential path); the
+# +/-PERF_TOLERANCE band absorbs run-to-run variance. The DISABLE_BATCHED_PREFILL=1 A/B path
+# (sequential, ~16ms) is a diagnostic knob, not a CI leg, so it is intentionally not gated here.
 #
 # Per-SKU CI-workload targets. N150/T3K were freshly measured 2026-07-09 at the seq2048/decode1024
 # ci workload; previously they fell back to EXPECTED_METRICS_BATCH32 (short-context), whose HOST bound
@@ -191,13 +196,13 @@ EXPECTED_METRICS_BATCH32 = {
 # not a shipped path (on-device is the T3K sampler). N150 fresh: host 62.9/61.8, on-dev 11.8/11.7.
 EXPECTED_METRICS_BATCH32_CI = {
     "host": {
-        "N150": {"tok_s_u": 61.0, "ttft_ms": 17},
-        "N300": {"tok_s_u": 58.8, "ttft_ms": 17},
+        "N150": {"tok_s_u": 61.0, "ttft_ms": 9},
+        "N300": {"tok_s_u": 58.8, "ttft_ms": 8},
     },
     "on_device_topk": {
-        "N150": {"tok_s_u": 11.6, "ttft_ms": 17},
-        "N300": {"tok_s_u": 34.3, "ttft_ms": 17},
-        "T3K": {"tok_s_u": 140.0, "ttft_ms": 17},
+        "N150": {"tok_s_u": 11.6, "ttft_ms": 9},  # prefill 6.5ms (batched-ON, #49118)
+        "N300": {"tok_s_u": 34.3, "ttft_ms": 8},  # prefill 5.8ms (batched-ON, #49118)
+        "T3K": {"tok_s_u": 140.0, "ttft_ms": 5},  # prefill 3.8ms == TTTv1 ci-32 parity (#49118)
     },
 }
 
