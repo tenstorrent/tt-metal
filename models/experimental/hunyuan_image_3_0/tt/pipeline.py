@@ -33,9 +33,22 @@
 import os
 import time
 
+import torch
 import ttnn
 
+from .denoise_dual_cq import DenoiseDualCQCoordinator, denoise_2cq_enabled, latent_tt_to_torch
 from .scheduler import classifier_free_guidance_tt
+from .vae_dual_cq import VaeDualCQCoordinator, vae_2cq_enabled
+
+
+def _ttnn_embed_dtype(ref: ttnn.Tensor) -> ttnn.DataType:
+    """Return the ttnn dtype of a device embedding tensor (not torch.dtype)."""
+    if not isinstance(ref, ttnn.Tensor):
+        raise TypeError(
+            "expected a device ttnn.Tensor for embedding dtype; "
+            "upload host tensors via upload_denoise_cond_mesh / replicate_fn first"
+        )
+    return ref.dtype
 
 
 class HunyuanTtDenoiseStep:
@@ -82,8 +95,9 @@ class HunyuanTtDenoiseStep:
         ref = text_pre if text_pre is not None else text_post
         toks = ttnn.reshape(img_tokens, [B, self.n_img, H])
         toks = ttnn.to_layout(toks, ttnn.TILE_LAYOUT)
-        if toks.dtype != ref.dtype:
-            toks = ttnn.typecast(toks, ref.dtype)
+        ref_dtype = _ttnn_embed_dtype(ref)
+        if toks.dtype != ref_dtype:
+            toks = ttnn.typecast(toks, ref_dtype)
         pieces = [p for p in (text_pre, toks, text_post) if p is not None]
         seq = ttnn.concat(pieces, dim=1)
         ttnn.deallocate(toks)
@@ -95,8 +109,9 @@ class HunyuanTtDenoiseStep:
         H = self.backbone.hidden_size
         toks = ttnn.reshape(img_tokens, [B, self.n_img, H])
         toks = ttnn.to_layout(toks, ttnn.TILE_LAYOUT)
-        if toks.dtype != base_embeds.dtype:
-            toks = ttnn.typecast(toks, base_embeds.dtype)
+        base_dtype = _ttnn_embed_dtype(base_embeds)
+        if toks.dtype != base_dtype:
+            toks = ttnn.typecast(toks, base_dtype)
 
         pre_len = self.img_slice.start
         post_len = self.seq_len - self.img_slice.stop
@@ -169,6 +184,58 @@ class HunyuanTtDenoiseStep:
         ttnn.deallocate(img_out)
         return pred  # ttnn NHWC flat [1,1,B*h*w,latent_ch]
 
+    def forward_device(
+        self,
+        latent_flat,
+        *,
+        text_pre=None,
+        text_post=None,
+        base_embeds=None,
+        t_emb1,
+        t_emb2,
+        image_infos,
+        attention_mask,
+        batch: int = 1,
+        cos_sin=None,
+    ):
+        """On-device denoise forward from a pre-uploaded NHWC-flat latent (trace path)."""
+        self.backbone_batch = batch
+        if base_embeds is not None and (text_pre is not None or text_post is not None):
+            raise ValueError("pass base_embeds OR text_pre/text_post, not both")
+        if base_embeds is None and text_pre is None:
+            raise ValueError("text_pre or base_embeds is required")
+
+        B, H, W = batch, self.token_h, self.token_w
+        img_tok, th, tw = self.patch_embed.forward_latent(latent_flat, t_emb1, B, H, W)
+        assert (th, tw) == (self.token_h, self.token_w), f"grid mismatch: got {th}x{tw}"
+
+        if base_embeds is not None:
+            seq = self._scatter_from_base(img_tok, base_embeds)
+        else:
+            seq = self._scatter(img_tok, text_pre, text_post)
+        ttnn.deallocate(img_tok)
+
+        hidden = self.backbone.forward(
+            inputs_embeds=seq,
+            seq_len=self.seq_len,
+            image_infos=image_infos,
+            attention_mask=attention_mask,
+            cos_sin=cos_sin,
+        )
+        ttnn.deallocate(seq)
+
+        Hdim = self.backbone.hidden_size
+        img_out = ttnn.slice(
+            hidden,
+            [0, self.img_slice.start, 0],
+            [batch, self.img_slice.stop, Hdim],
+        )
+        ttnn.deallocate(hidden)
+        img_out = ttnn.reshape(img_out, [1, 1, self.n_img, Hdim])
+        pred, _, _ = self.final_layer(img_out, t_emb2, th, tw, B=batch)
+        ttnn.deallocate(img_out)
+        return pred
+
 
 def denoise_loop(
     step: HunyuanTtDenoiseStep,
@@ -186,6 +253,7 @@ def denoise_loop(
     cfg_distilled: bool = False,
     use_meanflow: bool = False,
     mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
+    dual_cq: DenoiseDualCQCoordinator | None = None,
 ):
     """Run the diffusion denoise loop, returning the final latent (torch NCHW).
 
@@ -217,8 +285,40 @@ def denoise_loop(
     """
     import torch
 
+    from models.experimental.hunyuan_image_3_0.tt.stage_trace import DenoiseStepTracer
+    from models.experimental.hunyuan_image_3_0.tt.trace_config import denoise_execute_trace_enabled
+
     B, C, h, w = init_latent.shape
     scheduler.set_begin_index(0)
+    num_steps = len(scheduler.timesteps) if scheduler.timesteps is not None else 0
+
+    if denoise_execute_trace_enabled(steps=num_steps) and mesh_device is not None:
+        print("[denoise] execute_trace loop on CQ0 (HY_TRACE=1)", flush=True)
+        tracer = DenoiseStepTracer(
+            step.device,
+            step,
+            time_embed=time_embed,
+            time_embed_2=time_embed_2,
+            scheduler=scheduler,
+            cond=cond,
+            uncond=uncond,
+            guidance_scale=guidance_scale,
+            mesh_device=mesh_device,
+            batch=B,
+            channels=C,
+            h=h,
+            w=w,
+        )
+        try:
+            latent = tracer.run(init_latent, scheduler.timesteps)
+        finally:
+            tracer.release()
+        return latent
+
+    if dual_cq is None and mesh_device is not None and denoise_2cq_enabled(mesh_device):
+        dual_cq = DenoiseDualCQCoordinator(mesh_device)
+        print("[denoise] 2CQ latent D2H on CQ1 (HY_TRACE=1)", flush=True)
+
     do_cfg = uncond is not None and guidance_scale != 1.0 and not cfg_distilled
     distill_guidance = 1000.0 * guidance_scale if cfg_distilled else None
     latent = init_latent  # torch NCHW (canonical host form; small tensor)
@@ -245,6 +345,9 @@ def denoise_loop(
             out = ttnn.to_torch(t_dev, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
             return out[:1]  # one replica (flat leading dim is 1)
         return ttnn.to_torch(t_dev)
+
+    def _down_latent_bchw(t_dev):
+        return latent_tt_to_torch(t_dev, mesh_device, batch=B, channels=C, h=h, w=w)
 
     def _prepare_base_embeds(c, t_scalar):
         host = c.get("base_embeds_host")
@@ -279,6 +382,8 @@ def denoise_loop(
 
     for step_i, t in enumerate(timesteps):
         step_t0 = time.time()
+        if dual_cq is not None and step_i > 0:
+            latent = dual_cq.consume_latent_torch(mesh_device, batch=B, channels=C, h=h, w=w)
         if verbose:
             cfg_note = " +CFG" if do_cfg else ""
             print(
@@ -324,19 +429,27 @@ def denoise_loop(
         # On-device Euler update: prev = sample + (sigma_next - sigma) * pred.
         sample = _up(latent.permute(0, 2, 3, 1).reshape(1, 1, B * h * w, C).contiguous(), pred.dtype)
         nxt = scheduler.step(pred, t, sample)
-        latent = _down(nxt).reshape(B, h, w, C).permute(0, 3, 1, 2).contiguous()
+        if dual_cq is not None:
+            dual_cq.launch_latent_d2h(nxt)
+        else:
+            latent = _down_latent_bchw(nxt)
+            ttnn.deallocate(nxt)
 
         ttnn.deallocate(pred)
         ttnn.deallocate(sample)
-        ttnn.deallocate(nxt)
         ttnn.deallocate(te1)
         ttnn.deallocate(te2)
         if verbose:
+            cq_note = " [2CQ D2H queued]" if dual_cq is not None else ""
             print(
                 f"[denoise] step {step_i + 1}/{total_steps} done "
-                f"({time.time() - step_t0:.1f}s, total {time.time() - loop_t0:.0f}s)",
+                f"({time.time() - step_t0:.1f}s, total {time.time() - loop_t0:.0f}s){cq_note}",
                 flush=True,
             )
+
+    if dual_cq is not None:
+        latent = dual_cq.consume_latent_torch(mesh_device, batch=B, channels=C, h=h, w=w)
+        print(f"[denoise] 2CQ completed {dual_cq.steps} latent D2H transfers on CQ1", flush=True)
 
     return latent  # torch [B, C, h, w] — feed to VAE decode
 
@@ -355,6 +468,12 @@ def upload_denoise_cond_mesh(
     mask = out.get("attention_mask")
     if mask is not None and not isinstance(mask, ttnn.Tensor):
         out["attention_mask"] = replicate_fn(mask)
+    base = out.get("base_embeds")
+    if base is None:
+        base = out.get("base_embeds_host")
+    if base is not None and not isinstance(base, ttnn.Tensor):
+        host = base.to(torch.bfloat16) if isinstance(base, torch.Tensor) else base
+        out["base_embeds"] = replicate_fn(host)
     return out
 
 
@@ -369,6 +488,7 @@ def decode_latent(
     ccl_manager=None,  # set (with h/w_mesh_axis) to run the decoder H/W-spatial-parallel
     h_mesh_axis=None,
     w_mesh_axis=None,
+    dual_cq: VaeDualCQCoordinator | None = None,
 ):
     """Decode a diffusion latent to an RGB image in [0, 1] via the TTNN VAE.
 
@@ -386,6 +506,10 @@ def decode_latent(
     from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
     from .vae.decoder import VAEDecoderTTNN, bcthw_to_bthwc, bthwc_to_bcthw
 
+    if dual_cq is None and vae_2cq_enabled(mesh_device):
+        dual_cq = VaeDualCQCoordinator(mesh_device)
+        print("[vae] 2CQ decode active (CQ0 forward, CQ1 async RGB D2H)", flush=True)
+
     if decoder is None:
         vae_kwargs = {}
         if grid_hw is not None:
@@ -394,13 +518,45 @@ def decode_latent(
 
     spatial = ccl_manager is not None and (h_mesh_axis is not None or w_mesh_axis is not None)
     if spatial:
-        return _decode_latent_spatial(
+        from models.experimental.hunyuan_image_3_0.tt.trace_config import vae_execute_trace_enabled
+
+        if vae_execute_trace_enabled():
+            return _decode_latent_spatial_traced(
+                mesh_device,
+                latent,
+                decoder,
+                ccl_manager,
+                h_mesh_axis,
+                w_mesh_axis,
+                scaling_factor=scaling_factor,
+                dtype=dtype,
+            )
+
+        img = _decode_latent_spatial(
             mesh_device,
             latent,
             decoder,
             ccl_manager,
             h_mesh_axis,
             w_mesh_axis,
+            scaling_factor=scaling_factor,
+            dtype=dtype,
+            dual_cq=dual_cq,
+        )
+        if dual_cq is not None:
+            print(
+                f"[vae] 2CQ completed d2h={dual_cq.d2h_transfers}",
+                flush=True,
+            )
+        return img
+
+    from models.experimental.hunyuan_image_3_0.tt.trace_config import vae_execute_trace_enabled
+
+    if vae_execute_trace_enabled():
+        return _decode_latent_replicated_traced(
+            mesh_device,
+            latent,
+            decoder,
             scaling_factor=scaling_factor,
             dtype=dtype,
         )
@@ -419,21 +575,125 @@ def decode_latent(
     x_bthwc = bcthw_to_bthwc(x_bcthw)
     ttnn.deallocate(x_bcthw, force=False)
 
+    if dual_cq is not None:
+        dual_cq.fence_compute_before_forward()
     out_bthwc = decoder(x_bthwc)
     ttnn.deallocate(x_bthwc, force=False)
 
     out_bcthw = bthwc_to_bcthw(out_bthwc)
-    img = ttnn.to_torch(
-        ttnn.from_device(out_bcthw),
-        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
-    )
-    ttnn.deallocate(out_bthwc, force=False)
+    if dual_cq is not None:
+        dual_cq.launch_output_d2h(out_bcthw)
+        out_host = dual_cq.consume_output_host()
+        img = ttnn.to_torch(
+            out_host,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        )
+        print(
+            f"[vae] 2CQ completed d2h={dual_cq.d2h_transfers}",
+            flush=True,
+        )
+    else:
+        img = ttnn.to_torch(
+            ttnn.from_device(out_bcthw),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        )
     img = img[: img.shape[0] // mesh_device.get_num_devices()].float()  # [B, 3, T, H, W]
 
     return vae_decode_output_to_rgb(img)  # last temporal frame -> [B, 3, H, W] in [0, 1]
 
 
-def _decode_latent_spatial(mesh_device, latent, decoder, ccl, h_mesh_axis, w_mesh_axis, *, scaling_factor, dtype):
+def _decode_latent_spatial_traced(
+    mesh_device,
+    latent,
+    decoder,
+    ccl,
+    h_mesh_axis,
+    w_mesh_axis,
+    *,
+    scaling_factor,
+    dtype,
+):
+    from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
+    from models.experimental.hunyuan_image_3_0.tt.stage_trace import VaeDecodeTracer
+    from .vae.spatial import enable_vae_spatial
+
+    print("[vae] execute_trace spatial decode on CQ0 (HY_VAE_DECODE_TRACE=1)", flush=True)
+    enable_vae_spatial(decoder, ccl, h_mesh_axis=h_mesh_axis, w_mesh_axis=w_mesh_axis)
+    mesh_shape = tuple(mesh_device.shape)
+    dims = [None, None]
+    if h_mesh_axis is not None:
+        dims[h_mesh_axis] = 2
+    if w_mesh_axis is not None:
+        dims[w_mesh_axis] = 3
+    dims = [d if d is not None else (3 if 2 in dims else 2) for d in dims]
+
+    tracer = VaeDecodeTracer(
+        mesh_device,
+        decoder,
+        ccl=ccl,
+        h_mesh_axis=h_mesh_axis,
+        w_mesh_axis=w_mesh_axis,
+        mesh_shape=mesh_shape,
+        dims=dims,
+        dtype=dtype,
+        spatial=True,
+    )
+    try:
+        out_bthwc = tracer.capture_and_run(latent, scaling_factor=scaling_factor)
+        img_bthwc = ttnn.to_torch(
+            ttnn.from_device(out_bthwc),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        ).float()
+        ttnn.deallocate(out_bthwc, force=False)
+    finally:
+        tracer.release()
+
+    img = img_bthwc.permute(0, 4, 1, 2, 3)
+    return vae_decode_output_to_rgb(img)
+
+
+def _decode_latent_replicated_traced(
+    mesh_device,
+    latent,
+    decoder,
+    *,
+    scaling_factor,
+    dtype,
+):
+    from models.experimental.hunyuan_image_3_0.ref.vae.decoder import vae_decode_output_to_rgb
+    from models.experimental.hunyuan_image_3_0.tt.stage_trace import VaeDecodeTracer
+    from .vae.decoder import bthwc_to_bcthw
+
+    print("[vae] execute_trace decode on CQ0 (HY_VAE_DECODE_TRACE=1)", flush=True)
+    tracer = VaeDecodeTracer(mesh_device, decoder, dtype=dtype, spatial=False)
+    try:
+        out_bthwc = tracer.capture_and_run(latent, scaling_factor=scaling_factor)
+        out_bcthw = bthwc_to_bcthw(out_bthwc)
+        img = ttnn.to_torch(
+            ttnn.from_device(out_bcthw),
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+        )
+        ttnn.deallocate(out_bthwc, force=False)
+        ttnn.deallocate(out_bcthw, force=False)
+    finally:
+        tracer.release()
+
+    img = img[: img.shape[0] // mesh_device.get_num_devices()].float()
+    return vae_decode_output_to_rgb(img)
+
+
+def _decode_latent_spatial(
+    mesh_device,
+    latent,
+    decoder,
+    ccl,
+    h_mesh_axis,
+    w_mesh_axis,
+    *,
+    scaling_factor,
+    dtype,
+    dual_cq: VaeDualCQCoordinator | None = None,
+):
     """H/W-spatial-parallel decode: shard the latent across the mesh (H->axis0,
     W->axis1), run the spatially-sharded decoder (convs keep a halo, norms/attn
     gather), then ConcatMesh2dToTensor the output back to full resolution."""
@@ -463,14 +723,24 @@ def _decode_latent_spatial(mesh_device, latent, decoder, ccl, h_mesh_axis, w_mes
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
     )
 
+    if dual_cq is not None:
+        dual_cq.fence_compute_before_forward()
     out_bthwc = decoder(x_bthwc)  # sharded [B,T,H_out/h,W_out/w,3]
     ttnn.deallocate(x_bthwc, force=False)
 
-    img_bthwc = ttnn.to_torch(
-        ttnn.from_device(out_bthwc),
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=dims),
-    ).float()  # [B,T,H_out,W_out,3]
-    ttnn.deallocate(out_bthwc, force=False)
+    if dual_cq is not None:
+        dual_cq.launch_output_d2h(out_bthwc)
+        img_host = dual_cq.consume_output_host()
+        img_bthwc = ttnn.to_torch(
+            img_host,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        ).float()
+    else:
+        img_bthwc = ttnn.to_torch(
+            ttnn.from_device(out_bthwc),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=dims),
+        ).float()  # [B,T,H_out,W_out,3]
+        ttnn.deallocate(out_bthwc, force=False)
 
     img = img_bthwc.permute(0, 4, 1, 2, 3)  # [B,3,T,H_out,W_out]
     return vae_decode_output_to_rgb(img)  # [B,3,H_out,W_out] in [0,1]
