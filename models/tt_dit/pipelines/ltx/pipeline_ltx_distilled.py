@@ -724,6 +724,11 @@ class LTXDistilledPipeline(LTXPipeline):
             ttnn.add_(state.tt_audio_lat, a_vel)
             ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
+            # Under LTX_PROFILE_FLUSH, drain the device profiler each step so an untraced render
+            # (~18k ops) doesn't overflow the 12k-marker DRAM buffer, which drops markers and
+            # breaks the ops report. Profiling only; no effect on the normal traced path.
+            if os.environ.get("LTX_PROFILE_FLUSH"):
+                ttnn.ReadDeviceProfiler(self.mesh_device)
 
         v_final = LTXTransformerModel.device_to_host(
             state.tt_video_lat,

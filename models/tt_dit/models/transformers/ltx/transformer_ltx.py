@@ -956,8 +956,14 @@ class LTXTransformerModel(Module):
 
         skip_self_attn_set = frozenset(skip_self_attn_blocks) if skip_self_attn_blocks else frozenset()
 
+        # LTX_SKIP_BLOCKS="a,b,..": identity-skip whole blocks (layer-prune experiment; residual passes
+        # through unchanged). Baked into the trace, so it must be constant across capture+replay.
+        _prune = {int(x) for x in os.environ.get("LTX_SKIP_BLOCKS", "").split(",") if x.strip().isdigit()}
+
         # Transformer blocks
         for block_idx, block in enumerate(self.transformer_blocks):
+            if block_idx in _prune:
+                continue
             result = block(
                 video_1BND=video_1BND,
                 video_prompt=video_prompt_1BLP,
