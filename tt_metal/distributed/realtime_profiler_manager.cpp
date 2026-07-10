@@ -858,7 +858,11 @@ void RealtimeProfilerManager::boot_x280_drainer(
             constexpr uint64_t kX280MboxParams = 0x08011000ull;
             constexpr uint64_t kX280MboxResults = 0x08011040ull;
             constexpr uint64_t kX280MboxCoords = 0x08011200ull;
-            constexpr uint32_t kX280Fifo = 4096;
+            // D2H FIFO depth (host pinned). At 4 KB (=64 x 64B markers) the X280 filled it in ~0.3ms
+            // and then spun on reserve-stalls waiting for the host to free space, throttling its ring
+            // drain and back-pressuring the compute cores. Size it to buffer the X280<->host round-trip
+            // (1 MB = 16384 markers) so the X280 pipelines ahead instead of stalling.
+            constexpr uint32_t kX280Fifo = 1u << 20;  // 1 MiB
             constexpr uint32_t kX280PageSize = 64;
 
             std::ifstream f(x280_fw, std::ios::binary);
