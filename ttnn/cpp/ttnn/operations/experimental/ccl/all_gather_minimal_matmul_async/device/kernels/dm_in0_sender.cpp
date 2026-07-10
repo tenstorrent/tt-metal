@@ -7,6 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "matmul_dataflow_common.hpp"
 
@@ -455,13 +456,16 @@ void kernel_main() {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
-                    uint64_t in0_unicast_data_addr = get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
-
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    noc_obj.async_write(
+                        CoreLocalMem<uint32_t>(in0_start_address),
+                        UnicastEndpoint{},
+                        current_block_bytes,
+                        {},
+                        {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = in0_start_address});
 
 #ifdef ARCH_BLACKHOLE
                     noc_obj.async_writes_flushed();

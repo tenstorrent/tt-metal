@@ -114,11 +114,15 @@ void kernel_main() {
                 const uint32_t x = input_core_xy[curr_core][x_index];
                 const uint32_t y = input_core_xy[curr_core][y_index];
                 const uint32_t offset_address = bank_base_address + (read_offset * page_size_bytes);
-                const uint64_t shard_noc_addr = get_noc_addr(x, y, offset_address);
                 const uint32_t transfer_size = read_size * page_size_bytes;
 
                 cb_fabric_sender.reserve_back(num_pages_reserve_push);
-                noc_async_read(shard_noc_addr, sender_read_addr, transfer_size);
+                noc_obj.async_read(
+                    UnicastEndpoint{},
+                    CoreLocalMem<uint32_t>(sender_read_addr),
+                    transfer_size,
+                    {.noc_x = x, .noc_y = y, .addr = offset_address},
+                    {});
 
                 if (num_pages_reserve_push >= curr_packet_num_pages) {
                     noc_obj.async_read_barrier();
@@ -149,10 +153,14 @@ void kernel_main() {
             const uint32_t core_y = input_core_xy[linear_input_core_idcs][y_index];
             const uint32_t tile_offset = linear_input_tile_offsets * page_size_bytes;
 
-            const uint64_t output_noc_address = get_noc_addr(core_x, core_y, base_input_tensor_addr + tile_offset);
             const uint32_t receiver_l1_address = base_receiver_l1_addresses + i * page_size_bytes;
 
-            noc_async_read(output_noc_address, receiver_l1_address, page_size_bytes);
+            noc_obj.async_read(
+                UnicastEndpoint{},
+                CoreLocalMem<uint32_t>(receiver_l1_address),
+                page_size_bytes,
+                {.noc_x = core_x, .noc_y = core_y, .addr = base_input_tensor_addr + tile_offset},
+                {});
         }
 
         noc_semaphore_wait((uint32_t*)receiver_semaphore_address, other_devices);
