@@ -209,10 +209,16 @@ jobs:
           }
 
           def model_matches(test_model, filter_str):
-              """Substring match: 'llama' matches 'llama3.1-8b', 'llama3.2-70b', etc."""
+              """Substring match, comma-separated OR-list.
+
+              'llama' matches 'llama3.1-8b', 'llama3.2-70b', etc.
+              'llama3.1-8b,qwen3-32b' matches a model containing either token.
+              """
               if filter_str == "all":
                   return True
-              return filter_str.lower() in test_model.lower()
+              tm = test_model.lower()
+              return any(tok.strip() and tok.strip().lower() in tm
+                         for tok in filter_str.split(","))
 
           github_output = os.environ.get("GITHUB_OUTPUT", "")
           results = {}
