@@ -34,6 +34,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     reduction/generic/generic_reductions.hpp
     to_device/to_device.hpp
     typecast/typecast.hpp
+    padded_slice/padded_slice.hpp
 )
 
 set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
@@ -70,6 +71,12 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     slice/device/slice_program_factory_rm.cpp
     slice/device/slice_program_factory_rm_sharded.cpp
     slice/device/slice_program_factory_rm_stride.cpp
+    # padded_slice (RM Metal-2 port; used by conv2d DRAM slicing on Quasar)
+    padded_slice/padded_slice.cpp
+    padded_slice/device/padded_slice_device_operation.cpp
+    padded_slice/device/padded_slice_utils.cpp
+    padded_slice/device/padded_slice_rm_program_factory.cpp
+    padded_slice/device/padded_slice_tile_program_factory.cpp
     slice/device/slice_program_factory_tile.cpp
     slice/device/slice_program_factory_tile_tensor_args.cpp
     # transpose

@@ -495,8 +495,13 @@ void kernel_main() {
                 // must invalidate any address another agent wrote before reading it (invalidate_l1_cache() is
                 // a no-op on Quasar DM). Invalidate the scratch row's L2+L1D lines so the load re-fetches the
                 // freshly packed data from TL1. The prior NoC-read path avoided this because the NoC engine
-                // reads TL1 directly (non-snooping), never through the DM cache.
+                // reads TL1 directly (non-snooping), never through the DM cache. Arch-split: Quasar (tt-2xx)
+                // has invalidate_l2_cache_range; WH/BH have no L2, so invalidate_l1_cache() (equivalent effect).
+#ifdef ARCH_QUASAR
                 invalidate_l2_cache_range(scratch_row0_addr, out_row_bytes);
+#else
+                invalidate_l1_cache();
+#endif
                 const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() + global_stick * out_row_bytes;
                 volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_row0_addr);
                 volatile tt_l1_ptr uint32_t* dst_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_dst_addr);

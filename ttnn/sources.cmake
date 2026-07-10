@@ -198,6 +198,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/quasar/reshard/reshard_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/pool_generic/generic_pools_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/padded_slice/padded_slice_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/matmul/matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/binary/binary_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/fold/fold_nanobind.cpp
