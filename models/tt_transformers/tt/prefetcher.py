@@ -50,6 +50,45 @@ TILE_BYTES = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
 BYTES_PER_TILE_BFP8 = TILE_BYTES[ttnn.bfloat8_b]
 
 
+def full_grid_core_range_set(mesh_device: ttnn.MeshDevice) -> ttnn.CoreRangeSet:
+    """The full compute-with-storage grid as a single-range CoreRangeSet.
+
+    Shared by both prefetcher backends (worker sub-device setup, DRAM-core worker sub-device).
+    """
+    grid = mesh_device.compute_with_storage_grid_size()
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+
+
+def prefetcher_linear(prefetcher, input_tensor_a, weight, *, mode, program_config, **linear_kwargs):
+    """Dispatch a decode/prefill matmul through whichever prefetcher backend is active.
+
+    Collapses the per-call-site ``prefetch_and_linear`` (DRAM-core tensor backend) vs
+    ``ttnn.linear`` (worker / no-prefetcher) fork. In decode the tensor backend streams the
+    weight through its GCB while the worker backend passes its GCB + sub-device; every other
+    case is a plain matmul. ``linear_kwargs`` (``memory_config``, ``compute_kernel_config``,
+    ``dtype``, ``core_grid``, ...) are forwarded unchanged, so each call site passes only the
+    kwargs it actually uses.
+    """
+    if mode == Mode.DECODE and uses_tensor_prefetcher(prefetcher):
+        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            input_tensor_a,
+            weight,
+            global_cb=prefetcher.global_cb,
+            program_config=program_config,
+            cq_id=0,
+            **linear_kwargs,
+        )
+    use_gcb = prefetcher is not None and mode == Mode.DECODE
+    return ttnn.linear(
+        input_tensor_a,
+        weight,
+        program_config=program_config,
+        global_cb=prefetcher.global_cb if use_gcb else None,
+        sub_device_id=prefetcher.worker_sub_device_id if use_gcb else None,
+        **linear_kwargs,
+    )
+
+
 def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     """
     Generate custom sender->receiver mapping for Blackhole prefetcher.
@@ -332,6 +371,9 @@ class Prefetcher(LightweightModule):
         # heads, lm_head, rope — on its reserved worker grid so the activation stays sharded there.
         # The DRAM-core backend sets this False (those ops use the model's default placement).
         self.colocate_ops: bool = True
+        # The worker backend never streams weights (batched delivery only); the DRAM-core backend
+        # overrides this. Defined here so model_config can read prefetcher.stream_in1 uniformly.
+        self.stream_in1: bool = False
         self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
         self.worker_sub_device_id: Optional[ttnn.SubDeviceId] = None
         self.num_tensors: int = num_tensors
@@ -376,10 +418,7 @@ class Prefetcher(LightweightModule):
 
         ### Worker core ranges for the worker sub device
         if self.receiver_mapping_override:
-            grid = self.mesh_device.compute_with_storage_grid_size()
-            full_grid = ttnn.CoreRangeSet(
-                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-            )
+            full_grid = full_grid_core_range_set(self.mesh_device)
             sender_cores = [
                 ttnn.CoreRange(ttnn.CoreCoord(s.x, s.y), ttnn.CoreCoord(s.x, s.y))
                 for s in self.core_config.sender_cores(active=True)
@@ -459,10 +498,7 @@ class Prefetcher(LightweightModule):
                 # the full compute grid. (Was self.all_core_range_set, an attribute that is never
                 # assigned: a pre-existing typo/omission on main; all_worker_cores_range_set would
                 # exclude the sender columns and trip num_intersections != num_cores.)
-                grid = self.mesh_device.compute_with_storage_grid_size()
-                full_grid = ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-                )
+                full_grid = full_grid_core_range_set(self.mesh_device)
                 self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
                 self.prefetcher_sub_device.add_sub_device(full_grid)
                 self.prefetcher_sub_device.init_sub_device_manager()
