@@ -245,8 +245,11 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
     out_dfb.borrowed_from = PS_OUT;
     spec.dataflow_buffers.push_back(out_dfb);
 
-    // Non-aligned TRID staging: node-local scratchpad (reader fills+drains -> not a DFB / self-loop).
-    if (is_non_aligned) {
+    // TRID staging scratchpad (used only by the non-aligned path; reader fills+drains -> not a DFB / self-loop).
+    // Declared UNCONDITIONALLY: the kernel references `scratch::pad` inside `if constexpr(is_non_aligned)`, and a
+    // non-template if-constexpr still name-checks its discarded branch, so the binding must always exist even when
+    // aligned. Unused (tiny) on the aligned path.
+    {
         const uint32_t scratch_page =
             tt::align((a.logical_shape()[-1] * a.element_size()) + src_buffer_alignment, src_buffer_alignment);
         spec.scratchpads.push_back(ScratchpadSpec{.unique_id = PS_SCRATCH, .size_per_node = scratch_page * kNumTrids});
@@ -260,9 +263,9 @@ ttnn::device_operation::ProgramArtifacts PaddedSliceRMProgramFactory::create_pro
             "padded_slice_reader_rm_interleaved_start_id.cpp"};
     reader.tensor_bindings = {TensorBinding{.tensor_parameter_name = PS_SRC, .accessor_name = "src"}};
     reader.dfb_bindings = {ProducerOf(PS_OUT_DFB, "in0")};
-    if (is_non_aligned) {
-        reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"}};
-    }
+    // Always bound (see the ScratchpadSpec note above): the kernel's `scratch::pad` reference must resolve
+    // even when is_non_aligned is false (non-template if-constexpr still name-checks the discarded branch).
+    reader.scratchpad_bindings = {ScratchpadBinding{.scratchpad_spec_name = PS_SCRATCH, .accessor_name = "pad"}};
     reader.compile_time_args = {
         {"is_non_aligned", is_non_aligned ? 1u : 0u},
         {"src_buffer_alignment", static_cast<uint32_t>(src_buffer_alignment)},

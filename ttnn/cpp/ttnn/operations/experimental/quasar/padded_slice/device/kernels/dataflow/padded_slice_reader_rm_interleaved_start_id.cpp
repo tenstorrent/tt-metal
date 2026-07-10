@@ -69,9 +69,10 @@ void kernel_main() {
         enum SlotState : uint8_t { IDLE = 0, SRC_PENDING = 1, SCRATCH_READY = 2, SCRATCH_PENDING = 3 };
         constexpr uint32_t trid_base = 1;
 
-        Scratchpad<uint32_t> scratch(scratch::pad);
-        const uint32_t scratch_page_size = scratch.size_in_bytes() / num_trids;
-        const uint32_t scratch_l1_base = scratch.get_base_address();
+        Scratchpad<uint32_t> scratch_buf(
+            scratch::pad);  // NB: local must not be named `scratch` (shadows the scratch:: ns)
+        const uint32_t scratch_page_size = scratch_buf.size_in_bytes() / num_trids;
+        const uint32_t scratch_l1_base = scratch_buf.get_base_address();
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
         UnicastEndpoint self_ep;
