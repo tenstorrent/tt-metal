@@ -63,9 +63,9 @@ void RunTest(
     // use_remapper: true -> all (remapper enabled), false -> strided (bypass mode)
     const auto cap = use_remapper ? experimental::DFBAccessPattern::ALL : experimental::DFBAccessPattern::STRIDED;
 
-    constexpr const char* TILE_COUNTER_DFB = "tile_counter_dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
+    const experimental::DFBSpecName TILE_COUNTER_DFB{"tile_counter_dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
 
     experimental::DataflowBufferSpec dfb_spec{
         .unique_id = TILE_COUNTER_DFB,
@@ -86,8 +86,7 @@ void RunTest(
         .hw_config =
             experimental::DataMovementHardwareConfig{
                 .gen2_config =
-                    experimental::DataMovementHardwareConfig::Gen2Config{
-                        .disable_implicit_sync_for = {TILE_COUNTER_DFB}}},
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // NEO compute consumer kernel (4 threads = 4 Neo clusters)
@@ -185,11 +184,7 @@ void RunTest(
 }
 
 // Test bypass mode (strided consumer access pattern)
-TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
-    const auto& hal = MetalContext::instance().hal();
-    if (!hal.has_tile_counter_registers()) {
-        GTEST_SKIP() << "Tile counters are only used on Quasar";
-    }
+TEST_F(MeshWatcherTileCounterFixture, TestWatcherTileCounterLogBypass) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -200,11 +195,7 @@ TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
 }
 
 // Test remapper mode (blocked consumer access pattern)
-TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogRemapper) {
-    const auto& hal = MetalContext::instance().hal();
-    if (!hal.has_tile_counter_registers()) {
-        GTEST_SKIP() << "Tile counters are only used on Quasar";
-    }
+TEST_F(MeshWatcherTileCounterFixture, TestWatcherTileCounterLogRemapper) {
     for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {

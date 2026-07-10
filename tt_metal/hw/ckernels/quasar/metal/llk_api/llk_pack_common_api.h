@@ -6,6 +6,8 @@
 #include "ckernel.h"
 #include "llk_outputs.h"
 #include "llk_pack_common.h"
+#include "llk_sync.h"
+#include "llk_defs.h"
 #include "api/dataflow/dataflow_buffer.h"
 
 /*************************************************************************
@@ -54,6 +56,30 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
 }
 
+inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
+    const std::uint32_t old_output_id = get_output_id(old_output);
+    const std::uint32_t new_output_id = get_output_id(new_output);
+    return (pack_src_format[old_output_id] != pack_src_format[new_output_id]) ||
+           (pack_dst_format[old_output_id] != pack_dst_format[new_output_id]);
+}
+
+/**
+ * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ */
+template <[[maybe_unused]] bool EN_32BIT_DEST>
+inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
+    const std::uint32_t output_id = get_output_id(new_output);
+    _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);
+}
+
+template <bool EN_32BIT_DEST>
+inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
+    if (!should_reconfig_pack_in_data_format(old_output, new_output)) {
+        return;
+    }
+    llk_pack_reconfig_data_format<EN_32BIT_DEST>(new_output);
+}
+
 /**
  * @brief Clears the data valid for destination register after Packer 0 is done packing
  * and zeroes out the dest bank(s) used by packer 0
@@ -88,8 +114,20 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    if constexpr (UnpackToDestEn) {
+        _llk_sync_get_<p_stall::PACK0>(semaphore::MATH_PACK);
+        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            _llk_sync_advance_dest_section_<ckernel::pack::TRISC_ID, true /*EN_32BIT_DEST*/, p_stall::PACK0>();
+        }
+    } else {
+        _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    }
 }
+
+/**
+ * @brief Reset packer dest-bank parity to bank 0 at program start (pack-side mirror of llk_math_pack_sync_init).
+ */
+inline void llk_pack_dest_init() { _llk_pack_dest_init_<p_pacr::PACK0, DST_SYNC_MODE>(); }
 
 /**
  * @brief Configure packer ReLU at runtime from a packed uint32.

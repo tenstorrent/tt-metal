@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -38,6 +39,8 @@ struct WeightCoreShardMaps {
 // compute op expects. Uses ``shard_tiles`` (Euclidean rhythm) for W0/W1 and
 // ``w2_shard_tiles`` (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``)
 // for W2. Ring ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
+// The matmul ring size is auto-detected from the device arch (8 on Blackhole,
+// 12 — the DRAM-bank count — on Wormhole), matching ``ttnn.experimental.moe_compute``.
 WeightCoreShardMaps get_weight_core_shard_maps(
     ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size);
 
@@ -73,7 +76,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& routed_w2,
     const ttnn::Tensor& shared_w0,
     const ttnn::Tensor& shared_w1,
-    const ttnn::Tensor& shared_w2);
+    const ttnn::Tensor& shared_w2,
+    uint32_t cluster_axis);
 
 // Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel reads.
 // Output local shape: ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE)``.
@@ -108,11 +112,11 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
 ttnn::Tensor prepare_w2_tensor_with_bias(
     const ttnn::Tensor& tt_w2, const ttnn::Tensor& tt_b2, uint32_t L, uint32_t E, uint32_t N, uint32_t K);
 
-// Round-trip a device tensor through host to change its dtype and re-upload
+// Round-trip a device tensor through host to change its dtype and optionally re-upload
 // it under the supplied memory config. Used to quantize the packed weight
 // tensors to ``bfloat4_b`` on the DRAM-sharded mem config the kernel consumes.
 // Host side quantization is higher quality and maintains PCC with the original implementation
 ttnn::Tensor quantize_weights_via_host(
-    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config);
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config);
 
 }  // namespace ttnn::experimental

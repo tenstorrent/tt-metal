@@ -48,7 +48,7 @@ void kernel_main() {
     uint32_t i_tile_N = 0;  // first tile in current batch
     uint32_t i_tile = 0;
 
-    const uint32_t tile_bytes = get_tile_size(cb_id_in0);
+    const uint32_t tile_bytes = cb.get_tile_size();
     const auto s = TensorAccessor(src_args, src_addr);
 
     // this reader will read a NHW tensor in NWH order

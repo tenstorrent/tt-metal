@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 #include "api/debug/dprint_pages.h"
 
 // Compile-time args
@@ -49,6 +53,13 @@ constexpr uint32_t initial_ct_idx_expert_mapping =
     TensorAccessorArgs<initial_ct_idx_expert_indices>::next_compile_time_args_offset();
 
 void kernel_main() {
+    Noc noc;
+    CircularBuffer cb_in_act(cb_in_act_id);
+    CircularBuffer cb_scores(cb_scores_id);
+    CircularBuffer cb_scores_rm(cb_scores_rm_id);
+    CircularBuffer cb_expert_indices(cb_expert_indices_id);
+    CircularBuffer cb_expert_mapping(cb_expert_mapping_id);
+
     uint32_t arg_idx = 0;
     const uint32_t input_address = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t scores_address = get_arg_val<uint32_t>(arg_idx++);
@@ -83,20 +94,30 @@ void kernel_main() {
     // slot per DRAM page (host-side sizing in the program factory).
     ////////////////////////////////////////////////////////////////////////////
 
-    cb_reserve_back(cb_expert_indices_id, expert_indices_num_pages);
-    uint32_t expert_indices_ptr = get_write_ptr(cb_expert_indices_id);
+    cb_expert_indices.reserve_back(expert_indices_num_pages);
+    uint32_t expert_indices_ptr = cb_expert_indices.get_write_ptr();
     for (uint32_t p = 0; p < expert_indices_num_pages; ++p) {
-        noc_async_read_page(p, expert_indices_accessor, expert_indices_ptr + p * expert_indices_cb_page_size);
+        noc.async_read(
+            expert_indices_accessor,
+            CoreLocalMem<uint32_t>(expert_indices_ptr + p * expert_indices_cb_page_size),
+            expert_indices_page_size,
+            {.page_id = p},
+            {});
     }
 
-    cb_reserve_back(cb_expert_mapping_id, expert_mapping_num_pages);
-    uint32_t expert_mapping_ptr = get_write_ptr(cb_expert_mapping_id);
+    cb_expert_mapping.reserve_back(expert_mapping_num_pages);
+    uint32_t expert_mapping_ptr = cb_expert_mapping.get_write_ptr();
     for (uint32_t p = 0; p < expert_mapping_num_pages; ++p) {
-        noc_async_read_page(p, expert_mapping_accessor, expert_mapping_ptr + p * expert_mapping_cb_page_size);
+        noc.async_read(
+            expert_mapping_accessor,
+            CoreLocalMem<uint32_t>(expert_mapping_ptr + p * expert_mapping_cb_page_size),
+            expert_mapping_page_size,
+            {.page_id = p},
+            {});
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_expert_indices_id, expert_indices_num_pages);
-    cb_push_back(cb_expert_mapping_id, expert_mapping_num_pages);
+    noc.async_read_barrier();
+    cb_expert_indices.push_back(expert_indices_num_pages);
+    cb_expert_mapping.push_back(expert_mapping_num_pages);
 
     ////////////////////////////////////////////////////////////////////////////
     // Prologue: Load all raw RM scores into scratch CB, then build
@@ -121,16 +142,21 @@ void kernel_main() {
     ////////////////////////////////////////////////////////////////////////////
 
     // Step 1: Read all token rows from DRAM into scratch staging buffer
-    cb_reserve_back(cb_scores_rm_id, num_tokens);
-    uint32_t scores_rm_ptr = get_write_ptr(cb_scores_rm_id);
+    cb_scores_rm.reserve_back(num_tokens);
+    uint32_t scores_rm_ptr = cb_scores_rm.get_write_ptr();
     for (uint32_t t = 0; t < num_tokens; ++t) {
-        noc_async_read_page(t, scores_accessor, scores_rm_ptr + t * cb_scores_rm_page_size);
+        noc.async_read(
+            scores_accessor,
+            CoreLocalMem<uint32_t>(scores_rm_ptr + t * cb_scores_rm_page_size),
+            scores_page_size,
+            {.page_id = t},
+            {});
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 
     // Step 2: Permute and to_layout scores; rm [token][expert] in uint16 units, row stride = reduction_dim_size
-    cb_reserve_back(cb_scores_id, reduction_dim_size);
-    uint32_t scores_write_ptr = get_write_ptr(cb_scores_id);
+    cb_scores.reserve_back(reduction_dim_size);
+    uint32_t scores_write_ptr = cb_scores.get_write_ptr();
 
     volatile tt_l1_ptr uint16_t* scores_rm_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_rm_ptr);
     volatile tt_l1_ptr uint16_t* scores_tile_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_write_ptr);
@@ -223,8 +249,8 @@ void kernel_main() {
     }
 
     // Step 3: Release scores to compute kernel
-    cb_push_back(cb_scores_id, reduction_dim_size);
-    cb_push_back(cb_scores_rm_id, num_tokens);
+    cb_scores.push_back(reduction_dim_size);
+    cb_scores_rm.push_back(num_tokens);
 
     ////////////////////////////////////////////////////////////////////////////
     // Main loop: stream activation tiles into cb_in_act (same as original op)
@@ -248,18 +274,19 @@ void kernel_main() {
         // 64+130, 64+260, 64+390, 128, 128+130, 128+260, and 128+390.
         for (uint32_t j = 0; j < reduction_dim_size; ++j) {
             if (input_granularity_index == 0) {
-                cb_reserve_back(cb_in_act_id, input_granularity);
-                l1_write_addr = get_write_ptr(cb_in_act_id);
+                cb_in_act.reserve_back(input_granularity);
+                l1_write_addr = cb_in_act.get_write_ptr();
             }
-            noc_async_read_page(read_tile_id, act_accessor, l1_write_addr);
+            noc.async_read(
+                act_accessor, CoreLocalMem<uint32_t>(l1_write_addr), act_page_size, {.page_id = read_tile_id}, {});
 
             l1_write_addr += act_page_size;
             read_tile_id += inner_num_tiles;
             input_granularity_index++;
 
             if (input_granularity_index == input_granularity) {
-                noc_async_read_barrier();
-                cb_push_back(cb_in_act_id, input_granularity);
+                noc.async_read_barrier();
+                cb_in_act.push_back(input_granularity);
                 input_granularity_index = 0;
             }
         }

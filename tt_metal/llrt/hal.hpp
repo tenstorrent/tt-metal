@@ -139,6 +139,8 @@ enum class EthDebugReg : uint8_t {
     ERISC1_RESET_PC,
     // RISC soft reset register
     RISC_SOFT_RESET,
+    // ETH_CTRL ERR_STAT register (link error status)
+    ERR_STAT,
     // Number of debug register entries
     COUNT,
 };

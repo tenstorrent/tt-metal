@@ -43,11 +43,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr uint32_t l1_address = 1000 * 1024;
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(16, 0);
     tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
 
-    constexpr const char* COMPUTE_KERNEL = "risc_math";
+    const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
     experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
@@ -76,9 +77,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelMultipleThreads) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = COMPUTE_KERNEL,
-        .runtime_arg_values = {{.node = node, .args = {{"l1_address", l1_address}}}},
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
     }};
     experimental::SetProgramRunArgs(program, params);
 
@@ -119,11 +120,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr uint32_t l1_address = 1000 * 1024;
+    const uint32_t l1_address = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     std::vector<uint32_t> init_values(4, 0);
     tt_metal::detail::WriteToDeviceL1(mesh_device->get_devices()[0], node, l1_address, init_values);
 
-    constexpr const char* COMPUTE_KERNEL = "risc_math";
+    const experimental::KernelSpecName COMPUTE_KERNEL{"risc_math"};
 
     experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
@@ -152,9 +154,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelSingleThread) {
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs params;
-    params.kernel_run_args = {{
-        .kernel_spec_name = COMPUTE_KERNEL,
-        .runtime_arg_values = {{.node = node, .args = {{"l1_address", l1_address}}}},
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = COMPUTE_KERNEL,
+        .runtime_arg_values = {{node, {{"l1_address", l1_address}}}},
     }};
     experimental::SetProgramRunArgs(program, params);
 
@@ -178,8 +180,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCreateMultipleComputeKernelsSing
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    constexpr const char* COMPUTE_KERNEL_1 = "risc_math_1";
-    constexpr const char* COMPUTE_KERNEL_2 = "risc_math_2";
+    const experimental::KernelSpecName COMPUTE_KERNEL_1{"risc_math_1"};
+    const experimental::KernelSpecName COMPUTE_KERNEL_2{"risc_math_2"};
 
     experimental::KernelSpec compute_kernel_spec_1{
         .unique_id = COMPUTE_KERNEL_1,

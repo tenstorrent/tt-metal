@@ -39,19 +39,10 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         target_sources(
             ${TEST_TARGET}
             PRIVATE
-                ${PROJECT_SOURCE_DIR}/tt_metal/impl/experimental/disaggregation/kv_chunk_address_table_protobuf.cpp
+                ${PROJECT_SOURCE_DIR}/tt_metal/impl/internal/disaggregation/kv_chunk_address_table_protobuf.cpp
         )
     endif()
 
-    if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
-        target_sources(${TEST_TARGET} PRIVATE ${TEST_TT_FABRIC_ADDITIONAL_SOURCES})
-        target_link_libraries(
-            ${TEST_TARGET}
-            PRIVATE
-                yaml-cpp::yaml-cpp
-                TT::ScaleoutTools
-        )
-    endif()
     target_include_directories(
         ${TEST_TARGET}
         BEFORE

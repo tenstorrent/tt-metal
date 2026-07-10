@@ -16,6 +16,13 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_softmax,
+    ttnn_scale_mask_softmax,
+    ttnn_softmax_in_place,
+    ttnn_scale_mask_softmax_in_place,
+)
+
 
 TEST_PADDING_VALUE = -42
 
@@ -28,7 +35,7 @@ TEST_PADDING_VALUE = -42
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax(device, inplace, dtype):
     torch.manual_seed(0)
-    sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
+    sm_op = ttnn_softmax_in_place if inplace else ttnn_softmax
 
     input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
@@ -74,7 +81,7 @@ def test_softmax(device, inplace, dtype):
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax_with_program_cache(device, inplace):
     torch.manual_seed(0)
-    sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
+    sm_op = ttnn_softmax_in_place if inplace else ttnn_softmax
 
     input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
@@ -109,7 +116,7 @@ def test_softmax_with_program_cache(device, inplace):
 @pytest.mark.parametrize("inplace", [True, False])
 def test_softmax_mix_precision(device, inplace, in_dtype):
     torch.manual_seed(0)
-    sm_op = ttnn.softmax_in_place if inplace else ttnn.softmax
+    sm_op = ttnn_softmax_in_place if inplace else ttnn_softmax
 
     input_shapes = [(3, 64, 128, 96), (1, 64, 32, 32), (1, 64, 24, 42)]
 
@@ -215,7 +222,7 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
             fp32_dest_acc_en=False,
         )
 
-    tt_output = ttnn.scale_mask_softmax_in_place(
+    tt_output = ttnn_scale_mask_softmax_in_place(
         in1_t, scale, attention_mask_t, is_causal_mask=causal_mask, compute_kernel_config=compute_kernel_config
     )
 
@@ -275,7 +282,7 @@ def test_scale_mask_softmax(device, in_dtype, in0_mem_config):
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
 
-    tt_output = ttnn.scale_mask_softmax(in1_t, scale, attention_mask_t)
+    tt_output = ttnn_scale_mask_softmax(in1_t, scale, attention_mask_t)
 
     tt_output_tensor = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)

@@ -146,7 +146,7 @@ def _get_card_type_str(run_metadata: dict[str, Any] | None) -> str:
     Build card_type string from run metadata with fallback to ttnn device query.
 
     Priority:
-    1. runner_label from CI environment (e.g., N150, N300, BH-LLMBox)
+    1. runner_label from CI environment (e.g., N150, N300, BH-LoudBox)
     2. ttnn device count query at runtime (for local runs without RUNNER_LABEL)
     3. arch name only as final fallback
     """

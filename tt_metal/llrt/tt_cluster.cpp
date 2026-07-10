@@ -12,6 +12,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -86,7 +87,9 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
+    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
+    // cluster descriptor is also configured (tt-run MP sweeps set both).
+    if (rtoptions.get_simulator_enabled()) {
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
@@ -231,7 +234,7 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     this->initialize_ethernet_cores_router_mode();
 
     TT_FATAL(this->driver_, "UMD cluster object must be initialized and available");
-    auto & cluster_desc = (*(this->driver_->get_cluster_description()));
+    auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
@@ -475,7 +478,8 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
     // May block waiting for other processes to release the device.
     this->driver_->start_device(device_params);
 
-    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) && device_params.init_device) {
+    if ((this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) &&
+        device_params.init_device) {
         // Configure TLBs on all MMIO devices in parallel
         std::vector<std::shared_future<void>> futures;
         const auto& mmio_device_ids = driver_->get_target_mmio_device_ids();
@@ -483,8 +487,18 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
         for (const auto& mmio_device_id : mmio_device_ids) {
             futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
+                bool include_dram_tlbs = (this->target_type_ == TargetDevice::Silicon);
+                if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled()) {
+                    // Functional ttsim (libttsim.so) does not model BH DRAM TLBs and crashes if they
+                    // are configured. RTL sim uses a directory simulator path and still needs them.
+                    include_dram_tlbs = (rtoptions_.get_simulator_path().extension() != ".so");
+                }
                 ll_api::configure_static_tlbs(
-                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+                    this->arch_,
+                    mmio_device_id,
+                    this->get_soc_desc(mmio_device_id),
+                    *this->driver_,
+                    include_dram_tlbs);
             }));
         }
 
@@ -722,7 +736,34 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
     return worker_logical_to_virtual_y;
 }
 
-int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
+int Cluster::get_device_aiclk(const ChipId& chip_id) const {
+    // Functional ttsim (.so) clock queries are unreliable; RTL sim uses a directory path and
+    // metal/umd unit tests expect a non-zero AICLK (see test_dram_kernels, watcher tests).
+    if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled() &&
+        rtoptions_.get_simulator_path().extension() == ".so") {
+        return 0;
+    }
+    return this->driver_->get_chip(chip_id)->get_clock();
+}
+
+uint32_t Cluster::get_arc_timer_heartbeat(const ChipId& chip_id) const {
+    auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
+    if (!tt_device) {
+        return 0;
+    }
+
+    auto* fw = tt_device->get_firmware_info_provider();
+    if (!fw) {
+        return 0;
+    }
+
+    return fw->get_heartbeat();  // ← THIS is the correct call path
+}
+
+bool Cluster::is_arc_telemetry_available(const ChipId& chip_id) const {
+    auto* tt_device = driver_->get_chip(chip_id)->get_tt_device();
+    return tt_device && tt_device->get_firmware_info_provider();
+}
 
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->get_cluster_desc()->get_bus_id(chip); }
 
@@ -1059,7 +1100,7 @@ uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
     TT_FATAL(driver_, "UMD cluster object must be initialized and available");
-    auto & cluster_desc = (*(driver_->get_cluster_description()));
+    auto& cluster_desc = (*(driver_->get_cluster_description()));
     return llrt::get_devices_controlled_by_mmio_device(cluster_desc, mmio_device_id);
 }
 
@@ -1549,6 +1590,26 @@ bool Cluster::supports_ethernet_link_retraining() const {
         return this->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0);
     }
     return false;
+}
+
+void Cluster::register_sim_fabric_endpoint_direction(
+    ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const {
+    if (std::getenv("TTSIM_FABRIC_TERMINAL_TRACE")) {
+        std::fprintf(
+            stderr,
+            "[ttsim-fabric-terminal] tt-metal-register-direction chip=%d chan=%u dir=%u target=%u\n",
+            chip_id,
+            static_cast<uint32_t>(eth_chan_id),
+            static_cast<uint32_t>(direction),
+            static_cast<uint32_t>(this->target_type_));
+    }
+    if (this->target_type_ != tt::TargetDevice::Simulator) {
+        return;
+    }
+#if defined(TT_UMD_BUILD_SIMULATION)
+    this->get_driver()->register_sim_fabric_endpoint_direction(
+        chip_id, static_cast<uint32_t>(eth_chan_id), static_cast<uint32_t>(direction));
+#endif
 }
 
 }  // namespace tt

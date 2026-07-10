@@ -24,6 +24,13 @@ libTracyClient.a
 
 ### tracy-capture
 tracy-capture is a command line executable that acts as the tracy server to capture events from tracy-client. It will dump a .tracy file which you can feed into tracy-profiler GUI.
+
+In **tt-metal** (after `./build_metal.sh`), the binary is at `build/tools/profiler/bin/tracy-capture`:
+```
+build/tools/profiler/bin/tracy-capture -o test.tracy -f
+```
+
+Upstream Tracy standalone build (not tt-metal):
 ```
 cd capture/build/unix
 make all
@@ -40,6 +47,13 @@ make all
 
 ### tracy-csvexport
 tracy-csvexport is a command line executable that consumes .tracy file and outputs a csv file with all the data within the .tracy file. It is meant for an easier way to view the data.
+
+In **tt-metal**:
+```
+build/tools/profiler/bin/tracy-csvexport test.tracy
+```
+
+Upstream Tracy standalone build (not tt-metal):
 ```
 cd csvexport/build/unix
 make all
@@ -257,7 +271,7 @@ ninja
 ### 7. Start tracy-capture OR tracy-profiler
 Start this in a separate terminal. This will dump all events into hello.tracy.
 ```
-./tracy-capture -o hello.tracy
+build/tools/profiler/bin/tracy-capture -o hello.tracy -f
 ```
 
 Start this on your macbook. This will collect all events live. You need to make sure you port forward from your remote machine to your macbook.
@@ -275,7 +289,7 @@ cd build
 ### (Optional) Run tracy-csvexport
 If you used tracy-capture and want to view the results, you can pass them through tracy-csvexport. This will dump out all the results in csv format which you can then pipe to a file. You can also save a .tracy file via the tracy-profiler GUI and view them using this tool.
 ```
-./csvexport hello.tracy
+build/tools/profiler/bin/tracy-csvexport hello.tracy
 ```
 
 ### (Optional) Upload .tracy file into tracy-profiler

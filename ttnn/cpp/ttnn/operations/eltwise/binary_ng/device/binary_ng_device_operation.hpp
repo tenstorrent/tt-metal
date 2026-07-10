@@ -32,9 +32,9 @@ struct BinaryNgDeviceOperation {
 
     struct operation_attributes_t {
         BinaryOpType binary_op_type;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
-        ttnn::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> lhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> rhs_activations;
+        ttsl::SmallVector<unary::EltwiseUnaryWithParam> post_activations;
         std::optional<unary::ScalarVariant> scalar;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
@@ -104,7 +104,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a_arg,
-    float scalar,
+    ttnn::operations::unary::ScalarVariant scalar,
     ttnn::operations::binary_ng::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

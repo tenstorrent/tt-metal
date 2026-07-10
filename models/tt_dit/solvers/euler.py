@@ -4,17 +4,12 @@
 
 from __future__ import annotations
 
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-
 import ttnn
 
 from .base import Solver
 
 
 class EulerSolver(Solver):
-    def __init__(self, scheduler: FlowMatchEulerDiscreteScheduler | None = None) -> None:
-        super().__init__(scheduler if scheduler is not None else FlowMatchEulerDiscreteScheduler())
-
     def step(self, *, step: int, latent: ttnn.Tensor, velocity_pred: ttnn.Tensor) -> ttnn.Tensor:
         self._assert_schedule()
 

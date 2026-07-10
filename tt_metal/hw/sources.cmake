@@ -23,9 +23,12 @@ set(HW_JIT_API_HEADERS
     inc/api/kernel_thread_globals.h
     inc/api/tensor/tensor_accessor.h
     inc/api/tensor/tensor_accessor_args.h
+    inc/api/tensor/tensor_binding_token.h
+    inc/api/tensor/local_tensor_accessor.h
     inc/api/tensor/shard_pages_address_iterator.h
     inc/api/tensor/pages_address_iterator.h
     inc/api/tensor/page.h
+    inc/api/scratchpad.h
     inc/api/compute/compute_kernel_api.h
     inc/api/compute/add_int_sfpu.h
     inc/api/compute/atan2.h
@@ -50,10 +53,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/addcdiv.h
     inc/api/compute/eltwise_unary/addcmul.h
     inc/api/compute/eltwise_unary/binop_with_scalar.h
-    inc/api/compute/eltwise_unary/bitwise_and.h
+    inc/api/compute/eltwise_unary/bitwise.h
     inc/api/compute/eltwise_unary/bitwise_not.h
-    inc/api/compute/eltwise_unary/bitwise_or.h
-    inc/api/compute/eltwise_unary/bitwise_xor.h
     inc/api/compute/eltwise_unary/cbrt.h
     inc/api/compute/eltwise_unary/clamp.h
     inc/api/compute/eltwise_unary/comp.h
@@ -72,7 +73,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/i1.h
     inc/api/compute/eltwise_unary/identity.h
     inc/api/compute/eltwise_unary/isinf_isnan.h
-    inc/api/compute/eltwise_unary/left_shift.h
     inc/api/compute/eltwise_unary/log1p.h
     inc/api/compute/eltwise_unary/logical_not.h
     inc/api/compute/eltwise_unary/negative.h
@@ -83,7 +83,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/relu.h
     inc/api/compute/eltwise_unary/remainder.h
     inc/api/compute/eltwise_unary/reverseops.h
-    inc/api/compute/eltwise_unary/right_shift.h
     inc/api/compute/eltwise_unary/rounding.h
     inc/api/compute/eltwise_unary/rpow.h
     inc/api/compute/eltwise_unary/rsqrt.h
@@ -91,6 +90,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/selu.h
     inc/api/compute/eltwise_unary/sfpu_int_sum.h
     inc/api/compute/eltwise_unary/sfpu_split_includes.h
+    inc/api/compute/eltwise_unary/shift.h
     inc/api/compute/eltwise_unary/softplus.h
     inc/api/compute/eltwise_unary/sqrt.h
     inc/api/compute/eltwise_unary/tanh_derivative.h
@@ -127,6 +127,8 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/sub_int_sfpu.h
     inc/api/compute/tile_move_copy.h
     inc/api/compute/tilize.h
+    inc/api/compute/transpose.h
+    inc/api/compute/transpose_dest.h
     inc/api/compute/transpose_wh.h
     inc/api/compute/transpose_wh_dest.h
     inc/api/compute/untilize.h
@@ -163,6 +165,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/dataflow/dataflow_cmd_bufs.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
+    inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
     inc/internal/debug/stack_usage.h
     inc/internal/debug/watcher_common.h
@@ -179,6 +182,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/cfg_defines.h
     inc/internal/tt-1xx/blackhole/core_config.h
     inc/internal/tt-1xx/blackhole/dev_mem_map.h
+    inc/internal/tt-1xx/blackhole/device_print_mem.h
     inc/internal/tt-1xx/blackhole/eth_chan_noc_mapping.h
     inc/internal/tt-1xx/blackhole/eth_fw_api.h
     inc/internal/tt-1xx/blackhole/eth_l1_address_map.h
@@ -191,8 +195,11 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/tdma_xmov.h
     inc/internal/tt-1xx/blackhole/tensix.h
     inc/internal/tt-1xx/blackhole/tensix_types.h
+    inc/internal/noc_zero_dram.inl
     inc/internal/tt-1xx/dataflow_buffer.inl
+    inc/internal/tt-1xx/noc_zero_l1.inl
     inc/internal/tt-2xx/dataflow_buffer.inl
+    inc/internal/tt-2xx/noc_zero_l1.inl
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
     inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
@@ -201,6 +208,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h
     inc/internal/tt-2xx/quasar/dev_mem_map.h
+    inc/internal/tt-2xx/quasar/device_print_mem.h
     inc/internal/tt-2xx/quasar/eth_chan_noc_mapping.h
     inc/internal/tt-2xx/quasar/eth_fw_api.h
     inc/internal/tt-2xx/quasar/eth_l1_address_map.h
@@ -217,6 +225,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/wormhole/c_tensix_core.h
     inc/internal/tt-1xx/wormhole/core_config.h
     inc/internal/tt-1xx/wormhole/dev_mem_map.h
+    inc/internal/tt-1xx/wormhole/device_print_mem.h
     inc/internal/tt-1xx/wormhole/eth_chan_noc_mapping.h
     inc/internal/tt-1xx/wormhole/eth_fw_api.h
     inc/internal/tt-1xx/wormhole/eth_l1_address_map.h

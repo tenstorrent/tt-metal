@@ -10,7 +10,8 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <cstdint>
 #include <optional>
-#include <vector>
+#include <tuple>
+#include <utility>
 
 namespace ttnn::experimental::prim {
 
@@ -64,24 +65,40 @@ struct AllReduceCreateQkvHeadsParams {
         dtype(dtype),
         cluster_axis(cluster_axis) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("all_reduce_mem_config", all_reduce_mem_config);
-        attrs.emplace_back("topology", topology);
-        attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("head_dim", head_dim);
-        attrs.emplace_back("use_noc1_only", use_noc1_only);
-        attrs.emplace_back("num_heads", num_heads);
-        attrs.emplace_back("num_kv_heads", num_kv_heads);
-        attrs.emplace_back("input_on_subcoregrids", input_on_subcoregrids);
-        attrs.emplace_back("slice_size", slice_size);
-        attrs.emplace_back("final_mem_config", final_mem_config);
-        attrs.emplace_back("dtype", dtype);
-        attrs.emplace_back("cluster_axis", cluster_axis);
-        return attrs;
+    // Compile-time attributes drive the default program-cache hash and canonical key.
+    // `semaphore` (GlobalSemaphore) is excluded: it is not hashable/canonical-key serializable and
+    // is used only for runtime args (semaphore.address()), so it does not affect program structure.
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "num_links",
+        "ring_size",
+        "all_reduce_mem_config",
+        "topology",
+        "sub_device_id",
+        "head_dim",
+        "use_noc1_only",
+        "num_heads",
+        "num_kv_heads",
+        "input_on_subcoregrids",
+        "slice_size",
+        "final_mem_config",
+        "dtype",
+        "cluster_axis");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            num_links,
+            ring_size,
+            all_reduce_mem_config,
+            topology,
+            sub_device_id,
+            head_dim,
+            use_noc1_only,
+            num_heads,
+            num_kv_heads,
+            input_on_subcoregrids,
+            slice_size,
+            final_mem_config,
+            dtype,
+            cluster_axis);
     }
 };
 

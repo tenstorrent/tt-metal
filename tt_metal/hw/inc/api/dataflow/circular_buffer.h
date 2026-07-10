@@ -256,4 +256,11 @@ private:
     }
 };
 
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#else
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#include "internal/noc_zero_dram.inl"
+
 #endif  // !COMPILE_FOR_TRISC

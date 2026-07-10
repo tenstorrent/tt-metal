@@ -25,6 +25,8 @@ on:
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
           - mamba-2.8b
+          - gemma-4-e2b
+          - gemma-4-e4b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -79,6 +81,8 @@ permissions:
 run-name: "(Tier 3) Models E2E${{ github.event_name == 'schedule' && ' [scheduled]' || '' }}"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   resolve-skus:
     runs-on: ubuntu-latest
     outputs:
@@ -105,17 +109,20 @@ jobs:
           echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
           echo "model=all" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   models-e2e-tests:
-    needs: [build-artifact, resolve-skus]
+    needs: [check-harbor, build-artifact, resolve-skus]
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:

@@ -4,7 +4,7 @@
 
 #include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
@@ -26,10 +26,11 @@ void kernel_main() {
 
     Scalar one;
     one.f = 1.0f;
-    fill_cb_with_value(cb_id_one, one.u);
+    DataflowBuffer dfb_one(cb_id_one);
+    fill_cb_with_value(dfb_one, one.u);
 
     Noc noc;
-    CircularBuffer cb_input(cb_id_input);
+    DataflowBuffer dfb_input(cb_id_input);
     const auto input_tile_bytes = get_tile_size(cb_id_input);
 
     auto start_output_tile_idx = tile_offset;
@@ -40,10 +41,10 @@ void kernel_main() {
 
         auto input_tile_idx = outer_idx * outer_stride + inner_idx;
         for (uint32_t d = 0; d < num_reduced_tiles_along_dim; ++d) {
-            cb_input.reserve_back(1);
-            noc.async_read(s, cb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
+            dfb_input.reserve_back(1);
+            noc.async_read(s, dfb_input, input_tile_bytes, {.page_id = input_tile_idx}, {.offset_bytes = 0});
             noc.async_read_barrier();
-            cb_input.push_back(1);
+            dfb_input.push_back(1);
             input_tile_idx += inner_stride;
         }
 

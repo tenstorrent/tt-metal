@@ -22,8 +22,6 @@ on:
           - P150b
           - n300-llmbox
           - topology-6u
-          - BH-LLMBox
-          - BH-DeskBox
           - BH-LoudBox
         default: "N150"
       load-to-db:
@@ -78,6 +76,7 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
 
@@ -172,7 +171,7 @@ jobs:
         run: |
           RUNNER="$RUNNER_LABEL"
           case "$RUNNER" in
-            P100a|P150b|BH-LLMBox|BH-DeskBox|BH-LoudBox)
+            P100a|P150b|BH-LoudBox)
               ARCH="blackhole"
               ;;
             *)
@@ -195,21 +194,26 @@ jobs:
           echo "ci_version=$CI_VERSION" >> $GITHUB_OUTPUT
           echo "Derived arch=$ARCH ci_version=$CI_VERSION for runner=$RUNNER"
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
     name: Build
-    needs: [validate-inputs]
+    needs: [check-harbor, validate-inputs]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: Release
       build-wheel: true
       platform: ${{ needs.validate-inputs.outputs.platform }}
 
   trace-model:
     name: "Trace: ${{ matrix.slug }}"
-    needs: [validate-inputs, build-artifact]
+    needs: [check-harbor, validate-inputs, build-artifact]
     strategy:
       fail-fast: false
       matrix:
@@ -243,12 +247,13 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
     runs-on: >-
       ${{
-        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LLMBox' || inputs.runner-label == 'BH-DeskBox' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
+        (inputs.runner-label == 'topology-6u' || inputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', inputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -311,7 +316,7 @@ jobs:
           if [[ "$STATUS" != "200" ]]; then
             echo "::error::LFC does not serve ${INPUT_HF_MODEL} (HTTP $STATUS at $URL)."
             echo "::error::Upload the weights to /mldata/model_checkpoints/pytorch/huggingface/${INPUT_HF_MODEL}/,"
-            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LLMBox, BH-DeskBox, BH-LoudBox)"
+            echo "::error::or re-run this workflow on a CIv1 runner label (topology-6u, BH-LoudBox)"
             echo "::error::where /mnt/MLPerf provides the weights."
             exit 1
           fi
@@ -606,6 +611,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           ref: ${{ github.sha }}
 

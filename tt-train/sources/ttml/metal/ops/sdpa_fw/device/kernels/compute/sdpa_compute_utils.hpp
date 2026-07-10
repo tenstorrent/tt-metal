@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
@@ -17,8 +18,13 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+#ifdef TRISC_MATH
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
+#endif
 
 constexpr uint32_t onetile = 1U;
 
@@ -36,47 +42,10 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
-void calculate_recip_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat out;
-        if constexpr (DST_ACCUM_MODE) {
-            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-        } else {
-            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
-        }
-        sfpi::dst_reg[0] = out;
-        sfpi::dst_reg += 2;
-    }
-}
-
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
-
-// First-column exp with fused scale: exp(scale * x) on column 0 only.
-// Uses _ckernel_sfpu_exp_accurate_ — the same function behind exp_tile<false, true>,
-// so accuracy is identical to the full-tile version. Stride-2 access skips column 1.
-// Combined with VectorMode::C (2 faces instead of 4), this gives 4× fewer SFPU iterations
-// compared to exp_tile<false, true>(idx, VectorMode::RC).
-template <uint16_t scale_bf16>
-void calculate_exponential_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::vFloat result = ckernel::sfpu::_ckernel_sfpu_exp_accurate_<true, DST_ACCUM_MODE>(val, scale_bf16);
-        sfpi::dst_reg[0] = result;
-        sfpi::dst_reg += 2;
-    }
-}
-
-template <uint16_t scale_bf16>
-void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, VectorMode::C);
-}
-#endif
+#endif  // TRISC_MATH
 
 // Apply an attention mask to a Q@K^T score tile already sitting in DST register `register_idx`.
 //
@@ -196,14 +165,12 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     sub_bcast_cols_init_short(cb_attention_weights, cb_cur_max);
 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    exp_tile_init</* approx */ false, scaler_fp32>();
-
+    // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
     tile_regs_acquire();
     for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
         sub_tiles_bcast_cols(
             cb_attention_weights, cb_cur_max, /* in0 tile_idx */ n, /* in1 tile_idx */ 0, /* dst_reg_idx */ n);
-        exp_tile</* approx */ false, /* scale_en */ true>(n, VectorMode::RC, scaler_bf16);
+        sdpa_exp_tile_scaled<scaler_fp32>(n);
     }
     tile_regs_commit();
 
@@ -263,7 +230,7 @@ void matmul_qk_by_v(
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
     pack_reconfig_data_format(cb_cur_mm_out);
-    mm_block_init_short(
+    matmul_block_init(
         cb_attention_weights,
         cb_value,
         /* transpose */ 0,
@@ -316,11 +283,10 @@ void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, 
         /* tile_idx */ 0,
         /* dst_reg_idx */ exp_max_diff_dst_idx);
 
-    // First-column fused scale+exp: exp(scale * (prev_max - cur_max)).
+    // First-column scaled exp: exp(scale * (prev_max - cur_max)).
     // Both max values are column vectors, so the result is a column vector —
     // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
-    MATH((exp_tile_first_column<scaler_bf16>(exp_max_diff_dst_idx)));
+    sdpa_exp_tile_first_column_scaled<scaler_fp32>(exp_max_diff_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -431,8 +397,7 @@ void row_reduce_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
 
-    mm_init(cb_in_idx, cb_matmul_reduce, cb_in_idx, 0);
-    // mm_init_short(cb_in_idx, cb_matmul_reduce, 0);
+    matmul_init(cb_in_idx, cb_matmul_reduce, 0);
     matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduce_dst_idx);
     tile_regs_commit();
 

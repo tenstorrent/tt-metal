@@ -19,12 +19,24 @@
 #endif
 #include "internal/debug/stack_usage.h"
 
+#include "sanitizer/api.h"
+
 // Global vars
 uint32_t unp_cfg_context = 0;
 uint32_t pack_sync_tile_dst_ptr = 0;
 uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
+
+#if defined(LLK_SAN_ENABLE)
+namespace llk::san {
+
+static_assert(
+    sizeof(SanitizerState) <= MEM_LLK_DEBUG_SIZE, "llk_san: sanitizer state must fit in MEM_LLK_DEBUG region");
+
+extern SanitizerState* const sanitizer = reinterpret_cast<SanitizerState*>(MEM_LLK_DEBUG_BASE);
+}  // namespace llk::san
+#endif
 
 namespace ckernel {
 // Transition shim
@@ -69,6 +81,7 @@ uint32_t _start() {
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
     wait_for_go_message();
+    llk::san::thread_init();
     RecordPerfCounters();
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG

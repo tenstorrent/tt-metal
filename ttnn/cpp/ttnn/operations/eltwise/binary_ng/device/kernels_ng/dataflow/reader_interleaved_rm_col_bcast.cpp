@@ -7,6 +7,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
+#include "api/core_local_mem.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 namespace {
@@ -172,7 +174,12 @@ void kernel_main() {
                                 const uint32_t row_l1_addr =
                                     l1_write_addr_src + static_cast<uint32_t>(k) * current_chunk_bytes;
 
-                                noc_async_read(addr_a, scratch_l1_addr, element_size);
+                                noc.async_read(
+                                    src,
+                                    CoreLocalMem<uint32_t>(scratch_l1_addr),
+                                    element_size,
+                                    {.page_id = row_idx_a},
+                                    {});
                                 noc.async_read_barrier();
 
                                 copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
@@ -182,8 +189,12 @@ void kernel_main() {
                             uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_b = row_block_b + k * s_h_b;
-                                const uint64_t addr_b = src_b.get_noc_addr(row_idx_b) + current_chunk_offset;
-                                noc_async_read(addr_b, curr_l1_b, current_read_len_b);
+                                noc.async_read(
+                                    src_b,
+                                    CoreLocalMem<uint32_t>(curr_l1_b),
+                                    current_read_len_b,
+                                    {.page_id = row_idx_b, .offset_bytes = current_chunk_offset},
+                                    {});
                                 curr_l1_b += current_chunk_bytes;
                             }
                             noc.async_read_barrier();
@@ -193,8 +204,12 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
-                                const uint64_t addr_a = src.get_noc_addr(row_idx_a) + current_chunk_offset;
-                                noc_async_read(addr_a, curr_l1_a, current_read_len_a);
+                                noc.async_read(
+                                    src,
+                                    CoreLocalMem<uint32_t>(curr_l1_a),
+                                    current_read_len_a,
+                                    {.page_id = row_idx_a, .offset_bytes = current_chunk_offset},
+                                    {});
                                 curr_l1_a += current_chunk_bytes;
                             }
                             noc.async_read_barrier();
@@ -207,7 +222,12 @@ void kernel_main() {
                                 const uint32_t row_l1_addr =
                                     l1_write_addr_src_b + static_cast<uint32_t>(k) * current_chunk_bytes;
 
-                                noc_async_read(addr_b, scratch_l1_addr, element_size);
+                                noc.async_read(
+                                    src_b,
+                                    CoreLocalMem<uint32_t>(scratch_l1_addr),
+                                    element_size,
+                                    {.page_id = row_idx_b},
+                                    {});
                                 noc.async_read_barrier();
 
                                 copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);

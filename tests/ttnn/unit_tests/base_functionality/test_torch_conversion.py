@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2025-2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -752,6 +752,49 @@ def test_from_torch_mesh_sharded_dram_width_no_tensorspec_crash(mesh_device, map
     ), f"Memory config mismatch: expected {memory_config}, got {ttnn_tensor.memory_config()}"
     assert ttnn_tensor.dtype == ttnn.bfloat16
     assert ttnn_tensor.layout == ttnn.TILE_LAYOUT
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "shard_shape",
+    [
+        (2048, 3584),
+    ],
+)
+def test_from_torch_mesh_width_sharded_dram_tile_oom_45331(mesh_device, shard_shape):
+    """
+    Regression test for https://github.com/tenstorrent/tt-metal/issues/45331.
+    """
+
+    torch.manual_seed(0)
+    # Width-shard across every DRAM bank the device exposes (12 on Wormhole,
+    # 8 on Blackhole). Hardcoding 12 cores would request a DRAM bank that does
+    # not exist on Blackhole and crash in the allocator before tilize runs.
+    num_cores = mesh_device.dram_grid_size().x
+    shard_height, shard_width = shard_shape
+    tensor_shape = (shard_height, shard_width * num_cores)
+    torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_dram_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        shard_spec,
+    )
+
+    tt_tile = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
+        memory_config=sharded_dram_cfg,
+        device=mesh_device,
+    )
+
+    assert tt_tile.layout == ttnn.TILE_LAYOUT
+    assert tt_tile.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+    assert tt_tile.dtype == ttnn.bfloat16
 
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)

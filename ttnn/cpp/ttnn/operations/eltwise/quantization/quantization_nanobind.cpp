@@ -49,6 +49,8 @@ void bind_quantize(nb::module_& mod) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+            When :attr:`scale` and :attr:`zero_point` are tensors, they must be FLOAT32.
+
         Example:
             >>> input_tensor = ttnn.from_torch(torch.tensor([[0.1, 0.2], [0.3, 0.4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> scale = 0.001173
@@ -58,7 +60,7 @@ void bind_quantize(nb::module_& mod) {
         "quantize",
         "ttnn.quantize",
         "Quantize Operation",
-        "BFLOAT16");
+        "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32");
 
     ttnn::bind_function<"quantize">(
         mod,
@@ -106,6 +108,8 @@ void bind_requantize(nb::module_& mod) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+            Input tensor dtype must be INT32. When scale and zero-point parameters are tensors, they must be FLOAT32.
+
             **Mixed Quantization Support:**
 
             This operation supports mixed quantization schemes:
@@ -142,7 +146,7 @@ void bind_requantize(nb::module_& mod) {
         "requantize",
         "ttnn.requantize",
         "Re-quantize Operation",
-        "BFLOAT16");
+        "INT32");
 
     ttnn::bind_function<"requantize">(
         mod,
@@ -190,6 +194,8 @@ void bind_dequantize(nb::module_& mod) {
 
             bfloat8_b/bfloat4_b supports only on TILE_LAYOUT
 
+            Input tensor dtype must be INT32. When :attr:`scale` and :attr:`zero_point` are tensors, they must be FLOAT32.
+
         Example:
             >>> input_tensor = ttnn.from_torch(torch.tensor([[-127 -42], [43 127]], dtype=torch.int32), layout=ttnn.TILE_LAYOUT, device=device)
             >>> scale = 0.001173
@@ -199,7 +205,7 @@ void bind_dequantize(nb::module_& mod) {
         "dequantize",
         "ttnn.dequantize",
         "De-quantize Operation",
-        "BFLOAT16");
+        "INT32");
 
     ttnn::bind_function<"dequantize">(
         mod,

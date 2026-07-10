@@ -42,7 +42,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Runtime arguments for 4D slice support with multi-core work distribution
@@ -68,6 +71,7 @@ void kernel_main() {
     // Set up TensorAccessor for output data - use row size as page size
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
+    Noc noc;
     // Create CircularBuffer for Device 2.0 API
     CircularBuffer cb_in(cb_id_in);
 
@@ -80,14 +84,13 @@ void kernel_main() {
         // Calculate global output row index for this local row
         uint32_t global_output_row = start_row_for_this_core + local_row;
 
-        // Calculate output address for this row
-        uint64_t output_row_noc_addr = s0.get_noc_addr(global_output_row);
-
-        // Write the complete row to output tensor
-        noc_async_write(l1_read_addr, output_row_noc_addr, output_bytes_per_row);
-        noc_async_writes_flushed();
+        // noc_async_write_sharded splits the write across shards for B/W-sharded outputs;
+        // falls through to a single noc_async_write for interleaved / HEIGHT-sharded.
+        tt::data_movement::common::noc_async_write_sharded(
+            noc, l1_read_addr, s0, global_output_row, /*offset=*/0, /*size=*/output_bytes_per_row);
+        noc.async_writes_flushed();
 
         cb_in.pop_front(1);
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

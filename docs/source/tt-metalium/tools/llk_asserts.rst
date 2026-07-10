@@ -265,20 +265,17 @@ LLK asserts are fully integrated into the tt-metal CI/CD system through the ``en
 
 The following key workflow files accept the ``enable-llk-asserts`` boolean input and can be triggered manually via ``workflow_dispatch`` with the checkbox enabled:
 
-- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, models, ops, TTNN, profiler)
+- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, ops, TTNN, profiler)
 - ``sanity-tests-debug.yaml`` — nightly debug run (also the scheduled nightly LLK assert run)
-- ``blackhole-post-commit.yaml`` — Blackhole-specific test matrix (models, ops, TTNN, UMD, multi-card)
 
-Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``models-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the three above are the most useful entry points for validating new asserts.
+Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the two above are the most useful entry points for validating new asserts.
 
 **Nightly Runs with LLK Asserts**
 
-The ``sanity-tests-debug.yaml`` workflow runs automatically every night **at 2:00 AM UTC** with LLK asserts enabled. It spawns four test jobs — Wormhole and Blackhole on both Ubuntu 22.04 and Ubuntu 24.04:
+The ``sanity-tests-debug.yaml`` workflow runs automatically every night **at 2:00 AM UTC** with LLK asserts enabled. It spawns Wormhole test jobs on both Ubuntu 22.04 and Ubuntu 24.04:
 
 - ``wormhole-nightly-debug-ubuntu-22`` — runs ``sanity-tests.yaml`` with ``enable-llk-asserts: true``
-- ``blackhole-nightly-debug-ubuntu-22`` — runs ``blackhole-post-commit.yaml`` with ``enable-llk-asserts: true``
 - ``wormhole-nightly-debug-ubuntu-24`` — runs ``sanity-tests.yaml`` with ``enable-llk-asserts: true``
-- ``blackhole-nightly-debug-ubuntu-24`` — runs ``blackhole-post-commit.yaml`` with ``enable-llk-asserts: true``
 
 The same workflow can also be triggered on demand via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox.
 
@@ -289,10 +286,9 @@ After adding a new ``LLK_ASSERT`` to the codebase, you must validate it does not
 
 1. **Run CI with LLK asserts enabled**
 
-   Trigger either (or both) of these workflows manually via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox enabled:
+   Trigger this workflow manually via ``workflow_dispatch`` with the ``enable-llk-asserts`` checkbox enabled:
 
    - `Sanity tests <https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/sanity-tests.yaml>`_ — exercises a broad set of configurations including fast dispatch, models, ops, TTNN, and profiler regression.
-   - `Blackhole post-commit <https://github.com/tenstorrent/tt-metal/blob/main/.github/workflows/blackhole-post-commit.yaml>`_ — validates Blackhole-specific code paths (models, ops, TTNN, UMD, multi-card).
 
 2. **For each test failure, choose one of two resolutions:**
 
