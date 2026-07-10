@@ -362,6 +362,11 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     if (use_post_mul) {
         reduce_defines["REDUCE_POST_MUL"] = "1";
     }
+    // RM reduce packs into a dst-format CB; when that differs from the input format (e.g. bf16 input
+    // reduced into an FP32 partial for the H-axis-split stage 1) the packer must be reconfigured too.
+    if (rm_path && dst_cb_data_format != src0_cb_data_format) {
+        reduce_defines["REDUCE_RM_MIXED_FORMAT"] = "1";
+    }
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
 
