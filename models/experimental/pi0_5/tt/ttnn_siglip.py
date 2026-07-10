@@ -25,6 +25,7 @@ from typing import Dict, Optional, Tuple
 
 import torch
 import ttnn
+from models.experimental.pi0_5.tt.ttnn_common import matmul_weight_dtype
 import tt_lib.fallback_ops as fallback_ops  # For position embedding interpolation (native TTNN interpolate not available)
 
 from models.experimental.pi0_5.common.configs import SigLIPConfig
@@ -511,13 +512,13 @@ class SigLIPAttentionTTNN:
 
         # Concatenate Q, K, V weights on device
         wq_ttnn = ttnn.from_torch(
-            wq_padded.T.contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+            wq_padded.T.contiguous(), dtype=matmul_weight_dtype(), layout=ttnn.TILE_LAYOUT, device=device
         )
         wk_ttnn = ttnn.from_torch(
-            wk_padded.T.contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+            wk_padded.T.contiguous(), dtype=matmul_weight_dtype(), layout=ttnn.TILE_LAYOUT, device=device
         )
         wv_ttnn = ttnn.from_torch(
-            wv_padded.T.contiguous(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+            wv_padded.T.contiguous(), dtype=matmul_weight_dtype(), layout=ttnn.TILE_LAYOUT, device=device
         )
         self.wqkv = ttnn.concat([wq_ttnn, wk_ttnn, wv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -528,9 +529,9 @@ class SigLIPAttentionTTNN:
             bv_padded = pad_head_dim_bias(weights["self_attn.v_proj.bias"])
 
             # Concatenate biases on device (using tensor_1d_to_2d_ttnn to avoid torch.unsqueeze)
-            bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=ttnn.bfloat8_b)
-            bk_ttnn = tensor_1d_to_2d_ttnn(bk_padded, device, dtype=ttnn.bfloat8_b)
-            bv_ttnn = tensor_1d_to_2d_ttnn(bv_padded, device, dtype=ttnn.bfloat8_b)
+            bq_ttnn = tensor_1d_to_2d_ttnn(bq_padded, device, dtype=matmul_weight_dtype())
+            bk_ttnn = tensor_1d_to_2d_ttnn(bk_padded, device, dtype=matmul_weight_dtype())
+            bv_ttnn = tensor_1d_to_2d_ttnn(bv_padded, device, dtype=matmul_weight_dtype())
             self.bqkv = ttnn.concat([bq_ttnn, bk_ttnn, bv_ttnn], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
             self.bqkv = None
@@ -539,14 +540,14 @@ class SigLIPAttentionTTNN:
         wo_padded = pad_head_dim_weight(weights["self_attn.out_proj.weight"], heads_out=False)
         self.wo = ttnn.from_torch(
             wo_padded.T.contiguous(),
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         if "self_attn.out_proj.bias" in weights:
-            self.bo = tensor_1d_to_2d_ttnn(weights["self_attn.out_proj.bias"], device, dtype=ttnn.bfloat8_b)
+            self.bo = tensor_1d_to_2d_ttnn(weights["self_attn.out_proj.bias"], device, dtype=matmul_weight_dtype())
         else:
             self.bo = None
 
@@ -612,7 +613,7 @@ class SigLIPAttentionTTNN:
             hidden_states,
             self.wqkv,
             bias=self.bqkv,
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             memory_config=bs_memcfg_qkv,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=qkv_pcfg,
@@ -680,7 +681,7 @@ class SigLIPAttentionTTNN:
             attn_concat,
             self.wo,
             bias=self.bo,
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             memory_config=bs_memcfg_hidden,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             program_config=oproj_pcfg,
@@ -735,7 +736,7 @@ class SigLIPAttentionTTNN:
                 hidden_states,
                 self.wqkv,
                 bias=self.bqkv,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=qkv_pcfg,
@@ -745,7 +746,7 @@ class SigLIPAttentionTTNN:
                 hidden_states,
                 self.wqkv,
                 bias=self.bqkv,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 core_grid=self.core_grid,
@@ -816,7 +817,7 @@ class SigLIPAttentionTTNN:
                 attn_concat,
                 self.wo,
                 bias=self.bo,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=wo_pcfg,
@@ -826,7 +827,7 @@ class SigLIPAttentionTTNN:
                 attn_concat,
                 self.wo,
                 bias=self.bo,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 core_grid=self.core_grid,
@@ -877,7 +878,7 @@ class SigLIPMLPTTNN:
         fc1_weight = fc1_w_torch.T.contiguous()
         self.fc1_weight = ttnn.from_torch(
             fc1_weight,
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -887,7 +888,7 @@ class SigLIPMLPTTNN:
             fc1_b_torch = weights["mlp.fc1.bias"]
             if pad_n > 0:
                 fc1_b_torch = torch.nn.functional.pad(fc1_b_torch, (0, pad_n))
-            self.fc1_bias = tensor_1d_to_2d_ttnn(fc1_b_torch, device, dtype=ttnn.bfloat8_b)
+            self.fc1_bias = tensor_1d_to_2d_ttnn(fc1_b_torch, device, dtype=matmul_weight_dtype())
         else:
             self.fc1_bias = None
 
@@ -900,14 +901,14 @@ class SigLIPMLPTTNN:
         fc2_weight = fc2_w_torch.T.contiguous()
         self.fc2_weight = ttnn.from_torch(
             fc2_weight,
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         if "mlp.fc2.bias" in weights:
-            self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=ttnn.bfloat8_b)
+            self.fc2_bias = tensor_1d_to_2d_ttnn(weights["mlp.fc2.bias"], device, dtype=matmul_weight_dtype())
         else:
             self.fc2_bias = None
 
@@ -954,7 +955,7 @@ class SigLIPMLPTTNN:
             hidden_states,
             self.fc1_weight,
             bias=self.fc1_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             memory_config=bs_memcfg_intermediate,
             compute_kernel_config=self.compute_kernel_config,
             program_config=fc1_pcfg,
@@ -972,7 +973,7 @@ class SigLIPMLPTTNN:
             x,
             self.fc2_weight,
             bias=self.fc2_bias,
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             memory_config=bs_memcfg_hidden,
             compute_kernel_config=self.compute_kernel_config,
             program_config=fc2_pcfg,
@@ -1034,7 +1035,7 @@ class SigLIPMLPTTNN:
                 hidden_states,
                 self.fc1_weight,
                 bias=self.fc1_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=fc1_pcfg,
@@ -1044,7 +1045,7 @@ class SigLIPMLPTTNN:
                 hidden_states,
                 self.fc1_weight,
                 bias=self.fc1_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 core_grid=self.core_grid,
@@ -1057,7 +1058,7 @@ class SigLIPMLPTTNN:
                 x,
                 self.fc2_weight,
                 bias=self.fc2_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=fc2_pcfg,
@@ -1067,7 +1068,7 @@ class SigLIPMLPTTNN:
                 x,
                 self.fc2_weight,
                 bias=self.fc2_bias,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 core_grid=self.core_grid,
@@ -1601,7 +1602,7 @@ class MultiModalProjectorTTNN:
         # Convert weight to TTNN format (transposed)
         self.weight = ttnn.from_torch(
             weights["linear.weight"].T.contiguous(),
-            dtype=ttnn.bfloat8_b,
+            dtype=matmul_weight_dtype(),
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

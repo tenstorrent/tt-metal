@@ -26,7 +26,7 @@ import torch
 import ttnn
 
 from models.experimental.pi0_5.common.configs import PaliGemmaConfig
-from .ttnn_common import get_ln_weight_memory_config, tensor_1d_to_2d_ttnn
+from .ttnn_common import get_ln_weight_memory_config, matmul_weight_dtype, tensor_1d_to_2d_ttnn
 from .ttnn_gemma import (
     GemmaBlockTTNN,
     rms_norm_ttnn,
@@ -181,19 +181,19 @@ class PaliGemmaBackboneTTNN:
             # on the per-step QKV linear (180 calls for expert, 18 for VLM prefill).
             wq_ttnn = ttnn.from_torch(
                 weights[q_key].T.contiguous(),  # [hidden, num_heads * head_dim]
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
                 weights[k_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
                 weights[v_key].T.contiguous(),  # [hidden, num_kv_heads * head_dim]
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -239,7 +239,7 @@ class PaliGemmaBackboneTTNN:
                     # OPTIMIZATION: o_proj weight bf16 -> bf8_b (halves DRAM bandwidth).
                     # Norm weights stay bf16 (small and precision-sensitive).
                     is_norm = "layernorm" in new_key or "norm" in new_key
-                    weight_dtype = ttnn.bfloat16 if is_norm else ttnn.bfloat8_b
+                    weight_dtype = ttnn.bfloat16 if is_norm else matmul_weight_dtype()
                     block_weights[new_key] = ttnn.from_torch(
                         value,
                         dtype=weight_dtype,
@@ -266,19 +266,19 @@ class PaliGemmaBackboneTTNN:
             # Get Q, K, V weights, transpose for TTNN linear, and convert to TTNN
             wq_ttnn = ttnn.from_torch(
                 weights[q_key].T.contiguous(),
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wk_ttnn = ttnn.from_torch(
                 weights[k_key].T.contiguous(),
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             wv_ttnn = ttnn.from_torch(
                 weights[v_key].T.contiguous(),
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_weight_dtype(),
                 layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
@@ -324,7 +324,7 @@ class PaliGemmaBackboneTTNN:
                     # OPTIMIZATION: o_proj weight bf16 -> bf8_b (halves DRAM bandwidth).
                     # Norm weights stay bf16 (small and precision-sensitive).
                     is_norm = "layernorm" in new_key or "norm" in new_key
-                    weight_dtype = ttnn.bfloat16 if is_norm else ttnn.bfloat8_b
+                    weight_dtype = ttnn.bfloat16 if is_norm else matmul_weight_dtype()
                     block_weights[new_key] = ttnn.from_torch(
                         value,
                         dtype=weight_dtype,

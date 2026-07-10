@@ -33,6 +33,8 @@ from models.experimental.pi0_5.common.configs import GemmaConfig
 from models.experimental.pi0_5.tt.ttnn_common import (
     get_sdpa_compute_kernel_config,
     get_sdpa_exp_approx_mode,
+    matmul_act_dtype,
+    matmul_weight_dtype,
     sdpa_prefill_chunk_sizes,
 )
 
@@ -215,6 +217,13 @@ def build_matmul_pcfg(
     Returns None if shapes don't admit a clean config.
     """
     if m_tiles == 0 or k_tiles == 0 or n_tiles == 0:
+        return None
+    # High-precision (PI0_WEIGHTS_BF16=1): bf16 weights are 2x the bf8 CB footprint and clash with
+    # L1 under these perf-tuned block sizes. Fall back to None so callers use the core_grid path,
+    # which auto-sizes CBs to fit L1 (slower, but this is a precision-parity mode, not the perf path).
+    import os as _os_hp
+
+    if _os_hp.environ.get("PI0_WEIGHTS_BF16", "").lower() in ("1", "true", "yes", "on"):
         return None
     total_cores = grid_x * grid_y
 
@@ -628,7 +637,7 @@ class GemmaAttentionTTNN:
                 xqkv = ttnn.linear(
                     hidden_states,
                     self.wqkv,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=matmul_act_dtype(),
                     memory_config=bs_mc_qkv,
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     program_config=qkv_pcfg,
@@ -645,7 +654,7 @@ class GemmaAttentionTTNN:
                 xqkv = ttnn.linear(
                     hidden_states,
                     self.wqkv,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=matmul_act_dtype(),
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     program_config=wqkv_pcfg,
@@ -654,7 +663,7 @@ class GemmaAttentionTTNN:
                 xqkv = ttnn.linear(
                     hidden_states,
                     self.wqkv,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=matmul_act_dtype(),
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     core_grid=self.core_grid,
@@ -890,7 +899,7 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
             xqkv = ttnn.linear(
                 hidden_states,
                 self.wqkv,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_act_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 program_config=wqkv_pcfg,
@@ -899,7 +908,7 @@ class AdaRMSExpertAttentionTTNN(GemmaAttentionTTNN):
             xqkv = ttnn.linear(
                 hidden_states,
                 self.wqkv,
-                dtype=ttnn.bfloat8_b,
+                dtype=matmul_act_dtype(),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 core_grid=self.core_grid,
@@ -1023,12 +1032,12 @@ class GemmaMLPTTNN:
         self.device = device
         self._force_bf16_out = force_bf16_out
 
-        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings
+        # Convert weights to TTNN as BF8_B for 2x DRAM bandwidth savings (PI0_WEIGHTS_BF16=1 -> bf16).
         def to_ttnn(w):
             if isinstance(w, torch.Tensor):
                 return ttnn.from_torch(
                     w.T.contiguous(),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=matmul_weight_dtype(),
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                 )
@@ -1098,7 +1107,7 @@ class GemmaMLPTTNN:
                         w_torch = torch.nn.functional.pad(w_torch, (0, pad_cols), mode="constant", value=0.0)
                     self.down_proj_dram_sharded = ttnn.from_torch(
                         w_torch,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=matmul_act_dtype(),
                         layout=ttnn.TILE_LAYOUT,
                         device=device,
                         memory_config=memcfg,

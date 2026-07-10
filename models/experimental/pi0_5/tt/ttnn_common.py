@@ -173,6 +173,24 @@ def denoise_loop_fp32() -> bool:
     return _env_bool("PI0_DENOISE_FP32", False)
 
 
+def matmul_weight_dtype() -> "ttnn.DataType":
+    """Dtype for VLM/expert matmul WEIGHTS (QKV, o_proj, MLP gate/up/down).
+
+    Default `bfloat8_b` (the validated perf policy — halves DRAM bandwidth). Set
+    `PI0_WEIGHTS_BF16=1` to load them `bfloat16` instead: ~2 mantissa bits → 8, which
+    lifts e2e PCC vs the higher-precision torch reference (bf8 weight quantization is the
+    dominant single-chip PCC gap at horizon 50). Costs DRAM/L1 + bandwidth, so it's a
+    precision-parity knob, not the perf default.
+    """
+    return ttnn.bfloat16 if _env_bool("PI0_WEIGHTS_BF16", False) else ttnn.bfloat8_b
+
+
+def matmul_act_dtype() -> "ttnn.DataType":
+    """Dtype for matmul activation OUTPUTS (QKV/o-proj/MLP intermediates). Same PI0_WEIGHTS_BF16
+    high-precision gate as matmul_weight_dtype — bf8_b for perf, bf16 for PCC parity."""
+    return ttnn.bfloat16 if _env_bool("PI0_WEIGHTS_BF16", False) else ttnn.bfloat8_b
+
+
 def get_ttnn_dtype(precision: str) -> ttnn.DataType:
     """
     Convert precision string to TTNN dtype.
