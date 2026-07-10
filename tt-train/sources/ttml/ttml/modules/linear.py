@@ -13,6 +13,11 @@ import ttml
 from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
+# Activations flow as 4-D tensors ``(B, 1, S, H)``; the sequence dimension is axis 2.
+# Under Megatron sequence parallelism the residual stream is sharded along this axis
+# across the tensor-parallel mesh axis, so the SP collectives target dim 2.
+_SEQUENCE_DIM = 2
+
 
 class LinearLayer(AbstractModuleBase):
     """Fully-connected linear layer: y = x @ W^T + b."""
@@ -92,6 +97,10 @@ class ColumnParallelLinear(AbstractModuleBase):
         gather_output: If ``True`` an all-gather is inserted after the matmul so
             the output is replicated across TP devices (needed when the consumer
             expects an un-sharded tensor, e.g. the final LM-head projection).
+        sequence_parallel: If ``True`` the input arrives sharded along the sequence
+            dimension across the TP axis (Megatron sequence parallelism). An
+            all-gather over the sequence dim reconstructs the full sequence before
+            the matmul.
         axis_name: Mesh axis used for tensor parallelism.
     """
 
@@ -103,6 +112,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         weight_init: Callable | None = None,
         bias_init: Callable | None = None,
         gather_output: bool = False,
+        sequence_parallel: bool = False,
         axis_name: str = "tp",
     ) -> None:
         super().__init__()
@@ -110,6 +120,7 @@ class ColumnParallelLinear(AbstractModuleBase):
         self.in_features = in_features
         self.out_features = out_features
         self.gather_output = gather_output
+        self.sequence_parallel = sequence_parallel
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
 
@@ -133,8 +144,17 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.bias = None
 
     def forward(self, x):
-        # Broadcast ensures the input is replicated across all TP devices.
-        x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        if self.sequence_parallel:
+            # SP: input is sequence-sharded across TP. Gather the full sequence for
+            # the matmul. Backward is reduce_scatter(seq) (GradOutputType.SHARDED ->
+            # plain sum, no averaging), which sums the input grad across TP and
+            # re-shards it along the sequence -- the transpose of this gather.
+            x = ttml.ops.distributed.all_gather(
+                x, _SEQUENCE_DIM, self.cluster_axis, ttml.ops.distributed.GradOutputType.SHARDED
+            )
+        else:
+            # Broadcast ensures the input is replicated across all TP devices.
+            x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
@@ -157,6 +177,10 @@ class RowParallelLinear(AbstractModuleBase):
             sharded along the feature dimension (e.g. the output of a
             ``ColumnParallelLinear`` with ``gather_output=False``).  When ``False``
             a scatter is inserted to partition the input.
+        sequence_parallel: If ``True`` the partial matmul outputs are combined with a
+            sequence reduce-scatter (Megatron sequence parallelism) instead of an
+            all-reduce: this sums the partial products across TP *and* shards the
+            result along the sequence, leaving the residual stream sequence-sharded.
         axis_name: Mesh axis used for tensor parallelism.
     """
 
@@ -168,14 +192,23 @@ class RowParallelLinear(AbstractModuleBase):
         weight_init: Callable | None = None,
         bias_init: Callable | None = None,
         input_is_parallel: bool = False,
+        sequence_parallel: bool = False,
         axis_name: str = "tp",
     ) -> None:
         super().__init__()
+
+        if sequence_parallel and not input_is_parallel:
+            # SP RowParallel always follows an SP ColumnParallel, whose output is
+            # already feature-sharded. A non-parallel (replicated) SP input would
+            # need a simultaneous sequence-gather + feature-scatter that Llama never
+            # exercises; reject it rather than emit a subtly wrong graph.
+            raise ValueError("RowParallelLinear: sequence_parallel requires input_is_parallel=True")
 
         self.in_features = in_features
         self.out_features = out_features
         # TODO: use ttnn.Tensor.tensor_topology() once CCL ops will properly update this property
         self.input_is_parallel = input_is_parallel
+        self.sequence_parallel = sequence_parallel
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
 
@@ -201,9 +234,16 @@ class RowParallelLinear(AbstractModuleBase):
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        # Sum partial products across TP devices to obtain the full result.
-        x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
-        # Bias is replicated, so it is safe to add after the all-reduce.
+        if self.sequence_parallel:
+            # SP: sum partial products across TP and re-shard along the sequence in
+            # one step. Backward is all_gather(seq), which reconstructs the full-
+            # sequence gradient (replicated across TP) that the matmul backward
+            # expects -- no double reduction, so no noop_backward is needed here.
+            x = ttml.ops.distributed.reduce_scatter(x, _SEQUENCE_DIM, self.cluster_axis)
+        else:
+            # Sum partial products across TP devices to obtain the full result.
+            x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+        # Bias is replicated, so it is safe to add after the reduction.
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)
         return x

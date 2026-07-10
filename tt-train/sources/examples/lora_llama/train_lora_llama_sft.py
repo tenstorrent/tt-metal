@@ -27,6 +27,7 @@ from ttml.models.llama import (
     LlamaRopeScalingConfig,
     load_from_safetensors,
 )
+from ttml.parallel import TPStrategy
 from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
@@ -126,7 +127,7 @@ def llama_config_from_yaml(yaml_config: dict, vocab_size: int, use_tp: bool = Fa
         runner_type=runner_type,
         weight_tying=weight_tying,
         rope_scaling=rope_scaling,
-        use_tp=use_tp,
+        tp_strategy=TPStrategy.from_flags(use_tp, False),
     )
 
 
@@ -294,7 +295,7 @@ def main():
             vocab_size=vocab_size,
             max_position_embeddings=256,
             rope_theta=500000.0,
-            use_tp=use_tp,
+            tp_strategy=TPStrategy.from_flags(use_tp, False),
         )
 
     seq_len = llama_cfg.max_position_embeddings

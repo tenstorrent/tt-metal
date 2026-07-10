@@ -12,6 +12,7 @@ import ttml
 from ttml.modules import AbstractModuleBase, Parameter, RunMode, LinearLayer, ColumnParallelLinear, RowParallelLinear
 
 from .gqattn import GroupedQueryAttention
+from ttml.parallel import TPStrategy
 
 
 def compute_swiglu_intermediate_size(hidden_size: int, multiple_of: int = 256) -> int:
@@ -67,9 +68,12 @@ class LlamaMLP(AbstractModuleBase):
         embedding_size: int,
         intermediate_size: Optional[int] = None,
         dropout: float = 0.0,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
+
+        use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
 
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
@@ -80,13 +84,13 @@ class LlamaMLP(AbstractModuleBase):
 
         if use_tp:
             # Gate (w1) and up (w3) projections are column-parallel (output sharded);
-            # down projection (w2) is row-parallel (input sharded).  The pair
-            # eliminates a gather/scatter round-trip between w1/w3 and w2.
+            # down projection (w2) is row-parallel (input sharded).
             self.w1 = ColumnParallelLinear(
                 embedding_size,
                 intermediate_size,
                 has_bias=False,
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.w3 = ColumnParallelLinear(
@@ -94,6 +98,7 @@ class LlamaMLP(AbstractModuleBase):
                 intermediate_size,
                 has_bias=False,
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.w2 = RowParallelLinear(
@@ -101,6 +106,7 @@ class LlamaMLP(AbstractModuleBase):
                 embedding_size,
                 has_bias=False,
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
@@ -165,15 +171,19 @@ class LlamaBlock(AbstractModuleBase):
         mlp_dropout: float = 0.0,
         intermediate_size: Optional[int] = None,
         attention_bias: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
     ) -> None:
         super().__init__()
 
+        # Under sequence parallelism the residual stream (and hence the two RMSNorm
+        # inputs) is sequence-sharded across the TP axis; the norms are per-token so
+        # they need no change. The attention/MLP linears gather to full sequence for
+        # their matmuls and reduce-scatter back, so the block wiring is unchanged.
         self.mlp = LlamaMLP(
             hidden_size,
             intermediate_size,
             mlp_dropout,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
         )
         self.attention_norm = RMSNormLayer(hidden_size)
         self.mlp_norm = RMSNormLayer(hidden_size)
@@ -184,7 +194,7 @@ class LlamaBlock(AbstractModuleBase):
             dropout=attention_dropout,
             rope_params=rope_params,
             bias_linears=attention_bias,
-            use_tp=use_tp,
+            tp_strategy=tp_strategy,
         )
 
     def forward(
