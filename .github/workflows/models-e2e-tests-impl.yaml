@@ -171,29 +171,49 @@ jobs:
         working-directory: /work
         run: |
           set -x
-          python3 -m pip install --no-cache-dir pyelftools tabulate \
-            || python3 -m pip install --no-cache-dir --break-system-packages pyelftools tabulate \
-            || pip3 install --no-cache-dir pyelftools tabulate || true
+          # The runtime venv (/opt/venv) has no pip → bootstrap it, then install the
+          # analyzer deps. Fall back to a --target dir on PYTHONPATH if the venv is locked.
+          python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+          python3 -m pip install --no-cache-dir pyelftools tabulate >/dev/null 2>&1 \
+            || python3 -m pip install --no-cache-dir --break-system-packages pyelftools tabulate >/dev/null 2>&1 || true
+          if ! python3 -c "import elftools" 2>/dev/null; then
+            python3 -m pip install --no-cache-dir -t /tmp/pylibs pyelftools tabulate >/dev/null 2>&1 || true
+            export PYTHONPATH="/tmp/pylibs:${PYTHONPATH}"
+          fi
+          python3 -c "import elftools, tabulate; print('analyzer deps OK')" || echo "WARN: analyzer deps missing"
           CACHE="${TT_METAL_CACHE:-$HOME/.cache/tt-metal-cache}"
           echo "Analyzing JIT kernels under: $CACHE"
           echo "trisc ELFs found: $(find "$CACHE" -name 'trisc*.elf' 2>/dev/null | wc -l)"
           mkdir -p generated
-          PYTHONPATH=/work python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f table -l llk_core,llk_api -o generated/llk_report_table.md || true
-          PYTHONPATH=/work python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f csv   -l llk_core,llk_api -o generated/llk_report.csv || true
+          export PYTHONPATH="/work:${PYTHONPATH}"
+          python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f table -l llk_core,llk_api -o generated/llk_report_table.md || true
+          python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f csv   -l llk_core,llk_api -o generated/llk_report.csv || true
           echo "===================== #45127-active signature counts ====================="
           for s in "dim_stride_target=FACE_ROW_MAJOR" "unpack_tilize" "unpack_bcastA_B" "dim_stride_target=IGNORE"; do
             echo "  $s : $(grep -c "$s" generated/llk_report_table.md 2>/dev/null || echo 0)"
           done
-          echo "===================== kernels hitting FACE_ROW_MAJOR / tilize / bcastA_B ====================="
-          grep -nE "FACE_ROW_MAJOR|unpack_tilize|unpack_bcastA_B" generated/llk_report.csv 2>/dev/null | head -80 || true
+          # The log is the reliable channel (artifact path is finicky in this container mount),
+          # so dump the culprit rows fully here. Use the markdown table (pipe-delimited; the CSV
+          # has commas inside the format fields). Table cols: 1='' 2=LLK API 3=TTNN Ops 4=Op Args ...
+          echo "===================== FULL #45127-active table rows (LLK API | op | formats) ====================="
+          grep -E "FACE_ROW_MAJOR|unpack_tilize|unpack_bcastA_B" generated/llk_report_table.md 2>/dev/null | head -400 || true
+          echo "===================== distinct TTNN ops that hit each #45127 path ====================="
+          for s in FACE_ROW_MAJOR unpack_tilize unpack_bcastA_B; do
+            echo "--- $s ---"
+            grep -E "$s" generated/llk_report_table.md 2>/dev/null | awk -F'|' '{print $3}' | sort -u | head -40 || true
+          done
       - name: Upload LLK report (#45127)
         if: ${{ always() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: llk-report-45127
+          # container writes to /work (= workspace/docker-job); list both prefixes so
+          # whichever the action's workspace root resolves to gets picked up.
           path: |
             generated/llk_report_table.md
             generated/llk_report.csv
+            docker-job/generated/llk_report_table.md
+            docker-job/generated/llk_report.csv
           if-no-files-found: warn
       - name: Save environment data
         id: save-environment-data
