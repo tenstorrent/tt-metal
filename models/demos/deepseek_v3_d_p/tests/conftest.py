@@ -32,6 +32,13 @@ from models.demos.deepseek_v3.utils.test_utils import load_state_dict
 TestVariant = PrefillModelAdapter
 TEST_VARIANTS = {name: get_adapter(name) for name in ADAPTER_PATHS}
 DSV3 = get_adapter("deepseek_v3_d_p")
+
+# glm_5_2 is a TEST-ONLY variant here: its adapter is intentionally kept out of the shared common
+# ADAPTER_PATHS (prefill serving is not wired), so register it locally for the `variant` fixture
+# without modifying the common prefill registry.
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.sparse_mla import GLM52Adapter
+
+TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict, detect_language_model_prefix
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset

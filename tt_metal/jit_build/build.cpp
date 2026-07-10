@@ -180,6 +180,9 @@ void JitBuildEnv::init(
         if (rtoptions.get_profiler_sum()) {
             profiler_options |= PROFILER_OPT_DO_SUM;
         }
+        if (rtoptions.get_profiler_accumulate()) {
+            profiler_options |= PROFILER_OPT_DO_ACCUMULATE;
+        }
         this->defines_ += "-DPROFILE_KERNEL=" + std::to_string(profiler_options) + " ";
 
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
