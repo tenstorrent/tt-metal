@@ -36,6 +36,12 @@ required (buffer size, mid-run dump, timeout) -- without them the post-process a
     --timeout=1800
   pip install tt-perf-report
   tt-perf-report generated/profiler/reports/.../ops_perf_results_*.csv   # auto-focuses the "fibo profile" signpost region
+
+Per-component device-op profiles (``test_fibo_{encode,denoise,decode}_device_profile``) live at the bottom
+of this file. Each builds ONLY one component (encoder / transformer / VAE decoder) with synthetic inputs at
+the real 1024^2 shapes and runs a single warmup + signposted measured forward -- no pipeline, no allocation
+run -- so each yields a small, focused ``tt-perf-report`` for just that stage. See the section comment above
+those tests for their run command.
 """
 
 import os
@@ -347,3 +353,233 @@ def test_fibo_pipeline_device_profile(*, mesh_device, height, width, num_inferen
         signpost_label="fibo profile",
         check_image=False,
     )
+
+
+# ---------------------------------------------------------------------------------------------------
+# Per-component device-op profiles.
+#
+# Each test below builds ONLY one pipeline component (text encoder / transformer / VAE decoder) and runs
+# it once with synthetic inputs at the SAME shapes the real pipeline uses at 1024^2. Nothing else runs --
+# no pipeline, no __init__ allocation generation -- so the Tracy device-op capture stays small and each
+# report is focused on just that component. (Profiling the whole pipeline to isolate one part emits ~15k+
+# programs/pass and a multi-GB device log that overwhelms the host capture.) One forward captures every
+# unique device op, so a per-op report needs a single warmup + single measured pass, bracketed by a
+# per-stage Tracy signpost ("fibo encode" / "fibo denoise" / "fibo decode").
+#
+# WORKFLOW (Tracy build required) -- two steps, e.g. for denoise:
+#
+#   1. Record the raw device-op CSV. This captures the WHOLE process: model build + warmup forward +
+#      measured forward, with one row PER DEVICE (the 2x2 mesh -> x4 rows/op).
+#        TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000 \
+#          HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \
+#          python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \
+#          models/tt_dit/tests/models/bria_fibo/test_performance_bria_fibo.py::test_fibo_denoise_device_profile \
+#          --timeout=1800
+#      -> generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv
+#
+#   2. Render + save ONLY the measured forward's ops into a per-stage folder. Passing the SAME name to
+#      --start-signpost and --end-signpost brackets the region between the "measured begin" (1st instance)
+#      and "measured end" (2nd instance) signposts; --csv writes the per-op table (a *_stacked.csv grouped
+#      summary lands alongside it). tt-perf-report does NOT create the output folder, so mkdir it first:
+#        mkdir -p denoise_report
+#        tt-perf-report generated/profiler/reports/<ts>/ops_perf_results_<ts>.csv \
+#          --start-signpost "fibo denoise" --end-signpost "fibo denoise" \
+#          --csv denoise_report/ops.csv
+#
+#   Per stage -- swap the ::test, the signpost name, and the folder together:
+#     encode   ::test_fibo_encode_device_profile    "fibo encode"    mkdir -p encode_report  --csv encode_report/ops.csv
+#     denoise  ::test_fibo_denoise_device_profile   "fibo denoise"   mkdir -p denoise_report --csv denoise_report/ops.csv
+#     decode   ::test_fibo_decode_device_profile    "fibo decode"    mkdir -p decode_report  --csv decode_report/ops.csv
+#
+# WHY the saved report is much smaller than the raw CSV (and still complete): the raw CSV holds every op
+# once per device (2x2 -> x4, which tt-perf-report merges) AND the model build + the compile-warmup forward
+# that run BEFORE the signpost. The signpost keeps ONLY the measured forward. E.g. denoise: ~26k raw rows
+# -> /4 devices -> ~6.5k logical ops -> signpost -> 2934 measured-forward ops (build ~690 + warmup ~2934
+# excluded). So you get exactly the one cache-warm forward's ops, deduped across the mesh -- nothing from
+# the measured pass is dropped. (Without the --start/--end-signpost flags, tt-perf-report defaults to the
+# last signpost; passing them explicitly is unambiguous. --ignore-signposts analyzes the entire raw file.)
+# ---------------------------------------------------------------------------------------------------
+
+
+def _profile_forward(mesh_device, header, forward):
+    """Profile ONE component forward for a focused device-op report: 1 warmup + 1 measured pass.
+
+    ``forward`` is a zero-arg callable that (re)builds its device inputs and runs the component once,
+    returning its output (rebuilding per call so warmup and measured see identical fresh device state).
+    Under ``python -m tracy`` the signpost brackets the region tt-perf-report focuses on, and (with
+    ``--dump-device-data-mid-run``) the mid-run flush drains the warmup's markers so the measured pass's
+    per-core marker buffer can't overflow. Everything here is a no-op under plain pytest, so the test
+    still runs (producing no CSV) without the Tracy driver.
+    """
+
+    def _signpost(message):
+        try:
+            from tracy import signpost
+        except Exception:
+            return
+        signpost(header=header, message=message)
+
+    def _flush():
+        # No-op unless under the driver's --dump-device-data-mid-run (TT_METAL_PROFILER_MID_RUN_DUMP=1).
+        if os.environ.get("TT_METAL_PROFILER_MID_RUN_DUMP") != "1":
+            return
+        try:
+            ttnn.ReadDeviceProfiler(mesh_device)
+        except Exception as e:  # a real flush failure would silently drop markers -> surface it
+            logger.warning(f"ReadDeviceProfiler flush failed ({e}); device-op markers may drop")
+
+    forward()  # warmup: compile/populate the program cache (its one-time cost is before the signpost)
+    ttnn.synchronize_device(mesh_device)
+    _flush()  # drop the warmup's markers so they don't share the measured pass's buffer
+
+    _signpost("measured begin")
+    out = forward()
+    ttnn.synchronize_device(mesh_device)
+    _signpost("measured end")
+    return out
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
+def test_fibo_encode_device_profile(*, mesh_device):
+    """Device-op profile of ONLY the SmolLM3 text encoder (encode stage), 2x2 mesh, replicated (as in the pipeline).
+
+    Builds just the encoder and runs one free-text prompt through it (its input is a string; the token
+    count is the "shape"). 1 warmup + 1 signposted ("fibo encode") measured forward. See the section
+    comment above for the Tracy command (swap in ::test_fibo_encode_device_profile and the "fibo encode"
+    signpost); encode is light, so a small TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT suffices.
+    """
+    from models.tt_dit.parallel.config import EncoderParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.pipelines.bria_fibo.text_encoder import SmolLM3TextEncoderWrapper
+
+    ckpt = _fibo_local()
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    # tp factor 1 -> fully replicated across the mesh (matches the pipeline's encoder_parallel_config).
+    encoder = SmolLM3TextEncoderWrapper(
+        ckpt, device=mesh_device, ccl_manager=ccl, parallel_config=EncoderParallelConfig.from_tuple((1, 1))
+    )
+
+    prompt_embeds, hidden_states = _profile_forward(
+        mesh_device, "fibo encode", lambda: encoder.encode_prompt("a luxury sports car")
+    )
+    assert prompt_embeds is not None and len(hidden_states) > 0
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
+@pytest.mark.parametrize("height, width", [(1024, 1024)])
+def test_fibo_denoise_device_profile(*, mesh_device, height, width):
+    """Device-op profile of ONLY the BriaFiboTransformer (denoise stage) at production sizes, 2x2 (sp=2, tp=2).
+
+    Builds the full 46-block transformer and runs ONE forward at production spatial sequence 4096
+    (1024^2 / 16^2 -> 64x64 patches) with synthetic inputs -- one forward captures every unique device op,
+    so the report is small and focused. 1 warmup + 1 signposted ("fibo denoise") measured forward. (CFG
+    runs this same forward twice per step; one forward is sufficient for a per-op report.) See the section
+    comment above for the Tracy command; the full-depth forward needs the enlarged marker buffer +
+    ``--dump-device-data-mid-run`` (e.g. TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000).
+    """
+    import torch
+
+    from models.tt_dit.blocks.attention import Attention
+    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
+    from models.tt_dit.parallel.config import DiTParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+    from models.tt_dit.utils.tensor import bf16_tensor
+
+    sp_axis, tp_axis = 0, 1
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    parallel_config = DiTParallelConfig.from_tuples(cfg=(1, 0), sp=(sp_factor, sp_axis), tp=(tp_factor, tp_axis))
+
+    checkpoint = BriaFiboCheckpoint(_fibo_local())
+    model = checkpoint.build(ccl_manager=ccl, parallel_config=parallel_config)
+
+    latent_h, latent_w = height // 16, width // 16
+    spatial_seq_len = latent_h * latent_w  # 4096 at 1024^2
+    prompt_seq_len = 128
+    num_blocks = checkpoint._config.num_layers + checkpoint._config.num_single_layers  # 46
+
+    torch.manual_seed(0)
+    spatial = torch.randn(1, spatial_seq_len, checkpoint.in_channels).to(torch.bfloat16)
+    prompt = torch.randn(1, prompt_seq_len, checkpoint.joint_attention_dim).to(torch.bfloat16)
+    text_encoder_layers = [
+        torch.randn(1, prompt_seq_len, checkpoint.text_encoder_dim).to(torch.bfloat16) for _ in range(num_blocks)
+    ]
+    timestep = torch.full((1,), 500.0).to(torch.bfloat16)
+
+    # RoPE ids, Flux-style (txt = zeros, img = pixel grid; random ids are fine -- values don't change op shapes).
+    text_ids = torch.zeros(prompt_seq_len, 3).to(torch.bfloat16)
+    image_ids = torch.randint(height * width, (spatial_seq_len, 3)).to(torch.bfloat16)
+    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
+    rope_cos, rope_sin = checkpoint.pos_embed.forward(ids)
+
+    # Pad the spatial sequence + spatial RoPE to the sp factor (host), then shard on the sp axis.
+    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    rope_cos_sp = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
+    rope_sin_sp = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
+    padded_spatial_seq_len = spatial_padded.shape[1]
+
+    def forward():
+        return model.forward(
+            spatial=bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=1),
+            prompt=bf16_tensor(prompt, device=mesh_device),
+            timestep=bf16_tensor(timestep.unsqueeze(-1), device=mesh_device),
+            text_encoder_layers=[bf16_tensor(t, device=mesh_device) for t in text_encoder_layers],
+            spatial_rope=(
+                bf16_tensor(rope_cos_sp, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
+                bf16_tensor(rope_sin_sp, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
+            ),
+            prompt_rope=(
+                bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device),
+                bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device),
+            ),
+            spatial_sequence_length=padded_spatial_seq_len,
+            prompt_sequence_length=prompt_seq_len,
+        )
+
+    out = _profile_forward(mesh_device, "fibo denoise", forward)
+    assert out is not None
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize("device_params", [_PROFILE_DEVICE_PARAMS], indirect=["device_params"])
+@pytest.mark.parametrize("height, width", [(1024, 1024)])
+def test_fibo_decode_device_profile(*, mesh_device, height, width):
+    """Device-op profile of ONLY the on-device Wan VAE decoder (decode stage) at production 1024^2, 2x2 hw-parallel.
+
+    Builds just the VAE decoder (as the pipeline does: height/width parallel over the 2x2 mesh) and decodes
+    ONE synthetic production-shape latent (1, 48, 1, 64, 64) -> 1024x1024 -- small, focused report. 1 warmup
+    + 1 signposted ("fibo decode") measured decode. See the section comment above for the Tracy command.
+    """
+    import torch
+
+    from models.tt_dit.models.vae.vae_wan2_1 import WanVAEDecoderAdapter
+    from models.tt_dit.parallel.config import VaeHWParallelConfig
+    from models.tt_dit.parallel.manager import CCLManager
+
+    sp_axis, tp_axis = 0, 1
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+
+    ccl = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    # Height on the tp axis, width on the sp axis (matches the pipeline's vae_parallel_config).
+    parallel_config = VaeHWParallelConfig.from_tuples(height=(tp_factor, tp_axis), width=(sp_factor, sp_axis))
+    vae = WanVAEDecoderAdapter(
+        checkpoint_name=_fibo_local(),
+        parallel_config=parallel_config,
+        ccl_manager=ccl,
+        height=height,
+        width=width,
+        num_frames=1,
+        vae_t_chunk_size=None,  # full-T single pass (T=1)
+    )
+
+    latent_h, latent_w = height // 16, width // 16
+    torch.manual_seed(0)
+    z = torch.randn(1, vae.config.z_dim, 1, latent_h, latent_w)  # BCTHW, z_dim=48
+
+    out = _profile_forward(mesh_device, "fibo decode", lambda: vae.decode(z, output_type="pt"))
+    assert out is not None
