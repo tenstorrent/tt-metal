@@ -93,7 +93,9 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
 
     from safetensors import safe_open
 
-    base = os.environ.get("M3_CKPT", "/data/philei/MiniMax-M3")
+    base = os.environ.get("M3_CKPT") or os.environ.get("HF_MODEL")
+    if not base:
+        pytest.skip("set HF_MODEL (or M3_CKPT) to a MiniMax-M3 checkpoint for the real-weights MSA test")
     wmap = _json.load(open(f"{base}/model.safetensors.index.json"))["weight_map"]
     pre = "language_model.model.layers.3.self_attn."
     names = {
@@ -141,7 +143,12 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     )
     block_ids_ref = _torch_block_ids(iq, ik, scale, S)  # [1, NKV(=NIDX groups), S, TOPK]
     sample = list(range(0, S, S // 64))  # ~64 sampled query rows (full gather is too large at S>2048)
-    ref_sampled = sparse_attention_ref_msa_sampled_tokens(q, k, v, block_ids_ref, scale, sample)  # [1,NQ,len,HD]
+    # causal=True: the device sparse_sdpa_msa is driven with chunk_start_idx=0, which enables the
+    # token-level diagonal-block causal mask (a query's own block holds future tokens that must be
+    # masked). The reference must apply the same mask or it wrongly attends those future tokens.
+    ref_sampled = sparse_attention_ref_msa_sampled_tokens(
+        q, k, v, block_ids_ref, scale, sample, causal=True, chunk_start_idx=0
+    )  # [1,NQ,len,HD]
 
     # --- TT path: compose the real model functions from the SAME (Meta-swizzled) weights ---
     hf_state = {
@@ -223,7 +230,13 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
 
     # DIAGNOSTIC 1 — block-selection agreement (index branch + indexer correctness): per (group, query),
     # fraction of the device's selected blocks that match torch's (order-independent set overlap).
-    bids_tt = ttnn.to_torch(ttnn.get_device_tensors(tt_block_ids)[0]).to(torch.int64)[:, :NIDX]  # [1,NIDX,S,TOPK]
+    # Device block-ids are uint32 with the masked/invalid tail marked by SENTINEL 0xFFFFFFFF (queries with
+    # < TOPK causally-visible blocks pad the rest). to_torch keeps uint32, so .to(int64) would turn the
+    # sentinel into 4294967295 (a huge "valid" out-of-range block). Re-map it to the reference's -1 so the
+    # `row >= 0` filter drops it (matches sparse_sdpa_msa_test_utils' SENTINEL convention).
+    bids_tt = ttnn.to_torch(ttnn.get_device_tensors(tt_block_ids)[0]).to(torch.int64)
+    bids_tt[bids_tt == 0xFFFFFFFF] = -1
+    bids_tt = bids_tt[:, :NIDX]  # [1,NIDX,S,TOPK]
     agree = 0.0
     for g in range(NIDX):
         for s in sample:
@@ -232,7 +245,9 @@ def test_msa_layer_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
 
     # DIAGNOSTIC 2 — feed the DEVICE block-ids to the torch golden too (isolates sparse + main Q/K/V
     # from any block-selection disagreement).
-    ref_common = sparse_attention_ref_msa_sampled_tokens(q, k, v, bids_tt, scale, sample)
+    ref_common = sparse_attention_ref_msa_sampled_tokens(
+        q, k, v, bids_tt, scale, sample, causal=True, chunk_start_idx=0
+    )
     _, pcc_common = comp_pcc(ref_common, out[:, :, sample, :], 0.95)
 
     # DIAGNOSTIC 3 — prove the flat-scores hypothesis. Pull the device's RAW block scores (pre top-k)

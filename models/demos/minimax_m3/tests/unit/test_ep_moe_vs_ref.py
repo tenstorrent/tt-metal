@@ -6,13 +6,15 @@ MiniMax-M3 EP MoE MLP (router + always-on shared expert + expert-parallel routed
 self-authored torch reference, at REAL M3 dims and the production 128-expert / 4-per-chip EP
 dispatch.
 
-Complements tests/unit/test_model_ep_vs_ref.py (whole model, reduced 32-expert MoE): this drives
-tt/mlp.py MLP directly at the full expert count and real hidden size, so it uniquely exercises the
+Op-level MoE MLP check at the full 128-expert / 4-per-chip EP dispatch and real hidden size (the SP
+whole-model test in test_model_sp_vs_ref.py runs a reduced expert count), so this uniquely exercises the
 multi-expert-per-chip dispatch/combine buffers AND the shared-expert add + routed_scaling_factor.
 
-Layout: one prompt per mesh ROW (DP=8, row-sharded), full emb replicated across the TP cols (4) —
-the same [1,1,S,H] MLP sees from the decoder layer. MLP does host top-k routing, EP dispatch/combine
-(fused clamped-swigluoai kernel) across all 32 chips, then adds the shared expert.
+Layout: each mesh ROW is fed an INDEPENDENT [1,1,S,H] token batch (row-sharded), replicated across the
+TP cols (4) — exactly the [1,1,S,H] the MLP sees per device from the decoder layer. The MLP is blind to
+how those rows relate (the model is SP-only: rows are sequence shards of one prompt), so independent
+per-row inputs are just a convenient way to exercise the op. MLP does host top-k routing, EP
+dispatch/combine (fused clamped-swigluoai kernel) across all 32 chips, then adds the shared expert.
 
 Random weights. Needs TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy ([8,4]). Anchor: transformers minimax_m3_vl.
 """
