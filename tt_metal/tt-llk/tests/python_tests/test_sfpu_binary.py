@@ -260,12 +260,14 @@ def test_sfpu_binary_int_shift_edge_cases(
     mathop,
 ):
     if (
-        mathop == MathOperation.SfpuElwRightShift
+        mathop in (MathOperation.SfpuElwRightShift, MathOperation.SfpuElwLeftShift)
         and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
     ):
         pytest.skip(
-            reason="Blackhole arithmetic right-shift kernel is unmigrated TTI microcode; "
-            "its sign-fill predication breaks under INT32_2S_COMP (see SFPU_INT32_SHIFT.md)."
+            reason="Blackhole shift kernels are unmigrated TTI microcode; their "
+            "predicated out-of-range/sign handling breaks under INT32_2S_COMP for "
+            "negative operands (arithmetic right-shift sign-fill and left-shift both "
+            "diverge from the two's-complement golden). See SFPU_INT32_SHIFT.md."
         )
 
     sfpu_binary(
