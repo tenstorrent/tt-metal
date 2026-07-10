@@ -339,7 +339,8 @@ void kernel_main() {
     uint64_t done_meta_noc = our_metadata_slice_noc_addr + write_slot * aligned_dispatched_metadata_page_size;
     noc_inline_dw_write(done_meta_noc, ROUTE_INFO_SENTINEL);
     noc.async_write_barrier();
-    noc_semaphore_inc(sender_data_ready_noc_addr, 1);
+    Semaphore<> sender_data_ready_sem(data_ready_semaphore_id);
+    sender_data_ready_sem.up(noc, sender_noc_x, sender_noc_y, 1);
     noc.async_atomic_barrier();
     cb_experts_tok_counter.pop_front(cb_counter_total_pages);
 }

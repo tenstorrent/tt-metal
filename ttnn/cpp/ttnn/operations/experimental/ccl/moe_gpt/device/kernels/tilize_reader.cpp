@@ -243,7 +243,6 @@ void kernel_main() {
     Semaphore<> metadata_ready_sem(metadata_ready_semaphore_id);
     Semaphore<> previous_chunk_sent_sem(previous_chunk_sent_semaphore_id);
 
-    uint32_t partial_metadata_ready_semaphore_addr = get_semaphore(partial_metadata_ready_semaphore_id);
     uint32_t metadata_ready_semaphore_addr = get_semaphore(metadata_ready_semaphore_id);
     uint32_t previous_chunk_sent_semaphore_addr = get_semaphore(previous_chunk_sent_semaphore_id);
 
@@ -848,11 +847,7 @@ void kernel_main() {
         noc_obj.async_write_barrier();
 
         // Signal drain core via semaphore increment
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address used
-        // for cross-core semaphore increment
-        uint64_t drain_semaphore_noc_addr =
-            get_noc_addr(drain_core_noc_x, drain_core_noc_y, partial_metadata_ready_semaphore_addr);
-        noc_semaphore_inc(drain_semaphore_noc_addr, 1);
+        partial_metadata_ready_sem.up(noc_obj, drain_core_noc_x, drain_core_noc_y, 1);
 
         // ========== NON-DRAIN tilize CORE: Wait for drain core to multicast data ==========
         // Wait for the semaphore signal from drain core

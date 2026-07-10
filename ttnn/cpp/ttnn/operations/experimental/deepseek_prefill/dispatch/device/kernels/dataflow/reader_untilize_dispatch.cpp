@@ -36,6 +36,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "api/debug/dprint.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -184,7 +185,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* turn_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(turn_semaphore_id));
     uint64_t owner_offsets_noc_addr = get_noc_addr(owner_noc_x, owner_noc_y, offsets_base_addr);
-    uint64_t next_turn_sem_noc_addr = get_noc_addr(next_noc_x, next_noc_y, get_semaphore(turn_semaphore_id));
+    Noc noc;
+    Semaphore<> next_turn_sem(turn_semaphore_id);
     if constexpr (IS_OWNER) {
         noc_semaphore_set(turn_sem_ptr, 1);
     }
@@ -361,7 +363,7 @@ void kernel_main() {
             noc_async_write_barrier();
         }
         if (batch_idx + 1 < effective_total_batches) {
-            noc_semaphore_inc(next_turn_sem_noc_addr, 1);
+            next_turn_sem.up(noc, next_noc_x, next_noc_y, 1);
             DPRINT_DISPATCH(
                 "[R s={} c={}] b={} RELEASE baton -> signaled next (entries={})\n",
                 (uint32_t)dispatch_core_idx,
