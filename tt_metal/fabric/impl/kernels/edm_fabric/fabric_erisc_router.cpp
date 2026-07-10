@@ -3436,22 +3436,38 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                                     c->att_other);
                             }
                         }
-                        // [debug][cmb-place] Emit this eth router's placement at the combine STOP marker:
-                        // its own eth core coords + the downstream (next-hop) eth core(s) it forwards
-                        // in-transit packets to + the forwarding NoC. Coords are VIRTUAL (translated) NOC
-                        // space -- the space my_x/my_y and the adapter's edm_noc_x/y both live in -- so an
-                        // upstream sender's [cmb-place sender] eth_virt and a downstream[] virt below join
-                        // to the [cmb-place eth] self_virt printed by that same eth core. Only self_logical
-                        // is known on-core (active-erisc FW sets it); the downstream core's logical is
-                        // recovered by joining downstream[] virt to its own self line. ERISC0-only.
+                        // [debug][cmb-place] Emit this eth router's placement at the combine STOP marker in
+                        // ALL FOUR coordinate systems (matching the tensix [cmb-place sender]/[untilizer]
+                        // lines), plus the VIRTUAL coords of the downstream (next-hop) eth core(s) it
+                        // forwards in-transit packets to, plus the forwarding NoC.
+                        //   logical   : active-erisc FW-set (get_absolute_logical_*).
+                        //   virt      : my_x/my_y = NOC_ID_LOGICAL (translated); NOC-uniform.
+                        //   phys_noc0 : read straight from HW. NOC_NODE_ID is the UNTRANSLATED physical
+                        //               node id (bh_hal: noc_node_id_ = NOC_NODE_ID always), unlike my_x
+                        //               which reads NOC_ID_LOGICAL under coordinate virtualization.
+                        //   noc1      : NOC_NODE_ID read on NOC1 -> the physical mirror directly from HW
+                        //               (no computed grid_size-1-x needed).
+                        // Extraction (x = reg & MASK, y = (reg >> NODE_ID_BITS) & MASK) matches risc_init's
+                        // my_x/my_y. A downstream eth core's phys_noc0/noc1/logical are recovered by joining
+                        // downstream[] virt to that core's own [cmb-place eth] self line. ERISC0-only.
                         if constexpr (combine_debug_owner) {
+                            const uint32_t nid0 = NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID);
+                            const uint32_t nid1 = NOC_CMD_BUF_READ_REG(1, 0, NOC_NODE_ID);
+                            const uint32_t phys_noc0_x = nid0 & NOC_NODE_ID_MASK;
+                            const uint32_t phys_noc0_y = (nid0 >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
+                            const uint32_t noc1_x = nid1 & NOC_NODE_ID_MASK;
+                            const uint32_t noc1_y = (nid1 >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
                             DEVICE_PRINT(
-                                "[cmb-place eth] self_virt=({},{}) self_logical=({},{}) fwd_noc={} "
-                                "num_downstream={}\n",
-                                (uint32_t)my_x[noc_index],
-                                (uint32_t)my_y[noc_index],
+                                "[cmb-place eth] logical=({},{}) virt=({},{}) phys_noc0=({},{}) noc1=({},{}) "
+                                "fwd_noc={} num_downstream={}\n",
                                 (uint32_t)get_absolute_logical_x(),
                                 (uint32_t)get_absolute_logical_y(),
+                                (uint32_t)my_x[noc_index],
+                                (uint32_t)my_y[noc_index],
+                                phys_noc0_x,
+                                phys_noc0_y,
+                                noc1_x,
+                                noc1_y,
                                 (uint32_t)tt::tt_fabric::edm_to_downstream_noc,
                                 (uint32_t)VC0_DOWNSTREAM_EDM_SIZE);
                             for (uint32_t i = 0; i < VC0_DOWNSTREAM_EDM_SIZE; i++) {
