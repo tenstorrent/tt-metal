@@ -26,6 +26,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     decoder_all_reduce_sum_replicate,
     build_ln_sharded_config,
     decoder_prefill_block_sharded_matmul,
+    decoder_prefill_bs_chunk_rows,
     matmul_multicast_1d_program_config,
     matmul_program_config,
     sdpa_program_config,
@@ -604,16 +605,23 @@ class TTSeamlessM4Tv2Decoder:
         is_decode: bool = False,
     ) -> ttnn.Tensor:
         ck = compute_cfg if compute_cfg is not None else self._linear_ln_compute_cfg
-        # Prefill (M=128) tuned block-sharded 2D path for the shapes where the sweep beat the 1D
-        # baseline (QKV / cross-q / cross-kv / ffn-fc2).  Overrides any caller-supplied 1D
+        # Prefill tuned block-sharded 2D path for the shapes where the sweep beat the 1D baseline
+        # (QKV / cross-q / cross-kv / ffn-fc2).  Long M (``m > decoder_prefill_bs_chunk_rows()``,
+        # default 2048) runs the same kernel on row chunks — mirrors text-encoder
+        # ``_linear_tp_chunked`` (full M=4096 L1 CB clash).  Overrides any caller-supplied 1D
         # program_config for those shapes; other shapes and all decode fall through unchanged.
         if not is_decode and self._sharded_decode_out:
-            bs_spec = self._prefill_bs_matmul(
-                self._matmul_token_rows(x, is_decode=False),
-                int(weight.shape[-2]),
-                int(weight.shape[-1]),
-                activation,
-            )
+            m = self._matmul_token_rows(x, is_decode=False)
+            k = int(weight.shape[-2])
+            n = int(weight.shape[-1])
+            chunk_m = decoder_prefill_bs_chunk_rows()
+            if m > chunk_m:
+                chunk_spec = self._prefill_bs_matmul(chunk_m, k, n, activation)
+                if chunk_spec is not None:
+                    return self._linear_block_sharded_chunked(
+                        x, weight, bias, ck, memory_config, chunk_spec, m=m, k=k, n=n, chunk_m=chunk_m
+                    )
+            bs_spec = self._prefill_bs_matmul(m, k, n, activation)
             if bs_spec is not None:
                 return self._linear_block_sharded(x, weight, bias, ck, memory_config, bs_spec)
         if program_config is None:
@@ -659,6 +667,23 @@ class TTSeamlessM4Tv2Decoder:
         spec = decoder_prefill_block_sharded_matmul(self.device, token_rows, in_dim, out_dim, fused_activation=fused)
         self._prefill_bs_cache[key] = spec
         return spec
+
+    @staticmethod
+    def _pad_token_rows(x: ttnn.Tensor, m_actual: int, m_padded: int) -> ttnn.Tensor:
+        if m_actual >= m_padded:
+            return x
+        k = int(x.shape[-1])
+        pad = ttnn.full(
+            [m_padded - m_actual, k],
+            0.0,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=x.device(),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        padded = ttnn.concat([x, pad], dim=0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(pad)
+        return padded
 
     def _linear_block_sharded(
         self,
@@ -707,6 +732,97 @@ class TTSeamlessM4Tv2Decoder:
         if len(x.shape) >= 3:
             out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
         return out
+
+    def _linear_block_sharded_chunked(
+        self,
+        x: ttnn.Tensor,
+        weight: ttnn.Tensor,
+        bias: ttnn.Tensor,
+        compute_kernel_config,
+        memory_config: ttnn.MemoryConfig,
+        spec: tuple,
+        *,
+        m: int,
+        k: int,
+        n: int,
+        chunk_m: int,
+    ) -> ttnn.Tensor:
+        """Long-seq prefill BS matmul via ``ceil(m / chunk_m)`` tuned chunk kernels.
+
+        Mirrors text-encoder ``_linear_tp_chunked``.  Spills the full activation to DRAM so each
+        L1 chunk + block-sharded in0/out fits beside matmul CBs (full M=4096 otherwise clashes).
+        """
+        program_config, in0_mem, out_mem = spec
+        batch = int(x.shape[0]) if len(x.shape) >= 3 else 1
+        seq = int(x.shape[1]) if len(x.shape) >= 3 else m
+        num_chunks = (m + chunk_m - 1) // chunk_m
+
+        x_inter = x
+        owns_x_inter = False
+        if ttnn.is_sharded(x):
+            x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            owns_x_inter = True
+        if len(x_inter.shape) != 2:
+            reshaped = ttnn.reshape(x_inter, (m, k))
+            if reshaped is not x_inter:
+                if owns_x_inter:
+                    ttnn.deallocate(x_inter)
+                x_inter = reshaped
+                owns_x_inter = True
+        if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
+            x_dram = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
+            if owns_x_inter:
+                ttnn.deallocate(x_inter)
+            elif x_dram is not x:
+                owns_x_inter = True
+            x_inter = x_dram
+
+        chunks: list[ttnn.Tensor] = []
+        for i in range(num_chunks):
+            start = i * chunk_m
+            end = min(start + chunk_m, m)
+            chunk_rows = end - start
+            chunk = ttnn.slice(x_inter, [start, 0], [end, k], [1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if chunk_rows < chunk_m:
+                chunk = self._pad_token_rows(chunk, chunk_rows, chunk_m)
+            x2d = chunk if len(chunk.shape) == 2 else ttnn.reshape(chunk, (chunk_m, k))
+            x_bs = ttnn.to_memory_config(x2d, in0_mem)
+            if x2d is not chunk:
+                ttnn.deallocate(x2d)
+            if chunk is not x_inter:
+                ttnn.deallocate(chunk)
+            out_bs = ttnn.linear(
+                x_bs,
+                weight,
+                bias=bias,
+                program_config=program_config,
+                memory_config=out_mem,
+                compute_kernel_config=compute_kernel_config,
+            )
+            ttnn.deallocate(x_bs)
+            out_inter = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
+            ttnn.deallocate(out_bs)
+            if len(out_inter.shape) > 2:
+                out_inter = ttnn.reshape(out_inter, (chunk_m, n))
+            if chunk_rows < chunk_m:
+                out_inter = ttnn.slice(
+                    out_inter,
+                    [0, 0],
+                    [chunk_rows, int(out_inter.shape[-1])],
+                    [1, 1],
+                    memory_config=memory_config,
+                )
+            chunks.append(out_inter)
+
+        if owns_x_inter:
+            ttnn.deallocate(x_inter)
+        if len(chunks) == 1:
+            out_concat = chunks[0]
+        else:
+            out_concat = ttnn.concat(chunks, dim=0, memory_config=memory_config)
+            for c in chunks:
+                ttnn.deallocate(c)
+        return ttnn.reshape(out_concat, (batch, seq, n))
 
     def _build_ln_sharded_config(self, m_tiles: int, n_tiles: int):
         return build_ln_sharded_config(self.device, m_tiles, n_tiles, self._ln_sharded_cache)

@@ -65,8 +65,11 @@ import pytest
 import torch
 
 from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import load_hf_model_and_processor
-from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_wer_helpers import (
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_token_matching_helpers import (
     SANITY_SWEEP_LENGTHS,
+    sweep_sequence_lengths,
+)
+from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_wer_helpers import (
     WER_SWEEP_TASKS,
     ensure_wer_sweep_reference,
     load_wer_sweep_reference,
@@ -74,7 +77,6 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.e2e_wer_helpers import 
     maybe_skip_short_speech_wer,
     run_speech_output_teacher_forced_wer,
     run_speech_output_whisper_wer,
-    sweep_sequence_lengths,
     sweep_teacher_forced_wer_threshold_for_task,
     sweep_whisper_wer_threshold_for_task,
     wer_sweep_mesh_parametrize,

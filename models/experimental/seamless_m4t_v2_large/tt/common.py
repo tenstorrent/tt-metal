@@ -452,12 +452,25 @@ def encoder_tp_interleaved_matmul_program_config(
 #   (2048, 1024) ffn fc2            22.51 -> 18.04 us (1.25x)
 # out_proj (256,1024) and ffn fc1 (1024,2048) are intentionally omitted: the sweep found their
 # 1D width-sharded configs already optimal (<=1.01x, and fc1 is HiFi2 FLOP-bound).
+#
+# Long-seq chunk size for decoder prefill BS matmul (mirrors text-encoder ``SEAMLESS_TP_BS_CHUNK_M``).
+# Above this M the decoder runs ``ceil(M / chunk)`` tuned chunk kernels instead of sharding full M
+# (full M=4096 clashes L1 CBs with the resident interleaved activation). Override via env.
+_DECODER_PREFILL_BS_CHUNK_M = 2048
 _DECODER_PREFILL_BS_IBW = {
     (1024, 768): 4,
     (1024, 256): 4,
     (1024, 512): 4,
     (2048, 1024): 8,
 }
+
+
+def decoder_prefill_bs_chunk_rows() -> int:
+    """Row chunk size for long-seq decoder prefill block-sharded matmul."""
+    try:
+        return int(os.environ.get("SEAMLESS_DECODER_PREFILL_BS_CHUNK_M", str(_DECODER_PREFILL_BS_CHUNK_M)))
+    except ValueError:
+        return _DECODER_PREFILL_BS_CHUNK_M
 
 
 def decoder_prefill_block_sharded_matmul(
@@ -475,6 +488,9 @@ def decoder_prefill_block_sharded_matmul(
     caller then keeps its default 1D linear).  in0 and out are L1 ``BLOCK_SHARDED``; the matmul
     height-shards M over grid rows and width-shards N over grid columns.  Mirrors
     ``encoder_tp_block_sharded_matmul`` but keyed on the decoder-specific shape set.
+
+    Callers with ``m > decoder_prefill_bs_chunk_rows()`` should request a chunk-sized spec and
+    run row-chunked matmul (same pattern as the text encoder).
     """
     ibw_cap = _DECODER_PREFILL_BS_IBW.get((k, n))
     if ibw_cap is None:
