@@ -50,7 +50,17 @@ HF_MODEL_ID = "tencent/HunyuanVideo-1.5"
 
 def build(device, torch_module, ccl_manager=None, tp=1):
     """Extract all sub-weights of the dual-stream block; return a native forward."""
+    import os
+
     import torch
+
+    # bf16 fast path (HY_DIT_BF16=1): load weights bf16 + run the block's matmuls/
+    # norms/SDPA in bf16 (HiFi2, fp32 accumulate). The block casts activations to
+    # bf16 on entry and back to fp32 on exit, so it stays fp32-in/fp32-out (drop-in
+    # for the fp32 glue/sub-stubs). ~2-4x faster matmuls + ~2x less weight/activation
+    # DRAM. Default OFF = original fp32 behavior. The joint SDPA is bf16 either way.
+    _bf16 = os.environ.get("HY_DIT_BF16", "0") == "1"
+    wdt = ttnn.bfloat16 if _bf16 else ttnn.float32
 
     blk = torch_module
     attn = blk.attn
@@ -67,7 +77,7 @@ def build(device, torch_module, ccl_manager=None, tp=1):
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_fidelity=ttnn.MathFidelity.HiFi2 if _bf16 else ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
@@ -93,7 +103,7 @@ def build(device, torch_module, ccl_manager=None, tp=1):
             mesh_mapper = ttnn.ReplicateTensorToMesh(device)
         return ttnn.from_torch(
             t.contiguous().float(),
-            dtype=ttnn.float32,
+            dtype=wdt,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             mesh_mapper=mesh_mapper,
@@ -189,12 +199,14 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         _rot[2 * _i + 1, 2 * _i] = -1.0
     rot_M = f32(_rot)
 
-    def _to_f32_device(t):
+    def _to_wdt_device(t):
+        """Bring an input onto device in the block's working dtype (wdt): fp32 in the
+        default path, bf16 in the HY_DIT_BF16 fast path."""
         if isinstance(t, ttnn.Tensor):
-            if t.get_dtype() != ttnn.float32:
-                t = ttnn.typecast(t, ttnn.float32)
+            if t.get_dtype() != wdt:
+                t = ttnn.typecast(t, wdt)
             return t
-        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(t, dtype=wdt, layout=ttnn.TILE_LAYOUT, device=device)
 
     def _linear(x, w, b):
         y = ttnn.matmul(x, w, compute_kernel_config=compute_config)
@@ -257,6 +269,9 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         rot4 = ttnn.reshape(rot, (Bx, Sx, Hx, Dx))
         cos_b = ttnn.reshape(cos, (1, Sx, 1, Dx))
         sin_b = ttnn.reshape(sin, (1, Sx, 1, Dx))
+        if cos_b.dtype != x4.dtype:  # bf16 fast path: match the fp32 freqs to activations
+            cos_b = ttnn.typecast(cos_b, x4.dtype)
+            sin_b = ttnn.typecast(sin_b, x4.dtype)
         return ttnn.add(ttnn.multiply(x4, cos_b), ttnn.multiply(rot4, sin_b))
 
     def _joint_attention(nh, ne, freqs_cis=None, attn_bias=None):
@@ -374,9 +389,9 @@ def build(device, torch_module, ccl_manager=None, tp=1):
         if encoder_hidden_states is None or temb is None:
             raise TypeError("hunyuan_video15_transformer_block needs encoder_hidden_states and temb")
 
-        h = _to_f32_device(hidden_states)
-        e = _to_f32_device(encoder_hidden_states)
-        t = _to_f32_device(temb)
+        h = _to_wdt_device(hidden_states)
+        e = _to_wdt_device(encoder_hidden_states)
+        t = _to_wdt_device(temb)
 
         attn_bias = kwargs.get("attn_bias")
 
@@ -395,6 +410,9 @@ def build(device, torch_module, ccl_manager=None, tp=1):
 
         h = ttnn.add(h, ttnn.multiply(_unsq(gate_mlp), _ff(nh2, ff_p)))
         e = ttnn.add(e, ttnn.multiply(_unsq(c_gate_mlp), _ff(ne2, ffc_p)))
+        if wdt != ttnn.float32:  # keep the block fp32-in/fp32-out for the fp32 glue
+            h = ttnn.typecast(h, ttnn.float32)
+            e = ttnn.typecast(e, ttnn.float32)
         return h, e
 
     return forward

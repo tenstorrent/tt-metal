@@ -372,18 +372,89 @@ class TTVAEDecodeAdapter:
     def __getattr__(self, k):
         return getattr(self.__dict__["_real"], k)
 
-    def decode(self, z, return_dict=True):
-        from diffusers.models.autoencoders.vae import DecoderOutput
-
+    def _decode_tile(self, z_tile):
+        """Decode one latent tile (torch NCTHW) -> output (torch NCTHW) via the ttnn decoder."""
         dev = self.__dict__["_device"]
         mm = ttnn.ReplicateTensorToMesh(dev) if dev.get_num_devices() > 1 else None
         z_bthwc = ttnn.from_torch(
-            z.permute(0, 2, 3, 4, 1).contiguous().float(),
+            z_tile.permute(0, 2, 3, 4, 1).contiguous().float(),
             dtype=self.__dict__["_dtype_tt"],
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=dev,
             mesh_mapper=mm,
         )
         out = self.__dict__["_dec"](z_bthwc)
-        v = ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().permute(0, 4, 1, 2, 3).to(z.dtype)
+        return ttnn.to_torch(ttnn.get_device_tensors(out)[0]).float().permute(0, 4, 1, 2, 3)
+
+    @staticmethod
+    def _blend_v(a, b, blend_extent):
+        blend_extent = min(a.shape[-2], b.shape[-2], blend_extent)
+        for y in range(blend_extent):
+            b[:, :, :, y, :] = a[:, :, :, -blend_extent + y, :] * (1 - y / blend_extent) + b[:, :, :, y, :] * (
+                y / blend_extent
+            )
+        return b
+
+    @staticmethod
+    def _blend_h(a, b, blend_extent):
+        blend_extent = min(a.shape[-1], b.shape[-1], blend_extent)
+        for x in range(blend_extent):
+            b[:, :, :, :, x] = a[:, :, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, :, x] * (
+                x / blend_extent
+            )
+        return b
+
+    def _tiled_decode(self, z):
+        """Spatial (H/W) tiled decode mirroring diffusers `tiled_decode`, but each
+        latent tile is decoded by the ttnn decoder (blend/crop stay on host torch).
+        Tiling the latent H/W shrinks the mid-block attention (seq = T*Hl*Wl) enough
+        to fit high frame counts on device that the full-res decode OOMs on."""
+        rv = self.__dict__["_real"]
+        tlh, tlw = rv.tile_latent_min_height, rv.tile_latent_min_width
+        tsh, tsw = rv.tile_sample_min_height, rv.tile_sample_min_width
+        ov = rv.tile_overlap_factor
+        _, _, _, height, width = z.shape
+        overlap_h = int(tlh * (1 - ov))
+        overlap_w = int(tlw * (1 - ov))
+        blend_h = int(tsh * ov)
+        blend_w = int(tsw * ov)
+        row_limit_h = tsh - blend_h
+        row_limit_w = tsw - blend_w
+
+        rows = []
+        for i in range(0, height, overlap_h):
+            row = []
+            for j in range(0, width, overlap_w):
+                tile = z[:, :, :, i : i + tlh, j : j + tlw]
+                row.append(self._decode_tile(tile))
+            rows.append(row)
+
+        result_rows = []
+        for i, row in enumerate(rows):
+            result_row = []
+            for j, tile in enumerate(row):
+                if i > 0:
+                    tile = self._blend_v(rows[i - 1][j], tile, blend_h)
+                if j > 0:
+                    tile = self._blend_h(row[j - 1], tile, blend_w)
+                result_row.append(tile[:, :, :, :row_limit_h, :row_limit_w])
+            result_rows.append(torch.cat(result_row, dim=-1))
+        return torch.cat(result_rows, dim=-2)
+
+    def decode(self, z, return_dict=True):
+        import os
+
+        from diffusers.models.autoencoders.vae import DecoderOutput
+
+        rv = self.__dict__["_real"]
+        # Spatial tiling avoids the full-res OOM at high frame counts. Trigger it
+        # like the reference (latent H or W beyond a tile) but only when opted in
+        # (HY_VAE_TILE=1 or vae.enable_tiling()), so the small-frame path stays fast.
+        tile = (os.environ.get("HY_VAE_TILE", "0") == "1" or getattr(rv, "use_tiling", False)) and (
+            z.shape[-1] > rv.tile_latent_min_width or z.shape[-2] > rv.tile_latent_min_height
+        )
+        if tile:
+            v = self._tiled_decode(z).to(z.dtype)
+        else:
+            v = self._decode_tile(z).to(z.dtype)
         return DecoderOutput(sample=v) if return_dict else (v,)

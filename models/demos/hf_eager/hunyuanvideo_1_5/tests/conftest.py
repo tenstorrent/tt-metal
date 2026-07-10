@@ -69,6 +69,18 @@ def mesh_device(request, silicon_arch_name, device_params):
         param = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
 
     req_shape = _requested_shape(param)
+    # Optional override for bring-up experiments (e.g. an 8-chip (1,8) DiT for
+    # higher frame counts): HY_MESH="1,8" or "1x8" or "8". Backward compatible --
+    # inactive unless set, so committed parametrize decorators are unaffected.
+    # NOTE: for the DiT's flat head-TP, use (1,8) NOT (2,4): the row-parallel
+    # all-reduce is on mesh_axis=1, so all TP devices must lie on axis=1. A (2,4)
+    # split puts 4 devices on axis=1 and silently drops the other row's heads ->
+    # correct-looking PCC on one block but NOISE end-to-end. (1,8) uses the rotated
+    # (4,8) parent so all 8 devices are on axis=1.
+    _mesh_env = os.environ.get("HY_MESH")
+    if _mesh_env:
+        _parts = [int(x) for x in _mesh_env.replace("x", ",").split(",") if x.strip()]
+        req_shape = _requested_shape(tuple(_parts) if len(_parts) == 2 else _parts[0])
     sys_shape = tuple(ttnn._ttnn.multi_device.SystemMeshDescriptor().shape())
     parent_shape = _pick_parent_shape(sys_shape, req_shape)
 
