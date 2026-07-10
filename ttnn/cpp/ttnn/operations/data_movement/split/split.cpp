@@ -63,9 +63,9 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     // dimension size. This internal check guards against a malformed size list reaching the slicer.
     TT_FATAL(
         std::accumulate(split_sizes.begin(), split_sizes.end(), int64_t{0}) == static_cast<int64_t>(input_shape[dim]),
-        "Split sizes should sum exactly to dimension size. Split sizes: {} dimension {}",
-        split_sizes,
-        input_shape[dim]);
+        "Split sizes should sum exactly to dimension size {}. Split sizes: {}",
+        input_shape[dim],
+        split_sizes);
 
     const auto num_chunks = static_cast<uint32_t>(split_sizes.size());
 

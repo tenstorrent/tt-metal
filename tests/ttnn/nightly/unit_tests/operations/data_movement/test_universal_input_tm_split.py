@@ -803,3 +803,33 @@ def test_native_single_core_sharded_input(device):
     tt_in = _from_torch(t, device, mc=in_cfg)
     tt_out = ttnn.split(tt_in, TILE, dim=-1)
     _check(tt_out, ref)
+
+
+# ---------------------------------------------------------------------------
+# 20. Single-chunk parity: split_size >= dim size returns the whole tensor as
+#     one chunk (matching torch.split). split_size == dim size exercises the
+#     native num_splits=1 device path for TILE layout; split_size > dim size
+#     clamps to a single chunk. Both layouts covered.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("split_size", [64, 100])  # == dim size, and > dim size
+def test_split_single_chunk(device, layout, torch_dtype, ttnn_dtype, split_size):
+    """split_size >= dim size returns exactly one chunk equal to the input."""
+    torch.manual_seed(21)
+    t = torch.randn([64, 64]).to(torch_dtype)
+    ref = torch.split(t, split_size, dim=-1)
+    assert len(ref) == 1
+
+    tt_in = _from_torch(t, device, dtype=ttnn_dtype, layout=layout, mc=L1)
+    tt_out = ttnn.split(tt_in, split_size, dim=-1, memory_config=L1)
+    assert len(tt_out) == 1, f"Expected a single chunk, got {len(tt_out)}"
+    _check(tt_out, ref)
