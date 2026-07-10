@@ -63,6 +63,25 @@ is **6.75× faster** (**3.46 µs** versus **23.31 µs**).
 **Gist:** initialize FPU add once per DST batch, pair source blocks, accumulate directly into DST,
 and pack only the final sum. Seed DST with one copy only for an odd contributor count.
 
+## ⭐⭐ T2 — [`compute_fusion`](compute_fusion/README.md)
+**Concept:** fusing a small expression through DEST vs. computing it as separate helper calls that
+round-trip each intermediate through an L1 circular buffer (single core, pure compute).
+**Situation:** you built `exp(sqrt(x)+y)` / `sqrt(x)*b` / `1/rowsum(x)` the readable way — one helper
+per op — and wonder whether fusing it into one pass (or using a reduce post-op) is worth it.
+**Measured win (Wormhole B0, 1 core):** it depends entirely on **which engine consumes the
+intermediate**. When the consumer is an **SFPU** op (reads DEST natively), fusion wins:
+`exp(sqrt(x)+y)` **1.03–1.12×**, reduce+reciprocal post-op **1.01–1.07×**. When the consumer is an
+**FPU** op, fusing via DEST-reuse **loses** (`sqrt(x)*b` at **0.94–1.02×**; isolating just the combine
+step, dest-reuse is **0.82×** — the L1 round-trip is 1.22× *faster*), because the FPU wants operands
+in source registers and DEST→src costs more than the pack+unpack it replaces. Doing a plain multiply
+on the SFPU instead of the FPU is a **0.58×** loss. DEST-lane block size is a ~1–3% second-order knob.
+**Gist:** fuse (keep intermediates in DEST) when the next op is **SFPU** — sqrt/exp/recip and reduce
+post-ops. Do **not** reach for FPU dest-reuse just to "skip L1": for a single FPU binary, pack the
+intermediate to L1 and let the unpacker feed it back. Never use the SFPU for what the FPU does.
+Ships a `--microbench` mode (`DeviceZoneScopedN` per phase, per TRISC) that shows the mechanism at
+engine granularity: the L1 round-trip surfaces as **unpack** cost; dest-reuse surfaces as extra
+**math** cost; SFPU-mul is ~22k ns more math than FPU-mul.
+
 ## ⭐⭐⭐ T3 — [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/README.md)
 **Concepts:** neighbor semaphore cost and direction-sensitive NoC contention in serpentine rings.
 **Situation:** a reduce-and-forward ring is much slower when a rectangular group spans two rows.
