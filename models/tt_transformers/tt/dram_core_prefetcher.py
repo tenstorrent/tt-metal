@@ -27,6 +27,8 @@ from models.tt_transformers.tt.recv_contig_layout import bank_receivers_contiguo
 from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
 from models.tt_transformers.tt.recv_contig_layout import ring_pos_coord as _ring_pos_coord
 
+STREAMING_GCB_MAX_SIZE = 788032
+
 
 def gcb_block_bytes(k_tiles: int, per_core_n_tiles: int, ring_size: int, tile_bytes: int) -> int:
     """Per-receiver GCB block footprint (bytes) for one gather_in0 matmul weight.
@@ -144,6 +146,8 @@ class DramCorePrefetcher(LightweightModule):
         self.num_senders: int = mesh_device.dram_grid_size().x
         self.model_name: str = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
+        self.dual_senders_per_bank: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_DUAL_SENDERS", "0") == "1"
+        self.stream_in1: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1"
 
         # Pick recv_per_bank. Auto-mode walks 8,4,2,1 (descending) and takes the largest supported.
         candidates: List[int] = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
@@ -213,7 +217,9 @@ class DramCorePrefetcher(LightweightModule):
         self.colocate_ops: bool = False
 
         logger.info(
-            f"[DramCorePrefetcher] model={self.model_name} banks={self.num_senders} recv/bank={self.num_receiver_cores} ring={self.ring_size}"
+            f"[DramCorePrefetcher] model={self.model_name} banks={self.num_senders} "
+            f"recv/bank={self.num_receiver_cores} ring={self.ring_size} "
+            f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
         )
 
     # ---- Public surface compatible with Prefetcher ----
@@ -288,7 +294,9 @@ class DramCorePrefetcher(LightweightModule):
         if self.global_cb is None:
             self._build_global_cb()
         if not self._started:
-            ttnn.experimental.start_tensor_prefetcher(self.mesh_device)
+            ttnn.experimental.start_tensor_prefetcher(
+                self.mesh_device, dual_senders_per_bank=self.dual_senders_per_bank
+            )
             self._started = True
 
         # One request per forward(): queue every inserted weight once, in construction order, so
@@ -298,7 +306,11 @@ class DramCorePrefetcher(LightweightModule):
         # (weight, block_count) pairs — block_count = ring_size K-blocks per tensor. The payload
         # list is invariant after prefetch(), so it's cached in _queue_payload.
         if self._queue_payload is None:
-            self._queue_payload = [(t, self.ring_size) for t in self.prefetched_tensors]
+            if self.stream_in1:
+                rotation = list(range(self.ring_size))
+                self._queue_payload = [(t, self.ring_size, rotation) for t in self.prefetched_tensors]
+            else:
+                self._queue_payload = [(t, self.ring_size) for t in self.prefetched_tensors]
         ttnn.experimental.queue_tensor_prefetcher_request(
             self.mesh_device,
             self._queue_payload,
@@ -438,8 +450,7 @@ class DramCorePrefetcher(LightweightModule):
         assert len(self.prefetched_tensors) == len(self.prefetched_program_configs)
         assert len(self.prefetched_tensors) == self.num_tensors * self.num_layers
 
-        # Size over every inserted weight (all layers): the GCB is a ring sized for one layer's
-        # worth of in-flight pages (num_blocks = ring_size), so we take the max block across all.
+        # Size over every inserted weight (all layers), taking the largest block across all.
         max_in1_block_size = 0
         for tensor, pc in zip(self.prefetched_tensors, self.prefetched_program_configs):
             tile_bytes = TILE_BYTES[tensor.dtype]
@@ -458,18 +469,28 @@ class DramCorePrefetcher(LightweightModule):
                 f"in1_block_size={in1_block_size}"
             )
 
-        # Minimum buffer = num_blocks * max_in1_block_size = ring_size * max_in1_block_size (one layer's pages).
+        # Batched delivery needs a full ring. Streaming can use a partial ring; retain as many blocks
+        # as fit below the largest full-grid program's static-CB boundary. On Blackhole the usable
+        # top-down L1 region ends at 1,519,552 and the LM-head static CBs end at 731,520, leaving
+        # 788,032 bytes. For Llama-8B's 30,464-byte largest block this keeps 25/32 blocks, the deepest
+        # whole-block window that fits.
         num_blocks = self.ring_size
+        if self.stream_in1:
+            num_blocks = min(self.ring_size, STREAMING_GCB_MAX_SIZE // max_in1_block_size)
+            assert num_blocks >= 2, (
+                f"Streaming GCB needs at least two blocks, but only {num_blocks} blocks of "
+                f"{max_in1_block_size} bytes fit in the {STREAMING_GCB_MAX_SIZE}-byte budget."
+            )
         gcb_size = num_blocks * max_in1_block_size
         logger.info(
-            f"[DramCorePrefetcher] Creating GCB: ring={self.ring_size} max_in1={max_in1_block_size} size={gcb_size}"
+            f"[DramCorePrefetcher] Creating GCB: ring={self.ring_size} window={num_blocks} "
+            f"max_in1={max_in1_block_size} size={gcb_size}"
         )
-        # Receiver-contiguous weights are NdShardSpec (CONTIGUOUS_1D), which the matmul-aware
-        # _for_matmul_1d factory rejects (it asserts a K-row-major single-wide-shard-per-bank
-        # layout). Build the DRAM-sender GCB directly from the contiguous bank->receivers topology;
-        # the underlying GCB object is identical.
-        self.global_cb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        self.global_cb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
             self.mesh_device,
+            self.prefetched_program_configs,
+            self.prefetched_tensors,
             self._bank_to_receivers,
             gcb_size,
+            dual_senders_per_bank=self.dual_senders_per_bank,
         )
