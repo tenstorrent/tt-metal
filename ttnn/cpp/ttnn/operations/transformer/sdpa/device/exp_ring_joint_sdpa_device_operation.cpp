@@ -373,7 +373,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
 }
 
 std::vector<tt::tt_metal::DynamicRuntimeArg> ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args(
-    const ExpRingJointSDPAParams& args,
+    const ExpRingJointSDPAParams& operation_attributes,
     const ExpRingJointSDPAInputs& tensor_args,
     ExpRingJointSDPAResult& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
@@ -388,22 +388,22 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ExpRingJointSDPADeviceOperation::ge
     auto* mesh_device = tensor_args.input_q.device();
     const auto device_grid = mesh_device->compute_with_storage_grid_size();
     const CoreCoord user_grid =
-        args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
+        operation_attributes.program_config.has_value() ? operation_attributes.program_config->compute_with_storage_grid_size : device_grid;
     const CoreCoord sdpa_grid = {user_grid.x - 1, user_grid.y};
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
 
     std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
-    dynamic_args.reserve(static_cast<std::size_t>(num_sdpa_cores) * (args.num_links + 1));
+    dynamic_args.reserve(static_cast<std::size_t>(num_sdpa_cores) * (operation_attributes.num_links + 1));
     for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
         const CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
 
         // Reader kernel: per-link semaphore addresses on every SDPA core.
-        for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
+        for (uint32_t lnk = 0; lnk < operation_attributes.num_links; ++lnk) {
             dynamic_args.push_back(
                 {dyn::kReaderKernelIdx,
                  core,
                  dyn::kReaderSemaphoreArgBase + lnk,
-                 static_cast<uint32_t>(args.semaphore[lnk].address())});
+                 static_cast<uint32_t>(operation_attributes.semaphore[lnk].address())});
         }
 
         // Fabric-writer kernel: out_ready_sem_addr on the two MUX-writer columns. num_links is
@@ -416,7 +416,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ExpRingJointSDPADeviceOperation::ge
                 {dyn::kWriterFabricKernelIdx,
                  core,
                  dyn::kWriterFabricOutReadySemArg,
-                 static_cast<uint32_t>(args.semaphore[link].address())});
+                 static_cast<uint32_t>(operation_attributes.semaphore[link].address())});
         }
     }
     return dynamic_args;
