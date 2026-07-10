@@ -319,13 +319,17 @@ inline void _set_packer_dest_registers_()
     static_assert(DST == ckernel::DstSync::SyncHalf || DST == ckernel::DstSync::SyncFull);
     std::uint32_t dest_buffer_base_offset = (DST == ckernel::DstSync::SyncFull) ? 0 : _get_dest_buffer_base_();
 
+    // Masked write of just SRC_ADDR_OFFSET. On PACKER1 this cfg word (ADDR32 65) also holds the
+    // INSTRN_LOOP_COUNT/COUNT auto-loop bits programmed by _llk_pack_srcs_config_ (llk_srcs.h); a
+    // full-word write would zero them (per-tile in SyncHalf, once the SrcS->Packer1 path is wired).
+    // PACKER0's word has no such siblings today, but keep it masked for symmetry.
     if constexpr (PACK_SEL == p_pacr::PACK0)
     {
-        cfg[THCON_PACKER0_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
+        cfg_rmw(THCON_PACKER0_REG0_SRC_ADDR_OFFSET_RMW, dest_buffer_base_offset);
     }
     else
     {
-        cfg[THCON_PACKER1_REG0_SRC_ADDR_OFFSET_ADDR32] = dest_buffer_base_offset;
+        cfg_rmw(THCON_PACKER1_REG0_SRC_ADDR_OFFSET_RMW, dest_buffer_base_offset);
     }
 }
 
@@ -403,8 +407,8 @@ inline tdma_descriptor_t construct_tdma_desc(
     {
         buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
     }
-    buf_desc.f.l1_addr_16B  = base_l1_16B;
-    buf_desc.f.format       = static_cast<std::uint8_t>(data_format);
+    buf_desc.f.l1_addr_16B = base_l1_16B;
+    buf_desc.f.format      = static_cast<std::uint8_t>(data_format);
 
     tdma_descriptor_t tdma_desc = {buf_desc, buf_desc_id, static_cast<std::uint8_t>(reg_data_format)};
 
