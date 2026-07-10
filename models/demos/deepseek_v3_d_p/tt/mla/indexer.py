@@ -61,7 +61,9 @@ class TtIndexer:
 
     @staticmethod
     def _cache_short_name(weight_name: str) -> str:
-        return weight_name.split(".")[-1]  # "indexer.wq_b" -> "wq_b"
+        # wq_b's replicated layout uses a distinct cache stem so the pre-replication TP-sharded
+        # tensorbin cannot satisfy completeness checks or be loaded by cache-only construction.
+        return "wq_b_repl" if weight_name == "indexer.wq_b" else weight_name.split(".")[-1]
 
     @classmethod
     def check_cache_complete(cls, cache_path, cache_name_prefix: str) -> bool:
@@ -168,7 +170,9 @@ class TtIndexer:
         # "wq_b_repl" (not "wq_b") so a stale col-sharded tensorbin can never alias this layout. wk /
         # weights_proj contract over hidden (TP-sharded) → upload transposed+sharded, reduced by _tp_rs_ag.
         result = {
-            "wq_b": repl(wq_b, "wq_b_repl", transpose=True),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
+            "wq_b": repl(
+                wq_b, cls._cache_short_name("indexer.wq_b"), transpose=True
+            ),  # [q_lora_rank, H_idx*D_idx] replicated (all heads)
             "wk": shard(wk, 0, "wk"),  # [dim, D_idx] sharded on dim
             "weights_proj": shard(wproj, 0, "weights_proj"),  # [dim, H_idx] sharded on dim
             "k_norm": repl(knorm, "k_norm"),  # [D_idx]
