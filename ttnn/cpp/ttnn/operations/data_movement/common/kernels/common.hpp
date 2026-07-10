@@ -112,7 +112,10 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
                 }
             } else {
                 invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+                // Cast through uintptr_t: L1 addresses are uint32_t but the Quasar kernel pointer width
+                // differs, so a direct uint32_t->void* cast trips -Werror=int-to-pointer-cast (no-op on
+                // WH/BH where the widths match).
+                memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_l1_addr), (size_t)(bytes));
             }
         }
     } else {
@@ -139,7 +142,10 @@ FORCE_INLINE void tt_memmove(Noc noc, const uint32_t dst_l1_addr, const uint32_t
                 }
             } else {
                 invalidate_l1_cache();
-                memmove((void*)(dst_l1_addr), (void*)(src_l1_addr), (size_t)(bytes));
+                // Cast through uintptr_t: L1 addresses are uint32_t but the Quasar kernel pointer width
+                // differs, so a direct uint32_t->void* cast trips -Werror=int-to-pointer-cast (no-op on
+                // WH/BH where the widths match).
+                memmove((void*)(uintptr_t)(dst_l1_addr), (void*)(uintptr_t)(src_l1_addr), (size_t)(bytes));
             }
         }
     }
