@@ -809,10 +809,12 @@ def test_kimi_prefill_transformer_chunked_padded(
 
 # GLM-5.1 variants
 # ---------------------------------------------------------------------------
-# Same chunked-prefill validation as the DeepSeek/Kimi tests, with the glm_5_1 variant and the on-device
-# gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path) +
-# GLM51Config fabric payload. Golden = the vLLM GLM-5.1 55k structured trace (chunked_group_a_v1; set via
-# the variant's test_prefill_trace_default, override with PREFILL_TRACE_DIR).
+# Same chunked-prefill validation as the DeepSeek/Kimi tests, for the glm_5_1 / glm_5_2 variants and the
+# on-device gate (GateComputeMode.DEVICE_FP32 — GLM's noaux_tc gate uses the grouped-topk fp32 device path)
+# + GLM fabric payload (5.1 == 5.2 dims). glm_5_2 additionally exercises DSA indexer reuse per chunk: each
+# chunk is one forward, so full layers recompute that chunk's top-k and shared layers reuse it within the
+# chunk. Golden = each variant's vLLM 55k structured trace (chunked_group_a_v1; via test_prefill_trace_default,
+# override with PREFILL_TRACE_DIR).
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
@@ -837,8 +839,8 @@ def test_kimi_prefill_transformer_chunked_padded(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["glm_5_1"], indirect=True, ids=["glm"])
-@pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
+@pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked(
     variant,

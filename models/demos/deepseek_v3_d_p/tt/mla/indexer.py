@@ -671,6 +671,20 @@ class NullIndexer:
         return None
 
 
+class ReuseIndexer:
+    """GLM-5.2 ``shared`` DSA layer stand-in: owns no indexer weights and never computes. The layer is
+    still sparse (top-k SDPA) but reuses a prior ``full`` layer's top-k indices, injected at
+    ttMLA.forward(indexer_indices=...). forward() is unreachable there (the injected indices short-
+    circuit it); it raises if ever called, so a shared layer missing its reused indices fails loudly
+    instead of silently going dense."""
+
+    def forward(self, *args, **kwargs):
+        raise RuntimeError(
+            "ReuseIndexer.forward called: a GLM-5.2 shared DSA layer must receive reused top-k indices "
+            "via MLA.forward(indexer_indices=...)."
+        )
+
+
 # Back-compat alias; TtIndexer.WEIGHT_NAMES is the single source of truth.
 INDEXER_WEIGHT_NAMES = TtIndexer.WEIGHT_NAMES
 
@@ -698,3 +712,12 @@ def resolve_has_indexer(config, state_dict=None, explicit=None, weight_cache_pat
     if weight_cache_path is not None and cache_name_prefix is not None:
         return TtIndexer.check_cache_complete(weight_cache_path, cache_name_prefix)
     return False
+
+
+def indexer_layer_is_reused(config, layer_idx: int) -> bool:
+    """GLM-5.2 ``shared`` layer: sparse attention but owns NO indexer (it reuses a prior ``full`` layer's
+    top-k). True iff ``config.indexer_types[layer_idx] == "shared"``. Absent the map (v3.1 / v3.2 /
+    GLM-5.1) every layer is a full indexer owner -> current behavior. Single source of truth for the
+    device construction (ReuseIndexer binding) and the cache build (skip the indexer tensorbins)."""
+    types = getattr(config, "indexer_types", None)
+    return bool(types) and layer_idx < len(types) and types[layer_idx] == "shared"

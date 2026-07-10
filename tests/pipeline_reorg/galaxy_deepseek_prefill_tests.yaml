@@ -125,19 +125,20 @@
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
 
-- name: "(Galaxy) DeepSeek Prefill - DSA MLA (GLM-5.1)"
+- name: "(Galaxy) DeepSeek Prefill - DSA MLA (GLM-5.1 + GLM-5.2 indexer reuse)"
   cmd: |
     export MESH_DEVICE=TG
     export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
     export DS_SPARSE_FABRIC=line
-    # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. Random weights + on-the-fly CPU
-    # truth -> no staged weights.
-    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_1 and 8x4 and line" -vvv --tb=short
+    # GLM-5.1 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference, plus the GLM-5.2 indexer-reuse
+    # equivalence case (inject a prior-layer top-k == recompute). Random weights + on-the-fly CPU truth
+    # -> no staged weights. Reuse shares the warm sparse-MLA JIT for this job (same op graph; glm_5_2 == glm_5_1 dims).
+    pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "(glm_5_1 and 8x4 and line) or indexer_reuse" -vvv --tb=short
   test_type: dsa_mla_glm
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 5
+      timeout: 8
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
 
@@ -161,10 +162,11 @@
     export GLM51_HF_MODEL=/mnt/MLPerf/huggingface/hub/models--zai-org--GLM-5.1-FP8
     export TT_GLM51_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/zai-org/GLM-5.1-FP8-Cache
     export GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
-    # Fused GLM decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
-    # composed CPU reference (reference.glm_5_1). Real weights via the prebuilt ttnn cache when present
-    # (loaded, like the transformer tests); random fallback otherwise. Never rebuilds the cache.
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and mesh-8x4" -vvv --tb=short --timeout=300
+    # Fused GLM-5.1 decoder block (sparse-SDPA MLA + norm/residual + dense/MoE FFN, layers 0 and 3) vs the
+    # composed CPU reference. Real weights via the prebuilt ttnn cache when present (random fallback
+    # otherwise; never rebuilds). -k glm51 so the shared glm_5_2 parametrization is not run here: its MoE
+    # block is skipped under the degenerate gate, and GLM-5.2 is covered by the DSA-MLA and MoE jobs.
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_glm_prefill_block -k "seq5120 and mesh-8x4 and glm51" -vvv --tb=short --timeout=300
   test_type: glm_prefill_block
   test_group: module
   skus:
