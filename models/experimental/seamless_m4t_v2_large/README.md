@@ -219,7 +219,7 @@ Task order:
 - **Text** — *A Tale of Two Cities* from `models/tt_transformers/tests/tale-of-two-cities.txt.bz2` (cached under `scripts/outputs/` when expanded).
 - **Audio** — by default, concatenated **LibriSpeech-dummy** utterances until ≥ 4096 mel frames (`scripts/outputs/long_speech_input_librispeech.wav`). Falls back to looping the demo preamble WAV if the dataset is unavailable.
 
-At mel lengths **≥ 1792**, **S2TT / S2ST / ASR** warmups run on a **throwaway** mesh device so the timed session stays decode-trace clean (fixes speech-path collapse that appeared when multiple speech `generate()` calls shared one session). T2ST does not use split warmups.
+At mel lengths **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a **throwaway** mesh device and the timed session skips speech-encoder prewarm, so the timed `generate()` is the first encode at that mel length on a clean device. (A dummy `_encode_speech` prewarm at mel 1024–2560 poisons persistent L1 and collapses decode into token loops — same class of bug previously gated only for mel 1920–2560.) T2ST does not use split warmups.
 
 ```bash
 python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py

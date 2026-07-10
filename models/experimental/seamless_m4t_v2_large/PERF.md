@@ -12,7 +12,7 @@ Sweep timing vs `demo.py`:
 - Untimed warmups match the demo (text=1, speech=2).
 - **1 timed iter** per task (demo uses 2 timed iters for T2ST/S2ST).
 - No vocoder `post_warmup_fn` in the sweep (demo prewarms vocoder convs after speech warmups).
-- At mel **≥ 1792**, **S2TT / S2ST / ASR** warmups run on a throwaway mesh device; T2ST does not.
+- At mel **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a throwaway mesh device and the timed session skips speech-encoder prewarm; T2ST does not.
 
 Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
 
@@ -198,9 +198,9 @@ Four-chip QuietBox (`MeshShape(1, 4)`, batch-1, TP=4).
 
 ## Demo wall timings (Blackhole P150, 2CQ + decode trace)
 
-Single-chip P150 (`MeshShape(1, 1)`). Tables from `scripts/outputs/perf_sweep.txt` (2026-07-10, total wall **109.0 min**).
+Single-chip P150 (`MeshShape(1, 1)`). Tables from `scripts/outputs/perf_sweep.txt`.
 
-**Note:** Several S2ST vocoder times (~38–64 s) are cold JIT / first-shape compile outliers; compare against S2ST@64 (~2.0 s vocoder) for steady-state. T2ST vocoder is closer to steady across lengths.
+**Note:** Several S2ST vocoder times (~35–64 s) are cold JIT / first-shape compile outliers; compare against S2ST@64 (~2.0 s vocoder) for steady-state. T2ST vocoder is closer to steady across lengths.
 
 ### Sequence length: 32
 
@@ -300,20 +300,20 @@ Single-chip P150 (`MeshShape(1, 1)`). Tables from `scripts/outputs/perf_sweep.tx
 ### Sequence length: 1024
 
 
-| Task | TTFT      | Encoder   | Prefill  | decode t/s/u | ms/tok (steady) | E2E        | Output                     |
-| ---- | --------- | --------- | -------- | ------------ | --------------- | ---------- | -------------------------- |
-| T2TT | 1888.6 ms | 898.9 ms  | 91.6 ms  | 105.8        | 9.4             | 4319.4 ms  | 256 tok                    |
-| T2ST | 2077.9 ms | 1041.1 ms | 116.7 ms | 103.8        | 9.6             | 14639.2 ms | 771840 smp (RTF **0.30×**) |
-| S2TT | 2786.6 ms | 1854.0 ms | 120.1 ms | 114.6        | 8.7             | 5030.0 ms  | 256 tok (1024 mel)         |
-| S2ST | 3263.7 ms | 2288.1 ms | 154.5 ms | 111.9        | 8.9             | 69370.4 ms | 592960 smp (RTF **1.87×**) |
-| ASR  | 3112.7 ms | 2000.5 ms | 189.0 ms | 90.5         | 11.1            | 4125.0 ms  | 92 tok (1024 mel)          |
+| Task | TTFT       | Encoder    | Prefill  | decode t/s/u | ms/tok (steady) | E2E        | Output                     |
+| ---- | ---------- | ---------- | -------- | ------------ | --------------- | ---------- | -------------------------- |
+| T2TT | 2078.8 ms  | 1077.7 ms  | 102.7 ms | 104.5        | 9.6             | 4542.8 ms  | 256 tok                    |
+| T2ST | 2345.5 ms  | 1209.9 ms  | 139.1 ms | 102.9        | 9.7             | 15673.8 ms | 771840 smp (RTF **0.32×**) |
+| S2TT | 12945.5 ms | 11998.4 ms | 148.5 ms | 95.2         | 10.5            | 13790.9 ms | 81 tok (1024 mel)          |
+| S2ST | 13376.4 ms | 12424.4 ms | 154.9 ms | 112.3        | 8.9             | 62135.5 ms | 600960 smp (RTF **1.65×**) |
+| ASR  | 13364.7 ms | 12329.2 ms | 205.2 ms | 90.4         | 11.1            | 14410.2 ms | 95 tok (1024 mel)          |
 
 
 
 | Task | T2U     | Vocoder  | RTF   |
 | ---- | ------- | -------- | ----- |
-| T2ST | 4461 ms | 5239 ms  | 0.30× |
-| S2ST | 5785 ms | 53548 ms | 1.87× |
+| T2ST | 4674 ms | 5679 ms  | 0.32× |
+| S2ST | 6204 ms | 35583 ms | 1.65× |
 
 
 ### Sequence length: 2048

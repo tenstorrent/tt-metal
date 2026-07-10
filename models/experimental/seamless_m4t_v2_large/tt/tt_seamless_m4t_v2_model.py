@@ -55,9 +55,11 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, me
 # the shape-specialized (JIT-compiled) kernels instead of recompiling cold (~7-20 s). 256 keeps the
 # extra (masked) frames — and the encoder's O(S^2) attention overhead — small (≤256, ~2-5% typical).
 _SPEECH_ENC_SEQ_BUCKET = 256
-# Dummy ``_encode_speech`` prewarm poisons persistent L1 only on this JIT bucket band (2048 mel
-# collapse). JIT the dummy forward on a longer proxy bucket instead of skipping it entirely.
-_SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN = 1920
+# Dummy ``_encode_speech`` prewarm poisons persistent L1 on these JIT buckets (token-loop
+# collapse on the following real ``generate()``). Observed at mel 1024 on P150 and mel 2048
+# on BH-QB. JIT the dummy forward on a longer proxy bucket instead of encoding at the
+# poisoned length.
+_SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN = 1024
 _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX = 2560
 _SPEECH_ENC_PREWARM_JIT_PROXY_BUCKET = 3072
 
@@ -646,9 +648,11 @@ class TTSeamlessM4Tv2Model:
         """Warm speech-encoder JIT for bucketed mel lengths.
 
         Short buckets and long buckets (e.g. 4096) use a dummy ``_encode_speech`` forward for
-        kernel JIT. The 1920–2560 mel bucket band cannot use a dummy forward *at that length*
-        (bad persistent L1 / LN state collapses S2TT/S2ST/ASR at 2048 mel); those buckets still
-        ``pre_warm`` shape caches locally and JIT via a proxy dummy forward at 3072 mel.
+        kernel JIT. Buckets in ``[_SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN,
+        _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX]`` (1024–2560 mel) cannot use a dummy forward
+        *at that length* (bad persistent L1 / LN state collapses S2TT/S2ST/ASR into token loops);
+        those buckets still ``pre_warm`` shape caches locally and JIT via a proxy dummy forward
+        at ``_SPEECH_ENC_PREWARM_JIT_PROXY_BUCKET`` (3072 mel).
         """
         n_mels = self.feature_projection_input_dim
         for sl in mel_seq_lens:
