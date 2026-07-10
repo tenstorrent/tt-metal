@@ -9,11 +9,13 @@ import torch
 from .format_config import DataFormat
 
 format_dict = {
+    DataFormat.Tf32: torch.float32,
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
     DataFormat.Bfp8_b: torch.bfloat16,  # BFP8 not native to PyTorch, is represented as bfloat16
     DataFormat.Bfp4_b: torch.bfloat16,  # BFP4 not native to PyTorch, is represented as bfloat16
+    DataFormat.Bfp2_b: torch.bfloat16,  # BFP2 not native to PyTorch, is represented as bfloat16
     DataFormat.Int32: torch.int32,
     DataFormat.UInt32: torch.int64,
     DataFormat.Int16: torch.int16,
@@ -23,6 +25,9 @@ format_dict = {
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
     DataFormat.MxFp4: torch.bfloat16,
+    DataFormat.MxInt8: torch.bfloat16,
+    DataFormat.MxInt4: torch.bfloat16,
+    DataFormat.MxInt2: torch.bfloat16,
     DataFormat.Fp8_e4m3: torch.bfloat16,
 }
 
@@ -34,6 +39,7 @@ class MathOpType(Enum):
     SFPU_BINARY = auto()
     SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
+    SFPU_BINOP_SCALAR = auto()
 
     FPU_BINARY = auto()
     REDUCE = auto()
@@ -76,6 +82,7 @@ class MathOperation(Enum):
     Exp2 = OpSpec("exp2", MathOpType.SFPU_UNARY)
     Fill = OpSpec("fill", MathOpType.SFPU_UNARY)
     Gelu = OpSpec("gelu", MathOpType.SFPU_UNARY)
+    GeluTanh = OpSpec("gelu_tanh", MathOpType.SFPU_UNARY)
     Hardsigmoid = OpSpec("hardsigmoid", MathOpType.SFPU_UNARY)
     Log = OpSpec("log", MathOpType.SFPU_UNARY)
     Log1p = OpSpec("log1p", MathOpType.SFPU_UNARY)
@@ -88,6 +95,22 @@ class MathOperation(Enum):
     Silu = OpSpec("silu", MathOpType.SFPU_UNARY)
     Sqrt = OpSpec("sqrt", MathOpType.SFPU_UNARY)
     Square = OpSpec("square", MathOpType.SFPU_UNARY)
+    Erfinv = OpSpec("erfinv", MathOpType.SFPU_UNARY)
+    Heaviside = OpSpec("heaviside", MathOpType.SFPU_UNARY)
+    Softshrink = OpSpec("softshrink", MathOpType.SFPU_UNARY)
+    Softsign = OpSpec("softsign", MathOpType.SFPU_UNARY)
+    Mish = OpSpec("mish", MathOpType.SFPU_UNARY)
+    Selu = OpSpec("selu", MathOpType.SFPU_UNARY)
+    I0 = OpSpec("i0", MathOpType.SFPU_UNARY)
+    Rdiv = OpSpec("rdiv", MathOpType.SFPU_UNARY)
+    Clamp = OpSpec("clamp", MathOpType.SFPU_UNARY)
+    Hardtanh = OpSpec("hardtanh", MathOpType.SFPU_UNARY)
+    EqualZero = OpSpec("equal_zero", MathOpType.SFPU_UNARY)
+    NotEqualZero = OpSpec("not_equal_zero", MathOpType.SFPU_UNARY)
+    LessThanZero = OpSpec("less_than_zero", MathOpType.SFPU_UNARY)
+    GreaterThanZero = OpSpec("greater_than_zero", MathOpType.SFPU_UNARY)
+    LessThanEqualZero = OpSpec("less_than_equal_zero", MathOpType.SFPU_UNARY)
+    GreaterThanEqualZero = OpSpec("greater_than_equal_zero", MathOpType.SFPU_UNARY)
     # Swiglu is technically a binary SFPU op (gate+up → out), but because
     # Quasar lacks the llk_math_eltwise_binary_sfpu_* dispatcher, its test
     # harness runs through the unary SFPU path. We therefore register it as
@@ -97,11 +120,16 @@ class MathOperation(Enum):
     # three offsets directly.
     SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
+    # Typecast is dispatched by the (input, output) DataFormat pair rather than a
+    # single op, but it maps to SfpuType::typecast and runs through the shared
+    # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
+    Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
-    ReluMax = OpSpec(
-        "relu_max", MathOpType.SFPU_UNARY
-    )  # ReLU_max(x, U) = max(0, min(x, U))
-    ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)  # ReLU_min(x, L) = max(x, L)
+    ReluMax = OpSpec("relu_max", MathOpType.SFPU_UNARY)
+    ReluMin = OpSpec("relu_min", MathOpType.SFPU_UNARY)
+    Lrelu = OpSpec("lrelu", MathOpType.SFPU_UNARY)
+    AddInt32 = OpSpec("add_int32", MathOpType.SFPU_UNARY)
+    SubInt32 = OpSpec("sub_int32", MathOpType.SFPU_UNARY)
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
@@ -124,13 +152,31 @@ class MathOperation(Enum):
     SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
     SfpuLeInt = OpSpec("LE_INT", MathOpType.SFPU_BINARY_INT)
     SfpuGeInt = OpSpec("GE_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuElwLt = OpSpec("LT", MathOpType.SFPU_BINARY)
+    SfpuElwGt = OpSpec("GT", MathOpType.SFPU_BINARY)
+    SfpuElwLe = OpSpec("LE", MathOpType.SFPU_BINARY)
+    SfpuElwGe = OpSpec("GE", MathOpType.SFPU_BINARY)
+    SfpuElwEq = OpSpec("EQ", MathOpType.SFPU_BINARY)
+    SfpuElwNe = OpSpec("NE", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
     # =============================================================================
     SfpuWhere = OpSpec("WHERE", MathOpType.SFPU_TERNARY)
-    # Alias maintained for backward compatibility with older test cases
     TTNNWhere = SfpuWhere
+    SfpuAddcmul = OpSpec("addcmul", MathOpType.SFPU_TERNARY)
+    SfpuAddcdiv = OpSpec("addcdiv", MathOpType.SFPU_TERNARY)
+    SfpuLerp = OpSpec("lerp", MathOpType.SFPU_TERNARY)
+    SfpuSnakeBeta = OpSpec("snake_beta", MathOpType.SFPU_TERNARY)
+
+    # =============================================================================
+    # SFPU FLOAT UNARY-WITH-SCALAR BINOPS
+    # =============================================================================
+    ScalarAdd = OpSpec("ADD", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarSub = OpSpec("SUB", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarMul = OpSpec("MUL", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarDiv = OpSpec("DIV", MathOpType.SFPU_BINOP_SCALAR)
+    ScalarRsub = OpSpec("RSUB", MathOpType.SFPU_BINOP_SCALAR)
 
     # =============================================================================
     # REDUCE OPERATIONS
@@ -173,6 +219,16 @@ class MathOperation(Enum):
         return cls._get_operations_by_type(MathOpType.SFPU_BINARY)
 
     @classmethod
+    def get_sfpu_ternary_operations(cls):
+        """Get all SFPU ternary operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_TERNARY)
+
+    @classmethod
+    def get_sfpu_binop_scalar_operations(cls):
+        """Get all SFPU float unary-with-scalar binop operations."""
+        return cls._get_operations_by_type(MathOpType.SFPU_BINOP_SCALAR)
+
+    @classmethod
     def get_reduce_operations(cls):
         """Get all reduce operations."""
         return cls._get_operations_by_type(MathOpType.REDUCE)
@@ -180,6 +236,8 @@ class MathOperation(Enum):
 
 SFPU_UNARY_OPERATIONS = MathOperation.get_sfpu_unary_operations()
 SFPU_BINARY_OPERATIONS = MathOperation.get_sfpu_binary_operations()
+SFPU_TERNARY_OPERATIONS = MathOperation.get_sfpu_ternary_operations()
+SFPU_BINOP_SCALAR_OPERATIONS = MathOperation.get_sfpu_binop_scalar_operations()
 FPU_BINARY_OPERATIONS = MathOperation.get_fpu_binary_operations()
 REDUCE_OPERATIONS = MathOperation.get_reduce_operations()
 
@@ -445,6 +503,7 @@ class BriscCmd(Enum):
 format_tile_sizes = {
     DataFormat.Bfp8_b: 1088,
     DataFormat.Bfp4_b: 576,
+    DataFormat.Bfp2_b: 320,
     DataFormat.Float16: 2048,
     DataFormat.Float16_b: 2048,
     DataFormat.Float32: 4096,
@@ -462,6 +521,15 @@ format_tile_sizes = {
     # MXFp4 half byte per element + 1 scale (8 bits) per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 16 bytes of FP4 data) = 544 bytes
     DataFormat.MxFp4: 544,
+    # MxInt8: 1 byte per element + 1 scale (8 bits) per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 32 bytes of INT8 data) = 1056 bytes
+    DataFormat.MxInt8: 1056,
+    # MxInt4: half byte per element (2 packed per byte) + 1 scale per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 16 bytes of INT4 data) = 544 bytes
+    DataFormat.MxInt4: 544,
+    # MxInt2: quarter byte per element (4 packed per byte) + 1 scale per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 8 bytes of INT2 data) = 288 bytes
+    DataFormat.MxInt2: 288,
     DataFormat.Fp8_e4m3: 1024,  # 1 byte per element, no exponent section
 }
 

@@ -9,46 +9,24 @@ on:
         type: boolean
         default: false
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'llama3.1-8b'
+        default: 'all'
         type: choice
         options:
           - all
-          - whisper
-          - llama3.1-8b
-          - llama3-8b
-          - unet-shallow
-          - stable_diffusion_xl
-          - llama3.3-70b
-          - qwen3-32b
-          - qwen2.5-32b-instruct
-          - qwen2.5-72b-instruct
-          - qwen2.5-vl-32b-instruct
-          - qwen2.5-vl-72b
-          - qwen3-vl-32b
           - mistral-small-3.1-24b
-          - gpt-oss-20b
-          - gpt-oss-120b
-          - mochi
-          - flux.1-dev
           - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: choice
         options:
           - all
-          - P150 (1xP150)
-          - P150 CIv2 (1xP150)
-          - Quietbox (4xP150)
-          - DeskBox (2xP150)
-          - LoudBox (8xP150)
-          - P300 (1xP300)
-          - QuietBox 2 (2xP300)
+          - bh_quietbox_2
       build-type:
         required: false
         type: choice
@@ -83,10 +61,10 @@ on:
       model:
         required: false
         type: string
-        default: 'all'
+        default: "all"
         description: "Select model to test"
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: string
@@ -106,7 +84,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 4 * * *"  # Every day at 4:00 UTC
+    - cron: "0 4 * * *" # Every day at 4:00 UTC
 
 jobs:
   generate-model-matrix:
@@ -116,6 +94,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -139,10 +118,7 @@ jobs:
 
           with open("tests/pipeline_reorg/blackhole_demo_tests.yaml") as f:
               tests = yaml.safe_load(f) or []
-          with open(".github/blackhole_demo_systems.yaml") as f:
-              systems = yaml.safe_load(f) or {}
 
-          sku_to_system = {s["sku"]: s["name"] for s in systems.get("systems", [])}
           selected_model = os.environ["SELECTED_MODEL"]
           system_filter = os.environ["SYSTEM_TYPE_FILTER"]
 
@@ -157,8 +133,7 @@ jobs:
               if selected_model != "all" and m != selected_model:
                   continue
               if system_filter != "all":
-                  if not any(sku_to_system.get(sku) == system_filter
-                             for sku in (t.get("skus") or {}).keys()):
+                  if system_filter not in (t.get("skus") or {}):
                       continue
               if m not in matching_models:
                   matching_models.append(m)
@@ -178,9 +153,14 @@ jobs:
           echo "System-type filter: $SYSTEM_TYPE_FILTER"
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:

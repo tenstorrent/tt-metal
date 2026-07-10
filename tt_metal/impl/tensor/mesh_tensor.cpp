@@ -90,8 +90,23 @@ void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
 
 MeshTensor MeshTensor::allocate_on_device(
     distributed::MeshDevice& mesh_device, const TensorSpec& spec, const TensorTopology& topology) {
+    // Catch-all guard: FP8_E4M3 is only supported on Blackhole. Op-level validators may also
+    // check this, but we enforce it here at the device-binding boundary so any path that
+    // produces an FP8 tensor on unsupported hardware fails loudly rather than silently
+    // generating programs that misbehave later.
+    if (spec.data_type() == DataType::FP8_E4M3) {
+        TT_FATAL(
+            mesh_device.arch() == tt::ARCH::BLACKHOLE,
+            "FP8_E4M3 is only supported on Blackhole hardware (got arch {})",
+            mesh_device.arch());
+    }
     auto mesh_buffer = tensor_impl::allocate_device_buffer(&mesh_device, spec);
-    return MeshTensor(std::move(mesh_buffer), spec, topology);
+    return MeshTensor::from_buffer(std::move(*mesh_buffer), spec, topology);
+}
+
+MeshTensor MeshTensor::from_buffer(distributed::MeshBuffer mesh_buffer, TensorSpec spec, TensorTopology topology) {
+    return MeshTensor(
+        std::make_shared<distributed::MeshBuffer>(std::move(mesh_buffer)), std::move(spec), std::move(topology));
 }
 
 }  // namespace tt::tt_metal

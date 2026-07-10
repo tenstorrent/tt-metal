@@ -143,10 +143,36 @@ inline tt::tt_metal::KernelDescriptor create_compute_kernel(
  * Set up the runtime arguments for the relevant kernels (reader, writer, compute G1, compute G2)
  *        for each core in the grid.
  */
+// Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
+struct DropoutCoreSplit {
+    uint32_t num_cores = 0;
+    uint32_t num_cores_y = 0;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_group_1;
+    tt::tt_metal::CoreRangeSet core_group_2;
+    uint32_t num_tiles_per_core_group_1 = 0;
+    uint32_t num_tiles_per_core_group_2 = 0;
+};
+
+DropoutCoreSplit dropout_core_split(const Tensor& input) {
+    auto grid = input.device()->compute_with_storage_grid_size();
+    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_tiles);
+    return {
+        num_cores,
+        grid.y,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2};
+}
+
 inline void assign_per_core_runtime_args(
     DropoutKernels& kernels,
-    const tt::tt_metal::Buffer* src_buffer,
-    const tt::tt_metal::Buffer* dst_buffer,
+    tt::tt_metal::Buffer* src_buffer,
+    tt::tt_metal::Buffer* dst_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
     uint32_t num_tiles_per_core_group_1,
@@ -184,13 +210,13 @@ inline void assign_per_core_runtime_args(
         } else {
             TT_THROW("Core not in specified core ranges.");
         }
-        // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles)
-        kernels.reader.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{src_buffer->address(), num_tiles_per_core, num_tiles_written});
+        // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles).  src/dst go in as Buffer*
+        // bindings so the framework patches their addresses on the fast cache-hit path (the
+        // input==output in-place case is allowed by resolve_bindings).
+        kernels.reader.emplace_runtime_args(core, {src_buffer, num_tiles_per_core, num_tiles_written});
 
         // Writer kernel: (dst_addr, number_of_tiles, offset_in_tiles)
-        kernels.writer.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        kernels.writer.emplace_runtime_args(core, {dst_buffer, num_tiles_per_core, num_tiles_written});
 
         num_tiles_written += num_tiles_per_core;
     }
@@ -205,7 +231,6 @@ tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
     const auto& input = tensor_args.input;
-    auto* device = input.device();
 
     ProgramDescriptor descriptor{};
 
@@ -215,13 +240,14 @@ tt::tt_metal::ProgramDescriptor DropoutProgramFactory::create_descriptor(
     uint32_t single_tile_size_in = tt::tile_size(data_fmt_in);
     uint32_t single_tile_size_out = tt::tile_size(data_fmt_out);
 
-    uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
-
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+    auto
+        [num_cores,
+         num_cores_y,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tiles_per_core_group_1,
+         num_tiles_per_core_group_2] = dropout_core_split(input);
 
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
@@ -316,6 +342,44 @@ tt::tt_metal::ProgramDescriptor DropoutMeshWorkloadFactory::create_descriptor(
     TT_ASSERT(args.use_per_device_seed, "DropoutMeshWorkloadFactory should only be used if per-device seed is used.");
     const auto effective_args = override_per_device_seed(args, mesh_dispatch_coordinate, tensor_args.input);
     return DropoutProgramFactory::create_descriptor(effective_args, tensor_args, output);
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*output*/,
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
+    using namespace tt::tt_metal;
+
+    // seed is the only dynamic arg (prob/scale are compile-time); per-device path offsets by device id.
+    const uint32_t seed = args.use_per_device_seed
+                              ? override_per_device_seed(args, mesh_dispatch_coordinate, tensor_args.input).seed
+                              : args.seed;
+
+    [[maybe_unused]] auto
+        [num_cores,
+         num_cores_y,
+         all_cores,
+         core_group_1,
+         core_group_2,
+         num_tiles_per_core_group_1,
+         num_tiles_per_core_group_2] = dropout_core_split(tensor_args.input);
+
+    // kernels are pushed reader(0), writer(1), compute_group_1(2), compute_group_2(3 if present).
+    constexpr uint32_t kComputeGroup1Idx = 2;
+    constexpr uint32_t kComputeGroup2Idx = 3;
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(num_cores);
+    for (uint32_t i = 0; i < num_cores; i++) {
+        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        if (core_group_1.contains(core)) {
+            dynamic_args.push_back({kComputeGroup1Idx, core, 0, seed});
+        } else if (core_group_2.contains(core)) {
+            dynamic_args.push_back({kComputeGroup2Idx, core, 0, seed});
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::experimental::prim

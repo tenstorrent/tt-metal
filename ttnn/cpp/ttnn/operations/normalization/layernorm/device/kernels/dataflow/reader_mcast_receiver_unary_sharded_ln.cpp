@@ -162,7 +162,7 @@ void kernel_main() {
                 cb_external_obj.reserve_back(num_blocks_first_stage * num_tiles_scaler);
                 uint32_t write_offset = 0;
                 for (uint32_t block = 0; block < num_blocks_first_stage; block++) {
-                    noc.async_read<Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                    noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                         remote_ep,
                         cb_external_obj,
                         num_tiles_scaler * single_tile_size_bytes,
@@ -189,7 +189,7 @@ void kernel_main() {
                         cb_external_obj.reserve_back((num_blocks_second_stage - 1) * num_tiles_scaler);
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
-                            noc.async_read<Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
                                 cb_external_obj,
                                 num_tiles_scaler * single_tile_size_bytes,
@@ -239,6 +239,11 @@ void kernel_main() {
             reduce_sender_sem.wait_min(block + 2);
             cb_ex_global_obj.push_back(num_tiles * num_tiles_scaler);
         }
+
+        // The partial-reduction buffer is waited up front and read (locally and by remote cores)
+        // during the combine; by here all those reads have completed, so pop it to leave the CB
+        // balanced.
+        cb_partial_obj.pop_front(block_h * num_tiles_scaler);
     };
 
     if constexpr (!rms_norm) {

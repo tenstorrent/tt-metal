@@ -10,6 +10,7 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import run_for_blackhole
 
 import tests.ttnn.unit_tests.operations.fused.test_group_norm as base
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_group_norm, ttnn_group_norm_in_place
 
 
 @pytest.mark.parametrize("specify_grid", [True, False])
@@ -47,7 +48,7 @@ def test_group_norm_large_ex_external_cb(device, specify_grid):
             is_row_major=False,
         )
 
-    output_tensor_tt = ttnn.group_norm(
+    output_tensor_tt = ttnn_group_norm(
         input_tensor_tt,
         num_groups=num_groups,
         epsilon=eps,
@@ -171,7 +172,9 @@ def test_group_norm_sharded_ex_external_cb_gap(device, specify_grid):
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
 
-    output_tensor = ttnn.group_norm(
+    # group_norm defaults to inplace=True here, which mutates the input; use the in-place
+    # determinism wrapper so the two runs each get a fresh clone of the input.
+    output_tensor = ttnn_group_norm_in_place(
         input_tensor,
         num_groups=num_groups,
         epsilon=eps,

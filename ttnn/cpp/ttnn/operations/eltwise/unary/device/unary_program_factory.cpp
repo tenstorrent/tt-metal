@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
 #include "ttnn/operations/cb_utils.hpp"
 #include <algorithm>
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -52,8 +53,28 @@ void pack_first_op_scalars(
             const auto eps = *op.get_param_if<float>(0);
             if (eps >= 0.0f) {
                 // Ensure correct clamp bounds [min(eps, 1-eps), max(eps, 1-eps)]
-                const auto lo = std::min(eps, 1.0f - eps);
-                const auto hi = std::max(eps, 1.0f - eps);
+                auto lo = std::min(eps, 1.0f - eps);
+                auto hi = std::max(eps, 1.0f - eps);
+                // Pre-round the bounds to bf16 (RNE) for bf16 input: the SFPU
+                // narrows the clamped value fp32->bf16 by truncation. Making
+                // the bound bf16-exact host-side turns that truncating write-back into
+                // a no-op.
+                // Torch's bf16 boundary:
+                //   * eps <= 0.5 (golden = torch.special.logit): torch quantizes
+                //     eps->bf16 first, then forms 1-eps in bf16, i.e. bf16(1 - bf16(eps)).
+                //   * eps > 0.5 (golden = ordered clamp on python 1-eps/eps): the
+                //     bounds are bf16(1-eps)/bf16(eps) directly.
+                if (input_dtype == DataType::BFLOAT16) {
+                    if (eps <= 0.5f) {
+                        const float eps_bf = static_cast<float>(bfloat16(eps));
+                        const float one_minus_eps_bf = 1.0f - eps_bf;
+                        lo = static_cast<float>(bfloat16(std::min(eps_bf, one_minus_eps_bf)));
+                        hi = static_cast<float>(bfloat16(std::max(eps_bf, one_minus_eps_bf)));
+                    } else {
+                        lo = static_cast<float>(bfloat16(lo));
+                        hi = static_cast<float>(bfloat16(hi));
+                    }
+                }
                 packed_scalar1 = pack_scalar_runtime_arg_impl(lo, input_dtype);
                 packed_scalar2 = pack_scalar_runtime_arg_impl(hi, input_dtype);
                 unary_defines["CLAMP"] = "clamp_tile";
@@ -411,10 +432,8 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
                                     ((i % num_shards_per_width) * out_shard_width);
-            reader_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), in_tiles, out_start_id});
-            writer_desc.runtime_args.emplace_back(
-                core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), o_tiles, out_start_id});
+            reader_desc.emplace_runtime_args(core, {input.buffer(), in_tiles, out_start_id});
+            writer_desc.emplace_runtime_args(core, {output.buffer(), o_tiles, out_start_id});
             compute_desc.runtime_args.emplace_back(
                 core, KernelDescriptor::CoreRuntimeArgs{o_tiles, packed_scalar1, packed_scalar2});
         }
@@ -455,39 +474,31 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
             }
 
             if (rm_interleaved) {
-                reader_desc.runtime_args.emplace_back(
+                reader_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input.buffer()->address(),
-                        npc,
-                        start_tile_id,
-                        chunks_per_row,
-                        input_chunk_size,
-                        input_last_chunk_size,
-                        rows_per_tile,
-                        total_rows});
-                writer_desc.runtime_args.emplace_back(
+                    {input.buffer(),
+                     npc,
+                     start_tile_id,
+                     chunks_per_row,
+                     input_chunk_size,
+                     input_last_chunk_size,
+                     rows_per_tile,
+                     total_rows});
+                writer_desc.emplace_runtime_args(
                     core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        output.buffer()->address(),
-                        npc,
-                        start_tile_id,
-                        chunks_per_row,
-                        output_chunk_size,
-                        output_last_chunk_size,
-                        rows_per_tile,
-                        total_rows});
+                    {output.buffer(),
+                     npc,
+                     start_tile_id,
+                     chunks_per_row,
+                     output_chunk_size,
+                     output_last_chunk_size,
+                     rows_per_tile,
+                     total_rows});
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{npc * chunks_per_row, packed_scalar1, packed_scalar2});
             } else {
-                reader_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        input.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
-                writer_desc.runtime_args.emplace_back(
-                    core,
-                    KernelDescriptor::CoreRuntimeArgs{
-                        output.buffer()->address(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                reader_desc.emplace_runtime_args(core, {input.buffer(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
+                writer_desc.emplace_runtime_args(core, {output.buffer(), npc, start_tile_id, 0u, 0u, 0u, 0u, 0u});
                 compute_desc.runtime_args.emplace_back(
                     core, KernelDescriptor::CoreRuntimeArgs{npc, packed_scalar1, packed_scalar2});
             }
@@ -501,6 +512,27 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> UnaryDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Recompute the descriptor for the current tensors and re-apply every per-core runtime arg
+    // (kernels pushed in create_descriptor order: reader=0, writer=1, compute=2). Buffer slots hold
+    // the current address here too, matching the bindings, so re-applying them is a no-op; the point
+    // is the volume-dependent work-split args, which the fast path would otherwise leave frozen.
+    auto desc = ProgramFactory::create_descriptor(operation_attributes, tensor_args, output);
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    for (uint32_t kernel_idx = 0; kernel_idx < desc.kernels.size(); ++kernel_idx) {
+        for (const auto& [core, args] : desc.kernels[kernel_idx].runtime_args) {
+            for (uint32_t arg_idx = 0; arg_idx < args.size(); ++arg_idx) {
+                dynamic_args.push_back({kernel_idx, core, arg_idx, args[arg_idx]});
+            }
+        }
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::unary

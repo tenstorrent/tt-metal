@@ -19,7 +19,13 @@ namespace ttnn::operations::reduction::detail {
 
 namespace nb = nanobind;
 
-inline std::string get_generic_reduction_doc(const char* op_name, const char* qualified_name) {
+inline std::string get_generic_reduction_doc(const char* op_name, const char* qualified_name, bool int32_supported) {
+    // INT32 (TILE only) is supported for sum/min/max via the SFPU reduce path, but not for mean:
+    // the average (sum / N) is usually fractional, so there is no canonical INT32 result to return.
+    const char* int32_row = int32_supported ? R"doc(
+                * - INT32
+                  - TILE)doc"
+                                            : "";
     return fmt::format(
         R"doc(
         Computes the {0} of the input tensor :attr:`input_tensor` along the specified dimension(s) :attr:`dim`.
@@ -53,9 +59,11 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
                 * - BFLOAT16
                   - ROW_MAJOR, TILE
                 * - BFLOAT8_B
-                  - TILE
+                  - TILE{2}
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
+            Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
+            config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -63,7 +71,8 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
             - Output sharding will mirror the input
         )doc",
         op_name,
-        qualified_name);
+        qualified_name,
+        int32_row);
 }
 
 // Wrapper that detects explicit use of the deprecated 'correction' parameter and
@@ -74,7 +83,7 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
 template <auto Func>
 Tensor generic_reduction_with_deprecated_correction(
     const Tensor& input_tensor,
-    const std::optional<std::variant<int, int64_t, SmallVector<int>>>& dim,
+    const std::optional<std::variant<int, int64_t, ttsl::SmallVector<int>>>& dim,
     bool keepdim,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
@@ -104,7 +113,7 @@ Tensor generic_reduction_with_deprecated_correction(
 }
 
 inline void bind_generic_reductions(nb::module_& mod) {
-    const auto sum_doc = get_generic_reduction_doc("sum", "ttnn.sum");
+    const auto sum_doc = get_generic_reduction_doc("sum", "ttnn.sum", /*int32_supported=*/true);
     ttnn::bind_function<"sum">(
         mod,
         sum_doc.c_str(),
@@ -119,7 +128,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 
-    const auto mean_doc = get_generic_reduction_doc("mean", "ttnn.mean");
+    const auto mean_doc = get_generic_reduction_doc("mean", "ttnn.mean", /*int32_supported=*/false);
     ttnn::bind_function<"mean">(
         mod,
         mean_doc.c_str(),
@@ -134,7 +143,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 
-    const auto max_doc = get_generic_reduction_doc("max", "ttnn.max");
+    const auto max_doc = get_generic_reduction_doc("max", "ttnn.max", /*int32_supported=*/true);
     ttnn::bind_function<"max">(
         mod,
         max_doc.c_str(),
@@ -149,7 +158,7 @@ inline void bind_generic_reductions(nb::module_& mod) {
         nb::arg("correction") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 
-    const auto min_doc = get_generic_reduction_doc("min", "ttnn.min");
+    const auto min_doc = get_generic_reduction_doc("min", "ttnn.min", /*int32_supported=*/true);
     ttnn::bind_function<"min">(
         mod,
         min_doc.c_str(),

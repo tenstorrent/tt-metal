@@ -730,6 +730,7 @@ class DecoderStage(StageKind):
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
+        enable_sram_bspm: bool = False,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -754,6 +755,7 @@ class DecoderStage(StageKind):
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._host_loopback = host_loopback
+        self._enable_sram_bspm = enable_sram_bspm
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -797,6 +799,7 @@ class DecoderStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=ctx.stage_plan,
             loopback=LoopbackConfig.host_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD))
             if self._host_loopback
             else LoopbackConfig.fabric_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
@@ -888,6 +891,7 @@ class DecoderStage(StageKind):
             persistent_mode=self._persistent_mode,
             termination_semaphore=self._state.get("termination_semaphore"),
             is_torus=self._is_torus,
+            enable_sram_bspm=self._enable_sram_bspm,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -915,6 +919,16 @@ class DecoderStage(StageKind):
         # weights were allocated. Without this, sram_*_proj is in L1 but no
         # gate index has bit-15 set, so the SRAM kernel filter sees zero
         # SRAM-flagged experts every iter and the SRAM path never fires.
+        #
+        # TODO (BSPM-SRAM): under enable_sram_bspm, SRAM CT sizes diverge per
+        # device and must be allocated AFTER SDPA buffer (allocated below in
+        # create_decoder_block_tensors) so SDPA addresses stay uniform across
+        # the mesh.  The unit test test_decoder_block.py shows the deferred
+        # pattern: prepare_moe_layer_weights(sram_expert_ids=[]) →
+        # create_decoder_block_tensors → build_sram_routed_proj_cts →
+        # _dataclass_replace + d.update.  Wiring this through the weight
+        # provider (so the stage receives a "deferred SRAM build" descriptor
+        # instead of pre-allocated SRAM CTs) is a follow-up.
         if self._is_moe:
             # MoE: prepare_moe_layer_weights populates sram_slots.slot_experts with
             # the L1-fit-truncated subset of sram_hot_experts. None when SRAM
@@ -1182,6 +1196,7 @@ class HostIoDecoderStage(DecoderStage):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=ctx.stage_plan,
             loopback=LoopbackConfig.no_loopback(HostIoPlacement.default(PIPELINE_CORE_COORD)),
         )
 
@@ -1209,6 +1224,7 @@ class MoEDecoderStage(DecoderStage):
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
+        enable_sram_bspm: bool = False,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -1225,6 +1241,7 @@ class MoEDecoderStage(DecoderStage):
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
             host_loopback=host_loopback,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
 

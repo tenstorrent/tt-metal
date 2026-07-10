@@ -41,14 +41,14 @@ public:
     /// Shards TensorSpec across the specified dimensions.
     /// This would result in the shard shape to be minimal (typically 1 or tile size) in the sharded dimensions.
     TensorSpec sharded_across_dims(
-        tt::stl::Span<const int32_t> dims,
+        ttsl::Span<const int32_t> dims,
         CoreRangeSet grid,
         ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     /// Shards TensorSpec across all dimensions except for the specified ones.
     /// This would result in the shard shape to be minimal (typically 1 or tile size) in all dimensions except for the
     /// specified ones.
     TensorSpec sharded_across_dims_except(
-        tt::stl::Span<const int32_t> dims,
+        ttsl::Span<const int32_t> dims,
         CoreRangeSet grid,
         ShardOrientation orientation = ShardOrientation::ROW_MAJOR) const;
     /// Performs 2D height sharding for TensorSpec.
@@ -101,8 +101,6 @@ public:
     size_t compute_consumed_memory_bytes_per_bank(size_t page_alignment, size_t num_banks) const {
         return tensor_layout_.compute_consumed_memory_bytes_per_bank(logical_shape_, page_alignment, num_banks);
     }
-
-    TensorSpec with_memory_config(MemoryConfig memory_config) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
     auto attribute_values() const { return std::forward_as_tuple(logical_shape_, tensor_layout_); }

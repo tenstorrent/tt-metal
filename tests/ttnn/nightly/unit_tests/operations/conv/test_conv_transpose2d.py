@@ -126,6 +126,7 @@ def run_conv_transpose2d(
             kernel_size=(filter_height, filter_width),
             stride=(stride_h, stride_w),
             padding=(pad_h, pad_w),
+            output_padding=(out_pad_h, out_pad_w),
             dilation=(dilation, dilation),
             has_bias=has_bias,
             groups=groups,
@@ -680,6 +681,8 @@ def run_conv_transpose2d_replicate_pad(
     groups=1,
     dilation_h=1,
     dilation_w=1,
+    mirror_kernel=True,
+    config_tensors_in_dram=False,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -728,10 +731,11 @@ def run_conv_transpose2d_replicate_pad(
 
     padded = torch.nn.functional.pad(strided, (in_pad_l, in_pad_r, in_pad_t, in_pad_b), mode="replicate")
 
-    # conv_transpose2d weight (Cin, Cout/g, kH, kW) → conv2d weight (Cout, Cin/g, kH, kW), spatial-flipped
+    # conv_transpose2d weight (Cin, Cout/g, kH, kW) -> conv2d weight (Cout, Cin/g, kH, kW).
     w_eq = torch_weight_tensor.view(groups, Cin // groups, output_channels // groups, filter_height, filter_width)
     w_eq = w_eq.transpose(1, 2).contiguous().view(output_channels, Cin // groups, filter_height, filter_width)
-    w_eq = w_eq.flip(-1).flip(-2)
+    if mirror_kernel:
+        w_eq = w_eq.flip(-1).flip(-2)
 
     torch_out_golden = torch.nn.functional.conv2d(
         padded,
@@ -759,6 +763,7 @@ def run_conv_transpose2d_replicate_pad(
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         deallocate_activation=True,
         padding_mode=ttnn.PaddingMode.Replicate,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -783,6 +788,7 @@ def run_conv_transpose2d_replicate_pad(
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,
+        mirror_kernel=mirror_kernel,
         dtype=output_dtype,
         return_output_dim=True,
         return_weights_and_bias=False,
@@ -842,6 +848,31 @@ def test_conv_transpose2d_replicate_pad(
         out_pad_h=out_pad_h,
         out_pad_w=out_pad_w,
         groups=groups,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv_transpose2d_replicate_pad_depthwise_kernel12_mirror_false(device):
+    # Regression for issue #45783: this shape previously selected the 1D depthwise conv path with an invalid
+    # coalesced activation block width.
+    run_conv_transpose2d_replicate_pad(
+        device,
+        batch_size=1,
+        output_channels=48,
+        input_channels=48,
+        input_height=1,
+        input_width=64,
+        filter_height=1,
+        filter_width=12,
+        stride_h=1,
+        stride_w=2,
+        padding=(0, 5),
+        out_pad_h=0,
+        out_pad_w=0,
+        has_bias=False,
+        groups=48,
+        mirror_kernel=False,
+        config_tensors_in_dram=True,
     )
 
 

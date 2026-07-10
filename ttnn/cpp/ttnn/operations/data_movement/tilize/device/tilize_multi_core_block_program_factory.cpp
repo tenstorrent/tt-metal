@@ -8,6 +8,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -28,7 +29,28 @@ void push_cb_pair(
     uint32_t output_single_tile_size,
     uint32_t num_tiles,
     tt::DataFormat input_cb_data_format,
-    tt::DataFormat output_cb_data_format) {
+    tt::DataFormat output_cb_data_format,
+    uint32_t dram_alignment) {
+    // c_1 is a per-row staging buffer used by the reader when the DRAM source row and the
+    // L1 destination have different alignment offsets: the reader rounds the source address
+    // down to a dram_alignment boundary, issues one noc_async_read of (row_bytes + dram_alignment)
+    // into this buffer, then copies the correctly-offset slice into c_0.
+    //   row_bytes  = TILE_WIDTH * elt_size * num_tiles  (one row of a sub-block)
+    //              = input_single_tile_size / TILE_HEIGHT * num_tiles
+    //   + dram_alignment    : tail bytes from rounding the DRAM read down to alignment
+    //   + dram_alignment    : headroom for aligning the L1 write pointer up to dram_alignment
+    //                         (get_write_ptr only guarantees L1 alignment, not DRAM alignment)
+    uint32_t input_row_bytes = input_single_tile_size / TILE_HEIGHT;
+    uint32_t temp_cb_size = input_row_bytes * num_tiles + 2 * dram_alignment;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = temp_cb_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = input_cb_data_format,
+            .page_size = temp_cb_size,
+        }}},
+    });
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_tiles * input_single_tile_size,
         .core_ranges = core_ranges,
@@ -62,7 +84,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32;
+    bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
+                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -109,6 +132,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+
     ProgramDescriptor desc;
 
     if (!core_range.empty()) {
@@ -119,7 +144,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             output_single_tile_size,
             single_sub_block_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
     if (has_cliff_col && has_cliff_row) {
         push_cb_pair(
@@ -129,7 +155,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             output_single_tile_size,
             single_block_size_cliff_row,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
     if (has_cliff_row) {
         push_cb_pair(
@@ -139,7 +166,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             output_single_tile_size,
             single_block_size_cliff_row,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
     if (has_cliff_col) {
         push_cb_pair(
@@ -149,7 +177,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
             output_single_tile_size,
             single_sub_block_size,
             input_cb_data_format,
-            output_cb_data_format);
+            output_cb_data_format,
+            dram_alignment);
     }
 
     // reader
@@ -172,7 +201,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        total_num_rows, third_dim, tile_height, a.element_size(), row_size_bytes};
+        total_num_rows, third_dim, tile_height, a.element_size(), row_size_bytes, dram_alignment};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;

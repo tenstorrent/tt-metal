@@ -5,6 +5,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(0);
@@ -13,6 +14,8 @@ void kernel_main() {
     const uint32_t start_id = get_arg_val<uint32_t>(1);
     const uint32_t num_tiles = get_arg_val<uint32_t>(2);
     const uint32_t end_id = start_id + num_tiles;
+
+    CircularBuffer cb_intermed(intermed_cb_id);
 
     init_sfpu(intermed_cb_id, intermed_cb_id);
 
@@ -25,7 +28,7 @@ void kernel_main() {
 
     rand_tile_init(seed);
     for (uint32_t i = start_id; i < end_id; ++i) {
-        cb_reserve_back(intermed_cb_id, 1);
+        cb_intermed.reserve_back(1);
 
         tile_regs_acquire();
         rand_tile(0, rand_from, rand_scale.u);
@@ -35,6 +38,6 @@ void kernel_main() {
         pack_tile(0, intermed_cb_id, 0);
         tile_regs_release();
 
-        cb_push_back(intermed_cb_id, 1);
+        cb_intermed.push_back(1);
     }
 }

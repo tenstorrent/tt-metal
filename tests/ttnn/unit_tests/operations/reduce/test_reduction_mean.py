@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 TEST_PADDING_VALUE = -42
@@ -49,9 +49,7 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, [0, 1], [2, 3], [0, 1, 2]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_mean_scaling(device, shape, dim, keepdim):
-    """Use assert_allclose with ones() to test that mean's scaling factor is
-    computed correctly.
-    """
+    """Ones input → uniform mean; check exact bfloat16 result via ULP."""
     torch.manual_seed(0)
     torch_input_tensor = torch.ones(shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=keepdim, dtype=torch.bfloat16)
@@ -62,16 +60,7 @@ def test_mean_scaling(device, shape, dim, keepdim):
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # test for equivalance
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=0.999,
-        rtol=0.004,
-        atol=0.004,
-        frobenius_threshold=0.004,
-        check_ulp=True,
-    )
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("shape", [(2, 3, 4, 5), (7, 17, 41, 31)])
@@ -89,16 +78,7 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
     output_tensor = ttnn.mean(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # test for equivalance
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=0.9999,
-        rtol=0.004,
-        atol=0.008,
-        frobenius_threshold=0.004,
-        check_ulp=True,
-    )
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
 
 
 @pytest.mark.parametrize("mem_config", [None, ttnn.DRAM_MEMORY_CONFIG, "block", "height"])

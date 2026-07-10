@@ -135,11 +135,11 @@ class GemmaMultimodalGenerator(Generator):
             # Only paged attention is supported for prefill
             enable_trace = False
 
-        sampling_on_device_requested = sampling_params is not None
+        on_device_sampling_requested = sampling_params is not None
 
         # we need this here because of tt-metal tests
         if warmup_prefill:
-            sampling_on_device_enabled = (
+            on_device_sampling_enabled = (
                 getattr(self.model[0], "_supports_on_device_sampling", False)
                 and getattr(self.model[0], "sampling", None) is not None
             )
@@ -147,8 +147,7 @@ class GemmaMultimodalGenerator(Generator):
             self.warmup_model_prefill(
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
-                can_sample_on_device=sampling_on_device_enabled,
-                non_greedy_decoding_on_device=sampling_on_device_enabled,
+                can_sample_on_device=on_device_sampling_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape
@@ -212,7 +211,7 @@ class GemmaMultimodalGenerator(Generator):
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
         )
 
-        if use_batched_prefill and sampling_on_device_requested:
+        if use_batched_prefill and on_device_sampling_requested:
             sampling_module, sampling_dp, _, _ = self._get_sampling_contract(0)
             if sampling_module is not None and sampling_dp > 1:
                 # NOTE: Batched prefill disabled: on-device sampling
@@ -266,7 +265,7 @@ class GemmaMultimodalGenerator(Generator):
             if getattr(self.model[model_id], "users_row_sharded", False):
                 local_kwargs["global_user_id"] = batch_user_ids if use_batched_prefill else user_id
             sampling_enabled = (
-                sampling_on_device_requested
+                on_device_sampling_requested
                 and getattr(self.model[model_id], "_supports_on_device_sampling", False)
                 and getattr(self.model[model_id], "sampling", None) is not None
             )
@@ -569,7 +568,7 @@ class GemmaMultimodalGenerator(Generator):
         else:
             return output_tensor
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -617,8 +616,8 @@ class GemmaMultimodalGenerator(Generator):
                     if not sampling_parameters_sweeped:
                         sampling_params = self._create_sampling_params(
                             can_sample_on_device=can_sample_on_device,
-                            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
                             batch_size=batch_size,
+                            greedy_only=greedy_only,
                         )
                     else:
                         sampling_params = [None]

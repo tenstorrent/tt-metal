@@ -1437,3 +1437,104 @@ def test_lm_head_decode_linear(device):
     passed, pcc = comp_pcc(pt_out, output_tensor, 0.999)
     logger.info(f"PCC: {pcc}")
     assert passed, f"LM head decode linear test failed with PCC {pcc} < 0.999"
+
+
+@pytest.mark.parametrize("num_iters", [1])
+def test_matmul_dram_sharded_single_kblock(device, num_iters):
+    """
+    DRAM-sharded matmul whose activations live on a single in0 core, so in0_block_w
+    spans the full contraction dimension and the reader processes K in a single block
+    (num_blocks == 1). With one K-block the in1 circular buffer is single-buffered
+    rather than triple-buffered, so the reader's initial cb_in1.reserve_back must
+    request no more pages than the single-slot CB holds. Reserving a wider window
+    exceeds the CB capacity and deadlocks the reader, so this case guards the
+    single-buffered reservation path on any DRAM-sharded matmul.
+    """
+    torch.manual_seed(0)
+
+    m, k, n = 32, 512, 384
+    tile = 32
+    in0_dtype, in1_dtype, out_dtype = ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat16
+
+    # in1 is DRAM width-sharded across every bank; bank count is arch-dependent
+    # (8 on Blackhole, 12 on Wormhole), so derive it from the device.
+    num_dram_banks = device.dram_grid_size().x
+    n_padded = pad_to_dram_banks(n, tile, tile * num_dram_banks)
+
+    in0_shape = [1, 1, m, k]
+    in1_shape = [1, 1, k, n]
+    in1_shard_shape = [k, n_padded // num_dram_banks]
+
+    # A single in0 core makes in0_block_w cover all of K, which yields num_blocks == 1.
+    in0_core_grid = ttnn.CoreGrid(y=1, x=1)
+    in0_block_w = k // tile
+    per_core_M = m // tile
+    per_core_N = (n_padded // tile) // num_dram_banks
+
+    in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+    in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+    in0_memory_config = ttnn.create_sharded_memory_config(
+        in0_shape,
+        core_grid=in0_core_grid,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in0_t = ttnn.from_torch(
+        in0,
+        dtype=in0_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in0_memory_config,
+    )
+
+    in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))})
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    in1_t = ttnn.from_torch(
+        in1,
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in1_memory_config,
+    )
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=in0_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fused_activation=None,
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    for itr in range(num_iters):
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            dtype=out_dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
+        if itr != num_iters - 1:
+            output_t.deallocate()
+
+    output_tensor = ttnn.to_torch(output_t)[:, :, :m, :n]
+    pt_out = in0 @ in1
+
+    assert_numeric_metrics(
+        pt_out,
+        output_tensor,
+        atol=0.0028 * k,
+        rtol=1.5 * k,
+        frobenius_threshold=0.0001 * k,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )

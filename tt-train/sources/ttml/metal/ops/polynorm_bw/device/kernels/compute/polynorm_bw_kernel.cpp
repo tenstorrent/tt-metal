@@ -62,6 +62,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -143,8 +144,8 @@ inline void copy_scalar_tile_to_reg(const uint32_t cb_src, const uint32_t reg_ds
 }
 
 inline void row_reduce_sum_to_reg(const uint32_t cb_sum, const uint32_t reg_dst) {
-    reconfig_data_format(cb_sum, cb_matmul_reduce);
-    mm_init(cb_sum, cb_matmul_reduce, cb_sum, 0);
+    reconfig_data_format(cb_matmul_reduce, cb_sum);
+    matmul_init(cb_sum, cb_matmul_reduce, 0);
     matmul_tiles(cb_sum, cb_matmul_reduce, 0, 0, reg_dst);
 }
 
@@ -181,7 +182,7 @@ void reduce_sum_to_inv_rms(const uint32_t cb_sum, const uint32_t cb_inv_rms) {
         mul_binary_tile_init();
         mul_binary_tile(reg_acc, reg_scaler, reg_acc);
     } else {
-        reconfig_data_format(cb_sum, cb_scaler);
+        reconfig_data_format(cb_scaler, cb_sum);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, cb_inv_rms);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_scaler, 0, 0, reg_acc);
         reduce_uninit();
@@ -213,7 +214,7 @@ void reduce_sum_to_scalar(const uint32_t cb_sum, const uint32_t cb_scalar) {
         row_reduce_sum_to_reg(cb_sum, reg_acc);
     } else {
         cb_wait_front(cb_one, onetile);
-        reconfig_data_format(cb_sum, cb_one);
+        reconfig_data_format(cb_one, cb_sum);
         reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, cb_scalar);
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_sum, cb_one, 0, 0, reg_acc);
         reduce_uninit();

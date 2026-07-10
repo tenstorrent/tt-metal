@@ -287,6 +287,13 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
+    // Number of cells in the multicast bounding box. The on-chip multicasts
+    // below address the full `num_cores_x * num_cores_y` rectangle, which may
+    // be larger than `num_blocks` (the shard worker count) when the shard
+    // grid is non-rectangular. The NoC ack counter must be credited against
+    // the rectangle size, not the worker count, otherwise the sender's
+    // `noc_async_write_barrier()` waits for acks that never arrive.
+    uint32_t num_mcast_dests = num_cores_x * num_cores_y;
     uint32_t num_cores_all_to_all = 1;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
@@ -338,24 +345,6 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         all_to_all_workers_except_sender =
             num_cores_to_corerangeset(all_start_core, num_cores_all_to_all - 1, all_core_grid_size, true);
     }
-    if (num_none_all_to_all_workers > 0) {
-        if (use_two_stage_reduce) {
-            CoreCoord none_start_core = {all_core_grid_size.x, sender_cores.end_coord.y};
-            CoreCoord none_end_core = {num_cores_x - 1, num_cores_y - 1};
-            CoreRange none_core_range = CoreRange(none_start_core, none_end_core);
-            not_all_to_all_workers = CoreRangeSet(none_core_range);
-        } else {
-            CoreCoord none_start_core;
-            CoreCoord end_core = (*all_to_all_cores.ranges().rbegin()).end_coord;
-            if (end_core.x == bbox.end_coord.x) {
-                none_start_core = {0, end_core.y + 1};
-            } else {
-                none_start_core = {end_core.x + 1, end_core.y};
-            }
-            not_all_to_all_workers =
-                num_cores_to_corerangeset(none_start_core, num_none_all_to_all_workers, none_core_grid_size, true);
-        }
-    }
     num_cores_x_mcast = num_cores_x;
     num_cores_y_mcast = num_cores_y;
     auto applyStartOffset = [](const CoreRangeSet& input_set, const CoreCoord& grid_offset) -> CoreRangeSet {
@@ -381,7 +370,16 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             {sender_cores.end_coord.x + start_core.x, sender_cores.end_coord.y + start_core.y}};
         all_to_all_cores = applyStartOffset(all_to_all_cores, grid_offset.value());
         all_to_all_workers_except_sender = applyStartOffset(all_to_all_workers_except_sender, grid_offset.value());
-        not_all_to_all_workers = applyStartOffset(not_all_to_all_workers, grid_offset.value());
+    }
+    if (num_none_all_to_all_workers > 0) {
+        // Workers that are not on the first all-to-all column. Computing this
+        // as a bounding-box rectangle (the legacy path) silently includes
+        // phantom cells when the shard grid is non-rectangular: the receiver
+        // kernel then gets dispatched on cores that have no CBs allocated and
+        // deadlocks in cb_reserve_back. Subtracting from the actual shard
+        // grid is correct for both rectangular and non-rectangular layouts.
+        // (Both operands are already in absolute coords here.)
+        not_all_to_all_workers = all_cores.subtract(all_to_all_cores);
     }
     // Mcast args
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -620,7 +618,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         (std::uint32_t)ex_cb_external2_index,
         (std::uint32_t)post_reduce_sender_semaphore_id,
         (std::uint32_t)cb_stats_reduced_index,
-        (std::uint32_t)ex_global_cb_index};
+        (std::uint32_t)ex_global_cb_index,
+        (std::uint32_t)num_mcast_dests};
     std::vector<uint32_t> reader_mcast_receiver_all_to_all_compile_time_args = {
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
@@ -692,6 +691,7 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     writer_compile_time_args.push_back(stats_filled_semaphore);
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
+    writer_compile_time_args.push_back(num_mcast_dests);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;

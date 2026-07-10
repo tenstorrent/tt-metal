@@ -30,7 +30,7 @@ void kernel_main() {
     DPRINT(" > Received data from src1: {}\n", ptr[0]);
 
     // Save output data
-    noc_async_write_tile(0, output_tensor_dram, l1_write_addr_output);
+    noc_async_write_page(0, output_tensor_dram, l1_write_addr_output);
     noc_async_write_barrier();
 
     cb_pop_front(src1_cb_index, one_tile);

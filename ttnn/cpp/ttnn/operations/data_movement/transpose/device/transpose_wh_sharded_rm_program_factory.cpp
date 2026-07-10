@@ -224,6 +224,10 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (src0_cb_data_format == tt::DataFormat::Float32) {
+        // Keep both the tilize input (c_24) and its output (c_25, which feeds
+        // the transpose) in full Float32 on the unpack-to-dest path; otherwise
+        // the unpacker falls back to tf32 and drops the low mantissa bits.
+        unpack_to_dest_mode[in_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[im_cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
@@ -238,6 +242,12 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
     };
+
+    // #48928: this reader uses compile-time args only; emit one placeholder rt-arg per core so
+    // get_dynamic_runtime_args has a slot to re-apply, opting this CB-bound factory into the fast-path.
+    for (const auto& core : corerange_to_cores(all_cores)) {
+        reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0u});
+    }
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

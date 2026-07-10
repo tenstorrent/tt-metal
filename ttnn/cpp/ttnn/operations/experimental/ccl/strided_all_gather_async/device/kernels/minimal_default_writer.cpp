@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -191,6 +193,8 @@ void kernel_main() {
         }
     }
 
+    Noc noc_obj;
+
     uint32_t batch_output_tile_offset = output_worker_tile_offset;
     uint32_t global_tile_index = 0;
     uint32_t output_tiles_per_batch = output_tensor_Wt * output_tensor_Ht;
@@ -286,8 +290,8 @@ void kernel_main() {
         batch_output_tile_offset += output_tiles_per_batch;
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
@@ -300,8 +304,8 @@ void kernel_main() {
             uint64_t dest_addr =
                 safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
             noc_semaphore_inc(dest_addr, 1);
-            noc_async_atomic_barrier();
+            noc_obj.async_atomic_barrier();
         }
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

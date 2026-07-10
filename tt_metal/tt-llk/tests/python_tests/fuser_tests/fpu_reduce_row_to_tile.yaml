@@ -1,0 +1,27 @@
+operands:
+  - name: "input_A"
+    dims: [128, 128]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [128, 128]
+    format: "Float16_b"
+    const_value: 1.0
+  - name: "reduce_row_out"
+    dims: [128, 128]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_ROW"
+        reduce_pool: "SUM"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 128]
+    pack:
+      - output: "reduce_row_out"
+        packer: "Packer"

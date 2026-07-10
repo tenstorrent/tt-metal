@@ -28,7 +28,7 @@ inline void calculate_dropout(uint probability, uint scale) {
         // Scale samples
         // dst_reg[0] = dst_reg[0] * sFloat16b(scale);
         ///////////////////////
-        TTI_SFPLOAD(p_sfpu::LREG0, 0, 3, 0);
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, 3, 0);
         TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 
         ////////////////////////
@@ -43,12 +43,12 @@ inline void calculate_dropout(uint probability, uint scale) {
         ////////////////////////
         // Drop samples
         // v_if (rand < probability)
-        //   dst_reg[0] = vConst0;
+        //   dst_reg[0] = 0.0f;
         ///////////////////////
         TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 10);
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
         TTI_SFPENCC(0, 0, 0, 0);
-        TTI_SFPSTORE(0, 0, 3, 0);
+        TTI_SFPSTORE(0, InstrModLoadStore::DEFAULT, 3, 0);
 
         sfpi::dst_reg++;
     }

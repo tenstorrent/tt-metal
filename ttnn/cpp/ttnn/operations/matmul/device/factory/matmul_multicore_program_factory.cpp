@@ -33,9 +33,9 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }
 
-    const auto& a = tensor_args.input_tensors.at(0);
-    const auto& b = tensor_args.input_tensors.at(1);
-    auto& output = tensor_return_value.at(0);
+    const auto& a = tensor_args.input_tensors.at(0).mesh_tensor();
+    const auto& b = tensor_args.input_tensors.at(1).mesh_tensor();
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
@@ -50,14 +50,11 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    tt::tt_metal::IDevice* device = a.device();
+    tt::tt_metal::IDevice* device = &a.mutable_device();
     TT_FATAL(operation_attributes.compute_kernel_config.has_value(), "Compute kernel config should have been provided");
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
     (void)packer_l1_acc;
-
-    tt_metal::Buffer* src0_buffer = a.buffer();
-    tt_metal::Buffer* src1_buffer = b.buffer();
 
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
@@ -88,9 +85,6 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
          num_output_tiles_per_core_group_1,
          num_output_tiles_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
-
-    tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // C = A*B*...
     // MN = MK*KN
@@ -140,8 +134,8 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
     uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
     uint32_t last_ktile_h = 0;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w, (uint32_t)last_ktile_h};
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -154,7 +148,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
 
     // Writer kernel
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -179,8 +173,8 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
         }
         reader_desc.emplace_runtime_args(
             core,
-            {src0_buffer,
-             src1_buffer,
+            {a,
+             b,
              Mt,
              Kt,
              Nt,
@@ -191,7 +185,7 @@ ProgramDescriptor MatmulMultiCoreProgramFactory::create_descriptor(
              num_tiles_written,
              num_output_tiles_per_core,
              MtNt});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_output_tiles_per_core, num_tiles_written});
+        writer_desc.emplace_runtime_args(core, {output, num_output_tiles_per_core, num_tiles_written});
         num_tiles_written += num_output_tiles_per_core;
     }
 

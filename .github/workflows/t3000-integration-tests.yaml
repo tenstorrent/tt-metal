@@ -12,19 +12,11 @@ on:
           - all
           - tteager
           - trace stress
-          # - llama3.2-vision # Tier 3 models
-          # - n300 mesh llama3.2-vision # Tier 3 models
-          - llama3.2-90b-vision # Tier 2 model
-          - llama3
-          - llama3 accuracy
-          - llama3_70n90b accuracy
-          - llama3_90b
           - resnet
           - sd35_large
           - flux1
           - motif
           - qwenimage
-          - mistral
           - wan2.2
           - mochi
           - deepseek-modules
@@ -56,18 +48,23 @@ on:
     - cron: "0 */8 * * *" # This cron schedule runs the workflow every 8 hours
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   t3000-integration-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/t3000-integration-tests-impl.yaml
     with:

@@ -60,14 +60,8 @@ void apply_fused_attn_mask(
 void pad_input(uint32_t cb_in, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, uint32_t cb_length_t, uint32_t blk);
 
-template <PoolType reduce_type>
-void reduce_cb(
-    uint32_t cb_in,
-    uint32_t cb_scaler,
-    uint32_t cb_prev_out,
-    uint32_t cb_out,
-    bool use_prev_reduce,
-    uint32_t cb_length_t);
+template <PoolType reduce_type, uint32_t cb_in_id, uint32_t cb_scaler_id, uint32_t cb_prev_out_id, uint32_t cb_out_id>
+void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t);
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk);
 
 // for scale+mask+softmax:
@@ -249,31 +243,22 @@ void exp_cb(uint32_t cb_in, uint32_t cb_out, uint32_t cb_max, const uint32_t cb_
     }
 }
 
-template <PoolType reduce_type>
-void reduce_cb(
-    uint32_t cb_in,
-    uint32_t cb_scaler,
-    uint32_t cb_prev_out,
-    uint32_t cb_out,
-    bool use_prev_reduce,
-    uint32_t cb_length_t) {
+template <PoolType reduce_type, uint32_t cb_in_id, uint32_t cb_scaler_id, uint32_t cb_prev_out_id, uint32_t cb_out_id>
+void reduce_cb(bool use_prev_reduce, uint32_t cb_length_t) {
     // Single reduce call with lambda that conditionally accumulates
-    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW>(
-        cb_in,
-        cb_scaler,
-        cb_out,
+    compute_kernel_lib::reduce<reduce_type, ReduceDim::REDUCE_ROW, cb_in_id, cb_scaler_id, cb_out_id>(
         compute_kernel_lib::ReduceInputBlockShape::row(cb_length_t),
         compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
         compute_kernel_lib::NoAccumulation{},
         // PostReduceOp: conditionally accumulate with previous result
-        [cb_prev_out, use_prev_reduce](uint32_t) {
+        [use_prev_reduce](uint32_t) {
             if (use_prev_reduce) {
                 // At this point, DST[0] contains the current reduce result
                 // Load previous result into DST[1] and accumulate
-                cb_wait_front(cb_prev_out, 1);
-                reconfig_data_format_srca(cb_prev_out);
-                copy_tile_init(cb_prev_out);
-                copy_tile(cb_prev_out, 0, 1);
+                CircularBuffer(cb_prev_out_id).wait_front(1);
+                reconfig_data_format_srca(cb_prev_out_id);
+                copy_tile_init(cb_prev_out_id);
+                copy_tile(cb_prev_out_id, 0, 1);
 
                 // Accumulate based on reduce type
                 if constexpr (reduce_type == PoolType::MAX) {
@@ -285,11 +270,21 @@ void reduce_cb(
                     add_binary_tile(0, 1, 0);  // add(DST[0], DST[1]) -> DST[0]
                 }
 
-                cb_pop_front(cb_prev_out, 1);
+                CircularBuffer(cb_prev_out_id).pop_front(1);
             }
             // If !use_prev_reduce, lambda is no-op (compiles away)
         });
 }
+
+template <PoolType reduce_type, uint32_t cb_in_id, uint32_t cb_scaler_id, uint32_t cb_ping_a, uint32_t cb_ping_b>
+ALWI void reduce_cb_pass(uint32_t cur_pass, bool use_prev_reduce, uint32_t cb_length_t) {
+    if ((cur_pass & 1) == 0) {
+        reduce_cb<reduce_type, cb_in_id, cb_scaler_id, cb_ping_b, cb_ping_a>(use_prev_reduce, cb_length_t);
+    } else {
+        reduce_cb<reduce_type, cb_in_id, cb_scaler_id, cb_ping_a, cb_ping_b>(use_prev_reduce, cb_length_t);
+    }
+}
+
 void apply_recip(uint32_t cb_in, uint32_t cb_recip, uint32_t cb_out, uint32_t cb_length_t, uint32_t blk) {
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_recip_obj(cb_recip);
@@ -332,21 +327,20 @@ void kernel_main() {
     // We only do the reserve for the intermediates once and use pack_tile
     // So effectively these are used as pre-allocated arrays
     // Note that the entire W dimension must fit in the intermed0 CB for this kernel to be correct
-    auto cb_max_scaler = tt::CBIndex::c_2;
-    auto cb_sum_scaler = tt::CBIndex::c_13;
-    auto cb_fused_scale = tt::CBIndex::c_3;
-    auto cb_fused_attn = tt::CBIndex::c_4;
-    auto cb_exps = tt::CBIndex::c_6;
-    auto cb_scale_mask = tt::CBIndex::c_9;
-    auto cb_sumexps = tt::CBIndex::c_7;
-    auto cb_prev_reduce = tt::CBIndex::c_12;
-    auto cb_in0 = tt::CBIndex::c_0;
-    auto cb_out0 = tt::CBIndex::c_11;
-    auto cb_max = tt::CBIndex::c_8;
-    auto cb_x = tt::CBIndex::c_10;
-    // TODO: need to add this cb
-    auto cb_recip = tt::CBIndex::c_16;
-    auto cb_prev_max = tt::CBIndex::c_15;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_13;
+    constexpr auto cb_fused_scale = tt::CBIndex::c_3;
+    constexpr auto cb_fused_attn = tt::CBIndex::c_4;
+    constexpr auto cb_exps = tt::CBIndex::c_6;
+    constexpr auto cb_scale_mask = tt::CBIndex::c_9;
+    constexpr auto cb_sumexps = tt::CBIndex::c_7;
+    constexpr auto cb_prev_reduce = tt::CBIndex::c_12;
+    constexpr auto cb_in0 = tt::CBIndex::c_0;
+    constexpr auto cb_out0 = tt::CBIndex::c_11;
+    constexpr auto cb_max = tt::CBIndex::c_8;
+    constexpr auto cb_x = tt::CBIndex::c_10;
+    constexpr auto cb_recip = tt::CBIndex::c_16;
+    constexpr auto cb_prev_max = tt::CBIndex::c_15;
     constexpr auto cb_mask_padded = tt::CBIndex::c_5;
     CircularBuffer cb_max_scaler_obj(cb_max_scaler);
     CircularBuffer cb_sum_scaler_obj(cb_sum_scaler);
@@ -364,10 +358,12 @@ void kernel_main() {
 #endif
 
     uint32_t num_cb_passes = 1 + ((Wt - 1) / cb_length_t);  // ceiling divide
+    // Ping-pong reduce outputs: odd num_cb_passes -> cb_max/cb_sumexps, even -> cb_prev_max/cb_prev_reduce
+    const uint32_t cb_max_final = (num_cb_passes & 1) ? cb_max : cb_prev_max;
+    const uint32_t cb_sum_final = (num_cb_passes & 1) ? cb_sumexps : cb_prev_reduce;
 
     // First loop is to parse and find the sum
     uint32_t dst0 = 0;
-    uint32_t cb_processed_input;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // This and all inner loops are for parsing the length of Wt in terms of chunks of the width that can fit in the
@@ -387,33 +383,30 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
-            cb_processed_input = cb_x;
+            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cur_cb_length_t, blk);
+            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cur_cb_length_t, blk, do_mask);
+            reduce_cb_pass<PoolType::MAX, cb_x, cb_max_scaler, cb_max, cb_prev_max>(
+                cur_pass, use_prev_reduce, cur_cb_length_t);
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {
-                // pad
                 pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
-                cb_processed_input = cb_x;
+                reduce_cb_pass<PoolType::MAX, cb_x, cb_max_scaler, cb_max, cb_prev_max>(
+                    cur_pass, use_prev_reduce, cur_cb_length_t);
             } else {
-                // no Pad
-                cb_processed_input = cb_in0;
+                reduce_cb_pass<PoolType::MAX, cb_in0, cb_max_scaler, cb_max, cb_prev_max>(
+                    cur_pass, use_prev_reduce, cur_cb_length_t);
             }
 #endif
-            reduce_cb<PoolType::MAX>(cb_processed_input, cb_max_scaler, cb_prev_max, cb_max, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
-            if (cur_pass != num_cb_passes - 1) {
-                std::swap(cb_max, cb_prev_max);
-            }
         }
         use_prev_reduce = false;
         length_left_t = Wt;
         cur_cb_length_t = cb_length_t;
 #endif
 #ifdef NUMERIC_STABLE
-        CircularBuffer(cb_max).wait_front(1);
+        CircularBuffer(cb_max_final).wait_front(1);
 #endif
 
         /*
@@ -426,32 +419,26 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
-            cb_processed_input = cb_x;
+            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cur_cb_length_t, blk);
+            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cur_cb_length_t, blk, do_mask);
+            exp_cb(cb_x, cb_exps, cb_max_final, cur_cb_length_t, blk);
+            reduce_cb_pass<PoolType::SUM, cb_exps, cb_sum_scaler, cb_sumexps, cb_prev_reduce>(
+                cur_pass, use_prev_reduce, cur_cb_length_t);
 #else
-            // Following code is focuesed on padding the last tile that need -inf for sections of the tile that are not
-            // a part of the tensor
             if (do_mask && cur_pass == num_cb_passes - 1) {
-                // pad
                 pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
-                cb_processed_input = cb_x;
+                exp_cb(cb_x, cb_exps, cb_max_final, cur_cb_length_t, blk);
+                reduce_cb_pass<PoolType::SUM, cb_exps, cb_sum_scaler, cb_sumexps, cb_prev_reduce>(
+                    cur_pass, use_prev_reduce, cur_cb_length_t);
             } else {
-                // no Pad
-                cb_processed_input = cb_in0;
+                exp_cb(cb_in0, cb_exps, cb_max_final, cur_cb_length_t, blk);
+                reduce_cb_pass<PoolType::SUM, cb_exps, cb_sum_scaler, cb_sumexps, cb_prev_reduce>(
+                    cur_pass, use_prev_reduce, cur_cb_length_t);
             }
-
 #endif
-            exp_cb(cb_processed_input, cb_exps, cb_max, cur_cb_length_t, blk);
-
-            reduce_cb<PoolType::SUM>(
-                cb_exps, cb_sum_scaler, cb_prev_reduce, cb_sumexps, use_prev_reduce, cur_cb_length_t);
             use_prev_reduce = true;  // We want to accumulate the previous cb reductions
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
-            if (cur_pass != num_cb_passes - 1) {
-                std::swap(cb_sumexps, cb_prev_reduce);
-            }
         }
         /*
          * --------------------------------------------------------
@@ -460,15 +447,15 @@ void kernel_main() {
          * --------------------------------------------------------
          * --------------------------------------------------------
          */
-        CircularBuffer(cb_sumexps).wait_front(1);
+        CircularBuffer(cb_sum_final).wait_front(1);
 
-        reconfig_data_format_srca(cb_sumexps);
-        pack_reconfig_data_format(cb_sumexps, cb_recip);
+        reconfig_data_format_srca(cb_sum_final);
+        pack_reconfig_data_format(cb_sum_final, cb_recip);
         tile_regs_acquire();
-        copy_tile_init(cb_sumexps);
-        copy_tile(cb_sumexps, 0, dst0);
+        copy_tile_init(cb_sum_final);
+        copy_tile(cb_sum_final, 0, dst0);
 
-        CircularBuffer(cb_sumexps).pop_front(1);
+        CircularBuffer(cb_sum_final).pop_front(1);
 
         recip_tile_init();
         recip_tile(dst0);
@@ -495,28 +482,24 @@ void kernel_main() {
         for (uint32_t cur_pass = 0; cur_pass < num_cb_passes; cur_pass++) {
             bool do_mask = mask_padded_data && (cur_pass == num_cb_passes - 1);
 #if FUSED_SCALE_MASK
-            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cb_length_t, blk);
-            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cb_length_t, blk, do_mask);
-            cb_processed_input = cb_x;
+            apply_fused_scale_mask(cb_in0, cb_fused_scale, cb_scale_mask, cur_cb_length_t, blk);
+            apply_fused_attn_mask(cb_scale_mask, cb_fused_attn, cb_x, cur_cb_length_t, blk, do_mask);
+            exp_cb(cb_x, cb_exps, cb_max_final, cur_cb_length_t, blk);
 #else
             if (do_mask && cur_pass == num_cb_passes - 1) {
-                // pad
                 pad_input(cb_in0, cb_x, cur_cb_length_t, blk);
-                cb_processed_input = cb_x;
+                exp_cb(cb_x, cb_exps, cb_max_final, cur_cb_length_t, blk);
             } else {
-                // no Pad
-                cb_processed_input = cb_in0;
+                exp_cb(cb_in0, cb_exps, cb_max_final, cur_cb_length_t, blk);
             }
 #endif
-            exp_cb(cb_processed_input, cb_exps, cb_max, cur_cb_length_t, blk);
-
             apply_recip(cb_exps, cb_recip, cb_out0, cur_cb_length_t, blk);
             length_left_t -= cur_cb_length_t;
             cur_cb_length_t = std::min(cur_cb_length_t, length_left_t);
         }
         cb_recip_obj.pop_front(1);
 #ifdef NUMERIC_STABLE
-        CircularBuffer(cb_max).pop_front(1);
+        CircularBuffer(cb_max_final).pop_front(1);
 #endif
     }
     cb_mask_padded_obj.pop_front(1);

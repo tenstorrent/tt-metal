@@ -27,6 +27,7 @@ void bind_randn_operation(nb::module_& mod) {
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
             layout (ttnn.Layout, optional): The layout of the tensor. Defaults to `ttnn.TILE_LAYOUT`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Configuration for the compute kernel. Defaults to `None`.
             seed (int, optional): An optional seed to initialize the random number generator for reproducible results. Defaults to `None`.
 
         Returns:
@@ -39,14 +40,14 @@ void bind_randn_operation(nb::module_& mod) {
                 :header-rows: 1
 
                 * - dtype
-                - layout
+                  - layout
                 * - FLOAT32
-                - ROW_MAJOR, TILE
+                  - ROW_MAJOR, TILE
                 * - BFLOAT16
-                - ROW_MAJOR, TILE
+                  - ROW_MAJOR, TILE
 
-        Memory Support:
-            - Interleaved: DRAM and L1
+        .. note::
+            Memory layout support: interleaved DRAM and L1.
         )doc";
 
     ttnn::bind_function<"randn">(

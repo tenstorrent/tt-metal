@@ -29,6 +29,11 @@
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include <gmock/gmock.h>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include "../metal2_host_api/test_helpers.hpp"
 
 namespace tt::tt_metal {
 
@@ -49,6 +54,11 @@ void validate_dfb_tile_counters(
     const CoreCoord& logical_core,
     const experimental::dfb::DataflowBufferConfig& config,
     const DFBTileCounterExpectation& expectation) {
+    // risc_mask/groups are only populated by finalize_dataflow_buffer_configs(); these
+    // host-side config tests inspect that state without launching, so finalize here.
+    // Idempotent (finalize skips already-finalized DFBs) -> no-op for the MultiCore/Reentry
+    // tests that finalize explicitly.
+    program.impl().finalize_dataflow_buffer_configs();
     auto dfbs = program.impl().dataflow_buffers_on_core(logical_core);
     ASSERT_EQ(dfbs.size(), 1) << "Expected exactly 1 DFB on core";
 
@@ -112,8 +122,17 @@ void validate_dfb_tile_counters(
         }
     }
 
-    // For ALL mode, validate remapper pair indices
-    if (config.cap == dfb::AccessPattern::ALL) {
+    // ALL mode engages the remapper ONLY when a Tensix endpoint is involved. Pure DM->DM ALL
+    // broadcasts via broadcast_tc, so remapper_pair_index / consumer_tcs are intentionally left
+    // at 0 (in dataflow_buffer.cpp they are populated only inside `if (use_remapper)`, and
+    // use_remapper == ALL && !dm_dm_all). Tensix RISCs occupy mask bits 0x0F00.
+    const bool dm_dm_all = config.cap == dfb::AccessPattern::ALL &&
+                           (config.producer_risc_mask & 0x0F00) == 0 &&
+                           (config.consumer_risc_mask & 0x0F00) == 0;
+    const bool uses_remapper = config.cap == dfb::AccessPattern::ALL && !dm_dm_all;
+
+    // For remapper-based ALL, validate remapper pair indices are unique per producer.
+    if (uses_remapper) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
@@ -197,7 +216,7 @@ void validate_dfb_tile_counters(
             }
         }
 
-        if (config.cap == dfb::AccessPattern::ALL) {
+        if (uses_remapper) {
             uint32_t actual_consumer_tcs = producer_rc->config.consumer_tcs;
             ASSERT_EQ(actual_consumer_tcs, expected_consumer_tcs)
                 << "ALL: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
@@ -209,6 +228,15 @@ void validate_dfb_tile_counters(
                 "ALL: Producer {} consumer_tcs validated: 0x{:x}",
                 producer_risc_id,
                 actual_consumer_tcs);
+        } else if (dm_dm_all) {
+            // DM->DM ALL broadcasts via broadcast_tc; the remapper-only fields must stay unset.
+            EXPECT_EQ(producer_rc->config.consumer_tcs, 0u)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id
+                << " must not populate consumer_tcs (broadcast_tc path, remapper unused)";
+            EXPECT_TRUE(producer_rc->config.broadcast_tc)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must have broadcast_tc set";
+            EXPECT_EQ(producer_rc->config.remapper_pair_index, 0)
+                << "DM->DM ALL: Producer " << (int)producer_risc_id << " must not allocate a remapper pair index";
         }
     }
 }
@@ -237,7 +265,7 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .expected_producer_tc_count = 1,  // 1 producer with 1 consumer -> 1 TC per producer
         .expected_consumer_tc_count = 1,  // 1 consumer with 1 producer -> 1 TC per consumer
         .producer_to_consumer_pairings = {
-            {0, {{0, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 0 TC[0]
+            {0, {{4, 0, 0}}},  // Producer 0 TC[0] pairs with Consumer risc 4 TC[0]  (consumer_risc_mask 0x10 -> risc 4; matches DMTensixTest1xDFB4Sx1SConfig)
         }};
 
     validate_dfb_tile_counters(program, logical_core, config, expectation);
@@ -500,7 +528,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 1,  // ALL: each consumer has num_producers TCs = 1
         .producer_to_consumer_pairings = {
             {0,
@@ -568,7 +596,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
@@ -625,7 +653,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 2,  // ALL: producer broadcasts to num_consumers=2 TCs
         .expected_consumer_tc_count = 4,  // ALL: each consumer has num_producers TCs = 4
         .producer_to_consumer_pairings = {
             {0,
@@ -678,7 +706,7 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
 
     // consumer_risc_mask 0x3C = riscs 2,3,4,5
     DFBTileCounterExpectation expectation{
-        .expected_producer_tc_count = 1,  // ALL: each producer has 1 TC
+        .expected_producer_tc_count = 4,  // ALL: producer broadcasts to num_consumers=4 TCs
         .expected_consumer_tc_count = 2,  // ALL: each consumer has num_producers TCs = 2
         .producer_to_consumer_pairings = {
             {0,
@@ -944,6 +972,136 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
     experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
 
     validate_intra_tensix_dfb(program, logical_core, config);
+}
+
+// Run args for the minimal spec's two kernels (both declare empty RTA schemas, so empty arg sets).
+inline experimental::ProgramRunArgs MakeMinimalRunArgs(const experimental::NodeCoord& node) {
+    auto kernel_args = [&](const char* name) {
+        return experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel = experimental::KernelSpecName{name},
+            .advanced_options =
+                experimental::AdvancedKernelRunArgs{.runtime_varargs = {{node, {}}}, .common_runtime_varargs = {}},
+        };
+    };
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args.push_back(kernel_args("dm_kernel"));
+    params.kernel_run_args.push_back(kernel_args("compute_kernel"));
+    return params;
+}
+
+// num_entries override on a finalized DFB recomputes the txn descriptor in place while PRESERVING the
+// TC assignment and transaction IDs (only the threshold changes for the new ring depth).
+TEST_F(MeshDeviceFixture, DFBReentryOverridePreservesTcAndRecomputesTxn) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction IDs / tile counters require Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb_0"));
+    ASSERT_TRUE(dfb->configs_finalized);
+    ASSERT_TRUE(dfb->config.enable_producer_implicit_sync);
+    ASSERT_GT(dfb->producer_txn_descriptor.num_txn_ids, 0);
+
+    // Snapshot TC assignment + transaction IDs before the override.
+    auto snapshot_tcs = [](const auto& d) {
+        std::vector<uint32_t> tcs;
+        for (const auto& group : d->groups) {
+            for (const auto& rc : group.hw_risc_configs) {
+                for (uint8_t i = 0; i < rc.config.num_tcs_to_rr; ++i) {
+                    tcs.push_back(static_cast<uint32_t>(rc.config.packed_tile_counter[i]));
+                }
+            }
+        }
+        return tcs;
+    };
+    const std::vector<uint32_t> tcs_before = snapshot_tcs(dfb);
+    const uint8_t num_txn_ids_before = dfb->producer_txn_descriptor.num_txn_ids;
+    const std::vector<uint8_t> txn_ids_before(
+        dfb->producer_txn_descriptor.txn_ids, dfb->producer_txn_descriptor.txn_ids + num_txn_ids_before);
+    const uint8_t threshold_before = dfb->producer_txn_descriptor.num_entries_to_process_threshold;
+
+    // Override num_entries 2 -> 4 (still divisible by the preserved txn-id divisor).
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 4});
+    EXPECT_NO_THROW(experimental::SetProgramRunArgs(program, params));
+
+    // Size-derived state updated.
+    EXPECT_EQ(dfb->config.num_entries, 4u);
+    EXPECT_EQ(dfb->capacity, 4u);
+    EXPECT_TRUE(dfb->configs_finalized);  // not reset
+
+    // TC assignment + transaction IDs preserved.
+    EXPECT_EQ(snapshot_tcs(dfb), tcs_before);
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_txn_ids, num_txn_ids_before);
+    const std::vector<uint8_t> txn_ids_after(
+        dfb->producer_txn_descriptor.txn_ids,
+        dfb->producer_txn_descriptor.txn_ids + dfb->producer_txn_descriptor.num_txn_ids);
+    EXPECT_EQ(txn_ids_after, txn_ids_before);
+
+    // Threshold recomputed for the new num_entries (threshold = num_entries / num_txn_ids).
+    EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_to_process_threshold, threshold_before * 2);
+}
+
+// On re-entry the txn-id count is preserved, so a num_entries override that breaks the preserved divisor
+// is rejected up front with an actionable message.
+TEST_F(MeshDeviceFixture, DFBReentryNumEntriesViolatesTxnDivisorFails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB transaction-id divisor check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 3});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("num_entries override 3 is not divisible by")));
+}
+
+// An entry_size override that pushes the TRISC ring extent past the uint16 L1-aligned-unit limit is
+// rejected by the ring-extent re-validation.
+TEST_F(MeshDeviceFixture, DFBReentryEntrySizeRingExtentFails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB ring-extent check requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back({.dfb = experimental::DFBSpecName{"dfb_0"}, .entry_size = 64u * 1024u * 1024u});
+
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("exceeds uint16_t; reduce capacity, stride, or entry_size")));
+}
+
+// capacity (num_entries / max(producers, consumers)) is stored as uint16_t (the tile-counter register
+// width); an override that pushes it past the max is rejected rather than silently truncated.
+TEST_F(MeshDeviceFixture, DFBOverrideCapacityExceedsUint16Fails) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB capacity / tile-counter limit requires Quasar";
+    }
+    const experimental::NodeCoord node{0, 0};
+    experimental::ProgramSpec spec = experimental::test_helpers::MakeMinimalValidProgramSpec();
+    Program program = experimental::MakeProgramFromSpec(*devices_.at(0), spec);
+
+    auto params = MakeMinimalRunArgs(node);
+    params.dfb_run_overrides.push_back(
+        {.dfb = experimental::DFBSpecName{"dfb_0"}, .num_entries = 70000});  // capacity 70000 > 65535
+    EXPECT_THAT(
+        [&] { experimental::SetProgramRunArgs(program, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("capacity 70000 exceeds the maximum 65535")));
 }
 
 }  // end namespace tt::tt_metal

@@ -19,6 +19,10 @@ on:
         required: false
         type: string
         default: "all"
+      exclude-test-group:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 jobs:
@@ -31,6 +35,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
       - name: Install dependencies
@@ -55,20 +60,28 @@ jobs:
         id: apply-test-type-filter
         run: |
           MATRIX='${{ steps.build-matrix.outputs.matrix }}'
+          # test-type is a comma-separated selection (validated upstream). An empty
+          # value or any "all" token means run the full matrix; otherwise keep entries
+          # whose test_type OR test_group matches any selected token.
           TEST_TYPE="${{ inputs.test-type }}"
-          if [ "$TEST_TYPE" = "all" ]; then
+          EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
+          if [ -z "$TEST_TYPE" ] || \
+            echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
+            # Optionally drop a test_group from the "all" run (e.g. perf checks that
+            # need their own profiler build are run via a separate impl invocation).
+            if [ -n "$EXCLUDE_GROUP" ]; then
+              MATRIX=$(echo "$MATRIX" | jq -c --arg g "$EXCLUDE_GROUP" '[.[] | select(.test_group != $g)]')
+            fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
-            # Try filtering by exact test_type first
-            FILTERED=$(echo "$MATRIX" | jq -c --arg t "$TEST_TYPE" '[.[] | select(.test_type == $t)]')
-            # If no match, try filtering by test_group
+            FILTERED=$(echo "$MATRIX" | jq -c --arg sel "$TEST_TYPE" '
+              ($sel | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $tokens
+              | [ .[] | . as $e | select(($tokens | index($e.test_type)) or ($tokens | index($e.test_group))) ]
+            ')
             if [ "$FILTERED" = "[]" ]; then
-              FILTERED=$(echo "$MATRIX" | jq -c --arg g "$TEST_TYPE" '[.[] | select(.test_group == $g)]')
-            fi
-            if [ "$FILTERED" = "[]" ]; then
-              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure the test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
+              echo "::error::No tests found for test-type '$TEST_TYPE'. Ensure each selected test-type or test-group is defined in the test matrix (TESTS_YAML_PATH=${TESTS_YAML_PATH})."
               exit 1
             fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
@@ -103,6 +116,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -117,17 +131,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_logs
-          # tee combined stdout+stderr to a per-leg .log for ai-summary.
-          # Brace group: cmd may be multiple shell statements.
-          # PIPESTATUS: preserve real exit code (tee would mask it).
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-          {
-            ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit ${PIPESTATUS[0]}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
       - name: Publish PCC summary
         if: ${{ !cancelled() }}
         run: |
@@ -172,6 +179,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

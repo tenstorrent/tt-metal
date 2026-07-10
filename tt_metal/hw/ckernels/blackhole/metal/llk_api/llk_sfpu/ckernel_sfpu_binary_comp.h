@@ -209,8 +209,8 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(a, INT32, ADDR_MOD_7, dst_index_a * dst_tile_size);
-        TT_SFPLOAD(b, INT32, ADDR_MOD_7, dst_index_b * dst_tile_size);
+        TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_a * dst_tile_size);
+        TT_SFPLOAD(b, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_b * dst_tile_size);
 
         TTI_SFPSETSGN(sign, b, scratch, 1); // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPIADD(0, a, scratch, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -218,7 +218,7 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         TTI_SFPOR(0, scratch, tmp, 0);
         TTI_SFPXOR(0, b, a, 0);
         TTI_SFPSHFT((-31) & 0xfff, a, a, 1); // SFPSHFT_MOD1_ARG_IMM
-        TT_SFPSTORE(a, INT32, ADDR_MOD_6, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(a, InstrModLoadStore::INT32, ADDR_MOD_6, dst_index_out * dst_tile_size);
     }
 }
 
@@ -274,6 +274,42 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
             TTI_SFPSHFT((-31) & 0xfff, b, b, 1); // SFPSHFT_MOD1_ARG_IMM
             TT_SFPSTORE(b, ld_st_mod, ADDR_MOD_6, dst_index_out * dst_tile_size);
         }
+    }
+}
+
+// Integer equality comparisons: eq(a,b) and ne(a,b).
+// XOR a and b; the result is zero if a == b. A conditional store writes
+// the appropriate integer 0 or 1 result.
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
+inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    static_assert(
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16 || DATA_FORMAT == DataFormat::UInt32,
+        "Unsupported data format for calculate_binary_eq_int(). Supported formats: Int32, UInt16, UInt32.");
+    static_assert(RELATIONAL_OP == SfpuType::eq || RELATIONAL_OP == SfpuType::ne, "Supported operation types: eq, ne");
+
+    constexpr InstrModLoadStore ld_st_mod =
+        (DATA_FORMAT == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
+    constexpr uint a = p_sfpu::LREG0;
+    constexpr uint b = p_sfpu::LREG1;
+    constexpr uint one = p_sfpu::LREG2;
+    constexpr uint dst_tile_size = 64;
+
+    constexpr bool is_eq = (RELATIONAL_OP == SfpuType::eq);
+    constexpr uint default_result = is_eq ? p_sfpu::LCONST_0 : one;
+    constexpr uint equal_result = is_eq ? one : p_sfpu::LCONST_0;
+
+    TTI_SFPLOADI(one, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(a, ld_st_mod, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(b, ld_st_mod, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
+        TT_SFPSTORE(default_result, ld_st_mod, ADDR_MOD_7, dst_index_out * dst_tile_size);
+
+        TTI_SFPXOR(0, b, a, 0);
+        TTI_SFPSETCC(0, a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        TT_SFPSTORE(equal_result, ld_st_mod, ADDR_MOD_6, dst_index_out * dst_tile_size);
+        TTI_SFPENCC(0, 0, 0, 0);
     }
 }
 }  //  namespace ckernel::sfpu

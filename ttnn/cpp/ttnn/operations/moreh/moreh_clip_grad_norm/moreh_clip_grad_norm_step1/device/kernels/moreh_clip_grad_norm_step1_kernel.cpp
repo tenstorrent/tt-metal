@@ -4,7 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
 
@@ -16,29 +16,32 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{0};
-    const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);  // input(==x)
-    const auto cb_one = input_id++;
-    CircularBuffer cb_one_obj(cb_one);  // one
-    const auto cb_decimal = input_id++;
-    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
-    const auto cb_mask_h_w = input_id++;
-    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
+    constexpr std::uint8_t input_id = 0;
+    constexpr auto cb_x = input_id + 0;
+    DataflowBuffer dfb_x_obj(cb_x);  // input(==x)
+    constexpr auto cb_one = input_id + 1;
+    DataflowBuffer dfb_one_obj(cb_one);  // one
+    constexpr auto cb_decimal = input_id + 2;
+    DataflowBuffer dfb_decimal_obj(cb_decimal);  // decimal
+    constexpr auto cb_mask_h_w = input_id + 3;
+    DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
 
-    std::uint8_t output_id{16};
-    const auto cb_y = output_id++;  // output(==y)
+    constexpr std::uint8_t output_id = 16;
+    constexpr auto cb_y = output_id;  // output(==y)
 
-    std::uint8_t intermed_id{24};
-    const auto cb_xabs = intermed_id++;
-    CircularBuffer cb_xabs_obj(cb_xabs);         // |x|
-    const auto cb_xpow = intermed_id++;          // |x|^p
-    const auto cb_xpowadd = intermed_id++;
-    CircularBuffer cb_xpowadd_obj(cb_xpowadd);   // Add[|x|^p * exp(log(|x|) * decimal)]
-    const auto cb_logx = intermed_id++;          // log(|x|)
-    const auto cb_exp_lxmd = intermed_id++;      // exp(log(|x|) * decimal)
-    const auto cb_correct_xpow = intermed_id++;
-    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
+    constexpr std::uint8_t intermed_id = 24;
+    constexpr auto cb_xabs = intermed_id + 0;
+    DataflowBuffer dfb_xabs_obj(cb_xabs);        // |x|
+    constexpr auto cb_xpow = intermed_id + 1;    // |x|^p
+    DataflowBuffer dfb_xpow_obj(cb_xpow);
+    constexpr auto cb_xpowadd = intermed_id + 2;
+    DataflowBuffer dfb_xpowadd_obj(cb_xpowadd);  // Add[|x|^p * exp(log(|x|) * decimal)]
+    constexpr auto cb_logx = intermed_id + 3;    // log(|x|)
+    DataflowBuffer dfb_logx_obj(cb_logx);
+    constexpr auto cb_exp_lxmd = intermed_id + 4;  // exp(log(|x|) * decimal)
+    DataflowBuffer dfb_exp_lxmd_obj(cb_exp_lxmd);
+    constexpr auto cb_correct_xpow = intermed_id + 5;
+    DataflowBuffer dfb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -55,11 +58,11 @@ void kernel_main() {
 
     binary_op_init_common(cb_logx, cb_decimal, cb_y);
 
-    cb_decimal_obj.wait_front(onetile);  // comes from the reader
-    cb_one_obj.wait_front(onetile);      // comes from the reader
+    dfb_decimal_obj.wait_front(onetile);  // comes from the reader
+    dfb_one_obj.wait_front(onetile);      // comes from the reader
 
     if (do_mask_h || do_mask_w) {
-        cb_mask_h_w_obj.wait_front(2);  // comes from the reader
+        dfb_mask_h_w_obj.wait_front(2);  // comes from the reader
     }
 
     // Compute cb_xpowadd
@@ -67,8 +70,8 @@ void kernel_main() {
         // Comput cb_xabs and mask(optional)
         // |x|
         tile_regs_acquire();
-        cb_x_obj.wait_front(onetile);  // comes from the reader
-        cb_xabs_obj.reserve_back(onetile);
+        dfb_x_obj.wait_front(onetile);  // comes from the reader
+        dfb_xabs_obj.reserve_back(onetile);
 
         copy_tile_init(cb_x);
         copy_tile(cb_x, 0, dst0);
@@ -91,21 +94,29 @@ void kernel_main() {
 
         abs_tile_init();
         abs_tile(dst0);
-        cb_x_obj.pop_front(onetile);
+        dfb_x_obj.pop_front(onetile);
         tile_regs_commit();
 
         tile_regs_wait();
         pack_tile(dst0, cb_xabs);
-        cb_xabs_obj.push_back(onetile);
+        dfb_xabs_obj.push_back(onetile);
         tile_regs_release();
 
         // |x + decimal|^p
-        power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
+        power_tile_to_cb(
+            dfb_xabs_obj,
+            dfb_xpow_obj,
+            dfb_logx_obj,
+            dfb_decimal_obj,
+            dfb_exp_lxmd_obj,
+            dfb_correct_xpow_obj,
+            p,
+            p_is_negative);
 
         if (tile_idx == 0) {
             tile_regs_acquire();
-            cb_correct_xpow_obj.wait_front(onetile);
-            cb_xpowadd_obj.reserve_back(onetile);
+            dfb_correct_xpow_obj.wait_front(onetile);
+            dfb_xpowadd_obj.reserve_back(onetile);
 
             copy_tile_init(cb_correct_xpow);
             copy_tile(cb_correct_xpow, 0, dst0);
@@ -114,14 +125,14 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile(dst0, cb_xpowadd);
 
-            cb_correct_xpow_obj.pop_front(onetile);
-            cb_xpowadd_obj.push_back(onetile);
+            dfb_correct_xpow_obj.pop_front(onetile);
+            dfb_xpowadd_obj.push_back(onetile);
             tile_regs_release();
         } else {
             tile_regs_acquire();
-            cb_correct_xpow_obj.wait_front(onetile);
-            cb_xpowadd_obj.wait_front(onetile);
-            cb_xpowadd_obj.reserve_back(onetile);
+            dfb_correct_xpow_obj.wait_front(onetile);
+            dfb_xpowadd_obj.wait_front(onetile);
+            dfb_xpowadd_obj.reserve_back(onetile);
 
             add_tiles_init(cb_correct_xpow, cb_xpowadd);
             add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
@@ -130,20 +141,20 @@ void kernel_main() {
             tile_regs_wait();
             pack_tile(dst0, cb_xpowadd);
 
-            cb_correct_xpow_obj.pop_front(onetile);
-            cb_xpowadd_obj.pop_front(onetile);
-            cb_xpowadd_obj.push_back(onetile);
+            dfb_correct_xpow_obj.pop_front(onetile);
+            dfb_xpowadd_obj.pop_front(onetile);
+            dfb_xpowadd_obj.push_back(onetile);
             tile_regs_release();
         }
     }
 
     // Compute cb_y - reduce single pre-accumulated tile to scalar
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-        cb_xpowadd, cb_one, cb_y, compute_kernel_lib::ReduceInputBlockShape::single());
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_y>(
+        compute_kernel_lib::ReduceInputBlockShape::single());
 
-    cb_decimal_obj.pop_front(onetile);
-    cb_one_obj.pop_front(onetile);
+    dfb_decimal_obj.pop_front(onetile);
+    dfb_one_obj.pop_front(onetile);
     if (do_mask_h || do_mask_w) {
-        cb_mask_h_w_obj.pop_front(2);
+        dfb_mask_h_w_obj.pop_front(2);
     }
 }

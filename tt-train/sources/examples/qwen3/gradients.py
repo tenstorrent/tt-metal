@@ -47,9 +47,11 @@ from utils.tensor_utils import (
     create_input_tensor_dp,
 )
 from utils.memory import MemoryUsageTracker, finalize_memory
-from utils.param_utils import (
+from ttml.models.qwen3.weights import (
     repermute_proj_rows,
     repermute_norm_weights,
+)
+from utils.param_utils import (
     _build_grad_mapping_single,
     _build_grad_mapping_distributed,
     _extract_grad_distributed,
