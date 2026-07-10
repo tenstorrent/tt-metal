@@ -1403,10 +1403,10 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadBoundByTwoKernelsDisjointNodesSucceeds) 
     ProgramSpec spec;
     spec.name = "scratchpad_shared_disjoint";
 
-    auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
+    auto kernel_a = MakeMinimalGen2DMKernel("kernel_a");
     kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_shared"}, .accessor_name = "scratch"});
-    auto kernel_b = MakeMinimalGen1DMKernel("kernel_b");
+    auto kernel_b = MakeMinimalGen2DMKernel("kernel_b");
     kernel_b.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_shared"}, .accessor_name = "scratch"});
 
@@ -1491,10 +1491,10 @@ TEST_F(ProgramSpecTestQuasar, MultipleScratchpadsEachBoundToOwnKernelSucceeds) {
 
     // Two independent scratchpads, each bound by its own kernel on its own node — the simplest
     // multi-scratchpad case (distinct from binding one shared scratchpad across disjoint nodes).
-    auto kernel_a = MakeMinimalGen1DMKernel("kernel_a");
+    auto kernel_a = MakeMinimalGen2DMKernel("kernel_a");
     kernel_a.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_a"}, .accessor_name = "scratch"});
-    auto kernel_b = MakeMinimalGen1DMKernel("kernel_b");
+    auto kernel_b = MakeMinimalGen2DMKernel("kernel_b");
     kernel_b.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch_b"}, .accessor_name = "scratch"});
 
@@ -1526,7 +1526,7 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadBindingAffectsKernelHash) {
     auto make_bound_spec = [] {
         ProgramSpec spec;
         spec.name = "scratchpad_hash_bound";
-        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
         dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
             .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
         spec.kernels = {dm_kernel};
@@ -1537,7 +1537,7 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadBindingAffectsKernelHash) {
     auto make_unbound_spec = [] {
         ProgramSpec spec;
         spec.name = "scratchpad_hash_unbound";
-        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
         spec.kernels = {dm_kernel};
         spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel"})};
         return spec;
@@ -1559,7 +1559,7 @@ TEST_F(ProgramSpecTestQuasar, DifferentScratchpadSizeProducesDifferentKernelHash
     auto make_spec = [](uint32_t size_per_node) {
         ProgramSpec spec;
         spec.name = "scratchpad_hash_size";
-        auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
+        auto dm_kernel = MakeMinimalGen2DMKernel("dm_kernel");
         dm_kernel.scratchpad_bindings.push_back(KernelSpec::ScratchpadBinding{
             .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"});
         spec.kernels = {dm_kernel};
@@ -3034,9 +3034,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecSucceeds) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMOnlyProgramSucceeds) {
-    // Two DM kernels on different processors: a writer-role producer (RISCV_0/NOC_1) and a reader-role
-    // consumer (RISCV_1/NOC_0). Distinct processors AND distinct NOCs, so the pair satisfies the
-    // dedicated-NOC distinctness rule.
+    // Two DM kernels on different processors (RISCV_0 producer, RISCV_1 consumer)
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
