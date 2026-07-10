@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 from loguru import logger
@@ -94,31 +94,44 @@ def pixel_to_latent_frame(pixel_idx: int, num_frames: int) -> int:
     return min((pixel_idx - 1) // TEMPORAL_COMPRESSION + 1, latent_frames - 1)
 
 
-def build_conditioning_tensors(conds, latent_frames, latent_h, latent_w, in_channels):
+def build_conditioning_tensors(conds, latent_frames, latent_h, latent_w, in_channels, append_interior=False):
     """Place per-frame conditioning latents into the flat token sequence.
 
     Tokens are frame-major: latent frame ``k`` owns rows ``[k*hw : (k+1)*hw)`` (``hw = latent_h *
     latent_w``). ``conds`` is a list of ``(latent_frame_index, cond_latent, strength)`` where
-    ``cond_latent`` is one encoded frame ``(1, C, 1, latent_h, latent_w)``. Returns
-    ``(clean_latent [1, N, C], denoise_mask [1, N, 1], pin_rows [N] bool)``: the mask is
-    ``1 - strength`` on a pinned frame's rows (1.0 pins it fully to the image) and 1.0 elsewhere.
-    Generalizes frame-0 i2v to first/last/arbitrary keyframes without changing the trace (the
-    pin op and the pre-allocated pin buffers are position-agnostic and full-length)."""
+    ``cond_latent`` is one encoded frame ``(1, C, 1, latent_h, latent_w)``.
+
+    With ``append_interior``, a non-frame-0 keyframe is NOT pinned in its own grid rows (that static
+    in-place pin freezes the video and rings a decode halo); its grid frame stays free and the encoded
+    keyframe is pinned into an hw ANCHOR block appended after the grid, so the free frame converges to
+    it via attention while staying on the moving distribution. Frame-0 always stays in-place. Returns
+    ``(clean_latent [1, N, C], denoise_mask [1, N, 1], pin_rows [N] bool, anchor_frame_indices,
+    video_N_real_ext)`` where ``N = video_N_real_ext = latent_frames*hw + n_anchor*hw``."""
     hw = latent_h * latent_w
-    video_N_real = latent_frames * hw
-    clean_latent = torch.zeros(1, video_N_real, in_channels)
-    denoise_mask = torch.ones(1, video_N_real, 1)
-    pin_rows = torch.zeros(video_N_real, dtype=torch.bool)
-    for lat_idx, cond_latent, strength in conds:
-        assert 0 <= lat_idx < latent_frames, f"latent frame {lat_idx} out of range [0,{latent_frames})"
+    video_N_grid = latent_frames * hw
+    inplace = [c for c in conds if c[0] == 0 or not append_interior]
+    append = [c for c in conds if c[0] != 0 and append_interior]
+    video_N_real_ext = video_N_grid + len(append) * hw
+    clean_latent = torch.zeros(1, video_N_real_ext, in_channels)
+    denoise_mask = torch.ones(1, video_N_real_ext, 1)
+    pin_rows = torch.zeros(video_N_real_ext, dtype=torch.bool)
+
+    def _pin(off, cond_latent, strength):
         tokens = cond_latent.float().permute(0, 2, 3, 4, 1).reshape(1, -1, in_channels)
-        n = tokens.shape[1]
-        assert n == hw, f"cond latent has {n} tokens, expected one latent frame = {hw}"
-        off = lat_idx * hw
-        clean_latent[:, off : off + n, :] = tokens
-        denoise_mask[:, off : off + n, :] = 1.0 - strength
-        pin_rows[off : off + n] = True
-    return clean_latent, denoise_mask, pin_rows
+        assert tokens.shape[1] == hw, f"cond latent has {tokens.shape[1]} tokens, expected one latent frame = {hw}"
+        clean_latent[:, off : off + hw, :] = tokens
+        denoise_mask[:, off : off + hw, :] = 1.0 - strength
+        pin_rows[off : off + hw] = True
+
+    for lat_idx, cond_latent, strength in inplace:
+        assert 0 <= lat_idx < latent_frames, f"latent frame {lat_idx} out of range [0,{latent_frames})"
+        _pin(lat_idx * hw, cond_latent, strength)
+    anchor_frame_indices = []
+    for a, (lat_idx, cond_latent, strength) in enumerate(append):
+        assert 0 < lat_idx < latent_frames, f"interior keyframe {lat_idx} out of range (0,{latent_frames})"
+        _pin(video_N_grid + a * hw, cond_latent, strength)  # anchor block; grid frame lat_idx left free
+        anchor_frame_indices.append(lat_idx)
+    return clean_latent, denoise_mask, pin_rows, anchor_frame_indices, video_N_real_ext
 
 
 @dataclass
@@ -130,6 +143,10 @@ class _I2VConditioning:
     denoise_mask: torch.Tensor | None  # (B, N, 1): 1−strength at cond tokens else 1; None = plain T2V
     clean_latent: torch.Tensor | None  # (B, N, C): cond tokens at their latent frames else 0
     pin_rows: torch.Tensor | None  # (N,) bool: True at pinned tokens (any latent frame); None = no image
+    # Append-token: interior keyframes ride hw anchor tokens appended after the grid (N = video_N_real_ext);
+    # their main-grid frame stays free. anchor_frame_indices lists each anchor's target latent frame.
+    anchor_frame_indices: list[int] = field(default_factory=list)
+    video_N_real_ext: int = 0  # grid + n_anchor*hw; == grid length when no append
 
 
 class LTXDistilledPipeline(LTXPipeline):
@@ -179,24 +196,33 @@ class LTXDistilledPipeline(LTXPipeline):
         latent_frames: int,
         latent_h: int,
         latent_w: int,
+        append_interior: bool = False,
     ) -> _I2VConditioning:
         """Build the per-token conditioning (denoise mask + clean latent + pinned-row mask) — tt
         analog of the reference ``create_initial_state`` + ``VideoConditionByLatentIndex.apply_to``,
         one entry per conditioned latent frame. ``denoise_mask`` is None only when the transformer
         needs no per-token video timestep and no image is staged (the plain-T2V forward-noise path)."""
         if not image_conds and not needs_video_ts:
-            return _I2VConditioning(denoise_mask=None, clean_latent=None, pin_rows=None)
+            return _I2VConditioning(denoise_mask=None, clean_latent=None, pin_rows=None, video_N_real_ext=video_N_real)
         if image_conds:
-            clean_latent, denoise_mask, pin_rows = build_conditioning_tensors(
-                image_conds, latent_frames, latent_h, latent_w, self.in_channels
+            clean_latent, denoise_mask, pin_rows, anchor_frames, video_N_real_ext = build_conditioning_tensors(
+                image_conds, latent_frames, latent_h, latent_w, self.in_channels, append_interior=append_interior
             )
             logger.info(
                 f"I2V: pinning {int(pin_rows.sum())} tokens across {len(image_conds)} frame(s) at "
                 f"latent indices {sorted(int(i) for i, _, _ in image_conds)} "
-                f"(strength≈{image_conds[0][2]})"
+                f"(strength≈{image_conds[0][2]}; appended anchors at {anchor_frames})"
             )
-            return _I2VConditioning(denoise_mask=denoise_mask, clean_latent=clean_latent, pin_rows=pin_rows)
-        return _I2VConditioning(denoise_mask=torch.ones(B, video_N_real, 1), clean_latent=None, pin_rows=None)
+            return _I2VConditioning(
+                denoise_mask=denoise_mask,
+                clean_latent=clean_latent,
+                pin_rows=pin_rows,
+                anchor_frame_indices=anchor_frames,
+                video_N_real_ext=video_N_real_ext,
+            )
+        return _I2VConditioning(
+            denoise_mask=torch.ones(B, video_N_real, 1), clean_latent=None, pin_rows=None, video_N_real_ext=video_N_real
+        )
 
     def warmup_buffers(
         self,
@@ -379,11 +405,29 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
     def _prepare_stage_statics(
-        self, state, *, latent_frames, latent_h, latent_w, video_N, video_N_real, audio_N, audio_N_real, sp_axis
+        self,
+        state,
+        *,
+        latent_frames,
+        latent_h,
+        latent_w,
+        video_N,
+        video_N_real,
+        audio_N,
+        audio_N_real,
+        sp_axis,
+        video_N_grid=None,
+        anchor_frames=None,
     ):
-        """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat)."""
+        """Build a stage's static per-shape inputs once (rope/cross-PE/masks/trans_mat).
+
+        ``anchor_frames`` (append-token) extends the video RoPE + cross-PE by one hw block per interior
+        keyframe (carrying that frame's phase); ``video_N_grid`` is the pre-append length used for the
+        V→A mask so the audio never attends to the appended anchors."""
         if state.tt_video_rope_cos is not None:
             return
+        if video_N_grid is None:
+            video_N_grid = video_N_real
         v_cos, v_sin = prepare_video_rope(
             latent_frames,
             latent_h,
@@ -394,6 +438,7 @@ class LTXDistilledPipeline(LTXPipeline):
             max_pos=self.positional_embedding_max_pos,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            anchor_frames=anchor_frames,
         )
         a_cos, a_sin = prepare_audio_rope(
             audio_N,
@@ -419,6 +464,7 @@ class LTXDistilledPipeline(LTXPipeline):
             theta=self.positional_embedding_theta,
             mesh_device=self.mesh_device,
             parallel_config=self.parallel_config,
+            anchor_frames=anchor_frames,
         )
         tt_attn_mask, tt_pad_mask_sp, tt_pad_mask_full = build_audio_masks(
             audio_N, audio_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis
@@ -437,9 +483,12 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_audio_attn_mask.update(tt_attn_mask, False)
         state._tt_audio_padding_mask.update(tt_pad_mask_sp, False)
         state._tt_audio_padding_mask_full.update(tt_pad_mask_full, False)
+        # V→A video context mask: real region = grid (pre-append), so appended anchor rows and SP-pad
+        # are both zeroed — audio never syncs to the anchor.
         state._tt_video_padding_mask.update(
-            build_video_pad_mask(video_N, video_N_real, mesh_device=self.mesh_device, sp_axis=sp_axis), False
+            build_video_pad_mask(video_N, video_N_grid, mesh_device=self.mesh_device, sp_axis=sp_axis), False
         )
+        # Euler pad mask: anchor rows stay REAL (1.0) so the pin runs on them; only true SP-pad is zeroed.
         v_mask = torch.ones(1, 1, video_N, self.in_channels)
         v_mask[:, :, video_N_real:, :] = 0.0
         a_mask = torch.ones(1, 1, audio_N, self.in_channels)
@@ -465,6 +514,8 @@ class LTXDistilledPipeline(LTXPipeline):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         state = self._trace_state.setdefault(trace_key, LTXTransformerState())
+        # Trace prealloc reserves the non-append (base grid) shape; append-token interior keyframes are
+        # eager-only for now, so grid == real and no anchors are baked here.
         self._prepare_stage_statics(
             state,
             latent_frames=latent_frames,
@@ -472,9 +523,11 @@ class LTXDistilledPipeline(LTXPipeline):
             latent_w=latent_w,
             video_N=video_N,
             video_N_real=video_N_real,
+            video_N_grid=video_N_real,
             audio_N=audio_N,
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
+            anchor_frames=[],
         )
         # Reserve the latent buffers before capture so the trace bakes their addresses.
         if state.tt_video_lat is None:
@@ -526,9 +579,10 @@ class LTXDistilledPipeline(LTXPipeline):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
-        video_N_real = latent_frames * latent_h * latent_w
-        # SP padding: round video seq dim up to TILE_SIZE * sp_factor for ring SDPA.
-        video_N = self._sp_pad_len(video_N_real)
+        # video_N_grid is the base (decode/strip) length; append-token grows the real length by one hw
+        # anchor block per interior keyframe. video_N_real is the extended logical count (== grid when
+        # not appending); video_N is its SP-padded total, sizing every device buffer.
+        video_N_grid = latent_frames * latent_h * latent_w
         als = AudioLatentShape.from_video_pixel_shape(
             VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         )
@@ -538,16 +592,30 @@ class LTXDistilledPipeline(LTXPipeline):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         image_cond = bool(image_conds)
+        append_interior = os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True")
         # AdaLN's 2-value timestep pair (in the step loop) carries one pinned noise level, so the
         # modulation uses a single shared strength; the per-token pin/denoise_mask below still honors
         # each frame's own strength. Uniform strengths (the server default) make this exact.
         image_cond_strength = image_conds[0][2] if image_cond else 1.0
         needs_video_ts = getattr(self.transformer, "image_conditioning", False)
         i2v = self._build_i2v_conditioning(
-            image_conds, needs_video_ts, B, video_N_real, latent_frames, latent_h, latent_w
+            image_conds,
+            needs_video_ts,
+            B,
+            video_N_grid,
+            latent_frames,
+            latent_h,
+            latent_w,
+            append_interior=append_interior,
         )
+        video_N_real = i2v.video_N_real_ext
+        video_N = self._sp_pad_len(video_N_real)
+        anchor_frames = i2v.anchor_frame_indices
 
-        logger.info(f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]")
+        logger.info(
+            f"  shapes: vN={video_N}(real={video_N_real} grid={video_N_grid}), "
+            f"aN={audio_N}(real={audio_N_real}) [sp={sp_factor}]"
+        )
 
         # Persist buffers only when traced (baked addresses); untraced uses a transient state so
         # statics rebuild — resolution can differ across generates.
@@ -559,9 +627,11 @@ class LTXDistilledPipeline(LTXPipeline):
             latent_w=latent_w,
             video_N=video_N,
             video_N_real=video_N_real,
+            video_N_grid=video_N_grid,
             audio_N=audio_N,
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
+            anchor_frames=anchor_frames,
         )
 
         prompt_v = self._prepare_prompt(v_embeds)
@@ -578,14 +648,15 @@ class LTXDistilledPipeline(LTXPipeline):
         # ----- Video latent init: one GaussianNoiser over three bases — I2V (frame-0 replaced by
         # the clean cond latent), T2V-S2 (upsampled latent), T2V-S1 (zeros). denoise_mask pins the
         # conditioning tokens; None ≡ full forward noise. Ends at (B, video_N, C). -----
-        if image_cond:  # I2V: zeros (S1) or upsampled (S2), frame-0 overwritten by the cond latent
-            if initial_video_latent is not None:
-                base_v = initial_video_latent.float()
-                if base_v.dim() == 2:
-                    base_v = base_v.unsqueeze(0)
-                base_v = base_v.clone()
-            else:
-                base_v = torch.zeros(B, video_N_real, self.in_channels)
+        if image_cond:  # I2V: zeros (S1) or upsampled (S2), cond frames overwritten by the clean latent
+            base_v = torch.zeros(B, video_N_real, self.in_channels)
+            if initial_video_latent is not None:  # S2: upsampled latent arrives at grid length
+                grid_v = initial_video_latent.float()
+                if grid_v.dim() == 2:
+                    grid_v = grid_v.unsqueeze(0)
+                base_v[:, :video_N_grid, :] = grid_v.clone()
+            # pin_rows now indexes frame-0 (in-place) and/or the appended anchor block; a free interior
+            # frame keeps its base value (zeros=noise at S1, the upsampled latent at S2).
             base_v[:, i2v.pin_rows, :] = i2v.clean_latent[:, i2v.pin_rows, :]
         elif initial_video_latent is not None:  # T2V S2: upsampled latent arrives at (B, video_N_real, C)
             base_v = initial_video_latent.float()
@@ -682,6 +753,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 video_rope_cos=state.tt_video_rope_cos,
                 video_rope_sin=state.tt_video_rope_sin,
                 video_N=video_N_real,
+                video_kv_logical_n=video_N_grid,
                 trans_mat=state.tt_trans_mat,
                 audio_prompt_1BLP=prompt_a,
                 audio_rope_cos=state.tt_audio_rope_cos,
@@ -739,7 +811,8 @@ class LTXDistilledPipeline(LTXPipeline):
             sp_already_gathered=False,
             tp_already_gathered=True,
         ).squeeze(0)
-        return v_final[:, :video_N_real, :], a_final[:, :audio_N_real, :]
+        # Strip the appended anchor tokens (and SP-pad): return exactly the base grid for decode.
+        return v_final[:, :video_N_grid, :], a_final[:, :audio_N_real, :]
 
     def generate(
         self,
