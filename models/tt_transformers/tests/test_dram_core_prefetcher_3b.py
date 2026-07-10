@@ -7,8 +7,8 @@
 This is a near-copy of ``test_mlp_inference`` from ``test_mlp.py`` with one change:
 
   ``Prefetcher`` is replaced with ``make_prefetcher``, which selects ``DramCorePrefetcher``
-  when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` and DRAM programmable cores are enabled
-  (``TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1``).
+  when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` and the device firmware supports
+  programmable DRAM cores.
 
 ``num_receiver_cores`` is left to ``DramCorePrefetcher``'s auto-pick: the divisibility +
 L1 budget check in ``is_dram_core_prefetcher_supported`` rules out ring sizes that don't
@@ -39,10 +39,6 @@ from models.tt_transformers.tt.prefetcher import make_prefetcher
 pytestmark = [
     run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
     pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-    pytest.mark.skipif(
         os.environ.get("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") != "1",
         reason="TT_METAL_USE_DRAM_CORE_PREFETCHER not set",
     ),
@@ -51,6 +47,12 @@ pytestmark = [
         reason="HF_MODEL must point to Llama-3.2-3B for this test",
     ),
 ]
+
+
+@pytest.fixture(autouse=True)
+def _require_tensor_prefetcher(mesh_device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
+        pytest.skip("Tensor prefetcher requires Blackhole firmware >= 19.12.0.0")
 
 
 @torch.no_grad()

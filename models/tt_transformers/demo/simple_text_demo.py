@@ -940,10 +940,9 @@ def test_demo_text(
     # (ring=16 weight > L1 budget). The DRAM-core backend uses a higher ring (its own gate,
     # is_dram_core_prefetcher_supported, runs in the DramCorePrefetcher ctor), so when it's
     # selected bypass the worker gate and let that backend self-validate.
-    use_dram_core_prefetcher = (
-        os.getenv("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") == "1"
-        and os.getenv("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") == "1"
-    )
+    use_dram_core_prefetcher = os.getenv(
+        "TT_METAL_USE_DRAM_CORE_PREFETCHER", "0"
+    ) == "1" and ttnn.experimental.is_tensor_prefetcher_supported(mesh_device)
     use_prefetcher = (
         use_prefetcher
         and "Llama" in hf_dir
