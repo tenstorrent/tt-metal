@@ -69,6 +69,8 @@ PROMPT = "a cat on a mat"
 BOT_TASK = "recaption"
 SEQUENCE_TEMPLATE = "instruct"
 PERF_TOKEN_POS = int(os.environ.get("HY_PERF_TOKEN_POS", "128"))
+SP_FACTOR = 2  # must match sp_factor passed to HunyuanTtModel below
+SP_TILE_ALIGN = SP_FACTOR * 32  # model.py shards the seq dim in TILE(32)-aligned chunks
 
 use_signpost = True
 try:
@@ -128,7 +130,7 @@ def _build_workload(mesh_device):
         tp_axis=1,
         tp_factor=2,
         sp_axis=0,
-        sp_factor=2,
+        sp_factor=SP_FACTOR,
         bf16_layers=default_bf16_layers(num_layers),
         model_cache_name="hunyuan-image-3.0",
     )
@@ -161,6 +163,11 @@ def _build_workload(mesh_device):
     # prefix_len + PERF_TOKEN_POS with a valid token id (values don't affect timing).
     prefix_len = int(bundle.input_ids.shape[1])
     seq_len = prefix_len + max(PERF_TOKEN_POS, 0)
+    # Round up to the sp-shard tile alignment so model.forward()'s internal
+    # sp_pad is 0 — the pad/fill_pad ops it would otherwise emit are pure
+    # alignment overhead (masked-out, discarded on exit) and add nothing to a
+    # representative per-token timing; padding token values don't affect timing.
+    seq_len = ((seq_len + SP_TILE_ALIGN - 1) // SP_TILE_ALIGN) * SP_TILE_ALIGN
     pad = bundle.input_ids[:, -1:].repeat(1, seq_len - prefix_len)
     ids = torch.cat([bundle.input_ids, pad], dim=1) if seq_len > prefix_len else bundle.input_ids
 
