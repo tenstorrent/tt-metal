@@ -513,7 +513,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite_2
             GTEST_SKIP() << "Skipping: need 3 distinct cores but grid is only " << grid_dbg.x << "x" << grid_dbg.y;
         }
         unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-            .test_id = 700,
+            .test_id = 620,
             .master_core_coord = master_core_coord,
             .sub0_core_coord = sub0_core_coord,
             .sub1_core_coord = sub1_core_coord,
@@ -535,7 +535,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWrite_2
                 continue;
             }
             unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-                .test_id = 700,
+                .test_id = 620,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
                 .sub1_core_coord = sub1_core_coord,
@@ -566,7 +566,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
             GTEST_SKIP() << "Skipping: need 3 distinct cores on Quasar emulator";
         }
         unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-            .test_id = 701,
+            .test_id = 621,
             .master_core_coord = master_core_coord,
             .sub0_core_coord = sub0_core_coord,
             .sub1_core_coord = sub1_core_coord,
@@ -588,7 +588,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
                 continue;
             }
             unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-                .test_id = 701,
+                .test_id = 621,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
                 .sub1_core_coord = sub1_core_coord,
@@ -620,7 +620,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
             GTEST_SKIP() << "Skipping: need 3 distinct cores on Quasar emulator";
         }
         unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-            .test_id = 702,
+            .test_id = 622,
             .master_core_coord = master_core_coord,
             .sub0_core_coord = sub0_core_coord,
             .sub1_core_coord = sub1_core_coord,
@@ -643,7 +643,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdReadAfterWriteOn
                 continue;
             }
             unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-                .test_id = 702,
+                .test_id = 622,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
                 .sub1_core_coord = sub1_core_coord,
@@ -676,7 +676,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead_2
             GTEST_SKIP() << "Skipping: need 3 distinct cores on Quasar emulator";
         }
         unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-            .test_id = 710,
+            .test_id = 630,
             .master_core_coord = master_core_coord,
             .sub0_core_coord = sub0_core_coord,
             .sub1_core_coord = sub1_core_coord,
@@ -698,7 +698,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterRead_2
                 continue;
             }
             unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-                .test_id = 710,
+                .test_id = 630,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
                 .sub1_core_coord = sub1_core_coord,
@@ -730,7 +730,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOn
             GTEST_SKIP() << "Skipping: need 3 distinct cores on Quasar emulator";
         }
         unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-            .test_id = 711,
+            .test_id = 631,
             .master_core_coord = master_core_coord,
             .sub0_core_coord = sub0_core_coord,
             .sub1_core_coord = sub1_core_coord,
@@ -754,7 +754,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementTransactionIdWriteAfterReadOn
                 continue;
             }
             unit_tests::dm::transaction_id::TransactionIdConfig test_config = {
-                .test_id = 711,
+                .test_id = 631,
                 .master_core_coord = master_core_coord,
                 .sub0_core_coord = sub0_core_coord,
                 .sub1_core_coord = sub1_core_coord,

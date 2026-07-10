@@ -495,7 +495,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes_2_0) {
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 115,
+            .test_id = 160,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -509,7 +509,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllPacketSizes_2_0) {
     }
 
     // WH/BH full sweep.
-    uint32_t test_id = 115;
+    uint32_t test_id = 160;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -556,7 +556,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal_2_0) 
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
             unit_tests::dm::compute_physical_constraints(mesh_device);
         unit_tests::dm::core_from_all::OneFromAllConfig test_config = {
-            .test_id = 130,
+            .test_id = 161,
             .master_core_coord = {0, 0},
             .sub_start_core_coord = {0, 0},
             .sub_grid_size = {2, 1},
@@ -570,7 +570,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal_2_0) 
     }
 
     // WH/BH ideal config.
-    uint32_t test_id = 130;
+    uint32_t test_id = 161;
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {

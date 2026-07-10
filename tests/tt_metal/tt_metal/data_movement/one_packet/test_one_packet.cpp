@@ -391,7 +391,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 84,
+            .test_id = 90,
             .master_core_coord = {0, 0},
             .subordinate_core_coord = subordinate,
             .num_packets = 4,
@@ -412,7 +412,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
         for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
              packet_size_bytes *= 2) {
             unit_tests::dm::one_packet::OnePacketConfig test_config = {
-                .test_id = 84,
+                .test_id = 90,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_packets = num_packets,
@@ -441,7 +441,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 85,
+            .test_id = 91,
             .master_core_coord = {0, 0},
             .subordinate_core_coord = subordinate,
             .num_packets = 4,
@@ -462,7 +462,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
         for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
              packet_size_bytes *= 2) {
             unit_tests::dm::one_packet::OnePacketConfig test_config = {
-                .test_id = 85,
+                .test_id = 91,
                 .master_core_coord = master_core_coord,
                 .subordinate_core_coord = subordinate_core_coord,
                 .num_packets = num_packets,
@@ -493,7 +493,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 86,
+            .test_id = 92,
             .master_core_coord = master_core_coord,
             .subordinate_core_coord = subordinate_core_coord,
             .num_packets = 4,
@@ -508,7 +508,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_
     uint32_t num_packets = max_transmittable_bytes / packet_size_bytes;
 
     unit_tests::dm::one_packet::OnePacketConfig test_config = {
-        .test_id = 86,
+        .test_id = 92,
         .master_core_coord = master_core_coord,
         .subordinate_core_coord = subordinate_core_coord,
         .num_packets = num_packets,
@@ -537,7 +537,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal_2
             GTEST_SKIP() << "Skipping: need at least a 1x2 or 2x1 grid, got " << grid.x << "x" << grid.y;
         }
         unit_tests::dm::one_packet::OnePacketConfig test_config = {
-            .test_id = 87,
+            .test_id = 93,
             .master_core_coord = master_core_coord,
             .subordinate_core_coord = subordinate_core_coord,
             .num_packets = 4,
@@ -552,7 +552,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal_2
     uint32_t num_packets = max_transmittable_bytes / packet_size_bytes;
 
     unit_tests::dm::one_packet::OnePacketConfig test_config = {
-        .test_id = 87,
+        .test_id = 93,
         .master_core_coord = master_core_coord,
         .subordinate_core_coord = subordinate_core_coord,
         .num_packets = num_packets,
