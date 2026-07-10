@@ -244,6 +244,14 @@ void run_single_core_tilize_program(
         // DST untilize reads face geometry from the output CB metadata (no explicit kernel args).
         output_dfb_spec.unpack_face_geometry_metadata =
             tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+    } else if (
+        test_config.tilize_type.has_value() && test_config.tilize_type == TilizeType::UNPACK_A &&
+        test_config.num_faces_per_tile != 4) {
+        // Tiny-tile tilize (e.g. 16x32): the unpack/pack LLKs read the tile's face geometry from the
+        // CB metadata, so tag both the input and output buffers with it.
+        const auto fg = tt::tt_metal::FaceGeometry{test_config.face_r_dim, test_config.num_faces_per_tile};
+        input_dfb_spec.unpack_face_geometry_metadata = fg;
+        output_dfb_spec.unpack_face_geometry_metadata = fg;
     }
 
     // Reader kernel: untilize types stream native tiles from DRAM (`reader_unary_2_0`);
@@ -843,6 +851,39 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeUInt8) {
                 .input_fmt = tt::DataFormat::UInt8,
                 .output_fmt = tt::DataFormat::UInt8,
                 .src0_data = src_data,
+                .golden_function = ::unit_tests::compute::gold_standard_tilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
+    }
+}
+
+// Exercises llk_unpack_tilize_block (via tilize_block in tilize.cpp) with a 16x32 tiny tile.
+//
+// A 16x32 tile has num_faces=2, face_r_dim=16 (half the rows of a 32x32 tile). The block variant
+// llk_unpack_tilize_block (tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h)
+// computes the cross-tile-row L1 stride from the operand's tile_r_dim; it previously used the
+// compile-time TILE_R_DIM (32), wrong for a 16-row tile. We use num_tiles_r >= 2 so the cross-tile-row
+// stride is exercised (with num_tiles_r == 1 the offending term is multiplied by 0 and never hit).
+// The tiny-tile face geometry is tagged onto the input/output DFBs in run_single_core_tilize_program.
+TEST_F(LLKBlackholeSingleCardFixture, TensixComputeUnpackTilizeTinyTile16x32) {
+    constexpr std::uint32_t face_r_dim = 16;
+    constexpr std::uint32_t face_c_dim = 16;
+    constexpr std::uint32_t num_faces = 2;  // 16x32 = two 16x16 faces laid horizontally
+    // bf16 16x32 tile = 2 faces * 16 * 16 * 2 bytes = 1024 bytes.
+    constexpr std::uint32_t tile_bytes = num_faces * face_r_dim * face_c_dim * sizeof(std::uint16_t);
+    // num_tiles_r >= 2 so the cross-tile-row stride in llk_unpack_tilize_block is exercised.
+    vector<vector<std::uint32_t>> num_tiles = {{2, 1}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool dst_full_sync_en : {false, true}) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .input_single_tile_size = tile_bytes,
+                .output_single_tile_size = tile_bytes,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .num_faces_per_tile = num_faces,
+                .face_r_dim = face_r_dim,
+                .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
                 .golden_function = ::unit_tests::compute::gold_standard_tilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }
