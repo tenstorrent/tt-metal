@@ -545,7 +545,20 @@ Tensor fold(
         const uint32_t out_wo = static_cast<uint32_t>(pre_fold[2]) / stride_w;
         auto folded = ttnn::prim::qsr::fold(processed_tensor, stride_h, stride_w);
 
-        // 6) Keep only the real c_keep channels of each of the `groups` spatial sub-positions (the rest of
+        // 6a) Fast path (C=8 / padding-absorbed-into-conv-weights): when the consumer accepts the full
+        //     aligned width (c_keep == c_aligned, i.e. output_shape's C == groups * C_aligned), there are no
+        //     per-group padding channels to strip. Skip the reshape/slice/reshape un-weave (the slow DRAM
+        //     tail: on the 2-core emulator that chain is minutes of row-major page movement) and just
+        //     un-flatten the fold's [1,1,N*Ho*Wo, groups*C_aligned] row dim back to NHWC. This mirrors how
+        //     the WH/BH transpose fold already keeps the aligned width and relies on the first conv's weights
+        //     being folded to groups*C_aligned with zero pad channels (pad_and_fold_conv_filters_for_unity_
+        //     stride at align_c == C_aligned), so the padding is harmless and the strip is unnecessary.
+        if (c_keep == c_aligned) {
+            return ttnn::operations::experimental::quasar::reshape(
+                folded, ttnn::Shape{out_n, out_ho, out_wo, groups * c_aligned}, dram_interleaved);
+        }
+
+        // 6b) Keep only the real c_keep channels of each of the `groups` spatial sub-positions (the rest of
         //    C_aligned is padding). 4D-only: reinterpret each group as a separate W-row, slice the prefix,
         //    fold the groups back into C. Result last dim = groups * c_keep (e.g. 4*4 = 16), matching golden.
         const auto fs = folded.logical_shape();  // [N, Ho, Wo, groups * C_aligned]

@@ -559,7 +559,10 @@ class resnet50:
         n = batch_size
         h += kernel_size * 2
         w += kernel_size * 2
-        C = _nearest_y(c, 4)
+        # Quasar aligns fold channels to 8 (bf16 row-major 16B shard-width); the first-conv weights are
+        # folded to groups*8 input channels (see custom_preprocessing), so the direct fold's aligned
+        # groups*8 output feeds conv1 with no per-group padding strip. WH/BH keep alignment 4.
+        C = _nearest_y(c, 8 if is_quasar() else 4)
         self.fold_pad_c = C - c
         self.fold_pad_h = kernel_size
         self.fold_pad_w = kernel_size
