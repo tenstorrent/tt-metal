@@ -765,9 +765,11 @@ jobs:
         id: set_precompiled_wheel_name
         if: ${{ inputs.build-wheel-from-precompiled }}
         run: |
+          PY_NODOT=$(echo "${{ needs.parse-platform.outputs.python-version }}" | tr -d '.')
           RAW_REF="${{ inputs.ref || github.sha }}"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          NAME="wheel-precompiled-${{ env.VERSION }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${SANITIZED_REF}-${{ github.run_id }}"
+          TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
+          NAME="ttnn-dist-cp${PY_NODOT}-${{ inputs.build-type }}${TRACY_SUFFIX}-${SANITIZED_REF}-${{ github.run_id }}"
           echo "name=$NAME" >> "$GITHUB_OUTPUT"
       - name: ☁️ Upload precompiled wheel
         if: ${{ inputs.build-wheel-from-precompiled }}
