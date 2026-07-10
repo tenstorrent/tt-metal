@@ -6,6 +6,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.tt_dit.blocks.attention import Attention
@@ -466,3 +467,149 @@ def test_fibo_transformer_mesh(*, mesh_device):
     tt_output_torch = tt_output_torch[:, :spatial_seq_len]
 
     assert_quality(ref_out, tt_output_torch, pcc=0.99)
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 2)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}],
+    indirect=True,
+)
+def test_fibo_transformer_mesh_profile(*, mesh_device):
+    """Device-op profile of ``BriaFiboTransformer`` on the 2x2 mesh (sp=2, tp=2), cache-warm.
+
+    Same model/inputs as ``test_fibo_transformer_mesh`` but built for profiling, not correctness: a
+    warmup forward populates the program cache (its one-time op-compile cost is excluded from the report),
+    then a Tracy signpost brackets the measured forward that ``tt-perf-report`` focuses on. Inputs are
+    rebuilt for the measured forward so it sees the same fresh device state as the warmup. No PCC assert --
+    correctness is covered by ``test_fibo_transformer_mesh``; this only proves the profiled path ran.
+
+    Depth via ``FIBO_DUAL`` / ``FIBO_SINGLE`` and sequence via ``FIBO_SPATIAL_SEQ`` / ``FIBO_PROMPT_SEQ``
+    (defaults 2/2, 512/128). Runs fine under plain pytest (the signpost is a no-op), but only produces a CSV
+    under the Tracy driver. Quick reduced-depth command:
+      HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \\
+        python_env/bin/python -m tracy -r -p -v -m pytest \\
+        models/tt_dit/tests/models/bria_fibo/test_transformer.py::test_fibo_transformer_mesh_profile
+      tt-perf-report generated/profiler/reports/.../ops_perf_results_*.csv   # auto-focuses the "fibo dit" signpost
+
+    FULL model (all 46 blocks at production seq 4096) needs an enlarged on-device marker buffer + mid-run
+    dump, else the buffer overflows and the report aborts with "Device data missing" (verified to pass):
+      FIBO_DUAL=8 FIBO_SINGLE=38 FIBO_SPATIAL_SEQ=4096 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=6000 \\
+        HF_HUB_OFFLINE=1 TT_METAL_HOME=$PWD PYTHONPATH=$PWD ARCH_NAME=blackhole \\
+        python_env/bin/python -m tracy -r -p -v --dump-device-data-mid-run -m pytest \\
+        models/tt_dit/tests/models/bria_fibo/test_transformer.py::test_fibo_transformer_mesh_profile
+    """
+    from models.tt_dit.models.transformers.transformer_bria_fibo import BriaFiboCheckpoint
+
+    num_dual = int(os.environ.get("FIBO_DUAL", "2"))
+    num_single = int(os.environ.get("FIBO_SINGLE", "2"))
+
+    ref = _load_ref_transformer()
+    ref = _truncate_ref(ref, num_dual, num_single)
+
+    c = ref.config
+    in_channels = c.in_channels  # 48
+    joint_attention_dim = c.joint_attention_dim  # 4096
+    text_encoder_dim = c.text_encoder_dim  # 2048
+    num_blocks = num_dual + num_single
+
+    sp_axis = 0
+    tp_axis = 1
+    sp_factor = tuple(mesh_device.shape)[sp_axis]  # 2
+    tp_factor = tuple(mesh_device.shape)[tp_axis]  # 2
+
+    batch_size = 1
+    # Production sizing at 1024x1024 is spatial=4096 (64x64 patches); default stays small for a quick run.
+    # Override with FIBO_SPATIAL_SEQ / FIBO_PROMPT_SEQ (spatial must be divisible by sp_factor).
+    spatial_seq_len = int(os.environ.get("FIBO_SPATIAL_SEQ", "512"))
+    prompt_seq_len = int(os.environ.get("FIBO_PROMPT_SEQ", "128"))
+
+    torch.manual_seed(0)
+    spatial = torch.randn([batch_size, spatial_seq_len, in_channels]).to(torch.bfloat16)
+    prompt = torch.randn([batch_size, prompt_seq_len, joint_attention_dim]).to(torch.bfloat16)
+    text_encoder_layers = [
+        torch.randn([batch_size, prompt_seq_len, text_encoder_dim]).to(torch.bfloat16)
+        for _ in range(c.num_layers + c.num_single_layers)
+    ]
+    timestep = torch.full([batch_size], fill_value=500).to(torch.bfloat16)
+
+    # RoPE ids (txt = zeros, img = random), Flux-style.
+    text_ids = torch.zeros([prompt_seq_len, 3]).to(torch.bfloat16)
+    image_ids = torch.randint(1024 * 1024, [spatial_seq_len, 3]).to(torch.bfloat16)
+    ids = torch.cat((text_ids, image_ids), dim=0).to(torch.bfloat16)
+    rope_cos, rope_sin = ref.pos_embed.forward(ids)
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    parallel_config = DiTParallelConfig(
+        cfg_parallel=ParallelFactor(factor=0, mesh_axis=0),
+        tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),
+        sequence_parallel=ParallelFactor(factor=sp_factor, mesh_axis=sp_axis),
+    )
+
+    checkpoint = BriaFiboCheckpoint(FIBO_PATH)
+    tt_model = checkpoint.build(
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        num_layers=num_dual,
+        num_single_layers=num_single,
+    )
+
+    # Pad once on host; upload fresh device tensors per forward (make_inputs) so warmup and measured
+    # forwards see identical state regardless of whether any op consumes its inputs.
+    spatial_padded = Attention.pad_spatial_sequence(spatial, sp_factor=sp_factor)
+    spatial_rope_cos_padded = Attention.pad_spatial_sequence(rope_cos[prompt_seq_len:], sp_factor=sp_factor)
+    spatial_rope_sin_padded = Attention.pad_spatial_sequence(rope_sin[prompt_seq_len:], sp_factor=sp_factor)
+    padded_spatial_seq_len = spatial_padded.shape[1]
+
+    def make_inputs():
+        return dict(
+            spatial=bf16_tensor(spatial_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=1),
+            prompt=bf16_tensor(prompt, device=mesh_device),
+            timestep=bf16_tensor(timestep.unsqueeze(-1), device=mesh_device),
+            text_encoder_layers=[bf16_tensor(t, device=mesh_device) for t in text_encoder_layers[:num_blocks]],
+            spatial_rope=(
+                bf16_tensor(spatial_rope_cos_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
+                bf16_tensor(spatial_rope_sin_padded, device=mesh_device, mesh_axis=sp_axis, shard_dim=0),
+            ),
+            prompt_rope=(
+                bf16_tensor(rope_cos[:prompt_seq_len], device=mesh_device),
+                bf16_tensor(rope_sin[:prompt_seq_len], device=mesh_device),
+            ),
+            spatial_sequence_length=padded_spatial_seq_len,
+            prompt_sequence_length=prompt_seq_len,
+        )
+
+    def _signpost(message):
+        # No-op (and import-safe) under plain pytest; emits a Tracy marker under `python -m tracy`.
+        try:
+            from tracy import signpost
+        except Exception:
+            return
+        signpost(header="fibo dit", message=message)
+
+    def _flush_profiler():
+        # Drain the warmup forward's markers off-device so warmup + measured don't share the per-core buffer.
+        # The buffer must still hold ONE measured forward -- for full depth (FIBO_DUAL=8/FIBO_SINGLE=38) raise
+        # TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT (this flush is not mid-forward). Only active with the
+        # driver's --dump-device-data-mid-run (sets TT_METAL_PROFILER_MID_RUN_DUMP=1); a no-op otherwise.
+        if os.environ.get("TT_METAL_PROFILER_MID_RUN_DUMP") != "1":
+            return
+        try:
+            ttnn.ReadDeviceProfiler(mesh_device)
+        except Exception as e:  # a real flush failure would silently drop markers -> surface it
+            logger.warning(f"ReadDeviceProfiler flush failed ({e}); device-op markers may drop")
+
+    # Warmup: compiles/loads every op into the program cache (its one-time cost is before the signpost).
+    tt_model.forward(**make_inputs())
+    ttnn.synchronize_device(mesh_device)
+    _flush_profiler()  # drop the warmup's markers so the measured forward's don't share the per-core buffer
+
+    # Measured (cache-warm): the signpost brackets bound the region tt-perf-report focuses on.
+    _signpost("measured forward begin")
+    tt_output = tt_model.forward(**make_inputs())
+    ttnn.synchronize_device(mesh_device)
+    _signpost("measured forward end")
+
+    # Sanity only (no PCC): prove the profiled forward produced a correctly shaped frame.
+    tt_output_torch = tt_tensor.to_torch(tt_output, mesh_axes=[None, sp_axis, None])[:, :spatial_seq_len]
+    assert tt_output_torch.shape[0] == batch_size and tt_output_torch.shape[1] == spatial_seq_len, tt_output_torch.shape
