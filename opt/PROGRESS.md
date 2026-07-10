@@ -60,9 +60,15 @@ util, no barrier). CCL-overlap banks ~0.15-0.35s, not 1.75s. QAT/quant DEAD (ove
 | # | lever | predicted | MEASURED | status |
 |---|---|---|---|---|
 | A1 | VAE decode trace (port kevinmi decode_device) | ~0.35s | **0.19ms (DEAD)** | ✅ verified: PCC=1.0 but decode is device-bound (async CQ already hides dispatch); untraced 552.08ms = traced 551.88ms. Refactor kept on branch (65a3a1c), NOT worth shipping. |
-| A2 | num_links 2→4 + fabric sweep | 0.1-0.2s (uncertain) | ? | ⏳ device A/B (watched, hang risk) — the one untested >0.1s lever |
-| A7 | adaLN to_out fusion (a2v/v2a/attn2) | ~0.008s | ? | ⏳ trivial python-only |
-| A3/A5 | RMSNorm stat-gather merge + scale/shift fold | 0.07-0.17s | ? | ⏳ kernel change, needs warm-gap attribution first |
+| A2 | num_links 2→4 | 0.1-0.2s | **NOT SUPPORTED (DEAD)** | ❌ TT_FATAL fabric.cpp:163 link_idx<candidate_eth_chans — BH 4x8 is HARDWARE-CAPPED at 2 ETH links (WH has 4; doesn't transfer). Prod num_links=2 is a cap, not a choice. |
+| A7 | adaLN to_out fusion (a2v/v2a/attn2) | ~0.008s | (unmeasured) | ⏳ trivial but negligible — not worth a device run |
+| A3/A5 | RMSNorm stat-gather merge + scale/shift fold | 0.07-0.17s | (unmeasured) | ⏳ kernel change, uncertain; pipeline is device-bound (dispatch hidden) → likely marginal |
+
+**FINAL no-finetune scorecard — space EXHAUSTED with measurements. Floor FIRMLY ~7.9s:**
+audio-trace SHIPPED (−0.3s) · VAE-trace 0.19ms DEAD · CCL-overlap already-fused · num_links=4 HW-CAPPED on BH · tilize
+cold-artifact · quant/FP4 null · layer-prune kills quality. Only adaLN (0.008s) + RMSNorm-merge (uncertain ~0.1s, kernel
+change) remain — both marginal against a device-bound pipeline. **6.0s = out-of-repo step-distillation, full stop.**
+Warm single-blocking block-forward = 44.77ms @num_links=2 (inflated by per-iter sync vs ~20.6ms pipelined device-FW).
 
 **CORRECTED no-finetune floor: ~7.8–8.0s.** The VAE trace (biggest predicted no-finetune win, 0.35s) is measured-DEAD;
 the VAE stage is device-bound (552ms decode + ~400ms host I/O, neither trace-addressable). Remaining levers (num_links

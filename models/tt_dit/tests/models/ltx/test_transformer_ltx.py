@@ -506,6 +506,8 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
 
 
 def _make_ccl_manager(mesh_device, num_links, topology):
+    # LTX_NUM_LINKS overrides the param default to A/B fabric link count (BH prod = 2, WH = 4).
+    num_links = int(os.environ.get("LTX_NUM_LINKS", str(num_links)))
     return CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
 
@@ -872,10 +874,20 @@ def test_ltx_transformer_block(
     # steady-state profile; the block is functional (no input mutation) so every iteration is identical.
     # Drain each lap so warm markers reach profile_log_device.csv even if teardown is cut short.
     _prof_iters = int(os.environ.get("LTX_PROFILE_ITERS", "1"))
+    _warm_ms = []
     for _i in range(_prof_iters):
+        _t0 = time.perf_counter()
         tt_out = tt_block(**forward_kwargs)
+        ttnn.synchronize_device(mesh_device)
+        if _i > 0:  # first lap is cold-compile; time only warm laps
+            _warm_ms.append((time.perf_counter() - _t0) * 1000)
         if _prof_iters > 1:
             ttnn.ReadDeviceProfiler(mesh_device)
+    if _warm_ms:
+        logger.info(
+            f"WARM_FWD_MS={sum(_warm_ms) / len(_warm_ms):.2f} "
+            f"num_links={os.environ.get('LTX_NUM_LINKS', 'param')} iters={len(_warm_ms)}"
+        )
     if has_audio:
         tt_v, tt_a = tt_out
     else:
