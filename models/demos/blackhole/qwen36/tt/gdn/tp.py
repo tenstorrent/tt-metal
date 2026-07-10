@@ -18,6 +18,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    l2_norm_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
@@ -148,6 +149,14 @@ class TPGatedDeltaNet:
         self._stable_state = False
         self.conv_carry = None  # [1, K-1, qkv_dim_tp] cross-chunk prefill conv carry
         self._zero_conv0 = None  # persistent zero source for conv_states[0] (trace-safe)
+        # Batched-decode seeding (Step 1): when B>1, each of the B sequences is
+        # prefilled independently and its captured recurrent/conv state is stashed
+        # per batch slot here (kept ON DEVICE — the state's per-device head shards
+        # differ across the mesh, so a host round-trip would collapse the mesh dim),
+        # then concatenated into the [B,...] decode buffers by finalize_seed().
+        # Seeding happens once per sequence, not in the decode hot loop.
+        self._seed_rec = {}  # slot -> device rec state  [1, Nv, Dk, Dv]
+        self._seed_conv = {}  # slot -> list of K-1 device conv windows, each [1, 1, qkv_dim_tp]
 
     def reset_state(self):
         def z(shape):
@@ -215,7 +224,130 @@ class TPGatedDeltaNet:
         ttnn.copy(zcc, self.conv_carry)
         ttnn.deallocate(zcc)
 
-    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False):
+    def finalize_seed(self, batch_size):
+        """Assemble the per-slot stashed prefill state (see forward_prefill seed_slot)
+        into the [B,...] decode buffers. Call once after all `batch_size` sequences
+        have been prefilled with their seed_slot. Clears the stash.
+
+        Everything stays on device: ttnn.concat runs per-device, so each device's own
+        GDN head shard is preserved (the recurrent/conv state is NOT replicated — it is
+        computed independently per device). Concatenation is along the batch (slot) axis.
+        """
+        assert len(self._seed_rec) == batch_size, f"seeded {len(self._seed_rec)} slots, expected {batch_size}"
+        if self.conv_states is None:
+            self.reset_state()
+        # Recurrent state: [B, Nv, Dk, Dv] over the batch axis (dim=0). Match the demo
+        # semantics (self.rec_state = final_state) by reassigning; copy in place only when
+        # the buffer address must stay fixed (trace path, Step 2).
+        slots = [self._seed_rec[b] for b in range(batch_size)]
+        rec = slots[0] if batch_size == 1 else ttnn.concat(slots, dim=0)
+        if self._stable_state:
+            ttnn.copy(rec, self.rec_state)  # data → fixed buffer; rec itself no longer needed
+            ttnn.deallocate(rec)
+        else:
+            self.rec_state = rec  # rec becomes the buffer
+        for s in slots:
+            if s is not rec and s is not self.rec_state:
+                ttnn.deallocate(s)
+        # Conv window: conv_states[0] = zero; conv_states[j+1] = the j-th window over all slots.
+        D = self.qkv_dim_tp
+        zc = ttnn.from_torch(
+            torch.zeros(1, batch_size, D, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        ttnn.copy(zc, self.conv_states[0])
+        ttnn.deallocate(zc)
+        for j in range(self.K - 1):
+            wins = [self._seed_conv[b][j] for b in range(batch_size)]  # each [1, 1, D]
+            if batch_size == 1:
+                win = wins[0]
+            else:
+                # Concat along the batch axis (dim=1). That is a TILE sub-dim, so detour
+                # through ROW_MAJOR where a size-1 stack is unambiguous, then back to TILE.
+                rm = [ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT) for w in wins]
+                win_rm = ttnn.concat(rm, dim=1)  # [1, B, D] row-major
+                win = ttnn.to_layout(win_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(win_rm)
+                for r in rm:
+                    ttnn.deallocate(r)
+            ttnn.copy(win, self.conv_states[j + 1])
+            if win is not wins[0]:
+                ttnn.deallocate(win)
+            for w in wins:
+                ttnn.deallocate(w)
+        self._seed_rec.clear()
+        self._seed_conv.clear()
+
+    def reseed_slot(self, b):
+        """Replace ONLY batch lane b's recurrent + conv state with the sequence stashed
+        for slot b (a prior forward_prefill(seed_slot=b)), leaving the other B-1 lanes'
+        running state untouched. In-place (ttnn.copy into the fixed buffers) so a captured
+        decode trace's baked addresses survive — this is the continuous-batching join.
+
+        Slice-per-lane + concat (per-device, so each device keeps its own head shard),
+        replacing lane b with the seed. Clears the slot's stash.
+        """
+        assert b in self._seed_rec, f"call forward_prefill(seed_slot={b}) before reseed_slot({b})"
+        B = self.B
+
+        def _match(t, ref):
+            # After decode steps the running buffers may be a different dtype (fp32 recurrent
+            # default) than the freshly-prefilled seed pieces; concat requires uniform dtype.
+            return t if t.dtype == ref.dtype else ttnn.typecast(t, ref.dtype)
+
+        # Recurrent state [B, Nv, Dk, Dv]: replace lane b along dim 0.
+        seed_rec = _match(self._seed_rec[b], self.rec_state)
+        lanes = [
+            seed_rec if i == b else ttnn.slice(self.rec_state, (i, 0, 0, 0), (i + 1, self.Nv, self.Dk, self.Dv))
+            for i in range(B)
+        ]
+        new = lanes[0] if B == 1 else ttnn.concat(lanes, dim=0)
+        ttnn.copy(new, self.rec_state)
+        if new is not lanes[0]:
+            ttnn.deallocate(new)
+        for i, s in enumerate(lanes):
+            if i != b:  # slices we made; the seed (i==b) is freed with the stash below
+                ttnn.deallocate(s)
+        if seed_rec is not self._seed_rec[b]:
+            ttnn.deallocate(seed_rec)
+        # Conv window [1, B, D]: conv_states[0] lane b = 0; conv_states[j+1] lane b = window j.
+        D = self.qkv_dim_tp
+        zero_b = ttnn.from_torch(
+            torch.zeros(1, 1, D, dtype=torch.bfloat16),
+            dtype=self.conv_states[0].dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        for k in range(self.K):
+            seed_lane = zero_b if k == 0 else _match(self._seed_conv[b][k - 1], self.conv_states[k])  # [1,1,D]
+            wins = [seed_lane if i == b else ttnn.slice(self.conv_states[k], (0, i, 0), (1, i + 1, D)) for i in range(B)]
+            if B == 1:
+                new_c = wins[0]
+            else:
+                rm = [ttnn.to_layout(w, ttnn.ROW_MAJOR_LAYOUT) for w in wins]
+                new_rm = ttnn.concat(rm, dim=1)
+                new_c = ttnn.to_layout(new_rm, ttnn.TILE_LAYOUT)
+                ttnn.deallocate(new_rm)
+                for r in rm:
+                    ttnn.deallocate(r)
+            ttnn.copy(new_c, self.conv_states[k])
+            if new_c is not wins[0]:
+                ttnn.deallocate(new_c)
+            for i, w in enumerate(wins):
+                if i != b:  # slices; seed windows freed with the stash below
+                    ttnn.deallocate(w)
+            if k > 0 and seed_lane is not self._seed_conv[b][k - 1]:
+                ttnn.deallocate(seed_lane)  # a typecast temp (not the stashed window)
+        ttnn.deallocate(zero_b)
+        # Free the slot's stashed device tensors and clear it.
+        ttnn.deallocate(self._seed_rec[b])
+        for w in self._seed_conv[b]:
+            ttnn.deallocate(w)
+        del self._seed_rec[b]
+        del self._seed_conv[b]
+
+    def forward_prefill(self, x, chunk_size=128, valid_len=None, capture_state=False, seed_slot=None):
         """Causal chunk-prefill over a sequence (from scratch, zero init state).
 
         x: [1,1,T,dim] replicated. Reuses the shared gated_delta_attn_seq kernel
@@ -243,7 +375,12 @@ class TPGatedDeltaNet:
         # state continue from the persistent buffers (zeroed at sequence start by
         # reset_state_inplace, so a from-scratch single pass reads zeros == None). The demo
         # path (_stable_state False) is unchanged: no carry, reassign state.
-        carry = self._stable_state
+        # seed_slot prefills a fresh single sequence into a batch lane; it is always
+        # from-scratch (initial_state=None), even while the batch runs in-place-state
+        # (_stable_state) mode — a running batch reseeds a slot via prefill(seed_slot=b)
+        # while _stable_state is True, and self.rec_state is then [B,...] (wrong shape for
+        # this batch-1 prefill). So force no-carry when seeding.
+        carry = self._stable_state and seed_slot is None
         if carry and self.conv_carry is None:
             self.reset_state()
 
@@ -301,10 +438,28 @@ class TPGatedDeltaNet:
             valid_len=valid_len,
         )
         B, D = 1, self.qkv_dim_tp
+        # ---- Batched-decode seeding (Step 1): stash this sequence's state per slot. ----
+        # When seed_slot is set we are prefilling ONE of B sequences whose decode buffers
+        # are [B,...]; a single-pass prefill produces batch-1 state, so we stash it (keyed
+        # by slot, kept on device) and DON'T touch the shared [B,...] buffers here.
+        # finalize_seed() concats all B slots into rec_state/conv_states once every
+        # sequence is prefilled. Falls through to the shared output tail below.
+        if seed_slot is not None:
+            # Keep the state ON DEVICE (per-device head shards differ across the mesh;
+            # a host round-trip would collapse the mesh dim). finalize_seed concats these
+            # per-slot device tensors along the batch axis — ttnn.concat is per-device, so
+            # each device's own head shard is preserved. Slices are fresh tensors, so the
+            # shared tail's deallocate(conv_new_state) is still correct.
+            self._seed_rec[seed_slot] = final_state  # [1, Nv, Dk, Dv]; NOT freed here
+            windows = []
+            for j in range(self.K - 1):
+                windows.append(ttnn.reshape(ttnn.slice(conv_new_state, (0, j, 0), (1, j + 1, D)), (1, B, D)))
+            self._seed_conv[seed_slot] = windows  # K-1 tensors, each [1, 1, D]
+            # conv_new_state is freed by the shared tail below; final_state is retained.
         # ---- Carry recurrent + conv state for the NEXT chunk (chunk-outer prefill). ----
         # In place (ttnn.copy) when _stable_state so the addresses the prefill/decode traces
         # baked in stay valid across execute_trace replays and across sequences.
-        if carry:
+        elif carry:
             ttnn.copy(final_state, self.rec_state)
             ttnn.deallocate(final_state)
             ttnn.copy(conv_new_state, self.conv_carry)  # [1, K-1, D] last-K-1 conv inputs
@@ -313,7 +468,7 @@ class TPGatedDeltaNet:
         # ---- Finalize the decode conv window (last chunk / short prompt). ----
         # conv_states[1..K-1] = the last K-1 real conv inputs; [0] is the (shifted-out) zero.
         # Harmless to refresh every chunk — the last chunk's values are the ones decode reads.
-        if capture_state:
+        if seed_slot is None and capture_state:
             if self.conv_states is None:
                 self.reset_state()
             if self._zero_conv0 is not None:
@@ -386,44 +541,116 @@ class TPGatedDeltaNet:
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
 
-        # expand Q/K from Nk to Nv heads (GQA); recurrence fn L2-norms + scales internally
         rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=1)
-        k = ttnn.repeat_interleave(k, rf, dim=1)
-        q = ttnn.reshape(q, (B, 1, Nv, Dk))
-        k = ttnn.reshape(k, (B, 1, Nv, Dk))
-        v = ttnn.reshape(v, (B, 1, Nv, Dv))
-
-        beta = ttnn.reshape(ttnn.sigmoid(b), (B, 1, Nv))
-        ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))
-        ttnn.deallocate(a)
-        g = ttnn.reshape(g, (B, 1, Nv))
-
-        # fp32 decode step DEFAULT (decode-drift mitigation). The per-step gated-delta recurrence
-        # h = decay*h + beta*(k⊗delta) compounds every token; in bf16, `decay = exp(g)` (near 1.0)
-        # quantizes coarsely and the error accumulates over a long decode → late-generation
-        # repetition collapse. high_precision runs the whole step in fp32 (pairs with the fp32
-        # rec_state default). QWEN35_GDN_DECODE_BF16=1 reverts to the bf16 step.
-        o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
-            q,
-            k,
-            v,
-            beta,
-            g,
-            scale=self.scale,
-            initial_state=self.rec_state,
-            device=self.mesh,
-            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-        )
-        if self._stable_state:
-            # In-place update keeps rec_state's address fixed so the decode trace
-            # (captured at pos 0) replays correctly across steps and sequences.
-            ttnn.copy(new_rec, self.rec_state)
-            ttnn.deallocate(new_rec)
+        if os.environ.get("QWEN_GDN_FUSED_DECODE") == "1":
+            # ---- Fused C++ kernel: gated-delta STATE update + raw read, both bit-exact vs torch
+            # (test_deltanet_decode_kernel_pcc: state 1.0, PROBE-RAW 0.99998). The op outputs the
+            # RAW pre-norm o (its internal norm/gate is unused); the gated-RMSNorm + silu(z) run in
+            # ttnn in the shared tail below — matching recurrent_gated_delta_rule_decode_ttnn's
+            # raw-o contract. FLATTENED-HEAD batching (Stage 7): the B decode lanes are folded into
+            # the head axis (H = B*Nv heads, ONE kernel call, one core per (batch,head)), so batching
+            # is ~free. qkv_proj is packed [all_q | all_k | all_v] (batch-major within each block) so
+            # the op's per-head offset math (k_head_idx = h/head_expand_ratio) addresses batch b's
+            # block; state / z / beta / decay are batch-major [.., B*..] = free reshapes. ----
+            H = B * Nv
+            qn = ttnn.multiply(l2_norm_ttnn(q, dim=-1), self.scale)  # [B, Nk, Dk]
+            kn = l2_norm_ttnn(k, dim=-1)
+            qkv_proj = ttnn.reshape(
+                ttnn.concat(
+                    [ttnn.reshape(qn, (1, 1, B * kd)), ttnn.reshape(kn, (1, 1, B * kd)),
+                     ttnn.reshape(v, (1, 1, B * self.value_dim_tp))], dim=-1,
+                ), (1, 1, 1, B * self.qkv_dim_tp),
+            )
+            z_p = ttnn.reshape(z, (1, 1, 1, B * self.value_dim_tp))
+            beta_p = ttnn.reshape(ttnn.sigmoid(b), (1, 1, 1, H))
+            ttnn.deallocate(b)
+            decay_p = ttnn.reshape(
+                ttnn.exp(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))), (1, 1, 1, H)
+            )
+            ttnn.deallocate(a)
+            # Pass-through / unused kernel args (kept in the op signature) — allocate once and reuse
+            # (a per-step from_torch would be a host write, killing decode perf + breaking trace).
+            if getattr(self, "_kdummy_conv", None) is None:
+                rep = ttnn.ReplicateTensorToMesh(self.mesh)
+                self._kdummy_conv = ttnn.from_torch(
+                    torch.zeros(1, 1, B * self.qkv_dim_tp, 32, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=rep,
+                )
+                self._kdummy_h = ttnn.from_torch(
+                    torch.zeros(1, 1, 1, H, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=rep,
+                )
+                self._knorm_w = ttnn.reshape(tw["norm_w"], (1, 1, 1, Dv))
+            # State: the batch-flatten reshape [B,Nv,Dk,Dv] -> [1,B*Nv,Dk,Dv] mangles an fp32 TILE
+            # tensor (yields NaNs); bf16 reshapes correctly. The kernel's recurrence + output are bf16
+            # regardless (CBs are bf16; output dtype = qkv_proj.dtype), so a bf16 fused-path state is
+            # not a precision regression vs the kernel itself — only the pure-python path keeps the
+            # fp32 high_precision carry. After step 1, self.rec_state is bf16 (reassigned below).
+            rec_src = self.rec_state
+            if rec_src.dtype != ttnn.bfloat16:
+                rec_src = ttnn.typecast(rec_src, ttnn.bfloat16)
+            rec_flat = ttnn.reshape(rec_src, (1, H, Dk, Dv))
+            _out, new_rec, _cs = ttnn.experimental.deltanet_decode_full(
+                qkv_proj, z_p, beta_p, decay_p, self._kdummy_conv, rec_flat, self._kdummy_conv,
+                self._kdummy_h, self._kdummy_h, self._knorm_w,
+                num_heads=H, num_k_heads=B * Nk, k_head_dim=Dk, v_head_dim=Dv,
+                conv_dim=B * self.qkv_dim_tp, conv_kernel_size=self.K, head_expand_ratio=rf,
+            )
+            ttnn.deallocate(_cs)
+            if rec_src is not self.rec_state:
+                ttnn.deallocate(rec_src)
+            # Kernel outputs the RAW pre-norm read (q @ S_new); the gated-RMSNorm(norm_w) + silu(z)
+            # runs in the ttnn tail below. Folding norm/gate into the kernel was measured SLOWER on
+            # Blackhole (one-core-per-head serializes the RMSNorm reduce: +8.4ms/step at B=8 vs the
+            # parallel ttnn tail) — see memory note. So we keep the raw-o contract + ttnn norm/gate.
+            o = _out  # [1,1,1,B*Nv*Dv] RAW; shared tail does norm/gate + reshape to (B,Nv,Dv)
+            new_rec = ttnn.reshape(new_rec, (B, Nv, Dk, Dv))  # bf16
+            if self._stable_state:
+                ttnn.copy(new_rec, self.rec_state)
+                ttnn.deallocate(new_rec)
+            else:
+                self.rec_state = new_rec
         else:
-            self.rec_state = new_rec
+            # expand Q/K from Nk to Nv heads (GQA); recurrence fn L2-norms + scales internally
+            q = ttnn.repeat_interleave(q, rf, dim=1)
+            k = ttnn.repeat_interleave(k, rf, dim=1)
+            q = ttnn.reshape(q, (B, 1, Nv, Dk))
+            k = ttnn.reshape(k, (B, 1, Nv, Dk))
+            v = ttnn.reshape(v, (B, 1, Nv, Dv))
 
+            beta = ttnn.reshape(ttnn.sigmoid(b), (B, 1, Nv))
+            ttnn.deallocate(b)
+            g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))
+            ttnn.deallocate(a)
+            g = ttnn.reshape(g, (B, 1, Nv))
+
+            # fp32 decode step DEFAULT (decode-drift mitigation). The per-step gated-delta recurrence
+            # h = decay*h + beta*(k⊗delta) compounds every token; in bf16, `decay = exp(g)` (near 1.0)
+            # quantizes coarsely and the error accumulates over a long decode → late-generation
+            # repetition collapse. high_precision runs the whole step in fp32 (pairs with the fp32
+            # rec_state default). QWEN35_GDN_DECODE_BF16=1 reverts to the bf16 step.
+            o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
+                q,
+                k,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=self.rec_state,
+                device=self.mesh,
+                high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+            )
+            if self._stable_state:
+                # In-place update keeps rec_state's address fixed so the decode trace
+                # (captured at pos 0) replays correctly across steps and sequences.
+                ttnn.copy(new_rec, self.rec_state)
+                ttnn.deallocate(new_rec)
+            else:
+                self.rec_state = new_rec
+
+        # Gated-RMSNorm(norm_w) over Dv + silu(z) gate, in ttnn (both the fused-kernel raw-o path
+        # and the recurrent_gated_delta_rule_decode_ttnn path output raw o). Folding this into the
+        # kernel is a NET LOSS on Blackhole (one-core-per-head serializes the reduce) — see memory.
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)  # gated norm: weight only (no +1)
         ttnn.deallocate(out_r)

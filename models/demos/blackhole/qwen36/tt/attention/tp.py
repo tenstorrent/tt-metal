@@ -65,6 +65,21 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wv"),
         dtype=ttnn.bfloat8_b,
     )
+    # Fused QKV: concat the three column-parallel shards along the output dim (per-device concat
+    # preserves each device's [q|gate], k, v slice) → ONE matmul instead of three. Matches the
+    # branch's fused-QKV attn(). ALL paths (prefill/prefill_paged/decode) use wqkv_all, so the
+    # separate wqkv/wk/wv are freed here — the fused weight replaces (not duplicates) them.
+    # QWEN_SKIP_FUSED_WEIGHTS skips building it (DRAM-cost A/B measurement only; forward needs it).
+    if os.environ.get("QWEN_SKIP_FUSED_WEIGHTS") == "1":
+        tw["wqkv_all"] = None
+    else:
+        tw["wqkv_all"] = ttnn.concat(
+            [tw["wqkv"], tw["wk"], tw["wv"]], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(tw["wqkv"])
+        ttnn.deallocate(tw["wk"])
+        ttnn.deallocate(tw["wv"])
+        tw["wqkv"] = tw["wk"] = tw["wv"] = None
     # Row-parallel: shard input dim → reduce-scatter after
     tw["wo"] = tpc.shard_w(
         state_dict["o_proj.weight"],
@@ -130,15 +145,23 @@ class TPAttention:
         self.k_caches = [z() for _ in range(self.NKV)]
         self.v_caches = [z() for _ in range(self.NKV)]
 
-    def forward_prefill(self, x, cos_tt, sin_tt):
+    def forward_prefill(self, x, cos_tt, sin_tt, batch_slot=0):
         """Causal prefill over a full sequence. x: [1,1,S,dim] replicated;
-        cos/sin: [1,1,S,rope_dim]. Output fractured along dim=3 (reduce-scatter)."""
+        cos/sin: [1,1,S,rope_dim]. Output fractured along dim=3 (reduce-scatter).
+
+        batch_slot: which lane of the [B,1,seq,HD] internal KV cache to fill. For
+        batched decode (Step 1) each of the B sequences is prefilled into its own
+        lane; the default 0 preserves the single-sequence (B=1) behavior exactly."""
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         S = x.shape[-2]
 
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Fused QKV (shares the decode-fused weight; separate wqkv/wk/wv are freed at load).
+        qsz, ksz = NH * HD * 2, NKV * HD
+        qkv = ttnn.linear(x, tw["wqkv_all"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qg = ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, S, qsz))
+        kp = ttnn.slice(qkv, (0, 0, 0, qsz), (1, 1, S, qsz + ksz))
+        vp = ttnn.slice(qkv, (0, 0, 0, qsz + ksz), (1, 1, S, qsz + 2 * ksz))
+        ttnn.deallocate(qkv)
 
         # [1,1,S,NH*HD*2] -> [1,S,NH,2*HD] -> split -> [1,NH,S,HD]
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
@@ -161,8 +184,8 @@ class TPAttention:
             # Don't deallocate the slices — for NKV==1 they alias k/v, which are
             # still needed for SDPA below.
             for h in range(NKV):
-                ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
-                ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
+                ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), batch_slot)
+                ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), batch_slot)
 
         # Keep Q/K/V bf16 into SDPA. The unconditional bf8 cast here was inconsistent with the documented bf16-Q fix and degraded
         # the bespoke prefill_tp oracle vs the paged path. QWEN_SDPA_BF8_Q=1 restores the old bf8.
@@ -213,9 +236,15 @@ class TPAttention:
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Fused QKV: one matmul then split into [q|gate], k, v (branch's fused-QKV attn()).
+        qsz, ksz = NH * HD * 2, NKV * HD
+        qkv = ttnn.linear(
+            x, tw["wqkv_all"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        qg = ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, B, qsz))
+        kp = ttnn.slice(qkv, (0, 0, 0, qsz), (1, 1, B, qsz + ksz))
+        vp = ttnn.slice(qkv, (0, 0, 0, qsz + ksz), (1, 1, B, qsz + 2 * ksz))
+        ttnn.deallocate(qkv)
 
         qg_r = ttnn.reshape(qg, (1, B, NH, HD * 2))
         ttnn.deallocate(qg)
@@ -360,9 +389,13 @@ class TPAttention:
             chunk_start_idx = 0
         S = x.shape[-2]
 
-        qg = ttnn.linear(x, tw["wqkv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        kp = ttnn.linear(x, tw["wk"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        vp = ttnn.linear(x, tw["wv"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Fused QKV (shares the decode-fused weight; separate wqkv/wk/wv are freed at load).
+        qsz, ksz = NH * HD * 2, NKV * HD
+        qkv = ttnn.linear(x, tw["wqkv_all"], compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qg = ttnn.slice(qkv, (0, 0, 0, 0), (1, 1, S, qsz))
+        kp = ttnn.slice(qkv, (0, 0, 0, qsz), (1, 1, S, qsz + ksz))
+        vp = ttnn.slice(qkv, (0, 0, 0, qsz + ksz), (1, 1, S, qsz + 2 * ksz))
+        ttnn.deallocate(qkv)
 
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
         q = ttnn.transpose(ttnn.slice(qg, (0, 0, 0, 0), (1, S, NH, HD)), 1, 2)
