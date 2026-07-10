@@ -140,11 +140,11 @@ inline void _llk_unpack_configure_stoch_rnd_()
  * @param tile_size: New tile size of operand A stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
- * @note Caller contract: the SrcA-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcAUnsigned), and the math-side
- *       INT8 math-enable in @ref _llk_math_reconfig_data_format_srca_, are only reprogrammed when
- *       to_from_int8 is set. Set to_from_int8 = true for ANY reconfig that transitions to OR from an
- *       8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float); otherwise the previous unsigned/INT8
- *       state is left stale and the next op misinterprets the operand.
+ * @note The SrcA-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcAUnsigned), and the math-side INT8 math-enable in
+ *       @ref _llk_math_reconfig_data_format_srca_, are re-derived from the new format by default, so a reconfig
+ *       that transitions to OR from an 8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float) is handled
+ *       automatically. Set skip_int8 = true only when the caller guarantees no such boundary is crossed;
+ *       skipping leaves the previous unsigned/INT8 state, which the next op would then misinterpret.
  */
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srca_impl_(
@@ -229,11 +229,11 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
  * @param tile_size: New tile size of operand B stored to the tile-size GPR.
  * @param unpack_face_r_dim: Rows per face, used when reprogramming dim/stride.
  * @param unpack_num_faces: Number of faces, valid values = <1, 2, 4>.
- * @note Caller contract: the SrcB-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcBUnsigned), and the math-side
- *       INT8 math-enable in @ref _llk_math_reconfig_data_format_srcb_, are only reprogrammed when
- *       to_from_int8 is set. Set to_from_int8 = true for ANY reconfig that transitions to OR from an
- *       8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float); otherwise the previous unsigned/INT8
- *       state is left stale and the next op misinterprets the operand.
+ * @note The SrcB-unsigned ALU bit (ALU_FORMAT_SPEC_REG0_SrcBUnsigned), and the math-side INT8 math-enable in
+ *       @ref _llk_math_reconfig_data_format_srcb_, are re-derived from the new format by default, so a reconfig
+ *       that transitions to OR from an 8-bit-integer / Int8 / Int32 format (e.g. UInt8 -> float) is handled
+ *       automatically. Set skip_int8 = true only when the caller guarantees no such boundary is crossed;
+ *       skipping leaves the previous unsigned/INT8 state, which the next op would then misinterpret.
  */
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool skip_int8 = false>
 inline void _llk_unpack_reconfig_data_format_srcb_impl_(

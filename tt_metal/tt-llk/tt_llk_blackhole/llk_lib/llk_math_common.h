@@ -169,8 +169,7 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
-            is_fp32_dest_acc_en || !(masked_data_format(srca_data_format) == ckernel::to_underlying(DataFormat::Int8) ||
-                                     srca_data_format == ckernel::to_underlying(DataFormat::Int32)),
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(srca_data_format),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
         // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
@@ -203,8 +202,7 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
-            is_fp32_dest_acc_en || !(masked_data_format(srcb_data_format) == ckernel::to_underlying(DataFormat::Int8) ||
-                                     srcb_data_format == ckernel::to_underlying(DataFormat::Int32)),
+            is_fp32_dest_acc_en || !is_int8_or_int32_format(srcb_data_format),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
         // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.
@@ -238,10 +236,7 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
     if constexpr (!skip_int8)
     {
         LLK_ASSERT(
-            is_fp32_dest_acc_en ||
-                !(masked_data_format(srca_data_format) == ckernel::to_underlying(DataFormat::Int8) ||
-                  masked_data_format(srcb_data_format) == ckernel::to_underlying(DataFormat::Int8) ||
-                  srca_data_format == ckernel::to_underlying(DataFormat::Int32) || srcb_data_format == ckernel::to_underlying(DataFormat::Int32)),
+            is_fp32_dest_acc_en || !(is_int8_or_int32_format(srca_data_format) || is_int8_or_int32_format(srcb_data_format)),
             "Reconfiguring math to/from Int8/UInt8/Int32 formats requires FP32 Dest mode enabled");
         // Only INT8_math_enabled is written here; it is FPU-only (the SFPU never reads it, and on Blackhole SrcB
         // format is inferred rather than rewritten here), so draining the FPU (MATH) suffices -- no WAIT_SFPU.

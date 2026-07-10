@@ -242,6 +242,13 @@ ALWI void reconfig_data_format_srcb_skip_int8(const uint32_t srcb_old_operand, c
 // 2026-08-15. to_from_int8 is now ignored: the int8/unsigned state is always re-derived from the format, so callers
 // get the fix for free. Move to reconfig_data_format<SrcOrder::Regular>() (or reconfig_data_format_skip_int8() when you know
 // no int8 boundary is crossed). The cleanup PR removes these overloads and the now-vestigial to_from_int8 flag.
+//
+// MIGRATION CAVEAT (srca/srcb): the new reconfig_data_format_srca/_srcb take ONE bool template arg
+// (is_tile_dim_reconfig_en), the old ones took two (to_from_int8, is_tile_dim_reconfig_en). A one-arg call like
+// reconfig_data_format_srca<true>(...) now binds true to is_tile_dim_reconfig_en (new), not to_from_int8 (old) --
+// it compiles with no deprecation warning and reprograms tile/face geometry. The [[deprecated]] shim cannot catch
+// this (the two-arg form still binds to the deprecated overload and warns). All in-repo call sites are migrated;
+// external callers must drop the leading to_from_int8 arg (int8 state is derived regardless).
 // -------------------------------------------------------------------------------------------------------------------
 
 /// \cond DEPRECATED_RECONFIG_DATA_FORMAT (excluded from published docs; overloads the current API by template only)

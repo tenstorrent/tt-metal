@@ -90,3 +90,47 @@ def test_math_reconfig(
     actual = TensixState.fetch(TestConfig.TENSIX_LOCATION)
 
     TensixState.assert_equal(expected, actual)
+
+
+def generate_int8_boundary_formats() -> (
+    list[tuple[DataFormat, DataFormat, DataFormat, DataFormat]]
+):
+    # Reconfigs that cross the INT8_math_enabled boundary: a float side (bit = 0) <-> an Int8/Int32 side (bit = 1).
+    # These are the cases where skip_int8 is observable -- it leaves the bit stale instead of re-deriving it.
+    floats = [DataFormat.Float16_b, DataFormat.Float16]
+    ints = [DataFormat.Int8, DataFormat.Int32]
+    return [(f, f, i, i) for f in floats for i in ints] + [
+        (i, i, f, f) for f in floats for i in ints
+    ]
+
+
+@parametrize(
+    formats=generate_int8_boundary_formats(),
+    dest_acc=lambda formats: [
+        DestAccumulation.Yes
+    ],  # int8/int32 math requires FP32 dest accumulation
+)
+def test_math_reconfig_skip_int8(
+    formats,
+    dest_acc,
+):
+    prev_a, prev_b, next_a, next_b = formats
+
+    # tt-metal#34499: the _skip_int8 path (run idx 2) leaves INT8_math_enabled untouched, whereas the default
+    # path (run idx 1) re-derives it. Across an int8 boundary the two must therefore land in different ALU
+    # states -- this is the coverage that pins the skip_int8=true branch and its "do not re-derive" contract.
+    configuration = TestConfig(
+        "sources/state/reconfig/math_reconfig_test.cpp",
+        FormatConfig(prev_a, prev_b, next_a, next_b, DataFormat.Float32),
+        runtimes=[CONFIGURE_TEST_RUN_IDX(1)],
+        dest_acc=dest_acc,
+    )
+
+    configuration.run()
+    derived = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+
+    configuration.runtimes = [CONFIGURE_TEST_RUN_IDX(2)]
+    configuration.run()
+    skipped = TensixState.fetch(TestConfig.TENSIX_LOCATION)
+
+    TensixState.assert_not_equal(derived, skipped)
