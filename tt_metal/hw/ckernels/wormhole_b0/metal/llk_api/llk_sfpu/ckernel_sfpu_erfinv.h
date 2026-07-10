@@ -34,9 +34,6 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     sfpi::vFloat tmp = TwoPiA + -0.5f * log_value;
 
     // calculated_value = temp + sqrt( temp^2 - log_value / a)
-    // The Winitzki approximation itself carries ~1e-3 relative error, so a single
-    // Newton step in the sqrt (~1.7e-3) is well within the algorithm's own error
-    // budget; the second NR step was redundant here (2->1 iterations).
     sfpi::vFloat calculated_value = tmp * tmp - log_value * OneDivA;
     sfpi::vFloat intermediate_result = sfpu_sqrt_custom<false, 2>(calculated_value);
     calculated_value = tmp + intermediate_result;
