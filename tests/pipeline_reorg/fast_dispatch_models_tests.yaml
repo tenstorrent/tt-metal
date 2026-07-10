@@ -219,10 +219,12 @@
 - name: stable_diffusion_xl_base nightly WH
   cmd: |
     export TT_MM_THROTTLE_PERF=5
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+    exit_code=0
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+    exit $exit_code
   model: stable_diffusion_xl_base
   skus:
     wh_n150:
@@ -260,10 +262,12 @@
 - name: stable_diffusion_xl_base nightly BH
   cmd: |
     export TT_MM_THROTTLE_PERF=5
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
-    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+    exit_code=0
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+    $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+    exit $exit_code
   model: stable_diffusion_xl_base
   skus:
     bh_p150b_civ2:
