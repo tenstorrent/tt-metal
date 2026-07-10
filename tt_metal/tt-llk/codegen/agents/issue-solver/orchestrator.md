@@ -99,8 +99,8 @@ top-level `cost_usd`. Don't hand-parse the Agent `<usage>` trailer; it only
 gives a single blended total, whereas the transcript has the real split.
 
 Capture the session once in Step 0 (see Step 0), then **refresh after every
-agent returns** (analyzer, arch_lookup, writer, tester, perf, fix_tests) and
-once more in Step 6 before returning, so the final spend lands in `run.json`:
+agent returns** (analyzer, arch_lookup, writer, tester, reviewer, perf, fix_tests)
+and once more in Step 6 before returning, so the final spend lands in `run.json`:
 
 ```bash
 python codegen/scripts/session_cost.py \
@@ -173,6 +173,25 @@ if [ -z "${CODEGEN_LOGS_ROOT:-}" ]; then
 fi
 export LOGS_BASE="${CODEGEN_LOGS_ROOT}/${DASHBOARD_PROJECT_ID}"
 
+# PR_REVIEW_KNOWLEDGE_DIR: bot-local review knowledge for the reviewer stage
+# (Step 5.3). Explicit CODEGEN_PR_REVIEW_KNOWLEDGE wins; then the dashboard tree
+# under llk_code_gen (shared /proj_sw or the sibling checkout next to the main
+# repo); else empty and the reviewer falls back to the in-repo .claude/ rules.
+if [ -n "${CODEGEN_PR_REVIEW_KNOWLEDGE:-}" ] && [ -d "${CODEGEN_PR_REVIEW_KNOWLEDGE}" ]; then
+  export PR_REVIEW_KNOWLEDGE_DIR="${CODEGEN_PR_REVIEW_KNOWLEDGE}"
+elif [ -d "${CODEGEN_LOGS_ROOT}/dashboard/pr_review/knowledge" ]; then
+  export PR_REVIEW_KNOWLEDGE_DIR="${CODEGEN_LOGS_ROOT}/dashboard/pr_review/knowledge"
+elif [ -d /proj_sw/user_dev/llk_code_gen/dashboard/pr_review/knowledge ]; then
+  export PR_REVIEW_KNOWLEDGE_DIR="/proj_sw/user_dev/llk_code_gen/dashboard/pr_review/knowledge"
+else
+  MAIN_REPO_ROOT=${MAIN_REPO_ROOT:-$(dirname "$(git -C "$WORKTREE_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" 2>/dev/null)}
+  if [ -n "$MAIN_REPO_ROOT" ] && [ -d "$(dirname "$MAIN_REPO_ROOT")/llk_code_gen/dashboard/pr_review/knowledge" ]; then
+    export PR_REVIEW_KNOWLEDGE_DIR="$(dirname "$MAIN_REPO_ROOT")/llk_code_gen/dashboard/pr_review/knowledge"
+  else
+    export PR_REVIEW_KNOWLEDGE_DIR=""
+  fi
+fi
+
 export START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 export RUN_ID=$(date +%Y-%m-%d)_issue_${ISSUE_NUMBER}_$(head -c 4 /dev/urandom | xxd -p)
 export LOG_DIR=${LOGS_BASE}/${RUN_ID}
@@ -187,6 +206,8 @@ export TESTS_TOTAL=0
 export TESTS_PASSED=0
 export PERF_RETRIES=0
 export MAX_PERF_RETRIES=2
+export REVIEW_RETRIES=0
+export MAX_REVIEW_RETRIES=2
 export OBSTACLE=
 export ISSUE_NUMBER ISSUE_TITLE ISSUE_LABELS ISSUE_URL
 export TEST_BACKEND TTSIM_SO_PATH CREATE_LOCAL_BRANCH CREATE_PR
@@ -212,8 +233,9 @@ PIPELINE_STEPS='[
   {"id":"arch_lookup","name":"Research","desc":"Look up architecture facts only when needed"},
   {"id":"writer","name":"Fix","desc":"Plan and implement the smallest fix"},
   {"id":"tester","name":"Test","desc":"Run selected backend tests"},
+  {"id":"review","name":"Review","desc":"Senior LLK review of the fix diff (loop, no PR)"},
   {"id":"perf","name":"Perf","desc":"Measure cycle counts vs baseline (BH/WH local only)"},
-  {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test or perf failure"}
+  {"id":"fix_tests","name":"Retry","desc":"Debug and update the fix after a test, review, or perf failure"}
 ]'
 
 ISSUE_JSON=$(python - <<PY
@@ -411,6 +433,84 @@ The retry worker reads the existing plan plus tester evidence, patches the imple
 
 Do not debug `SIM_ISA_GAP`; that is a simulator limitation, not an LLK fix failure. Finalize as `failed` unless the caller explicitly reruns with `TEST_BACKEND=local`.
 
+## Step 5.3: Review the Fix and Feed Back
+
+A senior-reviewer pass over the fix diff, run as a loop **inside** the pipeline —
+same idea as a `code-review` bot, except findings are fed back to the worker
+instead of posted to a PR. Unlike perf, review is static (reads the diff only),
+so it runs for **every** backend and arch.
+
+Run this only once the functional tests are **green** (the tester returned
+`SUCCESS`). A green functional result implies a fix diff exists, so there is
+always something to review here.
+
+Advance to the `review` step and run the reviewer:
+
+```bash
+python codegen/scripts/run_json_writer.py advance \
+  --log-dir "$LOG_DIR" \
+  --new-step "review" \
+  --new-message "Reviewing fix diff for issue #${ISSUE_NUMBER} (attempt $((REVIEW_RETRIES+1))/$((MAX_REVIEW_RETRIES+1)))" \
+  --prev-result "success" \
+  --prev-message "Functional tests passed" \
+  --agent "tester"
+```
+
+Spawn `reviewer.md` with: issue number, `TARGET_ARCH`, changed files,
+`WORKTREE_DIR`, `LOG_DIR`, and `PR_REVIEW_KNOWLEDGE_DIR`. It writes
+`$LOG_DIR/review_result.json` and `$LOG_DIR/agent_reviewer.md`, and returns
+`REVIEW_CLEAN` or `REVIEW_CHANGES_REQUESTED`. Patch its result into `run.json`:
+
+```bash
+python codegen/scripts/run_json_writer.py metric \
+  --log-dir "$LOG_DIR" \
+  --patch-json "{\"review\": $(cat "$LOG_DIR/review_result.json")}"
+```
+
+**Review feedback loop.** Read `blocking_total` from `review_result.json`. If it
+is `0` (verdict `clean`), proceed to Step 5.5. If it is `> 0` and
+`REVIEW_RETRIES < MAX_REVIEW_RETRIES`, send the blocking findings back to the
+worker:
+
+```bash
+python codegen/scripts/run_json_writer.py failure \
+  --log-dir "$LOG_DIR" \
+  --step "review" \
+  --agent "reviewer" \
+  --type "test_failure" \
+  --message "$REVIEW_FAILURE_SUMMARY" \
+  --resolved "false"
+
+python codegen/scripts/run_json_writer.py advance \
+  --log-dir "$LOG_DIR" \
+  --new-step "fix_tests" \
+  --new-message "Addressing review findings for issue #${ISSUE_NUMBER}; attempt $((REVIEW_RETRIES+1))/${MAX_REVIEW_RETRIES}" \
+  --prev-result "test_failure" \
+  --prev-message "$REVIEW_FAILURE_SUMMARY" \
+  --agent "fix_tests"
+```
+
+Spawn `issue-worker.md` in debug/retry mode with `FAILURE_CLASS=REVIEW_FINDINGS`
+and the `$LOG_DIR/review_result.json` path. The worker addresses each **blocking**
+finding with the smallest fix; advisory findings are recorded only, not looped
+on. Then:
+
+```bash
+REVIEW_RETRIES=$((REVIEW_RETRIES + 1))
+DEBUG_CYCLES=$((DEBUG_CYCLES + 1))
+```
+
+Re-run **Step 4 (functional Test)** — a review fix must not break correctness —
+and, if it stays green, re-run this Step 5.3. If the worker returns
+`HYPOTHESIS_REFUTED` (the finding cannot be resolved without breaking
+correctness), stop the loop and go to Step 5.5.
+
+**When the review budget is exhausted** (`REVIEW_RETRIES == MAX_REVIEW_RETRIES`
+and blocking findings remain): the run does **not** fail on the review alone.
+Keep the functional `STATUS`, leave `review.verdict=changes_requested` in
+`run.json`, and set `OBSTACLE=unresolved_review_findings` as the terminal record.
+Then proceed to Step 5.5.
+
 ## Step 5.5: Measure Perf and Feed Back
 
 Run this only once the functional tests are **green** (the tester returned
@@ -594,6 +694,7 @@ for agent, filename in [
     ("arch_lookup", "agent_arch_lookup.md"),
     ("writer", "agent_issue_worker.md"),
     ("tester", "agent_tester.md"),
+    ("reviewer", "agent_reviewer.md"),
     ("perf", "agent_perf_tester.md"),
     ("fix_tests", "agent_issue_worker_debug.md"),
 ]:
@@ -658,6 +759,13 @@ Issue-Solver Result:
     test: ...                     # perf module + -k filter, or "n/a"
     baseline_vs_current: ...      # "<base> -> <cur> cycles (median <pct>%, worst <pct>%)", or "not measured"
     retries_used: ${PERF_RETRIES}/${MAX_PERF_RETRIES}
+  review:
+    verdict: ...                  # clean | changes_requested | not_reviewed
+    findings_total: ...           # review.findings_total
+    blocking_total: ...           # review.blocking_total (0 once the loop converges)
+    retries_used: ${REVIEW_RETRIES}/${MAX_REVIEW_RETRIES}
+    advisory:                     # non-blocking findings recorded, not acted on (nits/parity/style)
+      - <severity> <file>:<line> — <title>
   cost:
     tokens: ...                   # "in=<n> out=<n> cache_read=<n> cache_creation=<n>" (tokens.*)
     total_tokens: ...             # tokens.total (input + output)
@@ -672,6 +780,10 @@ Issue-Solver Result:
 Populate the `perf:` block from the `perf` object in `run.json` (written by the
 perf-tester). When the perf stage was gated out, report `verdict: not_measured`
 and `test: n/a`.
+
+Populate the `review:` block from the `review` object in `run.json` (written by
+the reviewer). List every `blocking: false` finding under `advisory:` — the
+nits/parity/style items the loop recorded but did not act on.
 
 Populate the `cost:` block from the `tokens` object in `run.json` (written by
 the `session_cost.py` refreshes). If the session could not be discovered,
