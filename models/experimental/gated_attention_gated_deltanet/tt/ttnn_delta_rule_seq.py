@@ -65,6 +65,26 @@ _TILE = 32
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 
 
+# Optional sub-stage tracy signposts that split gdn_core into prep / chunk / decay /
+# Lmat / payload / intra / Linv / scan / out. OFF unless GDN_PROFILE_CORE is set, so the
+# default GDN_PROFILE run keeps gdn_core as a single bucket (report unchanged). Enable both
+# to drill in:  GDN_PROFILE=1 GDN_PROFILE_CORE=1 python -m tracy ... forward_prefill_perf.py
+try:
+    from tracy import signpost as _tracy_signpost
+except Exception:  # tracy not built / unavailable -> no-op
+
+    def _tracy_signpost(*_args, **_kwargs):
+        return None
+
+
+_GDN_PROFILE_CORE = _os.environ.get("GDN_PROFILE_CORE")
+
+
+def _spc(name):
+    if _GDN_PROFILE_CORE:
+        _tracy_signpost(name)
+
+
 def chunk_gated_delta_rule_seq_adapter(
     q,  # [B, T, H, K]
     k,  # [B, T, H, K]
@@ -116,6 +136,7 @@ def chunk_gated_delta_rule_seq_adapter(
         t = ttnn.reshape(t, [BH, T])
         return _tilize(t, ttnn.float32)
 
+    _spc("core.prep")  # layout transforms (_to_bhtd/_to_bht) + l2_norm
     q_bh = _to_bhtd(q, K)
     k_bh = _to_bhtd(k, K)
     v_bh = _to_bhtd(v, V)
@@ -362,6 +383,8 @@ def chunk_gated_delta_rule_seq(
     if scale is None:
         scale = K**-0.5
 
+    _spc("core.chunk")  # valid_len mask + scale + pad/concat + chunk reshape + mask setup
+
     # Right-padding mask: zero every state-affecting input past valid_len. The mask
     # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
     # single program serves all real lengths. Mirrors the zeros concatenated below for
@@ -448,6 +471,7 @@ def chunk_gated_delta_rule_seq(
     _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
     _l1 = ttnn.L1_MEMORY_CONFIG if (chunk_size > 64 and _os.environ.get("QWEN_GDN_SLAB_L1") == "1") else _cmc
 
+    _spc("core.decay")  # cumulative decay + decay_exp + L_mask (decay spine)
     # ---- Decay preprocessing ----
     g_c_3d = ttnn.reshape(g_c, [batch, 1, chunk_size], memory_config=None)
     decay = ttnn.reshape(
@@ -478,6 +502,7 @@ def chunk_gated_delta_rule_seq(
     L_mask = ttnn.multiply(ttnn.exp(L_diff_clamped, memory_config=_cmc), tril_mask, memory_config=_cmc)
     ttnn.deallocate(L_diff_clamped)
 
+    _spc("core.Lmat")  # kk matmul -> L_mat -> D_inv -> L_unit (triangular-solve spine build)
     # ---- kk = k_beta @ k.T ----
     del k
     k_c = ttnn.move(k_c)
@@ -509,6 +534,7 @@ def chunk_gated_delta_rule_seq(
     L_unit = ttnn.add(_eye_1cc, N, memory_config=_cmc)
     ttnn.deallocate(N)
 
+    _spc("core.payload")  # v_beta_sc, k_bd_sc (payload scaling by D_inv/decay)
     # Payload operand first so the product inherits _pdt (bf16 when toggled); commutative,
     # so byte-identical to the D_inv_row-first form when fp32.
     v_beta_sc = ttnn.multiply(v_beta_c, D_inv_row, memory_config=_cmc)
@@ -519,6 +545,7 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(k_beta_decay)
     ttnn.deallocate(D_inv_row)
 
+    _spc("core.intra")  # q_decay/k_decay/dl_exp + qk matmul + intra_attn + kernel-input reshape
     # ---- intra_attn = (q_decay @ k.T) * L_mask * lower_causal ----
     decay_3d = ttnn.reshape(decay, [BH, num_chunks, chunk_size], memory_config=None)
     decay_raw_3d = ttnn.reshape(decay_raw, [BH, num_chunks, chunk_size], memory_config=None)
@@ -612,6 +639,7 @@ def chunk_gated_delta_rule_seq(
     _ck("k_decay_t", k_decay_t_4d)
     _ck("dl_exp", dl_exp_4d)
 
+    _spc("core.Linv")  # _compute_L_inv_ttnn: Neumann doubling + Newton-Schulz matmuls
     # Diagonal block inverses of L_unit (Neumann + Newton-Schulz).
     L_inv_4d = _compute_L_inv_ttnn(L_unit_4d, BH, num_chunks, chunk_size, mesh_device, _cmc, eye_32=_eye_32)
     _ck("L_inv", L_inv_4d)
@@ -625,6 +653,7 @@ def chunk_gated_delta_rule_seq(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    _spc("core.scan")  # the C++ gated_delta_attn_seq sequential scan kernel
     # ---- C++ sequential scan kernel (Path A) ----
     out_4d, final_state = ttnn.transformer.gated_delta_attn_seq(
         L_unit_4d,
@@ -639,6 +668,7 @@ def chunk_gated_delta_rule_seq(
     )
     ttnn.deallocate(L_inv_4d)
 
+    _spc("core.out")  # output untilize/reshape/slice (+ adapter's o permute back to [B,T,H,V])
     out_4d = ttnn.to_layout(
         ttnn.typecast(out_4d, ttnn.float32, memory_config=None) if out_4d.dtype != ttnn.float32 else out_4d,
         ttnn.TILE_LAYOUT,
