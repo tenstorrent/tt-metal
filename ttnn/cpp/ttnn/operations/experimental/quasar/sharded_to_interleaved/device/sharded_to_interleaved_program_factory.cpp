@@ -11,6 +11,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -219,7 +220,9 @@ ttnn::device_operation::ProgramArtifacts ShardedToInterleavedProgramFactory::cre
                       "eltwise_copy.cpp",
             .dfb_bindings = {ConsumerOf(S2I_INPUT_DFB, "in0"), ProducerOf(S2I_OUTPUT_DFB, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-            .hw_config = Compute2xxConfig{},
+            .hw_config = ttnn::to_compute_hardware_config(
+                input.device()->arch(),
+                ttnn::ComputeKernelConfig{.math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false}),
         });
     }
 
