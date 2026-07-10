@@ -100,15 +100,14 @@ inline void _bcast_cols_op_()
  * @note Canonical description of the shared blocked bcast-col mechanism; other files reference this one.
  */
 template <EltwiseBinaryType eltwise_binary_type>
-inline void _llk_math_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
+inline void _llk_math_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
 {
     static_assert(
         eltwise_binary_type == EltwiseBinaryType::ELWMUL || eltwise_binary_type == EltwiseBinaryType::ELWSUB,
         "blocked bcast-col reuse scaffold supports ELWMUL and ELWSUB only");
 
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
-    const std::uint32_t num_face_rows = num_faces / 2;
+    const std::uint32_t num_face_rows = num_faces >> 1;
 
     addr_mod_t {
         .srca = {.incr = 8},
@@ -180,8 +179,7 @@ inline void _llk_math_bcast_cols_reuse_custom_(
  * @param num_faces: Number of faces per tile (2 for 16x32 tiny tiles, 4 for full 32x32 tiles).
  * @param dst_index: Absolute dest tile slot where this block-row's ct_dim tiles begin.
  */
-inline void _llk_math_sub_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
+inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
 {
     _llk_math_bcast_cols_reuse_custom_<EltwiseBinaryType::ELWSUB>(ct_dim, num_faces, dst_index);
 }

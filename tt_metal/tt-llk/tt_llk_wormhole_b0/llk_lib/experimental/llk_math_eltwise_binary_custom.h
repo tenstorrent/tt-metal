@@ -82,11 +82,10 @@ inline void _llk_math_eltwise_binary_uninit_custom_()
 // @param dst_index Absolute dest tile slot where this block-row's ct_dim tiles begin. Multi-tile-row
 //                  callers (e.g. the fuser LoopBlockRow driver) advance this per block-row so each row
 //                  lands on its own dest slots; single-tile-row callers leave it at 0.
-inline void _llk_math_sub_bcast_cols_reuse_custom_(
-    const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
+inline void _llk_math_sub_bcast_cols_reuse_custom_(const std::uint32_t ct_dim = 1, const std::uint32_t num_faces = 4, const std::uint32_t dst_index = 0)
 {
     // Two faces make up one face-row; a full tile has two of them, a tiny tile one.
-    const std::uint32_t num_face_rows = num_faces / 2;
+    const std::uint32_t num_face_rows = num_faces >> 1;
 
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_AB);
 
