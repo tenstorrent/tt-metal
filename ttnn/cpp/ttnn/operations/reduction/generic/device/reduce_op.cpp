@@ -272,6 +272,67 @@ Tensor reduce(
             tilized_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
     }
 
+    // H-axis split (see #46110): the un-split RM-H path uses only NC*Wt cores (one per output tile
+    // column) and issues one narrow read per H row per core, so tall-H shapes starve the grid. When
+    // that happens, split the reduction axis into S contiguous segments:
+    //   stage 1 → (N,C,S,W) partial (pure SUM, FP32 for accumulation accuracy),
+    //   stage 2 → collapse the S-row shard axis with the user scaler and final dtype.
+    // Exact-sum decomposition: sum over H == sum of per-shard sums, so mean is applied once in stage 2.
+    if (use_rm_dense_h) {
+        const auto& logical = input_tensor.logical_shape();
+        const auto& padded = input_tensor.padded_shape();
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+        const uint32_t NC = logical[0] * logical[1];
+        const uint32_t Wt = (padded[3] + tile_w - 1) / tile_w;
+        const uint32_t Ht_rm = (logical[2] + tile_h - 1) / tile_h;
+        const uint32_t col_groups = NC * Wt;  // cores the un-split path would use
+
+        const auto grid = input_tensor.device()->compute_with_storage_grid_size();
+        const uint32_t grid_cores = sub_core_grids.has_value() ? sub_core_grids->num_cores() : (grid.x * grid.y);
+
+        // Only split genuinely tall reduces: below this the un-split path already performs well and a
+        // second stage would just add a dispatch + reduction rounding (small-shape precision noise).
+        constexpr uint32_t k_min_ht_for_split = 16;  // ~H >= 512 rows
+        uint32_t S = 1;
+        if (col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
+            const uint32_t cand = grid_cores / col_groups;  // shards that keep the grid filled
+            S = (cand < Ht_rm) ? cand : Ht_rm;              // never more shards than H tiles
+        }
+
+        if (S >= 2) {
+            const Tensor partials = ttnn::prim::reduce(
+                input_tensor,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                /*scaler=*/1.0f,
+                output_mem_config,
+                tt::tt_metal::DataType::FLOAT32,
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/1.0f,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*h_num_shards=*/S);
+
+            return ttnn::prim::reduce(
+                partials,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                reduce_scaler,
+                output_mem_config,
+                output_dtype.value_or(input_tensor.dtype()),
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/post_mul,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*h_num_shards=*/1);
+        }
+    }
+
     return ttnn::prim::reduce(
         tilized_input,
         prim_reduce_math,

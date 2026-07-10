@@ -38,6 +38,18 @@ constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
 constexpr uint32_t cb_out = tt::CBIndex::c_3;
 constexpr uint32_t cb_acc = tt::CBIndex::c_5;
 
+// The reduce packs into cb_acc / cb_out (dst format). When that differs from the input (src) format
+// — e.g. bf16 input reduced into an FP32 partial (H-axis-split stage 1) — the packer must also be
+// reconfigured, else it writes src-format datums into a dst-format buffer (garbage). The factory
+// defines REDUCE_RM_MIXED_FORMAT only in that case, so the common same-dtype path keeps the cheaper
+// input-only reconfig.
+constexpr auto rm_reconfig_mode =
+#ifdef REDUCE_RM_MIXED_FORMAT
+    compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT;
+#else
+    compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+#endif
+
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in cb_tile_in.
 // is_last_chunk == true packs the final result into cb_out (with optional post-mul); otherwise the
 // partial is left in cb_acc at index chunk_idx and accumulation continues on the next call.
@@ -51,7 +63,7 @@ FORCE_INLINE void reduce_block(
             cb_scaler,
             cb_out,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+            rm_reconfig_mode>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
@@ -73,7 +85,7 @@ FORCE_INLINE void reduce_block(
             cb_scaler,
             cb_acc,
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+            rm_reconfig_mode>(
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::Accumulate::at(cb_acc, chunk_idx),
