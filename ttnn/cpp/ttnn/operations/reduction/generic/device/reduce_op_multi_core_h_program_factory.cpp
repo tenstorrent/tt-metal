@@ -76,6 +76,13 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
             ReduceOpDim::H);
     }
 
+    // H-axis split: partition the reduction axis into `num_h_shards` contiguous tile ranges so the
+    // op can use NC*Wt*num_h_shards cores instead of NC*Wt. Each shard reduces `shard_Ht` tiles
+    // (compile-time uniform; the last shard's overhang past Ht_rm is identity-padded to 0 by the
+    // reader). Clamped to Ht_rm so shards are never empty. 1 = normal H-reduce (output H=1).
+    const uint32_t num_h_shards = rm_path ? std::min(std::max(operation_attributes.h_num_shards, 1u), plan.Ht_rm) : 1;
+    const uint32_t shard_Ht = rm_path ? tt::div_up(plan.Ht_rm, num_h_shards) : 0;
+
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
     // For min/max with non-unity scalar, the GMPOOL hardware path only respects the scaler's
@@ -89,7 +96,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const bool use_fpu_negate = operation_attributes.negate && !is_sfpu_reduce;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    auto num_cols = NC * Wt;
+    // Each (nc, shard, wt) triple is one output tile column of the (N, C, num_h_shards, W) result.
+    // num_h_shards == 1 (all non-split paths) reduces this to the classic NC*Wt.
+    auto num_cols = NC * num_h_shards * Wt;
     uint32_t num_cores;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     uint32_t num_cols_per_core_group_1, num_cols_per_core_group_2;
@@ -369,7 +378,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
 
     if (rm_path) {
         std::vector<uint32_t> reader_compile_time_args =
-            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H);
+            build_rm_reader_ct_args(plan, scaler_bits, a, ReduceOpDim::H, num_h_shards, shard_Ht);
 
         reader_desc.kernel_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -445,7 +454,9 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     // reduce.cpp / reduce_h_neg.cpp expect {Ht, Wt, NC, post_mul_bits}.
     std::vector<uint32_t> compute_kernel_args_group_1;
     if (rm_path) {
-        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, plan.Ht_rm, post_mul_scaler_bits);
+        // Per-shard tile count: the compute kernel reduces `shard_Ht` tiles per output (its H loop
+        // bound). Equals plan.Ht_rm when num_h_shards == 1, so the non-split path is unchanged.
+        compute_kernel_args_group_1 = build_rm_compute_ct_args(plan, shard_Ht, post_mul_scaler_bits);
     } else {
         compute_kernel_args_group_1 = {
             Ht,                          // Ht
