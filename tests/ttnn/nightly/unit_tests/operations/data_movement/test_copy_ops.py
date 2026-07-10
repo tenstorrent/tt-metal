@@ -15,7 +15,13 @@ from tests.ttnn.python_api_testing.typecast_test_helpers import (
     make_typecast_test_input,
     typecast_test_input_bounds,
 )
-from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
+from tests.ttnn.utils_for_testing import (
+    assert_equal,
+    assert_with_pcc,
+    assert_with_ulp,
+    tt_dtype_to_torch_dtype,
+    select_tile,
+)
 from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
@@ -51,12 +57,13 @@ def run_copy_test(N, C, H, W, layout, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
+    tile = select_tile(ttnn.bfloat16, layout=layout)
 
     input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device, tile=tile)
 
     input_b = torch.zeros(shape, dtype=torch_dtype)
-    input_b = ttnn.from_torch(input_b, ttnn.bfloat16, layout=layout, device=device)
+    input_b = ttnn.from_torch(input_b, ttnn.bfloat16, layout=layout, device=device, tile=tile)
 
     ttnn.copy(input, input_b)
     assert input_b.shape == input.shape
@@ -95,9 +102,10 @@ def run_assign_test(N, C, H, W, memory_config, dtype, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
+    tile = select_tile(ttnn.bfloat16, dtype)
 
     input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, tile=tile)
     tensor = ttnn.assign(input, memory_config=memory_config, dtype=dtype)
     assert tensor.shape == input.shape
     assert tensor.dtype == dtype
@@ -129,12 +137,17 @@ def run_assign_test_opt_tensor(N, C, H, W, memory_config, dtype, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
+    tile = select_tile(ttnn.bfloat16, dtype)
 
     input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, memory_config=memory_config)
+    input = ttnn.from_torch(
+        input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device, memory_config=memory_config, tile=tile
+    )
 
     opt_tensor = torch.randn(shape, dtype=torch_dtype)
-    opt_tensor = ttnn.from_torch(opt_tensor, dtype, layout=ttnn.Layout.TILE, device=device, memory_config=memory_config)
+    opt_tensor = ttnn.from_torch(
+        opt_tensor, dtype, layout=ttnn.Layout.TILE, device=device, memory_config=memory_config, tile=tile
+    )
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
     ttnn.assign(input, memory_config=memory_config, dtype=dtype, output_tensor=opt_tensor)
@@ -170,12 +183,13 @@ def run_binary_assign_test(N, C, H, W, layout, device):
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
+    tile = select_tile(ttnn.bfloat16, layout=layout)
 
     input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device)
+    input = ttnn.from_torch(input, ttnn.bfloat16, layout=layout, device=device, tile=tile)
 
     input_b = torch.zeros(shape, dtype=torch_dtype)
-    input_b = ttnn.from_torch(input_b, ttnn.bfloat16, layout=layout, device=device)
+    input_b = ttnn.from_torch(input_b, ttnn.bfloat16, layout=layout, device=device, tile=tile)
 
     ttnn.assign(input, input_b)
     assert input_b.shape == input.shape
@@ -195,9 +209,10 @@ def run_experimental_typecast_test(N, C, H, W, memory_config, input_dtype, outpu
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
+    tile = select_tile(input_dtype, output_dtype)
 
     input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, input_dtype, layout=ttnn.Layout.TILE, device=device)
+    input = ttnn.from_torch(input, input_dtype, layout=ttnn.Layout.TILE, device=device, tile=tile)
     tensor = ttnn.experimental.typecast(input, memory_config=memory_config, dtype=output_dtype)
 
     assert tensor.shape == input.shape
@@ -243,8 +258,9 @@ def run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, devi
     torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
+    tile = select_tile(input_dtype, output_dtype)
     input = torch.randn(shape, dtype=torch_dtype)
-    input = ttnn.from_torch(input, input_dtype, layout=ttnn.Layout.TILE, device=device)
+    input = ttnn.from_torch(input, input_dtype, layout=ttnn.Layout.TILE, device=device, tile=tile)
     tensor = ttnn.typecast(input, memory_config=memory_config, dtype=output_dtype)
 
     assert tensor.shape == input.shape
@@ -311,8 +327,14 @@ def test_typecast_output_tensor(to_dtype, device):
     in_low, in_high = typecast_test_input_bounds(from_dtype, to_dtype)
     torch_input = make_typecast_test_input([h, w], torch.bfloat16, in_low, in_high)
 
+    tile = select_tile(from_dtype, to_dtype)
     bfloat16_tensor = ttnn.from_torch(
-        torch_input, dtype=from_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        torch_input,
+        dtype=from_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=tile,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     preallocated = ttnn.empty([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
 
@@ -485,7 +507,8 @@ def test_typecast_row_major_vs_tile_layout(input_dtype, output_dtype, shape, dev
     output_rm = ttnn.typecast(input_rm, dtype=output_dtype)
 
     # Create tile layout tensor
-    input_tile = ttnn.from_torch(torch_input, input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tile = select_tile(input_dtype, output_dtype)
+    input_tile = ttnn.from_torch(torch_input, input_dtype, layout=ttnn.TILE_LAYOUT, device=device, tile=tile)
     output_tile = ttnn.typecast(input_tile, dtype=output_dtype)
 
     # Convert both to torch and compare
@@ -537,7 +560,8 @@ def test_typecast_host_tensor(output_dtype, preferred_layout, device):
     torch_tensor = _make_host_typecast_torch_input(shape, output_dtype)
 
     # Create host tensor
-    ttnn_tensor_host = ttnn.from_torch(torch_tensor, dtype=ttnn.float32, layout=preferred_layout)
+    tile = select_tile(ttnn.float32, output_dtype, layout=preferred_layout)
+    ttnn_tensor_host = ttnn.from_torch(torch_tensor, dtype=ttnn.float32, layout=preferred_layout, tile=tile)
 
     # Verify input is on host
     assert ttnn_tensor_host.storage_type() == ttnn.StorageType.HOST

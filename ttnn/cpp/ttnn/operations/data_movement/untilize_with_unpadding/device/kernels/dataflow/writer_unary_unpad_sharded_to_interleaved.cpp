@@ -16,7 +16,7 @@
 // first H_logical rows are real data and whose remaining rows are interior tile padding. This core
 // owns the absolute padded rows [start_padded_row, start_padded_row + num_rows).
 //
-// The compute kernel streams the untilized rows into the output CB one tile-row (32 rows) at a
+// The compute kernel streams the untilized rows into the output CB one tile-row at a
 // time. For each row this kernel derives, from its absolute position, which matrix it belongs to
 // (m) and the row within that matrix (rr). Real rows (rr < H_logical) are written to interleaved
 // output page m * H_logical + rr; padding rows are skipped. Column padding is dropped by writing
@@ -28,16 +28,16 @@
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t start_padded_row = get_arg_val<uint32_t>(1);   // absolute first padded row owned by this core
-    uint32_t num_rows = get_arg_val<uint32_t>(2);           // padded rows owned by this core (multiple of 32)
+    uint32_t num_rows = get_arg_val<uint32_t>(2);           // padded rows owned by this core (multiple of tile height)
     uint32_t matrix_h_padded = get_arg_val<uint32_t>(3);    // padded height of one matrix
     uint32_t matrix_h_logical = get_arg_val<uint32_t>(4);   // logical (real) height of one matrix
     uint32_t block_row_size = get_arg_val<uint32_t>(5);     // CB row stride in bytes (padded width)
     uint32_t row_size_unpadded = get_arg_val<uint32_t>(6);  // bytes written per row (logical width)
     uint32_t ntiles_per_row = get_arg_val<uint32_t>(7);     // tiles per tile-row (CB wait/pop granularity)
 
-    constexpr auto dst_args = TensorAccessorArgs<0>();
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(0);
+    constexpr auto dst_args = TensorAccessorArgs<1>();
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;

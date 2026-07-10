@@ -5,7 +5,7 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_ulp, select_tile
 
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
@@ -78,12 +78,14 @@ def test_unary_sharded_interleaved(input_shape, input_config, out_config, ttnn_o
     golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output = golden_function(torch_input, device=device)
 
+    tile = select_tile(ttnn_dtype)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=input_config,
+        tile=tile,
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input, memory_config=out_config))
@@ -104,12 +106,14 @@ def test_unary_row_major(input_shape, ttnn_op, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(torch_input, device=device)
 
+    tile = select_tile(ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input))
@@ -147,12 +151,14 @@ def test_unary_sub_core_grids(shape, sub_core_grid, ttnn_op, device):
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden_tensor = golden_function(torch_input)
 
+    tile = select_tile(ttnn.bfloat16)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        tile=tile,
     )
 
     ttnn_output = ttnn.to_torch(ttnn_op(ttnn_input, sub_core_grids=sub_core_grid))
@@ -181,12 +187,14 @@ def test_unary_uneven_sharding_fallback(ttnn_op, device):
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=uneven_shard_config,
+        tile=tile,
     )
 
     ttnn_output = ttnn_op(ttnn_input, memory_config=uneven_shard_config)
@@ -240,12 +248,14 @@ def test_unary_row_major_sharded(input_shape, shard_shape, core_grid, strategy, 
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        tile=tile,
     )
     ttnn_input = ttnn.to_memory_config(ttnn_input, memory_config=shard_mem_config)
 
@@ -296,12 +306,14 @@ def test_unary_shard_orientation(strategy, shard_shape_rm, shard_shape_cm, core_
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=shard_mem_config,
+        tile=tile,
     )
 
     ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input, memory_config=shard_mem_config))
@@ -356,12 +368,14 @@ def test_unary_generic_sharded_memory_config(
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=input_shard_config,
+        tile=tile,
     )
 
     ttnn_output = ttnn.to_torch(ttnn.neg(ttnn_input, memory_config=output_memory_config))
@@ -393,12 +407,14 @@ def test_unary_reshard(device):
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn.bfloat16)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=input_shard_config,
+        tile=tile,
     )
 
     ttnn_output = ttnn.to_torch(ttnn.relu(ttnn_input, memory_config=output_shard_config))
@@ -433,7 +449,8 @@ def test_unary_rm_interleaved(device, shape, torch_dtype, ttnn_dtype):
     Partial last blocks (non-tile-aligned row counts) are also covered.
     """
     torch_input = torch.randn(shape, dtype=torch_dtype)
-    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tile = select_tile(ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, tile=tile)
     ttnn_output = ttnn.to_torch(ttnn.abs(ttnn_input))
     golden_output = torch.abs(torch_input)
     assert torch.equal(ttnn_output, golden_output)
@@ -462,12 +479,14 @@ def test_unary_rm_block_shard(device, torch_dtype, ttnn_dtype):
         use_height_and_width_as_shard_shape=True,
     )
 
+    tile = select_tile(ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn_input = ttnn.from_torch(
         torch_input,
         dtype=ttnn_dtype,
         device=device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
+        tile=tile,
     )
     ttnn_input = ttnn.to_memory_config(ttnn_input, memory_config=shard_mem_config)
 
