@@ -441,9 +441,9 @@ class Flux1Checkpoint:
         # loaded onto device. No runtime LoRA path is needed on-device. FLUX.1-dev
         # LoRAs target the same layers Kontext shares, so they generally apply.
         if lora_path:
-            import loguru
+            from loguru import logger
 
-            loguru.logger.info(f"fusing LoRA adapter {lora_path!r} (scale={lora_scale})...")
+            logger.info(f"fusing LoRA adapter {lora_path!r} (scale={lora_scale})...")
             torch_transformer.load_lora_adapter(lora_path)
             torch_transformer.fuse_lora(lora_scale=lora_scale)
             torch_transformer.unload_lora()  # drop adapter modules; keep fused weights
