@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke test for ``DramCorePrefetcher`` (Python wrapper) without HF weights.
+"""Smoke test for ``TensorPrefetcher`` (Python wrapper) without HF weights.
 
 Validates direct weight registration, decode initialization, per-op
 ``prefetch_and_linear``, trace replay, and teardown against a synthetic
 Llama-3.2-3B-shaped weight + activation. Compares to ``torch.matmul``.
 
-Complements ``test_dram_core_prefetcher_3b.py`` which exercises the same path with
+Complements ``test_tensor_prefetcher_3b.py`` which exercises the same path with
 real HF weights through ``MLP``/``Attention``.
 """
 
@@ -27,7 +27,7 @@ from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up
 
-pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+pytestmark = run_for_blackhole("Tensor Prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
@@ -38,17 +38,15 @@ def _require_tensor_prefetcher(device):
 
 @torch.no_grad()
 @pytest.mark.parametrize("recv_per_bank", [4])
-def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
-    """Drive a single 1D mcast matmul through ``DramCorePrefetcher`` end-to-end.
+def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
+    """Drive a single 1D mcast matmul through ``TensorPrefetcher`` end-to-end.
 
     Shape mirrors Llama-3.2-3B FF1: K=3072, N=8192/banks/recv_per_bank.
     HF_MODEL is set programmatically so the divisibility check passes; no weights
     are loaded.
     """
-    # Set HF_MODEL so DramCorePrefetcher's support check finds a verified config.
+    # Set HF_MODEL so TensorPrefetcher's support check finds a verified config.
     os.environ["HF_MODEL"] = "Llama-3.2-3B"
-    # Force the env flag the factory checks.
-    os.environ["TT_METAL_USE_DRAM_CORE_PREFETCHER"] = "1"
 
     from models.tt_transformers.tt.prefetcher import make_prefetcher
 
@@ -122,11 +120,11 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
         stream_in1=os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1",
     )
 
-    # ---- Construct DramCorePrefetcher, drive its lifecycle ----
+    # ---- Construct TensorPrefetcher, drive its lifecycle ----
     prefetcher = make_prefetcher(device, num_tensors=1, num_layers=1, num_receiver_cores=recv_per_bank)
-    assert prefetcher.__class__.__name__ == "DramCorePrefetcher", (
-        f"Expected DramCorePrefetcher but got {prefetcher.__class__.__name__}; "
-        "check TT_METAL_USE_DRAM_CORE_PREFETCHER=1 and device firmware support."
+    assert prefetcher.__class__.__name__ == "TensorPrefetcher", (
+        f"Expected TensorPrefetcher but got {prefetcher.__class__.__name__}; "
+        "check model geometry and device firmware support."
     )
     prefetcher.insert_tensor(tt_weight, program_config=program_config)
     prefetcher.init(Mode.DECODE)

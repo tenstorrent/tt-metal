@@ -32,16 +32,16 @@ def gcb_block_bytes(k_tiles: int, per_core_n_tiles: int, ring_size: int, tile_by
     The matmul splits ``in0_block_w`` to ``k_tiles / ring_size``; each receiver holds one
     ``(k_tiles/ring_size, per_core_N)`` tile block. The full GCB ring holds ``ring_size`` such
     blocks. Single source for the arithmetic shared by the support gate
-    (:func:`is_dram_core_prefetcher_supported`) and the builder
-    (:meth:`DramCorePrefetcher._build_global_cb`), so the pre-check and the allocation can't drift.
+    (:func:`is_tensor_prefetcher_config_supported`) and the builder
+    (:meth:`TensorPrefetcher._build_global_cb`), so the pre-check and the allocation can't drift.
     """
     return (k_tiles // ring_size) * per_core_n_tiles * tile_bytes
 
 
-def is_dram_core_prefetcher_supported(
+def is_tensor_prefetcher_config_supported(
     model_name: str, num_devices: int, num_dram_banks: int, recv_per_bank: int
 ) -> bool:
-    """Strict divisibility + GCB-size check for the DRAM-core prefetcher path.
+    """Strict divisibility + GCB-size check for the Tensor Prefetcher path.
 
     The DRAM-core path has the same uniform-receivers requirement as the worker path,
     plus an actual ``n_per_device_tiles % ring_size == 0`` check that the worker-side
@@ -120,8 +120,8 @@ def is_dram_core_prefetcher_supported(
     return True
 
 
-class DramCorePrefetcher(LightweightModule):
-    """Tensor-prefetcher state shared by DRAM-core-prefetched model matmuls.
+class TensorPrefetcher(LightweightModule):
+    """Tensor-prefetcher state shared by Tensor-Prefetcher-fed model matmuls.
 
     Receiver layout is a ``num_dram_banks × recv_per_bank`` rectangle anchored at ``(0,0)``
     on the worker grid. Bank ``b``'s receivers occupy ring positions ``[b*r, (b+1)*r)`` in
@@ -144,7 +144,7 @@ class DramCorePrefetcher(LightweightModule):
         self.num_layers: int = num_layers
         self.num_senders: int = mesh_device.dram_grid_size().x
         self.model_name: str = os.getenv("HF_MODEL", "")
-        assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
+        assert self.model_name != "", "HF_MODEL is not set. Tensor Prefetcher must be run with a model."
         self.dual_senders_per_bank: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_DUAL_SENDERS", "0") == "1"
         self.stream_in1: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1"
         self.uses_tensor_prefetcher: bool = True
@@ -153,7 +153,7 @@ class DramCorePrefetcher(LightweightModule):
         candidates: List[int] = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
         picked = None
         for rpb in candidates:
-            if is_dram_core_prefetcher_supported(
+            if is_tensor_prefetcher_config_supported(
                 self.model_name, self.mesh_device.get_num_devices(), self.num_senders, rpb
             ):
                 picked = rpb
@@ -204,7 +204,7 @@ class DramCorePrefetcher(LightweightModule):
         self.colocate_ops: bool = False
 
         logger.info(
-            f"[DramCorePrefetcher] model={self.model_name} banks={self.num_senders} "
+            f"[TensorPrefetcher] model={self.model_name} banks={self.num_senders} "
             f"recv/bank={self.num_receiver_cores} ring={self.ring_size} "
             f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
         )
@@ -213,16 +213,16 @@ class DramCorePrefetcher(LightweightModule):
         """Register one weight and its consuming decode program config for GCB sizing."""
         assert not self._started, "Cannot register weights after the Tensor prefetcher has started."
         assert program_config is not None, (
-            "DramCorePrefetcher.insert_tensor requires program_config (the 1D mcast gather_in0 matmul "
+            "TensorPrefetcher.insert_tensor requires program_config (the 1D mcast gather_in0 matmul "
             "program config that will consume this weight). Threaded through from MLP/Attention."
         )
         assert hasattr(program_config, "per_core_N"), (
-            "DramCorePrefetcher.insert_tensor needs a 1D-mcast matmul program config exposing per_core_N "
+            "TensorPrefetcher.insert_tensor needs a 1D-mcast matmul program config exposing per_core_N "
             f"(used to size the GCB); got {type(program_config).__name__}."
         )
         if not tensor.is_sharded() or tensor.memory_config().buffer_type != ttnn.BufferType.DRAM:
             raise ValueError(
-                f"Tensor must be DRAM sharded for DRAM-core prefetcher. Got sharded={tensor.is_sharded()}, "
+                f"Tensor must be DRAM sharded for Tensor Prefetcher. Got sharded={tensor.is_sharded()}, "
                 f"buffer_type={tensor.memory_config().buffer_type}"
             )
         if tensor.volume() % self.ring_size != 0:
@@ -230,7 +230,7 @@ class DramCorePrefetcher(LightweightModule):
         self.registered_weights.append(tensor)
         self.registered_program_configs.append(program_config)
         logger.info(
-            f"[DramCorePrefetcher] Registered tensor of shape {tensor.shape} "
+            f"[TensorPrefetcher] Registered tensor of shape {tensor.shape} "
             f"({len(self.registered_weights)}/{self.num_tensors * self.num_layers})"
         )
 
@@ -239,7 +239,7 @@ class DramCorePrefetcher(LightweightModule):
         self.mode = mode
         if mode != Mode.DECODE or self._started:
             return
-        assert not self._stopped, "DramCorePrefetcher has been torn down; cannot run again."
+        assert not self._stopped, "TensorPrefetcher has been torn down; cannot run again."
         assert len(self.registered_weights) == self.num_tensors * self.num_layers, (
             f"Expected {self.num_tensors} * {self.num_layers} = {self.num_tensors * self.num_layers} inserted "
             f"tensors (num_tensors per layer), got {len(self.registered_weights)}."
@@ -247,7 +247,7 @@ class DramCorePrefetcher(LightweightModule):
         self._build_global_cb()
         ttnn.experimental.start_tensor_prefetcher(self.mesh_device, dual_senders_per_bank=self.dual_senders_per_bank)
         self._started = True
-        logger.info(f"[DramCorePrefetcher.init] started decode prefetcher with ring={self.ring_size}")
+        logger.info(f"[TensorPrefetcher.init] started decode prefetcher with ring={self.ring_size}")
 
     def teardown(self) -> None:
         if self._started and not self._stopped:
@@ -262,11 +262,11 @@ class DramCorePrefetcher(LightweightModule):
             pass
 
     def register_callback(self, callback) -> None:
-        """Run ``callback`` now. The DRAM-core backend has no deferred prefetch phase, so weight
+        """Run ``callback`` now. The Tensor Prefetcher backend has no deferred prefetch phase, so weight
         registration happens immediately (the worker backend defers this to prefetch-time)."""
         callback()
 
-    # The DRAM-core backend has no separate prefetch/run/stop phase — each matmul queues its own
+    # The Tensor Prefetcher backend has no separate prefetch/run/stop phase — each matmul queues its own
     # request via ``prefetch_and_linear``. These no-ops let the model driver call the prefetcher
     # lifecycle uniformly (matching ``Prefetcher.prefetch``/``run``/``stop``) without branching.
     def prefetch(self) -> None:
@@ -386,7 +386,7 @@ class DramCorePrefetcher(LightweightModule):
 
     def _build_global_cb(self) -> None:
         """Construct the DRAM-sender GlobalCircularBuffer sized for all queued (weight, pc) pairs."""
-        # Lazy import to avoid hard dep order at module load (see is_dram_core_prefetcher_supported).
+        # Lazy import to avoid hard dep order at module load (see is_tensor_prefetcher_config_supported).
         from models.tt_transformers.tt.prefetcher import TILE_BYTES
 
         assert len(self.registered_weights) == len(self.registered_program_configs)
@@ -402,12 +402,12 @@ class DramCorePrefetcher(LightweightModule):
             weight_K_tiles = weight_K // ttnn.TILE_SIZE
             assert weight_K_tiles % self.ring_size == 0, (
                 f"Weight K_tiles {weight_K_tiles} must be divisible by ring_size {self.ring_size}; "
-                "this should have been caught by is_dram_core_prefetcher_supported."
+                "this should have been caught by is_tensor_prefetcher_config_supported."
             )
             in1_block_size = gcb_block_bytes(weight_K_tiles, pc.per_core_N, self.ring_size, tile_bytes)
             max_in1_block_size = max(max_in1_block_size, in1_block_size)
             logger.info(
-                f"[DramCorePrefetcher] tensor K={weight_K} N_per_core={pc.per_core_N} tile_bytes={tile_bytes} "
+                f"[TensorPrefetcher] tensor K={weight_K} N_per_core={pc.per_core_N} tile_bytes={tile_bytes} "
                 f"in1_block_size={in1_block_size}"
             )
 
@@ -425,7 +425,7 @@ class DramCorePrefetcher(LightweightModule):
             )
         gcb_size = num_blocks * max_in1_block_size
         logger.info(
-            f"[DramCorePrefetcher] Creating GCB: ring={self.ring_size} window={num_blocks} "
+            f"[TensorPrefetcher] Creating GCB: ring={self.ring_size} window={num_blocks} "
             f"max_in1={max_in1_block_size} size={gcb_size}"
         )
         self.global_cb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(

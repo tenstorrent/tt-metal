@@ -5,11 +5,9 @@
 """MLP-level decode benchmark: DRAM-core (receiver-contiguous) prefetcher vs worker-core.
 
 Builds the Llama-3.2-3B decode MLP (FF1/FF3/FF2 fed by the prefetcher) and executes
-a single decode forward eagerly ``BENCH_REPEATS`` times, reporting per-forward latency. The
-prefetcher backend is selected by ``make_prefetcher`` via ``TT_METAL_USE_DRAM_CORE_PREFETCHER``
-(1 = DRAM-core DRISC senders with recv-contig weights, 0 = worker-core BRISC/NCRISC senders),
-so both backends exercise the same MLP while retaining their distinct queueing lifecycles.
-Run the test twice (env=1, then env=0) and compare.
+a single decode forward eagerly ``BENCH_REPEATS`` times, reporting per-forward latency.
+``BENCH_PREFETCHER_BACKEND=tensor`` uses the automatically selected Tensor Prefetcher backend;
+``worker`` constructs the worker-core backend explicitly for comparison.
 
 Requires HF weights for ``meta-llama/Llama-3.2-3B`` and Blackhole. Decode-only.
 """
@@ -27,7 +25,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.prefetcher import make_prefetcher, uses_tensor_prefetcher
+from models.tt_transformers.tt.prefetcher import Prefetcher, make_prefetcher, uses_tensor_prefetcher
 
 pytestmark = [
     run_for_blackhole("DRAM prefetcher benchmark requires Blackhole"),
@@ -64,9 +62,10 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
     # only divides cleanly at ring=32 (recv_per_bank=4); the worker-core auto-pick would otherwise
     # choose an invalid ring=64.
     recv_per_bank = int(os.environ.get("BENCH_RECV_PER_BANK", "4"))
-    prefetcher = make_prefetcher(
-        mesh_device, num_tensors=num_tensors, num_layers=num_layers, num_receiver_cores=recv_per_bank
-    )
+    backend_name = os.environ.get("BENCH_PREFETCHER_BACKEND", "tensor")
+    assert backend_name in ("tensor", "worker")
+    prefetcher_type = make_prefetcher if backend_name == "tensor" else Prefetcher
+    prefetcher = prefetcher_type(mesh_device, num_tensors, num_layers, num_receiver_cores=recv_per_bank)
     backend = prefetcher.__class__.__name__
     model_args = ModelArgs(
         mesh_device,

@@ -114,6 +114,31 @@ def generate_sender_receiver_mapping(num_receivers_per_sender: int = 8) -> dict:
     return mapping
 
 
+def is_tensor_prefetcher_supported(
+    mesh_device: ttnn.MeshDevice,
+    model_name: Optional[str] = None,
+    num_receiver_cores: Optional[int] = None,
+) -> bool:
+    """Return whether the DRAM-core Tensor Prefetcher supports this model and mesh."""
+    if not is_blackhole() or not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
+        return False
+
+    from models.tt_transformers.tt.tensor_prefetcher import is_tensor_prefetcher_config_supported
+
+    model_name = model_name or os.getenv("HF_MODEL", "")
+    num_senders = mesh_device.dram_grid_size().x
+    receiver_candidates = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
+    return any(
+        is_tensor_prefetcher_config_supported(
+            model_name,
+            mesh_device.get_num_devices(),
+            num_senders,
+            receivers_per_bank,
+        )
+        for receivers_per_bank in receiver_candidates
+    )
+
+
 def make_prefetcher(
     mesh_device: ttnn.MeshDevice,
     num_tensors: int,
@@ -122,22 +147,13 @@ def make_prefetcher(
 ):
     """Select the prefetcher backend.
 
-    Returns a ``DramCorePrefetcher`` when ``TT_METAL_USE_DRAM_CORE_PREFETCHER=1`` and
-    the Tensor prefetcher is supported by the device firmware. Otherwise returns the
-    original worker-core ``Prefetcher``.
-
-    The returned backends intentionally have distinct lifecycles. Callers use
-    ``uses_tensor_prefetcher`` where behavior differs.
+    Prefer ``TensorPrefetcher`` whenever the model, mesh, and firmware support the
+    Tensor Prefetcher. Fall back to the worker-core ``Prefetcher`` otherwise.
     """
-    use_dram_core = (
-        os.getenv("TT_METAL_USE_DRAM_CORE_PREFETCHER", "0") == "1"
-        and is_blackhole()
-        and ttnn.experimental.is_tensor_prefetcher_supported(mesh_device)
-    )
-    if use_dram_core:
-        from models.tt_transformers.tt.dram_core_prefetcher import DramCorePrefetcher
+    if is_tensor_prefetcher_supported(mesh_device, num_receiver_cores=num_receiver_cores):
+        from models.tt_transformers.tt.tensor_prefetcher import TensorPrefetcher
 
-        return DramCorePrefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
+        return TensorPrefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
     return Prefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
 
 
@@ -156,7 +172,7 @@ def colocating_prefetcher(prefetcher):
 def to_core_range_set(cores: List, return_list: bool = False) -> Union[ttnn.CoreRangeSet, List[ttnn.CoreRangeSet]]:
     """Convert cores (CoreCoord/CoreRange/CoreRangeSet, or a list thereof) to CoreRangeSet(s).
 
-    Shared by both prefetcher backends (``Prefetcher`` and ``DramCorePrefetcher``) so the core-type
+    Shared by both prefetcher backends (``Prefetcher`` and ``TensorPrefetcher``) so the core-type
     handling has a single definition.
     """
     assert cores, "No cores provided"
@@ -180,7 +196,7 @@ def resolve_verified_model_cfg(model_name: str) -> Optional[dict]:
 
     Returns ``None`` off Blackhole (the only architecture the prefetcher paths are verified on) or
     when no verified model matches. Shared by ``is_prefetcher_supported`` and
-    ``is_dram_core_prefetcher_supported`` so the model lookup + Blackhole gate have one definition.
+    ``is_tensor_prefetcher_config_supported`` so the model lookup + Blackhole gate have one definition.
     (The per-weight shape math and L1-budget checks intentionally differ between the two backends.)
     """
     if not is_blackhole():
@@ -369,9 +385,9 @@ class Prefetcher(LightweightModule):
         self.enable_performance_mode: bool = True
         # The worker-core backend co-locates surrounding (non-GCB-matmul) ops — SDPA, create/concat
         # heads, lm_head, rope — on its reserved worker grid so the activation stays sharded there.
-        # The DRAM-core backend sets this False (those ops use the model's default placement).
+        # The Tensor Prefetcher backend sets this False (those ops use the model's default placement).
         self.colocate_ops: bool = True
-        # The worker backend never streams weights (batched delivery only); the DRAM-core backend
+        # The worker backend never streams weights (batched delivery only); the Tensor Prefetcher backend
         # overrides this. Defined here so model_config can read prefetcher.stream_in1 uniformly.
         self.stream_in1: bool = False
         self.global_cb: Optional[ttnn.GlobalCircularBuffer] = None
@@ -641,7 +657,7 @@ class Prefetcher(LightweightModule):
 
         The worker-core backend keeps the caller's default (width-sharded) layout, which is the
         historical cache layout, so the suffix is empty — existing cache files stay valid. The
-        DRAM-core backend overrides this to keep its receiver-contiguous weights in separate files.
+        Tensor Prefetcher backend overrides this to keep its receiver-contiguous weights in separate files.
         """
         return ""
 
@@ -651,7 +667,7 @@ class Prefetcher(LightweightModule):
         """Memory config for a prefetched (K, N) weight.
 
         The worker-core path keeps the caller's ``default`` (width-sharded) layout. Defined so
-        model code can call ``prefetcher.weight_mem_config(...)`` uniformly; the DRAM-core backend
+        model code can call ``prefetcher.weight_mem_config(...)`` uniformly; the Tensor Prefetcher backend
         overrides this to return its receiver-contiguous layout.
         """
         del k, n, is_galaxy
