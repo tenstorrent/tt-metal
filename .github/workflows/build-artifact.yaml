@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      build-wheel-from-precompiled:
+        required: false
+        type: boolean
+        default: false
+        description: "Package the already-compiled tree into a self-contained wheel (no recompile); publishes wheel-from-precompiled-artifact-name"
       skip-tt-train:
         # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
         #        Fow now enabling an opt-out. But this should get removed.
@@ -176,6 +181,11 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
+      wheel-from-precompiled-artifact-name:
+        description: "Name of the self-contained wheel packaged from the already-compiled tree (no recompile)"
+        value: >-
+          ${{ jobs.build-artifact.result == 'success' &&
+              jobs.build-artifact.outputs.precompiled_wheel_name || '' }}
   workflow_dispatch:
     inputs:
       tracy:
@@ -390,6 +400,7 @@ jobs:
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
       build_artifact_name: ${{ steps.set_build_artifact_name.outputs.build_artifact_name }}
+      precompiled_wheel_name: ${{ steps.set_precompiled_wheel_name.outputs.name }}
     env:
       # Platform values from parse-platform job (handles both workflow_dispatch and workflow_call)
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
@@ -738,6 +749,33 @@ jobs:
         with:
           name: ${{ env.build_artifact_name }}
           path: /work/ttm_any.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+
+      # TODO: background this so it overlaps the Package step once parallel steps are confirmed.
+      - name: 🐍 Build wheel from precompiled tree
+        if: ${{ inputs.build-wheel-from-precompiled }}
+        env:
+          # Makes setup.py skip CMake and package build/lib + runtime — no recompile.
+          TT_FROM_PRECOMPILED_DIR: /work
+        run: |
+          uv build --wheel --out-dir /work/wheelhouse
+          ls -lh /work/wheelhouse
+      - name: Set precompiled wheel artifact name
+        id: set_precompiled_wheel_name
+        if: ${{ inputs.build-wheel-from-precompiled }}
+        run: |
+          RAW_REF="${{ inputs.ref || github.sha }}"
+          SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
+          NAME="wheel-precompiled-${{ env.VERSION }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${SANITIZED_REF}-${{ github.run_id }}"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+      - name: ☁️ Upload precompiled wheel
+        if: ${{ inputs.build-wheel-from-precompiled }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        timeout-minutes: 10
+        with:
+          name: ${{ steps.set_precompiled_wheel_name.outputs.name }}
+          path: /work/wheelhouse/*.whl
           if-no-files-found: error
           compression-level: 0
 
