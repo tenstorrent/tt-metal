@@ -257,6 +257,7 @@ class HunyuanTtModel(LightweightModule):
             raise ValueError("provide either input_ids or inputs_embeds")
 
         # Build the 2D RoPE tables once and share them across all layers.
+        owns_cos_sin = cos_sin is None
         if cos_sin is not None:
             cos_tt, sin_tt = cos_sin
         else:
@@ -312,8 +313,9 @@ class HunyuanTtModel(LightweightModule):
             caller_owns_hidden = False
             hidden = nxt
 
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
+        if owns_cos_sin or sp:
+            ttnn.deallocate(cos_tt)
+            ttnn.deallocate(sin_tt)
 
         # --- Sequence-parallel exit gather ----------------------------------
         # Re-assemble the full (replicated) sequence so the caller/pipeline sees the
@@ -331,7 +333,7 @@ class HunyuanTtModel(LightweightModule):
             for t in sp_owned:
                 ttnn.deallocate(t)
 
-        if self.ln_f is not None:
+        if self.apply_final_norm and self.ln_f is not None:
             normed = self.ln_f(hidden)
             ttnn.deallocate(hidden)
             hidden = normed

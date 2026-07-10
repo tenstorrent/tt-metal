@@ -122,10 +122,41 @@ class _TtConv2d:
             weights_dtype=dtype,
             shard_layout=None,
         )
+        self._weights_prepared = False
 
     def __call__(self, x_flat, B, H, W):
         x = ttnn.to_layout(x_flat, ttnn.ROW_MAJOR_LAYOUT)
-        out, [Hout, Wout], [self.weight, self.bias] = ttnn.conv2d(
+        if not self._weights_prepared:
+            out, dim, wb = ttnn.conv2d(
+                input_tensor=x,
+                weight_tensor=self.weight,
+                bias_tensor=self.bias,
+                in_channels=self.in_channels,
+                out_channels=self.out_channels,
+                device=self.device,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=self.padding,
+                batch_size=B,
+                input_height=H,
+                input_width=W,
+                conv_config=self.conv_config,
+                compute_config=_COMPUTE_KERNEL_CONFIG,
+                return_output_dim=True,
+                return_weights_and_bias=True,
+            )
+            Hout, Wout = dim
+            w, b = wb
+            if w is not self.weight:
+                ttnn.deallocate(self.weight)
+                self.weight = w
+            if b is not None:
+                if self.bias is not None and b is not self.bias:
+                    ttnn.deallocate(self.bias)
+                self.bias = b
+            self._weights_prepared = True
+            return out, Hout, Wout
+        out, [Hout, Wout] = ttnn.conv2d(
             input_tensor=x,
             weight_tensor=self.weight,
             bias_tensor=self.bias,
@@ -141,7 +172,7 @@ class _TtConv2d:
             conv_config=self.conv_config,
             compute_config=_COMPUTE_KERNEL_CONFIG,
             return_output_dim=True,
-            return_weights_and_bias=True,
+            return_weights_and_bias=False,
         )
         return out, Hout, Wout
 

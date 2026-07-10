@@ -79,25 +79,29 @@ and default to 32 backbone layers (`HY_NUM_LAYERS=32`).
 
 | Variant | Demo | Steps | CFG | Checkpoint env / default path |
 |---|---|---:|---|---|
-| **Base** T2I | `demo/demo.py` | 8 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (local `/home/iguser/ign-tt/base`, or HF `tencent/HunyuanImage-3.0`) |
+| **Base** T2I | `demo/demo.py` | 50 | yes (`HY_GUIDANCE=5.0`) | `HUNYUAN_MODEL_DIR` (local `/home/iguser/ign-tt/base`, or HF `tencent/HunyuanImage-3.0`) |
 | **Instruct** I2I | `demo/demo_i2i.py` | 50 | yes (`HY_GUIDANCE=2.5`) | `HUNYUAN_INSTRUCT_MODEL_DIR` (local `/home/iguser/ign-tt/hunyan_instruct`, or HF `tencent/HunyuanImage-3.0-Instruct`) |
 | **Instruct-Distil** I2I | `demo/demo_i2i.py --distil` | 8 | no (distilled) | `HUNYUAN_INSTRUCT_DISTIL_MODEL_DIR` (HF `tencent/HunyuanImage-3.0-Instruct-Distil`) |
 
 ### Base text-to-image
 
 ```bash
-HY_STEPS=8 HY_NUM_LAYERS=32 HY_GUIDANCE=5.0 python_env/bin/python \
+HY_NUM_LAYERS=32 HY_GUIDANCE=5.0 python_env/bin/python \
   models/experimental/hunyuan_image_3_0/demo/demo.py \
   "a photo of a cat, studio lighting"
 ```
 
-Base T2I matches upstream `generate_image` with `bot_task=image`: **no recaption** by
-default (prompt used verbatim). Optional AR recaption (`HY_RECAPTION=1`) rewrites the
-prompt via the text-sampling loop (`ref/generate.py`, re-exported by `tt/generate.py`)
-before the gen-image block. Knobs (env vars):
+Base T2I defaults to **50 denoise steps** and **CFG 5.0**, matching HF
+`tencent/HunyuanImage-3.0` `generation_config.json` (`diff_infer_steps=50`,
+`diff_guidance_scale=5.0`). Override with `HY_STEPS` / `HY_GUIDANCE`. Matches upstream
+`generate_image` with `bot_task=image`: **no recaption** by default (prompt used verbatim).
+Optional AR recaption (`HY_RECAPTION=1`) rewrites the prompt via the text-sampling loop
+(`ref/generate.py`, re-exported by `tt/generate.py`) before the gen-image block.
 
 | Env | Default | Meaning |
 |---|---|---|
+| `HY_STEPS` | `50` | Denoise steps (HF base default) |
+| `HY_GUIDANCE` | `5.0` | Classifier-free guidance scale (HF base default) |
 | `HY_RECAPTION` | `0` | `1` enables optional recaption/think before image gen |
 | `HY_BOT_TASK` | `recaption` | `recaption` / `think` / `think_recaption` |
 | `HY_MAX_NEW_TOKENS` | `512` | AR token budget — caps recaption latency |
@@ -106,15 +110,44 @@ before the gen-image block. Knobs (env vars):
 | `HY_TOP_P` | `0.95` | nucleus top-p (1.0 disables) |
 | `HY_REP_PENALTY` | `1.0` | repetition penalty (1.0 disables) |
 | `HY_DO_SAMPLE` | `1` | `0` = greedy argmax |
+| `HY_TRACE` | `1` | **Master switch.** `1` = 2CQ mesh + recaption AR trace (when recaption runs) + denoise CFG ``execute_trace`` when steps > ``HY_DENOISE_TRACE_MIN_STEPS``. `0` = eager 1CQ everywhere |
+| `HY_DENOISE_TRACE` | auto | `1` / `0` force denoise trace on/off. Default **auto**: off when denoise steps ≤ ``HY_DENOISE_TRACE_MIN_STEPS`` (capture overhead does not amortize on short loops) |
+| `HY_DENOISE_TRACE_MIN_STEPS` | `8` | Auto-disable denoise ``execute_trace`` when step count is at or below this (Instruct-Distil 8-step path) |
+| `HY_VAE_DECODE_TRACE` | `0` | `1` = CQ0 ``execute_trace`` for final RGB VAE decode (opt-in; see below) |
+| `HY_COND_ENCODE_TRACE` | `0` | `1` = CQ0 ``execute_trace`` for I2I cond **VAE encoder + ViT/aligner** (opt-in; recap stage stays eager) |
+| `HY_TRACE_REGION_MB` | auto | Trace region MiB (default scales with `HY_NUM_LAYERS`, 128–512 MiB) |
+| `HY_RECAPTION_KV` | `1` | `0` disables KV incremental decode on recaption path (required for recaption trace) |
+| `HY_RECAPTION_PREFILL_CHUNK` | `1024` | Chunk size for long-prefix KV prefill (`0` = one shot) |
 
-> When enabled, the text-only recaption path has **no KV cache** (it re-runs the full
-> forward per token, unlike the I2I cond path), so it is O(N²) and slow for large
-> `HY_MAX_NEW_TOKENS`. Leave `HY_RECAPTION=0` (default) for the fast upstream path.
+> **``HY_TRACE=1``** (default): recaption AR uses CQ0 ``execute_trace`` when recaption runs.
+> Denoise CFG ``execute_trace`` is **auto-enabled only when steps > 8** (default
+> ``HY_DENOISE_TRACE_MIN_STEPS``): step-1 capture + warmup on an 8-step Distil loop costs
+> more than eager replay. Instruct 50-step and base 50-step T2I keep denoise trace on.
+> Force with ``HY_DENOISE_TRACE=1``; disable with ``HY_DENOISE_TRACE=0``.
+> CQ1 async I/O for denoise latent / VAE RGB transfers when 2CQ is active.
+>
+> **``HY_TRACE=0``**: single command queue, no trace replay, no async I/O overlap.
+>
+> **VAE / vision cond encode trace is opt-in (default off).** ``HY_VAE_DECODE_TRACE``
+> and ``HY_COND_ENCODE_TRACE`` default to ``0`` so first-run latency stays predictable:
+> trace capture on VAE encode/decode often costs more than eager on a single image,
+> cond traces are invalidated across backbone stage boundaries, and other tt-metal
+> pipelines (tt_dit SD3.5/Flux) keep ``vae_traced=False`` by default. Enable when
+> benchmarking steady-state replay (batch runs, repeated resolution) or profiling
+> capture vs eager.
+>
+> Text-only and I2I recaption use KV + trace decode when ``HY_TRACE=1`` and recaption runs.
+> Long prefixes (>``HY_RECAPTION_PREFILL_CHUNK``) use chunked eager KV prefill.
+> Prefill cannot be trace-captured (KV ``replace()`` writes are illegal inside a trace).
 
 ### Instruct image-to-image (50-step CFG)
 
 Replace `/path/to/input.png` with your cond image. `--bot-task image` skips the AR
 recaption stage; use `think_recaption` for the full upstream flow.
+
+Trace defaults match ``demo.py``: ``HY_TRACE=1`` for recaption AR; denoise
+``execute_trace`` when steps > 8 (50-step Instruct keeps trace on). VAE decode and cond
+VAE/ViT encode trace off unless ``HY_VAE_DECODE_TRACE=1`` / ``HY_COND_ENCODE_TRACE=1``.
 
 ```bash
 HY_STEPS=50 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
@@ -126,6 +159,9 @@ HY_STEPS=50 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
 ```
 
 ### Instruct-Distil image-to-image (8-step meanflow)
+
+Denoise ``execute_trace`` is **off by default** (8 steps ≤ ``HY_DENOISE_TRACE_MIN_STEPS``);
+recaption AR trace (if used) and 2CQ mesh stay on under ``HY_TRACE=1``.
 
 ```bash
 HY_DISTIL=1 HY_NUM_LAYERS=32 HY_GUIDANCE=2.5 python_env/bin/python \
@@ -158,13 +194,17 @@ Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each che
 - VAE encoder / decoder blocks (Conv3D) — `tt/vae/`
 - **Full-res VAE decode on device** — `tt/vae/spatial.py` H/W-spatial-parallel
   (each device a 512² quadrant of 1024²); `tests/vae/test_decode_latent_spatial.py`
-  vs fp32 reference: PCC 0.999489, no OOM. (Resolves the former full-res OOM blocker.)
+  vs fp32 reference: PCC 0.999489, no OOM. **Optional trace VAE decode**
+  (``HY_VAE_DECODE_TRACE=1`` with ``HY_TRACE=1``): CQ0 ``execute_trace`` via
+  ``tt/stage_trace.py``; 2CQ async RGB D2H — see ``tt/vae_dual_cq.py``.
 - **On-device single denoise step** — `tt/pipeline.py` `HunyuanTtDenoiseStep`
   (`tests/pcc/test_pipeline_step.py`): 4-layer PCC 0.99999, full 32-layer PCC 0.983.
   Device-side scatter (concat) + image-span slice; no host round-trips.
 - **Multi-step denoise loop** — `tt/pipeline.py` `denoise_loop`
   (`tests/pcc/test_denoise_loop.py`, PCC 0.99999): per-step timestep embedding,
-  scheduler Euler update, CFG.
+  scheduler Euler update, CFG. **Trace denoise** (``HY_TRACE=1`` and steps >
+  ``HY_DENOISE_TRACE_MIN_STEPS``): CQ0 ``execute_trace`` CFG loop via ``tt/stage_trace.py``;
+  2CQ latent D2H fallback — see ``tt/denoise_dual_cq.py``.
 - **`decode_latent` glue** — `tt/pipeline.py` (`tests/vae/test_decode_latent.py`):
   scaling / temporal-dim / denormalize wiring verified with an injected decoder.
 
@@ -194,7 +234,7 @@ Without `HY_STEPS`, Instruct defaults to 50 steps and Distil to 8 (from each che
    sequence; `demo/demo.py` runs from a real prompt (host wte embed; on-device embed via
    `HunyuanTtModel(embed_state_dict=...)` is also supported).
 5. ~~**Runnable `demo/demo.py`**~~ — DONE: prompt → tokenizer → resident bf8 2×2 backbone
-   → on-device VAE → PNG (`HY_STEPS=8 HY_NUM_LAYERS=32 demo/demo.py "a photo of a cat"`).
+   → on-device VAE → PNG (`HY_NUM_LAYERS=32 demo/demo.py "a photo of a cat"`; default 50 steps).
 
 ### Phase 2 — Accuracy & scale
 6. **VAE upsample memory** — chunk/shard/stream the DCAE upsample (the Phase-1 VAE
@@ -240,8 +280,15 @@ Vision input path — device pieces + host glue DONE; full on-box AR decode rema
     **Host recaption orchestration:** `ref/recaption.py` + `tt/recaption.py`
     (`run_recaption_on_device` with `make_recaption_logits_fn` for I2I cond embeds).
     `demo/demo_i2i.py` runs the full ``think_recaption`` → denoise chain.
-    **Remaining:** KV-cache incremental decode (``HY_RECAPTION_KV=1``, ``sp_factor=1`` on
-    recaption backbone); default ``HY_RECAPTION_LAYERS`` matches ``HY_NUM_LAYERS``.
+    **Remaining:** default ``HY_RECAPTION_LAYERS`` matches ``HY_NUM_LAYERS``. **2CQ AR**
+    (``HY_RECAPTION_2CQ=1``): CQ0 forward + CQ1 async logits D2H — see ``tt/ar_dual_cq.py``.
+    **Trace decode** (``HY_RECAPTION_TRACE=1``): requires ``HY_RECAPTION_KV=1`` and
+    ``sp_factor=1`` on the recaption backbone; captures one KV single-token decode step on
+    CQ0 (``tt/ar_trace.py``) and replays it in the host ``generate_text`` loop while stage
+    forcing stays on host (Whisper-style). Open the device with an enlarged trace region
+    (``open_recaption_mesh`` auto-sizes trace region from layer count, or set
+    ``HY_RECAPTION_TRACE_REGION_MB=128``). Logs:
+    ``capturing decode trace on CQ0``, ``decode trace captured``, ``trace replay steps=N``.
 
 ---
 

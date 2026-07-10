@@ -10,7 +10,9 @@ import torch
 from models.experimental.hunyuan_image_3_0.ref.recaption import (
     build_recaption_stage_params,
     decode_cot_text,
+    is_meager_recaption_cot,
     run_recaption_ar,
+    sanitize_recaption_cot_text,
 )
 from models.experimental.hunyuan_image_3_0.ref.generate import SamplingConfig
 from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
@@ -62,6 +64,50 @@ def test_decode_cot_text_recaption(tok):
     assert cot[0].startswith(recaption_str)
     assert end_recaption_str in cot[0]
     assert "dramatic sunset" in cot[0]
+
+
+def test_sanitize_recaption_cot_text_strips_garbage(tok):
+    sp = tok.special
+    recaption_str = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
+    end_recaption_str = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
+    messy = (
+        f"{recaption_str}<quad><pos_x_294><quad><pos_x_269><pos_y_399>"
+        f"<pos_x_700><quad><pos_y_437></quad><|endoftext|>"
+        "18．某同学在用显微镜观察菠菜叶徒手切片"
+    )
+    clean = sanitize_recaption_cot_text(
+        messy,
+        recaption_open=recaption_str,
+        recaption_close=end_recaption_str,
+    )
+    assert clean.endswith(end_recaption_str)
+    assert "菠菜" not in clean
+    assert "<quad>" in clean
+    assert "<|endoftext|>" not in clean
+
+
+def test_is_meager_recaption_cot_quad_only(tok):
+    sp = tok.special
+    recaption_str = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
+    end_recaption_str = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
+    quad_only = f"{recaption_str}<quad><pos_x_-1><pos_y_4><pos_x_989><pos_y_995></quad>{end_recaption_str}"
+    assert is_meager_recaption_cot(
+        quad_only,
+        recaption_open=recaption_str,
+        recaption_close=end_recaption_str,
+    )
+
+
+def test_is_meager_recaption_cot_with_prose(tok):
+    sp = tok.special
+    recaption_str = tok.tokenizer.convert_ids_to_tokens(sp.recaption_token_id)
+    end_recaption_str = tok.tokenizer.convert_ids_to_tokens(sp.end_recaption_token_id)
+    good = f"{recaption_str}a studio photograph of a fluffy cat on a cushion{end_recaption_str}"
+    assert not is_meager_recaption_cot(
+        good,
+        recaption_open=recaption_str,
+        recaption_close=end_recaption_str,
+    )
 
 
 def test_cot_text_in_i2i_template(tok):

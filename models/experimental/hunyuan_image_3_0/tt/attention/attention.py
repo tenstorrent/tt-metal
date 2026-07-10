@@ -34,6 +34,44 @@ from .rope_2d import HunyuanTtRoPE2D
 _TILE = 32
 
 
+def _nearest_32(n: int) -> int:
+    return ((n + 31) // 32) * 32
+
+
+_KV_DECODE_SHARD_CFG: dict = {}
+
+
+def _kv_decode_shard_memcfg(device, batch_size: int, num_kv_heads: int, head_dim: int):
+    key = (id(device), batch_size, num_kv_heads, head_dim)
+    if key not in _KV_DECODE_SHARD_CFG:
+        padded_heads = _nearest_32(num_kv_heads)
+        grid_size = device.compute_with_storage_grid_size()
+        batch_grid = ttnn.num_cores_to_corerangeset(batch_size, grid_size, row_wise=True)
+        _KV_DECODE_SHARD_CFG[key] = ttnn.create_sharded_memory_config(
+            shape=(padded_heads, head_dim),
+            core_grid=batch_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    return _KV_DECODE_SHARD_CFG[key]
+
+
+def _pad_kv_heads_for_decode(t: ttnn.Tensor, num_kv_heads: int, head_dim: int, pad_tt: ttnn.Tensor | None):
+    padded_heads = _nearest_32(num_kv_heads)
+    if num_kv_heads >= padded_heads:
+        return t, pad_tt
+    if pad_tt is None:
+        pad_tt = ttnn.zeros(
+            [t.shape[0], padded_heads - num_kv_heads, t.shape[2], head_dim],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=t.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    return ttnn.concat([t, pad_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG), pad_tt
+
+
 class HunyuanTtAttention(LightweightModule):
     """
     TTNN prefill attention for HunyuanImage-3.0, single device.
@@ -83,6 +121,7 @@ class HunyuanTtAttention(LightweightModule):
         # the gathered K/V carry correct per-position rotation.
         self.sp_axis = sp_axis
         self.sp_factor = sp_factor
+        self._trace_kv_pad: ttnn.Tensor | None = None
 
         # --- Tensor parallel (TP) over `tp_axis` --------------------------------
         # qkv_proj is column-parallel (heads split across TP), o_proj is row-parallel
@@ -272,11 +311,49 @@ class HunyuanTtAttention(LightweightModule):
             q_rot = self.query_norm(q_rot)
             k_rot = self.key_norm(k_rot)
 
-        if use_cache and kv_cache is not None and decode_step:
+        if use_cache and kv_cache is not None:
             past_k, past_v = kv_cache.get(layer_idx)
-            if past_k is not None:
+            if decode_step:
+                if kv_cache.trace_fixed and past_k is not None:
+                    if kv_cache.write_pos_tt is None:
+                        raise RuntimeError("trace_fixed KV requires write_pos_tt on kv_cache")
+                    k_pad, self._trace_kv_pad = _pad_kv_heads_for_decode(
+                        k_rot, self.num_kv_heads, self.head_dim, self._trace_kv_pad
+                    )
+                    v_pad, _ = _pad_kv_heads_for_decode(v, self.num_kv_heads, self.head_dim, self._trace_kv_pad)
+                    k_in = ttnn.transpose(k_pad, 0, 2)
+                    k_in = ttnn.transpose(k_in, 1, 2)
+                    v_in = ttnn.transpose(v_pad, 0, 2)
+                    v_in = ttnn.transpose(v_in, 1, 2)
+                    shard_cfg = _kv_decode_shard_memcfg(
+                        self.device, int(k_in.shape[1]), self.num_kv_heads, self.head_dim
+                    )
+                    k_in = ttnn.interleaved_to_sharded(k_in, shard_cfg)
+                    v_in = ttnn.interleaved_to_sharded(v_in, shard_cfg)
+                    ttnn.experimental.paged_update_cache(past_k, k_in, update_idxs_tensor=kv_cache.write_pos_tt)
+                    ttnn.experimental.paged_update_cache(past_v, v_in, update_idxs_tensor=kv_cache.write_pos_tt)
+                    ttnn.deallocate(k_in)
+                    ttnn.deallocate(v_in)
+                    if k_pad is not k_rot:
+                        ttnn.deallocate(k_pad)
+                    if v_pad is not v:
+                        ttnn.deallocate(v_pad)
+                    k_attn, v_attn = past_k, past_v
+                elif past_k is not None:
+                    k_rot = ttnn.concat([past_k, k_rot], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    k_attn, v_attn = k_rot, v
+                else:
+                    k_attn, v_attn = k_rot, v
+            elif past_k is not None and not kv_cache.trace_fixed:
+                # Chunked KV prefill continuation: queries are this chunk only; keys are prefix + chunk.
                 k_rot = ttnn.concat([past_k, k_rot], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 v = ttnn.concat([past_v, v], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                k_attn, v_attn = k_rot, v
+            else:
+                k_attn, v_attn = k_rot, v
+        else:
+            k_attn, v_attn = k_rot, v
 
         # ---- 4b. SP K/V all-gather -----------------------------------------
         # Q stays sequence-sharded; gather K/V along the sequence dim (2) over the
@@ -285,13 +362,12 @@ class HunyuanTtAttention(LightweightModule):
         # already correctly rotated. Done on the kv-head tensors (pre-GQA-expansion)
         # to gather the smaller num_kv_heads payload.
         if self.sp_factor > 1:
-            k_rot = self.ccl.all_gather(k_rot, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-            v = self.ccl.all_gather(v, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+            k_attn = self.ccl.all_gather(k_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+            v_attn = self.ccl.all_gather(v_attn, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
 
-        if use_cache and kv_cache is not None:
-            kv_cache.replace(layer_idx, k_rot, v)
+        if use_cache and kv_cache is not None and not kv_cache.trace_fixed:
+            kv_cache.replace(layer_idx, k_attn, v_attn)
 
-        k_attn, v_attn = k_rot, v
         # ---- 5. GQA expansion: interleaved repeat K/V heads to match Q --------
         # PyTorch GQA: Q head i uses KV head i//grp, so expansion is interleaved:
         #   [K0,K0,K0,K0, K1,K1,K1,K1, ..., K7,K7,K7,K7]

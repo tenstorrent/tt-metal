@@ -293,6 +293,19 @@ class HunyuanSymmetricConv3d(Module):
             ttnn.deallocate(o_t)
         return out
 
+    def _cached_h_pad_zeros(self, b: int, t: int, pH: int, w: int, last: int, dtype) -> ttnn.Tensor:
+        """Cached H-boundary zero pad — ``ttnn.zeros`` H2D is illegal during trace capture."""
+        cache = getattr(self, "_h_pad_zeros_cache", None)
+        if cache is None:
+            cache = {}
+            self._h_pad_zeros_cache = cache
+        key = (b, t, pH, w, last, dtype)
+        if key not in cache:
+            cache[key] = ttnn.zeros(
+                [b, t, pH, w, last], dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
+            )
+        return cache[key]
+
     def forward(self, x_bthwc: ttnn.Tensor) -> ttnn.Tensor:
         assert (
             x_bthwc.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -314,11 +327,8 @@ class HunyuanSymmetricConv3d(Module):
         n_chunks = (im2col_elems + _CONV3D_CHUNK_ELEMS - 1) // _CONV3D_CHUNK_ELEMS
         hc = (h + n_chunks - 1) // n_chunks
         last = x_bthwc.shape[-1]
-        zpad = ttnn.zeros(
-            [b, t, pH, w, last], dtype=x_bthwc.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device
-        )
+        zpad = self._cached_h_pad_zeros(b, t, pH, w, last, x_bthwc.dtype)
         x_pad = ttnn.concat([zpad, x_bthwc, zpad], dim=2)
-        ttnn.deallocate(zpad)
         h_pad = x_pad.shape[2]
         grid = self.mesh_device.compute_with_storage_grid_size()
         outs = []
