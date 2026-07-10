@@ -207,6 +207,43 @@ def test_reshape_tiled_pad_value_bfloat8_b(device, input_shape, output_shape):
 
 @pytest.mark.parametrize(
     "input_shape,output_shape",
+    [
+        ((32, 32), (32, 16, 2)),
+        ((1, 96), (3, 1, 32)),
+    ],
+    ids=["tile_to_sub_tile", "reshape_1d_to_3d"],
+)
+def test_reshape_tiled_pad_value_bfloat4_b(device, input_shape, output_shape):
+    """BFLOAT4_B interleaved reshape (issue #44919): exercises the block-float typecast
+    round-trip (bf4 -> bf16 -> reshape -> fill -> bf16 -> bf4) on the interleaved path
+    (reshape.cpp L497/L550) -- the exact path the issue's repro hits. The universal reshape
+    suite only covers bf4 on the *sharded* branch, so this guards the interleaved one.
+
+    bf4's 4-bit mantissa is far lossier than bf8, so rather than comparing against the
+    original bf16 (which folds in bf4's input quantization) we compare against the
+    bf4-quantized input read back and reshaped on host: this isolates reshape correctness
+    (the round-trip is lossless on bf4 data -> PCC ~1.0). pad_value=0.0 is exact under any
+    block exponent, so the per-lane padding check stays exact (atol=0).
+    """
+    torch.manual_seed(0)
+    torch_input = torch.rand(input_shape, dtype=torch.bfloat16) + 1.0
+
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.reshape(tt_input, output_shape, pad_value=0.0)
+
+    # Reshape is lossless on bf4 data; compare vs the bf4-quantized input (not original bf16).
+    actual = ttnn.to_torch(tt_output).reshape(-1).to(torch.float32)
+    expected = ttnn.to_torch(tt_input).reshape(-1).to(torch.float32)
+    assert_with_pcc(expected, actual, 0.999)
+
+    # Per-lane padding check. pad_value=0.0 is exact for any bf4 shared exponent (0 * 2^exp = 0).
+    full = _read_padded_region(tt_output).to(torch.float32)
+    if full.numel() > actual.numel():
+        _assert_padding_filled(tt_output, full, 0.0)
+
+
+@pytest.mark.parametrize(
+    "input_shape,output_shape",
     [([128, 128], [128, 4, 32])],
     ids=["aligned_in_padded_out"],
 )
