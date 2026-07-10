@@ -135,9 +135,12 @@ class TTVibeVoiceModel:
         acoustic_tokenizer = TTAcousticTokenizer(ac_tok_weights, mesh_device)
         semantic_tokenizer = TTSemanticTokenizer(sem_tok_weights, mesh_device)
 
-        # Warm up the post-diffusion conv path on a dummy latent so the conv2d weights prep runs now (at load) instead of on the first decode frame.
-        # Reset the streaming caches afterwards to ensure the first real frame is clean.
+        # Warm up conv2d weight prep at load (ROW_MAJOR → TILE) so the first real
+        # generate() frame does not pay host pull-back + reprocess per layer.
+        # Decoder + semantic (post-diffusion) and acoustic encoder (voice-clone prefill)
+        # are separate conv graphs — warm both.
         vae_dim = config.acoustic_tokenizer.vae_dim
+        encode_chunk = prod(config.acoustic_tokenizer.encoder_ratios)  # one latent frame
         dummy_latent = ttnn.zeros(
             [1, 1, 1, vae_dim],
             dtype=ttnn.bfloat16,
@@ -149,6 +152,19 @@ class TTVibeVoiceModel:
         semantic_tokenizer.forward(dummy_audio, use_cache=True)
         acoustic_tokenizer.reset_decode_cache()
         semantic_tokenizer.reset_cache()
+
+        # Acoustic encoder: fixed-width streaming chunk (non-final) then a final chunk
+        # (extra strided right-pad) so both prepared-weight profiles exist before generate.
+        dummy_wav = ttnn.zeros(
+            [1, 1, 1, encode_chunk],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        acoustic_tokenizer.encode(dummy_wav, use_cache=True, is_final_chunk=False)
+        acoustic_tokenizer.encode(dummy_wav, use_cache=True, is_final_chunk=True)
+        acoustic_tokenizer._encoder_tt.reset_cache()
 
         return cls(
             lm=lm,
