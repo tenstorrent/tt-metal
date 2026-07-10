@@ -205,10 +205,6 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             kernel_common_runtime_varargs(kernel_params).size());
 
         // Validate named RTAs: every declared name set per-node, no extras.
-        // runtime_arg_values is keyed by name then node; Table uniqueness makes duplicate
-        // (name, node) entries impossible.
-        // Check order matches the pre-swap surface: node membership → per-node count →
-        // undeclared names → missing-node coverage.
         const auto& named_rta_names = schema->runtime_arg_names;
         const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
@@ -244,7 +240,6 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
                     name);
             }
         }
-        // Every kernel node must appear in runtime_arg_values when named RTAs are declared.
         if (!named_rta_names.empty()) {
             for (const auto& node : kernel_nodes) {
                 TT_FATAL(
@@ -646,8 +641,6 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
             // before allocating. Build the node->values lookups and walk the kernel's logical cores
             // (the node coverage validation has confirmed) to assemble each combined buffer. This
             // runs once; every subsequent call takes the fast path above.
-            // Regroup the name->node->value table into per-node (slot, value) lists, resolving each
-            // name's declaration-order slot once here so buffer assembly below is a plain scatter.
             std::unordered_map<NodeCoord, std::vector<std::pair<size_t, uint32_t>>> named_rtas_by_node;
             for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
                 const auto s = slot_of.find(name);
@@ -1005,7 +998,6 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
                     name);
             }
         }
-        // A kernel node with no runtime_arg_values entry at all (when regular named RTAs exist).
         if (!regular_rta_names.empty()) {
             for (const auto& node : kernel_nodes) {
                 TT_FATAL(
@@ -1164,12 +1156,12 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             const auto& rta_index = schema->runtime_arg_name_to_slot;
             for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
                 const auto it = rta_index.find(name);
+                TT_FATAL(
+                    it != rta_index.end(),
+                    "Internal error: named RTA '{}' not in schema for kernel '{}'.",
+                    name,
+                    kernel_name);
                 for (const auto& [node, value] : per_node) {
-                    TT_FATAL(
-                        it != rta_index.end(),
-                        "Internal error: named RTA '{}' not in schema for kernel '{}'.",
-                        name,
-                        kernel_name);
                     TT_FATAL(
                         kernel->cores_with_runtime_args().contains(node),
                         "UpdateProgramRunArgs: kernel '{}' has no runtime-arg buffer for node {}. Call "
