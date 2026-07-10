@@ -612,12 +612,13 @@ class TtIndexer:
         # indexer_score wants per-head weights [1, H_idx, S/sp, 1]; wts is [1, 1, S/sp, H_idx].
         weights = ttnn.permute(wts, (0, 3, 2, 1))
 
-        # SPIKE (throwaway): TP×SP query parallelism. rope-then-split — q_dev/weights were roped on the
-        # FULL S/sp slab (block-cyclic-correct), now split their rows over TP so each chip scores only
-        # S/(sp·tp) rows. Uses the FLAT both-axes score (cluster_axis=None, block_cyclic_chunk_local=seq_len
-        # = Sq'·tp) — LINEAR-approximate under rotation (expected to fail test_sparse_mla_rotated); this
-        # spike only measures the perf ceiling. topk runs on the sub-rows; indices are all-gathered back
-        # over TP to the [1,1,S/sp,k] contract so mla.py/sparse_sdpa are unchanged.
+        # TP×SP query parallelism (rope-then-split). q_dev/weights were roped on the FULL S/sp slab
+        # (block-cyclic-correct, cluster_axis=sp_axis), so every row already carries its true position; now
+        # split those rows over TP so each chip scores only S/(sp·tp) of them — indexer_score + topk shrink
+        # ~TP×. RoPE is per-row so the split is safe (no 2-D rope op needed). The score is told the TP axis via
+        # seq_subshard_axis below, so its EXACT block-cyclic geometry adds each device's tp_rank*Sq' sub-offset
+        # (rotation-safe). topk runs on the sub-rows; indices are all-gathered back over TP to the [1,1,S/sp,k]
+        # contract so mla.py / sparse_sdpa are unchanged (both DeepSeek and GLM ride this one path).
         tpsp = self._blockcyclic and self.tp_factor > 1
         if tpsp:
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
@@ -655,8 +656,11 @@ class TtIndexer:
                 weights,
                 chunk_start_idx=start_pos,
                 program_config=cfg,
-                # SPIKE: TP×SP uses the FLAT both-axes causal offset (cluster_axis=None); SP-only stays named.
-                cluster_axis=None if tpsp else self.sp_axis,
+                cluster_axis=self.sp_axis,
+                # TP×SP: name the TP axis the query was sub-sharded over so the score adds each device's
+                # tp_rank*Sq' block-cyclic sub-offset — rotation-EXACT (vs the flat cluster_axis=None path,
+                # which is linear-approximate under a mid-slab start). None when the query stays SP-only.
+                seq_subshard_axis=self.tp_axis if tpsp else None,
                 cache_batch_idx=None,  # k_full is already sliced to this slot (batch-1) → no in-kernel select
                 block_cyclic_sp_axis=self.sp_axis,
                 block_cyclic_chunk_local=seq_len,  # cache slab == chunk_size_global / sp (== Sq'·tp when TP-split)
@@ -687,7 +691,7 @@ class TtIndexer:
         idx = ttnn.experimental.topk_large_indices(
             logits, k=min(self.index_args.index_topk, end_pos), valid_length=topk_valid_length
         )
-        # SPIKE: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
+        # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
         if tpsp:
