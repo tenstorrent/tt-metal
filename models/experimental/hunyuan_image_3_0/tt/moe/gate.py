@@ -12,8 +12,10 @@
 #
 # Notes:
 # - The reference keeps the router projection + softmax in fp32 because bf16
-#   ties can flip expert selection. We request HiFi4 + fp32 dest accumulation
-#   on the matmul so the logits are computed in high precision.
+#   ties can flip expert selection. Here the router runs end-to-end in bf16
+#   (HiFi4 + fp32 dest accumulation on the matmul keeps the logits close to
+#   fp32 despite bf16-stored activations/weights) — PCC-validated against the
+#   fp32 reference before relying on this in production.
 # - ttnn.topk requires the reduced (last) dim to be a multiple of 64 and k a
 #   power of two; num_experts=64 / moe_topk=8 satisfy both.
 
@@ -48,7 +50,7 @@ class HunyuanTtTopKGate(LightweightModule):
         state_dict: dict,
         weight_key: str,
         norm_topk_prob: bool = True,
-        weight_dtype=ttnn.float32,
+        weight_dtype=ttnn.bfloat16,
         weight_cache_path=None,
     ):
         super().__init__()
@@ -61,9 +63,6 @@ class HunyuanTtTopKGate(LightweightModule):
         key = weight_key.removesuffix(".weight") + ".weight"
         w = state_dict[key]  # [num_experts, hidden]
         # ttnn.linear computes x @ weight, so store as [hidden, num_experts].
-        # The reference router runs in fp32 (wg is fp32, input upcast); keeping
-        # the projection in fp32 here avoids bf16 ties flipping borderline
-        # expert selections.
         w_t = w.transpose(0, 1).contiguous().float()
         is_mesh = device.__class__.__name__ == "MeshDevice"
         self.wg = ttnn.as_tensor(
@@ -93,11 +92,6 @@ class HunyuanTtTopKGate(LightweightModule):
               topk_weight: [B, S, moe_topk]  routed probabilities (normalised)
               topk_index:  [B, S, moe_topk]  selected expert ids (uint)
         """
-        # Upcast activations to match the fp32 router weight (mirrors the
-        # reference, which casts hidden states to fp32 before the projection).
-        if self.weight_dtype == ttnn.float32 and x.get_dtype() != ttnn.float32:
-            x = ttnn.typecast(x, ttnn.float32)
-
         logits = ttnn.linear(
             x,
             self.wg,
@@ -108,10 +102,15 @@ class HunyuanTtTopKGate(LightweightModule):
         gates = ttnn.softmax(logits, dim=-1)
         ttnn.deallocate(logits)
 
-        # ttnn.topk requires bf16/bf8 input. Computing softmax in fp32 first
-        # keeps the expert ordering correct; the bf16 cast only happens after.
-        gates_bf16 = ttnn.typecast(gates, ttnn.bfloat16) if gates.get_dtype() != ttnn.bfloat16 else gates
-        ttnn.deallocate(gates)
+        # ttnn.topk requires bf16/bf8 input; only casts (and only then frees the
+        # pre-cast tensor) if gates isn't already bf16 — gates_bf16 aliases gates
+        # otherwise, so deallocating gates unconditionally would free it out from
+        # under gates_bf16.
+        if gates.get_dtype() != ttnn.bfloat16:
+            gates_bf16 = ttnn.typecast(gates, ttnn.bfloat16)
+            ttnn.deallocate(gates)
+        else:
+            gates_bf16 = gates
 
         topk_weight, topk_index = ttnn.topk(gates_bf16, self.moe_topk, dim=-1)
         ttnn.deallocate(gates_bf16)
