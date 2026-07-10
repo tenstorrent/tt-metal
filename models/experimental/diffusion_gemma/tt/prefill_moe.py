@@ -32,7 +32,7 @@ _MOE_INTERMEDIATE_SIZE = 704
 _NUM_EXPERTS = 128
 _TOP_K = 8
 _MESH_SHAPE = (1, 4)
-_COMPUTE_GRID = (13, 10)
+_COMPUTE_GRID = (11, 10)
 
 _tuned_geometry_active: ContextVar[bool] = ContextVar("diffusion_gemma_tuned_prefill_moe", default=False)
 _builder_install_lock = Lock()

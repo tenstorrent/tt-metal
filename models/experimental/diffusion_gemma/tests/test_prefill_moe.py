@@ -28,7 +28,7 @@ def _model(
     arch="blackhole",
     mesh_shape=(1, 4),
     num_devices=4,
-    grid=(13, 10),
+    grid=(11, 10),
     tp=4,
     ep=1,
     sp=1,
