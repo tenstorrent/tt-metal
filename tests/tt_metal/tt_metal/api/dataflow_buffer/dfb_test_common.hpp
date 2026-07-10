@@ -830,16 +830,41 @@ inline void run_single_dfb_program_2_0(
 
     // For Tensix producer: host-prefill the DFB L1 ring with the input data so the
     // producer kernel (which only posts credits) has something for the consumer to read.
+    //
+    // The physical ring layout depends on stride_in_entries, which the finalize derives
+    // from the consumer access pattern:
+    //   STRIDED: stride = num_producers -> interleaved (slot = e*P + p), which is exactly
+    //            linear page order, so an input[0..ring) copy is correct.
+    //   ALL:     stride = 1 -> each producer owns a contiguous block (slot = p*E + e). The
+    //            ALL consumer round-robins across the P blocks (drains slot (k%P)*E + k/P for
+    //            the k-th entry), so producer p's e-th entry (input page e*P + p) must sit at
+    //            slot p*E + e for the drained order to reconstruct the identity output. A
+    //            linear copy only works for a single producer; with P>1 it drains a P-way
+    //            transpose of the input. (Mirrors the legacy run_single_dfb_program fill.)
     if (p.producer_type == M2PorCType::TENSIX) {
         const uint32_t dfb_l1_addr =
             static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::L1));
-        const uint32_t ring_words = p.num_entries * p.entry_size / sizeof(uint32_t);
-        // For ring-pressure with Tensix producer, only the first num_entries entries
-        // of the input fit in the ring; the producer cycles those same slots.
-        const uint32_t fill_words = std::min(ring_words, static_cast<uint32_t>(input.size()));
-        std::vector<uint32_t> slice(input.begin(), input.begin() + fill_words);
-        if (slice.size() < ring_words) {
-            slice.resize(ring_words, 0u);
+        const uint32_t wpe = p.entry_size / sizeof(uint32_t);
+        const uint32_t ring_words = p.num_entries * wpe;
+        std::vector<uint32_t> slice(ring_words, 0u);
+        for (uint32_t prod = 0; prod < p.num_producers; ++prod) {
+            for (uint32_t e = 0; e < num_entries_per_producer; ++e) {
+                const uint32_t page_id = e * p.num_producers + prod;
+                if (page_id >= entries_per_core) {
+                    break;
+                }
+                const uint32_t dst_slot =
+                    is_all ? (prod * num_entries_per_producer + e) : (e * p.num_producers + prod);
+                // Ring-pressure: stop once the physical ring is full; later pages alias
+                // back onto already-filled slots (the producer cycles them).
+                if (dst_slot >= p.num_entries) {
+                    break;
+                }
+                std::copy(
+                    input.begin() + page_id * wpe,
+                    input.begin() + (page_id + 1) * wpe,
+                    slice.begin() + dst_slot * wpe);
+            }
         }
         detail::WriteToDeviceL1(device, CoreCoord(0, 0), dfb_l1_addr, slice);
     }
