@@ -182,10 +182,14 @@ jobs:
             if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
               # Split into separate pytest invocations to avoid host OOM from accumulated memory
               # across 311 tests in a single process (LoRA tests load ~15GB per test case).
-              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
-              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
-              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
-              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+              # Don't stop at the first failing group: run all groups and fail the job at the end
+              # if any of them failed, so a single broken group doesn't hide the others.
+              exit_code=0
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+              $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+              exit $exit_code
             else
               $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
             fi
@@ -323,10 +327,14 @@ jobs:
         run: |
           if [[ "${{ matrix.test-config.model }}" == "stable_diffusion_xl_base" ]]; then
             # Split into separate pytest invocations to avoid host OOM from accumulated memory
-            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora
-            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner
-            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae
-            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae
+            # Don't stop at the first failing group: run all groups and fail the job at the end
+            # if any of them failed, so a single broken group doesn't hide the others.
+            exit_code=0
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/lora || exit_code=$?
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/refiner || exit_code=$?
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+            $PYTEST_CMD tests/nightly/single_card/stable_diffusion_xl_base --ignore=tests/nightly/single_card/stable_diffusion_xl_base/lora --ignore=tests/nightly/single_card/stable_diffusion_xl_base/refiner --ignore=tests/nightly/single_card/stable_diffusion_xl_base/vae || exit_code=$?
+            exit $exit_code
           else
             $PYTEST_CMD tests/nightly/single_card/${{ matrix.test-config.model }}
           fi
