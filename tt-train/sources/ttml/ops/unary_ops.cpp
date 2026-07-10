@@ -22,8 +22,6 @@
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
 #include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
-#include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
-#include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -85,26 +83,14 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
-    auto log_softmax = ttnn::moreh_softmax(
-        tensor->get_value(),
-        /* axis */ dim,
-        /* output */ std::nullopt,
-        ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
-        ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
-        /* output_mem_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
+    // TODO(nuked-op softmax): restore real ttnn::moreh_softmax call
+    auto log_softmax = tensor->get_value();
+    static_cast<void>(dim);
     auto out = autograd::create_tensor(log_softmax);
 
-    autograd::GradFunction grad = [tensor, out, dim]() {
-        auto grad = ttnn::moreh_softmax_backward(
-            out->get_value(),
-            out->get_grad(),
-            /* axis */ dim,
-            /* output */ std::nullopt,
-            ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::LOGSOFTMAX,
-            ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
-            /* output_mem_config */ std::nullopt,
-            /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+    autograd::GradFunction grad = [tensor, out]() {
+        // TODO(nuked-op softmax): restore real ttnn::moreh_softmax_backward call
+        auto grad = out->get_grad();
         tensor->add_grad(grad);
     };
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor));
