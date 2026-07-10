@@ -402,8 +402,8 @@ def _lease_reclaim(d2d_in, d2d_out) -> None:
         d2d_in.release_fabric_links()
 
 
-def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
-    """Run one chunk: prefill into the engine-owned kv_cache, forward the output downstream (non-last
+def _compute_and_send(runtime, kv_caches, rank: int, c: int, inp, meta: dict, d2d_out) -> float:
+    """Run one chunk: prefill into the engine-owned kv_caches, forward the output downstream (non-last
     rank) and grant the outbound sender so it ships over fabric. Returns the compute-start epoch
     (NTP-comparable). CHUNK_START is logged BEFORE the forward, with this chunk's metadata, so the
     slot/KV-range is visible per rank even if prefill_chunk hangs. The trailing metadata is kept after
@@ -414,7 +414,7 @@ def _compute_and_send(runtime, kv_cache, rank: int, c: int, inp, meta: dict, d2d
         f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     )
     out = runtime.prefill_chunk(
-        inp, kv_cache, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
+        inp, kv_caches, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
     if SYNC_PER_CHUNK:
         # Block on device completion so the delta is this rank's forward alone, not the downstream-start
@@ -442,7 +442,7 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
 
 
 def run_request_loop(
-    runtime, kv_cache, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
+    runtime, kv_caches, rank: int, num_ranks: int, *, hidden_size: int, h2d_service=None, d2d_in=None, d2d_out=None
 ) -> None:
     """Production serving loop — UNBOUNDED. rank 0 reads each chunk from the H2D socket (the external
     producer decides the count); downstream ranks read from D2D. Runs until the producer/scheduler
@@ -473,14 +473,14 @@ def run_request_loop(
             if d2d_out is not None:
                 _forward_shutdown(d2d_out, rank, hidden_size)
             break
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
         c += 1
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
 
-def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
+def run_standalone_loop(runtime, kv_caches, rank: int, num_ranks: int, *, d2d_in=None, d2d_out=None) -> None:
     """Bring-up / benchmark loop — BOUNDED, golden-trace input. rank 0 drives NUM_CHUNKS chunks from the
     trace; downstream ranks receive the same count over D2D. Every rank knows NUM_CHUNKS (propagated via
     global_env), so each loops a fixed range independently — no end-of-stream marker needed. With
@@ -516,7 +516,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
         else:
             inp, meta = _d2d_recv(d2d_in)
             slot_id = meta["slot_id"]
-        t = _compute_and_send(runtime, kv_cache, rank, c, inp, meta, d2d_out)
+        t = _compute_and_send(runtime, kv_caches, rank, c, inp, meta, d2d_out)
         if first is None:
             first = t
     # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
@@ -540,7 +540,7 @@ def run_standalone_loop(runtime, kv_cache, rank: int, num_ranks: int, *, d2d_in=
             )
         # Pass the raw trace path; the validation helper resolves it (descends the vllm hash subdir).
         pcc_check(
-            kv_cache,
+            kv_caches,
             slot_id=slot_id,
             n_chunks=n_chunks,
             trace_dir=os.environ.get("PREFILL_TRACE_DIR", ADAPTER.prefill_trace_default),
@@ -672,9 +672,6 @@ def _serve_standalone(
 ) -> None:
     """Bring-up / benchmark path: golden-trace input on rank 0, D2D-socket transport between ranks,
     per-rank KV PCC. Self-contained (no external producer); covers num_ranks 1..N."""
-    # The per-chunk loop only writes the primary cache (index 0); the runtime already holds any
-    # secondary caches (handed over in compile()).
-    kv_cache = kv_caches[0]
     # Warm-up sync — the ONLY barrier. Every rank finishes compile before any chunk enters the
     # pipeline, so a downstream rank isn't still warming up while an upstream one races ahead. The
     # per-chunk loop takes no barrier. Trade-off: a rank that dies during compile hangs the others here.
@@ -693,7 +690,7 @@ def _serve_standalone(
         ttnn.distributed_context_barrier()
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
-    run_standalone_loop(runtime, kv_cache, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
+    run_standalone_loop(runtime, kv_caches, rank, num_ranks, d2d_in=d2d_in, d2d_out=d2d_out)
 
     if d2d_in is not None or d2d_out is not None:
         # Free the services while the mesh + command queues are still alive (their dtors free a command
@@ -714,10 +711,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     they are disabled for num_ranks>1 (pipelined migration is future work). Shutdown for num_ranks>1 is
     rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
     single_rank = num_ranks == 1
-    # The per-chunk loop only writes the primary cache (index 0); the runtime already holds any
-    # secondary caches (handed over in compile()). The migration table below is built from the whole
-    # KvCaches tuple.
-    kv_cache = kv_caches[0]
 
     # Migration is only wired for the single-rank case; on the pipeline it would silently no-op. Fail
     # loud so an enabled-migration pipeline run can't be mistaken for a working one.
@@ -812,7 +805,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(
         runtime,
-        kv_cache,
+        kv_caches,
         rank,
         num_ranks,
         hidden_size=hf_config.hidden_size,
