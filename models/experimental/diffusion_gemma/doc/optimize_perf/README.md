@@ -168,6 +168,10 @@ measured Blackhole TP=4 program geometry locally (`tt/prefill_moe.py`). Gate/up 
 - Evidence: `bench_chunk_sweep.py` (component geometry/exactness) and
   `bench_prefill_e2e.py` (alternating warmed full-backbone A/B);
   `prefill_moe_e2e.json` retains commands, raw samples, scopes, and correctness gates.
+- Watcher: a separate two-layer production-prefill run passed with
+  `TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1`; all four devices attached/detached,
+  the error scan had zero matches, and exact logits/KV/non-aligned gates passed. See
+  `prefill_moe_watcher.json` and `prefill_moe_watcher_summary.json`.
 
 ## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)
 

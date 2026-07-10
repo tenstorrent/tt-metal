@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-07-10T20:35:48.956426+00:00",
+  "git_commit": "06a082a211995aa7ca29a3da070fec48a1aa48c7",
+  "command": "models/experimental/diffusion_gemma/doc/optimize_perf/bench_prefill_e2e.py --seq-len 256 --non-aligned-len 225 --num-layers 2 --max-seq-len 512 --iters 1 --output-json models/experimental/diffusion_gemma/doc/optimize_perf/prefill_moe_watcher.json",
+  "checkpoint": "/home/zni/dg_models/diffusiongemma-26B-A4B-it",
+  "initial_environment": {
+    "DG_PREFILL_MOE_TUNED": "<unset>",
+    "TT_METAL_WATCHER": "10",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1",
+    "TT_METAL_WATCHER_APPEND": "0"
+  },
+  "hardware": {
+    "architecture": "Blackhole",
+    "system": "P150x4 QB2",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel": 4,
+    "compute_grid": [
+      11,
+      10
+    ]
+  },
+  "model": {
+    "name": "DiffusionGemma 26B-A4B-it",
+    "layers": 2,
+    "expert_layers_guarded": 2,
+    "expert_weight_dtype": "bfloat16"
+  },
+  "model_forward": {
+    "scope": "synchronized model forward; host embedding and logits readback excluded",
+    "raw_prompt_tokens": 256,
+    "padded_prompt_tokens": 256,
+    "iterations": 1,
+    "baseline_times_s": [
+      2.7118607859883923
+    ],
+    "tuned_times_s": [
+      0.5651029379951069
+    ],
+    "baseline_mean_s": 2.7118607859883923,
+    "tuned_mean_s": 0.5651029379951069,
+    "speedup": 4.798879290222118,
+    "logits_exact": true,
+    "logits_max_abs": 0.0,
+    "kv_cache_exact_all_layers_all_devices": true,
+    "kv_cache_max_abs": 0.0
+  },
+  "production_prefill": {
+    "scope": "prefill_prompt_tokens; host embedding included, host logits readback absent",
+    "flag_off_times_s": [
+      2.7128888930019457
+    ],
+    "unset_default_times_s": [
+      0.5664990939985728
+    ],
+    "flag_off_mean_s": 2.7128888930019457,
+    "unset_default_mean_s": 0.5664990939985728,
+    "speedup": 4.788867134549699,
+    "unset_default_enabled": true,
+    "flag_off_result": [
+      256,
+      256
+    ],
+    "unset_default_result": [
+      256,
+      256
+    ]
+  },
+  "non_aligned_correctness": {
+    "raw_prompt_tokens": 225,
+    "padded_prompt_tokens": 256,
+    "logits_exact": true,
+    "logits_max_abs": 0.0
+  }
+}

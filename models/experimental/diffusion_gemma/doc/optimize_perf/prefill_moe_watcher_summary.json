@@ -1,0 +1,66 @@
+{
+  "date": "2026-07-10",
+  "gate": "separate watcher smoke for the default-on tuned causal-prefill MoE geometry",
+  "raw_log": {
+    "workspace_path": "generated/watcher/watcher.log",
+    "bytes": 307133,
+    "lines": 4500,
+    "sha256": "f0da5643f2ab51dcd47f7f58664ca0d66ffc2e14d4d0e6f92746bc06ddd70f02",
+    "note": "The log contains two complete clean attach/detach intervals; the final 25.909-second interval covers the benchmark process."
+  },
+  "result_artifact": {
+    "path": "prefill_moe_watcher.json",
+    "sha256": "9c05283e33014e1de6b3921b9ab3e6245443747dde5421c69d542024193b197e"
+  },
+  "environment": {
+    "DG_PREFILL_MOE_TUNED": "<unset>",
+    "TT_METAL_WATCHER": "10",
+    "TT_METAL_WATCHER_APPEND": "0",
+    "TT_METAL_WATCHER_DISABLE_ETH": "1"
+  },
+  "workload": {
+    "mesh": "P150x4",
+    "mesh_shape": [
+      1,
+      4
+    ],
+    "tensor_parallel": 4,
+    "num_layers": 2,
+    "max_seq_len": 512,
+    "prompt_len": 256,
+    "non_aligned_prompt_len": 225,
+    "expert_layers_guarded": 2,
+    "expert_weight_dtype": "bfloat16"
+  },
+  "watcher_attach_records": [
+    "line 18: At 0.546s attach device 0",
+    "line 20: At 0.546s attach device 1",
+    "line 22: At 0.546s attach device 2",
+    "line 24: At 0.546s attach device 3",
+    "line 1110: At 0.659s attach device 0",
+    "line 1112: At 0.659s attach device 1",
+    "line 1114: At 0.659s attach device 2",
+    "line 1116: At 0.659s attach device 3"
+  ],
+  "watcher_detach_records": [
+    "line 1089: At 1.538s detach device 0",
+    "line 1090: At 1.538s detach device 1",
+    "line 1091: At 1.538s detach device 2",
+    "line 1092: At 1.538s detach device 3",
+    "line 4497: At 25.909s detach device 0",
+    "line 4498: At 25.909s detach device 1",
+    "line 4499: At 25.909s detach device 2",
+    "line 4500: At 25.909s detach device 3"
+  ],
+  "error_scan_regex": "ERROR|ASSERT|NOC.*(fail|error)|UNREACHABLE|Watchdog|exception",
+  "error_scan_matches": 0,
+  "correctness": {
+    "logits_exact": true,
+    "kv_cache_exact_all_layers_all_devices": true,
+    "non_aligned_logits_exact": true,
+    "max_abs": 0.0
+  },
+  "process_result": "exit 0; production selector unset and resolved enabled; clean four-device detach",
+  "post_run_device_list": "tt-smi -ls --local exited 0 and listed released UMD chips 0, 1, 2, and 3",
+  "verdict": "PASS"
+}
