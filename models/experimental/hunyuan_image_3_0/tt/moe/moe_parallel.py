@@ -44,7 +44,7 @@ class HunyuanTtMoEParallel(LightweightModule):
         use_mixed_mlp_moe: bool = True,
         mesh_axis: int = 0,
         weight_dtype=ttnn.bfloat8_b,
-        gate_dtype=ttnn.float32,
+        gate_dtype=ttnn.bfloat16,
         sp_axis: int = 0,
         sp_factor: int = 1,
         weight_cache_path=None,

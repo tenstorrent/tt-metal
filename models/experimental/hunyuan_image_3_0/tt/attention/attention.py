@@ -72,6 +72,19 @@ def _pad_kv_heads_for_decode(t: ttnn.Tensor, num_kv_heads: int, head_dim: int, p
     return ttnn.concat([t, pad_tt], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG), pad_tt
 
 
+def _repeat_interleave_heads(x: ttnn.Tensor, grp: int, dim: int) -> ttnn.Tensor:
+    """Interleaved repeat along `dim` (e.g. [K0,K0,K0,K0,K1,K1,...] for grp=4), staying
+    in TILE layout throughout. `dim` must not be one of the last two (tiled) dims —
+    unsqueeze/concat/reshape on a non-tiled leading dim are metadata-only w.r.t. tiling,
+    unlike ttnn.repeat_interleave, which round-trips through ROW_MAJOR internally.
+    """
+    unsq = ttnn.unsqueeze(x, dim + 1)
+    expanded = ttnn.concat([unsq] * grp, dim=dim + 1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out_shape = list(x.shape)
+    out_shape[dim] *= grp
+    return ttnn.reshape(expanded, out_shape)
+
+
 class HunyuanTtAttention(LightweightModule):
     """
     TTNN prefill attention for HunyuanImage-3.0, single device.
@@ -372,26 +385,13 @@ class HunyuanTtAttention(LightweightModule):
         # PyTorch GQA: Q head i uses KV head i//grp, so expansion is interleaved:
         #   [K0,K0,K0,K0, K1,K1,K1,K1, ..., K7,K7,K7,K7]
         # ttnn.repeat([1,grp,1,1]) gives [K0..K7, K0..K7, ...] — wrong ordering.
-        # Use slice+concat to get the correct interleaved layout.
+        # ttnn.repeat_interleave(dim=1) gives this interleaved layout but round-trips
+        # through ROW_MAJOR internally; _repeat_interleave_heads does the same expansion
+        # via unsqueeze+concat+reshape on the (non-tiled) heads dim, staying in TILE.
         if self.num_kv_heads < self.num_heads:
             grp = self.num_heads // self.num_kv_heads
-            # K/V seq length is the (possibly SP-gathered) full sequence, which may
-            # differ from Q's sharded length — slice each by its OWN seq extent.
-            k_seq = k_attn.shape[2]
-            v_seq = v_attn.shape[2]
-            k_chunks, v_chunks = [], []
-            for h in range(self.num_kv_heads):
-                kh = ttnn.slice(
-                    k_attn, [0, h, 0, 0], [1, h + 1, k_seq, self.head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                vh = ttnn.slice(
-                    v_attn, [0, h, 0, 0], [1, h + 1, v_seq, self.head_dim], memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-                for _ in range(grp):
-                    k_chunks.append(kh)
-                    v_chunks.append(vh)
-            k_attn = ttnn.concat(k_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            v_attn = ttnn.concat(v_chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            k_attn = _repeat_interleave_heads(k_attn, grp, dim=1)
+            v_attn = _repeat_interleave_heads(v_attn, grp, dim=1)
 
         # ---- 6. SDPA -------------------------------------------------------
         is_causal = attention_mask is None and not use_cache
