@@ -50,6 +50,20 @@ import ttnn
 # The worker and orchestrator will pick it up automatically.
 
 DEVICE_CONFIGS = {
+    # FIBO denoise topology: 2x2 Blackhole, sp=2 (axis 0) / tp=2 (axis 1), 1 link, Linear.
+    # FIBO's block matmuls are all non-AGMM (op_type "mm"), so only the mesh/fabric/cluster
+    # fields matter here; the AGMM-only fields are set consistently for completeness.
+    "bh_2x2": {
+        "mesh_shape": (2, 2),
+        "fabric_config": "FABRIC_1D",
+        "fabric_router_config_payload": None,
+        "topology": "Linear",
+        "num_links": 1,
+        "num_workers_per_link": 12,  # full_grid.x // num_links on this Blackhole (12x10 compute grid)
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
     "bh_4x8": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D_RING",
@@ -144,6 +158,30 @@ SHAPES = [
     (3072, 5120, 3840, 8, 8, True, "plain"),
     (3072, 5120, 1280, 8, 8, True, "plain"),
     (3072, 5120, 3456, 8, 8, True, "plain_gelu"),
+    # --- FIBO denoise (2x2 BH, sp=2/tp=2), 12x10 grid, all non-AGMM. From the
+    # linear.py get_matmul_config dump on 2026-07-10 (test_fibo_denoise_device_profile,
+    # full 46 blocks, spatial seq 4096). use_case "plain" except ff1 (fused exact GELU).
+    (2048, 7680, 3072, 12, 10, False, "plain"),  # single proj_out spatial (RowParallel)
+    (2048, 3072, 6144, 12, 10, False, "plain_gelu"),  # dual ff.ff1 spatial (fused exact GELU)
+    (2048, 6144, 3072, 12, 10, False, "plain"),  # dual ff.ff2 spatial (RowParallel)
+    (2048, 3072, 6144, 12, 10, False, "plain"),  # single proj_mlp spatial
+    (2048, 3072, 4608, 12, 10, False, "plain"),  # to_qkv spatial (dual+single)
+    (2048, 3072, 1536, 12, 10, False, "plain"),  # dual attn to_out spatial
+    (2048, 3072, 64, 12, 10, False, "plain"),  # final proj_out (patch*patch*out)
+    (2048, 64, 1536, 12, 10, False, "plain"),  # x_embedder (in_channels padded 48->64)
+    (128, 7680, 3072, 12, 10, False, "plain"),  # single proj_out prompt twin
+    (128, 3072, 6144, 12, 10, False, "plain_gelu"),  # dual ff_context.ff1 prompt (fused GELU)
+    (128, 6144, 3072, 12, 10, False, "plain"),  # dual ff_context.ff2 prompt
+    (128, 3072, 6144, 12, 10, False, "plain"),  # single proj_mlp prompt twin
+    (128, 3072, 4608, 12, 10, False, "plain"),  # to_qkv prompt twin
+    (128, 3072, 1536, 12, 10, False, "plain"),  # dual attn to_add_out prompt
+    (128, 4096, 1536, 12, 10, False, "plain"),  # context_embedder (joint_attention_dim 4096)
+    (128, 2048, 1536, 12, 10, False, "plain"),  # caption_projection (text_encoder_dim 2048)
+    (32, 3072, 9216, 12, 10, False, "plain"),  # norm1_linear / norm1_context_linear modulation
+    (32, 3072, 6144, 12, 10, False, "plain"),  # time_embed_out (inner -> 2*inner)
+    (32, 3072, 4608, 12, 10, False, "plain"),  # single-block time_embed (inner -> 3*inner)
+    (32, 3072, 3072, 12, 10, False, "plain"),  # timestep_embedder linear_2
+    (32, 256, 3072, 12, 10, False, "plain"),  # timestep_embedder linear_1 (256 -> inner)
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
