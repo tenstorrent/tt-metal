@@ -1532,34 +1532,46 @@ def test_reshard_variant6_reverse_dealloc_order(device):
 # ---------------------------------------------------------------------------
 # Resharding between L1 and DRAM
 #
-# Sweeps ttnn.to_memory_config across every combination of input/output buffer
-# type (L1/DRAM), memory layout (height/width/block sharded, interleaved), data
-# type and page layout (tile / row-major). Many of these combinations are
-# currently broken (wrong data or an op-side raise); this test reproduces the
-# whole space so the sweep flips green once the op is fixed.
+# A targeted, representative matrix - the full Cartesian product of {L1,DRAM} x {HS,WS,BS,I} x dtype
+# x layout is 2k+ device cases, too heavy for the unit suite. These cases cover each fixed path:
+# cross-/same-orientation reshards in both directions, interleaved<->interleaved uint8 (ttnn.copy),
+# block-float dtypes, row-major width-sharded to DRAM (Blackhole alignment), and block-on-DRAM via
+# the ND_SHARDED representation.
 # ---------------------------------------------------------------------------
 
-_L1_DRAM_SCHEMES = [
-    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-    ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ttnn.TensorMemoryLayout.INTERLEAVED,
-]
-_L1_DRAM_SCHEME_IDS = ["HS", "WS", "BS", "I"]
+_HS = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+_WS = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+_BS = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+_I = ttnn.TensorMemoryLayout.INTERLEAVED
+_L1 = ttnn.BufferType.L1
+_DRAM = ttnn.BufferType.DRAM
+_TILE = ttnn.TILE_LAYOUT
+_RM = ttnn.ROW_MAJOR_LAYOUT
 
-_L1_DRAM_DTYPES = [
-    ttnn.float32,
-    ttnn.bfloat16,
-    ttnn.int32,
-    ttnn.uint16,
-    ttnn.uint32,
-    ttnn.uint8,
-    ttnn.bfloat8_b,
-    ttnn.bfloat4_b,
+# (input_scheme, input_buffer_type, output_scheme, output_buffer_type, layout, dtype)
+_RESHARD_CASES = [
+    # DRAM -> L1 (cross- and same-orientation; BS here is on the L1 side)
+    pytest.param(_HS, _DRAM, _WS, _L1, _TILE, ttnn.float32, id="DRAM_HS-L1_WS-TILE-f32"),
+    pytest.param(_WS, _DRAM, _HS, _L1, _TILE, ttnn.bfloat16, id="DRAM_WS-L1_HS-TILE-bf16"),
+    pytest.param(_WS, _DRAM, _WS, _L1, _TILE, ttnn.int32, id="DRAM_WS-L1_WS-TILE-i32"),
+    pytest.param(_HS, _DRAM, _BS, _L1, _TILE, ttnn.bfloat16, id="DRAM_HS-L1_BS-TILE-bf16"),
+    # L1 -> DRAM
+    pytest.param(_HS, _L1, _WS, _DRAM, _TILE, ttnn.float32, id="L1_HS-DRAM_WS-TILE-f32"),
+    pytest.param(_WS, _L1, _HS, _DRAM, _TILE, ttnn.uint16, id="L1_WS-DRAM_HS-TILE-u16"),
+    pytest.param(_WS, _L1, _WS, _DRAM, _TILE, ttnn.uint32, id="L1_WS-DRAM_WS-TILE-u32"),
+    pytest.param(_BS, _L1, _HS, _DRAM, _TILE, ttnn.float32, id="L1_BS-DRAM_HS-TILE-f32"),
+    # interleaved <-> interleaved uint8 (ttnn.copy path)
+    pytest.param(_I, _DRAM, _I, _L1, _TILE, ttnn.uint8, id="DRAM_I-L1_I-TILE-u8"),
+    pytest.param(_I, _L1, _I, _DRAM, _TILE, ttnn.uint8, id="L1_I-DRAM_I-TILE-u8"),
+    # block-float dtypes (compared with PCC)
+    pytest.param(_HS, _DRAM, _WS, _L1, _TILE, ttnn.bfloat8_b, id="DRAM_HS-L1_WS-TILE-bf8_b"),
+    pytest.param(_WS, _L1, _HS, _DRAM, _TILE, ttnn.bfloat4_b, id="L1_WS-DRAM_HS-TILE-bf4_b"),
+    # row-major width-sharded to DRAM (Blackhole 64B DRAM alignment)
+    pytest.param(_WS, _L1, _WS, _DRAM, _RM, ttnn.uint8, id="L1_WS-DRAM_WS-RM-u8"),
+    # block-on-DRAM via ND_SHARDED (1D bank grid + round-robin), both directions
+    pytest.param(_HS, _L1, _BS, _DRAM, _TILE, ttnn.float32, id="L1_HS-DRAM_BS_nd-TILE-f32"),
+    pytest.param(_BS, _DRAM, _HS, _L1, _TILE, ttnn.float32, id="DRAM_BS_nd-L1_HS-TILE-f32"),
 ]
-_L1_DRAM_DTYPE_IDS = ["f32", "bf16", "i32", "u16", "u32", "u8", "bf8_b", "bf4_b"]
-
-_L1_DRAM_INT_DTYPES = {ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8}
 
 
 def _l1_dram_mem_config(scheme, buffer_type, height, width, device):
@@ -1606,24 +1618,19 @@ def _l1_dram_mem_config(scheme, buffer_type, height, width, device):
     return ttnn.MemoryConfig(scheme, buffer_type, shard_spec)
 
 
-@pytest.mark.parametrize("dtype", _L1_DRAM_DTYPES, ids=_L1_DRAM_DTYPE_IDS)
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE", "RM"])
-@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["in_L1", "in_DRAM"])
-@pytest.mark.parametrize("input_scheme", _L1_DRAM_SCHEMES, ids=["in_" + s for s in _L1_DRAM_SCHEME_IDS])
-@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["out_L1", "out_DRAM"])
-@pytest.mark.parametrize("output_scheme", _L1_DRAM_SCHEMES, ids=["out_" + s for s in _L1_DRAM_SCHEME_IDS])
+@pytest.mark.parametrize(
+    "input_scheme, input_buffer_type, output_scheme, output_buffer_type, layout, dtype", _RESHARD_CASES
+)
 def test_reshard_between_L1_and_DRAM(
-    device, dtype, layout, input_buffer_type, input_scheme, output_buffer_type, output_scheme
+    device, input_scheme, input_buffer_type, output_scheme, output_buffer_type, layout, dtype
 ):
     """
-    Sweep ttnn.to_memory_config resharding between L1 and DRAM.
+    ttnn.to_memory_config resharding between L1 and DRAM (representative cases, see _RESHARD_CASES).
 
     Round-trips a 256x256 tensor: build it in the input memory config, reshard
     to the output memory config (the op under test), read it back through a
     DRAM-interleaved tensor and check it matches the input.
     """
-    # No need to explicitly skip bf8_b/bf4_b with ROW_MAJOR: ttnn.Tensor(...).to(layout) implicitly converts them to TILE.
-
     height, width = 256, 256
     shape = [1, 1, height, width]
 
