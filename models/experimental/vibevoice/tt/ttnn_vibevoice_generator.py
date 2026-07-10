@@ -331,18 +331,21 @@ class TTVibeVoiceGenerator:
             return out.unsqueeze(0)
         return out
 
-    def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
-        """Encode audio → [T_enc, vae_dim] float32 on host (with fix-std sampling).
+    def _encode_acoustic_latents_tt(self, wav_1d: torch.Tensor) -> Optional[ttnn.Tensor]:
+        """Encode audio → [1, 1, T_enc, vae_dim] on device (with fix-std sampling).
 
         Long voice prompts are encoded in streaming chunks (one latent frame per chunk)
-        so conv L1 circular buffers stay within device limits.
+        so conv L1 circular buffers stay within device limits.  Per-chunk outputs are
+        1×vae_dim — assembled with a tiny host cat then one H2D (avoids a 200-way
+        device concat).  The full latent tensor then stays on device for scale/bias
+        + connector.  Returns None for an empty waveform.
         """
         wav = self._trim_trailing_zeros(wav_1d)
         total_samples = wav.numel()
         chunk = self.acoustic_encode_chunk_samples
 
         if total_samples == 0:
-            return torch.zeros(0, 0)
+            return None
 
         if total_samples <= chunk:
             self.acoustic_tok._encoder_tt.reset_cache()
@@ -351,10 +354,9 @@ class TTVibeVoiceGenerator:
                 use_cache=False,
                 is_final_chunk=True,
             )
-            lat = self._latents_from_encode_output(lat_tt)
         else:
             self.acoustic_tok._encoder_tt.reset_cache()
-            frames: List[torch.Tensor] = []
+            frames_host: List[torch.Tensor] = []
             pos = 0
             while pos < total_samples:
                 n = min(chunk, total_samples - pos)
@@ -363,19 +365,43 @@ class TTVibeVoiceGenerator:
                 if chunk_wav.numel() < chunk:
                     # conv2d caches prepared weights per input width; keep chunks fixed-size.
                     chunk_wav = torch.nn.functional.pad(chunk_wav, (0, chunk - chunk_wav.numel()))
-                lat_tt = self.acoustic_tok.encode(
+                lat_chunk = self.acoustic_tok.encode(
                     self._audio_row_to_tt(chunk_wav),
                     use_cache=True,
                     is_final_chunk=is_final,
                 )
-                out = self._latents_from_encode_output(lat_tt)
-                frames.append(out[-1:])
+                # One latent frame (1, vae_dim) — negligible D2H vs a N-way device concat.
+                frames_host.append(self._latents_from_encode_output(lat_chunk)[-1:])
                 pos += n
-            lat = torch.cat(frames, dim=0)
+            lat_host = torch.cat(frames_host, dim=0)  # [T_enc, vae_dim]
+            lat_tt = ttnn.as_tensor(
+                lat_host.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         if self.acoustic_fix_std:
-            lat = lat + self.acoustic_fix_std * torch.randn_like(lat)
-        return lat
+            t_enc, d = lat_tt.shape[2], lat_tt.shape[3]
+            noise = torch.randn(1, 1, t_enc, d, dtype=torch.float32) * self.acoustic_fix_std
+            noise_tt = ttnn.as_tensor(
+                noise.to(torch.bfloat16),
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=lat_tt.layout,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            lat_bf16 = lat_tt if lat_tt.dtype == ttnn.bfloat16 else ttnn.typecast(lat_tt, ttnn.bfloat16)
+            lat_tt = ttnn.add(lat_bf16, noise_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return lat_tt
+
+    def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
+        """Encode audio → [T_enc, vae_dim] float32 on host (compat wrapper)."""
+        lat_tt = self._encode_acoustic_latents_tt(wav_1d)
+        if lat_tt is None:
+            return torch.zeros(0, 0)
+        return self._latents_from_encode_output(lat_tt)
 
     def _compute_scale_bias(self, latents_list: List[torch.Tensor], speech_masks: torch.Tensor):
         """Match reference: scale=1/std(masked), bias=-mean(masked) on stacked latents."""
@@ -389,44 +415,82 @@ class TTVibeVoiceGenerator:
         flat = torch.cat(parts, dim=0).flatten()
         return (1.0 / flat.std()).item(), (-flat.mean()).item()
 
+    def _process_speech_prefill_tt(
+        self,
+        speech_tensors: torch.Tensor,
+        speech_masks: torch.Tensor,
+    ) -> ttnn.Tensor:
+        """Acoustic encode → scale/bias → connector, all on device.
+
+        Returns speech_embeds [1, 1, N_slots, hidden] (TILE).  Uses checkpoint
+        scale/bias when present (demo path); only falls back to a host mean/std if unset.
+        """
+        scale = self.speech_scaling_factor
+        bias = self.speech_bias_factor
+        latents_tt: List[Optional[ttnn.Tensor]] = []
+        for i in range(speech_tensors.shape[0]):
+            latents_tt.append(self._encode_acoustic_latents_tt(speech_tensors[i]))
+
+        if scale is None or bias is None:
+            host_lats = []
+            for lat in latents_tt:
+                if lat is None:
+                    host_lats.append(torch.zeros(0, 0))
+                else:
+                    host_lats.append(self._latents_from_encode_output(lat))
+            scale, bias = self._compute_scale_bias(host_lats, speech_masks)
+            self.speech_scaling_factor = scale
+            self.speech_bias_factor = bias
+
+        speech_embeds_parts: List[ttnn.Tensor] = []
+        for i, lat_tt in enumerate(latents_tt):
+            n = int(speech_masks[i].sum().item())
+            if n <= 0 or lat_tt is None:
+                continue
+            d = lat_tt.shape[3]
+            lat_n = ttnn.slice(lat_tt, [0, 0, 0, 0], [1, 1, n, d], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            lat_bf16 = lat_n if lat_n.dtype == ttnn.bfloat16 else ttnn.typecast(lat_n, ttnn.bfloat16)
+            # (lat + bias) * scale — scalars broadcast on device.
+            feats = ttnn.mul(
+                ttnn.add(lat_bf16, bias, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                scale,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            feats_tile = ttnn.to_layout(feats, ttnn.TILE_LAYOUT)
+            conn_out = self.acoustic_conn(feats_tile)
+            # TILE layout may pad the seq dim; trim back to the real slot count.
+            hidden = conn_out.shape[3]
+            if conn_out.shape[2] != n:
+                conn_rm = ttnn.to_layout(conn_out, ttnn.ROW_MAJOR_LAYOUT)
+                conn_out = ttnn.slice(conn_rm, [0, 0, 0, 0], [1, 1, n, hidden], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                conn_out = ttnn.to_layout(conn_out, ttnn.TILE_LAYOUT)
+            speech_embeds_parts.append(conn_out)
+
+        if not speech_embeds_parts:
+            hidden = self.lm.cfg.hidden_size
+            return ttnn.zeros(
+                [1, 1, 1, hidden],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if len(speech_embeds_parts) == 1:
+            return speech_embeds_parts[0]
+        return ttnn.concat(speech_embeds_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def _process_speech_prefill(
         self,
         speech_tensors: torch.Tensor,
         speech_masks: torch.Tensor,
     ) -> torch.Tensor:
-        """Return speech_embeds [N_slots, hidden] for scatter into prefill (host float32)."""
-        scale = self.speech_scaling_factor
-        bias = self.speech_bias_factor
-        latents_per_row = []
-        for i in range(speech_tensors.shape[0]):
-            latents_per_row.append(self._encode_acoustic_latents(speech_tensors[i]))
-
-        if scale is None or bias is None:
-            scale, bias = self._compute_scale_bias(latents_per_row, speech_masks)
-            self.speech_scaling_factor = scale
-            self.speech_bias_factor = bias
-
-        speech_embeds_parts = []
-        for i in range(speech_tensors.shape[0]):
-            n = int(speech_masks[i].sum().item())
-            feats = (latents_per_row[i][:n] + bias) * scale
-            feats_tt = ttnn.as_tensor(
-                feats.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            conn_out = self.acoustic_conn(feats_tt)
-            conn_torch = ttnn.to_torch(conn_out).to(torch.float32)
-            if conn_torch.dim() == 4:
-                conn_torch = conn_torch.squeeze(0).squeeze(0)
-            elif conn_torch.dim() == 3:
-                conn_torch = conn_torch.squeeze(0)
-            conn_torch = conn_torch[:n]
-            speech_embeds_parts.append(conn_torch)
-
-        return torch.cat(speech_embeds_parts, dim=0)
+        """Return speech_embeds [N_slots, hidden] float32 on host (PCC-test compat)."""
+        speech_tt = self._process_speech_prefill_tt(speech_tensors, speech_masks)
+        n_slots = int(speech_masks.sum().item())
+        out = ttnn.to_torch(speech_tt).to(torch.float32).squeeze(0).squeeze(0)
+        if out.dim() == 1:
+            out = out.unsqueeze(0)
+        return out[:n_slots] if n_slots > 0 else out[:0]
 
     def _build_prefill_embeds(
         self,
@@ -436,7 +500,12 @@ class TTVibeVoiceGenerator:
         speech_input_mask: Optional[torch.Tensor],
         prefill_speech_embeds: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Text embeds with speech slots scattered (reference forward prefill)."""
+        """Text embeds with speech slots scattered (reference forward prefill).
+
+        Speech encode/scale/connector run on device; the final slot scatter is a single
+        host index-assign (text embeds D2H once).  Contiguous on-device slice/concat was
+        correct but the TILE↔ROW_MAJOR round-trip on the full prefill was slower.
+        """
         if self._ref_lm is not None:
             cpu_embeds = self._ref_lm.build_prefill_embeds(input_ids, speech_input_mask, prefill_speech_embeds)
             return ttnn.as_tensor(
@@ -451,13 +520,17 @@ class TTVibeVoiceGenerator:
         if speech_input_mask is None:
             return inputs_embeds
 
-        embed_2d = _embeds_to_host_2d(inputs_embeds)
         if prefill_speech_embeds is not None:
             speech_embeds = prefill_speech_embeds.to(torch.float32)
         elif speech_tensors is not None and speech_masks is not None:
-            speech_embeds = self._process_speech_prefill(speech_tensors, speech_masks)
+            speech_tt = self._process_speech_prefill_tt(speech_tensors, speech_masks)
+            speech_embeds = ttnn.to_torch(speech_tt).to(torch.float32).squeeze(0).squeeze(0)
+            if speech_embeds.dim() == 1:
+                speech_embeds = speech_embeds.unsqueeze(0)
         else:
             return inputs_embeds
+
+        embed_2d = _embeds_to_host_2d(inputs_embeds)
         mask = speech_input_mask[0].cpu().bool()
         n_slots = int(mask.sum().item())
         embed_2d[mask[: embed_2d.shape[0]]] = speech_embeds[:n_slots].to(embed_2d.dtype)
