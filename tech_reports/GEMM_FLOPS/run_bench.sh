@@ -10,6 +10,7 @@ source python_env/bin/activate
 export TT_METAL_DEVICE_PROFILER=1
 export ENABLE_TRACY=1
 export TT_METAL_PROFILER_MID_RUN_DUMP=1
+export TTNN_RUN_GEMM_FLOPS_BENCHMARK=1
 
 mkdir -p generated
 

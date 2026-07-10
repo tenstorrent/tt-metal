@@ -67,6 +67,43 @@ def load_and_prepare(path, source):
     return df
 
 
+def get_best_trace_pairs(df_slice):
+    """Return plotted series and ratio points keyed by exact matrix shape."""
+    traced_perf = []
+    nontraced_perf = []
+    ratio_points = []
+
+    for shape, shape_group in df_slice.groupby(["m", "k", "n"], sort=True):
+        m, k, n = shape
+        matrix_elements = m * k * n
+
+        traced_group = shape_group[shape_group["use_trace"]]
+        nontraced_group = shape_group[~shape_group["use_trace"]]
+
+        best_traced_tflops = None
+        best_nontraced_tflops = None
+        if not traced_group.empty:
+            best_traced_tflops = traced_group["tflops"].max()
+            traced_perf.append((matrix_elements, best_traced_tflops))
+        if not nontraced_group.empty:
+            best_nontraced_tflops = nontraced_group["tflops"].max()
+            nontraced_perf.append((matrix_elements, best_nontraced_tflops))
+
+        if (
+            best_traced_tflops is not None
+            and best_nontraced_tflops is not None
+            and pd.notna(best_traced_tflops)
+            and pd.notna(best_nontraced_tflops)
+            and best_nontraced_tflops > 0
+        ):
+            ratio_points.append((matrix_elements, best_traced_tflops, best_nontraced_tflops))
+
+    traced_perf.sort()
+    nontraced_perf.sort()
+    ratio_points.sort()
+    return traced_perf, nontraced_perf, ratio_points
+
+
 frames = []
 for source, path in DEVICE_FILES.items():
     loaded = load_and_prepare(path, source)
@@ -87,22 +124,8 @@ for source in available_sources:
     device_data = df[df["source"] == source].copy()
 
     for dtype_fidelity, dtype_label, color in dtype_configs:
-        traced_perf = []
-        nontraced_perf = []
         df_slice = device_data[device_data["dtype_fidelity"] == dtype_fidelity]
-
-        for matrix_size in sorted(df_slice["matrix_elements"].unique()):
-            size_group = df_slice[df_slice["matrix_elements"] == matrix_size]
-
-            traced_group = size_group[size_group["use_trace"] == True]
-            if not traced_group.empty:
-                best_traced_tflops = traced_group.groupby(["m", "k", "n"])["tflops"].max().max()
-                traced_perf.append((matrix_size, best_traced_tflops))
-
-            nontraced_group = size_group[size_group["use_trace"] == False]
-            if not nontraced_group.empty:
-                best_nontraced_tflops = nontraced_group.groupby(["m", "k", "n"])["tflops"].max().max()
-                nontraced_perf.append((matrix_size, best_nontraced_tflops))
+        traced_perf, nontraced_perf, ratio_points = get_best_trace_pairs(df_slice)
 
         if not traced_perf or not nontraced_perf:
             continue
@@ -136,23 +159,21 @@ for source in available_sources:
             zorder=4,
         )
 
-        for i, (x, y_trace) in enumerate(zip(traced_x, traced_y)):
-            if i < len(nontraced_y):
-                y_nontrace = nontraced_y[i]
-                ratio = y_trace / y_nontrace
-                y_pos = max(y_trace, y_nontrace)
-                ax.annotate(
-                    f"{ratio:.2f}×",
-                    (x, y_pos),
-                    xytext=(0, 12),
-                    textcoords="offset points",
-                    ha="center",
-                    va="bottom",
-                    fontsize=9,
-                    fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=color, alpha=0.85, linewidth=1),
-                    zorder=5,
-                )
+        for x, y_trace, y_nontrace in ratio_points:
+            ratio = y_trace / y_nontrace
+            y_pos = max(y_trace, y_nontrace)
+            ax.annotate(
+                f"{ratio:.2f}×",
+                (x, y_pos),
+                xytext=(0, 12),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec=color, alpha=0.85, linewidth=1),
+                zorder=5,
+            )
 
     ax.set_xscale("log")
     ax.text(

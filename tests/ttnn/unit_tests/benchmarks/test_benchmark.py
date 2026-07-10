@@ -59,6 +59,21 @@ from tracy.device_post_proc_config import default_setup
 from tracy.process_device_log import import_log_run_stats
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+GEMM_FLOPS_BENCHMARK_ENV = "TTNN_RUN_GEMM_FLOPS_BENCHMARK"
+
+
+SKIPPABLE_RUNTIME_ERROR_SUBSTRINGS = (
+    "does not fit",
+    "failed to allocate",
+    "insufficient",
+    "invalid",
+    "l1 memory",
+    "not enough l1",
+    "out of memory",
+    "unable to find subblock",
+    "unsupported",
+    "validation",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +159,12 @@ def get_profiler_data():
 
 def get_profiler_build_enabled():
     return os.getenv("TT_METAL_DEVICE_PROFILER") is not None
+
+
+def is_skippable_benchmark_runtime_error(error):
+    """Return whether a benchmark config failed because it is not runnable for this shape/device."""
+    message = str(error).lower()
+    return any(substring in message for substring in SKIPPABLE_RUNTIME_ERROR_SUBSTRINGS)
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +351,10 @@ def get_tuning_params(dtype, shape, mode):
 # ---------------------------------------------------------------------------
 
 
-# @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+@pytest.mark.skipif(
+    os.getenv(GEMM_FLOPS_BENCHMARK_ENV) != "1",
+    reason=f"Benchmark is manual-only; set {GEMM_FLOPS_BENCHMARK_ENV}=1 to run",
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
@@ -370,6 +394,9 @@ def test_matmul_2d_host_perf(
             "m",
             "k",
             "n",
+            "base_m",
+            "base_k",
+            "base_n",
             "mode",
             "use_trace",
             "grid_size",
@@ -411,6 +438,9 @@ def test_matmul_2d_host_perf(
 
                             in0_sharded = mode == "tuned_2d_l1"
                             out_sharded = mode == "tuned_2d_l1"
+                            in0_t = None
+                            in1_t = None
+                            output_t = None
 
                             try:
                                 # --- Prepare inputs ---
@@ -552,9 +582,6 @@ def test_matmul_2d_host_perf(
 
                                 # --- Cleanup and write CSV ---
                                 ttnn.to_torch(output_t)
-                                ttnn.deallocate(output_t)
-                                ttnn.deallocate(in0_t)
-                                ttnn.deallocate(in1_t)
 
                                 in0_storage_type = "L1" if in0_sharded else "DRAM"
                                 out_storage_type = "L1" if out_sharded else "DRAM"
@@ -563,6 +590,9 @@ def test_matmul_2d_host_perf(
                                     m,
                                     k,
                                     n,
+                                    base_m,
+                                    base_k,
+                                    base_n,
                                     mode,
                                     f"{use_trace}",
                                     grid_size,
@@ -589,8 +619,14 @@ def test_matmul_2d_host_perf(
                                 file.flush()
 
                             except RuntimeError as e:
+                                if not is_skippable_benchmark_runtime_error(e):
+                                    raise
                                 logger.warning(
                                     f"Skipping [{mode}] {dtype} {math_fidelity} "
                                     f"({base_m},{base_k},{base_n}) trace={use_trace} — {e}"
                                 )
                                 continue
+                            finally:
+                                for tensor in (output_t, in0_t, in1_t):
+                                    if tensor is not None:
+                                        ttnn.deallocate(tensor)
