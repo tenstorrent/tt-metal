@@ -451,17 +451,15 @@ On **1×4**, look for prefill matmuls with batch **128** and decode ops (`SdpaDe
 
 ### Continuous integration
 
-Blackhole pipelines mirror the Devstral layout: **demo perf sweep** on demo CI, **full ISL sweeps** (32→4096) on e2e CI. Set `MESH_DEVICE` to pin mesh shape: **P150** → 1×1, **BH-QB** → 1×4.
-
 | Workflow | What runs |
 |----------|-----------|
-| `(Blackhole) Demo tests` → `seamless-m4t-v2-large` | `scripts/demo_perf_sweep.py` (five tasks, seq 32→4096) on P150 and BH-QB |
+| `(Blackhole) Demo tests` → `seamless-m4t-v2-large` | `demo_perf_sweep.py` (five tasks, seq 32→4096), then logit PCC, token matching, and WER sweeps with `-k sweep` on P150 and BH-QB |
 | `(Blackhole) e2e tests` → `seamless-m4t-v2-large` | Logit PCC, token match, and WER sweeps with `-k sweep` on P150 and BH-QB |
 
 | Job | Pipeline | SKU | Mesh | Timeout |
 |-----|----------|-----|------|--------:|
-| `seamless-m4t-v2-large demo perf sweep (P150 1x1)` | Demo | P150 CIv2 | 1×1 (`MESH_DEVICE=P150`) | 360 min |
-| `seamless-m4t-v2-large demo perf sweep (BH-QB 1x4)` | Demo | QuietBox 2 | 1×4 (`MESH_DEVICE=BH-QB`) | 360 min |
+| `seamless-m4t-v2-large demo + e2e sweep (P150 1x1)` | Demo | P150 CIv2 | 1×1 (`MESH_DEVICE=P150`) | 360 min (demo pipeline max) |
+| `seamless-m4t-v2-large demo + e2e sweep (BH-QB 1x4)` | Demo | QuietBox 2 | 1×4 (`MESH_DEVICE=BH-QB`) | 480 min |
 | `bh-p150-seamless-m4t-v2-e2e-sweep` | e2e | P150 CIv2 | 1×1 (`MESH_DEVICE=P150`) | 480 min |
 | `bh-qb-seamless-m4t-v2-e2e-sweep` | e2e | QuietBox 2 | 1×4 (`MESH_DEVICE=BH-QB`) | 720 min |
 
