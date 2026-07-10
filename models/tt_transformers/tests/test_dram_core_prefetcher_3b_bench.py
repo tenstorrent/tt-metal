@@ -4,12 +4,12 @@
 
 """MLP-level decode benchmark: DRAM-core (receiver-contiguous) prefetcher vs worker-core.
 
-Builds the Llama-3.2-3B decode MLP (FF1/FF3/FF2 fed by the prefetcher) and trace-replays
-a single decode forward ``BENCH_REPEATS`` times, reporting per-forward latency. The
+Builds the Llama-3.2-3B decode MLP (FF1/FF3/FF2 fed by the prefetcher) and executes
+a single decode forward eagerly ``BENCH_REPEATS`` times, reporting per-forward latency. The
 prefetcher backend is selected by ``make_prefetcher`` via ``TT_METAL_USE_DRAM_CORE_PREFETCHER``
 (1 = DRAM-core DRISC senders with recv-contig weights, 0 = worker-core BRISC/NCRISC senders),
-so the two backends share an identical MLP / matmul / trace path and differ only in how
-weights are pushed into the receiver ring. Run the test twice (env=1, then env=0) and compare.
+so both backends exercise the same MLP while retaining their distinct queueing lifecycles.
+Run the test twice (env=1, then env=0) and compare.
 
 Requires HF weights for ``meta-llama/Llama-3.2-3B`` and Blackhole. Decode-only.
 """
@@ -27,7 +27,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.prefetcher import make_prefetcher
+from models.tt_transformers.tt.prefetcher import make_prefetcher, uses_tensor_prefetcher
 
 pytestmark = [
     run_for_blackhole("DRAM prefetcher benchmark requires Blackhole"),
@@ -55,10 +55,9 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
 
     repeats = int(os.environ.get("BENCH_REPEATS", "50"))
     num_tensors = 3  # FF1/FF3/FF2
-    # One MLP module's worth of weights per prefetch. The worker-core Prefetcher expects exactly
-    # num_tensors*num_layers distinct inserted weights (one set per real decoder layer), so we use
-    # num_layers=1 and re-prefetch per forward — the realistic decode pattern (prefetch once per
-    # forward()) that both backends' run()/stop() lifecycles support.
+    # One MLP module's worth of weights. The worker-core Prefetcher expects exactly
+    # num_tensors*num_layers distinct inserted weights (one set per real decoder layer), so use
+    # num_layers=1. It queues the batch around each forward; the Tensor backend queues per matmul.
     num_layers = 1
 
     # Pin both backends to the same ring for an apples-to-apples comparison. 3B's FF2 (N=dim=3072)
@@ -69,8 +68,6 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
         mesh_device, num_tensors=num_tensors, num_layers=num_layers, num_receiver_cores=recv_per_bank
     )
     backend = prefetcher.__class__.__name__
-    prefetcher.init(mode)
-
     model_args = ModelArgs(
         mesh_device,
         max_batch_size=1,
@@ -94,7 +91,10 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
         prefetcher=prefetcher,
     )
 
-    prefetcher.prefetch()
+    prefetcher.init(mode)
+    worker_prefetcher = not uses_tensor_prefetcher(prefetcher)
+    if worker_prefetcher:
+        prefetcher.prefetch()
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
 
@@ -109,14 +109,14 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
             layout=ttnn.TILE_LAYOUT,
         )
 
-    # Each decode forward is preceded by one prefetch (run) and followed by stop — the production
-    # decode pattern. The full MLP forward contains a device read (CCL/reshard) so we can't trace it;
-    # we time per-forward run()+forward()+stop() with a synchronize each iteration. Both backends run
-    # identical MLP code, so the latency delta reflects the prefetcher-fed weight path. Inputs are
-    # pre-built outside the timed region (MLP.forward deallocates its input).
-    prefetcher.run()
+    # The worker backend queues its whole batch around each forward; the Tensor backend queues each
+    # weight immediately before its consuming matmul. Inputs are pre-built outside the timed region
+    # because MLP.forward deallocates its input.
+    if worker_prefetcher:
+        prefetcher.run()
     out = tt_model(make_input(), mode)
-    prefetcher.stop()
+    if worker_prefetcher:
+        prefetcher.stop()
     ttnn.synchronize_device(mesh_device)
 
     inputs = [make_input() for _ in range(repeats)]
@@ -127,16 +127,18 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
     bench_out = None
     for i in range(repeats):
         t0 = time.perf_counter()
-        prefetcher.run()
+        if worker_prefetcher:
+            prefetcher.run()
         bench_out = tt_model(inputs[i], mode)
-        prefetcher.stop()
+        if worker_prefetcher:
+            prefetcher.stop()
         ttnn.synchronize_device(mesh_device)
         per_forward_times.append(time.perf_counter() - t0)
     assert bench_out is not None
     elapsed = sum(per_forward_times)
 
-    # Both backends expose teardown() (worker's is a no-op); no backend branch needed.
-    prefetcher.teardown()
+    if uses_tensor_prefetcher(prefetcher):
+        prefetcher.teardown()
 
     per_forward_us = elapsed / repeats * 1e6
     sorted_us = sorted(t * 1e6 for t in per_forward_times)

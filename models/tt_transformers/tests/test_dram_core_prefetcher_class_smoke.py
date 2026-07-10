@@ -4,10 +4,9 @@
 
 """Smoke test for ``DramCorePrefetcher`` (Python wrapper) without HF weights.
 
-Validates the class's lifecycle — ``init`` → callback-registered ``insert_tensor`` →
-``prefetch`` → ``run`` (builds GCB, starts DRISC, queues request) → ``ttnn.linear``
-consuming via ``global_cb`` → ``teardown`` — against a synthetic Llama-3.2-3B-shaped
-weight + activation. Compares to ``torch.matmul``.
+Validates direct weight registration, decode initialization, per-op
+``prefetch_and_linear``, trace replay, and teardown against a synthetic
+Llama-3.2-3B-shaped weight + activation. Compares to ``torch.matmul``.
 
 Complements ``test_dram_core_prefetcher_3b.py`` which exercises the same path with
 real HF weights through ``MLP``/``Attention``.
@@ -120,6 +119,7 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
         hop_cores=ttnn.CoreRangeSet([]),
         num_global_cb_receivers=recv_per_bank,
         untilize_out=False,
+        stream_in1=os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1",
     )
 
     # ---- Construct DramCorePrefetcher, drive its lifecycle ----
@@ -128,10 +128,8 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
         f"Expected DramCorePrefetcher but got {prefetcher.__class__.__name__}; "
         "check TT_METAL_USE_DRAM_CORE_PREFETCHER=1 and device firmware support."
     )
+    prefetcher.insert_tensor(tt_weight, program_config=program_config)
     prefetcher.init(Mode.DECODE)
-    prefetcher.register_callback(lambda: prefetcher.insert_tensor(tt_weight, program_config=program_config))
-    prefetcher.prefetch()
-    prefetcher.run()
 
     # ---- Matmul consumes the queued weight via global_cb ----
     output_mem_config = ttnn.create_sharded_memory_config(
@@ -148,15 +146,27 @@ def test_dram_core_prefetcher_class_smoke(device, recv_per_bank):
         packer_l1_acc=True,
         dst_full_sync_en=True,
     )
-    tt_out = ttnn.linear(
-        tt_act,
-        tt_weight,
-        program_config=program_config,
-        memory_config=output_mem_config,
-        compute_kernel_config=compute_kernel_config,
-        dtype=ttnn.bfloat16,
-        global_cb=prefetcher.global_cb,
-    )
+
+    def run_matmul():
+        return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+            tt_act,
+            tt_weight,
+            global_cb=prefetcher.global_cb,
+            program_config=program_config,
+            cq_id=0,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
+        )
+
+    # Compile once, then verify that the per-op queue request is captured and replayed with its matmul.
+    run_matmul()
+    ttnn.synchronize_device(device)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    tt_out = run_matmul()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(device, trace_id)
     prefetcher.teardown()
 
     out_torch = ttnn.to_torch(tt_out)

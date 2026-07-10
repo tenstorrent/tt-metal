@@ -85,8 +85,6 @@ def test_mlp_inference_dram_core_prefetcher(batch_size, mode, seq_len, mesh_devi
     assert (
         prefetcher.__class__.__name__ == "DramCorePrefetcher"
     ), f"Expected DramCorePrefetcher but got {prefetcher.__class__.__name__}; check env flags."
-    prefetcher.init(mode)
-
     model_args = ModelArgs(
         mesh_device,
         max_batch_size=batch_size,
@@ -116,11 +114,7 @@ def test_mlp_inference_dram_core_prefetcher(batch_size, mode, seq_len, mesh_devi
         model_config=model_args.get_model_config(),
         prefetcher=prefetcher,
     )
-
-    # Prefetching is decode-only; in prefill the matmul reads the weight directly from DRAM.
-    if mode == Mode.DECODE:
-        prefetcher.prefetch()
-        prefetcher.run()
+    prefetcher.init(mode)
 
     torch_input = torch.randn(
         1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
