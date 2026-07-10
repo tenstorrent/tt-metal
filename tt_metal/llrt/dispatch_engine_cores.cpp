@@ -41,8 +41,8 @@ std::vector<tt::tt_metal::CoreCoord> get_quasar_tensix_fallback_dispatch_cores_f
 }
 
 // Quasar 1CQ fast dispatch places prefetch and dispatch HD on the same dispatch-engine tile (DM0/DM1).
-// dispatch_core_manager assigns them via separate pool pops, mirroring interim Tensix YAML that lists
-// the same logical coord twice (e.g. dispatch_cores: [[1,-1], [1,-1]]).
+// dispatch_s shares that tile on DM2; dispatch_core_manager assigns prefetch/dispatch via separate pool
+// pops, mirroring interim Tensix YAML that lists the same logical coord twice.
 void expand_quasar_dispatch_engine_pool_for_fd_assignment(
     std::vector<tt::tt_metal::CoreCoord>& logical_cores, uint8_t num_hw_cqs) {
     if (logical_cores.size() != 1) {
@@ -248,5 +248,7 @@ uint32_t fd_core_type_define_value(const tt::tt_metal::IDevice* device) {
 DataMovementProcessor prefetch_dm_processor() { return DataMovementProcessor::RISCV_0; }
 
 DataMovementProcessor dispatch_dm_processor() { return DataMovementProcessor::RISCV_1; }
+
+DataMovementProcessor dispatch_s_dm_processor() { return DataMovementProcessor::RISCV_2; }
 
 }  // namespace tt::tt_metal::detail

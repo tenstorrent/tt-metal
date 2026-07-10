@@ -63,5 +63,6 @@ bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device);
 uint32_t fd_core_type_define_value(const tt::tt_metal::IDevice* device);
 DataMovementProcessor prefetch_dm_processor();
 DataMovementProcessor dispatch_dm_processor();
+DataMovementProcessor dispatch_s_dm_processor();
 
 }  // namespace tt::tt_metal::detail
