@@ -21,6 +21,7 @@ from tracy.process_model_log import (
 from models.demos.llama3_70b_galaxy.demo.demo_decode import run_llama3_demo
 from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 from models.demos.llama3_70b_galaxy.demo.demo_qwen_decode import run_qwen_demo
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 
 DECODER_OP_START_INDEX = 4
@@ -79,7 +80,8 @@ MAX_TYPE = "max"
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
+            # trace_region_size resolved from models/model_trace_region_sizes.yaml.
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy-decode",
             "worker_l1_size": 1344544,
             "fabric_config": True,
         }
@@ -183,7 +185,8 @@ def test_llama_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
+            # trace_region_size resolved from models/model_trace_region_sizes.yaml.
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy-decode",
             "worker_l1_size": 1344544,
             "fabric_config": True,
         }
