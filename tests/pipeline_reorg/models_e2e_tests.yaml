@@ -699,3 +699,37 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+# WH/BH split kept separate so env stays faithful to the original frequent job:
+# WH sets TT_MM_THROTTLE_PERF=5, BH runs without it.
+- name: Stable Diffusion XL UNet-loop e2e tests (WH)
+  cmd: |
+    export TT_MM_THROTTLE_PERF=5
+    exit_code=0
+    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
+    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
+    exit $exit_code
+  model: sdxl-wh
+  skus:
+    wh_n150:
+      timeout: 40
+      tier: 2
+    wh_n300:
+      timeout: 40
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield
+
+- name: Stable Diffusion XL UNet-loop e2e tests (BH)
+  cmd: |
+    exit_code=0
+    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/test_unet_loop.py || exit_code=$?
+    pytest --timeout 1800 tests/nightly/single_card/stable_diffusion_xl_base/refiner/test_unet_loop.py || exit_code=$?
+    exit $exit_code
+  model: sdxl-bh
+  skus:
+    bh_p150:
+      timeout: 30
+      tier: 2
+  owner_id: U08SXRPCTJ5 # Janko Mitrovic
+  team: shield

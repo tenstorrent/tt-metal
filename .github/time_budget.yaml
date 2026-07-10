@@ -165,10 +165,18 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  e2e_tier2:
+    wh_n150: 40
+    wh_n300: 40
+    bh_p150: 30
   unit:
     wh_n150: 90
     wh_n300: 115
     bh_p150b_civ2: 125
+  unit_tier2:
+    wh_n150: 80
+    wh_n300: 80
+    bh_p150: 60
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
