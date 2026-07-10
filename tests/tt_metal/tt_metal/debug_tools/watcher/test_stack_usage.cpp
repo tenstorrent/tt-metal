@@ -89,7 +89,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = dms_per_kernel,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovement2xxConfig{},
+                .hw_config = experimental::DataMovementGen2Config{},
             });
             kernel_names.emplace_back(name);
         }
@@ -101,7 +101,7 @@ void RunOneTest(
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
             .compile_time_args = {{"usage", free}},
-            .hw_config = experimental::Compute2xxConfig{},
+            .hw_config = experimental::ComputeGen2Config{},
         });
         kernel_names.push_back(COMPUTE_NAME);
     } else {
@@ -117,7 +117,7 @@ void RunOneTest(
                 .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_args = {{"usage", free}},
-                .hw_config = experimental::DataMovement1xxConfig{.processor = processor, .noc = noc},
+                .hw_config = experimental::DataMovementGen1Config{.processor = processor, .noc = noc},
             });
             kernel_names.emplace_back(name);
         }

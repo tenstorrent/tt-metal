@@ -167,11 +167,11 @@ void run_borrowed_memory_dfb_program(
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
         auto& producer_hw_config =
-            std::get<DataMovement2xxConfig>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         if (!cfg.tensix_consumer) {
             auto& consumer_hw_config =
-                std::get<DataMovement2xxConfig>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+                std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
             consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
         }
     }
@@ -344,9 +344,9 @@ void run_update_address_test(
     // Gen1 has no ISR-based implicit sync to opt out of).
     if (arch == ARCH::QUASAR) {
         auto& producer_hw_config =
-            std::get<DataMovement2xxConfig>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(producer_spec.hw_config));
         auto& consumer_hw_config =
-            std::get<DataMovement2xxConfig>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
+            std::get<DataMovementGen2Config>(std::get<DataMovementHardwareConfig>(consumer_spec.hw_config));
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
         consumer_hw_config.disable_dfb_implicit_sync_for_all = true;
     }

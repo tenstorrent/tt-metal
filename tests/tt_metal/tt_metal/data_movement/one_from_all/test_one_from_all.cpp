@@ -109,9 +109,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     DataMovementHardwareConfig gatherer_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        gatherer_hw_config = DataMovement2xxConfig{};
+        gatherer_hw_config = DataMovementGen2Config{};
     } else {
-        gatherer_hw_config = DataMovement1xxConfig{
+        gatherer_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = test_config.noc_id,
         };

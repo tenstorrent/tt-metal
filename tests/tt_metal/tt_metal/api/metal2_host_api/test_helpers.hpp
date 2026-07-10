@@ -83,7 +83,7 @@ inline KernelSpec MakeMinimalGen2DMKernel(std::string name, uint32_t num_threads
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = DataMovement2xxConfig{},
+        .hw_config = DataMovementGen2Config{},
     };
 }
 
@@ -102,7 +102,7 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .hw_config = DataMovement1xxConfig{.processor = processor, .noc = noc}};
+        .hw_config = DataMovementGen1Config{.processor = processor, .noc = noc}};
 }
 
 // Helper to create a minimal valid KernelSpec for data movement whose Gen1 config is built
@@ -133,7 +133,7 @@ inline KernelSpec MakeMinimalGen2ComputeKernel(std::string name, uint32_t num_th
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = Compute2xxConfig{},
+        .hw_config = ComputeGen2Config{},
     };
 }
 
@@ -143,7 +143,7 @@ inline KernelSpec MakeMinimalGen1ComputeKernel(std::string name, uint32_t num_th
         .unique_id = KernelSpecName{std::move(name)},
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .hw_config = Compute1xxConfig{},
+        .hw_config = ComputeGen1Config{},
     };
 }
 

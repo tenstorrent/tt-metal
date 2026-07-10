@@ -105,7 +105,7 @@ static inline m2::KernelSpec make_dm_kernel(
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
         .hw_config =
-            m2::DataMovement2xxConfig{
+            m2::DataMovementGen2Config{
                 .disable_dfb_implicit_sync_for = std::move(disable_implicit_sync_for),
             },
     };
@@ -128,8 +128,8 @@ static inline m2::KernelSpec make_compute_kernel(
 // (which forced both bound kernels to agree) with per-kernel opt-out.
 static inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
     auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
-    TT_FATAL(std::holds_alternative<m2::DataMovement2xxConfig>(dm_cfg), "Can only set implicit sync for Gen2 Kernel");
-    auto& gen2_cfg = std::get<m2::DataMovement2xxConfig>(dm_cfg);
+    TT_FATAL(std::holds_alternative<m2::DataMovementGen2Config>(dm_cfg), "Can only set implicit sync for Gen2 Kernel");
+    auto& gen2_cfg = std::get<m2::DataMovementGen2Config>(dm_cfg);
     gen2_cfg.disable_dfb_implicit_sync_for.push_back(std::move(dfb_name));
 }
 

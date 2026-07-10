@@ -681,9 +681,9 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        reader_hw_config = experimental::DataMovement1xxConfig{
+        reader_hw_config = experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
     }
 
@@ -703,9 +703,9 @@ std::vector<uint32_t> run_sfpu_pipeline(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        writer_hw_config = experimental::DataMovement1xxConfig{
+        writer_hw_config = experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
     }
 
@@ -730,7 +730,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
     }
     const bool fp32_dest_acc_en = test_config.en_32bit_dest || test_config.unpack_to_dest_fp32;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::Compute2xxConfig{
+        compute_hw_config = experimental::ComputeGen2Config{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
@@ -738,7 +738,7 @@ std::vector<uint32_t> run_sfpu_pipeline(
             .unpack_to_dest_mode = unpack_modes,
         };
     } else {
-        compute_hw_config = experimental::Compute1xxConfig{
+        compute_hw_config = experimental::ComputeGen1Config{
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .math_approx_mode = test_config.approx_mode,
@@ -906,7 +906,7 @@ experimental::KernelSpec make_writer_unary_quasar_spec(
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
         }},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
-        .hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 }
 
@@ -1037,17 +1037,17 @@ bool run_sfpu_binary_two_input_buffer(
              }},
         .runtime_arg_schema =
             {.runtime_arg_names = {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles"}},
-        .hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true},
+        .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
     };
 
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        compute_hw_config = experimental::Compute2xxConfig{
+        compute_hw_config = experimental::ComputeGen2Config{
             .fp32_dest_acc_en = is_int8_op,
             .math_approx_mode = test_config.approx_mode,
         };
     } else {
-        compute_hw_config = experimental::Compute1xxConfig{
+        compute_hw_config = experimental::ComputeGen1Config{
             .fp32_dest_acc_en = is_int8_op,
             .math_approx_mode = test_config.approx_mode,
         };
@@ -1212,16 +1212,16 @@ bool run_sfpu_ternary_three_input_buffer(
                       "num_tiles",
                       "src2_addr",
                       "src2_bank_id"}},
-            .hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true},
+            .hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true},
         };
 
         experimental::ComputeHardwareConfig compute_hw_config;
         if (mesh_device->arch() == tt::ARCH::QUASAR) {
-            compute_hw_config = experimental::Compute2xxConfig{
+            compute_hw_config = experimental::ComputeGen2Config{
                 .math_approx_mode = test_config.approx_mode,
             };
         } else {
-            compute_hw_config = experimental::Compute1xxConfig{
+            compute_hw_config = experimental::ComputeGen1Config{
                 .math_approx_mode = test_config.approx_mode,
             };
         }

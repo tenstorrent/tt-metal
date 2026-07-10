@@ -59,8 +59,8 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 
 // Maps the four hardware knobs (math_fidelity, math_approx_mode, fp32_dest_acc_en,
 // dst_full_sync_en) of a ComputeKernelConfig to a Metal 2.0 ComputeHardwareConfig. The knobs are
-// common to both generations; `arch` selects the matching alternative (Compute2xxConfig on Quasar,
-// else Compute1xxConfig) — the config's generation must match the target platform.
+// common to both generations; `arch` selects the matching alternative (ComputeGen2Config on Quasar,
+// else ComputeGen1Config) — the config's generation must match the target platform.
 // packer_l1_acc and throttle_level are op-side concerns, not translated.
 // config.unpack_to_dest_mode is copied through to the result's per-DFB unpack_to_dest_mode.
 // (bfp8_pack_precise is left default, as it is rarely to never set non-default.)

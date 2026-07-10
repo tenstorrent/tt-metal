@@ -62,7 +62,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
                 {
                     .runtime_arg_names = {"a", "b"},
                 },
-            .hw_config = experimental::DataMovement2xxConfig{},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 

@@ -90,9 +90,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 
     DataMovementHardwareConfig sender_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        sender_hw_config = DataMovement2xxConfig{};
+        sender_hw_config = DataMovementGen2Config{};
     } else {
-        sender_hw_config = DataMovement1xxConfig{
+        sender_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
         };

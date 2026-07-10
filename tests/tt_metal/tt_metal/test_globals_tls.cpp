@@ -80,7 +80,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
                 {
                     .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
-            .hw_config = experimental::DataMovement2xxConfig{},
+            .hw_config = experimental::DataMovementGen2Config{},
         };
     };
 
@@ -323,7 +323,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
             {
                 .runtime_arg_names = {"signal_address", "l1_result_addr"},
             },
-        .hw_config = experimental::Compute2xxConfig{},
+        .hw_config = experimental::ComputeGen2Config{},
     };
 
     experimental::WorkUnitSpec main_wu{

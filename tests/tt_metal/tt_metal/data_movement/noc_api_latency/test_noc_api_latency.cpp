@@ -135,9 +135,9 @@ bool run_noc_api_latency_test(
 
     DataMovementHardwareConfig noc_kernel_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        noc_kernel_hw_config = DataMovement2xxConfig{};
+        noc_kernel_hw_config = DataMovementGen2Config{};
     } else {
-        noc_kernel_hw_config = DataMovement1xxConfig{
+        noc_kernel_hw_config = DataMovementGen1Config{
             .processor = riscv, .noc = test_config.noc_id, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
     }
     ProgramSpec spec{

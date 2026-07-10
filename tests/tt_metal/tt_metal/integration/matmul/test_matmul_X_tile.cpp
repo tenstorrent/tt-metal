@@ -253,9 +253,9 @@ static void matmul_tile_block(
 
     experimental::DataMovementHardwareConfig reader_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
+        reader_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        reader_hw_config = experimental::DataMovement1xxConfig{
+        reader_hw_config = experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default};
     }
     experimental::KernelSpec reader_spec{
@@ -291,9 +291,9 @@ static void matmul_tile_block(
 
     experimental::DataMovementHardwareConfig writer_hw_config;
     if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        writer_hw_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = true};
+        writer_hw_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = true};
     } else {
-        writer_hw_config = experimental::DataMovement1xxConfig{
+        writer_hw_config = experimental::DataMovementGen1Config{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default};
     }
     experimental::KernelSpec writer_spec{
@@ -334,13 +334,13 @@ static void matmul_tile_block(
 
     experimental::ComputeHardwareConfig compute_hw_config;
     if (mesh_device->arch() == ARCH::QUASAR) {
-        compute_hw_config = experimental::Compute2xxConfig{
+        compute_hw_config = experimental::ComputeGen2Config{
             .math_fidelity = cfg.math_fidelity,
             .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
             .dst_full_sync_en = cfg.dst_full_sync_en,
         };
     } else {
-        compute_hw_config = experimental::Compute1xxConfig{
+        compute_hw_config = experimental::ComputeGen1Config{
             .math_fidelity = cfg.math_fidelity,
             .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
             .dst_full_sync_en = cfg.dst_full_sync_en,

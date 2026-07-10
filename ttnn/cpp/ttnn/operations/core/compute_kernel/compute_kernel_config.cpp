@@ -124,7 +124,7 @@ std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kerne
 tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
     tt::ARCH arch, const ComputeKernelConfig& config) {
     if (arch == tt::ARCH::QUASAR) {
-        return tt::tt_metal::experimental::Compute2xxConfig{
+        return tt::tt_metal::experimental::ComputeGen2Config{
             .math_fidelity = config.math_fidelity,
             .fp32_dest_acc_en = config.fp32_dest_acc_en,
             .dst_full_sync_en = config.dst_full_sync_en,
@@ -133,7 +133,7 @@ tt::tt_metal::experimental::ComputeHardwareConfig to_compute_hardware_config(
             // Omitted fields use defaults: enable_2x_src_format, unpack_to_dest_en
         };
     }
-    return tt::tt_metal::experimental::Compute1xxConfig{
+    return tt::tt_metal::experimental::ComputeGen1Config{
         .math_fidelity = config.math_fidelity,
         .fp32_dest_acc_en = config.fp32_dest_acc_en,
         .dst_full_sync_en = config.dst_full_sync_en,

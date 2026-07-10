@@ -91,15 +91,15 @@ experimental::ProgramSpec build_bmm_program_spec(
     experimental::DataMovementHardwareConfig writer_config;
     experimental::ComputeHardwareConfig compute_config;
     if (is_quasar) {
-        reader_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        writer_config = experimental::DataMovement2xxConfig{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
-        compute_config = experimental::Compute2xxConfig{};
+        reader_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        writer_config = experimental::DataMovementGen2Config{.disable_dfb_implicit_sync_for_all = !use_implicit_sync};
+        compute_config = experimental::ComputeGen2Config{};
     } else {
-        reader_config = experimental::DataMovement1xxConfig{
+        reader_config = experimental::DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
-        writer_config = experimental::DataMovement1xxConfig{
+        writer_config = experimental::DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        compute_config = experimental::Compute1xxConfig{};
+        compute_config = experimental::ComputeGen1Config{};
     }
 
     experimental::DataflowBufferSpec src0_dfb_spec{

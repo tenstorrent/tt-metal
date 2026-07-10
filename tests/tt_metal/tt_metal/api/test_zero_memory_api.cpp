@@ -73,11 +73,11 @@ TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pag
 
 experimental::DataMovementHardwareConfig make_dm_config(tt::ARCH arch, DataMovementProcessor processor, NOC noc) {
     if (arch == tt::ARCH::QUASAR) {
-        return experimental::DataMovement2xxConfig{
+        return experimental::DataMovementGen2Config{
             .disable_dfb_implicit_sync_for_all = true,
         };
     }
-    return experimental::DataMovement1xxConfig{.processor = processor, .noc = noc};
+    return experimental::DataMovementGen1Config{.processor = processor, .noc = noc};
 }
 
 }  // namespace

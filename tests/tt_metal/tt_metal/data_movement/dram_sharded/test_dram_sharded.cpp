@@ -109,9 +109,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
 
     DataMovementHardwareConfig reader_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        reader_hw_config = DataMovement2xxConfig{};
+        reader_hw_config = DataMovementGen2Config{};
     } else {
-        reader_hw_config = DataMovement1xxConfig{
+        reader_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
         };

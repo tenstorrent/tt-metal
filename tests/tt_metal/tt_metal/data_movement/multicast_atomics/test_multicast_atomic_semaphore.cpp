@@ -100,9 +100,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
 
     DataMovementHardwareConfig sender_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        sender_hw_config = DataMovement2xxConfig{};
+        sender_hw_config = DataMovementGen2Config{};
     } else {
-        sender_hw_config = DataMovement1xxConfig{
+        sender_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = test_config.noc_id,
         };
@@ -126,9 +126,9 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
 
     DataMovementHardwareConfig receiver_hw_config;
     if (device->arch() == tt::ARCH::QUASAR) {
-        receiver_hw_config = DataMovement2xxConfig{};
+        receiver_hw_config = DataMovementGen2Config{};
     } else {
-        receiver_hw_config = DataMovement1xxConfig{
+        receiver_hw_config = DataMovementGen1Config{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = test_config.noc_id,
         };

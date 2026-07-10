@@ -3074,9 +3074,9 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 m2::DataMovementHardwareConfig make_datamovement_hardware_config(
     tt::ARCH arch, tt::tt_metal::DataMovementProcessor processor, tt::tt_metal::NOC noc) {
     if (arch == tt::ARCH::QUASAR) {
-        return m2::DataMovement2xxConfig{};
+        return m2::DataMovementGen2Config{};
     }
-    return m2::DataMovement1xxConfig{.processor = processor, .noc = noc};
+    return m2::DataMovementGen1Config{.processor = processor, .noc = noc};
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
