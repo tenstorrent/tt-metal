@@ -82,10 +82,6 @@ GENERATE_PROTO_FILES(
 )
 list(APPEND IMPL_SRC ${PROTO_SRCS})
 
-if(TT_METAL_USE_EMULE)
-    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/emulation/emulated_program_runner.cpp)
-endif()
-
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 

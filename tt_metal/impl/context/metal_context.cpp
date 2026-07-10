@@ -244,8 +244,11 @@ void MetalContext::initialize(
         rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
-    // Watcher server always created, since we use it to register kernels
-    watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
+    // Emulated devices have no firmware for the watcher to poll; skip it. A null
+    // watcher is handled downstream (kernel registration, teardown).
+    if (get_cluster().get_target_device_type() != tt::TargetDevice::Emule) {
+        watcher_server_ = std::make_unique<WatcherServer>(*this->env_);
+    }
     noc_debug_state_ = std::make_unique<NOCDebugState>();
 
     if (rtoptions().get_experimental_noc_debug_dump_enabled()) {
@@ -288,13 +291,17 @@ void MetalContext::initialize(
     if (dprint_server_) {
         dprint_server_->attach_devices();
     }
-    watcher_server_->init_devices();
+    if (watcher_server_) {
+        watcher_server_->init_devices();
+    }
 
     risc_firmware_initializer_->run_launch_phase(device_ids);
 
     // Watcher needs to init before FW since FW needs watcher mailboxes to be set up, and needs to attach after FW
     // starts since it also writes to watcher mailboxes.
-    watcher_server_->attach_devices();
+    if (watcher_server_) {
+        watcher_server_->attach_devices();
+    }
 }
 
 // IMPORTANT: This function is registered as an atexit handler. Creating threads during program termination may cause
