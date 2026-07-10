@@ -122,7 +122,6 @@ class HunyuanTtDecoderLayer(LightweightModule):
                 norm_topk_prob=norm_topk_prob,
                 weight_dtype=weight_dtype,
                 stream_experts=stream_experts,
-                weight_cache_path=weight_cache_path,
             )
 
     def forward(
