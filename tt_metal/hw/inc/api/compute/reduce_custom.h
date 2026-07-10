@@ -153,8 +153,9 @@ ALWI void reduce_block_max_row_reinit_minimal() {
  * Requires copy_tile_custom (which uses ADDR_MOD_4) so ADDR_MOD_3 is preserved
  * from the previous reduce.
  */
-ALWI void reduce_block_max_row_reinit_minimal_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
+ALWI void reduce_block_max_row_reinit_minimal_runtime(
+    uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, num_faces)));
     MATH((llk_math_reduce_block_max_row_reinit_minimal_runtime()));
     PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
@@ -163,9 +164,10 @@ ALWI void reduce_block_max_row_reinit_minimal_runtime(uint32_t block_ct_dim, boo
  * Short reinit (runtime variant): Reprograms reduce MOP and restores addrmods.
  * Used when reduce follows custom SDPA sub path with runtime block_ct_dim.
  */
-ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
-    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+ALWI void reduce_block_max_row_reinit_short_runtime(
+    uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, num_faces)));
+    MATH((llk_math_reduce_block_max_row_reinit_short_runtime<DST_ACCUM_MODE>(block_ct_dim, num_faces)));
     PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
 #endif
@@ -218,16 +220,22 @@ ALWI void reduce_block_max_row_uninit(uint32_t icb) {
 }
 
 // Runtime variants - block_ct_dim and respect_trigger are runtime parameters.
-ALWI void reduce_block_max_row_init_runtime(uint32_t block_ct_dim, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger)));
-    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim)));
+ALWI void reduce_block_max_row_init_runtime(
+    uint32_t block_ct_dim, bool respect_trigger = false, uint32_t num_faces = 4) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, respect_trigger, num_faces)));
+    MATH((llk_math_reduce_block_max_row_init_runtime<DST_ACCUM_MODE>(block_ct_dim, num_faces)));
     PACK((llk_pack_reduce_mask_config<false, ReduceDim::REDUCE_ROW>()));
 }
 
 ALWI void reduce_block_max_row_runtime(
-    uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst, bool respect_trigger = false) {
+    uint32_t icb,
+    uint32_t icb_scaler,
+    uint32_t row_start_index,
+    uint32_t idst,
+    bool respect_trigger = false,
+    uint32_t num_faces = 4) {
     UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(icb, icb_scaler, row_start_index, respect_trigger)));
-    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst)));
+    MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst, num_faces)));
 }
 
 ALWI void reduce_block_max_row_uninit_runtime(uint32_t icb, bool respect_trigger = false) {

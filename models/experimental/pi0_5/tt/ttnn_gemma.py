@@ -881,6 +881,22 @@ def _md_shard_a(a2d, device):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    # Tiny-tile (M<32) path: a 32x32-tiled tensor cannot be width-sharded to an
+    # M-row shard (shard height must be tile-aligned). Re-tilize the activation with
+    # an (M x 32) tile so the (M, K/2) shard is valid; 16x32 matmul_decode consumes it
+    # directly. There is no on-device retile op (tile is fixed at tilization), so this
+    # round-trips through host — a functional-correctness path for the M<32 denoise
+    # step; the op-level perf gain is measured separately in test_md_tile_gain.py.
+    if m < 32:
+        host = ttnn.to_torch(a2d)
+        return ttnn.from_torch(
+            host,
+            dtype=a2d.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            tile=ttnn.Tile((m, 32)),
+            device=device,
+            memory_config=cfg,
+        )
     return ttnn.to_memory_config(a2d, cfg)
 
 
@@ -1161,7 +1177,10 @@ class GemmaMLPTTNN:
                 _x2d = ttnn.reshape(x_chunk, (padded_chunk_size, self.hidden_size))
                 _a = _md_shard_a(_x2d, self.device)
                 _gate = ttnn.matmul_decode(_a, self._gate_md, partial_width_sharded=self._gate_partial)
-                _gate = ttnn.gelu(_gate, fast_and_approximate_mode=True, memory_config=_gate.memory_config())
+                # Inherit _gate's full spec (incl. the 16x32 tiny tile) rather than passing an
+                # explicit memory_config, which rebuilds the output spec with a default 32x32 tile
+                # and breaks the 16-row sharded output.
+                _gate = ttnn.gelu(_gate, fast_and_approximate_mode=True)
                 _up = ttnn.matmul_decode(_a, self._up_md, partial_width_sharded=self._up_partial)
                 ttnn.deallocate(_a)
                 _h = ttnn.multiply(_gate, _up, memory_config=_gate.memory_config())
