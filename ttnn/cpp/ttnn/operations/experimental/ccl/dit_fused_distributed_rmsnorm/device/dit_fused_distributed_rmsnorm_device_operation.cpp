@@ -215,39 +215,46 @@ void DitFusedDistributedRmsnormDeviceOperation::validate_on_program_cache_miss(
     // outside the op lets the caller pre-create one MeshBuffer per cluster
     // and reuse it across launches; we reject mismatched shape/dtype/layout
     // up front so a wrong tensor doesn't silently corrupt the AG.
-    const auto sizing = compute_sizing(args, input, tensor_args);
+    const auto sizing = compute_sizing(args, input);
     if (sizing.use_mux) {
+        // Validate the caller's buffer against the SAME spec compute_output_specs would allocate,
+        // so the check can never drift from the allocation.
+        const auto expected = make_stats_tensor_spec(sizing);
+        const auto& e_shape = expected.logical_shape();
         TT_FATAL(
             tensor_args.persistent_output_buffer.has_value(),
             "persistent_output_buffer is required for TP>1 with multiple workers (use_mux). "
             "Allocate it as a regular device tensor with shape "
             "[1, 1, {}, {}], dtype=FLOAT32, layout=ROW_MAJOR, DRAM INTERLEAVED.",
-            sizing.total_pages,
-            TILE_HEIGHT * sizing.window_size);
+            e_shape[2],
+            e_shape[3]);
         const auto& buf = tensor_args.persistent_output_buffer.value();
         TT_FATAL(buf.storage_type() == StorageType::DEVICE, "persistent_output_buffer must be on device");
         TT_FATAL(buf.buffer() != nullptr, "persistent_output_buffer must be allocated");
         TT_FATAL(
-            buf.layout() == Layout::ROW_MAJOR,
-            "persistent_output_buffer layout must be ROW_MAJOR (got {})",
+            buf.layout() == expected.layout(),
+            "persistent_output_buffer layout must be {} (got {})",
+            expected.layout(),
             buf.layout());
         TT_FATAL(
-            buf.dtype() == DataType::FLOAT32, "persistent_output_buffer dtype must be FLOAT32 (got {})", buf.dtype());
+            buf.dtype() == expected.data_type(),
+            "persistent_output_buffer dtype must be {} (got {})",
+            expected.data_type(),
+            buf.dtype());
         TT_FATAL(
-            buf.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            buf.memory_config().buffer_type() == expected.memory_config().buffer_type(),
             "persistent_output_buffer must be in DRAM");
         TT_FATAL(
-            buf.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+            buf.memory_config().memory_layout() == expected.memory_config().memory_layout(),
             "persistent_output_buffer must be INTERLEAVED");
         const auto& b_shape = buf.logical_shape();
         TT_FATAL(b_shape.rank() == 4, "persistent_output_buffer rank must be 4 (got {})", b_shape.rank());
-        const uint32_t expected_pages = sizing.total_pages;
-        const uint32_t expected_page_width = TILE_HEIGHT * sizing.window_size;
         TT_FATAL(
-            b_shape[0] == 1 && b_shape[1] == 1 && b_shape[2] == expected_pages && b_shape[3] == expected_page_width,
+            b_shape[0] == e_shape[0] && b_shape[1] == e_shape[1] && b_shape[2] == e_shape[2] &&
+                b_shape[3] == e_shape[3],
             "persistent_output_buffer shape must be [1, 1, {}, {}], got [{}, {}, {}, {}]",
-            expected_pages,
-            expected_page_width,
+            e_shape[2],
+            e_shape[3],
             b_shape[0],
             b_shape[1],
             b_shape[2],
@@ -295,11 +302,9 @@ DitFusedDistributedRmsnormDeviceOperation::compute_output_specs(
     // Allocated as a regular device tensor so the framework's
     // create_device_tensor places it as a mesh-coherent MeshBuffer — every
     // chip gets the same DRAM address, which the fabric mcast relies on.
-    const auto sizing = compute_sizing(args, input, tensor_args);
+    const auto sizing = compute_sizing(args, input);
     if (sizing.use_mux) {
-        ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
-        MemoryConfig stats_mem{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-        specs.emplace_back(stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+        specs.emplace_back(make_stats_tensor_spec(sizing));
     }
 
     return specs;

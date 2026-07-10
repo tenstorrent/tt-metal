@@ -85,10 +85,10 @@ void kernel_main() {
     // reloaded per row to reset the welford accumulator; see the cold-start capture.
     constexpr uint32_t welford_zero_cb = get_compile_time_arg_val(40);
     // Per-batch adaLN (CT 41/42/43): weight/bias is [batch,1,H] — broadcast over seq (so the
-    // bcast_rows path applies) but distinct per batch. All batches' rows are resident in
-    // weight_cb / bias_cb (batch * num_tile_cols tiles); we offset the tile index by
-    // wbatch * num_tile_cols, wbatch = (tile_row_start + row) / rows_per_batch_tiles. For a
-    // true-broadcast weight per_batch_* is 0 and the offset collapses to 0 (unchanged).
+    // bcast_rows path applies) but distinct per batch. The reader streams THIS row's batch slice
+    // (batch index = global_tile_row / rows_per_batch_tiles, computed reader-side) to the front of
+    // weight_cb / bias_cb per row, so compute consumes per row with NO batch offset here —
+    // identical to per-token. For a true-broadcast weight per_batch_* is 0.
     constexpr uint32_t per_batch_weight = get_compile_time_arg_val(41);
     constexpr uint32_t per_batch_bias = get_compile_time_arg_val(42);
     constexpr uint32_t rows_per_batch_tiles = get_compile_time_arg_val(43);

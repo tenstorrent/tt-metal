@@ -70,10 +70,12 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
     const uint32_t num_heads_per_device,
     const bool per_head_norm,
     const uint32_t num_links,
-    const std::optional<const ttnn::Tensor>& weight,
-    const std::optional<const ttnn::Tensor>& transformation_mat,
-    const std::optional<const ttnn::Tensor>& rope_cos,
-    const std::optional<const ttnn::Tensor>& rope_sin,
+    // weight/RoPE are accepted for API symmetry with the op call (callers pass the same tensors),
+    // but the stats-buffer geometry does not depend on them — see compute_sizing.
+    [[maybe_unused]] const std::optional<const ttnn::Tensor>& weight,
+    [[maybe_unused]] const std::optional<const ttnn::Tensor>& transformation_mat,
+    [[maybe_unused]] const std::optional<const ttnn::Tensor>& rope_cos,
+    [[maybe_unused]] const std::optional<const ttnn::Tensor>& rope_sin,
     const DitFusedNormType norm_type) {
     const auto& mesh_view = mesh_device.get_view();
     const std::size_t ring_size = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
@@ -99,20 +101,14 @@ std::optional<ttnn::Tensor> dit_fused_distributed_norm_create_stats_buffer_impl(
         kernel_config_val,
         norm_type);
 
-    // Forward weight/RoPE so compute_sizing's per-head-RoPE / streaming chunk clamp
-    // matches the program (the buffer's window/pages follow chunk_size_rows).
-    ttnn::experimental::prim::DitFusedDistributedRmsnormInputs sizing_args{
-        input_tensor, weight, /*bias=*/std::nullopt, transformation_mat, rope_cos, rope_sin, std::nullopt};
-    const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor, sizing_args);
+    // The stats-buffer geometry depends only on input shape / ring size / links / norm_type
+    // (all in params + input_tensor), so no tensor_args are needed here.
+    const auto sizing = ttnn::experimental::prim::compute_sizing(params, input_tensor);
     if (!sizing.use_mux) {
         return std::nullopt;
     }
-
-    ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
-    MemoryConfig stats_mem{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    tt::tt_metal::TensorSpec spec(
-        stats_shape,
-        tt::tt_metal::TensorLayout(DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), stats_mem));
+    // Same spec compute_output_specs allocates, so the pre-allocated buffer matches the op exactly.
+    const auto spec = ttnn::experimental::prim::make_stats_tensor_spec(sizing);
     return tt::tt_metal::create_device_tensor(spec, &const_cast<MeshDevice&>(mesh_device));
 }
 

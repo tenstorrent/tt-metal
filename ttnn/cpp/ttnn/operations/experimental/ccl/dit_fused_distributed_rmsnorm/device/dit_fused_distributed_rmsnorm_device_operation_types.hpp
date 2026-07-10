@@ -15,6 +15,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/dit_fused_distributed_rmsnorm.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_spec.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -146,8 +147,13 @@ struct DitFusedDistributedRmsnormSizing {
 };
 
 DitFusedDistributedRmsnormSizing compute_sizing(
-    const DitFusedDistributedRmsnormParams& args,
-    const Tensor& input,
-    const DitFusedDistributedRmsnormInputs& tensor_args);
+    const DitFusedDistributedRmsnormParams& args, const Tensor& input);
+
+// Single source of truth for the persistent gathered-stats DRAM scratch spec:
+// [1, 1, total_pages, TILE_HEIGHT * window_size], FLOAT32, ROW_MAJOR, DRAM INTERLEAVED.
+// Used by the pre-alloc helper, compute_output_specs, and validate so the pre-allocated
+// buffer, the op's expected spec, and the validation check cannot drift. Only meaningful
+// on the all-gather path (sizing.use_mux; total_pages > 0).
+tt::tt_metal::TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing);
 
 }  // namespace ttnn::experimental::prim

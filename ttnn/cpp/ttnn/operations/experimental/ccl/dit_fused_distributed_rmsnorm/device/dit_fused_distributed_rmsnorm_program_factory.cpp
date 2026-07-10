@@ -223,10 +223,10 @@ bool decide_block_major_post(
     // (x-mean) xmm buffer, so it's whole-row there too (RMS no-rope leaves it tiny).
     whole_row += (fuse_rope || is_layernorm) ? static_cast<uint64_t>(padded) * intermediate_tile_bytes : 0ull;
     whole_row += 2ull * padded * output_tile_bytes;  // output_cb (2 rows)
-    // weight_cb / bias_cb are the TRUE resident tile counts, not num_tile_cols: per-batch adaLN
-    // keeps all `batch` rows resident (batch*num_tile_cols) and per-token holds chunk_size_rows
-    // rows. block-major does NOT shrink these (only the intermediate/output whole-row CBs), so
-    // the decision must count them at full size or a wide per-batch shard silently overflows L1.
+    // weight_cb / bias_cb tile counts (passed in): every affine mode holds ONE row (num_tile_cols)
+    // — broadcast resident, per-token / per-batch streamed per row. block-major does NOT shrink
+    // these (only the intermediate/output whole-row CBs), so the decision counts them here at
+    // their real size (num_tile_cols) rather than assuming they collapse.
     whole_row += has_weight ? static_cast<uint64_t>(weight_cb_tiles) * weight_tile_bytes : 0ull;  // weight_cb
     whole_row += has_bias ? static_cast<uint64_t>(bias_cb_tiles) * bias_tile_bytes : 0ull;        // bias_cb
     // Streamed input_cb + resident cos/sin + the dozen small fp32 stat/scalar CBs +
@@ -277,10 +277,10 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
 // tensor in `compute_output_specs`) and the program factory (to lay out
 // kernels + CBs). Single source of truth so the two cannot drift.
 DitFusedDistributedRmsnormSizing compute_sizing(
-    const DitFusedDistributedRmsnormParams& args,
-    const Tensor& input,
-    const DitFusedDistributedRmsnormInputs& tensor_args) {
-    (void)tensor_args;  // page geometry does not depend on rope/streaming detection
+    const DitFusedDistributedRmsnormParams& args, const Tensor& input) {
+    // Page geometry depends only on the input shape, ring size, links, and norm_type — NOT on
+    // weight/bias/RoPE or the streaming decision (window_size is fixed: 1 here, sticks_per_packet *
+    // stats_per_token on the mux path). So there is no tensor_args to consult.
     DitFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
     const uint32_t W = padded[-1];
@@ -342,6 +342,14 @@ DitFusedDistributedRmsnormSizing compute_sizing(
     return s;
 }
 
+TensorSpec make_stats_tensor_spec(const DitFusedDistributedRmsnormSizing& sizing) {
+    // Row-major fp32 DRAM-interleaved scratch: one accessor page per packed stats page.
+    // Kept in one place so the pre-alloc helper, compute_output_specs, and validate agree.
+    ttnn::Shape stats_shape({1u, 1u, sizing.total_pages, TILE_HEIGHT * sizing.window_size});
+    MemoryConfig stats_mem{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    return TensorSpec(stats_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), stats_mem));
+}
+
 DitFusedDistributedRmsnormMeshWorkloadFactory::cached_program_t
 DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const DitFusedDistributedRmsnormParams& args,
@@ -383,10 +391,11 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const bool per_token_bias = has_bias && (bias->logical_shape()[-2] > 1);
     // Per-batch (adaLN) weight/bias: shape [batch, 1, H] — broadcast over seq (logical[-2]==1,
     // so NOT per-token) but distinct per batch. Detected by the affine tensor spanning `batch`
-    // padded tile-rows (broadcast [1,1,H] spans exactly 1). All batches' rows stay resident in
-    // weight_cb (batch * num_tile_cols tiles); compute offsets the tile index by
-    // wbatch * num_tile_cols (wbatch = global_tile_row / rows_per_batch_tiles). batch>1 is only
-    // reachable with num_heads_per_device==1 (validated in the device op).
+    // padded tile-rows (broadcast [1,1,H] spans exactly 1). weight_cb / bias_cb hold ONE row
+    // (num_tile_cols); the reader STREAMS each output row's batch slice into them per row (batch
+    // index wbatch = global_tile_row / rows_per_batch_tiles), so compute consumes per row with no
+    // batch offset of its own — same as per-token. batch>1 is only reachable with
+    // num_heads_per_device==1 (validated in the device op).
     const uint32_t batch = input_tensor.logical_shape()[1];
     const uint32_t rows_per_batch_tiles = (batch > 0) ? (num_tile_rows / batch) : num_tile_rows;
     auto affine_tile_rows = [](const Tensor& t) -> uint32_t {
