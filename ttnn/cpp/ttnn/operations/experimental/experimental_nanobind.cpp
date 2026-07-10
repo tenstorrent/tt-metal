@@ -53,6 +53,7 @@
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
+#include "ttnn/operations/experimental/deltanet/deltanet_decode_full_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
@@ -142,6 +143,7 @@ void py_module(nb::module_& mod) {
     ttnn::operations::experimental::conv3d::detail::bind_conv3d(mod);
     adaptive_pool::bind_adaptive_avg_pool2d_operation(mod);
     adaptive_pool::bind_adaptive_max_pool2d_operation(mod);
+    deltanet::detail::bind_deltanet_decode_full(mod);
 
     copy::detail::bind_typecast(mod);
 

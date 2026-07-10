@@ -6,6 +6,7 @@ Assembly: tok_embeddings -> 32 x Qwen36DecoderLayer -> RMSNorm -> LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math
+import os
 
 import torch
 from loguru import logger
@@ -520,8 +521,17 @@ class Qwen36Model:
 
         mesh = self.mesh_device
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        _fused = os.environ.get("QWEN_GDN_FUSED_DECODE") == "1"
         for dn in gdn:
             dn._stable_state = True  # in-place recurrent write → trace-safe fixed address
+            # Fused decode keeps its recurrent state in bf16 (the kernel + its batch-flatten reshape
+            # are bf16). Under trace the buffer address is baked in, and the fused step copies a bf16
+            # new_rec into it in place — so materialize a bf16 fixed buffer here (the eager path
+            # tolerates fp32 by re-casting per step, but the traced in-place copy needs matching dtype).
+            if _fused and dn.rec_state is not None and dn.rec_state.dtype != ttnn.bfloat16:
+                _old = dn.rec_state
+                dn.rec_state = ttnn.typecast(_old, ttnn.bfloat16)
+                ttnn.deallocate(_old)
 
         rep = ttnn.ReplicateTensorToMesh(self.device)
 

@@ -18,6 +18,7 @@ import torch
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    l2_norm_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
 )
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
@@ -540,44 +541,116 @@ class TPGatedDeltaNet:
         v = ttnn.reshape(ttnn.slice(conv, (0, 0, 2 * kd), (1, B, self.qkv_dim_tp)), (B, Nv, Dv))
         ttnn.deallocate(conv)
 
-        # expand Q/K from Nk to Nv heads (GQA); recurrence fn L2-norms + scales internally
         rf = Nv // Nk
-        q = ttnn.repeat_interleave(q, rf, dim=1)
-        k = ttnn.repeat_interleave(k, rf, dim=1)
-        q = ttnn.reshape(q, (B, 1, Nv, Dk))
-        k = ttnn.reshape(k, (B, 1, Nv, Dk))
-        v = ttnn.reshape(v, (B, 1, Nv, Dv))
-
-        beta = ttnn.reshape(ttnn.sigmoid(b), (B, 1, Nv))
-        ttnn.deallocate(b)
-        g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))
-        ttnn.deallocate(a)
-        g = ttnn.reshape(g, (B, 1, Nv))
-
-        # fp32 decode step DEFAULT (decode-drift mitigation). The per-step gated-delta recurrence
-        # h = decay*h + beta*(k⊗delta) compounds every token; in bf16, `decay = exp(g)` (near 1.0)
-        # quantizes coarsely and the error accumulates over a long decode → late-generation
-        # repetition collapse. high_precision runs the whole step in fp32 (pairs with the fp32
-        # rec_state default). QWEN35_GDN_DECODE_BF16=1 reverts to the bf16 step.
-        o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
-            q,
-            k,
-            v,
-            beta,
-            g,
-            scale=self.scale,
-            initial_state=self.rec_state,
-            device=self.mesh,
-            high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
-        )
-        if self._stable_state:
-            # In-place update keeps rec_state's address fixed so the decode trace
-            # (captured at pos 0) replays correctly across steps and sequences.
-            ttnn.copy(new_rec, self.rec_state)
-            ttnn.deallocate(new_rec)
+        if os.environ.get("QWEN_GDN_FUSED_DECODE") == "1":
+            # ---- Fused C++ kernel: gated-delta STATE update + raw read, both bit-exact vs torch
+            # (test_deltanet_decode_kernel_pcc: state 1.0, PROBE-RAW 0.99998). The op outputs the
+            # RAW pre-norm o (its internal norm/gate is unused); the gated-RMSNorm + silu(z) run in
+            # ttnn in the shared tail below — matching recurrent_gated_delta_rule_decode_ttnn's
+            # raw-o contract. FLATTENED-HEAD batching (Stage 7): the B decode lanes are folded into
+            # the head axis (H = B*Nv heads, ONE kernel call, one core per (batch,head)), so batching
+            # is ~free. qkv_proj is packed [all_q | all_k | all_v] (batch-major within each block) so
+            # the op's per-head offset math (k_head_idx = h/head_expand_ratio) addresses batch b's
+            # block; state / z / beta / decay are batch-major [.., B*..] = free reshapes. ----
+            H = B * Nv
+            qn = ttnn.multiply(l2_norm_ttnn(q, dim=-1), self.scale)  # [B, Nk, Dk]
+            kn = l2_norm_ttnn(k, dim=-1)
+            qkv_proj = ttnn.reshape(
+                ttnn.concat(
+                    [ttnn.reshape(qn, (1, 1, B * kd)), ttnn.reshape(kn, (1, 1, B * kd)),
+                     ttnn.reshape(v, (1, 1, B * self.value_dim_tp))], dim=-1,
+                ), (1, 1, 1, B * self.qkv_dim_tp),
+            )
+            z_p = ttnn.reshape(z, (1, 1, 1, B * self.value_dim_tp))
+            beta_p = ttnn.reshape(ttnn.sigmoid(b), (1, 1, 1, H))
+            ttnn.deallocate(b)
+            decay_p = ttnn.reshape(
+                ttnn.exp(ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))), (1, 1, 1, H)
+            )
+            ttnn.deallocate(a)
+            # Pass-through / unused kernel args (kept in the op signature) — allocate once and reuse
+            # (a per-step from_torch would be a host write, killing decode perf + breaking trace).
+            if getattr(self, "_kdummy_conv", None) is None:
+                rep = ttnn.ReplicateTensorToMesh(self.mesh)
+                self._kdummy_conv = ttnn.from_torch(
+                    torch.zeros(1, 1, B * self.qkv_dim_tp, 32, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=rep,
+                )
+                self._kdummy_h = ttnn.from_torch(
+                    torch.zeros(1, 1, 1, H, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh, mesh_mapper=rep,
+                )
+                self._knorm_w = ttnn.reshape(tw["norm_w"], (1, 1, 1, Dv))
+            # State: the batch-flatten reshape [B,Nv,Dk,Dv] -> [1,B*Nv,Dk,Dv] mangles an fp32 TILE
+            # tensor (yields NaNs); bf16 reshapes correctly. The kernel's recurrence + output are bf16
+            # regardless (CBs are bf16; output dtype = qkv_proj.dtype), so a bf16 fused-path state is
+            # not a precision regression vs the kernel itself — only the pure-python path keeps the
+            # fp32 high_precision carry. After step 1, self.rec_state is bf16 (reassigned below).
+            rec_src = self.rec_state
+            if rec_src.dtype != ttnn.bfloat16:
+                rec_src = ttnn.typecast(rec_src, ttnn.bfloat16)
+            rec_flat = ttnn.reshape(rec_src, (1, H, Dk, Dv))
+            _out, new_rec, _cs = ttnn.experimental.deltanet_decode_full(
+                qkv_proj, z_p, beta_p, decay_p, self._kdummy_conv, rec_flat, self._kdummy_conv,
+                self._kdummy_h, self._kdummy_h, self._knorm_w,
+                num_heads=H, num_k_heads=B * Nk, k_head_dim=Dk, v_head_dim=Dv,
+                conv_dim=B * self.qkv_dim_tp, conv_kernel_size=self.K, head_expand_ratio=rf,
+            )
+            ttnn.deallocate(_cs)
+            if rec_src is not self.rec_state:
+                ttnn.deallocate(rec_src)
+            # Kernel outputs the RAW pre-norm read (q @ S_new); the gated-RMSNorm(norm_w) + silu(z)
+            # runs in the ttnn tail below. Folding norm/gate into the kernel was measured SLOWER on
+            # Blackhole (one-core-per-head serializes the RMSNorm reduce: +8.4ms/step at B=8 vs the
+            # parallel ttnn tail) — see memory note. So we keep the raw-o contract + ttnn norm/gate.
+            o = _out  # [1,1,1,B*Nv*Dv] RAW; shared tail does norm/gate + reshape to (B,Nv,Dv)
+            new_rec = ttnn.reshape(new_rec, (B, Nv, Dk, Dv))  # bf16
+            if self._stable_state:
+                ttnn.copy(new_rec, self.rec_state)
+                ttnn.deallocate(new_rec)
+            else:
+                self.rec_state = new_rec
         else:
-            self.rec_state = new_rec
+            # expand Q/K from Nk to Nv heads (GQA); recurrence fn L2-norms + scales internally
+            q = ttnn.repeat_interleave(q, rf, dim=1)
+            k = ttnn.repeat_interleave(k, rf, dim=1)
+            q = ttnn.reshape(q, (B, 1, Nv, Dk))
+            k = ttnn.reshape(k, (B, 1, Nv, Dk))
+            v = ttnn.reshape(v, (B, 1, Nv, Dv))
 
+            beta = ttnn.reshape(ttnn.sigmoid(b), (B, 1, Nv))
+            ttnn.deallocate(b)
+            g = ttnn.multiply(tw["neg_exp_A"], ttnn.softplus(ttnn.add(a, tw["dt_bias"])))
+            ttnn.deallocate(a)
+            g = ttnn.reshape(g, (B, 1, Nv))
+
+            # fp32 decode step DEFAULT (decode-drift mitigation). The per-step gated-delta recurrence
+            # h = decay*h + beta*(k⊗delta) compounds every token; in bf16, `decay = exp(g)` (near 1.0)
+            # quantizes coarsely and the error accumulates over a long decode → late-generation
+            # repetition collapse. high_precision runs the whole step in fp32 (pairs with the fp32
+            # rec_state default). QWEN35_GDN_DECODE_BF16=1 reverts to the bf16 step.
+            o, new_rec = recurrent_gated_delta_rule_decode_ttnn(
+                q,
+                k,
+                v,
+                beta,
+                g,
+                scale=self.scale,
+                initial_state=self.rec_state,
+                device=self.mesh,
+                high_precision=(os.environ.get("QWEN35_GDN_DECODE_BF16") != "1"),
+            )
+            if self._stable_state:
+                # In-place update keeps rec_state's address fixed so the decode trace
+                # (captured at pos 0) replays correctly across steps and sequences.
+                ttnn.copy(new_rec, self.rec_state)
+                ttnn.deallocate(new_rec)
+            else:
+                self.rec_state = new_rec
+
+        # Gated-RMSNorm(norm_w) over Dv + silu(z) gate, in ttnn (both the fused-kernel raw-o path
+        # and the recurrent_gated_delta_rule_decode_ttnn path output raw o). Folding this into the
+        # kernel is a NET LOSS on Blackhole (one-core-per-head serializes the reduce) — see memory.
         out_r = ttnn.reshape(o, (B, Nv, Dv))
         out_n = ttnn.rms_norm(out_r, weight=tw["norm_w"], epsilon=1e-6)  # gated norm: weight only (no +1)
         ttnn.deallocate(out_r)
