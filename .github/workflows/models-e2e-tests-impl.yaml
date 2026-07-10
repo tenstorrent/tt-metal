@@ -113,6 +113,10 @@ jobs:
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
+        # --- Plan B (#45127 LLK hunt) — JIT kernels with DWARF into a fixed cache so the
+        # --- llk_api_analyzer step below can recover which LLK APIs each compute kernel used.
+        TT_METAL_RISCV_DEBUG_INFO: "1"
+        TT_METAL_CACHE: /work/generated/llk_kcache
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -157,6 +161,40 @@ jobs:
             # step below; the in-test checks are warning-only, so the tests write
             # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
+      # --- Plan B (#45127 LLK hunt): analyze the JIT kernels this run produced. ---
+      # Runs even when the test hangs/times out or fails at 0% accuracy — the compute
+      # kernels are JIT-compiled (with DWARF, via TT_METAL_RISCV_DEBUG_INFO) before the
+      # numeric check, so the DWARF ELFs already exist in $TT_METAL_CACHE.
+      - name: LLK API analysis (#45127)
+        if: ${{ always() }}
+        shell: bash
+        working-directory: /work
+        run: |
+          set -x
+          python3 -m pip install --no-cache-dir pyelftools tabulate \
+            || python3 -m pip install --no-cache-dir --break-system-packages pyelftools tabulate \
+            || pip3 install --no-cache-dir pyelftools tabulate || true
+          CACHE="${TT_METAL_CACHE:-$HOME/.cache/tt-metal-cache}"
+          echo "Analyzing JIT kernels under: $CACHE"
+          echo "trisc ELFs found: $(find "$CACHE" -name 'trisc*.elf' 2>/dev/null | wc -l)"
+          mkdir -p generated
+          PYTHONPATH=/work python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f table -l llk_core,llk_api -o generated/llk_report_table.md || true
+          PYTHONPATH=/work python3 -m tt_metal.tools.llk_api_analyzer "$CACHE" -f csv   -l llk_core,llk_api -o generated/llk_report.csv || true
+          echo "===================== #45127-active signature counts ====================="
+          for s in "dim_stride_target=FACE_ROW_MAJOR" "unpack_tilize" "unpack_bcastA_B" "dim_stride_target=IGNORE"; do
+            echo "  $s : $(grep -c "$s" generated/llk_report_table.md 2>/dev/null || echo 0)"
+          done
+          echo "===================== kernels hitting FACE_ROW_MAJOR / tilize / bcastA_B ====================="
+          grep -nE "FACE_ROW_MAJOR|unpack_tilize|unpack_bcastA_B" generated/llk_report.csv 2>/dev/null | head -80 || true
+      - name: Upload LLK report (#45127)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: llk-report-45127
+          path: |
+            generated/llk_report_table.md
+            generated/llk_report.csv
+          if-no-files-found: warn
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}

@@ -212,7 +212,7 @@
   model: qwen3-32b-galaxy
   skus:
     wh_galaxy_perf:
-      timeout: 10
+      timeout: 25 # bumped from 10 for Plan B: DWARF debug-info compile is slower; ensure kernels JIT before any hang
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
@@ -665,7 +665,7 @@
     bh_p150:
       timeout: 5
       tier: 2
-  owner_id: U06ECNVR0EN # Evan Smal
+  owner_id: U06ECNVR0EN # Evan Small
   team: models
 
 
