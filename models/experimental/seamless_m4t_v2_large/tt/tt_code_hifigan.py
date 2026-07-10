@@ -447,7 +447,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self.leaky_slope = float(config.leaky_relu_slope)
         self.num_kernels = len(config.resblock_kernel_sizes)
 
-        # HiFi4 math fidelity for waveform PCC.
+        # HiFi4 math fidelity for waveform PCC. (Measured: HiFi2 saves only ~1% total device time
+        # because ~80% of the vocoder is data movement, not conv math — not worth the PCC-margin hit;
+        # LoFi fails outright. The real bottleneck is the layout/slice/untilize glue.)
         self._compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -527,6 +529,62 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if len(t_cols) == 1:
             return t_cols[0]
         return ttnn.concat(t_cols, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _expand_unit_embeddings_gather(
+        self,
+        use: ttnn.Tensor,
+        *,
+        batch: int,
+        e_unit: int,
+        seq: int,
+        t_audio: int,
+        cumsum_inc_bt: ttnn.Tensor,
+        frame_idx: ttnn.Tensor,
+    ) -> ttnn.Tensor:
+        """Frame-expand unit embeddings via a per-frame gather (replaces the one-hot ``use @ H`` matmul).
+
+        Frame ``t`` belongs to unit ``u(t) = #{s : cumsum_inc[s] <= t}`` (searchsorted-right): the
+        unique unit whose half-open ``[cumsum_prev, cumsum_inc)`` interval contains ``t``. Bucket-pad
+        frames (``t >= t_audio_real``, where every ``cumsum_inc[s] <= t``) get ``u(t) == seq`` and
+        gather an appended all-zero row — matching the old matmul's all-zero column exactly.
+
+        Returns ``[B, E_unit, t_audio]`` (channel-first) to slot into the existing lang/spk concat.
+        Replaces ``O(t_audio/32 * seq/32)`` tiny matmuls + adds + slices with one reduce + one gather.
+        """
+        assert batch == 1, "_expand_unit_embeddings_gather expects B == 1 (forward loops rows)."
+        # unit index per frame = count of inclusive-cumulative durations <= t. Accumulate in fp32:
+        # bf16 rounds integers above 256, which would corrupt indices for seq up to 1024.
+        c_b = ttnn.reshape(cumsum_inc_bt, (batch, seq, 1))  # [B, T_units, 1]
+        f_b = ttnn.reshape(frame_idx, (1, 1, t_audio))  # [1, 1, t_audio]
+        le_mask = ttnn.le(c_b, f_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, T_units, t_audio]
+        le_f32 = ttnn.typecast(le_mask, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(le_mask)
+        unit_idx_f = ttnn.sum(le_f32, dim=1)  # [B, t_audio] (values in [0, seq])
+        ttnn.deallocate(le_f32)
+        unit_idx = ttnn.typecast(unit_idx_f, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(unit_idx_f)
+        unit_idx = ttnn.reshape(unit_idx, (batch, t_audio))
+        unit_idx = ttnn.to_layout(unit_idx, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Gather table: use [B, T_units, E_unit] -> row-major [T_units + 1, E_unit] with a zero tail
+        # row so out-of-range (padding) indices gather zeros. ``use`` itself is owned by the caller,
+        # so never deallocate it here — only intermediates this method creates.
+        use_rm = ttnn.to_layout(use, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        use_tbl = ttnn.reshape(use_rm, (seq, e_unit))
+        table = ttnn.pad(use_tbl, [(0, 1), (0, 0)], value=0.0)  # [T_units + 1, E_unit]
+        seen: set[int] = set()
+        for t in (use_tbl, use_rm):
+            if t is use or t is table or id(t) in seen:
+                continue
+            seen.add(id(t))
+            ttnn.deallocate(t)
+
+        gathered = ttnn.embedding(unit_idx, weight=table, layout=ttnn.TILE_LAYOUT)  # [B, t_audio, E_unit]
+        ttnn.deallocate(unit_idx)
+        ttnn.deallocate(table)
+        expanded_BCT = ttnn.permute(gathered, (0, 2, 1))  # [B, E_unit, t_audio]
+        ttnn.deallocate(gathered)
+        return expanded_BCT
 
     def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> Optional[ttnn.ProgramConfig]:
         if token_rows > MATMUL_1D_SEQ_THRESHOLD:
@@ -1640,16 +1698,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dur_bf = ttnn.maximum(r, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, T_units] bf16
         ttnn.deallocate(r)
 
-        # ---------- exclusive cumulative duration (device) ----------
+        # ---------- inclusive cumulative duration (device) ----------
         # Use float32 internally so integer comparisons are exact for any plausible t_audio.
         dur_f32 = ttnn.typecast(dur_bf, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         cumsum_inc = ttnn.cumsum(dur_f32, dim=-1, dtype=ttnn.float32)  # [B, T_units] inclusive
-        cumsum_prev = ttnn.subtract(cumsum_inc, dur_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(dur_f32)
         ttnn.deallocate(dur_bf)
 
         cumsum_inc_bt = _as_batch_time_2d(cumsum_inc, batch=batch, seq=seq)
-        cumsum_prev_bt = _as_batch_time_2d(cumsum_prev, batch=batch, seq=seq)
 
         # ``t_audio`` from HF gather index (not last TILE column, which may be padding).
         # Metal trace capture forbids host readbacks — reuse values cached on the compile forward.
@@ -1676,31 +1732,20 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if not trace_no_profiler:
             ttnn.ReadDeviceProfiler(self.device)
 
-        # ---------- expansion via embeddings @ H (device) ----------
-        # Defer dealloc of views (slice/permute/reshape) until after concat — aliases are common.
+        # ---------- expansion via per-frame gather (device) ----------
+        # ``H`` in the old matmul path was a one-hot selection mask, so ``use @ H`` is exactly a
+        # gather: frame ``t`` copies the unit whose ``[cumsum_prev, cumsum_inc)`` interval contains
+        # it; padded frames (``t >= t_audio_real``) gather an all-zero row. This replaces the
+        # ``O(t_audio/32 * seq/32)`` tiny-matmul + slice + concat explosion with one reduce + gather.
         frame_idx = self._cached_frame_idx_f32(t_audio)
-        # Reshape for broadcasting: [B, T_units, 1] vs [1, 1, t_audio].
-        c_b = ttnn.reshape(cumsum_inc_bt, (batch, seq, 1))
-        cp_b = ttnn.reshape(cumsum_prev_bt, (batch, seq, 1))
-        f_b = ttnn.reshape(frame_idx, (1, 1, t_audio))
-
-        lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        upper = ttnn.lt(f_b, c_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        H_mask = ttnn.logical_and(lower, upper, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(lower)
-        ttnn.deallocate(upper)
-        H = ttnn.typecast(H_mask, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(H_mask)
-
-        # use: [B, T_units, E_unit] -> [B, E_unit, T_units]; expand to [B, E_unit, t_audio].
-        use_BEC = ttnn.permute(use, (0, 2, 1))
-        expanded_BCT = self._expand_unit_embeddings_matmul(
-            use_BEC,
-            H,
+        expanded_BCT = self._expand_unit_embeddings_gather(
+            use,
             batch=batch,
             e_unit=e_unit,
             seq=seq,
             t_audio=t_audio,
+            cumsum_inc_bt=cumsum_inc_bt,
+            frame_idx=frame_idx,
         )
 
         # ---------- broadcast lang/spk to ``t_audio`` (device) ----------
@@ -1721,9 +1766,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         ttnn.deallocate(lang_BCT)
         ttnn.deallocate(expanded_BCT)
         ttnn.deallocate(spk_BCT)
-        ttnn.deallocate(use_BEC)
         ttnn.deallocate(use)
-        ttnn.deallocate(H)
         merged_NLC = ttnn.permute(merged_BCT, (0, 2, 1))
         ttnn.deallocate(merged_BCT)
 
@@ -1734,7 +1777,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # Real (un-bucketed) length so the bucket-padded waveform tail is cropped out by consumers.
         lengths = self._output_lengths_dev(t_audio_real, batch=batch)
         ttnn.deallocate(cumsum_inc)
-        ttnn.deallocate(cumsum_prev)
         return wav, lengths
 
     # ------------------------------------------------------------------------------- B > 1
