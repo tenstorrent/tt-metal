@@ -1,0 +1,190 @@
+2026-07-10 08:13:40.213 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-07-10 08:13:42.919 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.ETH
+2026-07-10 08:13:42.919 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.ROW
+2026-07-10 08:13:44.482 | INFO     | tracy:signpost:49 - PERF_PREFILL_BASELINE
+2026-07-10 08:13:44.641 | INFO     | tracy:signpost:49 - PERF_PREFILL_BASELINE_END
+2026-07-10 08:13:48.206 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:13:48.207 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:13:48.207 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:13:48.207 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:13:48.207 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:13:48.207 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:13:48.209 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:13:48.209 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:13:48.209 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:13:48.210 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:13:48.210 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:13:48.210 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:13:48.210 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:13:48.210 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:13:48.780 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-10 08:13:48.964 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-10 08:13:52.535 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:13:52.535 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:13:52.535 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:13:52.535 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:13:52.535 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:13:52.535 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:13:52.536 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:13:52.537 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:13:52.537 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:13:52.537 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:13:52.537 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:13:52.538 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:13:52.538 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:13:52.538 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:13:52.902 | INFO     | tracy:signpost:49 - PERF_PREFILL_DRAM
+2026-07-10 08:13:53.061 | INFO     | tracy:signpost:49 - PERF_PREFILL_DRAM_END
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+2026-07-10 08:13:57.873 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:13:57.873 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:13:57.873 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:13:57.873 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:13:57.873 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:13:57.873 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:13:57.875 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:13:57.875 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:13:57.875 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:13:57.875 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:13:57.876 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:13:57.876 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:13:57.876 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:13:57.876 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:13:58.087 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-10 08:13:58.280 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-10 08:14:03.300 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:03.301 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:03.301 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:03.301 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:03.301 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:03.301 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:03.302 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:03.302 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:03.303 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:03.303 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:03.303 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:03.303 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:03.303 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:03.303 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:03.503 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-10 08:14:03.791 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+2026-07-10 08:14:08.494 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:08.494 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:08.494 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:08.494 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:08.494 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:08.494 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:08.496 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:08.496 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:08.496 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:08.496 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:08.497 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:08.497 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:08.497 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:08.497 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:09.977 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-07-10 08:14:14.839 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-07-10 08:14:18.413 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:18.414 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:18.414 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:18.414 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:18.414 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:18.414 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:18.416 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:18.416 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:18.416 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:18.417 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:18.417 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:18.417 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:18.417 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:18.417 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:19.741 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-07-10 08:14:23.867 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-07-10 08:14:27.496 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:27.496 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:27.496 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:27.496 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:27.496 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:27.496 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:27.498 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:27.498 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:27.498 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:27.499 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:27.499 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:27.499 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:27.499 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:27.499 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:37.738 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:37.738 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:37.738 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:37.738 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:37.738 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:37.738 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:37.740 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:37.740 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:37.741 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:37.741 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:37.741 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:37.741 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:37.741 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:37.741 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:45.286 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:45.286 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:45.286 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:45.287 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:45.287 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:45.287 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:45.288 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:45.288 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:45.289 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:45.289 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:45.289 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:45.289 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:45.289 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:45.290 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:53.154 | INFO     | models.tt_transformers.tt.model_config:__init__:531 - Inferring device name: N150
+2026-07-10 08:14:53.155 | INFO     | models.tt_transformers.tt.model_config:__init__:590 - Checkpoint directory: meta-llama/Llama-3.1-8B-Instruct
+2026-07-10 08:14:53.155 | INFO     | models.tt_transformers.tt.model_config:__init__:591 - Tokenizer file: meta-llama/Llama-3.1-8B-Instruct/tokenizer.model
+2026-07-10 08:14:53.155 | INFO     | models.tt_transformers.tt.model_config:__init__:592 - Cache directory: model_cache/meta-llama/Llama-3.1-8B-Instruct/N150
+2026-07-10 08:14:53.155 | INFO     | models.tt_transformers.tt.model_config:__init__:593 - Model name: Llama-3.1-8B-Instruct
+2026-07-10 08:14:53.155 | INFO     | models.tt_transformers.tt.model_config:_set_hf_params:2896 - Loading state param for dummy Llama-3.1-8B-Instruct from /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct
+2026-07-10 08:14:53.157 | INFO     | models.tt_transformers.tt.model_config:_set_params_from_dict:2710 - Model name from config: Llama-3.1-8B-Instruct
+2026-07-10 08:14:53.157 | INFO     | models.tt_transformers.tt.model_config:__init__:638 - Reducing prefill_len_cutoff to 512 for Llama-3.1-8B-Instruct on N150
+2026-07-10 08:14:53.157 | INFO     | models.tt_transformers.tt.model_config:_precision_factory:4535 - Model Llama-3.1-8B-Instruct requires specific TensorPrecision and OpFidelity configuration, using /localdev/mvasiljevic/tt-metal/models/tt_transformers/model_params/Llama-3.1-8B-Instruct/performance_decoder_config.json
+2026-07-10 08:14:53.158 | INFO     | models.tt_transformers.tt.model_config:__init__:1118 - Attention grid: ttnn.CoreGrid(x=8, y=4)
+2026-07-10 08:14:53.158 | INFO     | models.tt_transformers.tt.model_config:__init__:1119 - MLP grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:53.158 | INFO     | models.tt_transformers.tt.model_config:__init__:1120 - MLP prefill grids @ 32: w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:53.158 | INFO     | models.tt_transformers.tt.model_config:__init__:1121 - MLP prefill grids @ max_seq_len(64): w1/w3: (8, 8), w2: (8, 8)
+2026-07-10 08:14:53.158 | INFO     | models.tt_transformers.tt.model_config:__init__:1124 - LM head grid: ttnn.CoreGrid(x=8, y=8)
+2026-07-10 08:14:58.625 | INFO     | tracy:signpost:49 - PERF_DECODE_TRACE
+2026-07-10 08:14:58.629 | INFO     | tracy:signpost:49 - PERF_DECODE_TRACE_END
+nanobind: leaked 2 instances!
+ - leaked instance 0x7f3496e64138 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7f34968059c8 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 28 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.multi_device.CppTensorToMesh"
+ - ... skipped remainder
+nanobind: leaked 287 functions!
+ - leaked function "__init__"
+ - leaked function "get_tile"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "buffer_page_size"
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

@@ -1,0 +1,10 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+94.50,MatmulDeviceOperation (in0:dram_interleaved),67000.97,5,Compute,4.98,5.22,5.09,0.11,5.07
+1.93,BinaryNgDeviceOperation (in0:dram_interleaved),1367.30,9,Compute,,,,,
+1.22,ReshapeViewDeviceOperation (in0:dram_interleaved),868.31,4,Other,,,,,
+0.69,UnaryDeviceOperation (in0:dram_interleaved),487.76,3,Compute,,,,,
+0.47,LayerNormDeviceOperation (in0:dram_interleaved),336.45,2,Compute,,,,,
+0.45,SliceDeviceOperation (in0:dram_interleaved),319.68,7,TM,,,,,
+0.34,TransposeDeviceOperation (in0:dram_interleaved),238.97,4,TM,,,,,
+0.22,SDPAOperation (in0:dram_interleaved),156.93,1,Compute,,,,,
+0.17,ConcatDeviceOperation (in0:dram_interleaved),121.47,2,TM,,,,,

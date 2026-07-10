@@ -1,0 +1,164 @@
+{
+  "provenance": {
+    "emit": "/localdev/mvasiljevic/ttnn-models/meta-llama/Llama-3.1-8B-Instruct/model/graph_0/model_ttnn.py",
+    "consteval": "/localdev/mvasiljevic/ttnn-models/meta-llama/Llama-3.1-8B-Instruct/model/graph_0/consteval.py",
+    "params": "/localdev/mvasiljevic/ttnn-models/meta-llama/Llama-3.1-8B-Instruct/model/graph_0/params.py",
+    "model_pt": "/localdev/mvasiljevic/ttnn-models/meta-llama/Llama-3.1-8B-Instruct/model/graph_0/model_pt.py",
+    "emitted_batch": 32,
+    "emitted_seq_len": 1,
+    "emitted_cache_len": 128,
+    "emitted_grid": "CoreCoord(11, 10) largest observed; per-op grids below are copied from the emit",
+    "capture_schema": "lossless per-layer/per-role templates for repeated emitted decoder ops; entries name layer variants when the emit differs",
+    "note": "This is a decode emit, not a prefill emit. Grids/shard-core counts are verbatim from the emit's authoring device and MUST be legalized to the optimize target's real compute grid; only the intent ports as-is."
+  },
+  "ops": {
+    "embedding_output": {
+      "memory_layout": "BLOCK_SHARDED",
+      "shard_shape": [32, 384],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 11,
+      "output_dtype": "BFLOAT16",
+      "program_config": null,
+      "weights_layout": "interleaved",
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "input_rms_norm_layer0": {
+      "memory_layout": "BLOCK_SHARDED",
+      "shard_shape": [32, 384],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 11,
+      "output_dtype": "BFLOAT16",
+      "program_config": null,
+      "weights_layout": null,
+      "fused_activation": null,
+      "compute_kernel": "WormholeComputeKernelConfig(math_fidelity=HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)"
+    },
+    "rms_norm_other_layers": {
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 192],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 22,
+      "output_dtype": "BFLOAT16",
+      "program_config": null,
+      "weights_layout": null,
+      "fused_activation": null,
+      "compute_kernel": "WormholeComputeKernelConfig(math_fidelity=HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)"
+    },
+    "qkv_matmul": {
+      "applies_to": "ttnn_matmul_0 for layer 0, ttnn_matmul_156 for layer 31, and the repeated middle-layer qkv matmul role",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 64],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 96,
+      "output_dtype": "BFLOAT16",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=CoreCoord(11, 9), in0_block_w=2, out_subblock_h=1, out_subblock_w=2, out_block_h=1, out_block_w=2, per_core_M=1, per_core_N=2, fuse_batch=True, fused_activation=None, mcast_in0=True, gather_in0=False, hop_cores=CoreRangeSet([]), num_global_cb_receivers=0, untilize_out=False)",
+      "weights_layout": "dram_width_sharded",
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "qkv_weight": {
+      "memory_layout": "DRAM",
+      "shard_shape": null,
+      "shard_orientation": null,
+      "core_count": null,
+      "output_dtype": "BFLOAT8_B",
+      "program_config": null,
+      "weights_layout": "interleaved",
+      "fused_activation": null,
+      "compute_kernel": null,
+      "note": "Layers 0..30 fuse [Q,V,K]; layer 31 reorders to [Q,K,V] in consteval."
+    },
+    "rope_cos_sin_mask": {
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 32],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 4,
+      "output_dtype": "BFLOAT16",
+      "program_config": null,
+      "weights_layout": null,
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "kv_cache_update": {
+      "memory_layout": "HEIGHT_SHARDED",
+      "shard_shape": [32, 128],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 32,
+      "output_dtype": "BFLOAT16",
+      "program_config": "ttnn.experimental.paged_update_cache(share_cache=False, page_table=None)",
+      "weights_layout": null,
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "sdpa_decode": {
+      "memory_layout": "DRAM",
+      "shard_shape": null,
+      "shard_orientation": null,
+      "core_count": null,
+      "output_dtype": "BFLOAT16",
+      "program_config": "scaled_dot_product_attention_decode(is_causal=False, explicit mask, scale=0.088388338685035706)",
+      "weights_layout": null,
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "o_proj_matmul": {
+      "applies_to": "ttnn_matmul_2 for layer 0 and repeated o_proj matmul role in decoder layers",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 64],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 64,
+      "output_dtype": "BFLOAT16",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=CoreCoord(11, 6), in0_block_w=8, out_subblock_h=1, out_subblock_w=2, out_block_h=1, out_block_w=2, per_core_M=1, per_core_N=2, fuse_batch=True, fused_activation=None, mcast_in0=True, gather_in0=False, hop_cores=CoreRangeSet([]), num_global_cb_receivers=0, untilize_out=False)",
+      "weights_layout": "dram_width_sharded",
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "mlp_gate_up": {
+      "applies_to": "ttnn_matmul_3 gate_proj and ttnn_matmul_4 up_proj repeated by decoder layer",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 160],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 90,
+      "output_dtype": "BFLOAT16",
+      "program_config": "gate_proj: MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=ttnn.CoreCoord(11, 9), in0_block_w=2, out_subblock_h=1, out_subblock_w=5, out_block_h=1, out_block_w=5, per_core_M=1, per_core_N=5, fuse_batch=True, fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), mcast_in0=True, gather_in0=False, hop_cores=ttnn.CoreRangeSet([]), num_global_cb_receivers=0, untilize_out=False); up_proj: MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=ttnn.CoreCoord(11, 9), in0_block_w=2, out_subblock_h=1, out_subblock_w=5, out_block_h=1, out_block_w=5, per_core_M=1, per_core_N=5, fuse_batch=True, fused_activation=None, mcast_in0=True, gather_in0=False, hop_cores=ttnn.CoreRangeSet([]), num_global_cb_receivers=0, untilize_out=False)",
+      "weights_layout": "dram_width_sharded",
+      "fused_activation": "SILU on gate_proj",
+      "compute_kernel": null
+    },
+    "mlp_down": {
+      "applies_to": "ttnn_matmul_5 repeated by decoder layer after WIDTH_SHARDED [32,256] down-input relayout",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 64],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 64,
+      "output_dtype": "BFLOAT16",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=ttnn.CoreCoord(11, 6), in0_block_w=8, out_subblock_h=1, out_subblock_w=2, out_block_h=1, out_block_w=2, per_core_M=1, per_core_N=2, fuse_batch=True, fused_activation=None, mcast_in0=True, gather_in0=False, hop_cores=ttnn.CoreRangeSet([]), num_global_cb_receivers=0, untilize_out=False)",
+      "weights_layout": "dram_width_sharded",
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "residual_adds": {
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 64],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 64,
+      "output_dtype": "BFLOAT16",
+      "program_config": null,
+      "weights_layout": null,
+      "fused_activation": null,
+      "compute_kernel": null
+    },
+    "lm_head": {
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [32, 1184],
+      "shard_orientation": "ROW_MAJOR",
+      "core_count": 109,
+      "output_dtype": "BFLOAT16",
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=CoreCoord(11, 10), in0_block_w=2, out_subblock_h=1, out_subblock_w=1, out_block_h=1, out_block_w=37, per_core_M=1, per_core_N=37, fuse_batch=True, fused_activation=None, mcast_in0=True, gather_in0=False, hop_cores=CoreRangeSet([]), num_global_cb_receivers=0, untilize_out=False)",
+      "weights_layout": "dram_width_sharded",
+      "fused_activation": null,
+      "compute_kernel": null
+    }
+  }
+}

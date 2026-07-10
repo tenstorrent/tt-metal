@@ -1,0 +1,79 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: wormhole
+Architecture: wormhole, Worker cores: 64
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE_TRACE'.
+Using operations until 'PERF_DECODE_TRACE_END'.
+Detected data from 1 devices. Merging device data...
+
+🚀 Performance Report 🚀
+========================
+
+ID  Total %  Bound  OP Code                                  Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs        FLOPs %  Math Fidelity
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+56    1.1 %         LayerNormDeviceOperation                       0        11 μs                   32                                                 BF16, BF16 => BF16
+57   11.2 %   DRAM  MatmulDeviceOperation 32 x 4096 x 6144         0       111 μs          1 μs     12  226 GB/s  78.6 %  14.5 TFLOPs   58.7 %  HiFi2 BF16 x BFP8 => BF16
+58    0.4 %         ShardedToInterleavedDeviceOperation            0         3 μs          1 μs     32                                                       BF16 => BF16
+59    2.1 %         NLPCreateQKVHeadsDecodeDeviceOperation         0        21 μs          1 μs     32                                                       BF16 => BF16
+60    0.6 %         RotaryEmbeddingLlamaDeviceOperation            0         5 μs          1 μs     32                                                 BF16, BF16 => BF16
+61    0.6 %         RotaryEmbeddingLlamaDeviceOperation            0         5 μs          1 μs     32                                                 BF16, BF16 => BF16
+62    2.8 %         PagedUpdateCacheDeviceOperation                0        27 μs          1 μs     32                                                 BF16, BF16 => BF16
+63    2.5 %         PagedUpdateCacheDeviceOperation                0        25 μs          1 μs     32                                                 BF16, BF16 => BF16
+64    3.1 %         SdpaDecodeDeviceOperation                      0        30 μs          1 μs     64                                                 BF16, BF16 => BF16
+65    0.3 %         InterleavedToShardedDeviceOperation            0         3 μs          1 μs     32                                                       BF16 => BF16
+66    0.9 %         NLPConcatHeadsDecodeDeviceOperation            0         8 μs          1 μs     32                                                       BF16 => BF16
+67    8.0 %   DRAM  MatmulDeviceOperation 32 x 4096 x 4096         0        80 μs          1 μs     12  210 GB/s  72.9 %  13.4 TFLOPs   54.5 %  HiFi2 BF16 x BFP8 => BF16
+68    0.3 %         BinaryNgDeviceOperation                        0         2 μs          1 μs     64                                                 BF16, BF16 => BF16
+69    0.3 %         ReshardDeviceOperation                         0         2 μs          1 μs     64                                                       BF16 => BF16
+70    1.4 %         LayerNormDeviceOperation                       0        13 μs          1 μs     64                                                 BF16, BF16 => BF16
+71   18.4 %   SLOW  MatmulDeviceOperation 32 x 4096 x 14336        0       183 μs          2 μs     12  161 GB/s  55.8 %  20.6 TFLOPs   47.1 %   LoFi BF16 x BFP4 => BF16
+72   18.4 %   SLOW  MatmulDeviceOperation 32 x 4096 x 14336        0       183 μs          1 μs     12  160 GB/s  55.6 %  20.5 TFLOPs   46.9 %   LoFi BF16 x BFP4 => BF16
+73    2.1 %         BinaryNgDeviceOperation                        0        21 μs          1 μs     64                                                 BF16, BF16 => BFP8
+74   24.8 %   DRAM  MatmulDeviceOperation 32 x 14336 x 4096        0       248 μs          1 μs     12  237 GB/s  82.2 %  15.1 TFLOPs   61.4 %  HiFi2 BFP8 x BFP8 => BF16
+75    0.3 %         ReshardDeviceOperation                         0         3 μs          1 μs     32                                                       BF16 => BF16
+76    0.3 %         BinaryNgDeviceOperation                        0         2 μs          1 μs     64                                                 BF16, BF16 => BF16
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    100.0 %         21 device ops, 0 host ops, 0 signposts                 987 μs         15 μs         161 GB/s  56.1 %
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+57   11.2 %   DRAM  MatmulDeviceOperation 32 x 4096 x 6144         0       111 μs          1 μs     12  226 GB/s  78.6 %  14.5 TFLOPs   58.7 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+67    8.0 %   DRAM  MatmulDeviceOperation 32 x 4096 x 4096         0        80 μs          1 μs     12  210 GB/s  72.9 %  13.4 TFLOPs   54.5 %  HiFi2 BF16 x BFP8 => BF16
+✅ Optimized
+
+71   18.4 %   SLOW  MatmulDeviceOperation 32 x 4096 x 14336        0       183 μs          2 μs     12  161 GB/s  55.8 %  20.6 TFLOPs   47.1 %   LoFi BF16 x BFP4 => BF16
+- No output subblock size found
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+72   18.4 %   SLOW  MatmulDeviceOperation 32 x 4096 x 14336        0       183 μs          1 μs     12  160 GB/s  55.6 %  20.5 TFLOPs   46.9 %   LoFi BF16 x BFP4 => BF16
+- No output subblock size found
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+74   24.8 %   DRAM  MatmulDeviceOperation 32 x 14336 x 4096        0       248 μs          1 μs     12  237 GB/s  82.2 %  15.1 TFLOPs   61.4 %  HiFi2 BFP8 x BFP8 => BF16
+✅ Optimized
+
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+📊 Stacked report 📊
+====================
+
+Total %  Op Code                                                      Device Time Sum  Op Count  Op Category  Min FLOPs  Max FLOPs  Mean FLOPs  Std FLOPs  Weighted Mean FLOPs
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+81.60 %  MatmulDeviceOperation (in0:width_sharded)                          805.30 μs         5      Compute    46.94 %    61.41 %     53.73 %     6.61 %              53.81 %
+ 5.27 %  PagedUpdateCacheDeviceOperation (in0:dram_interleaved)              51.96 μs         2           DM
+ 3.09 %  SdpaDecodeDeviceOperation (in0:height_sharded)                      30.45 μs         1        Other
+ 2.57 %  BinaryNgDeviceOperation (in0:width_sharded)                         25.39 μs         3      Compute
+ 2.46 %  LayerNormDeviceOperation (in0:width_sharded)                        24.32 μs         2      Compute
+ 2.09 %  NLPCreateQKVHeadsDecodeDeviceOperation (in0:l1_interleaved)         20.64 μs         1        Other
+ 1.09 %  RotaryEmbeddingLlamaDeviceOperation (in0:height_sharded)            10.75 μs         2      Compute
+ 0.78 %  NLPConcatHeadsDecodeDeviceOperation (in0:height_sharded)             7.70 μs         1           TM
+ 0.50 %  ReshardDeviceOperation (in0:width_sharded)                           4.94 μs         2           DM
+ 0.30 %  ShardedToInterleavedDeviceOperation (in0:width_sharded)              2.91 μs         1           DM
+ 0.26 %  InterleavedToShardedDeviceOperation (in0:dram_interleaved)           2.54 μs         1           DM
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,0 +1,116 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /localdev/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, split-0.11.0, anyio-4.14.1, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 12 items
+
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_baseline_prefill_warmed_perf_only 2026-07-10 08:12:12.329 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-10 08:12:12.329 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-10 08:12:12.329 | info     |             UMD | Creating TopologyDiscovery for architecture: wormhole_b0 (topology_discovery.cpp:91)
+2026-07-10 08:12:12.329 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-10 08:12:12.331 | info     |             UMD | Established firmware bundle version: 18.12.1 (topology_discovery.cpp:569)
+2026-07-10 08:12:12.335 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-10 08:12:12.357 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {1} (cluster.cpp:168)
+2026-07-10 08:12:12.358 | info     |             UMD | IOMMU: disabled (cluster.cpp:142)
+2026-07-10 08:12:12.358 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-10 08:12:12.358 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-10 08:12:12.359 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-10 08:12:12.369 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-10 08:12:12.386 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-10 08:12:12.386 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-10 08:12:12.386 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2342)
+2026-07-10 08:12:12.386 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {1:2} (topology_mapper_utils.cpp:2350)
+2026-07-10 08:12:12.392 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mvasiljevic/tt-metal/tt_metal/pre-compiled/9241714131097461201/ (build_env_manager.cpp:347)
+2026-07-10 08:12:12.392 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/mvasiljevic/tt-metal/tt_metal/pre-compiled/9241714131097461201/ (build_env_manager.cpp:347)
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_warmed_perf_only 2026-07-10 08:12:17.339 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_dram_candidate_warmed_perf_only 2026-07-10 08:12:21.420 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[4] 2026-07-10 08:12:26.401 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_REAL_PREFILL_SEQ_4_PCC=0.999998
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[8] 2026-07-10 08:12:31.508 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_REAL_PREFILL_SEQ_8_PCC=0.999998
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[synthetic] 2026-07-10 08:12:36.372 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_SYNTHETIC_DECODE_PAGED_SEQ_1_PCC=0.972351
+OPT_DECODE_KV_CACHE_DTYPE=DataType.BFLOAT8_B
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[real] 2026-07-10 08:12:46.115 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_REAL_DECODE_PAGED_SEQ_1_PCC=0.999991
+OPT_DECODE_KV_CACHE_DTYPE=DataType.BFLOAT8_B
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_nonzero_position_pcc 2026-07-10 08:12:54.856 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_REAL_DECODE_PAGED_SEQ_2_POS_1_PCC=0.999968
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_repeated_deterministic 2026-07-10 08:13:04.850 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+2026-07-10 08:13:12.165 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_DECODE_REPEAT_DETERMINISM_PCC=1.000000
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_real_weight_pcc 2026-07-10 08:13:19.862 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:151)
+OPT_REAL_DECODE_TRACE_REPLAY_PCC=0.999991
+PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_runtime_source_has_no_functional_fallbacks PASSED
+models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_runtime_source_has_no_functional_fallbacks PASSED
+
+=============================== warnings summary ===============================
+models/tt_transformers/tt/common.py:28
+  /localdev/mvasiljevic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/mvasiljevic/tt-metal/models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_decoder/test_reports/optimized_decoder_pytest.xml -
+============================== slowest durations ===============================
+15.91s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_repeated_deterministic
+10.62s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[synthetic]
+8.62s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_nonzero_position_pcc
+8.58s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[real]
+8.57s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_real_weight_pcc
+5.02s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[8]
+4.74s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[4]
+3.88s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_warmed_perf_only
+3.54s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_dram_candidate_warmed_perf_only
+1.22s call     models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_baseline_prefill_warmed_perf_only
+0.38s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_baseline_prefill_warmed_perf_only
+0.23s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_real_weight_pcc
+0.22s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_runtime_source_has_no_functional_fallbacks
+0.22s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[real]
+0.22s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_dram_candidate_warmed_perf_only
+0.21s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_nonzero_position_pcc
+0.19s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_repeated_deterministic
+0.19s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_warmed_perf_only
+0.19s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[8]
+0.19s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[4]
+0.19s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[synthetic]
+0.18s setup    models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_runtime_source_has_no_functional_fallbacks
+
+(14 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_baseline_prefill_warmed_perf_only
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_warmed_perf_only
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_dram_candidate_warmed_perf_only
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[4]
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_real_weight_pcc[8]
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[synthetic]
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_pcc[real]
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_paged_kv_nonzero_position_pcc
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_repeated_deterministic
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_trace_replay_real_weight_pcc
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_runtime_source_has_no_functional_fallbacks
+PASSED models/autoports/meta_llama_llama_3_1_8b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_runtime_source_has_no_functional_fallbacks
+=================== 12 passed, 1 warning in 74.72s (0:01:14) ===================
+2026-07-10 08:13:27.380 | info     |    BuildKernels | JIT cache stats: 200/200 hits (100.0%) [200 cached, 104 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-10 08:13:27.380 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-10 08:13:27.384 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-10 08:13:27.384 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-10 08:13:27.393 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-10 08:13:27.393 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-10 08:13:27.393 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

@@ -1,0 +1,12 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: wormhole
+Architecture: wormhole, Worker cores: 64
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL'.
+Using operations until 'PERF_PREFILL_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_decoder/tracy/prefill_warmed_final/prefill_perf_report.csv
+Overall DRAM roofline (modeled ops): 2.6% (8 GB/s)
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_decoder/tracy/prefill_warmed_final/prefill_perf_report_stacked.csv
+Plotting PNG stacked report to models/autoports/meta_llama_llama_3_1_8b_instruct/doc/optimized_decoder/tracy/prefill_warmed_final/prefill_perf_report_stacked.png
