@@ -24,6 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -42,6 +43,12 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 #   routed_emb_dim     3584  width the routed experts run at (K3's latent space); defaults to emb_dim.
 #   hidden_dim         3072  per-routed-expert FFN intermediate.
 #   shared_hidden_dim  6144  shared-expert FFN intermediate; defaults to hidden_dim.
+
+# L1_SMALL region reserved for the MoE routed-expert/combine overlap global semaphore.
+# Required because TtMoe, when built with the overlap enabled, uses a global semaphore in L1_SMALL.
+# A single semaphore is shared by all MoE layers (owned by TT_CCL), so this size is independent of
+# layer count.
+MOE_L1_SMALL_REGION_SIZE = 512
 
 
 class TtMoe(LightweightModule):
@@ -213,6 +220,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
+        overlap_routed_expert_with_combine: bool = True,
     ):
         """
         Initialize TtMoe module.
@@ -267,6 +275,8 @@ class TtMoe(LightweightModule):
                 (K3: latent_moe_use_norm=True).
             rms_norm_eps: eps for that latent norm. Passed explicitly because
                 TtDistributedRmsNorm defaults to 1e-6 while K3's config says 1e-5.
+            overlap_routed_expert_with_combine: If True, overlap the routed expert compute
+                with the combine. If False, run them sequentially.
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -284,6 +294,16 @@ class TtMoe(LightweightModule):
         self.routed_emb_dim = emb_dim if routed_emb_dim is None else routed_emb_dim
         self.shared_hidden_dim = hidden_dim if shared_hidden_dim is None else shared_hidden_dim
         self.use_latent_moe = self.routed_emb_dim != emb_dim
+
+        self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
+
+        # The routed-expert/combine overlap relies on the unified_routed_expert_moe op, which
+        # only runs on Blackhole (TtRoutedExpert.forward gates on is_blackhole()), so the overlap
+        # is unsupported on other archs.
+        # See https://github.com/tenstorrent/tt-metal/issues/47553
+        assert not (
+            overlap_routed_expert_with_combine and not is_blackhole()
+        ), "overlap_routed_expert_with_combine is only supported on Blackhole"
 
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
@@ -382,43 +402,41 @@ class TtMoe(LightweightModule):
         )
 
         # ========================================
-        # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
-        # strip and a "shared expert" strip so the two ops run on disjoint cores and the
-        # Fast-Dispatch per-sub-device counters let them overlap on-chip.
-        #   sub-device 0 (dispatch_sd):     rows [0, dispatch_sd_rows)
-        #   sub-device 1 (shared_sd):       rows [dispatch_sd_rows, grid_y)
-        # When overlap is disabled, both ops run sequentially on the full grid and no
+        # Sub-devices: when either overlap is enabled, split the Tensix grid into a
+        # "data movement" (dm) strip and a "compute" strip so the two overlapped ops run on
+        # disjoint cores and the Fast-Dispatch per-sub-device counters let them overlap on-chip.
+        # The same split serves both overlaps:
+        #   - shared-expert / dispatch overlap: dm = dispatch, compute = shared expert
+        #   - routed-expert / combine overlap:  dm = combine,  compute = routed expert
+        #   sub-device 0 (dm_sd):       rows [0, dm_sd_rows)
+        #   sub-device 1 (compute_sd):  rows [dm_sd_rows, grid_y)
+        # When both overlaps are disabled, ops run sequentially on the full grid and no
         # sub-device manager is created.
         # ========================================
-        if self.overlap_shared_expert_with_dispatch:
-            dispatch_sd_rows = 1
+        if overlap_shared_expert_with_dispatch or overlap_routed_expert_with_combine:
+            dm_sd_rows = 1
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
-            assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
-            dispatch_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
+            assert 0 < dm_sd_rows < grid_y, f"dm_sd_rows={dm_sd_rows} must be in (0, grid_y={grid_y})"
+            dm_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dm_sd_rows - 1))}
             )
-            shared_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+            compute_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, dm_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
             )
-            dispatch_sd = ttnn.SubDevice([dispatch_cores])
-            shared_sd = ttnn.SubDevice([shared_cores])
-            self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
-            self.dispatch_sd_id = ttnn.SubDeviceId(0)
-            self.shared_sd_id = ttnn.SubDeviceId(1)
-            # Stash the CoreRangeSet of the shared sub-device so TtSharedExpert can build
-            # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
-            self.shared_sd_cores = shared_cores
+            dm_sd = ttnn.SubDevice([dm_cores])
+            compute_sd = ttnn.SubDevice([compute_cores])
+            self.sd_manager_id = mesh_device.create_sub_device_manager([dm_sd, compute_sd], 0)
+            self.dm_sd_id = ttnn.SubDeviceId(0)
+            self.compute_sd_id = ttnn.SubDeviceId(1)
             logger.debug(
-                f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
-                f"shared=rows[{dispatch_sd_rows},{grid_y})"
+                f"Sub-devices: grid={grid_x}x{grid_y}, dm=rows[0,{dm_sd_rows}), " f"compute=rows[{dm_sd_rows},{grid_y})"
             )
-        else:
-            self.sd_manager_id = None
-            self.dispatch_sd_id = None
-            self.shared_sd_id = None
-            self.shared_sd_cores = None
-            logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
+
+            # Global semaphore is only needed for overlapping the routed expert with the combine.
+            # See TT_CCL.get_routed_expert_global_semaphore.
+            if overlap_routed_expert_with_combine:
+                self.routed_expert_global_semaphore = self.tt_ccl.get_routed_expert_global_semaphore(dm_cores)
 
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
@@ -434,7 +452,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            subdevice_id=self.dispatch_sd_id,
+            subdevice_id=self.dm_sd_id if self.overlap_shared_expert_with_dispatch else None,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -449,6 +467,8 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=False,
+            subdevice_id=self.dm_sd_id if self.overlap_routed_expert_with_combine else None,
+            global_semaphore=self.routed_expert_global_semaphore if self.overlap_routed_expert_with_combine else None,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -483,6 +503,8 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=ttnn.RoutedExpertActivation.Silu,
+            subdevice_id=self.compute_sd_id if self.overlap_routed_expert_with_combine else None,
+            global_semaphore=self.routed_expert_global_semaphore if self.overlap_routed_expert_with_combine else None,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -498,8 +520,7 @@ class TtMoe(LightweightModule):
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
-            subdevice_id=self.shared_sd_id,
-            subdevice_cores=self.shared_sd_cores,
+            subdevice_id=self.compute_sd_id if self.overlap_shared_expert_with_dispatch else None,
         )
 
         self.latent_projections = (
@@ -725,22 +746,14 @@ class TtMoe(LightweightModule):
                 self._trace_controller.sub_device_load(self.sd_manager_id)
             else:
                 self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+                self.mesh_device.set_sub_device_stall_group([self.compute_sd_id])
 
         # ========================================
-        # Step 1: Shared expert (enabled)
-        # ========================================
-        # Shared expert expects replicated input (full emb_dim)
-        # Convert x to TILE_LAYOUT for shared expert
-        logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-
-        shared_output = self.shared_expert(x)
-        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
-
-        # ========================================
-        # Step 2: Dispatch (enabled)
+        # Step 1: Dispatch (enabled)
         # ========================================
         # Dispatch expects complete routed-side rows on each device: full emb_dim normally, or the
         # all-gathered latent under LatentMoE (routed_x is x itself when there is no latent space).
+        # It is the longer op, so the host enqueues it first to maximize overlap with the shared expert.
         logger.debug(f"[TtMoe.forward] {routed_x.shape=} {routed_x.memory_config()=}")
         dispatched_buffer, metadata = self.dispatch_module(
             routed_x,
@@ -750,11 +763,21 @@ class TtMoe(LightweightModule):
             self.tt_expert_dispatch_table,
             padding_config=padding_config,
         )
+
+        # ========================================
+        # Step 2: Shared expert (enabled)
+        # ========================================
+        # Shared expert expects replicated input (full emb_dim)
+        shared_output = self.shared_expert(x)
+        logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
             else:
+                self.mesh_device.reset_sub_device_stall_group()
                 self.mesh_device.clear_loaded_sub_device_manager()
+        signpost("shared_expert_and_dispatch_end")
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
@@ -780,45 +803,78 @@ class TtMoe(LightweightModule):
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
-        signpost("shared_expert_and_dispatch_end")
-
         # ========================================
         # Step 3: Routed experts (enabled)
         # ========================================
-        # Dispatch output is (1, dispatch_group_size_per_device, experts_per_chip, max_tokens, emb_dim)
-        # Routed expert expects (experts_per_chip, max_tokens, emb_dim)
-        # Squeeze the first two dimensions
+        # Dispatch output is (1, 1, max_dispatch_buffer_token_size, emb_dim) — a flat token
+        # buffer with two leading singleton dims. The routed expert's extract/insert ops
+        # treat it as effectively 2D (rows, emb_dim) and accept the leading singleton dims
+        # directly, so no squeeze is needed; the buffer keeps its rank end-to-end and comes
+        # back out the same shape, ready for combine without re-adding batch dims.
 
-        # TtRoutedExpert.forward owns the per-arch layout/dtype prep: Blackhole
-        # consumes the ROW_MAJOR bf16 buffer and returns a fresh output; Wormhole
-        # tiles it internally for the extract loop. Either way the ROW_MAJOR input
-        # is independent of the result and can be freed here, unless the PCC check
-        # needs it to compare against the bfloat16 torch reference.
-        squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
-        expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+        # The routed expert consumes a shared TILE buffer that it writes in place,
+        # so the concurrent combine can read the same buffer (overlap path) and the
+        # buffer keeps its rank end-to-end. Tile the ROW_MAJOR dispatch buffer up
+        # front here rather than relying on TtRoutedExpert's fused ROW_MAJOR path:
+        # that path returns a fresh output instead of writing the shared buffer,
+        # which the routed-expert/combine overlap depends on.
+        dispatched_buffer_tiled = ttnn.to_layout(
+            dispatched_buffer,
+            ttnn.TILE_LAYOUT,
+            dtype=self.routed_expert.activations_dtype,
+        )
+        logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
+
+        # Free the original ROW_MAJOR DRAM buffer before entering routed_expert for clear state.
+        # When return_intermediates=True, keep it so the PCC check can compare against the
+        # bfloat16 torch reference (the tiled buffer may be bfloat8_b).
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
-        logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
-        # Add back the batch dimensions for combine
-        # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        logger.debug(f"[TtMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        # Overlap the routed expert with the combine
+        signpost("routed_expert_and_combine_start")
+        if self.overlap_routed_expert_with_combine:
+            self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+            self.mesh_device.set_sub_device_stall_group([self.compute_sd_id])
 
         # ========================================
-        # Step 4: Combine (enabled)
+        # Steps 3 + 4: Routed experts + Combine
         # ========================================
-        # Combine expects TILE_LAYOUT input
+        if self.overlap_routed_expert_with_combine:
+            # Overlap: routed expert (compute sub-device) and combine (dm sub-device) run
+            # concurrently, synchronized by the routed-expert global semaphore.
+            combined_output = self.combine_module(
+                dispatched_buffer_tiled,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
+            expert_outputs = self.routed_expert(
+                dispatched_buffer_tiled,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
+        else:
+            # No overlap: combine must read the buffer only AFTER routed_expert has written it.
+            expert_outputs = self.routed_expert(
+                dispatched_buffer_tiled,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
+            combined_output = self.combine_module(
+                expert_outputs,
+                metadata,
+                tt_expert_token_counts,
+                tt_expert_region_offsets,
+            )
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
-
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
+
+        # Restore the default full-grid
+        if self.overlap_routed_expert_with_combine:
+            self.mesh_device.reset_sub_device_stall_group()
+            self.mesh_device.clear_loaded_sub_device_manager()
+        signpost("routed_expert_and_combine_end")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)

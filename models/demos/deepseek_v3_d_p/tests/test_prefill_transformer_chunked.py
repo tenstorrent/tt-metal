@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -890,6 +891,7 @@ def run_chunked_transformer(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,
@@ -938,6 +940,7 @@ def test_ds_prefill_transformer_chunked(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2,
             ttnn.Topology.Linear,

@@ -44,5 +44,6 @@ ttnn::Tensor prefill_combine(
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_combine = false);
+    bool use_fp8_combine = false,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 }  // namespace ttnn::prim
