@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Lever-4 quick sweep: denoise MoE prefill chunk size (transpose-reorder overhead).
+"""Dense prefill-MoE chunk and sparse-matmul geometry sweep.
 
 The denoise MoE (gemma4 prefill_forward) splits the 256-token canvas into chunks of
 PREFILL_CHUNK_SIZE=32 (group_size=1 each) and pays the expensive expert-major transpose
-reorder once per chunk (8×). This sweeps PREFILL_CHUNK_SIZE ∈ {32,64,128,256} (group_size
-1/2/4/8) by monkeypatching the module constant — reusing ALL existing sparse_matmul logic,
-so any faster chunk is a bit-equivalent, no-semantics-change win. Measures clean device
-wall-clock + PCC vs the chunk=32 baseline.
+reorder once per chunk (8×). This first tests larger chunks on a grid that can fit their
+output blocks, then keeps the correct 32-token chunk and sweeps K blocking for gate/up/down.
+It reuses all existing sparse-matmul math and reports device wall-clock plus exactness/PCC
+against the stock chunk=32 geometry.
 """
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import time
 
@@ -51,6 +52,43 @@ def _time(fn, iters, mesh):
     return (time.perf_counter() - t0) * 1e3 / iters
 
 
+def _full_grid_config_builder(
+    mesh,
+    *,
+    gate_up_in0=1,
+    down_in0=1,
+    gate_up_grid=None,
+    down_grid=None,
+):
+    """Build sparse-matmul geometry that packs every sequence group on the full device grid."""
+    device_grid = mesh.compute_with_storage_grid_size()
+    full_grid = (int(device_grid.x), int(device_grid.y))
+
+    def build(m, n, in0_block_w=1):
+        group_size = PF.PREFILL_CHUNK_SIZE // ttnn.TILE_SIZE
+        n_tiles = math.ceil(n / ttnn.TILE_SIZE)
+        grid_x, grid_y = (gate_up_grid or full_grid) if n_tiles <= 8 else (down_grid or full_grid)
+        num_cores = grid_x * grid_y
+        max_n_blocks = max(1, num_cores // group_size)
+        per_core_n = math.ceil(n_tiles / max_n_blocks)
+        block_w = gate_up_in0 if n_tiles <= 8 else down_in0
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=block_w,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=per_core_n,
+            per_core_M=max(ttnn.TILE_SIZE, m) // ttnn.TILE_SIZE,
+            per_core_N=per_core_n,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+
+    return build
+
+
 def run(num_layers, canvas_length, iters, max_seq_len):
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D, ttnn.FabricReliabilityMode.STRICT_INIT, None)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=1300000000)
@@ -85,12 +123,63 @@ def run(num_layers, canvas_length, iters, max_seq_len):
         expert_input = mk_hidden()
 
         orig_chunk = PF.PREFILL_CHUNK_SIZE
+        orig_builder = PF._build_sparse_matmul_config
         baseline_host = None
-        for chunk in [32, 64, 128, 256]:
-            PF.PREFILL_CHUNK_SIZE = chunk
-            try:
+        sweeps = [
+            ("baseline", orig_builder, [32]),
+            ("full_grid", _full_grid_config_builder(mesh), [32, 64, 128]),
+        ]
+        sweeps.extend(
+            (
+                f"full_grid_g{gate_up_in0}_d1",
+                _full_grid_config_builder(mesh, gate_up_in0=gate_up_in0),
+                [32],
+            )
+            for gate_up_in0 in (2, 4, 8, 11, 22, 44, 88)
+        )
+        sweeps.extend(
+            (
+                f"full_grid_g{gate_up_in0}_d{down_in0}",
+                _full_grid_config_builder(mesh, gate_up_in0=gate_up_in0, down_in0=down_in0),
+                [32],
+            )
+            for gate_up_in0 in (22, 44)
+            for down_in0 in (2, 3, 6)
+        )
+        sweeps.extend(
+            (
+                f"compact_g6x1_d{down_grid[0]}x{down_grid[1]}",
+                _full_grid_config_builder(
+                    mesh,
+                    gate_up_in0=44,
+                    down_in0=3,
+                    gate_up_grid=(6, 1),
+                    down_grid=down_grid,
+                ),
+                [32],
+            )
+            for down_grid in ((11, 8), (11, 4), (11, 2), (11, 1), (8, 1))
+        )
+        for geometry, builder, chunks in sweeps:
+            PF._build_sparse_matmul_config = builder
+            for chunk in chunks:
+                PF.PREFILL_CHUNK_SIZE = chunk
+                try:
 
-                def call():
+                    def call():
+                        out = prefill_forward(
+                            expert_input,
+                            dense_routing,
+                            weights,
+                            cfg,
+                            experts.prefill_sparsity,
+                            mesh_config=mesh_config,
+                            mesh_device=mesh,
+                            ccl_manager=ccl,
+                        )
+                        out.deallocate(True)
+
+                    ms = _time(call, iters, mesh)
                     out = prefill_forward(
                         expert_input,
                         dense_routing,
@@ -101,32 +190,35 @@ def run(num_layers, canvas_length, iters, max_seq_len):
                         mesh_device=mesh,
                         ccl_manager=ccl,
                     )
+                    host = _to_host(out)
                     out.deallocate(True)
-
-                ms = _time(call, iters, mesh)
-                out = prefill_forward(
-                    expert_input,
-                    dense_routing,
-                    weights,
-                    cfg,
-                    experts.prefill_sparsity,
-                    mesh_config=mesh_config,
-                    mesh_device=mesh,
-                    ccl_manager=ccl,
-                )
-                host = _to_host(out)
-                out.deallocate(True)
-                if chunk == 32:
-                    baseline_host = host
-                    pcc = 1.0
-                else:
-                    pcc = _pcc(baseline_host, host)
-                logger.info(f"[chunk={chunk} group_size={chunk//32}] ms/call={ms:.2f} PCC_vs_c32={pcc:.5f}")
-                print(f"RESULT_CHUNK chunk={chunk} ms={ms:.2f} pcc={pcc:.5f}", flush=True)
-            except Exception as e:
-                logger.warning(f"chunk={chunk} FAILED: {type(e).__name__}: {str(e)[:300]}")
-                print(f"RESULT_CHUNK_BLOCKED chunk={chunk} {type(e).__name__}: {str(e)[:200]}", flush=True)
+                    if geometry == "baseline" and chunk == 32:
+                        baseline_host = host
+                        pcc = 1.0
+                        exact = True
+                        max_abs = 0.0
+                    else:
+                        pcc = _pcc(baseline_host, host)
+                        exact = torch.equal(baseline_host, host)
+                        max_abs = float((baseline_host - host).abs().max())
+                    logger.info(
+                        f"[geometry={geometry} chunk={chunk} group_size={chunk//32}] "
+                        f"ms/call={ms:.2f} PCC_vs_baseline={pcc:.5f} exact={exact} max_abs={max_abs:.6g}"
+                    )
+                    print(
+                        f"RESULT_CHUNK geometry={geometry} chunk={chunk} ms={ms:.2f} "
+                        f"pcc={pcc:.5f} exact={int(exact)} max_abs={max_abs:.6g}",
+                        flush=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"geometry={geometry} chunk={chunk} FAILED: {type(e).__name__}: {str(e)[:300]}")
+                    print(
+                        f"RESULT_CHUNK_BLOCKED geometry={geometry} chunk={chunk} "
+                        f"{type(e).__name__}: {str(e)[:200]}",
+                        flush=True,
+                    )
         PF.PREFILL_CHUNK_SIZE = orig_chunk
+        PF._build_sparse_matmul_config = orig_builder
 
         expert_input.deallocate(True)
         dense_routing.deallocate(True)
