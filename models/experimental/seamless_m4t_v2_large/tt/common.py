@@ -211,6 +211,58 @@ def matmul_multicast_1d_program_config(
     )
 
 
+def matmul_sharded_output_memcfg(
+    program_config: ttnn.ProgramConfig,
+    *,
+    m_tiles: int,
+    n_tiles: int,
+) -> Optional[ttnn.MemoryConfig]:
+    """L1 output memcfg matching matmul ``compute_output_specs`` (silences mismatch warnings).
+
+    Callers pass tile counts for the matmul output (M along rows, N along cols). Returns ``None``
+    when the program config does not use a sharded L1 output path.
+    """
+    if isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig):
+        if getattr(program_config, "gather_in0", False):
+            return None
+        per_core_M = int(program_config.per_core_M)
+        per_core_N = int(program_config.per_core_N)
+        grid = program_config.compute_with_storage_grid_size
+        cwsg = ttnn.CoreCoord(int(grid.x), int(grid.y))
+        num_blocks_y = ((m_tiles - 1) // per_core_M) + 1
+        num_blocks_x = ((n_tiles - 1) // per_core_N) + 1
+        num_cores = num_blocks_x * num_blocks_y
+        all_cores = ttnn.num_cores_to_corerangeset(num_cores, cwsg, row_wise=True)
+        shard = [per_core_M * TILE, per_core_N * TILE]
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, shard, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+
+    if isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+        per_core_M = int(program_config.per_core_M)
+        per_core_N = int(program_config.per_core_N)
+        num_blocks_y = ((m_tiles - 1) // per_core_M) + 1
+        num_blocks_x = ((n_tiles - 1) // per_core_N) + 1
+        start = ttnn.CoreCoord(0, 0)
+        if getattr(program_config, "transpose_mcast", False):
+            end = ttnn.CoreCoord(start.x + num_blocks_y - 1, start.y + num_blocks_x - 1)
+            orientation = ttnn.ShardOrientation.COL_MAJOR
+        else:
+            end = ttnn.CoreCoord(start.x + num_blocks_x - 1, start.y + num_blocks_y - 1)
+            orientation = ttnn.ShardOrientation.ROW_MAJOR
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(start, end)})
+        shard = [per_core_M * TILE, per_core_N * TILE]
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(all_cores, shard, orientation),
+        )
+
+    return None
+
+
 # Prefill rows at or below this use 1D-on-N; longer sequences use 2D multicast (speech-encoder path).
 MATMUL_1D_SEQ_THRESHOLD = 128
 

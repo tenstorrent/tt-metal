@@ -29,6 +29,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     decoder_prefill_bs_chunk_rows,
     matmul_multicast_1d_program_config,
     matmul_program_config,
+    matmul_sharded_output_memcfg,
     sdpa_program_config,
     TILE,
     to_torch_replicated_first_shard,
@@ -572,25 +573,15 @@ class TTSeamlessM4Tv2Decoder:
         self._matmul_pc_cache[key] = cached
         return cached
 
-    def _sharded_decode_out_memcfg(self, program_config) -> Optional[ttnn.MemoryConfig]:
-        """L1 sharded output memcfg matching ``program_config``'s grid/per-core tiling.
-
-        1D multicast (projections) -> WIDTH_SHARDED; 2D multicast (KV-enc fill) -> BLOCK_SHARDED.
-        Returns ``None`` for unsupported program-config types (caller keeps interleaved output).
-        """
-        if isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig):
-            layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        elif isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
-            layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
-        else:
-            return None
-        grid = program_config.compute_with_storage_grid_size
-        gx, gy = int(grid.x), int(grid.y)
-        shard = [int(program_config.per_core_M) * TILE, int(program_config.per_core_N) * TILE]
-        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
-        return ttnn.MemoryConfig(
-            layout, ttnn.BufferType.L1, ttnn.ShardSpec(core_range, shard, ttnn.ShardOrientation.ROW_MAJOR)
-        )
+    def _sharded_decode_out_memcfg(
+        self,
+        program_config: ttnn.ProgramConfig,
+        *,
+        m_tiles: int,
+        n_tiles: int,
+    ) -> Optional[ttnn.MemoryConfig]:
+        """L1 sharded output memcfg matching matmul ``compute_output_specs`` for this M/N."""
+        return matmul_sharded_output_memcfg(program_config, m_tiles=m_tiles, n_tiles=n_tiles)
 
     def _linear(
         self,
@@ -632,7 +623,9 @@ class TTSeamlessM4Tv2Decoder:
             )
         sharded_out_mem = None
         if self._sharded_decode_out:
-            sharded_out_mem = self._sharded_decode_out_memcfg(program_config)
+            m_tiles = max(1, math.ceil(self._matmul_token_rows(x, is_decode=is_decode) / TILE))
+            n_tiles = max(1, math.ceil(int(weight.shape[-1]) / TILE))
+            sharded_out_mem = self._sharded_decode_out_memcfg(program_config, m_tiles=m_tiles, n_tiles=n_tiles)
         out = ttnn.linear(
             x,
             weight,
