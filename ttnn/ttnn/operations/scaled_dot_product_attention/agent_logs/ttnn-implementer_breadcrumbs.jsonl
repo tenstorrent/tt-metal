@@ -10,3 +10,4 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-07-10T15:29:54+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/scaled_dot_product_attention/","detail":"42 passed after adding float32+bfloat8_b to SUPPORTED[dtype]; probe PCC fp32=0.999999 bf8b=0.9997","ts":"2026-07-10T15:33:01+00:00"}
 {"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention_precision_matrix.py","detail":"240 passed 48 skipped(fp32+bf16_acc EXCLUSION). fp32 D=128 large-S OOMs (R4 territory), not excluded.","ts":"2026-07-10T15:37:35+00:00"}
+{"event":"test_run","status":"pass","test":"golden suite (test_golden+test_regression)","detail":"108 failed(98 OOM R4 + 10 pre-existing bf16 regression) 991 passed 1208 xfailed. bf8b 400/424, fp32 162/212. Fixed bf8b+custom-mask via bf16 score-path intermediates.","ts":"2026-07-10T16:01:56+00:00"}

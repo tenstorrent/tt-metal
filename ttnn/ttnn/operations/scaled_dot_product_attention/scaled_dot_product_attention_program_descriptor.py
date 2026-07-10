@@ -128,6 +128,18 @@ def create_program_descriptor(
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=fmt, page_size=psize)],
         )
 
+    # Softmax-path score intermediates (QKᵀ scores, masked scores, exp probs).
+    # For bf8b input these MUST NOT be stored as bf8b: the additive mask writes
+    # -inf into cb_masked, and bf8b's shared-per-16-element exponent lets one -inf
+    # entry corrupt the valid scores in its block (PCC ~0.9 on custom-mask cells).
+    # bf16 has a per-element exponent, so -inf stays local. Q/K/V and the output
+    # stay in the caller's dtype; only the internal score path is promoted.
+    score_dtype = ttnn.bfloat16 if tile_dtype == ttnn.bfloat8_b else tile_dtype
+    score_bytes = ttnn.tile_size(score_dtype)
+
+    def cbs_(idx, pages):
+        return cb(idx, pages, fmt=score_dtype, psize=score_bytes)
+
     # fp32 accumulation path: the running output/sum are updated over up to
     # num_kv_blocks (long context => dozens) online-softmax steps; bf16 storage
     # loses precision there. The matmul/reduce already accumulate in fp32 DEST.
@@ -150,10 +162,10 @@ def create_program_descriptor(
         cbf(CB_O_RUN, 2 * o_pages),
         cbf(CB_O_NEW, 2 * o_pages),
         cbf(CB_L_INV, 2 * qcb),
-        cb(CB_MASKED, 2 * block_pages if has_mask else 1),
+        cbs_(CB_MASKED, 2 * block_pages if has_mask else 1),
         cb(CB_OUT, 2 * o_pages),
-        cb(CB_SCORES, 2 * block_pages),
-        cb(CB_PROBS, 2 * block_pages),
+        cbs_(CB_SCORES, 2 * block_pages),
+        cbs_(CB_PROBS, 2 * block_pages),
         cbf(CB_M_CUR, 2 * qcb),
         cbf(CB_M_RUN, 2 * qcb),
         cbf(CB_M_NEW, 2 * qcb),
