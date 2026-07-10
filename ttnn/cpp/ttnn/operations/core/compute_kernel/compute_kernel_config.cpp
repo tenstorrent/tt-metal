@@ -112,7 +112,7 @@ ttnn::operations::compute_throttle_utils::ThrottleLevel get_throttle_level(
 }
 
 std::tuple<tt::tt_metal::MathFidelity, bool, bool, bool, bool> get_compute_kernel_config_args(
-    tt::ARCH, const DeviceComputeKernelConfig compute_kernel_config) {
+    tt::ARCH, const DeviceComputeKernelConfig& compute_kernel_config) {
     return std::make_tuple(
         compute_kernel_config.math_fidelity,
         compute_kernel_config.math_approx_mode,
