@@ -79,12 +79,15 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             ],
             dim=0,
         )
+        # proj_1d_decode: interleaved weight (fast small-grid 1D decode matmul; prefill AGMM verified
+        # bit-identical on interleaved). Distinct cache suffix.
+        _proj1d = getattr(args, "proj_1d_decode", False)
         tw["qkvz"] = tpc.shard_w(
             fused,
             mesh,
             dim=-1,
-            memory_config=args.gdn_qkvzab_weight_memcfg,
-            cache_path=c("qkvzab.dramshard"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.gdn_qkvzab_weight_memcfg,
+            cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -264,7 +267,19 @@ class TPGatedDeltaNet:
     def _row_proj(self, x, weight):
         """Row-parallel out projection: DRAM-sharded decode/prefill matmul (K=gdn_value_dim_tp),
         matching the in-proj. Falls back to plain interleaved on single device (no sharded memcfg)."""
+        if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+            # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
+            return tpc.matmul_1d_decode(
+                x, weight, self.args.gdn_out_decode_1d_progcfg, self.cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
         if not self._out_sharded:
+            if x.shape[-2] > tpc.TILE_SIZE:
+                # Prefill de-fuse arm (QWEN36_FUSE_GDN_OUT_MMRS_PREFILL=0): tuned 2D config vs ttnn-auto.
+                # fp32 [seq,dim] output too big for L1 (42MB) -> DRAM out; separate tt_all_reduce does the RS.
+                pc = tpc.create_prefill_mlp_matmul_program_config(x.shape[-2], weight.shape[-2], weight.shape[-1])
+                return ttnn.linear(
+                    x, weight, compute_kernel_config=self.cfg, program_config=pc, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
             return ttnn.linear(x, weight, compute_kernel_config=self.cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
             x,
@@ -290,6 +305,15 @@ class TPGatedDeltaNet:
                     x, self.tw["qkvz"], self.tt_ccl, self.cfg, self.args.ccl_topology()
                 )
                 qkvzab = ttnn.reshape(qkvzab, (1, S, qkvzab.shape[-1]))
+            elif getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE:
+                # Decode: small-grid 1D matmul on the interleaved fused weight (beats the DRAM-sharded grid).
+                qkvzab = tpc.matmul_1d_decode(
+                    x,
+                    self.tw["qkvz"],
+                    self.args.gdn_qkvz_decode_1d_progcfg,
+                    self.cfg,
+                    out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+                )
             else:
                 qkvzab = self._col_proj(x, self.tw["qkvz"], self.args.gdn_qkvzab_progcfg, out_memory_config=_proj_mc)
             qkv = ttnn.slice(qkvzab, (0, 0, 0), (1, S, qz), memory_config=out_mc)
@@ -427,6 +451,8 @@ class TPGatedDeltaNet:
         # Prefill: fused out-proj matmul + reduce-scatter (matmul_reduce_scatter_async), flag-gated.
         if self._fuse_out_mmrs_prefill:
             x_out = ttnn.reshape(gated, (1, 1, T, gated.shape[-1]))
+            # fp32 output is load-bearing: o_proj is row-parallel, so the RS SUMS 4 per-device partials
+            # across devices — bf16 there tanks PCC to ~0.69 even at ISL 2048 (test_oproj_dtype_isl). Keep fp32.
             out = tpc.matmul_reduce_scatter_prefill(
                 x_out, tw["out"], self.tt_ccl, self.cfg, self.args.ccl_topology(), self.args.num_devices, ttnn.float32
             )

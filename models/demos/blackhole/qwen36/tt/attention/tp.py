@@ -50,12 +50,16 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
                 args.n_local_kv_heads * args.head_dim,
                 args.num_devices,
             )
+        # proj_1d_decode: interleaved weight (fast small-grid 1D decode matmul; prefill AGMM verified
+        # bit-identical on interleaved — test_agmm_accepts_interleaved_weight). Distinct cache suffix.
+        _proj1d = getattr(args, "proj_1d_decode", False)
+        _base = "wqkv_fused_qkvg" if qg_deint else "wqkv_fused"
         tw["wqkv_fused"] = tpc.shard_w(
             fused,
             mesh,
             dim=-1,
-            memory_config=args.attn_qkv_fused_weight_memcfg,
-            cache_path=c("wqkv_fused_qkvg.dramshard" if qg_deint else "wqkv_fused.dramshard"),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if _proj1d else args.attn_qkv_fused_weight_memcfg,
+            cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
             dtype=ttnn.bfloat8_b,
         )
     else:
@@ -178,6 +182,16 @@ class TPAttention:
             qkv = tpc.all_gather_matmul_prefill(
                 x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
             )
+        elif getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+            # Decode: small-grid 1D matmul (interleaved weight). Output DRAM so _make_heads_decode's
+            # to_memory_config(.,L1) stays a real copy before it deallocates the source.
+            qkv = tpc.matmul_1d_decode(
+                x,
+                tw["wqkv_fused"],
+                self.args.attn_qkv_decode_1d_progcfg,
+                self.compute_cfg,
+                out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         else:
             qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
         # Fused weight is [q|k|v|gate] (prepare_attn_qkv_deint): the q|k|v block is contiguous, so
@@ -208,7 +222,27 @@ class TPAttention:
     def _wo_proj(self, x, weight):
         """Row-parallel output projection: DRAM-sharded decode/prefill matmul (K=attn_out_dim_tp),
         matching the in-proj. Falls back to plain interleaved when no sharded memcfg."""
+        if getattr(self.args, "proj_1d_decode", False) and x.shape[-2] <= tpc.TILE_SIZE:
+            # Decode: tuned ~32-core 1D matmul (interleaved weight) -> DRAM for the reduce-scatter.
+            return tpc.matmul_1d_decode(
+                x,
+                weight,
+                self.args.attn_wo_decode_1d_progcfg,
+                self.compute_cfg,
+                out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         if not self._wo_sharded:
+            if x.shape[-2] > tpc.TILE_SIZE:
+                # Prefill: FPU-tuned 2D config (8-wide -> 1x4 subblock) beats ttnn-auto's 1x1 stall;
+                # L1 output (gated stays DRAM) feeds the separate RS. See test_mlp_matmul_sweep_prefill.
+                pc = tpc.create_prefill_mlp_matmul_program_config(x.shape[-2], weight.shape[-2], weight.shape[-1])
+                return ttnn.linear(
+                    x,
+                    weight,
+                    compute_kernel_config=self.compute_cfg,
+                    program_config=pc,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
             return ttnn.linear(x, weight, compute_kernel_config=self.compute_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(
             x,
