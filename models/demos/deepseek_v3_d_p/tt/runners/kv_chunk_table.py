@@ -17,19 +17,57 @@ NOTE: per-layer LayerAck channel + scheduler-driven migration are NOT here
 (owned by the runner / scheduler / worker side).
 """
 
-from models.demos.common.prefill.runners.migration import serialize_kv_chunk_table
+import ttnn
+from models.demos.common.prefill.runners.migration import serialize_kv_chunk_table, serialize_prebuilt_kv_chunk_table
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_OUTPUT_TOKENS,
     create_kv_chunk_address_table_kimi,
+    populate_kv_chunk_address_table_kimi,
 )
+
+# A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
+_TILE_DIM = 32  # bfp8 is tiled 32x32
+_BFP8_TILE_BYTES = 1088  # one 32x32 bfp8 tile: 1024 data + 64 exponent bytes
+_BF16_BYTES = 2
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
 _CHUNK_SIZE_BYTES = 19584
 
 
+def _dram_chunk_size_bytes(cache) -> int:
+    """Bytes of one 32-token DRAM-bank chunk ([.., 32, head_dim]) of `cache`, from its dtype:
+      * bfp8_b  (block-float, TILE):  (head_dim / 32) tiles x 1088 B/tile (1024 data + 64 exponent).
+      * bfloat16 (ROW_MAJOR):         32 tokens x head_dim x 2 B, contiguous.
+    Derived from the tensor so each cache (dense bf8 KVPE, bf16 sparse KVPE, bf8 index) sizes itself."""
+    head_dim = cache.shape[-1]
+    if cache.dtype == ttnn.bfloat8_b:
+        # bfp8 is tiled 32x32, so head_dim must be a whole number of tiles — otherwise integer division
+        # would silently undersize the chunk and corrupt the address table.
+        if head_dim % _TILE_DIM != 0:
+            raise ValueError(f"bfloat8_b KV cache head_dim {head_dim} must be a multiple of {_TILE_DIM} (tiled)")
+        return (head_dim // _TILE_DIM) * _BFP8_TILE_BYTES
+    if cache.dtype == ttnn.bfloat16:
+        # The bf16 contiguous sizing below assumes a ROW_MAJOR cache (32 tokens x head_dim packed with no
+        # tile padding). A TILE-laid-out bf16 cache would need the tiled sizing instead, so reject it here.
+        if cache.layout != ttnn.ROW_MAJOR_LAYOUT:
+            raise ValueError(f"bfloat16 KV cache must be ROW_MAJOR for contiguous chunk sizing, got {cache.layout}")
+        return NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK * head_dim * _BF16_BYTES
+    raise ValueError(f"unsupported KV cache dtype for chunk sizing: {cache.dtype}")
+
+
 def build_and_serialize_kv_chunk_table(
-    *, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, chunk_size_global, path
+    *,
+    mesh_device,
+    kvpe_cache,
+    seq_len,
+    num_layers,
+    mesh_shape,
+    sp_axis,
+    num_users,
+    chunk_size_global,
+    path,
+    index_kv_cache=None,
 ) -> str:
     """Build the MLA block-cyclic KV chunk address table and serialize it to ``path`` for the
     inference server's SET_TABLE. Returns the path on success.
@@ -41,12 +79,29 @@ def build_and_serialize_kv_chunk_table(
     max_seq_len) lists the wrong, block-cyclically-scattered chunks and fails its PCC check.
 
     ``chunk_size_global`` is the block-cyclic period; the kimi builder hardcodes it as
-    PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped."""
+    PREFILL_CHUNK_OUTPUT_TOKENS, so a non-default period is rejected here rather than mismapped.
+
+    ``index_kv_cache`` (sparse/DSA models only): when given, a single MERGED table describes BOTH
+    caches — config 0 = the KVPE cache, config 1 = the index-key cache — sharing one device-group
+    side table. None (dense models) → the usual single-config table over the KVPE cache alone."""
     assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
         f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
         f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
         f"A different period would mismap every position; re-introduce a parametrized builder if needed."
     )
+
+    if index_kv_cache is not None:
+        return _build_and_serialize_merged_kv_chunk_table(
+            mesh_device=mesh_device,
+            kvpe_cache=kvpe_cache,
+            index_kv_cache=index_kv_cache,
+            seq_len=seq_len,
+            num_layers=num_layers,
+            mesh_shape=mesh_shape,
+            sp_axis=sp_axis,
+            num_users=num_users,
+            path=path,
+        )
 
     def _builder(*, config, chunk_size_bytes, num_users):
         return create_kv_chunk_address_table_kimi(
@@ -69,3 +124,43 @@ def build_and_serialize_kv_chunk_table(
         chunk_size_bytes=_CHUNK_SIZE_BYTES,
         path=path,
     )
+
+
+def _build_and_serialize_merged_kv_chunk_table(
+    *, mesh_device, kvpe_cache, index_kv_cache, seq_len, num_layers, mesh_shape, sp_axis, num_users, path
+) -> str:
+    """Sparse (DSA) path: build ONE KvChunkAddressTable holding BOTH caches instead of two tables —
+    config 0 = the KVPE cache, config 1 = the index-key cache. Each config carries its own
+    chunk_size_bytes (derived from the cache's dtype + head_dim); the device-group / fabric-host side
+    table is shared across both. Mirrors test_glm_kv_cache_table's merged readback."""
+    disagg = ttnn.experimental.disaggregation
+
+    def _table_config(cache):
+        cfg = disagg.KvChunkAddressTableConfig()
+        cfg.num_layers = num_layers
+        cfg.max_sequence_length = seq_len
+        cfg.num_slots = num_users
+        cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+        cfg.chunk_size_bytes = _dram_chunk_size_bytes(cache)
+        return cfg
+
+    # config 0 = KVPE, config 1 = index (a list of configs -> config i is named "i").
+    caches = (kvpe_cache, index_kv_cache)
+    configs = [_table_config(c) for c in caches]
+    table = disagg.KvChunkAddressTable(configs)
+
+    for config_id, (cache, cfg) in enumerate(zip(caches, configs)):
+        populate_kv_chunk_address_table_kimi(
+            lookup_table=table,
+            config=cfg,
+            mesh_device=mesh_device,
+            mesh_shape=mesh_shape,
+            seq_len=seq_len,
+            sp_axis=sp_axis,
+            tt_kvpe_cache=cache,
+            chunk_size_bytes=cfg.chunk_size_bytes,
+            num_users=num_users,
+            config_id=config_id,
+        )
+
+    return serialize_prebuilt_kv_chunk_table(table=table, path=path)

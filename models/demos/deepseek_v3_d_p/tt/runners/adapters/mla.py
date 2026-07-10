@@ -27,7 +27,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.common.prefill.adapter import PrefillModelAdapter, PrefillRunParams
+from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
 
 # NOTE: the heavy model stack (TtPrefillRuntime / TtPrefillTransformer, the MoE gate, transformers'
 # AutoConfig) is imported lazily inside the methods that need it. This keeps `import ...adapters` cheap
@@ -88,20 +88,25 @@ class MLAPrefillAdapter(PrefillModelAdapter):
     # ------------------------------------------------------------------
     # KV cache + runtime build
     # ------------------------------------------------------------------
-    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         """Allocate the MLA kvpe KV cache (qk_rope_head_dim + kv_lora_rank per token;
-        one shared cache of num_users * num_layers user-major slots). The engine owns
-        the returned tensor and passes it into every runtime call."""
+        one shared cache of num_users * num_layers user-major slots). Dense MLA has no
+        secondary cache, so the returned KvCaches holds just the one at index 0. The engine
+        owns the returned caches and passes them into every runtime call."""
         from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 
-        return allocate_mla_kvpe_cache(
-            mesh_device=mesh_device,
-            hf_config=hf_config,
-            max_seq_len=params.max_seq_len,
-            mesh_shape=params.mesh_shape,
-            sp_axis=params.sp_axis,
-            num_layers=params.num_layers,
-            num_users=params.num_users,
+        return KvCaches(
+            [
+                allocate_mla_kvpe_cache(
+                    mesh_device=mesh_device,
+                    hf_config=hf_config,
+                    max_seq_len=params.max_seq_len,
+                    mesh_shape=params.mesh_shape,
+                    sp_axis=params.sp_axis,
+                    num_layers=params.num_layers,
+                    num_users=params.num_users,
+                )
+            ]
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
