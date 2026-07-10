@@ -46,19 +46,6 @@ using debug_sanitize_noc_cast_t = bool;
 #define DEBUG_SANITIZE_NOC_LOCAL false
 using debug_sanitize_noc_which_core_t = bool;
 
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-// Quasar DM cores access L1 through an uncached alias at MEM_L1_UNCACHED_BASE. Normalize
-// uncached addresses to their physical (cached) offset for bounds checks.
-inline uint64_t debug_normalize_l1_addr(uint64_t addr) {
-    if (addr >= MEM_L1_UNCACHED_BASE) {
-        return addr - MEM_L1_UNCACHED_BASE;
-    }
-    return addr;
-}
-#else
-inline uint64_t debug_normalize_l1_addr(uint64_t addr) { return addr; }
-#endif
-
 // Helper function to get the core type from noc coords.
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
@@ -180,17 +167,31 @@ inline bool debug_valid_reg_addr(
            (len == 4);
 }
 
-inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write) {
+inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write, bool is_local_buffer = false) {
     if (addr + len <= addr) {
         return DebugSanitizeNocAddrZeroLength;
     }
-    addr = debug_normalize_l1_addr(addr);
     if (addr < MEM_L1_BASE) {
         return DebugSanitizeNocAddrUnderflow;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM local buffers may use the cached view or the uncached alias (valid up to the top of
+    // the alias). Remote NOC target offsets are always physical (cached-range) and must stay within
+    // MEM_L1_SIZE.
+    if (is_local_buffer) {
+        if (addr + len > MEM_L1_UNCACHED_BASE + MEM_L1_SIZE) {
+            return DebugSanitizeNocAddrOverflow;
+        }
+    } else {
+        if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
+            return DebugSanitizeNocAddrOverflow;
+        }
+    }
+#else
     if (addr + len > MEM_L1_BASE + MEM_L1_SIZE) {
         return DebugSanitizeNocAddrOverflow;
     }
+#endif
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
     if (write && (addr < MEM_MAP_READ_ONLY_END)) {
@@ -278,7 +279,6 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
 // Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
 inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
-    l1_addr = static_cast<uint32_t>(debug_normalize_l1_addr(l1_addr));
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         LocalCBInterface& cb = get_local_cb_interface(i);
         if (cb.fifo_size == 0) {
@@ -529,7 +529,8 @@ uint32_t debug_sanitize_noc_addr(
             multicast,
             dir,
             DEBUG_SANITIZE_NOC_TARGET,
-            debug_valid_worker_addr(noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE));
+            debug_valid_worker_addr(
+                noc_local_addr, noc_len, dir == DEBUG_SANITIZE_NOC_WRITE, false));  // remote NOC target
     } else {
         // Bad XY
         debug_sanitize_post_addr_and_hang(
@@ -565,7 +566,8 @@ void debug_sanitize_noc_and_worker_addr(
 #elif defined(COMPILE_FOR_DRISC)
         uint16_t return_code = debug_valid_drisc_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
 #else
-        uint16_t return_code = debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ);
+        uint16_t return_code =
+            debug_valid_worker_addr(worker_addr, len, dir == DEBUG_SANITIZE_NOC_READ, true);  // local buffer
 #endif
         debug_sanitize_post_addr_and_hang(
             noc_id, noc_addr, worker_addr, len, multicast, dir, DEBUG_SANITIZE_NOC_LOCAL, return_code);
@@ -626,10 +628,14 @@ void debug_sanitize_l1_access(uint64_t addr, uint32_t len) {
     constexpr uint64_t l1_overflow_addr = MEM_ETH_SIZE;
 #elif defined(COMPILE_FOR_DRISC)
     constexpr uint64_t l1_overflow_addr = MEM_DRISC_L1_SIZE;
+#elif defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM kernels can access TL1 via the cached view or the uncached alias (same physical
+    // memory), so the valid range spans up to the top of the alias. Report the raw address, not a
+    // normalized one, so error messages reflect what the kernel actually used.
+    constexpr uint64_t l1_overflow_addr = MEM_L1_UNCACHED_BASE + MEM_L1_SIZE;
 #else
     constexpr uint64_t l1_overflow_addr = MEM_L1_SIZE;
 #endif
-    addr = debug_normalize_l1_addr(addr);
     if (addr + len <= addr || addr + len > l1_overflow_addr) {
         debug_sanitize_post_addr_and_hang(
             0,  // unused (not a noc transaction)
