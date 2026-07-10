@@ -20,10 +20,25 @@
 - Reservation-hog fixed (tt-host/tt-profile skills + lessons.md).
 - ltx-perf tip built + measured = 8.1s (parity; "7.9" was a one-off sample).
 
-## KEY MEASURED FINDING (corrects the prior assumption)
-Profiled the ring-joint SDPA at production S2 shape (unit test, PCC 0.9997, 71s<300s):
-**SDPA = 4.85ms/op = ~20% of the 24.3ms/block.** It's 61% of MACs but 20% of time = compute-EFFICIENT.
-⇒ The denoise is **distributed-overhead bound**, NOT one-kernel bound. No single-kernel opt reaches 6s.
+## KEY MEASURED FINDING — per-op S2 block profile (lever B) — ⚠️ CORRECTED (was cold, re-measuring warm)
+**METHODOLOGY ERROR I made, caught by adversarial worker a9dc1ceb + CSV-verified:** the recovered profile (job
+001940-36) is a **COLD, non-traced, num_layers=1 capture** — PROGRAM CACHE HIT=False on all 302 ops, METAL TRACE ID null.
+My first read divided the single cold block by 2 (mis-assumed 2 iterations; it's ONE AV block = 2 RingJointSDPA video+audio
+self + 4 SDPA cross). And the "14% Tilize" is a **one-time load preamble** (seq 0–106 = weights RM→TILE at load); the real
+block compute (seq 107–301) has **ZERO tilizes**. ⇒ **Tilize lever is DEAD (artifact).**
+
+CORRECTED per-block (compute phase seq 107–301, cold FW — warm may differ, esp. CCL fabric-setup): **20.56 ms/block**
+| bucket | ms/block | % | note |
+|---|---|---|---|
+| **CCL-collective matmul (SP)** (AllGatherMatmul + MatmulReduceScatter) | **11.57** | **56.3%** | matmul compute FUSED with all-gather/reduce-scatter |
+| **RingJoint SDPA** | 6.13 | 29.8% | 4.62ms video-self + 1.30ms audio-self; capped |
+| adaLN elementwise (addcmul shift/scale/gate) | 1.79 | 8.7% | small ceiling |
+| reshape/heads + RoPE + non-collective matmul | 1.06 | 5.2% | |
+
+**Wall reconciliation (CORRECTED):** 144 S2 forwards × 20.56ms = **2.96s device-FW** vs S2 wall 3.5s ⇒ **~15% inter-op gap,
+NOT 50%.** The denoise is **compute/CCL-bound, not overhead-bound** — my earlier "50% overhead" was the ÷2 error.
+⇒ 86% of the block is collective-matmul + SDPA, both near pure-compute floor (bf8 null). No-finetune runway is thin.
+**Open (needs WARM/TRACED profile):** is cold CCL FW inflated by fabric setup? Real warm per-block + real gap %. Re-measuring.
 
 ## LEVER PLAN (ranked; status)
 | # | lever | expected | status |
@@ -62,3 +77,6 @@ capped by the ~53% overhead structure. Banking every real gain; reporting the tr
 - 2026-07-10 00:52Z — pulled tt-workflows improvements (never-stop.md, tt-opt Opus-4.8 policy, tt-host cold-start floor); rebased my reservation-budget skill-fixes on top.
 - 2026-07-10 00:53Z — BLOG cross-check (fal.ai) done: CFG already folded; FP4/quant null on BH (overhead-bound); op-fusion = the one transferable no-finetune lever; QAD/DMD confirm 6s needs finetune.
 - 2026-07-10 00:54Z — reboot-resilient supervise.sh loop armed (pid 58706).
+- 2026-07-10 00:58Z — LEVER B COMPLETE: definitive per-op S2 block profile (see table above). Named targets: CCL-matmul 47.5%, SDPA 25%, Tilize 14%, adaLN 7%. Inter-op gap ~50% of wall.
+- 2026-07-10 01:00Z — dispatched worker a9dc1ceb (Opus/xhigh): investigate Tilize elimination (44 ops/block) → ranked removability plan. In flight.
+- 2026-07-10 01:16Z — TTSUP_TICK #1 (heartbeat healthy). Ultracode on. Launched Workflow wi7rr4cw5 (4 parallel Opus/xhigh digs + max synthesis): CCL-overlap/inter-op-gap (highest ceiling ~1.75s S2), adaLN-fusion, VAE-decode (1.0s unexplored stage), finetune-path scoping (DMD/QAD honest 6s route). All read-only. In flight alongside tilize worker.
