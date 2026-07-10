@@ -55,6 +55,11 @@ def test_lang_decoder_inference(seq_len, mesh_device, dummy_weights, reset_seeds
     reference_model = model_args.reference_language_model()
     reference_model.eval()
 
+    # Dummy runs must clear dummy_weights before TT construction so tt_transformers caches the
+    # tilized 7B QKV on host instead of live-tiling it on device (which overflows N150 L1).
+    if dummy_weights:
+        model_args.prepare_for_tt_weight_upload()
+
     # TT decoder stack: the shared tt_transformers Transformer, built from Janus weights.
     tt_model = Transformer(
         args=model_args,
