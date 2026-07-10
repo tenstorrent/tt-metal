@@ -249,8 +249,12 @@ It is only intended for use with the NC dimensions (0, 1).</p>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, FLOAT32</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT8_B, BFLOAT4_B</p></td>
+<td><p>TILE</p></td>
 </tr>
 </tbody>
 </table>
@@ -267,7 +271,11 @@ It is only intended for use with the NC dimensions (0, 1).</p>
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16</p></td>
+<td><p>BFLOAT16, FLOAT32</p></td>
+<td><p>TILE</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>BFLOAT8_B, BFLOAT4_B</p></td>
 <td><p>TILE</p></td>
 </tr>
 </tbody>
@@ -284,7 +292,9 @@ It is only intended for use with the NC dimensions (0, 1).</p>
 <dd>
 <ul class="simple">
 <li><p>All input tensors must be on-device.</p></li>
-<li><p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is not specified (i.e. full product), the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).</p></li>
+<li><p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is not specified (i.e. full product), keepdim=True is not supported  (as this operation results in a scalar).</p></li>
+<li><p>BFLOAT8_B and BFLOAT4_B inputs must be TILE layout.</p></li>
+<li><p>Dim-based reductions do not support BFLOAT4_B.</p></li>
 <li><p>Sharding is not supported for this operation</p></li>
 </ul>
 </dd>
