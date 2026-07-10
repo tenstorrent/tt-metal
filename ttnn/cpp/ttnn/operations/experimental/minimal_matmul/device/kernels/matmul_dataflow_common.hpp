@@ -89,13 +89,17 @@ void read_in0_block_sync(
     bool issue_barrier = true,
     // Tile offset from the block's CB base at which this call starts writing. Lets a band-streaming
     // caller place band s at its M-row slot within the one reserved block (0 => block base).
-    uint32_t write_tile_offset = 0) {
+    uint32_t write_tile_offset = 0,
+    // Absolute L1 write base. Nonzero overrides the CB's current write pointer so a paired-buffer
+    // caller can place a band at an explicit slot (e.g. addr_f/addr_b that may wrap the CB); the
+    // K-padding zero-fill offset is taken relative to this base.
+    uint32_t write_addr = 0) {
     ASSERT(d0_end > d0_start);
     ASSERT(d1_end > d1_start);
 
     Noc noc;
     CircularBuffer cb(cb_id);
-    const uint32_t cb_base_write_ptr = cb.get_write_ptr();
+    const uint32_t cb_base_write_ptr = write_addr ? write_addr : cb.get_write_ptr();
     uint32_t write_ptr = cb_base_write_ptr + write_tile_offset * tile_size_bytes;
     for (uint32_t i = d0_start; i < d0_end; i++) {
         if (i >= shape.logical_d0) {
