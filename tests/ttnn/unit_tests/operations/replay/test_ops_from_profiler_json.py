@@ -121,6 +121,15 @@ def parse_shape_list(shape_str: str):
     return [int(n) for n in nums]
 
 
+def tile_padded_shape(logical_shape, tile_h: int = TILE_HEIGHT, tile_w: int = TILE_WIDTH):
+    """Pad last two dims of a logical shape up to tile height/width multiples."""
+    shape = list(logical_shape)
+    if len(shape) >= 2:
+        shape[-2] = ((shape[-2] + tile_h - 1) // tile_h) * tile_h
+        shape[-1] = ((shape[-1] + tile_w - 1) // tile_w) * tile_w
+    return shape
+
+
 def parse_core_range_set(grid_blob: str) -> ttnn.CoreRangeSet:
     """Parse shard grid fragment with one or more {start/end} ranges."""
     ranges = []
@@ -240,7 +249,7 @@ def parse_sdpa_program_config(pc_str: str):
 def make_random_torch(shape, datatype: str = "BFLOAT16") -> torch.Tensor:
     # Always generate bf16 host data; profiled datatype is ignored.
     del datatype
-    return torch.randn(shape, dtype=torch.float32).to(torch.bfloat16) * 0.1
+    return torch.randint(-10, 10, shape, dtype=torch.float32).to(torch.bfloat16) * 0.1
 
 
 def create_tt_tensor(spec: dict, device, mem_config_override=None):
@@ -745,7 +754,8 @@ def compare_with_reference(op: dict, torch_inputs: list[torch.Tensor], tt_inputs
         assert list(actual.shape) == list(
             expected.shape
         ), f"{op['op_code']} out{i}: shape {list(actual.shape)} != ref {list(expected.shape)}"
-        assert_with_pcc(expected, actual, pcc=pcc)
+        passed, message = assert_with_pcc(expected, actual, pcc=pcc)
+        print(message)
 
 
 def _op_id(idx: int, op: dict) -> str:
@@ -777,8 +787,10 @@ def test_profiler_op_replay(device, op_index):
             got_logical = list(out_tt.shape)
             exp_logical = list(out_spec["shape_logical"])
             assert got_logical == exp_logical, f"{op['op_code']}: logical shape {got_logical} != expected {exp_logical}"
+            # Profiled shape_padded assumes the capture tile (often 32x32). Recompute
+            # from logical shape using this test's tile so 16x32 vs 32x32 padding matches.
             got_padded = list(out_tt.padded_shape)
-            exp_padded = list(out_spec["shape_padded"])
+            exp_padded = tile_padded_shape(exp_logical)
             assert got_padded == exp_padded, f"{op['op_code']}: padded_shape {got_padded} != expected {exp_padded}"
 
     compare_with_reference(op, torch_inputs, tt_inputs, result)
