@@ -47,7 +47,10 @@ from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
-PERF_INPUT_DIMENSIONS = [512, 64]
+# Nested list of [H, W] pairs: a flat [H, W] is expanded by parametrize into
+# input_dimensions=H (int) and breaks generate_stimuli / rows, cols = dims.
+PERF_INPUT_DIMENSIONS = [[512, 64]]
+PERF_ONLY_INPUT_DIMENSIONS = [[512, 64]]
 TILE_DIMENSIONS = [32, 32]
 # Complete list of formats that are supported with L1 accumulation as the
 # OUTPUT format. MX formats (MxInt8) are allowed only as INPUT — accumulation
@@ -144,7 +147,7 @@ def pack_l1_acc_implied_math_formats(formats_dest_acc, *, is_perf=False):
 
 
 def pack_l1_acc_input_dimensions(*, is_perf=False):
-    return [PERF_INPUT_DIMENSIONS] if is_perf else INPUT_DIMENSIONS
+    return PERF_ONLY_INPUT_DIMENSIONS if is_perf else INPUT_DIMENSIONS
 
 
 ALL_PACK_L1_ACC_COMBINATIONS = generate_qsr_pack_l1_acc_combinations(

@@ -98,6 +98,13 @@ def generate_unpack_unary_operand_combinations(
         if is_perf:
             if in_fmt.is_32_bit():
                 continue
+            # Same packer constraint as the correctness path: non-Fp32 input cannot
+            # pack to Fp32 when dest is in 16-bit mode.
+            if (
+                in_fmt != DataFormat.Float32
+                and fmt.output_format == DataFormat.Float32
+            ):
+                continue
             for dest_acc in (DestAccumulation.No,):
                 for dest_sync in dest_sync_modes:
                     for unpacker_sel in (UnpackerEngine.UnpA,):
@@ -204,7 +211,7 @@ def test_unpack_unary_operand_quasar(
         unpacker_sel,
         input_dimensions,
         tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims[0]
+    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
 
     tile_shape = construct_tile_shape(tile_dimensions)
 

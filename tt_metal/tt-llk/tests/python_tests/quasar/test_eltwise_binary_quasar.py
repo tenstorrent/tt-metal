@@ -88,7 +88,9 @@ def eltwise_binary_math_fidelities(mathop, formats, *, is_perf=False):
 
 def eltwise_binary_input_dimensions(dest_sync_dest_acc, *, is_perf=False):
     if is_perf:
-        return [32, 32]
+        # Nested list: parametrize treats a flat list as multiple values, so
+        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
+        return [[32, 32]]
     return generate_unary_input_dimensions(dest_sync_dest_acc[1], dest_sync_dest_acc[0])
 
 

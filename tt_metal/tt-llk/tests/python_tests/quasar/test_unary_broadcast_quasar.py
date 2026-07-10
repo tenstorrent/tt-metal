@@ -46,7 +46,10 @@ from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 32]]
-PERF_INPUT_DIMENSIONS = [512, 32]
+# Nested list of [H, W] pairs: a flat [H, W] is expanded by parametrize into
+# input_dimensions=H (int) and breaks generate_stimuli / rows, cols = dims.
+PERF_INPUT_DIMENSIONS = [[512, 32]]
+PERF_ONLY_INPUT_DIMENSIONS = [[512, 32]]
 TILE_DIMENSIONS = [32, 32]
 
 
@@ -63,7 +66,7 @@ def unary_broadcast_implied_math_formats(formats, *, is_perf=False):
 
 
 def unary_broadcast_input_dimensions(*, is_perf=False):
-    return PERF_INPUT_DIMENSIONS if is_perf else INPUT_DIMENSIONS[0]
+    return PERF_ONLY_INPUT_DIMENSIONS if is_perf else INPUT_DIMENSIONS
 
 
 UNARY_BROADCAST_FORMATS = input_output_formats(

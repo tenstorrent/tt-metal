@@ -4,7 +4,7 @@
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.llk_params import MathFidelity, PerfRunType, ReduceDimension, ReducePool
+from helpers.llk_params import MathFidelity, ReduceDimension, ReducePool, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_reduce_quasar import (
     REDUCE_FORMATS,
@@ -34,15 +34,7 @@ _ARCH = get_chip_architecture()
     implied_math_format=lambda formats: reduce_implied_math_formats(
         formats, is_perf=True
     ),
-    run_types=[
-        [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
-    ],
+    run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
 )
@@ -97,15 +89,7 @@ def test_perf_reduce_quasar(
     pool_type=[ReducePool.Sum, ReducePool.Average],
     math_fidelity=[MathFidelity.LoFi],
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=True),
-    run_types=[
-        [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
-    ],
+    run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
 )

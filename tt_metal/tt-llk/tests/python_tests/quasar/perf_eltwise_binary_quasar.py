@@ -3,7 +3,7 @@
 
 import pytest
 from helpers.format_config import DataFormat
-from helpers.llk_params import MathOperation, PerfRunType
+from helpers.llk_params import MathOperation, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_eltwise_binary_quasar import (
     ELTWISE_FORMATS,
@@ -34,15 +34,7 @@ from quasar.test_eltwise_binary_quasar import test_eltwise_binary as run_eltwise
     ),
     acc_to_dest=[False],
     num_faces=[4],
-    run_types=[
-        [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
-    ],
+    run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
 )

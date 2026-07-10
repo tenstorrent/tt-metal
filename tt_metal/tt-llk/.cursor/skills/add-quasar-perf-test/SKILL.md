@@ -19,7 +19,7 @@ Create a Quasar perf test that reuses the correctness test harness, emits perf r
 4. Mark the perf test with both `@pytest.mark.perf` and `@pytest.mark.quasar`.
 5. Import the correctness test as a helper, usually `from quasar.test_<op>_quasar import test_<op> as run_<op>`.
 6. Parametrize the perf test with a narrow, perf-oriented sweep:
-   - `run_types=[[PerfRunType.L1_TO_L1, PerfRunType.UNPACK_ISOLATE, PerfRunType.MATH_ISOLATE, PerfRunType.PACK_ISOLATE, PerfRunType.L1_CONGESTION]]`
+   - `run_types=PERF_RUN_TYPES` from `helpers.llk_params` (one `PerfRunType` per pytest case: L1_TO_L1, UNPACK_ISOLATE, MATH_ISOLATE, PACK_ISOLATE, L1_CONGESTION)
    - `loop_factor=[32]` unless the operation has an established different loop count
    - `is_perf=[True]`
    - prefer exact destination fill when dimensions affect profiler normalization

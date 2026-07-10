@@ -11,6 +11,7 @@ import pandas as pd
 from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .llk_params import PerfRunType
+from .logger import logger
 from .test_config import TestConfig
 
 
@@ -453,9 +454,16 @@ class Profiler:
             try:
                 marker = profiler_meta[marker_id]
             except KeyError:
-                raise AssertionError(
-                    f"Marker with ID {marker_id} not found in profiler metadata"
+                # Trailing/corrupt words can still have ENTRY_EXISTS_BIT set (e.g. after
+                # an incomplete reset or L1 pollution on the emulator). Stop parsing this
+                # thread rather than failing the whole perf run.
+                logger.warning(
+                    "Profiler {}: stopping parse at unknown marker ID {} "
+                    "(treated as end of valid buffer)",
+                    thread,
+                    marker_id,
                 )
+                break
 
             timestamp_high = word & Profiler.ENTRY_TIME_HIGH_MASK
             timestamp_low = next(word_stream)

@@ -83,7 +83,9 @@ def binary_broadcast_math_fidelities(format, mathop, *, is_perf=False):
 
 def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False):
     if is_perf:
-        return [32, 32]
+        # Nested list: parametrize treats a flat list as multiple values, so
+        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
+        return [[32, 32]]
     return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
 
 

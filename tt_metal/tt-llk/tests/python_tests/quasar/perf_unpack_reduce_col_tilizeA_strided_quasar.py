@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
     PERF_UNPACK_REDUCE_COL_TILIZEA_STRIDED_COMBINATIONS,
@@ -22,15 +22,7 @@ from quasar.test_unpack_reduce_col_tilizeA_strided_quasar import (
     implied_math_format=lambda: unpack_reduce_col_tilizeA_strided_implied_math_formats(
         is_perf=True
     ),
-    run_types=[
-        [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
-    ],
+    run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
 )

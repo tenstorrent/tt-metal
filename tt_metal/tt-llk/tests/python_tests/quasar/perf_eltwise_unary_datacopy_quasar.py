@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import PerfRunType
+from helpers.llk_params import PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize
 from quasar.test_eltwise_unary_datacopy_quasar import (
     PERF_DATACOPY_COMBINATIONS,
@@ -21,15 +21,7 @@ from quasar.test_eltwise_unary_datacopy_quasar import (
         formats_dest_acc_data_copy_type_dims_dest_sync_dest_indices[0],
         is_perf=True,
     ),
-    run_types=[
-        [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
-    ],
+    run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
 )

@@ -12,8 +12,6 @@
 #include "profiler.h"
 #include "sfpu_stub.h"
 
-static_assert(PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE, "Math isolation not supported for unpack_tilize");
-
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_math_common.h"
@@ -106,6 +104,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            if constexpr (DATA_COPY_TYPE == DataCopyType::A2D)
+            {
+                _perf_unpack_loop_set_valid<true, false>(LOOP_FACTOR);
+            }
+            else
+            {
+                _perf_unpack_loop_set_valid<false, true>(LOOP_FACTOR);
+            }
+        }
         else
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -185,6 +194,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _perf_math_loop_clear_valid<false, true>(LOOP_FACTOR * TILE_CNT);
                 }
             }
+            else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+            {
+                for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+                {
+                    for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                    {
+                        _llk_math_eltwise_unary_datacopy_(params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_tile*/, i);
+                    }
+                }
+            }
             else
             {
                 for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
@@ -244,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         ZONE_SCOPED("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)

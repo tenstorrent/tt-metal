@@ -157,7 +157,7 @@ def test_unpack_tilize_quasar(
     perf_report=None,
 ):
     (formats, dest_acc, dest_sync_mode, unpacker_sel, input_dimensions) = (
-        formats_dest_acc_sync_unpack_sel_dimensions[0]
+        formats_dest_acc_sync_unpack_sel_dimensions
     )
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(

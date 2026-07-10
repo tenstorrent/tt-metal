@@ -176,10 +176,15 @@ class ExalensServer:
         self.stop()
         pytest.exit(returncode=1)
 
-    EMU_ERROR_PATTERN = "zServer : ERROR"
+    EMU_ERROR_PATTERNS = (
+        "zServer : ERROR",
+        # Fail-fast marker from instrumented quasar-1x3_run_dev launcher when
+        # SSH to the Aether host fails (avoids waiting the full READY_TIMEOUT).
+        "FATAL: SSH",
+    )
 
     def _check_emulator_log(self) -> Optional[str]:
-        """Check emulator logs created after start() for zServer ERROR lines."""
+        """Check emulator logs created after start() for fatal bring-up errors."""
         new_logs = set(glob.glob(self.EMU_LOG_PATTERN)) - self._emu_logs_baseline
         if not new_logs:
             return None
@@ -192,7 +197,7 @@ class ExalensServer:
         try:
             with open(latest, "r") as f:
                 for line in f:
-                    if self.EMU_ERROR_PATTERN in line:
+                    if any(p in line for p in self.EMU_ERROR_PATTERNS):
                         error_lines.append(line.rstrip())
         except OSError:
             return None

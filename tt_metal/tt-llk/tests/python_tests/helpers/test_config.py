@@ -1239,6 +1239,11 @@ class TestConfig:
             )
 
             def build_kernel_part(name: str):
+                # Defensive: parallel compiles must not race a missing output dir
+                # (seen as ld "cannot open output file .../elf/<name>.elf").
+                os.makedirs(VARIANT_OBJ_DIR, exist_ok=True)
+                os.makedirs(VARIANT_ELF_DIR, exist_ok=True)
+
                 optional_kernel_flags = ""
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
                     optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(

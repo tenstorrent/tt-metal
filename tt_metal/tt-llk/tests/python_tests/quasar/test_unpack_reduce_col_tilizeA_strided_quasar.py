@@ -189,7 +189,7 @@ def test_unpack_reduce_col_tilizeA_strided_quasar(
     perf_report=None,
 ):
     (formats, dest_acc, dest_sync_mode, input_dimensions, pool_type) = (
-        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims[0]
+        formats_dest_acc_sync_unpack_reduce_col_tilizeA_strided_sel_dims
     )
 
     num_faces = 4

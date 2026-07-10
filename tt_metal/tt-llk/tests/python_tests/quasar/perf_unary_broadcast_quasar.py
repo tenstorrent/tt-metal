@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.llk_params import BroadcastType, PerfRunType
+from helpers.llk_params import BroadcastType, PERF_RUN_TYPES_QUASAR
 from helpers.param_config import parametrize, runtime
 from quasar.test_unary_broadcast_quasar import (
+    INPUT_DIMENSIONS,
     UNARY_BROADCAST_FORMATS,
     get_valid_dest_acc_unary_broadcast,
 )
@@ -14,7 +15,6 @@ from quasar.test_unary_broadcast_quasar import (
 from quasar.test_unary_broadcast_quasar import (
     unary_broadcast_dest_sync_modes,
     unary_broadcast_implied_math_formats,
-    unary_broadcast_input_dimensions,
 )
 
 
@@ -28,16 +28,8 @@ from quasar.test_unary_broadcast_quasar import (
         formats, is_perf=True
     ),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=True),
-    input_dimensions=runtime(lambda: unary_broadcast_input_dimensions(is_perf=True)),
-    run_types=[
-        [
-            PerfRunType.L1_TO_L1,
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ]
-    ],
+    input_dimensions=runtime(INPUT_DIMENSIONS),
+    run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[32],
     is_perf=[True],
 )

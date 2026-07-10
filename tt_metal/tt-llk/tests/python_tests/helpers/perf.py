@@ -529,6 +529,7 @@ class PerfConfig(TestConfig):
         l1_acc=L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        boot_mode: BootMode = BootMode.DEFAULT,
     ):
 
         # Initialize passed templates and runtimes here so we don't get variant hash issues
@@ -553,7 +554,7 @@ class PerfConfig(TestConfig):
             templates,
             runtimes,
             variant_stimuli,
-            BootMode.DEFAULT,
+            boot_mode,
             ProfilerBuild.Yes,
             1,  # L1_2_L1s
             unpack_to_dest,
