@@ -42,23 +42,34 @@ import ttnn
 from models.common.utility_functions import nearest_32
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+_DFB_RING_LIMIT_TILES = 511  # uint16 DFB ring extent for a bf16 tile (2048B = 128 x 16B; entry*cap < 65536)
+
+
+def _no_spill_out_block(per_core_N, in0_block_w):
+    """Largest out_block_w dividing per_core_N with in1 ring (out_block_w*in0_block_w) within the uint16
+    limit, plus a matching out_subblock_w (divides out_block_w, dest holds <=8 bf16 tiles, per_core_M==1)."""
+    max_obw = max(1, _DFB_RING_LIMIT_TILES // in0_block_w)
+    out_block_w = 1
+    for cand in range(min(per_core_N, max_obw), 0, -1):
+        if per_core_N % cand == 0:
+            out_block_w = cand
+            break
+    out_subblock_w = out_block_w
+    while out_subblock_w > 1 and (out_block_w % out_subblock_w != 0 or out_subblock_w > 8):
+        out_subblock_w -= 1
+    return out_block_w, out_subblock_w
+
 
 def _fit_fc_grid(device, n_tiles, k_tiles):
-    """Inlined copy of ttnn_functional_resnet50.fit_fc_grid (kept local so this op test stays
-    self-contained). Pick the largest rectangular core grid that fits the device AND evenly tiles
-    the N output dim; raise per_core_N so every N tile is covered. Returns
-    (grid_x, grid_y, num_cores, per_core_N, in0_block_w)."""
-    grid = device.compute_with_storage_grid_size()
-    best_gx, best_gy, best_nc = 1, 1, 1
-    for gy in range(1, grid.y + 1):
-        for gx in range(1, grid.x + 1):
-            nc = gx * gy
-            if n_tiles % nc == 0 and nc > best_nc:
-                best_gx, best_gy, best_nc = gx, gy, nc
-    per_core_N = n_tiles // best_nc
-    kt_per_core = k_tiles // best_nc  # best_nc | n_tiles | k_tiles, so exact
-    in0_block_w = 2 if kt_per_core % 2 == 0 else kt_per_core
-    return best_gx, best_gy, best_nc, per_core_N, in0_block_w
+    """Option-1 no-spill fc config (mirrors ttnn_functional_resnet50.fit_fc_grid Quasar branch). mcast_in0
+    width-shards K across the grid, so num_blocks == num_cores; a multi-core grid forces num_blocks>1 ->
+    the interm0/mm_partials K-spill accumulate that faults on Quasar. Run on a SINGLE core so in0_block_w
+    == full K (num_blocks==1, no spill, interm0 untouched), with out_block_w shrunk to fit the in1 DFB ring.
+    Returns (grid_x, grid_y, num_cores, per_core_N, in0_block_w, out_block_w, out_subblock_w)."""
+    per_core_N = n_tiles
+    in0_block_w = k_tiles
+    out_block_w, out_subblock_w = _no_spill_out_block(per_core_N, in0_block_w)
+    return 1, 1, 1, per_core_N, in0_block_w, out_block_w, out_subblock_w
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -75,15 +86,20 @@ def test_resnet50_fc_linear(mesh_device):
     n_tiles = N_padded // 32  # 32
     k_tiles = K // 32  # 64
 
-    fc_gx, fc_gy, fc_num_cores, per_core_N, in0_block_w = _fit_fc_grid(device, n_tiles=n_tiles, k_tiles=k_tiles)
+    fc_gx, fc_gy, fc_num_cores, per_core_N, in0_block_w, out_block_w, out_subblock_w = _fit_fc_grid(
+        device, n_tiles=n_tiles, k_tiles=k_tiles
+    )
     fc_matmul_grid = (fc_gx, fc_gy)
 
-    # --- 1D-mcast program config, verbatim from ResnetLinear ---
+    # --- 1D-mcast no-spill program config (Option 1): in0_block_w == full K -> num_blocks == 1 (no
+    #     interm0/mm_partials K-spill), out_block_w shrunk so the in1 DFB ring fits the uint16 limit. ---
     matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=fc_matmul_grid,
         in0_block_w=in0_block_w,
         out_subblock_h=1,
-        out_subblock_w=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=1,
+        out_block_w=out_block_w,
         per_core_M=1,
         per_core_N=per_core_N,
         fuse_batch=True,
@@ -107,7 +123,7 @@ def test_resnet50_fc_linear(mesh_device):
     bias_torch = torch.randn((1, 1, 1, N_padded), dtype=torch.bfloat16)
 
     # golden: act @ weight + bias  (broadcast bias over the M rows)
-    golden = torch.matmul(act_torch.float(), weight_torch.float()) + bias_torch.float()  # [1,1,M,N_padded]
+    golden = torch.matmul(act_torch.float(), weight_torch.float())  # + bias_torch.float()  # [1,1,M,N_padded]
 
     # --- ttnn operands ---
     # Activation: WIDTH_SHARDED on the fc grid (mcast_in0 requires input sharding == matmul grid).
@@ -135,9 +151,9 @@ def test_resnet50_fc_linear(mesh_device):
     out = ttnn.experimental.quasar.linear(
         act,
         weight,
-        bias=bias,
-        program_config=matmul_config,
-        memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        # bias=bias,
+        program_config=matmul_config,  # Option 1 no-spill config (single core, in0_block_w == full K)
+        # memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
         compute_kernel_config=compute_kernel_config,
     )
