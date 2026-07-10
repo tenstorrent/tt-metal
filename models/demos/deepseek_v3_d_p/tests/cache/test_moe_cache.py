@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_tp_mesh_composer,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE, TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -42,7 +42,7 @@ def cleanup_cache():
     [
         pytest.param(
             (2, 2),
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+            {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": MOE_L1_SMALL_REGION_SIZE},
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="linear"),
             id="linear-2x2",
         ),
@@ -54,8 +54,20 @@ def cleanup_cache():
     [GateComputeMode.DEVICE, GateComputeMode.HOST_ALL],
     ids=["device_gate", "host_gate"],
 )
-def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
+def test_moe_weights_cold_warm_cache(
+    mesh_device,
+    device_params,
+    gate_mode,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
+):
     """Test: weights → cold cache → warm cache produce identical outputs."""
+    # The routed-expert / combine overlap is only supported on Blackhole (TtMoe asserts this).
+    if overlap_routed_expert_with_combine and not is_blackhole():
+        pytest.skip("overlap_routed_expert_with_combine=True is only supported on Blackhole")
+
     torch.manual_seed(42)
 
     logger.info(f"Testing MoE cache with gate_mode={gate_mode}")
@@ -151,6 +163,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     output1_tt, _ = moe_from_weights(create_input(), return_intermediates=False)
     output1 = to_torch_tp(output1_tt)
@@ -219,6 +233,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     profiler.end("cold_load")
     output2_tt, _ = moe_cold(create_input(), return_intermediates=False)
@@ -260,6 +276,8 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
         n_expert_groups=DeepSeekV3Config.NUM_EXPERT_GROUPS,
         n_limited_groups=DeepSeekV3Config.NUM_LIMITED_GROUPS,
         route_scale=DeepSeekV3Config.ROUTE_SCALE,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     profiler.end("warm_load")
     output3_tt, _ = moe_warm(create_input(), return_intermediates=False)

@@ -28,7 +28,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     RoutedExpertActivation activation,
     const std::optional<ttnn::Tensor>& gate_bias,
     const std::optional<ttnn::Tensor>& up_bias,
-    const std::optional<ttnn::Tensor>& down_bias) {
+    const std::optional<ttnn::Tensor>& down_bias,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
@@ -88,7 +90,9 @@ ttnn::Tensor unified_routed_expert_ffn(
         activation,
         gate_bias,
         up_bias,
-        down_bias);
+        down_bias,
+        subdevice_id,
+        global_semaphore);
 }
 
 ttnn::Tensor unified_routed_expert_moe(
@@ -104,7 +108,9 @@ ttnn::Tensor unified_routed_expert_moe(
     RoutedExpertActivation activation,
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases) {
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",
@@ -186,7 +192,9 @@ ttnn::Tensor unified_routed_expert_moe(
             activation,
             has_bias ? std::optional<ttnn::Tensor>((*gate_biases)[local_expert]) : std::nullopt,
             has_bias ? std::optional<ttnn::Tensor>((*up_biases)[local_expert]) : std::nullopt,
-            has_bias ? std::optional<ttnn::Tensor>((*down_biases)[local_expert]) : std::nullopt);
+            has_bias ? std::optional<ttnn::Tensor>((*down_biases)[local_expert]) : std::nullopt,
+            subdevice_id,
+            global_semaphore);
     }
     return output;
 }

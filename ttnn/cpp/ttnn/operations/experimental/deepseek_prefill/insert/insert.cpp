@@ -13,9 +13,10 @@ ttnn::Tensor insert(
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id) {
+    uint32_t local_expert_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     return ttnn::prim::prefill_insert(
-        global_tensor, local_tensor, start, counts, global_expert_idx_table, local_expert_id);
+        global_tensor, local_tensor, start, counts, global_expert_idx_table, local_expert_id, subdevice_id);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::insert

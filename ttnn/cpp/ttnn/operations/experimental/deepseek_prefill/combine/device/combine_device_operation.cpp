@@ -155,7 +155,8 @@ ttnn::Tensor prefill_combine(
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
     bool use_l1_small_for_semaphores,
-    bool use_fp8_combine) {
+    bool use_fp8_combine,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -170,7 +171,8 @@ ttnn::Tensor prefill_combine(
             .worker_core_range_set = worker_core_range_set,
             .init_zeros = init_zeros,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
-            .use_fp8_combine = use_fp8_combine},
+            .use_fp8_combine = use_fp8_combine,
+            .global_semaphore = global_semaphore},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

@@ -13,6 +13,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine::detail {
@@ -68,6 +69,9 @@ void bind_combine(nb::module_& mod) {
                 Defaults to True.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
+            global_semaphore (ttnn._ttnn.global_semaphore.global_semaphore, optional): Routed-expert
+                global semaphore for overlapping the routed expert with the combine. The
+                reader_untilize kernel waits on it before processing each expert. Defaults to None.
 
         Returns:
             ttnn.Tensor:
@@ -94,7 +98,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_combine") = false);
+        nb::arg("use_fp8_combine") = false,
+        nb::arg("global_semaphore") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

@@ -40,7 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_sp_mesh_composer,
     get_tp_mesh_composer,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import MOE_L1_SMALL_REGION_SIZE, TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
@@ -86,6 +86,8 @@ def run_model(
     request,
     is_balanced=False,
     padded_percent=0,
+    overlap_shared_expert_with_dispatch=True,
+    overlap_routed_expert_with_combine=True,
 ):
     """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
@@ -100,6 +102,17 @@ def run_model(
     dedicated grouped_topk / routing_setup tests. HOST_ALL gates ignore padding entirely
     (TtMoe falls back to padding_config=None for non-DEVICE_FP32 gates).
     """
+
+    # Perf tests set this via extra_env to force both overlaps off without adding
+    # parametrize cases (perf approximation is only meaningful with overlaps disabled).
+    if os.environ.get("TT_DS_MOE_DISABLE_OVERLAP") == "1":
+        overlap_shared_expert_with_dispatch = False
+        overlap_routed_expert_with_combine = False
+
+    # The routed-expert / combine overlap is only supported on Blackhole (TtMoe asserts this).
+    # Skip on non-Blackhole archs instead of hitting that assertion.
+    if overlap_routed_expert_with_combine and not is_blackhole():
+        pytest.skip("overlap_routed_expert_with_combine=True is only supported on Blackhole")
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
     # Cached all-gather semaphores get placed at the wrong offset for that specific config.
@@ -345,6 +358,8 @@ def run_model(
         n_limited_groups=config.topk_group,
         route_scale=config.routed_scaling_factor,
         is_balanced=is_balanced,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -631,6 +646,7 @@ def run_model(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -644,6 +660,7 @@ def run_model(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -658,6 +675,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -671,6 +689,7 @@ def run_model(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -684,6 +703,7 @@ def run_model(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -694,6 +714,8 @@ def run_model(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
 def test_ds_moe(
     variant,
     config_only,
@@ -710,6 +732,8 @@ def test_ds_moe(
     num_links,
     topology,
     gate_fallback_mode,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
     request,
     padded_percent,
 ):
@@ -736,6 +760,8 @@ def test_ds_moe(
         request,
         is_balanced=is_balanced,
         padded_percent=padded_percent,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )
 
 
@@ -763,6 +789,7 @@ def test_ds_moe(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -776,6 +803,7 @@ def test_ds_moe(
                 "fabric_router_config": create_fabric_router_config(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -787,6 +815,7 @@ def test_ds_moe(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
@@ -797,6 +826,8 @@ def test_ds_moe(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("overlap_shared_expert_with_dispatch", [True], ids=["overlap_shared"])
+@pytest.mark.parametrize("overlap_routed_expert_with_combine", [True], ids=["overlap_routed"])
 def test_kimi_moe(
     variant,
     config_only,
@@ -812,6 +843,8 @@ def test_kimi_moe(
     num_links,
     topology,
     gate_fallback_mode,
+    overlap_shared_expert_with_dispatch,
+    overlap_routed_expert_with_combine,
     request,
 ):
     run_model(
@@ -830,4 +863,6 @@ def test_kimi_moe(
         topology,
         gate_fallback_mode,
         request,
+        overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+        overlap_routed_expert_with_combine=overlap_routed_expert_with_combine,
     )

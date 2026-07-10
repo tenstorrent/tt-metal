@@ -50,7 +50,15 @@ void validate_data_tensor(const ttnn::Tensor& tensor, const std::string& name) {
         tensor.dtype());
     TT_FATAL(tensor.layout() == tt::tt_metal::Layout::TILE, "{} must be TILE layout, got {}", name, tensor.layout());
     TT_FATAL(is_dram_interleaved(tensor), "{} must be DRAM interleaved", name);
-    TT_FATAL(tensor.logical_shape().rank() == 2, "{} must be 2D, got rank {}", name, tensor.logical_shape().rank());
+    // Accept rank >= 2 as long as every leading dim is 1 — we treat the buffer
+    // as effectively 2D (rows, hidden) using logical_shape[-2:]. This lets the
+    // caller pass e.g. (1, 1, rows, hidden) without an explicit squeeze.
+    TT_FATAL(
+        tensor.logical_shape().rank() >= 2, "{} must have rank >= 2, got rank {}", name, tensor.logical_shape().rank());
+    for (int i = 0; i < static_cast<int>(tensor.logical_shape().rank()) - 2; ++i) {
+        TT_FATAL(
+            tensor.logical_shape()[i] == 1, "{} leading dim {} must be 1, got {}", name, i, tensor.logical_shape()[i]);
+    }
 }
 
 }  // namespace
@@ -129,8 +137,8 @@ void InsertDeviceOperation::validate_on_program_cache_miss(
     // Tile-alignment checks.
     const uint32_t tile_height = tt::constants::TILE_HEIGHT;
     const uint32_t tile_width = tt::constants::TILE_WIDTH;
-    const auto global_rows = global_tensor.logical_shape()[0];
-    const auto local_rows = local_tensor.logical_shape()[0];
+    const auto global_rows = global_tensor.logical_shape()[-2];
+    const auto local_rows = local_tensor.logical_shape()[-2];
     TT_FATAL(
         global_rows % tile_height == 0,
         "global_tensor rows/tokens ({}) must be a multiple of TILE_HEIGHT ({})",
@@ -176,10 +184,11 @@ ttnn::Tensor prefill_insert(
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id) {
+    uint32_t local_expert_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::insert::InsertDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{.local_expert_id = local_expert_id},
+        OperationType::operation_attributes_t{.local_expert_id = local_expert_id, .subdevice_id = subdevice_id},
         OperationType::tensor_args_t{
             .global_tensor = global_tensor,
             .local_tensor = local_tensor,

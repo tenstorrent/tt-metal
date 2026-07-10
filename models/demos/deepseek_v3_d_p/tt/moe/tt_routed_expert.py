@@ -18,6 +18,7 @@ from typing import Optional
 import torch
 from loguru import logger
 from tracy import signpost
+from ttnn._ttnn.global_semaphore import global_semaphore as GlobalSemaphore
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -255,6 +256,8 @@ class TtRoutedExpert(LightweightModule):
         cache_name_prefix: Optional[str] = None,
         *,
         activation: "ttnn.RoutedExpertActivation",
+        subdevice_id=None,
+        global_semaphore: GlobalSemaphore | None = None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -282,6 +285,9 @@ class TtRoutedExpert(LightweightModule):
                           (byte-identical) or RoutedExpertActivation.SwiGluOai for the
                           MiniMax-M3 / gpt-oss clamped swigluoai activation. Keyword-only and
                           without a default so the caller must choose explicitly.
+            subdevice_id: Optional SubDeviceId confining the routed expert's core allocation,
+                          used to overlap the routed expert with the combine on disjoint cores.
+                          Defaults to None (full grid).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -307,6 +313,8 @@ class TtRoutedExpert(LightweightModule):
                 "TtRoutedExpert requires an explicit `activation` (ttnn.RoutedExpertActivation.Silu or .SwiGluOai)"
             )
         self.activation = activation
+        self.subdevice_id = subdevice_id
+        self.global_semaphore = global_semaphore
 
         # Optional per-expert projection biases (gpt-oss). Only supported with
         # SwiGluOai (the kernel adds gate/up bias before the clamp and down bias
@@ -471,7 +479,10 @@ class TtRoutedExpert(LightweightModule):
 
         Args:
             dispatched_buffer: Dispatched tokens
-                shape: (max_dispatch_buffer_token_size, emb_dim)
+                shape: (max_dispatch_buffer_token_size, emb_dim), optionally with leading
+                singleton dims, e.g. (1, 1, max_dispatch_buffer_token_size, emb_dim). The
+                extract/insert ops treat it as effectively 2D and preserve its rank, so the
+                returned expert_outputs has the same rank as the input.
             expert_token_counts: Token counts per expert per chip
                 Shape per device: (1, num_routed_experts).
             expert_region_offsets: Expert region start offsets per expert
@@ -508,6 +519,8 @@ class TtRoutedExpert(LightweightModule):
                 gate_biases=self.gate_biases,
                 up_biases=self.up_biases,
                 down_biases=self.down_biases,
+                global_semaphore=self.global_semaphore,
+                subdevice_id=self.subdevice_id,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

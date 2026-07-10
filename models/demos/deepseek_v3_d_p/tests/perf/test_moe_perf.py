@@ -62,6 +62,8 @@ def test_deepseek_v3_moe_perf_loudbox():
         margin=0.03,
         comments_8x1="seq3200_lb_8x1_dispatch_combine_proxy",
         comments_2x4="seq3200_lb_2x4_gate_proxy",
+        # Perf approximation is only meaningful with both overlaps off;
+        extra_env={"TT_DS_MOE_DISABLE_OVERLAP": "1"},
     )
 
 
@@ -82,6 +84,7 @@ def test_deepseek_v3_moe_perf_galaxy():
         batch_size=1,
         margin=margin,
         comments="seq3200_glx_8x4_ground_truth",
+        extra_env={"TT_DS_MOE_DISABLE_OVERLAP": "1"},
     )
 
 
@@ -102,4 +105,5 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
         batch_size=1,
         margin=margin,
         comments="seq3200_glx_8x4_ground_truth_padded_50_percent_w_awareness",
+        extra_env={"TT_DS_MOE_DISABLE_OVERLAP": "1"},
     )

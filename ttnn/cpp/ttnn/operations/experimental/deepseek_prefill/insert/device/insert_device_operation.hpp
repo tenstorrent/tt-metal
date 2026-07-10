@@ -5,7 +5,10 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <variant>
+
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "insert_types.hpp"
 #include "insert_program_factory.hpp"
@@ -38,6 +41,7 @@ ttnn::Tensor prefill_insert(
     const ttnn::Tensor& start,
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
-    uint32_t local_expert_id);
+    uint32_t local_expert_id,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::prim

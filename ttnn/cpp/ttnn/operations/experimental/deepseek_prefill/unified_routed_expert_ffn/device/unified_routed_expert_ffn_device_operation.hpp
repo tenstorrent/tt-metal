@@ -51,6 +51,8 @@ ttnn::Tensor unified_routed_expert_ffn(
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::RoutedExpertActivation::Silu,
     const std::optional<ttnn::Tensor>& gate_bias = std::nullopt,
     const std::optional<ttnn::Tensor>& up_bias = std::nullopt,
-    const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
+    const std::optional<ttnn::Tensor>& down_bias = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 
 }  // namespace ttnn::prim

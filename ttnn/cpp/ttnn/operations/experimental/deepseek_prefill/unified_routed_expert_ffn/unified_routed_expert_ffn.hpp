@@ -8,6 +8,9 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -65,6 +68,13 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //   x_is_row_major: when true, x is ROW_MAJOR bf16; the reader streams sticks
 //      and the compute kernel tilizes them to bf8_b before the matmul (fusing
 //      the standalone to_layout). False => x is already TILE bf8_b.
+//   subdevice_id: optional sub-device to confine the op to. When set, the
+//      GRID_X x GRID_Y compute block is placed at that sub-device's worker-core
+//      origin.
+//   global_semaphore: optional GlobalSemaphore the op increments on-device once
+//      this expert's output is fully written. A per-program leader core waits
+//      for every other core's writer to finish, then multicast-increments the
+//      semaphore on each of its cores.
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -86,7 +96,9 @@ ttnn::Tensor unified_routed_expert_ffn(
     // down matmul. Omit for the bias-free DeepSeek / MiniMax-M3 path.
     const std::optional<ttnn::Tensor>& gate_bias = std::nullopt,
     const std::optional<ttnn::Tensor>& up_bias = std::nullopt,
-    const std::optional<ttnn::Tensor>& down_bias = std::nullopt);
+    const std::optional<ttnn::Tensor>& down_bias = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling
@@ -115,7 +127,12 @@ ttnn::Tensor unified_routed_expert_moe(
     // the bias-free DeepSeek / MiniMax-M3 path.
     const std::optional<std::vector<ttnn::Tensor>>& gate_biases = std::nullopt,
     const std::optional<std::vector<ttnn::Tensor>>& up_biases = std::nullopt,
-    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt);
+    const std::optional<std::vector<ttnn::Tensor>>& down_biases = std::nullopt,
+    // Global semaphore used to overlap the routed expert with the combine: each per-expert FFN
+    // increments it once its output is written, and the combine waits on it before consuming
+    // that expert's region.
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

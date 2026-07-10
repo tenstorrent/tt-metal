@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import getpass
 import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime
@@ -125,12 +126,13 @@ def save_intermediate_output(
         tensor: Output tensor to save
         name: Name/type of output (e.g., "norm", "lm_head")
         test_params: Dict with all test parameters (mesh_shape, isl_total, num_layers, etc.)
-        output_dir: Output directory (default: /tmp/{name}_outputs or {NAME}_OUTPUT_DIR env var)
+        output_dir: Output directory (default: /tmp/{user}_{name}_outputs or {NAME}_OUTPUT_DIR env var)
     """
-    # Get output directory
+    # Get output directory. Namespace the default by username so concurrent users on a shared /tmp
+    # don't collide on a single dir owned by whoever created it.
     if output_dir is None:
         env_var = f"{name.upper()}_OUTPUT_DIR"
-        default_dir = f"/tmp/{name}_outputs"
+        default_dir = f"/tmp/{getpass.getuser()}_{name}_outputs"
         output_dir = Path(os.getenv(env_var, default_dir))
     else:
         output_dir = Path(output_dir)
