@@ -100,6 +100,41 @@ def test_sfpu_binary_float(
 @parametrize(
     formats=input_output_formats(
         [
+            DataFormat.Float32,
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+        ]
+    ),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+)
+def test_sfpu_binary_div(formats, dest_acc):
+    # DIV routes through the dedicated production kernel (calculate_sfpu_binary_div)
+    # via call_binary_sfpu_operation. It is split out from test_sfpu_binary_float
+    # because the reciprocal path is precision-sensitive and warrants its own
+    # coverage (guarding the bf16 Newton-iteration count vs the fp32 residual path).
+    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+    if (
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and formats.input_format == DataFormat.Float16
+        and dest_acc == DestAccumulation.No
+    ):
+        pytest.skip(
+            "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
+        )
+
+    sfpu_binary(
+        formats,
+        dest_acc,
+        MathOperation.SfpuElwdiv,
+        broadcast_type=LlkBroadcastType.None_,
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
             DataFormat.Int32,
         ]
     ),
