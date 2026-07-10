@@ -89,6 +89,14 @@ class _Transformer:
         self._R = None
         self._compute = None
         self._sdpa_pc = {}  # SDPAProgramConfig cache, keyed by (q_chunk, k_chunk)
+        # Tensor-parallel factor across the device mesh (1 = single-chip, unchanged behavior).
+        # When >1 (device is a 1xTP MeshDevice), the denoise runs Megatron-style TP: QKV/FFN-up
+        # COLUMN-parallel (shard weight out-dim), out-proj/FFN-down ROW-parallel (shard in-dim) +
+        # all_reduce, attention over heads//tp LOCAL heads. Set by the caller AFTER build().
+        # Replicated tensors (embeds/norms/RoPE/temb/residual stream) get a Replicate mesh mapper
+        # via _mt(); sharded weights via _linear(role=...). Single-chip (tp==1) path is untouched.
+        self.tp = 1
+        self._lin_tp = {}  # TP weight cache keyed by (id(module), role)
 
     # ── low-level helpers ────────────────────────────────────────────────
     def _ck(self):
@@ -101,6 +109,10 @@ class _Transformer:
     def _torch_dtype(self):
         return torch.float32 if self.wdtype == F32 else torch.bfloat16
 
+    def _rep_mapper(self):
+        # ReplicateTensorToMesh on a TP mesh (tp>1), else None (single-device: from_torch as before).
+        return ttnn.ReplicateTensorToMesh(self.device) if self.tp > 1 else None
+
     def _to_ttnn(self, t, dtype=None):
         dtype = dtype or self.wdtype
         if isinstance(t, ttnn.Tensor):
@@ -110,7 +122,9 @@ class _Transformer:
                 t = ttnn.typecast(t, dtype)
             return t
         td = t.to(torch.float32) if dtype == F32 else t.to(torch.bfloat16)
-        return ttnn.from_torch(td, dtype=dtype, layout=TILE, device=self.device, memory_config=DRAM)
+        return ttnn.from_torch(
+            td, dtype=dtype, layout=TILE, device=self.device, memory_config=DRAM, mesh_mapper=self._rep_mapper()
+        )
 
     @staticmethod
     def _limbs(x):
@@ -154,7 +168,79 @@ class _Transformer:
         ttnn.deallocate(t)
         return ttnn.add(y, bt) if bt is not None else y
 
-    def _linear(self, x, tm):
+    def _mm_grid8(self):
+        return ttnn.CoreGrid(y=8, x=8)
+
+    def _linear_tp(self, x, tm, role):
+        """Tensor-parallel linear on the mesh. role:
+        'col' = shard weight OUT dim (dim0) -> output sharded, no CCL (bias shards with out);
+        'row' = shard weight IN  dim (dim1), input already sharded -> partial, all_reduce(sum),
+                then add replicated bias ONCE;
+        'rep' = replicate weight+bias -> full linear, identical on every chip (residual stream)."""
+        key = (id(tm), role)
+        if key not in self._lin_tp:
+            tdt = self._torch_dtype()
+            b = tm.bias
+            if role == "col":
+                # weight [out,in] shard OUT (dim0); bias [1,1,out] shard OUT (dim2) to match.
+                wmap, bmap = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=0), ttnn.shard_tensor_to_mesh_mapper(
+                    self.device, dim=2
+                )
+            elif role == "row":
+                wmap, bmap = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=1), ttnn.ReplicateTensorToMesh(
+                    self.device
+                )
+            else:  # rep
+                wmap = bmap = ttnn.ReplicateTensorToMesh(self.device)
+            wt = ttnn.from_torch(
+                tm.weight.detach().to(tdt),
+                dtype=ttnn.bfloat8_b,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+                mesh_mapper=wmap,
+            )
+            bt = (
+                ttnn.from_torch(
+                    b.detach().reshape(1, 1, -1).to(tdt),
+                    dtype=self.wdtype,
+                    layout=TILE,
+                    device=self.device,
+                    memory_config=DRAM,
+                    mesh_mapper=bmap,
+                )
+                if b is not None
+                else None
+            )
+            self._lin_tp[key] = (wt, bt)
+        wt, bt = self._lin_tp[key]
+        ck = self._ck()
+        if role == "row":
+            y = ttnn.linear(
+                x,
+                wt,
+                transpose_b=True,
+                memory_config=DRAM,
+                dtype=self.wdtype,
+                compute_kernel_config=ck,
+                core_grid=self._mm_grid8(),
+            )  # partial per chip
+            y = ttnn.all_reduce(y, cluster_axis=1, topology=ttnn.Topology.Linear)
+            return ttnn.add(y, bt) if bt is not None else y
+        return ttnn.linear(
+            x,
+            wt,
+            bias=bt,
+            transpose_b=True,
+            memory_config=DRAM,
+            dtype=self.wdtype,
+            compute_kernel_config=ck,
+            core_grid=self._mm_grid8(),
+        )
+
+    def _linear(self, x, tm, role="rep"):
+        if self.tp > 1:
+            return self._linear_tp(x, tm, role)
         if self.limb:
             return self._emul_linear(x, tm)
         key = id(tm)
@@ -195,7 +281,14 @@ class _Transformer:
         key = id(norm)
         if key not in self._rms:
             w = norm.weight.detach().reshape(1, 1, 1, -1).to(self._torch_dtype())
-            self._rms[key] = ttnn.from_torch(w, dtype=self.wdtype, layout=TILE, device=self.device, memory_config=DRAM)
+            self._rms[key] = ttnn.from_torch(
+                w,
+                dtype=self.wdtype,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+                mesh_mapper=self._rep_mapper(),
+            )
         return self._rms[key]
 
     def _R_mat(self):
@@ -205,7 +298,14 @@ class _Transformer:
             for i in range(d // 2):
                 R[2 * i, 2 * i + 1] = 1.0  # (x@R)[2i+1] = x[2i]
                 R[2 * i + 1, 2 * i] = -1.0  # (x@R)[2i]   = -x[2i+1]
-            self._R = ttnn.from_torch(R, dtype=self.wdtype, layout=TILE, device=self.device, memory_config=DRAM)
+            self._R = ttnn.from_torch(
+                R,
+                dtype=self.wdtype,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+                mesh_mapper=self._rep_mapper(),
+            )
         return self._R
 
     def _layernorm(self, x, eps=1e-6):
@@ -220,17 +320,20 @@ class _Transformer:
         return ttnn.mul(ttnn.mul(x, ttnn.rsqrt(ttnn.add(msq, eps))), w)
 
     def _split_heads(self, t, S):
-        # [1,S,dim] -> [1,heads,S,head_dim]
+        # [1,S,h*head_dim] -> [1,h,S,head_dim]. h derived from the tensor so a TP-sharded
+        # projection (heads//tp local heads) splits correctly; single-chip -> full self.heads.
+        h = t.shape[-1] // self.head_dim
         t = ttnn.to_layout(t, RM)
-        t = ttnn.reshape(t, [1, S, self.heads, self.head_dim])
+        t = ttnn.reshape(t, [1, S, h, self.head_dim])
         t = ttnn.permute(t, [0, 2, 1, 3])
         return ttnn.to_layout(t, TILE)
 
     def _merge_heads(self, t, S):
-        # [1,heads,S,head_dim] -> [1,S,dim]
+        # [1,h,S,head_dim] -> [1,S,h*head_dim]. h from the tensor (local under TP).
+        h = t.shape[1]
         t = ttnn.to_layout(t, RM)
         t = ttnn.permute(t, [0, 2, 1, 3])
-        t = ttnn.reshape(t, [1, S, self.dim])
+        t = ttnn.reshape(t, [1, S, h * self.head_dim])
         return ttnn.to_layout(t, TILE)
 
     def _rope(self, x, cos, sin):
@@ -276,10 +379,11 @@ class _Transformer:
         )
 
     def _single_attn(self, a, norm_hs, cos, sin, S):
-        # pre_only single-stream attention (no added_kv, no to_out).
-        q = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_q), S), a.norm_q)
-        k = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_k), S), a.norm_k)
-        v = self._split_heads(self._linear(norm_hs, a.to_v), S)
+        # pre_only single-stream attention (no added_kv, no to_out). QKV column-parallel under TP
+        # -> local heads (heads//tp); _split_heads derives the local count from the tensor.
+        q = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_q, "col"), S), a.norm_q)
+        k = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_k, "col"), S), a.norm_k)
+        v = self._split_heads(self._linear(norm_hs, a.to_v, "col"), S)
         if cos is not None:
             q = self._rope(q, cos, sin)
             k = self._rope(k, cos, sin)
@@ -288,13 +392,13 @@ class _Transformer:
 
     def _double_attn(self, a, norm_hs, norm_enc, cos, sin, img_len, txt_len):
         # dual-stream joint attention: [txt ; img] concatenated along sequence.
-        q = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_q), img_len), a.norm_q)
-        k = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_k), img_len), a.norm_k)
-        v = self._split_heads(self._linear(norm_hs, a.to_v), img_len)
+        q = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_q, "col"), img_len), a.norm_q)
+        k = self._rmsnorm(self._split_heads(self._linear(norm_hs, a.to_k, "col"), img_len), a.norm_k)
+        v = self._split_heads(self._linear(norm_hs, a.to_v, "col"), img_len)
 
-        eq = self._rmsnorm(self._split_heads(self._linear(norm_enc, a.add_q_proj), txt_len), a.norm_added_q)
-        ek = self._rmsnorm(self._split_heads(self._linear(norm_enc, a.add_k_proj), txt_len), a.norm_added_k)
-        ev = self._split_heads(self._linear(norm_enc, a.add_v_proj), txt_len)
+        eq = self._rmsnorm(self._split_heads(self._linear(norm_enc, a.add_q_proj, "col"), txt_len), a.norm_added_q)
+        ek = self._rmsnorm(self._split_heads(self._linear(norm_enc, a.add_k_proj, "col"), txt_len), a.norm_added_k)
+        ev = self._split_heads(self._linear(norm_enc, a.add_v_proj, "col"), txt_len)
 
         q = ttnn.concat([eq, q], dim=2)  # [1,heads,txt+img,head_dim]
         k = ttnn.concat([ek, k], dim=2)
@@ -305,22 +409,88 @@ class _Transformer:
             k = self._rope(k, cos, sin)
 
         out = self._sdpa(q, k, v, S)
-        out = self._merge_heads(out, S)  # [1,S,dim]
+        out = self._merge_heads(out, S)  # [1,S,dim] (single-chip) or [1,S,dim//tp] (TP, sharded heads)
 
-        enc_attn = ttnn.slice(out, [0, 0, 0], [1, txt_len, self.dim], [1, 1, 1])
-        img_attn = ttnn.slice(out, [0, txt_len, 0], [1, S, self.dim], [1, 1, 1])
-        img_attn = self._linear(img_attn, a.to_out[0])
-        enc_attn = self._linear(enc_attn, a.to_add_out)
-        return img_attn, enc_attn  # (hidden, encoder)
+        d = out.shape[-1]  # full dim single-chip; local (dim//tp) under TP — slice the merged width
+        enc_attn = ttnn.slice(out, [0, 0, 0], [1, txt_len, d], [1, 1, 1])
+        img_attn = ttnn.slice(out, [0, txt_len, 0], [1, S, d], [1, 1, 1])
+        # out-projs are ROW-parallel: local-head input -> partial -> all_reduce -> full replicated dim.
+        img_attn = self._linear(img_attn, a.to_out[0], "row")
+        enc_attn = self._linear(enc_attn, a.to_add_out, "row")
+        return img_attn, enc_attn  # (hidden, encoder) — replicated full dim
 
     def _feed_forward(self, ff, x):
+        # Megatron FFN under TP: up COLUMN-parallel (shard inner), gelu local, down ROW-parallel
+        # (+ all_reduce). The col-out sharding feeds the row-in directly — no interior CCL.
         net = ff.net
-        x = self._linear(x, net[0].proj)  # dim -> inner
-        x = ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh)  # gelu-approximate
+        x = self._linear(x, net[0].proj, "col")  # dim -> inner (sharded under TP)
+        x = ttnn.gelu(x, variant=ttnn.GeluVariant.Tanh)  # gelu-approximate (local)
         for mod in net[1:]:
             if isinstance(mod, torch.nn.Linear):
-                x = self._linear(x, mod)
+                x = self._linear(x, mod, "row")  # inner -> dim (all_reduce under TP)
         return x
+
+    def _single_proj_out_tp(self, attn_local, mlp_local, tm):
+        """Row-parallel single-block proj_out over a [attn(dim) ; mlp(inner)] input whose two
+        halves are sharded independently (attn by heads, mlp by inner). Split the weight into its
+        attn/mlp column-blocks, row-shard each (each aligns with its stream's shard), matmul the
+        matching local input, sum the two partials locally, then all_reduce + bias-once."""
+        key = (id(tm), "row_cat")
+        if key not in self._lin_tp:
+            w = tm.weight.detach().to(self._torch_dtype())  # [dim, dim+inner]
+            sh1 = ttnn.shard_tensor_to_mesh_mapper(self.device, dim=1)
+            wa = ttnn.from_torch(
+                w[:, : self.dim].contiguous(),
+                dtype=ttnn.bfloat8_b,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+                mesh_mapper=sh1,
+            )
+            wm = ttnn.from_torch(
+                w[:, self.dim :].contiguous(),
+                dtype=ttnn.bfloat8_b,
+                layout=TILE,
+                device=self.device,
+                memory_config=DRAM,
+                mesh_mapper=sh1,
+            )
+            b = tm.bias
+            bt = (
+                ttnn.from_torch(
+                    b.detach().reshape(1, 1, -1).to(self._torch_dtype()),
+                    dtype=self.wdtype,
+                    layout=TILE,
+                    device=self.device,
+                    memory_config=DRAM,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                )
+                if b is not None
+                else None
+            )
+            self._lin_tp[key] = (wa, wm, bt)
+        wa, wm, bt = self._lin_tp[key]
+        ck, g = self._ck(), self._mm_grid8()
+        ya = ttnn.linear(
+            attn_local,
+            wa,
+            transpose_b=True,
+            memory_config=DRAM,
+            dtype=self.wdtype,
+            compute_kernel_config=ck,
+            core_grid=g,
+        )
+        ym = ttnn.linear(
+            mlp_local,
+            wm,
+            transpose_b=True,
+            memory_config=DRAM,
+            dtype=self.wdtype,
+            compute_kernel_config=ck,
+            core_grid=g,
+        )
+        y = ttnn.all_reduce(ttnn.add(ya, ym), cluster_axis=1, topology=ttnn.Topology.Linear)
+        return ttnn.add(y, bt) if bt is not None else y
 
     # ── blocks ───────────────────────────────────────────────────────────
     def _single_block(self, blk, hid, enc, temb, cos, sin):
@@ -330,10 +500,17 @@ class _Transformer:
         residual = hs
         shift, scale, gate = self._ada_mod(temb, blk.norm.linear, 3)
         norm_hs = ttnn.add(ttnn.mul(self._layernorm(hs), ttnn.add(scale, 1.0)), shift)
-        mlp = ttnn.gelu(self._linear(norm_hs, blk.proj_mlp), variant=ttnn.GeluVariant.Tanh)
+        mlp = ttnn.gelu(self._linear(norm_hs, blk.proj_mlp, "col"), variant=ttnn.GeluVariant.Tanh)
         attn_out = self._single_attn(blk.attn, norm_hs, cos, sin, S)
-        cat = ttnn.concat([attn_out, mlp], dim=2)
-        hs = ttnn.add(residual, ttnn.mul(self._linear(cat, blk.proj_out), gate))
+        if self.tp > 1:
+            # proj_out's input is [attn(dim) ; mlp(inner)] — two INDEPENDENTLY sharded streams, so a
+            # single contiguous row-shard would misalign. Split proj_out into its attn/mlp halves,
+            # row-parallel each (aligned with attn-head / mlp shards), sum locally, then all_reduce.
+            proj = self._single_proj_out_tp(attn_out, mlp, blk.proj_out)
+        else:
+            cat = ttnn.concat([attn_out, mlp], dim=2)
+            proj = self._linear(cat, blk.proj_out)
+        hs = ttnn.add(residual, ttnn.mul(proj, gate))
         enc_out = ttnn.slice(hs, [0, 0, 0], [1, txt, self.dim], [1, 1, 1])
         hid_out = ttnn.slice(hs, [0, txt, 0], [1, S, self.dim], [1, 1, 1])
         return enc_out, hid_out

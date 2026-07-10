@@ -521,6 +521,7 @@ class LongCatImagePipelineTT:
                 )
         stub_mod = _load_stub("long_cat_image_transformer2_d_model")
         stub = stub_mod.build(self.device, self.pipe.transformer)
+        stub.tp = self._device_tp()  # >1 iff self.device is a >1 mesh -> tensor-parallel DiT
         # Run the DiT in fp32 (weights ~25 GB, fit the 32 GB card). Classifier-free
         # guidance amplifies the per-branch noise error by guidance_scale; at a
         # single denoise step this holds e2e PCC ~0.995. Over MANY steps the TT and
@@ -916,6 +917,7 @@ class LongCatImagePipelineTT:
             _t0 = time.perf_counter()
             stub_mod = _load_stub("long_cat_image_transformer2_d_model")
             dit_stub = stub_mod.build(self.device, self.pipe.transformer)
+            dit_stub.tp = self._device_tp()  # >1 iff self.device is a >1 mesh -> tensor-parallel DiT
             dit_stub.wdtype = BF16
             print(f"[warmup] DiT stub build (weight upload): {time.perf_counter() - _t0:.1f}s", flush=True)
 
@@ -1112,6 +1114,20 @@ class LongCatImagePipelineTT:
         if nhwc.layout != ttnn.ROW_MAJOR_LAYOUT:
             nhwc = ttnn.to_layout(nhwc, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.permute(nhwc, [0, 3, 1, 2])  # [1,3,Hf,Wf]
+
+    def _device_tp(self):
+        """Tensor-parallel degree for the DiT = number of chips in self.device.
+
+        A plain single-chip device (ttnn.open_device) -> 1 (the original non-TP path,
+        fully unchanged). A >1 mesh (ttnn.open_mesh_device / a >1 submesh) -> that many
+        chips, so the DiT stub column/row-shards its weights across the mesh (Megatron
+        tensor parallelism). Detection is by capability (get_num_devices) so no caller
+        has to thread a flag through; the encoder/VAE stubs are unaffected."""
+        try:
+            n = int(self.device.get_num_devices())
+        except Exception:
+            return 1
+        return n if n > 1 else 1
 
     def _denoise_geometry(self, max_length, height, width):
         """Text/image sequence lengths + RoPE position ids for the Call-1 denoise stage.
