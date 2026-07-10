@@ -142,6 +142,26 @@ eager, device canvas feedback).
   +0.95% warmed @48 but changed the canonical clean-commit digest, so the selector was removed.
 - `artifacts/*.log` — raw run logs; `tracy/` — tt-perf-report CSV/tables.
 
+## Exact causal-prefill MoE geometry (2026-07-10)
+
+The stock Gemma4 expert prefill runs the dense all-128-expert `sparse_matmul` in 32-token
+chunks with `in0_block_w=1` and an N-divisor-limited core grid. DiffusionGemma now keeps
+that exact graph, chunk size, routing, expert set, dtype, and fidelity while selecting the
+measured Blackhole TP=4 program geometry locally (`tt/prefill_moe.py`). Gate/up use a
+`6x1` grid with K-block 44; down uses `11x4`, K-block 3, and two N tiles/core. The shared
+`models/demos/gemma4/` source remains unchanged.
+
+- Dense 256-token layer-0 MoE: **135.51 ms -> 21.16 ms (6.40x)**, elementwise exact
+  (`torch.equal=True`, `max_abs=0`).
+- Warmed full 30-layer 1024-token causal prefill: **16.3412 s -> 2.6155 s (6.25x)**,
+  final logits elementwise exact (`max_abs=0`), or about **62.7 -> 391.5 prompt tok/s**.
+- Larger 64/128-token sparse-matmul chunks were explicitly rejected despite small latency
+  gains: PCC fell to roughly 0.64/0.48. The selected path retains the correct 32-token chunk.
+- The exact geometry is default-on for the supported QB2 shape; set
+  `DG_PREFILL_MOE_TUNED=0` for the stock fallback. Unsupported shapes automatically fall back.
+- Evidence: `bench_chunk_sweep.py` (component geometry/exactness) and
+  `bench_prefill_e2e.py` (alternating warmed full-backbone A/B).
+
 ## OPT-004 — matmul-geometry tuning of the 5 sparse-MoE matmuls (rank 2)
 
 The sparse MoE's 5 `ttnn.matmul` calls (`tt/sparse_moe.py`) were never given a `program_config` — the
