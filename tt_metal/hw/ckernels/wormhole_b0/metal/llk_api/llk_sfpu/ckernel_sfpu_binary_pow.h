@@ -177,7 +177,11 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // t*y).
     sfpi::vFloat recip = 1.0f - 0.2426406871192851f * m_plus_1;
     recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
+    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR
+    // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
+    // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
+    // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
+    recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
     sfpi::vFloat z = m_minus_1 * recip;
 
     // Compute z**2 for polynomial evaluation
@@ -189,17 +193,51 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
 
-    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
+    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2). Keep the two contributions
+    // separate: exp_f32 is the large integer part, ln_m*ln2inv the small fractional
+    // part. Collapsing pow*log2(base) into one fp32 before 2**z squeezes out the
+    // fractional mantissa bits for large |base| (the 20-27 ULP error). Instead carry
+    // z = pow*log2(base) as an unevaluated double-float (z_hi, z_lo) and cancel the
+    // large integer part against k=round(z) before the tail is ever rounded away.
     const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
-    sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
-
-    // Step 2: base**pow = 2**(pow*log2(base)). Clamp z_f32 to -127 to avoid overflow when result should be 0 (e.g.
-    // 0**+inf, N**-inf).
-    sfpi::vFloat z_f32 = pow * log2_result;
-
-    // 2^z_f32 = exp(z_f32 * ln(2)); use Cody-Waite + Taylor exp for <1 ULP float32 accuracy
     constexpr float LN2 = 0.693147180559945309f;
-    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(z_f32 * LN2);
+
+    // Step 2: base**pow = 2**(pow*log2(base)).
+    // The residual after the two-sum is the fp32 rounding of pow*exp_f32 itself:
+    // exp_f32 is the large integer exponent and pow can carry a full 24-bit mantissa,
+    // so the product needs ~30 bits and drops its low bits before the two-sum sees
+    // them. exp_f32 is a small integer, so a Veltkamp split of pow makes both partial
+    // products exact (12-bit half * <=7-bit integer fits a 24-bit significand); the low
+    // half pow_lo*exp_f32 rides in z_lo so none of the integer term's bits are lost.
+    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
+    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
+    sfpi::vFloat pow_hi = pc - (pc - pow);
+    sfpi::vFloat pow_lo = pow - pow_hi;
+
+    sfpi::vFloat z_hi = pow_hi * exp_f32;
+    sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
+
+    // Knuth TwoSum (branch-free, exact regardless of the relative magnitudes of z_hi
+    // and z_lo) so k=round(z) sees the true integer part while the residual e keeps the
+    // dropped tail. Robust even when |z_lo| > |z_hi| (exponents/bases near 1).
+    sfpi::vFloat s = z_hi + z_lo;
+    sfpi::vFloat bb = s - z_hi;
+    sfpi::vFloat e = (z_hi - (s - bb)) + (z_lo - bb);
+    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;  // -127, matches original clamp
+    v_if(s < low_threshold) {
+        s = low_threshold;
+        e = 0.0f;
+    }
+    v_endif;
+
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
+    // Reduced argument (s - k) is exact by Sterbenz; add back the tail e.
+    sfpi::vFloat frac = (s - k) + e;
+
+    // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
+    sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
+    y = sfpi::setexp(y, sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int);
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     v_if(base == 0.f && pow < 0.f) {

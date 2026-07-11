@@ -353,6 +353,33 @@ def test_pow(exponent, device):
     assert_allclose(torch_output, ttnn_output, atol=2.5e-4, rtol=5e-7)
 
 
+# Dense log-spaced base sweep accuracy for non-integer exponents (issue #49625).
+# fp32 pow(x, y) must stay < 3 ULP for the CogVideo/DeepSeek regime x in [0.5, 50000],
+# while integer exponents stay bit-exact (0 ULP). Covers the long-mantissa 1.7984 case.
+@pytest.mark.parametrize("exponent", [0.5, 1.5, 1.7984, 2.5])
+def test_unary_pow_fp32_ulp_noninteger(exponent, device):
+    base = torch.logspace(-0.3, 4.7, 1024, dtype=torch.float32).reshape(32, 32)  # ~0.5 .. ~50000
+    golden = torch.pow(base, exponent)
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.pow(tt_base, exponent)
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, ulp_threshold=3)
+
+
+@pytest.mark.parametrize("exponent", [2.0, 3.0])
+def test_unary_pow_fp32_ulp_integer_exact(exponent, device):
+    base = torch.logspace(-0.3, 4.7, 1024, dtype=torch.float32).reshape(32, 32)
+    golden = torch.pow(base, exponent)
+
+    tt_base = ttnn.from_torch(base, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.pow(tt_base, exponent)
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, ulp_threshold=0)
+
+
 @pytest.mark.parametrize("exponent", [0.25, 0.5, 0.75, -0.25, -0.5, -0.75])
 def test_pow_arange_masking_fp32(exponent, device):
     tt_input = generate_clean_bf16_tensor(torch.float32)
