@@ -25,6 +25,7 @@ Run:
 import os
 
 import pytest
+import torch
 from loguru import logger
 
 import ttnn
@@ -33,13 +34,16 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score im
     glx_config,
     QB_CASES,
     QB_IDS,
+    QB_DIM,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_indexer_score_lb_ring4_ag_equiv import (
     _open_ring4_ccl,
     _close_ring4_ccl,
     _build_ring4_fused_inputs,
+    _persistent_buffer,
     _reset,
     SP_AXIS,
+    T,
 )
 
 pytestmark = [
@@ -87,6 +91,39 @@ def _run_profiled(label, fn, submesh, stall_group):
         fn()
         ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
     return _read_durations(submesh)
+
+
+def _peak(tab):
+    """Max device kernel-duration (us) across every program/analysis in the table (bottleneck chip)."""
+    return max((slot["dur_max"] for slot in tab.values()), default=0) / 1000.0
+
+
+def _matched_T(heads, grid_x, grid_y):
+    """Rescale K's T so a STANDALONE indexer_score does the SAME bands-per-column as the FUSED op.
+
+    The fused op reserves reserved_cols columns of the grid for the AG workers, so its compute runs on
+    (grid_x - reserved_cols) columns while a standalone score gets all grid_x. Bands are dealt one-per-column,
+    so the bottleneck column carries ceil(bands / cols) bands -- i.e. the fused op does ~grid_x/(grid_x-1) MORE
+    work per core purely from the reserved column. To compare apples-to-apples we scale the standalone's T up so
+    its bottleneck column matches the fused op's, then per-core work is identical and the fused-vs-matched delta
+    is the PURE co-schedule cost (DRAM contention + last-shard tail), with the core-count difference removed.
+
+    Returns (T_matched, diag) where diag documents the band arithmetic for the log."""
+    kc_tiles = _cfg(heads).k_chunk_size // 32
+    bands = (T // 32) // kc_tiles
+    reserved = (_NLINKS * 2 + grid_y - 1) // grid_y
+    fused_cols = grid_x - reserved
+    std_cols = min(bands, grid_x)
+    fused_perc = (bands + fused_cols - 1) // fused_cols  # bands on the fused bottleneck column
+    std_perc = (bands + std_cols - 1) // std_cols  # bands on the standalone bottleneck column (native T)
+    bands_matched = fused_perc * grid_x  # even split over grid_x cols -> std bottleneck == fused_perc
+    t_matched = bands_matched * kc_tiles * 32
+    diag = (
+        f"grid={grid_x}x{grid_y} bands={bands} kc_tiles={kc_tiles} | native: std {std_cols}cols→{std_perc}/col "
+        f"vs fused {fused_cols}cols→{fused_perc}/col | matched T {T}→{t_matched} "
+        f"(bands {bands}→{bands_matched} = {bands_matched // grid_x}/col over {grid_x} cols == fused {fused_perc}/col)"
+    )
+    return t_matched, diag
 
 
 def _summ(label, table):
@@ -163,18 +200,44 @@ def test_ring4_fused_device_profile(case_id, heads, block_cyclic):
         fused_tab = _run_profiled("FUSED", fused_once, submesh, stall_group)
         fused_rows = _summ("FUSED", fused_tab)
 
-        # Headline: max device kernel-duration per phase (bottleneck chip).
-        def _peak(tab):
-            return max((slot["dur_max"] for slot in tab.values()), default=0) / 1000.0
+        # Work-per-core-matched score-only: rescale K's T so a STANDALONE score does the same bands-per-column
+        # as the fused op (see _matched_T). Removes the reserved-AG-column core-count penalty from the fused-vs-
+        # score gap, isolating the pure co-schedule cost. Contiguous only (T need not divide chunk_global; the
+        # per-band compute cost is layout-independent with aligned KC), so we run it once on the contiguous pass.
+        matched_us = None
+        if not block_cyclic:
+            grid = submesh.compute_with_storage_grid_size()
+            t_matched, diag = _matched_T(heads, grid.x, grid.y)
+            logger.info(f">>> work-per-core match [{case_id}]: {diag}")
+            k_matched = _persistent_buffer(submesh, torch.zeros(1, 1, t_matched, QB_DIM, dtype=torch.bfloat16))
+
+            def matched_score_once():
+                ttnn.experimental.indexer_score_dsa(
+                    q_dev, k_matched, w_dev, cluster_axis=SP_AXIS, program_config=_cfg(heads)
+                )
+
+            matched_score_once()  # warmup/compile
+            ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+            _read_durations(submesh)
+            matched_tab = _run_profiled("score-matched", matched_score_once, submesh, stall_group)
+            _summ("score-matched", matched_tab)
+            matched_us = _peak(matched_tab)
 
         ag_us = _peak(ag_tab)
         score_us = _peak(score_tab)
         fused_us = _peak(fused_tab)
+        matched_str = (
+            f" | score-matched(=fused work/core)={matched_us:.1f} "
+            f"fused-vs-matched={fused_us - matched_us:+.1f}us  <== pure co-schedule cost (core-count controlled)"
+            if matched_us is not None
+            else ""
+        )
         logger.info(
             f">>> [{case_id}-{layout}] DEVICE us: AG={ag_us:.1f} score={score_us:.1f} "
             f"fused={fused_us:.1f} | ideal max(AG,score)={max(ag_us,score_us):.1f} "
             f"| zero-overlap floor(AG+score)={ag_us+score_us:.1f} "
             f"| fused-vs-floor={fused_us-(ag_us+score_us):+.1f}us fused-vs-ideal={fused_us-max(ag_us,score_us):+.1f}us"
+            + matched_str
         )
         logs = os.path.join(os.getcwd(), "generated/profiler/.logs/profile_log_device.csv")
         logger.info(f">>> raw per-core CSV: {logs} (exists={os.path.exists(logs)})")
