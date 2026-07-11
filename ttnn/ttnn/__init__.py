@@ -193,7 +193,6 @@ from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
-    read_global_semaphore_value,
 )
 
 from ttnn._ttnn.mesh_socket import (

@@ -159,30 +159,6 @@ std::tuple<CoreRangeSet, BufferType> GlobalSemaphore::attribute_values() const {
     return std::make_tuple(pimpl_->cores(), pimpl_->buffer_type());
 }
 
-std::vector<uint32_t> GlobalSemaphore::read_semaphore_values() const {
-    // Blocking read of the sem buffer; one uint32 per core in cores_, per device,
-    // concatenated in MeshCoordinate order. The semaphore buffer is replicated (not
-    // sharded) across the mesh, so we read each device's shard individually:
-    // EnqueueReadMeshBuffer only supports SHARDED layouts (or a unit mesh), and would
-    // otherwise TT_FATAL on a multi-device replicated buffer.
-    std::vector<uint32_t> host_buffer;
-    auto mesh_buffer = buffer_.get_mesh_buffer();
-    auto* mesh_device = mesh_buffer->device();
-    host_buffer.reserve(cores_.num_cores() * mesh_device->shape().mesh_size());
-    bool using_fast_dispatch = MetalContext::instance().rtoptions().get_fast_dispatch();
-    for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-        std::vector<uint32_t> shard_buffer;
-        if (using_fast_dispatch) {
-            distributed::ReadShard(
-                mesh_device->mesh_command_queue(), shard_buffer, mesh_buffer, coord, /*blocking=*/true);
-        } else {
-            tt::tt_metal::detail::ReadFromBuffer(*mesh_buffer->get_device_buffer(coord), shard_buffer);
-        }
-        host_buffer.insert(host_buffer.end(), shard_buffer.begin(), shard_buffer.end());
-    }
-    return host_buffer;
-}
-
 }  // namespace tt::tt_metal
 
 namespace std {
