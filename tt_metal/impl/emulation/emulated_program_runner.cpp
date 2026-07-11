@@ -767,6 +767,18 @@ static void apply_x86_rewrites(std::string& src) {
         src, l1_getptr_cast_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
 
+    // P2b: the C-STYLE cast of an inline get_*_ptr — `(T*)(get_read_ptr(cb))` /
+    // `(T*)(get_read_ptr(cb) + off)` (the all_to_all_dispatch writer reads token/mapping CBs
+    // this way). P2 above only catches the reinterpret_cast spelling. Operand = the get_*_ptr
+    // call (one arg-paren level) + optional trailing arithmetic (one nested-paren). The output
+    // wraps in `(uint32_t)(...)` (no trailing `*`), which this rule's `\*`-terminated cast type
+    // cannot re-match.
+    static const std::regex l1_getptr_cstyle_re(
+        R"(\(\s*([\w:][\w:\s]*\*)\s*\)\s*\(\s*((?:[A-Za-z_]\w*\s*\.\s*)?(?:get_write_ptr|get_read_ptr|get_semaphore|get_tile_address)\s*(?:<[^>]*>)?\s*\([^()]*\)(?:[^()]|\([^()]*\))*?)\s*\))");
+    src = emule_line_preserving_replace(
+        src, l1_getptr_cstyle_re,
+        "($1)((uintptr_t)__emule_local_l1_to_ptr((uint32_t)($2)))");
+
     // P3: local L1<->L1 `memmove((void*)(dst), (void*)(src), n)` / memcpy — used by
     // tt::data_movement::common::tt_memmove. Both operands are 0-based L1 offsets
     // cast to void*; rebase each onto this fiber's L1. Narrowly anchored on the
@@ -798,7 +810,7 @@ static void apply_x86_rewrites(std::string& src) {
     // risk — it fails loudly (SIGSEGV / the __emule_l1_translate OOB assert).
     {
         static const std::regex l1_addr_var_re(
-            R"RE(\b(?:uint32_t|auto)\s+([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\s*\.\s*)?(?:get_write_ptr|get_read_ptr|get_semaphore|get_tile_address)\s*(?:<[^>]*>)?\s*\()RE");
+            R"RE(\b(?:uint32_t|auto)\s+([A-Za-z_]\w*)\s*=\s*(?:[A-Za-z_]\w*\s*\.\s*)?(?:get_write_ptr|get_read_ptr|get_semaphore|get_tile_address|get_arg_val)\s*(?:<[^>]*>)?\s*\()RE");
         std::set<std::string> l1_addr_vars;
         for (std::sregex_iterator it(src.begin(), src.end(), l1_addr_var_re), end; it != end; ++it) {
             l1_addr_vars.insert((*it)[1].str());
