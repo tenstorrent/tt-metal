@@ -42,6 +42,7 @@ Caveats:
 
 import math
 import os
+import statistics
 import time
 import pytest
 import torch
@@ -225,6 +226,7 @@ def _build_program_config(
     ring_cols: int,
     ring_rows: int,
     num_global_cb_receivers: int,
+    stream_in1: bool = False,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
     in0_block_w = 1  # The DRISC prefetcher factory hard-codes in0_block_w_tiles=1.
     out_block_h = _M // ttnn.TILE_SIZE
@@ -250,6 +252,7 @@ def _build_program_config(
         # (causing OOM or sender stall via mismatched cb sizes).
         num_global_cb_receivers=num_global_cb_receivers,
         untilize_out=False,
+        stream_in1=stream_in1,
     )
 
 
@@ -516,7 +519,9 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     _apply_shape(shape)
 
     trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "100"))
-    num_prefetch_layers = trace_repeats + 1
+    bench_trials = int(os.environ.get("BENCH_TRIALS", "1"))
+    stream_in1 = os.environ.get("BENCH_STREAM_IN1", "0") == "1"
+    num_prefetch_layers = trace_repeats * bench_trials + 1
     if device.dram_grid_size().x != 8:
         pytest.skip("Production receiver layout requires 8 unharvested DRAM banks")
     num_dram_banks = _select_num_dram_banks(device.dram_grid_size().x)
@@ -548,9 +553,54 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     sorted_ys = sorted(receivers_by_y.keys())
     assert len(sorted_ys) == num_dram_banks, f"want {num_dram_banks} y-rows, got {len(sorted_ys)}"
     receivers_per_y = [sorted(receivers_by_y[y]) for y in sorted_ys]  # row-major-sortable
-    # Flattened row-major == ring position order (ring pos r = receivers_per_y[r//rpb][r%rpb]).
+    receiver_layout = os.environ.get("BENCH_RECEIVER_LAYOUT", "production")
+    receiver_ring = [coord for row in receivers_per_y for coord in row]
+    if receiver_layout == "rectangle":
+        if ring_size != 32:
+            pytest.skip("Rectangle receiver-layout A/B requires ring=32")
+        receiver_ring = [(r % num_dram_banks, r // num_dram_banks) for r in range(ring_size)]
+    elif receiver_layout == "spread":
+        if ring_size != 32:
+            pytest.skip("Spread receiver-layout A/B requires ring=32")
+        receiver_ring = [
+            (0, 0),
+            (1, 0),
+            (2, 0),
+            (6, 0),
+            (0, 1),
+            (1, 1),
+            (3, 1),
+            (6, 1),
+            (0, 2),
+            (1, 2),
+            (2, 2),
+            (4, 2),
+            (0, 4),
+            (1, 4),
+            (4, 4),
+            (5, 4),
+            (7, 5),
+            (8, 5),
+            (9, 5),
+            (10, 5),
+            (2, 6),
+            (3, 6),
+            (7, 6),
+            (8, 6),
+            (0, 7),
+            (7, 7),
+            (9, 7),
+            (10, 7),
+            (0, 8),
+            (6, 8),
+            (7, 8),
+            (8, 8),
+        ]
+    elif receiver_layout != "production":
+        raise ValueError(f"Unknown BENCH_RECEIVER_LAYOUT={receiver_layout!r}")
+
     receiver_core_range_set = ttnn.CoreRangeSet(
-        [ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry)) for row in receivers_per_y for rx, ry in row]
+        [ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry)) for rx, ry in receiver_ring]
     )
 
     receiver_sub_device = ttnn.SubDevice([receiver_core_range_set])
@@ -585,26 +635,34 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     )
 
     block_size_bytes = int((k_padded * n_per_recv) * _DTYPE_BYTES)
-    gcb_size = _gcb_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
+    if stream_in1:
+        in1_block_size_bytes = _matmul_in1_block_size_bytes(k_padded, ring_size)
+        gcb_size = min(25 * in1_block_size_bytes, (788032 // in1_block_size_bytes) * in1_block_size_bytes)
+    else:
+        gcb_size = _gcb_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
 
     cc_program_config = _build_program_config(
         ring_size=ring_size,
         ring_cols=ring_cols,
         ring_rows=ring_rows,
         num_global_cb_receivers=num_receivers_per_bank,
+        stream_in1=stream_in1,
     )
 
     # bank_to_receivers pairing must match the BDS placement so ring position r receives
     # shard r (full K, N-cols [r*npr, ...)):
-    #   round_robin -> STRIDED: bank b feeds [b, b+num_banks, ...] = column b of receivers_per_y.
-    #   shard-contiguous -> CONTIGUOUS arc: bank b feeds [b*R, b*R+R-1] = row b of receivers_per_y.
+    #   round_robin -> STRIDED: bank b feeds ring positions [b, b+num_banks, ...].
+    #   shard-contiguous -> CONTIGUOUS arc: bank b feeds ring positions [b*R, b*R+R-1].
     if is_shard_contiguous:
         bank_to_receivers = [
             (
                 b,
                 ttnn.CoreRangeSet(
                     [
-                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[b][s]), ttnn.CoreCoord(*receivers_per_y[b][s]))
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(*receiver_ring[b * num_receivers_per_bank + s]),
+                            ttnn.CoreCoord(*receiver_ring[b * num_receivers_per_bank + s]),
+                        )
                         for s in range(num_receivers_per_bank)
                     ]
                 ),
@@ -617,7 +675,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
                 b,
                 ttnn.CoreRangeSet(
                     [
-                        ttnn.CoreRange(ttnn.CoreCoord(*receivers_per_y[s][b]), ttnn.CoreCoord(*receivers_per_y[s][b]))
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(*receiver_ring[b + s * num_dram_banks]),
+                            ttnn.CoreCoord(*receiver_ring[b + s * num_dram_banks]),
+                        )
                         for s in range(num_receivers_per_bank)
                     ]
                 ),
@@ -661,6 +722,18 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     )
 
     def single_linear():
+        if stream_in1:
+            return ttnn.experimental.tensor_prefetcher_matmul.prefetch_and_linear(
+                tt_act,
+                tt_weight,
+                global_cb=gcb,
+                program_config=cc_program_config,
+                memory_config=output_mem_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=ttnn.bfloat16,
+                optional_output_tensor=optional_output_tensor,
+                sub_device_id=receiver_sub_device_id,
+            )
         return ttnn.linear(
             tt_act,
             tt_weight,
@@ -677,11 +750,12 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
     block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
     ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
-    ttnn.experimental.queue_tensor_prefetcher_request(
-        device,
-        [(tt_weight, block_count)] * num_prefetch_layers,
-        global_cb=gcb,
-    )
+    if not stream_in1:
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device,
+            [(tt_weight, block_count)] * num_prefetch_layers,
+            global_cb=gcb,
+        )
 
     # Correctness + program-cache warmup: one real one-matmul launch.
     cc_out = single_linear()
@@ -698,10 +772,13 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     ttnn.end_trace_capture(device, bench_trace, cq_id=0)
     assert bench_output is not None
 
-    t0 = time.perf_counter()
-    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    elapsed = time.perf_counter() - t0
+    elapsed_trials = []
+    for _ in range(bench_trials):
+        t0 = time.perf_counter()
+        ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        elapsed_trials.append(time.perf_counter() - t0)
+    elapsed = statistics.median(elapsed_trials)
     ttnn.release_trace(device, bench_trace)
 
     ttnn.experimental.stop_tensor_prefetcher(device)
@@ -714,8 +791,11 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     gbps = weight_bytes * trace_repeats / elapsed / 1e9
     dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
     logger.info(
-        f"[dram_core_rc][{op_name}] dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
-        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"
+        f"[dram_core_rc][{op_name}] dist={dist_id} receiver_layout={receiver_layout} "
+        f"dual_senders={dual_senders} stream_in1={stream_in1} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"repeats={trace_repeats} trials={bench_trials} per_matmul={per_matmul_us:.2f}us "
+        f"-> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s; "
+        f"trial_ms={[round(trial * 1e3, 3) for trial in elapsed_trials]}"
     )
 
 

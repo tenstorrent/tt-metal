@@ -1992,13 +1992,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         if (intersection.empty()) {
             continue;
         }
-        bool is_rectangular = cr.end_coord.x > cr.start_coord.x && cr.end_coord.y > cr.start_coord.y;
-        if (is_rectangular) {
-            non_idle_cores_vec.push_back(intersection.bounding_box());
-        } else {
-            for (const auto& ir : intersection.ranges()) {
-                non_idle_cores_vec.push_back(ir);
-            }
+        for (const auto& ir : intersection.ranges()) {
+            non_idle_cores_vec.push_back(ir);
         }
     }
     all_cores = CoreRangeSet(non_idle_cores_vec);
