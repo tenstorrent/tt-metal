@@ -737,9 +737,17 @@ class PerfConfig(TestConfig):
             results,
         )
 
-        # Setting header fields that are always there
+        # Setting header fields that are always there.
+        # register_format_hint is always emitted when formats are present (None when
+        # unused) so tests that share a CSV keep one schema — e.g. reduce vs
+        # reduce mxfp4_2x_gapool, which only differ by this hint.
         names = (
-            ["formats.input_A", "formats.input_B", "formats.output"]
+            [
+                "formats.input_A",
+                "formats.input_B",
+                "formats.output",
+                "register_format_hint",
+            ]
             if self.formats_config
             else []
         )
@@ -748,6 +756,7 @@ class PerfConfig(TestConfig):
                 self.formats_config[0].unpack_A_src,
                 self.formats_config[0].unpack_B_src,
                 self.formats_config[0].output_format,
+                self.register_format_hint,
             ]
             if self.formats_config[0]
             else []

@@ -557,13 +557,12 @@ class PerfRunType(Enum):
 
 
 # One PerfRunType per pytest case so isolate modes report independently.
-# For now, only L1_TO_L1 is tested.
 PERF_RUN_TYPES_QUASAR = [
     [PerfRunType.L1_TO_L1],
-    # [PerfRunType.UNPACK_ISOLATE],
-    # [PerfRunType.MATH_ISOLATE],
-    # [PerfRunType.PACK_ISOLATE],
-    # [PerfRunType.L1_CONGESTION],
+    [PerfRunType.UNPACK_ISOLATE],
+    [PerfRunType.MATH_ISOLATE],
+    [PerfRunType.PACK_ISOLATE],
+    [PerfRunType.L1_CONGESTION],
 ]
 
 
