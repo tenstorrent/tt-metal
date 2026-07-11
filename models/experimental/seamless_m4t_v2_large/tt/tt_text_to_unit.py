@@ -1530,6 +1530,15 @@ _CONV1D_CHUNK_ROWS = MATMUL_1D_SEQ_THRESHOLD
 _CONV1D_WIDE_CHUNK_ROWS = 256
 
 
+def _t2u_conv1d_dram_slice_enabled() -> bool:
+    """Long wide decoder conv1d: let ``ttnn.conv1d`` width-slice the timeline in DRAM in one op
+    (device-managed halo) instead of the manual Python chunk loop (per-chunk slice-in/slice-out +
+    concat). Same optimization the HiFi-GAN vocoder uses (``Conv2dDRAMSliceWidth``); collapses the
+    dominant Slice/Concat/Untilize/Tilize glue around every chunk. Set
+    ``SEAMLESS_T2U_CONV1D_DRAM_SLICE=0`` to fall back to the manual chunk loop (A/B / rollback)."""
+    return os.environ.get("SEAMLESS_T2U_CONV1D_DRAM_SLICE", "1") != "0"
+
+
 def _slice_nlc_bsc(
     t: ttnn.Tensor,
     *,
@@ -1581,11 +1590,15 @@ def _conv1d_same_impl(
     prep_cache: Optional[Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]] = None,
     deallocate_input: bool = False,
     keep_row_major: bool = False,
+    slice_config: Optional[Any] = None,
 ) -> ttnn.Tensor:
     """Single-shot same-padding Conv1d (``x_rm`` is NLC row-major).
 
     When ``keep_row_major=True``, leave the conv output in ROW_MAJOR (for a following
     ``_conv1d_same`` / mask multiply). Otherwise tilize for LN / attention / linear.
+
+    When ``slice_config`` is given, ``ttnn.conv1d`` slices the timeline (width) in DRAM itself —
+    used for long wide decoder timelines in place of the manual Python chunk loop.
     """
     batch = int(x_rm.shape[0])
     seq = int(sequence_length)
@@ -1624,7 +1637,7 @@ def _conv1d_same_impl(
             )
             cached = prep_cache[cache_key]
         prep_w, prep_b = cached
-        out_tt, _out_len = ttnn.conv1d(
+        conv1d_kwargs: dict = dict(
             input_tensor=x_rm,
             weight_tensor=prep_w,
             in_channels=in_channels,
@@ -1643,8 +1656,11 @@ def _conv1d_same_impl(
             return_output_dim=True,
             return_weights_and_bias=False,
         )
+        if slice_config is not None:
+            conv1d_kwargs["slice_config"] = slice_config
+        out_tt, _out_len = ttnn.conv1d(**conv1d_kwargs)
     else:
-        out_tt, _out_len = ttnn.conv1d(
+        conv1d_kwargs = dict(
             input_tensor=x_rm,
             weight_tensor=weight_rm,
             in_channels=in_channels,
@@ -1662,6 +1678,9 @@ def _conv1d_same_impl(
             dtype=ttnn.bfloat16,
             return_output_dim=True,
         )
+        if slice_config is not None:
+            conv1d_kwargs["slice_config"] = slice_config
+        out_tt, _out_len = ttnn.conv1d(**conv1d_kwargs)
     if deallocate_input:
         ttnn.deallocate(x_rm)
     out_nlc = _conv1d_out_to_nlc(out_tt, batch=batch, out_channels=out_channels)
@@ -1729,6 +1748,33 @@ def _conv1d_same(
             prep_cache=prep_cache,
             keep_row_major=keep_row_major,
         )
+
+    # Long wide timeline: let ``ttnn.conv1d`` width-slice in DRAM (one op, device-managed halo)
+    # instead of the manual Python chunk loop below — collapses the per-chunk slice-in/slice-out +
+    # concat glue (HiFi-GAN ``Conv2dDRAMSliceWidth`` pattern).
+    if _t2u_conv1d_dram_slice_enabled():
+        slice_config = ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            num_slices=0,  # 0 = device auto-picks slice count for this timeline / L1 budget.
+        )
+        out = _conv1d_same_impl(
+            device,
+            x_rm,
+            sequence_length=seq,
+            weight_rm=weight_rm,
+            bias_rm=bias_rm,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            padding=padding,
+            compute_kernel_config=compute_kernel_config,
+            activation=activation,
+            prep_cache=prep_cache,
+            deallocate_input=True,
+            keep_row_major=keep_row_major,
+            slice_config=slice_config,
+        )
+        return out
 
     chunk_size = _CONV1D_WIDE_CHUNK_ROWS
     chunks: list[ttnn.Tensor] = []
