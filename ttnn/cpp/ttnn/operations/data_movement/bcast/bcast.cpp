@@ -29,11 +29,12 @@ Tensor bcast(
             input_tensor_a.padded_shape()[-2],
             input_tensor_b.padded_shape()[-2]);
         if (input_tensor_b.layout() == Layout::TILE) {
+            const auto b_tile = input_tensor_b.tensor_spec().tile();
             TT_FATAL(
-                input_tensor_b.padded_shape()[-1] == TILE_WIDTH,
+                input_tensor_b.padded_shape()[-1] == b_tile.get_width(),
                 "Input tensor B width ({}) must equal TILE_WIDTH ({}) for tile layout",
                 input_tensor_b.padded_shape()[-1],
-                TILE_WIDTH);
+                b_tile.get_width());
         } else if (input_tensor_b.layout() == Layout::ROW_MAJOR) {
             TT_FATAL(
                 input_tensor_b.padded_shape()[-1] == 1 || input_tensor_b.padded_shape()[-1] == TILE_WIDTH,
@@ -50,11 +51,12 @@ Tensor bcast(
             input_tensor_a.padded_shape()[-1],
             input_tensor_b.padded_shape()[-1]);
         if (input_tensor_b.layout() == Layout::TILE) {
+            const auto b_tile = input_tensor_b.tensor_spec().tile();
             TT_FATAL(
-                input_tensor_b.padded_shape()[-2] == TILE_HEIGHT,
+                input_tensor_b.padded_shape()[-2] == b_tile.get_height(),
                 "Input tensor B height ({}) must equal TILE_HEIGHT ({}) for tile layout",
                 input_tensor_b.padded_shape()[-2],
-                TILE_HEIGHT);
+                b_tile.get_height());
         } else if (input_tensor_b.layout() == Layout::ROW_MAJOR) {
             TT_FATAL(
                 input_tensor_b.padded_shape()[-2] == 1 || input_tensor_b.padded_shape()[-2] == TILE_HEIGHT,
@@ -66,9 +68,15 @@ Tensor bcast(
         }
     } else if (bcast_dim == BcastOpDim::HW) {
         if (input_tensor_b.layout() == Layout::TILE) {
+            const auto b_tile = input_tensor_b.tensor_spec().tile();
             TT_FATAL(
-                input_tensor_b.padded_shape()[-2] == TILE_HEIGHT && input_tensor_b.padded_shape()[-1] == TILE_WIDTH,
-                "Error");
+                input_tensor_b.padded_shape()[-2] == b_tile.get_height() &&
+                    input_tensor_b.padded_shape()[-1] == b_tile.get_width(),
+                "Input Tensor B height ({}) and width ({}) must equal tile height ({}) and width ({})",
+                input_tensor_b.padded_shape()[-2],
+                input_tensor_b.padded_shape()[-1],
+                b_tile.get_height(),
+                b_tile.get_width());
         } else if (input_tensor_b.layout() == Layout::ROW_MAJOR) {
             TT_FATAL(
                 (input_tensor_b.padded_shape()[-2] == 1 && input_tensor_b.padded_shape()[-1] == 1) ||

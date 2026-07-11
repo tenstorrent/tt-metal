@@ -1148,11 +1148,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         compute_kernel = kernel_config.compute_kernel;
     }
 
-    auto writer_defines = make_dataflow_defines(b_dtype);
+    auto writer_defines = make_dataflow_defines(b_dtype, std::nullopt, b_tile.get_height());
     writer_defines["SRC_SHARDED"] = b_sharded ? "1" : "0";
     writer_defines["DST_SHARDED"] = c_sharded ? "1" : "0";
 
-    auto reader_defines = make_dataflow_defines(a_dtype, b_dtype);
+    auto reader_defines = make_dataflow_defines(a_dtype, b_dtype, a_tile.get_height(), b_tile.get_height());
     reader_defines["SRC_SHARDED"] = a_sharded ? "1" : "0";
     reader_defines["SRC_SHARDED_B"] = b_sharded ? "1" : "0";
     if (inputs_row_major) {

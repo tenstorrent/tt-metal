@@ -31,6 +31,10 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
     const uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     const uint32_t NC = N * C;
 
+    const auto& tile = a.tensor_spec().tile();
+    const uint32_t tile_h = tile.get_height();
+    const uint32_t tile_w = tile.get_width();
+
     IDevice* device = a.device();
 
     const auto shard_spec = a.shard_spec().value();
@@ -50,37 +54,37 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
     const auto b_df = datatype_to_dataformat_converter(b.dtype());
     const auto out_df = datatype_to_dataformat_converter(output.dtype());
 
-    const uint32_t input_tile_size = tt::tile_size(act_df);
-    const uint32_t input1_tile_size = tt::tile_size(b_df);
-    const uint32_t output_tile_size = tt::tile_size(out_df);
+    const uint32_t input_tile_size = tile.get_tile_size(act_df);
+    const uint32_t input1_tile_size = tile.get_tile_size(b_df);
+    const uint32_t output_tile_size = tile.get_tile_size(out_df);
 
     TT_FATAL(input_tile_size == output_tile_size, "Input and output tile size should be same");
 
-    const uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)TILE_WIDTH);
-    const uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)TILE_HEIGHT);
+    const uint32_t ntiles_along_width = std::ceil(shard_spec.shape[1] / (float)tile_w);
+    const uint32_t ntiles_along_height = std::ceil(shard_spec.shape[0] / (float)tile_h);
     const uint32_t num_tile_per_core = ntiles_along_width * ntiles_along_height;
 
     uint32_t Wt, Ht;
     if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
         ncores_x = all_cores.ranges().begin()->end_coord.y + 1;
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
+        Wt = shard_spec.shape[1] / tile_w;
+        Ht = shard_spec.shape[0] / tile_h;
     } else if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        Wt = shard_spec.shape[1] / TILE_WIDTH;
-        Ht = shard_spec.shape[0] / TILE_HEIGHT;
+        Wt = shard_spec.shape[1] / tile_w;
+        Ht = shard_spec.shape[0] / tile_h;
         TT_ASSERT(
-            (shard_spec.shape[0] % (bN * TILE_HEIGHT) == 0),
-            "Shard height per batch must be divisible by TILE_HEIGHT {} {} {} ",
+            (shard_spec.shape[0] % (bN * tile_h) == 0),
+            "Shard height per batch must be divisible by tile height {} {} {} ",
             shard_spec.shape[0],
             bN,
-            TILE_HEIGHT);
+            tile_h);
     } else {
         TT_THROW("Unsupported memory layout");
     }
 
     TT_ASSERT(
-        (shard_spec.shape[0] % TILE_HEIGHT == 0) && (shard_spec.shape[0] % TILE_WIDTH == 0),
-        "Shard shapes must be multiple of TILE_HEIGHT ");
+        (shard_spec.shape[0] % tile_h == 0) && (shard_spec.shape[1] % tile_w == 0),
+        "Shard shapes must be multiple of tile dimensions");
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t aligned_input_tile_nbytes =
@@ -108,6 +112,7 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
             .buffer_index = static_cast<uint8_t>(src0_cb_index),
             .data_format = act_df,
             .page_size = in_cb_pagesize,
+            .tile = TileDescriptor(tile),
         }}},
         .buffer = src0_buffer,
     });
@@ -119,6 +124,7 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
             .buffer_index = static_cast<uint8_t>(src1_cb_index),
             .data_format = b_df,
             .page_size = input1_tile_size,
+            .tile = TileDescriptor(tile),
         }}},
     });
 
@@ -129,6 +135,7 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
             .buffer_index = static_cast<uint8_t>(output_cb_index),
             .data_format = out_df,
             .page_size = in_cb_pagesize,
+            .tile = TileDescriptor(tile),
         }}},
         .buffer = dst_buffer,
     });
@@ -164,8 +171,8 @@ tt::tt_metal::ProgramDescriptor BcastShardedHOptimisedProgramFactory::create_des
     compute_desc.config = ComputeConfigDescriptor{};
 
     const uint32_t ncores_y = ncores / ncores_x;
-    TT_FATAL((NC * H / TILE_HEIGHT) % bN == 0, "N*C*H of input0 must be divisible by batch size of input1");
-    const uint32_t Ht_per_batch_b = std::min((NC * H / TILE_HEIGHT) / bN, Ht);
+    TT_FATAL((NC * H / tile_h) % bN == 0, "N*C*H of input0 must be divisible by batch size of input1");
+    const uint32_t Ht_per_batch_b = std::min((NC * H / tile_h) / bN, Ht);
     const uint32_t batch_b = Ht / Ht_per_batch_b;
 
     for (uint32_t i = 0; i < ncores; i++) {

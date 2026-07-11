@@ -77,6 +77,34 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
         "Input tensor B layout must be TILE but got {}",
         input_tensor_b.layout());
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
+
+    // Tiny-tile support: allow tile heights smaller than TILE_HEIGHT while keeping the
+    // width constrained to TILE_WIDTH. Both operands must share the same tile shape, and
+    // blocked (bfp8/bfp4) formats are not supported with tiny heights.
+    const auto& tile_a = input_tensor_a.tensor_spec().tile();
+    const auto& tile_b = input_tensor_b.tensor_spec().tile();
+    TT_FATAL(
+        tile_a.get_width() == TILE_WIDTH && tile_b.get_width() == TILE_WIDTH,
+        "Bcast requires tile width {} but got tensor A width {} and tensor B width {}",
+        TILE_WIDTH,
+        tile_a.get_width(),
+        tile_b.get_width());
+    TT_FATAL(
+        tile_a == tile_b,
+        "Bcast requires input tensors A and B to have the same tile shape, got {}x{} and {}x{}",
+        tile_a.get_height(),
+        tile_a.get_width(),
+        tile_b.get_height(),
+        tile_b.get_width());
+    if (tile_a.get_height() < TILE_HEIGHT) {
+        const auto is_blocked = [](DataType dtype) {
+            return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B;
+        };
+        TT_FATAL(
+            !is_blocked(input_tensor_a.dtype()) && !is_blocked(input_tensor_b.dtype()),
+            "Tiny tile heights are not supported for blocked data types like BFLOAT8_B or BFLOAT4_B");
+    }
+
     if (tensor_args.preallocated_output.has_value()) {
         TT_FATAL(is_floating_point(tensor_args.preallocated_output->dtype()), "Unsupported data format");
         const auto output_spec_required = compute_output_specs(operation_attributes, tensor_args);
@@ -86,6 +114,8 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
             "The input tensors need a shape of {}, however the output tensor is only {}",
             output_spec_required.logical_shape(),
             out_tensor.padded_shape());
+        TT_FATAL(
+            out_tensor.tensor_spec().tile() == tile_a, "Output tensor tile shape must match input tensor tile shape");
     }
     if (operation_attributes.in_place) {
         TT_FATAL(
@@ -147,33 +177,37 @@ void BcastDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
-    // validate input dimensions
+    // validate input dimensions. The broadcast operand (B) spans a single tile along the
+    // broadcast dimension(s), so its padded size there must equal the (possibly tiny) tile
+    // dimension rather than the hardcoded 32x32 constants.
+    const uint32_t tile_height = tile_a.get_height();
+    const uint32_t tile_width = tile_a.get_width();
     if (operation_attributes.dim == BcastOpDim::W) {
         TT_FATAL(
-            height_a == height_b && width_b == TILE_WIDTH,
-            "For width broadcast: height_a ({}) must equal height_b ({}) and width_b ({}) must equal TILE_WIDTH ({})",
+            height_a == height_b && width_b == tile_width,
+            "For width broadcast: height_a ({}) must equal height_b ({}) and width_b ({}) must equal tile width ({})",
             height_a,
             height_b,
             width_b,
-            TILE_WIDTH);
+            tile_width);
     }
     if (operation_attributes.dim == BcastOpDim::H) {
         TT_FATAL(
-            width_a == width_b && height_b == TILE_HEIGHT,
-            "For height broadcast: width_a ({}) must equal width_b ({}) and height_b ({}) must equal TILE_HEIGHT ({})",
+            width_a == width_b && height_b == tile_height,
+            "For height broadcast: width_a ({}) must equal width_b ({}) and height_b ({}) must equal tile height ({})",
             width_a,
             width_b,
             height_b,
-            TILE_HEIGHT);
+            tile_height);
     }
     if (operation_attributes.dim == BcastOpDim::HW) {
         TT_FATAL(
-            width_b == TILE_WIDTH && height_b == TILE_HEIGHT,
-            "For HW broadcast: width_b ({}) must equal TILE_WIDTH ({}) and height_b ({}) must equal TILE_HEIGHT ({})",
+            width_b == tile_width && height_b == tile_height,
+            "For HW broadcast: width_b ({}) must equal tile width ({}) and height_b ({}) must equal tile height ({})",
             width_b,
-            TILE_WIDTH,
+            tile_width,
             height_b,
-            TILE_HEIGHT);
+            tile_height);
     }
 }
 
@@ -200,7 +234,7 @@ TensorSpec BcastDeviceOperation::compute_output_specs(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 input_tensor.dtype(),
-                PageConfig(Layout::TILE),
+                input_tensor.tensor_spec().page_config(),
                 mem_config,
                 input_tensor.logical_shape(),
                 input_tensor.padded_shape()));
@@ -210,7 +244,7 @@ TensorSpec BcastDeviceOperation::compute_output_specs(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             input_tensor.dtype(),
-            PageConfig(Layout::TILE),
+            input_tensor.tensor_spec().page_config(),
             operation_attributes.output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
