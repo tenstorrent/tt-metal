@@ -157,14 +157,24 @@ restores the legacy formula; `SEAMLESS_VOCODER_TRANSPOSE_SLICE_ELEMS` tunes the 
 **Result:** PCC 0.99827 (unchanged). Device ops **3408→1012 (−70%)**, device time 123.2→**99.9ms**. Transpose
 block-conv 196→18 ops (27.7→8.3ms, FLOPs eff 1.58→7.5%). PaddedSlice/SliceWrite/per-slice Halo/Move collapsed.
 
+### EXP-7 ✅ DONE — Hoist the shared per-stage leaky_relu(h) (leaky-fusion candidate)
+**Idea:** each stage runs ``num_kernels`` (3) resblocks on the *same* stage input ``h``, and every resblock
+starts with ``leaky_relu(h)`` — so ``leaky(h)`` is computed 3x redundantly on the stage's biggest tensor.
+Compute it once and share (residual still uses the raw ``h``; bit-identical since leaky is deterministic).
+**Change:** `_resblock` takes ``first_leaky`` (used for the first conv pair); `_hifi_gan_once` precomputes
+``h_leaky = leaky(h)`` once per stage, passes it to all 3 resblocks, deallocs after.
+**Result:** PCC 0.99827 (bit-identical). Unary **9,438µs/54 ops → 4,782µs/44 ops** (−49% time — the removed
+leakys were the full-size stage-input ones). Device ops 1012→1002, device time 99.9→**95.2ms**.
+
 ### Cumulative results (device time, from `tt-perf-report`, unit_seq=1024)
 - exp0 baseline (manual chunk loop): **286.2 ms**, 6303 ops
 - exp1 (+DRAM width-slice, EXP-1): 141.0 ms, 3420 ops
 - exp2 (+L1 resblock, EXP-2): 134.5 ms
 - exp3 (+transpose reshape, EXP-3): 123.6 ms
 - exp4 (+NLC front-door, EXP-4): 123.2 ms, 3408 ops
-- exp5 (+element-budget transpose slicing, EXP-5): **99.9 ms**, **1012 ops**
-  → **−65% device time, −84% op count, −46% wall-clock (638→344 ms).**
+- exp5 (+element-budget transpose slicing, EXP-5): 99.9 ms, 1012 ops
+- exp9 (+hoist shared leaky, EXP-7): **95.2 ms**, **1002 ops**
+  → **−67% device time, −84% op count, −47% wall-clock (638→338 ms).**
 - PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512) pass unchanged.
 - useq=64 PCC 0.975 is a PRE-EXISTING short-seq accuracy bug (bit-identical with all flags off) — not ours.
 

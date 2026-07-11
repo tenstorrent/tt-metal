@@ -1596,11 +1596,27 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # Caller frees after ``expm1`` (``squeeze`` may alias ``log_dur``).
         return _as_batch_time_2d(log_dur_2d, batch=batch, seq=seq)
 
-    def _resblock(self, x_nlc: ttnn.Tensor, rb: Any, *, batch: int, tlen: int, channels: int) -> ttnn.Tensor:
-        """One HF ``HifiGanResidualBlock``; ``x`` is ``[B,T,C]``."""
-        for c1p, c2p in zip(rb.convs1, rb.convs2):
+    def _resblock(
+        self,
+        x_nlc: ttnn.Tensor,
+        rb: Any,
+        *,
+        batch: int,
+        tlen: int,
+        channels: int,
+        first_leaky: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """One HF ``HifiGanResidualBlock``; ``x`` is ``[B,T,C]``.
+
+        ``first_leaky`` is a precomputed ``leaky_relu(x_nlc)`` for the first conv pair — the caller shares
+        it across the stage's ``num_kernels`` resblocks (all fed the same stage input), so ``leaky(h)`` runs
+        once instead of once per resblock. The residual still uses the raw (non-activated) ``x_nlc``."""
+        for idx, (c1p, c2p) in enumerate(zip(rb.convs1, rb.convs2)):
             residual = x_nlc
-            x_nlc = ttnn.leaky_relu(x_nlc, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if idx == 0 and first_leaky is not None:
+                x_nlc = first_leaky
+            else:
+                x_nlc = ttnn.leaky_relu(x_nlc, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_nlc, tlen = self._conv1d(
                 x_nlc,
                 weight=c1p["weight"],
@@ -1700,15 +1716,19 @@ class TTSeamlessM4Tv2CodeHifiGan:
             )
             _vt0 = _vt(f"stage{i} conv_transpose -> tlen={tlen}", _vt0)
             channels = self.cfg.upsample_initial_channel // (2 ** (i + 1))
+            # All ``num_kernels`` resblocks consume the same stage input ``h`` and each starts with
+            # ``leaky_relu(h)``; compute it once and share (residual still uses the raw ``h``).
+            h_leaky = ttnn.leaky_relu(h, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             acc = None
             for j in range(self.num_kernels):
                 rb = hg.resblocks[i * self.num_kernels + j]
-                br = self._resblock(h, rb, batch=batch, tlen=tlen, channels=channels)
+                br = self._resblock(h, rb, batch=batch, tlen=tlen, channels=channels, first_leaky=h_leaky)
                 if acc is None:
                     acc = br
                 else:
                     acc = ttnn.add(acc, br, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                     ttnn.deallocate(br)
+            ttnn.deallocate(h_leaky)
             scale = 1.0 / float(self.num_kernels)
             acc_scaled = ttnn.multiply(acc, scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(acc)
