@@ -26,8 +26,12 @@ before its first config write):
     # candidates: out/audit.<arch>.json -> .checks["reconfig-stall"].findings
 
 `NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a
-stall that orders the GPR→cfg write but drains no execution unit. Both are
-**candidates** — decide with the rule below. The tool models the latched-register
+stall that orders the GPR→cfg write but drains no execution unit; `DRAIN_REARMED`
+= a draining stall precedes the write but the unit was re-issued (UNPACR/PACR/
+matrix) between the drain and the write, so the drain no longer holds. All are
+**candidates** — decide with the rule below. The tool now walks EVERY config
+write in a function (a latched first write no longer hides a later sampled one)
+and emits the first offending write. The tool models the latched-register
 exception only via a small allowlist (`L1_Dest_addr`); **widen for** other
 latched-vs-sampled registers (else you may false-positive) and for the "unit
 provably idle by handshake instead of stall" case. It never clears a site; you

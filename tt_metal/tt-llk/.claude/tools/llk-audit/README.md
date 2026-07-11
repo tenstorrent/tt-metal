@@ -38,8 +38,8 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 |---|---|---|
 | `mmio-race` | RISC MMIO cfg/GPR write vs. consuming Tensix instruction/MOP; is an applicable ordering primitive local? | `LOCALLY_ORDERED` / `NO_LOCAL_ORDERING` |
 | `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads; intra-thread full-word clobber | `CROSS_THREAD_SHARED_WORD` / `INTRA_THREAD_CLOBBER` / `UNRESOLVED` |
-| `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no in-tree init | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
-| `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall | `NO_UNIT_DRAIN` / `THCON_ONLY` |
+| `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no matching concrete init (emitted as a candidate, `safety: LOW_CONFIDENCE` when a generic init may cover it) | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
+| `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` |
 | `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` |
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
 
@@ -156,7 +156,11 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
 - `reconfig-stall` flags `set_packer_strides` etc. and correctly allowlists the
   latched `program_packer_destination` (`L1_Dest_addr`); exercises `THCON_ONLY` on BH.
 - `semaphore-handshake` sees all ops (17 post / 20 get / 4 init / balanced mutexes
-  on WH) and correctly reports no imbalance — after excluding wrapper defs + RAII.
+  on WH) and correctly reports no mutex imbalance — after excluding wrapper defs +
+  RAII. It emits the in-tree waits (e.g. `FPU_SFPU`, `UNPACK_TO_DEST`) as
+  `WAIT_WITHOUT_INIT` candidates tagged `LOW_CONFIDENCE` (the generic
+  `t6_sem(index)` init may cover them) rather than globally suppressing them —
+  recall-biased, per the augmentor contract.
 - `srcreg-bank` (BH) flags the raw `TTI_SETDVALID` sites — including the three real
   ones in `llk_math_eltwise_unary_datacopy.h` (ISA-unsupported on BH, a genuine
   recall win) — and recalls the `CLEARDVALID` control points; on WH/QSR the same

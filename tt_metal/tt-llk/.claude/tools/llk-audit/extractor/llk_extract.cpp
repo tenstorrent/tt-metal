@@ -159,7 +159,20 @@ public:
         {
             return;
         }
-        const bool wanted = MI->isFunctionLike() || II->getName().ends_with("_RMW");
+        llvm::StringRef nm = II->getName();
+        // Denylist encoding-constant / internal expansion macros: TT_OP_* are the
+        // opcode-VALUE constants (not an issued instruction) and INSTRUCTION_WORD
+        // is expanded INSIDE the real instruction macros — both otherwise get
+        // recorded mislocated at their #define site and add noise.
+        if (nm.starts_with("TT_OP_") || nm == "INSTRUCTION_WORD")
+        {
+            return;
+        }
+        // Capture function-like macros AND object-like INSTRUCTION macros
+        // (TTI_NOP, TTI_TRNSPSRCA/B, TTI_SFPNOP, … carry no args but ARE real
+        // Tensix instructions the AST erases), plus the *_RMW composite aliases.
+        const bool instrLike = nm.starts_with("TTI_") || nm.starts_with("TT_");
+        const bool wanted    = MI->isFunctionLike() || instrLike || nm.ends_with("_RMW");
         if (!wanted)
         {
             return;
@@ -252,8 +265,14 @@ public:
         {
             return true;
         }
+        // The end offset must be in the SAME file as the begin offset, else the
+        // [b,e] range compares offsets across two files and mis-attributes facts.
+        // If the end's spelling is in a different file (macro-wrapped body), fall
+        // back to `off` (the Python FactBase then extends it to the next function).
+        SourceLocation B = S.SM->getSpellingLoc(FD->getBeginLoc());
         SourceLocation E = S.SM->getSpellingLoc(FD->getEndLoc());
-        State::FnRange fr {FD->getNameAsString(), file, off, E.isValid() ? S.SM->getFileOffset(E) : off};
+        unsigned endOff  = (E.isValid() && S.SM->getFileID(E) == S.SM->getFileID(B)) ? S.SM->getFileOffset(E) : off;
+        State::FnRange fr {FD->getNameAsString(), file, off, endOff};
         S.fns.push_back(fr);
         Fact f;
         f.family = "function";
@@ -302,7 +321,17 @@ public:
         provenance(base, f.provenanceKind, f.producer);
         if (f.producer.empty())
         {
-            return true; // unresolved base — nothing useful for the registry
+            // Provenance didn't resolve to a named producer (template-dependent
+            // accessor, macro-generated cast, non-VarDecl base). Emit the write
+            // anyway, marked "unresolved", so it is VISIBLE rather than silently
+            // dropped. Force the kind to "unresolved" so the registry never
+            // MIS-classifies it from the fallback text (it will simply ignore it).
+            f.provenanceKind = "unresolved";
+            f.producer       = srcText(S, base->getSourceRange());
+            if (f.producer.empty())
+            {
+                f.producer = "<unresolved>";
+            }
         }
         S.facts.push_back(std::move(f));
         return true;

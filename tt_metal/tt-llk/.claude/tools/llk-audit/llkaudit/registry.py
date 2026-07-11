@@ -36,6 +36,11 @@ THREAD_BY_FILE = [
     ("cpack", "PACK"),
     ("llk_pack", "PACK"),
     ("pack", "PACK"),
+    # SFPU (the vector unit) runs on the MATH thread; its files carry no
+    # unpack/math/pack token, so without this they resolve to UNKNOWN and their
+    # (real, MATH-side) config writes drop out of the cross-thread analysis.
+    # Checked last so a "math_..._sfpu" file still hits MATH via "math" first.
+    ("sfpu", "MATH"),
 ]
 
 
@@ -132,6 +137,21 @@ TRISC_CFG_TOKEN = (
 CONSUMER_UNPACK_SUBSTR = ("UNPACR",)
 CONSUMER_PACK_SUBSTR = ("PACR",)  # checked after UNPACR
 CONSUMER_MOP_SUBSTR = ("MOP", "REPLAY")  # excluding CFG/BASE address macros
+# Matrix / FPU instruction macros that CONSUME config the RISC just wrote (ALU
+# format, DEST, accumulation control). Best-effort CURATED set — SFPU vector ops
+# and less-common matrix ops are a known partial (see mmio-race blind_spots).
+# Deliberately excludes NOP-like macros (TTI_NOP / TTI_SFPNOP do NOT consume
+# config), which now reach the fact base as object-like macros.
+CONSUMER_MATH_SUBSTR = (
+    "MVMUL",
+    "GMPOOL",
+    "GAPOOL",
+    "DOTPV",
+    "ELWADD",
+    "ELWSUB",
+    "ELWMUL",
+    "GATESRCRST",
+)
 CONSUMER_CALLS = ("mop_run",)  # substring match on callee
 
 # RISC-blocking drains / fences (functions).
@@ -148,7 +168,7 @@ def classify_macro(name: str):
     """
     up = name.upper()
     has = lambda s: s in up
-    if any(has(s) for s in STALL_MACRO_SUBSTR):
+    if _instr(name) and any(has(s) for s in STALL_MACRO_SUBSTR):
         return "stall"
     if _instr(name) and any(has(s) for s in ORDERED_WRITE_MACRO_SUBSTR):
         return "ordered_write"
@@ -160,6 +180,8 @@ def classify_macro(name: str):
         return "consumer_pack"
     if any(has(s) for s in CONSUMER_MOP_SUBSTR) and not has("CFG") and not has("BASE"):
         return "consumer_mop"
+    if any(has(s) for s in CONSUMER_MATH_SUBSTR):
+        return "consumer_math"
     return None
 
 
@@ -226,9 +248,17 @@ def is_semaphore_wrapper_def(fn_name: str) -> bool:
 
 def is_ctor_or_dtor(fn_name: str) -> bool:
     """RAII acquire-in-ctor / release-in-dtor is balanced at the object level,
-    not per-function. Skip ctor/dtor (dtor starts with '~'; ctor/type names are
-    CamelCase, unlike snake_case LLK functions)."""
-    return bool(fn_name) and (fn_name.startswith("~") or fn_name[0].isupper())
+    not per-function, so those are skipped. A destructor's name starts with '~';
+    a constructor's captured name is its (CamelCase) TYPE name. Match only a
+    CamelCase type-like name (leading uppercase AND no underscore) so we do NOT
+    also swallow a genuine capitalized_snake or `Capitalized` helper function —
+    the earlier `fn_name[0].isupper()` test was too broad and could silently drop
+    a real acquire/release imbalance in any capitalized-named function."""
+    if not fn_name:
+        return False
+    if fn_name.startswith("~"):
+        return True
+    return fn_name[0].isupper() and "_" not in fn_name
 
 
 # Semaphore identity. Waits name the semaphore as `semaphore::NAME`; SEMINIT
@@ -246,7 +276,11 @@ def semaphore_target(fact: dict):
     text = (
         fact.get("arg0", "") if fact.get("family") == "call" else fact.get("text", "")
     )
-    if "t6_sem(" in text or "index" in text.lower():
+    # A parameterized/generic op is the `t6_sem(index)` wrapper form ONLY. A bare
+    # `"index" in text` test was over-broad: a concrete op like
+    # `wait(semaphore::MATH_PACK, tile_index)` would be misread as a wildcard and
+    # its real identity discarded.
+    if "t6_sem(" in text:
         return None, True
     m = _SEM_NAME_RE.search(text)
     if m:
@@ -274,11 +308,15 @@ def stallwait_wait_operand(text: str) -> str:
     if lp < 0 or rp <= lp:
         return ""
     inner = text[lp + 1 : rp]
+    # Track (), [], <> and {} nesting so a comma inside a template-arg / brace-init
+    # (e.g. STALLWAIT(foo<a, b>, cond)) does not split an argument. STALLWAIT
+    # operands are plain p_stall:: enums today, so this is hardening, not a live
+    # fix.
     depth, start, args = 0, 0, []
     for i, ch in enumerate(inner):
-        if ch in "([":
+        if ch in "([<{":
             depth += 1
-        elif ch in ")]":
+        elif ch in ")]>}":
             depth -= 1
         elif ch == "," and depth == 0:
             args.append(inner[start:i])
@@ -300,27 +338,40 @@ CFG_DEFINES_REL = {
     "quasar": "tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h",
 }
 
-# NAME -> integer literal (decimal OR hex). Captures _ADDR32 (decimal word
-# index), _SHAMT (decimal), and _MASK (hex, pre-positioned 32-bit field mask).
+# NAME -> integer literal (decimal OR hex), tolerating an integer-suffix
+# (U/L/UL/…) and a trailing // comment. Captures _ADDR32 (decimal word index),
+# _SHAMT (decimal), and _MASK (hex, pre-positioned 32-bit field mask).
 _DEFINE_RE = re.compile(
-    r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(0[xX][0-9a-fA-F]+|\d+)\s*$"
+    r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+"
+    r"(0[xX][0-9a-fA-F]+|\d+)[uUlL]*\s*(?://.*)?$"
 )
 
 
 def load_addr32(cfg_defines_path: str) -> dict:
     """Parse `#define NAME <int|hex>` lines from a cfg_defines.h into {name: int}.
     Includes the *_ADDR32 word indices (used by resolve_word) and the *_MASK
-    field masks (used by field_bitmask for the masking annotation)."""
+    field masks (used by field_bitmask for the masking annotation). A value that
+    does not parse as base-0 (e.g. a leading-zero octal) is skipped, not fatal."""
     out = {}
     try:
         with open(cfg_defines_path) as fh:
             for ln in fh:
                 m = _DEFINE_RE.match(ln)
                 if m:
-                    out[m.group(1)] = int(m.group(2), 0)  # base 0 -> auto dec/hex
+                    try:
+                        out[m.group(1)] = int(m.group(2), 0)  # base 0 -> dec/hex
+                    except ValueError:
+                        pass
     except OSError:
         pass
     return out
+
+
+def wrcfg_word_count(text: str) -> int:
+    """A TTI_WRCFG(..., WRCFG_128b, ...) overwrites FOUR consecutive 32-bit config
+    words (base..base+3); WRCFG_32b (and everything else) writes one. Returns the
+    number of words the write spans so the overlap checker can enumerate them."""
+    return 4 if "WRCFG_128B" in (text or "").upper() else 1
 
 
 def field_bitmask(field_token: str, defines: dict):
@@ -352,7 +403,9 @@ def write_is_full_word(how: str) -> bool:
     return "CFG32" in h or "CFG_PTR" in h or "MMIO_PTR" in h or "WRCFG" in h
 
 
-_WORD_OFFSET_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:\+\s*(\d+))?")
+_WORD_OFFSET_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:\+\s*(0[xX][0-9a-fA-F]+|\d+))?"
+)
 # cfg_rmw / cfg_reg_rmw_tensix take a FIELD_RMW composite alias; the sibling
 # word-address macro is FIELD_ADDR32.
 _RMW_ALIAS_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)_RMW\b")
@@ -369,7 +422,7 @@ def resolve_word(text: str, addr32: dict):
         base = addr32.get(field)
         if base is None:
             return None, field
-        return base + (int(m.group(2)) if m.group(2) else 0), field
+        return base + (int(m.group(2), 0) if m.group(2) else 0), field
     a = _RMW_ALIAS_RE.search(text or "")
     if a:
         field = a.group(1) + "_ADDR32"

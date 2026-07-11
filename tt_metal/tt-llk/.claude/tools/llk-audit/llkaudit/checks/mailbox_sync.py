@@ -77,11 +77,13 @@ class MailboxSync(Check):
                 {"fact": c, "op": op, "src": src, "dst": dst, "channel": channel}
             )
 
-        # 2. Which resolved channels are produced (written) / consumed (read)?
-        produced = {e["channel"] for e in eps if e["op"] == "write" and e["channel"]}
-        consumed = {
-            e["channel"] for e in eps if e["op"] in ("read", "query") and e["channel"]
-        }
+        # 2. Which resolved channels are written / have a REAL blocking read?
+        # A `not_empty` query is non-blocking and does NOT drain the FIFO, so it
+        # does not make a write "paired" — a write with only a query (no read) is
+        # a potential no-reader deadlock and must stay UNPAIRED. A query endpoint
+        # itself is "paired" if the channel is written (it expects a producer).
+        written = {e["channel"] for e in eps if e["op"] == "write" and e["channel"]}
+        read_ch = {e["channel"] for e in eps if e["op"] == "read" and e["channel"]}
 
         # 3. Emit one recall finding per endpoint with its pairing status.
         findings: list[Finding] = []
@@ -92,8 +94,8 @@ class MailboxSync(Check):
                 hint = "UNRESOLVED_ENDPOINT"
                 chan_str = f"{e['src'] or '?'}->{e['dst'] or '?'}"
             else:
-                partner = consumed if e["op"] == "write" else produced
-                paired = ch in partner
+                # write needs a real read; read/query need a write.
+                paired = (ch in read_ch) if e["op"] == "write" else (ch in written)
                 hint = "PAIRED_CHANNEL" if paired else "UNPAIRED_ENDPOINT"
                 chan_str = f"{ch[0]}->{ch[1]}"
             # Evidence: the opposite-end sites on the same channel (if any).

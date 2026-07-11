@@ -82,7 +82,11 @@ class CfgWordOverlap(Check):
             src = None
             if "cfg_reg_rmw_tensix" in c.get("text", ""):
                 src = c.get("text", "")
-            elif registry.write_call_kind(c.get("name", "")):  # cfg_rmw / cfg_rmw_gpr
+            elif c.get("name", "") in ("cfg_rmw", "cfg_rmw_gpr"):
+                # ONLY the config-RMW helpers take a FIELD in arg0. Do NOT use the
+                # broader write_call_kind() (it also matches reg_write, a raw/GPR
+                # register write) — that could fold a non-config write into the
+                # CONFIG shared-word map if its arg0 happened to contain _ADDR32.
                 src = c.get("arg0", "")
             # Only act on a non-empty source token. A cfg_rmw(FIELD_RMW, ...) call
             # has arg0 == "" here because FIELD_RMW is an object-macro that expands
@@ -101,7 +105,13 @@ class CfgWordOverlap(Check):
                 # SETC16 targets ThreadConfig; all other ordered writes target Config.
                 ns = "THREAD" if "SETC16" in name.upper() else "CONFIG"
                 if word is not None:
-                    add(ns, word, field, m, f"instr:{name}")
+                    # A WRCFG_128b overwrites 4 consecutive words (base..base+3);
+                    # enumerate them all so a sibling write to base+1..+3 is seen
+                    # as overlapping. (Every other write spans one word.)
+                    span = registry.wrcfg_word_count(m.get("text", ""))
+                    for wd in range(word, word + span):
+                        fld = field if wd == word else f"{field}+{wd - word}"
+                        add(ns, wd, fld, m, f"instr:{name}")
                 elif field:
                     unresolved.append(self._unresolved(m, field))
             elif name.endswith("_RMW"):
@@ -134,6 +144,13 @@ class CfgWordOverlap(Check):
 
         findings: list[Finding] = []
         for (ns, word), ws in sorted(writers.items()):
+            # ThreadConfig[3][] has an INDEPENDENT physical copy per Tensix thread
+            # (that is why the namespace is split). Two threads writing the same
+            # ThreadConfig word touch DIFFERENT registers — no data race — so the
+            # cross-thread finding applies to Config only. (SETC16-shared words
+            # would otherwise be reported as a spurious POTENTIAL_CLOBBER.)
+            if ns != "CONFIG":
+                continue
             threads = {w["thread"] for w in ws if w["thread"] != "UNKNOWN"}
             if len(threads) < 2:
                 continue
@@ -199,11 +216,12 @@ class CfgWordOverlap(Check):
         per_thread: dict = {}
         unresolved = False
         all_atomic = True
+        full_word_present = False
         for w in ws:
             if w["thread"] == "UNKNOWN":
                 continue
             if registry.write_is_full_word(w["how"]):
-                m, all_atomic = 0xFFFFFFFF, False
+                m, all_atomic, full_word_present = 0xFFFFFFFF, False, True
             else:
                 m = registry.field_bitmask(w["field"], defines)
                 if m is None:
@@ -217,7 +235,13 @@ class CfgWordOverlap(Check):
             for i in range(len(masks))
             for j in range(i + 1, len(masks))
         )
-        if unresolved:
+        # A full-word writer definitely clobbers the whole word, so it is
+        # POTENTIAL_CLOBBER regardless of whether some OTHER writer's mask was
+        # unresolved — the full-word fact is stronger than the missing mask, and
+        # downgrading to UNKNOWN would hide a certain clobber behind a weaker label.
+        if full_word_present:
+            label = "POTENTIAL_CLOBBER"
+        elif unresolved:
             label = "UNKNOWN"
         elif all_atomic and disjoint:
             label = "SAFE_BY_MASKING"

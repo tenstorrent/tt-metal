@@ -31,7 +31,12 @@ class SemaphoreHandshake(Check):
         "not tt-llk), and deadlock cycles are NOT decided here. INIT presence is "
         "checked only within the parsed tree — the BRISC boot firmware inits "
         "semaphore Max out-of-tree, so WAIT_WITHOUT_INIT is a candidate, not a bug. "
-        "Branch-conditional acquire/release may show a false imbalance."
+        "Wait/init identity vocabularies (semaphore::NAME vs p_stall::SEMAPHORE_n) "
+        "do not reconcile statically, so concrete matching is best-effort; a wait "
+        "is emitted whenever no concrete init matches, tagged safety=LOW_CONFIDENCE "
+        "when the generic t6_sem(index) init (which may cover it) is present. "
+        "Branch-conditional acquire/release may show a false imbalance; overloaded "
+        "same-name functions in one file share a mutex-balance count."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
@@ -79,47 +84,58 @@ class SemaphoreHandshake(Check):
                     )
                 )
 
-        # 2) wait-without-init, matched PER SEMAPHORE IDENTITY (not a single
-        # global flag). Inits and waits use different vocabularies
-        # (p_stall::SEMAPHORE_n vs semaphore::NAME) and a generic parameterized
-        # init (t6_sem(index)) can init any semaphore, so:
-        #   - a parameterized/generic init is a WILDCARD -> suppress all waits;
-        #   - otherwise flag a wait whose identity has no matching concrete init.
-        # Init identities are gathered from ALL init ops (incl. the wrapper
-        # definitions), since that is where the generic init lives.
+        # 2) wait-without-init, matched PER SEMAPHORE IDENTITY. Inits and waits
+        # use different vocabularies (p_stall::SEMAPHORE_n vs semaphore::NAME) and
+        # a generic parameterized init (t6_sem(index)) can init any semaphore.
+        # RECALL-BIASED policy: a generic init is always present (the ckernel.h
+        # wrapper), so globally suppressing on it made this pass DEAD. Instead we
+        # EMIT every wait that lacks a *concrete* matching init as a candidate,
+        # and downgrade CONFIDENCE (the `safety` sub-annotation) when a generic
+        # init exists that MIGHT cover it — never drop it.
+        #   - concrete init matches the identity        -> not a candidate
+        #   - generic (parameterized) init exists        -> LOW_CONFIDENCE candidate
+        #   - no init of any kind                        -> (higher-confidence) candidate
+        # Init identities are gathered from ALL init ops (incl. wrapper defs),
+        # since that is where the generic init lives.
         init_ids: set[str] = set()
-        wildcard = False
+        generic_init = False
         for c in fb.family("call"):
             if registry.classify_semaphore_call(c.get("name", "")) == "init":
                 sid, param = registry.semaphore_target(c)
-                wildcard = wildcard or param
+                generic_init = generic_init or param
                 if sid:
                     init_ids.add(sid)
         for m in fb.family("macro"):
             if registry.classify_semaphore_macro(m.get("name", "")) == "init":
                 sid, param = registry.semaphore_target(m)
-                wildcard = wildcard or param
+                generic_init = generic_init or param
                 if sid:
                     init_ids.add(sid)
 
-        if not wildcard:
-            for op, f in ops:
-                if op != "wait":
-                    continue
-                sid, param = registry.semaphore_target(f)
-                if param or (sid and sid in init_ids):
-                    continue
-                findings.append(
-                    Finding(
-                        file=f["file"],
-                        line=f["line"],
-                        function=f.get("function", "?"),
-                        kind="wait_without_init",
-                        hint="WAIT_WITHOUT_INIT",
-                        detail=f"wait on semaphore '{sid or '?'}' with no matching "
-                        "SEMINIT in the parsed tree (BRISC boot firmware may init "
-                        "out-of-tree)",
-                        evidence=[self._ev(f, f.get("name", "wait"))],
-                    )
+        for op, f in ops:
+            if op != "wait":
+                continue
+            sid, param = registry.semaphore_target(f)
+            if param:
+                continue  # the generic wrapper's own parameterized wait — not a site
+            if sid and sid in init_ids:
+                continue  # a concrete init matches this identity
+            cover_note = (
+                " (a generic t6_sem(index) init may cover it)"
+                if generic_init
+                else " (BRISC boot firmware may init Max out-of-tree)"
+            )
+            findings.append(
+                Finding(
+                    file=f["file"],
+                    line=f["line"],
+                    function=f.get("function", "?"),
+                    kind="wait_without_init",
+                    hint="WAIT_WITHOUT_INIT",
+                    detail=f"wait on semaphore '{sid or '?'}' with no matching "
+                    f"concrete SEMINIT in the parsed tree{cover_note}",
+                    evidence=[self._ev(f, f.get("name", "wait"))],
+                    safety="LOW_CONFIDENCE" if generic_init else "",
                 )
+            )
         return findings

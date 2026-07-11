@@ -50,14 +50,19 @@ def scope_to_changed(findings: list, changed_files: list) -> list:
     def touches(fd: dict) -> bool:
         if os.path.basename(fd.get("file", "")) in base:
             return True
-        return any(cb in ev for ev in fd.get("evidence", []) for cb in base)
+        # Match the "basename:" prefix token of an evidence line (which is
+        # "basename:line: what"), not a bare substring, so a short basename that
+        # merely appears inside the free-text detail doesn't over-match.
+        return any(f"{cb}:" in ev for ev in fd.get("evidence", []) for cb in base)
 
     return [f for f in findings if touches(f)]
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="llkaudit")
-    ap.add_argument("--arch", required=True)
+    ap.add_argument(
+        "--arch", required=True, choices=("wormhole", "blackhole", "quasar")
+    )
     ap.add_argument(
         "--facts",
         required=True,
@@ -88,7 +93,14 @@ def main(argv=None) -> int:
             print(f"{name:22} {cls.description}")
         return 0
 
-    text = sys.stdin.read() if args.facts == "-" else open(args.facts).read()
+    if args.facts == "-":
+        text = sys.stdin.read()
+    else:
+        try:
+            with open(args.facts) as fh:
+                text = fh.read()
+        except OSError as e:
+            ap.error(f"cannot read --facts {args.facts!r}: {e}")
     fb = FactBase.from_concatenated_json(args.arch, text)
 
     # Resolve cfg_defines.h ADDR32 words (for cfg-word-overlap). Best-effort.
@@ -104,6 +116,10 @@ def main(argv=None) -> int:
         for c in selected:
             if c not in ALL:
                 ap.error(f"unknown check '{c}'. Available: {', '.join(ALL)}")
+        # An empty/whitespace/comma-only --checks must be a hard error, never a
+        # silent 0-check "clean" pass (the worst outcome for a recall augmentor).
+        if not selected:
+            ap.error("no checks selected (--checks was empty). Use 'all' or names.")
 
     changed = [c.strip() for c in args.changed_files.split(",") if c.strip()]
 
