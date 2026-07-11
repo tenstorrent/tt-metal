@@ -437,10 +437,17 @@ class LTXDistilledPipeline(LTXPipeline):
         ``anchor_frames`` (append-token) extends the video RoPE + cross-PE by one hw block per interior
         keyframe (carrying that frame's phase); ``video_N_grid`` is the pre-append length used for the
         V→A mask so the audio never attends to the appended anchors."""
-        if state.tt_video_rope_cos is not None:
-            return
         if video_N_grid is None:
             video_N_grid = video_N_real
+        anchor_frames = anchor_frames or []
+        built = state.tt_video_rope_cos is not None
+        # Only the video RoPE/cross-PE carry each anchor's target-frame phase (prepare_*'s anchor_frames
+        # extends the video temporal axis; audio positions and every mask are anchor-position-independent).
+        # A traced keyframe worker therefore refreshes just those four in place per gen when the keyframe
+        # positions move — same baked shape, new phases — and builds everything else once. A base worker
+        # has no anchors, so positions never change and the built path returns at once.
+        if built and anchor_frames == getattr(state, "_anchor_frames", []):
+            return
         v_cos, v_sin = prepare_video_rope(
             latent_frames,
             latent_h,
@@ -453,6 +460,26 @@ class LTXDistilledPipeline(LTXPipeline):
             parallel_config=self.parallel_config,
             anchor_frames=anchor_frames,
         )
+        if built:
+            (v_xpe_cos, v_xpe_sin, *_a_xpe) = prepare_av_cross_pe(
+                latent_frames,
+                latent_h,
+                latent_w,
+                audio_N,
+                audio_N_real,
+                theta=self.positional_embedding_theta,
+                mesh_device=self.mesh_device,
+                parallel_config=self.parallel_config,
+                anchor_frames=anchor_frames,
+            )
+            # traced=True => ttnn.copy into the baked buffer, not a fresh allocation the captured trace
+            # would never reference.
+            state._tt_video_rope_cos.update(v_cos, True)
+            state._tt_video_rope_sin.update(v_sin, True)
+            state._tt_video_cross_pe_cos.update(v_xpe_cos, True)
+            state._tt_video_cross_pe_sin.update(v_xpe_sin, True)
+            state._anchor_frames = list(anchor_frames)
+            return
         a_cos, a_sin = prepare_audio_rope(
             audio_N,
             audio_N_real,
@@ -508,6 +535,7 @@ class LTXDistilledPipeline(LTXPipeline):
         a_mask[:, :, audio_N_real:, :] = 0.0
         state._tt_video_pad_mask.update(v_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
         state._tt_audio_pad_mask.update(a_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+        state._anchor_frames = list(anchor_frames)
 
     @staticmethod
     def _kf_trace_anchors() -> list[int]:
