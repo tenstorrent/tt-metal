@@ -1368,6 +1368,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                // The sender does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND to publish
+                // blocks to compute. On Quasar the implicit-sync ISR would ALSO bump those tile counters
+                // -> double-count -> 16-bit counter overflow -> TILE_COUNTERS fault on the compute unpack
+                // that consumes WEIGHTS. Opt out so explicit credits stay authoritative (mirrors the reader
+                // + matmul mcast fix).
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
@@ -1422,6 +1428,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                // Same as the sender: the receiver does explicit reserve_back/push_back on WEIGHTS/BIAS/
+                // ACT_SECOND; opt out of implicit sync so those tile counters aren't double-bumped
+                // (else TILE_COUNTERS overflow on the compute unpack consuming WEIGHTS).
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
     if (create_writer_mcast_receiver) {

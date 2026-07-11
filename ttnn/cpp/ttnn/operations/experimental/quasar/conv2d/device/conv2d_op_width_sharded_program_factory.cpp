@@ -692,9 +692,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         // reserve_back/push_back. That sub-tile stick fill stalls the DFB implicit-sync credit accounting
         // (reader pinned at NRBW/cb_reserve_back, compute idle). Mirror the tilize/transpose HC-sharded
         // workaround: opt out of implicit sync so explicit reserve/push credits stay authoritative. (The
-        // weights reader does full-tile page reads into WEIGHTS/BIAS only — no opt-out needed; and this act
-        // reader is the only DM kernel on its ACT/ACT_RM/ACT_TILIZED/ACT_SHARDED/READER_INDICES sides, so the
-        // cross-kernel agreement rule is satisfied.)
+        // weights reader also opts out — see its hw_config below: full-tile reads avoid the stall but not
+        // the counter double-count. This act reader is the only DM kernel on its
+        // ACT/ACT_RM/ACT_TILIZED/ACT_SHARDED/READER_INDICES sides, so the cross-kernel agreement rule is
+        // satisfied.)
         .hw_config =
             m2::DataMovementHardwareConfig{
                 .gen1_config =
@@ -762,6 +763,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = weights_noc},
+                // This weights reader does explicit reserve_back/push_back on WEIGHTS/BIAS. Full-tile page
+                // reads avoid the sub-tile *stall* the act reader hits, but they do NOT avoid the Quasar
+                // *counter double-count*: the implicit-sync ISR bumps the same 16-bit tile counter as the
+                // explicit push -> overflow -> TILE_COUNTERS fault on the compute unpack consuming WEIGHTS
+                // (identical to the height-sharded weights writers). Opt out so explicit credits are
+                // authoritative.
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
 
