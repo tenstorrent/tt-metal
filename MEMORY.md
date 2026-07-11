@@ -145,22 +145,38 @@ use ``ROW_MAJOR_LAYOUT``; `_forward_one` merge concats NLC on dim=2 (no permute,
 **Result:** PCC 0.99827 (unchanged). BF16 permutes 4->2 ops (302->40µs); device ops 3420->3408. Front-door is
 ~1% of total so time delta is small (~0.4ms) — this was an op-count/churn cleanup, not a big time win.
 
+### EXP-5 ✅ DONE — Element-budget conv_transpose DRAM slicing (was fixed 128-count)
+**Idea:** the transpose sized by *slice count* (`_vocoder_dram_slice_count` → up to 128), giving ~16x more,
+tiny slices than L1 needs — each slice paid its own PaddedSlice/SliceWrite/Halo/Move/Untilize/conv, dominating
+the vocoder op count. Slice-count sweep on the real model (unit_seq=1024): 128→406ms, 32→354, 16→344, 8→339,
+and cap≤4 OOMs L1_SMALL — so 128 was ~16x over-sliced, floor is 8.
+**Change:** `_vocoder_dram_slice_count(input_length, in_channels)` now sizes each slice to a fixed element
+budget (`_VOCODER_TRANSPOSE_SLICE_ELEMS`=512K; measured L1_SMALL floor ~819K/slice → 1.6x margin), floor 8,
+cap 128 — adapts to any input size instead of a fixed count. `SEAMLESS_VOCODER_TRANSPOSE_FIXED_SLICES=1`
+restores the legacy formula; `SEAMLESS_VOCODER_TRANSPOSE_SLICE_ELEMS` tunes the budget. Callers pass in_channels.
+**Result:** PCC 0.99827 (unchanged). Device ops **3408→1012 (−70%)**, device time 123.2→**99.9ms**. Transpose
+block-conv 196→18 ops (27.7→8.3ms, FLOPs eff 1.58→7.5%). PaddedSlice/SliceWrite/per-slice Halo/Move collapsed.
+
 ### Cumulative results (device time, from `tt-perf-report`, unit_seq=1024)
 - exp0 baseline (manual chunk loop): **286.2 ms**, 6303 ops
 - exp1 (+DRAM width-slice, EXP-1): 141.0 ms, 3420 ops
 - exp2 (+L1 resblock, EXP-2): 134.5 ms
 - exp3 (+transpose reshape, EXP-3): 123.6 ms
-- exp4 (+NLC front-door, EXP-4): **123.2 ms**, 3408 ops  → **−57% device**, **−37% wall-clock** (638→402 ms).
-- PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512/1000) all pass unchanged.
+- exp4 (+NLC front-door, EXP-4): 123.2 ms, 3408 ops
+- exp5 (+element-budget transpose slicing, EXP-5): **99.9 ms**, **1012 ops**
+  → **−65% device time, −84% op count, −46% wall-clock (638→344 ms).**
+- PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512) pass unchanged.
 - useq=64 PCC 0.975 is a PRE-EXISTING short-seq accuracy bug (bit-identical with all flags off) — not ours.
 
-### Op-count note (why 3408 is still high)
-Op count is dominated by the **conv_transpose upsampling**: its DRAM height-slicing emits per-slice
-PaddedSlice(450) + SliceWrite(450) + Halo + Move + Untilize + conv. That's the next target — reducing slice
-count / restructuring the transpose is where the big op-count + block-sharded-conv(22%, 1.58% FLOPs) win is.
-Most ops show ``in0:dram_interleaved`` because activations live in DRAM between ops (read->shard->compute->
-write-back); convs show ``block/height_sharded`` (they receive the sharded tensor). Cutting that means keeping
-activations resident in L1 across more of the pipeline (done for resblock conv1->conv2; transpose still round-trips).
+### Remaining top buckets (exp5) — next candidates
+- **InterleavedToSharded 26.9% (26.8ms, 94 ops)** — now #1. Resharding DRAM→L1 for each conv input (the
+  activations still live in DRAM between ops). Cutting it means keeping more of the pipeline resident in L1
+  across ops (harder — stage activations are large, and eltwise leaky/add run in DRAM).
+- **UntilizeWithUnpadding 16.3% (16.3ms, 17 ops)** on the biggest tensors.
+- **Unary(leaky) 9.5% + BinaryNg(add) 5.2%** — standalone DRAM eltwise; fusion candidates.
+- conv_transpose block-conv still 8.3% at ~7.5% FLOPs (skinny low-channel) — largely inherent.
+Most ops show ``in0:dram_interleaved`` because activations live in DRAM between ops (read→shard→compute→
+write-back); convs show ``block/height_sharded`` (they receive the sharded tensor).
 
 ### Remaining top buckets (exp3) — next candidates, higher risk
 - **Conv2d block_sharded 22.4%** = conv_transpose upsampling at **1.58% FLOPs eff**. Biggest single bucket;

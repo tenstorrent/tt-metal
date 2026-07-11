@@ -184,9 +184,25 @@ def _slice_nlc_time(
     raise RuntimeError(f"cannot slice NLC tensor with shape {tuple(x.shape)}")
 
 
-def _vocoder_dram_slice_count(input_length: int) -> int:
-    """DRAM height slices for long vocoder upsample timelines on Blackhole."""
+# Target elements (rows*in_channels) per conv_transpose DRAM height slice. The old formula fixed the
+# *slice count* (up to 128), producing ~16x more, tiny slices than L1 needs — each slice pays its own
+# PaddedSlice/SliceWrite/Halo/Move/Untilize, so it dominated the vocoder op count. Sizing by elements
+# instead uses few large slices: measured L1_SMALL floor is ~819K elems/slice (32ch); 512K keeps ~1.6x
+# margin. Fewer slices ≈ proportionally fewer per-slice ops. Override via ``SEAMLESS_VOCODER_TRANSPOSE_SLICE_ELEMS``;
+# set ``SEAMLESS_VOCODER_TRANSPOSE_FIXED_SLICES=1`` to restore the legacy fixed-count formula.
+_VOCODER_TRANSPOSE_SLICE_ELEMS = int(os.environ.get("SEAMLESS_VOCODER_TRANSPOSE_SLICE_ELEMS", str(512 * 1024)))
+_VOCODER_TRANSPOSE_MIN_SLICES = 8  # measured L1_SMALL floor at BH for the widest (stage4) transpose.
+
+
+def _vocoder_dram_slice_count(input_length: int, in_channels: int = 0) -> int:
+    """DRAM height slices for long vocoder upsample timelines on Blackhole.
+
+    With ``in_channels`` and element-budget mode (default), size each slice to a fixed element count so a
+    few large slices fit L1 — far fewer per-slice ops than the legacy fixed-count formula."""
     il = int(input_length)
+    if int(in_channels) > 0 and os.environ.get("SEAMLESS_VOCODER_TRANSPOSE_FIXED_SLICES", "0") == "0":
+        slices = (il * int(in_channels) + _VOCODER_TRANSPOSE_SLICE_ELEMS - 1) // _VOCODER_TRANSPOSE_SLICE_ELEMS
+        return min(128, max(_VOCODER_TRANSPOSE_MIN_SLICES, slices))
     if il <= MATMUL_1D_SEQ_THRESHOLD:
         return 16
     target_rows = 128
@@ -195,7 +211,7 @@ def _vocoder_dram_slice_count(input_length: int) -> int:
 
 def _vocoder_dram_slice_pad_h(input_length: int, *, in_channels: int = 0) -> int:
     """Tile-aligned padded height for DRAM height-sliced transpose conv."""
-    num_slices = _vocoder_dram_slice_count(input_length)
+    num_slices = _vocoder_dram_slice_count(input_length, in_channels)
     pad_h = ((int(input_length) + num_slices - 1) // num_slices) * num_slices
     if int(in_channels) >= 512:
         align = _VOCODER_ACT_BLOCK_H_ALIGN
@@ -1379,7 +1395,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         p = int(layer["padding"])
         weight = layer["weight"]
         bias = layer["bias"]
-        num_slices = _vocoder_dram_slice_count(input_length)
+        num_slices = _vocoder_dram_slice_count(input_length, in_channels)
         pad_h = _vocoder_dram_slice_pad_h(input_length, in_channels=in_channels)
         x_work, padded = self._pad_nlc_time(
             x_nlc,
@@ -1477,7 +1493,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # HEIGHT per DRAM slice when slice count and K are within caps; else auto layout.
         sliced = int(input_length) > 64
-        num_slices = _vocoder_dram_slice_count(input_length) if sliced else 0
+        num_slices = _vocoder_dram_slice_count(input_length, in_channels) if sliced else 0
         prefer = _UPSAMPLE_SHARD if (not sliced or num_slices <= _UPSAMPLE_HEIGHT_MAX_SLICES) else None
         config_len = (
             _vocoder_dram_slice_pad_h(input_length, in_channels=in_channels)
