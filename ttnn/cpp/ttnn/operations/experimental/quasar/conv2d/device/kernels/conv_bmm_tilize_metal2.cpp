@@ -470,6 +470,18 @@ void kernel_main() {
                         pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                         pack_reconfig_l1_acc(0);
                     }
+#ifdef ARCH_QUASAR
+                    // QSR quirk #1: tilize_in packs into tilized_in0_cb_id, but Quasar tilize_init omits
+                    // llk_pack_init (it's #ifdef ARCH_BLACKHOLE in tilize.h), and the pack_reconfig above only
+                    // sets FORMAT (not the BD) AND is skipped when packer_l1_acc=false. So the pack buffer
+                    // descriptor is still pointed at dfb::out (from compute_kernel_hw_startup) -> the tilize
+                    // pack writes tilized_in0's tiles at out's base -> OOB PACR0_TILE_INC / ERROR_TRISC1 @
+                    // 0x37d90 (this is the fault that fires BEFORE the matmul pack). Repoint the pack BD to the
+                    // tilize target CB. Covers both the main and split-reader tilize_in calls below (both
+                    // target tilized_in0_cb_id, nothing repoints the pack BD between them). See
+                    // ~/QuasarProgrammingQuirks.md quirk #1.
+                    PACK((llk_pack_init(tilized_in0_cb_id)));
+#endif
 
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
