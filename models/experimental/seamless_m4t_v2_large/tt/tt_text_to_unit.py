@@ -23,6 +23,7 @@ encoder 4D additive mask with the same helpers used for the text encoder PCC tes
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence, Tuple
 
@@ -60,6 +61,14 @@ _T2U_SDPA_Q_CHUNK_ROWS_LONG = 1024
 def _t2u_sdpa_q_chunk_rows(seq: int) -> int:
     """Fewer SDPA chunks on decoder long-seq (``seq > 4096``) without changing encoder tuning."""
     return _T2U_SDPA_Q_CHUNK_ROWS_LONG if seq > 4096 else _T2U_SDPA_Q_CHUNK_ROWS
+
+
+def _t2u_tp_fused_sdpa() -> bool:
+    """Use fused flash-attention SDPA for the TP (tp>1) long-seq path too, instead of the DRAM
+    matmul+softmax fallback. Fused SDPA never materializes the [q_chunk, seq] scores and fuses the
+    softmax; with the 256-row chunk it fits L1 at any seq (per-core L1 is chunk-, not seq-, bound).
+    Default on; set SEAMLESS_T2U_TP_FUSED_SDPA=0 to restore the DRAM matmul path for A/B."""
+    return os.environ.get("SEAMLESS_T2U_TP_FUSED_SDPA", "1") != "0"
 
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
@@ -118,8 +127,14 @@ def _t2u_sdpa_program_config(
         return cached
 
     m = max(seq_q, seq_k)
-    if m > 96:
-        cap = 32
+    env_cap = os.environ.get("SEAMLESS_T2U_SDPA_CHUNK")
+    if env_cap is not None and m > 96:
+        cap = int(env_cap)
+    elif m > 96:
+        # 256-row flash chunks: ~2.6x faster SDPA than the old 32 cap AND more accurate (fewer bf16
+        # online-softmax merges over the 4096 seq). 512 overflows L1 on BH (head_dim 64); 256 is the
+        # validated sweet spot. Override with SEAMLESS_T2U_SDPA_CHUNK.
+        cap = 256
     elif m > 64:
         cap = 64
     elif m > 32:
@@ -343,7 +358,7 @@ def _t2u_scaled_dot_product_attention(
 ) -> ttnn.Tensor:
     """Prefill self-attention: fused SDPA (short / single-device) or DRAM matmul chunks (TP long-seq)."""
     scale = 1.0 / math.sqrt(head_dim)
-    if tp > 1 and seq >= _T2U_LONG_SDPA_TP_THRESHOLD:
+    if tp > 1 and seq >= _T2U_LONG_SDPA_TP_THRESHOLD and not _t2u_tp_fused_sdpa():
         return _t2u_dram_matmul_attention(
             q,
             k,
@@ -1241,6 +1256,63 @@ def _cached_frame_idx_f32(
     return frame_idx
 
 
+def _hard_upsample_gather(
+    enc: ttnn.Tensor,
+    device: ttnn.Device,
+    *,
+    enc_seq: int,
+    sum_r: int,
+    hidden_size: int,
+    cumsum_inc: ttnn.Tensor,
+    frame_idx: ttnn.Tensor,
+    owns_cum: bool,
+    owns_frame_idx: bool,
+) -> ttnn.Tensor:
+    """HF ``_hard_upsample`` (repeat-interleave) as a per-frame gather instead of the one-hot matmul.
+
+    The old ``H @ enc`` used a one-hot mask (``H[f, t] = 1`` iff frame ``f`` falls in input row ``t``'s
+    ``[cumsum_prev, cumsum_inc)`` interval), so it is exactly a gather: ``out[f] = enc[u(f)]`` with
+    ``u(f) = #{t : cumsum_inc[t] <= f}`` (searchsorted-right). This replaces the ``sum_r``-chunked
+    matmul (per-chunk ``slice`` + ``matmul`` + ``concat``) and the ``ge/lt/and`` mask build with a
+    single compare + reduce (the index) and one ``ttnn.embedding`` gather — numerically identical
+    (one-hot bf16 selection has no accumulation to round).
+    """
+    # searchsorted-right index per output frame. fp32 reduce keeps the count exact (bf16 rounds
+    # integers above 256; enc_seq can be thousands).
+    c_b = ttnn.reshape(cumsum_inc, (1, 1, enc_seq))
+    f_b = ttnn.reshape(frame_idx, (1, sum_r, 1))
+    le_mask = ttnn.le(c_b, f_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, sum_r, enc_seq]
+    if owns_cum:
+        ttnn.deallocate(c_b)
+    if owns_frame_idx:
+        ttnn.deallocate(f_b)
+    le_f32 = ttnn.typecast(le_mask, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(le_mask)
+    unit_idx_f = ttnn.sum(le_f32, dim=2)  # [1, sum_r] in [0, enc_seq]
+    ttnn.deallocate(le_f32)
+    unit_idx = ttnn.typecast(unit_idx_f, ttnn.uint32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(unit_idx_f)
+    unit_idx = ttnn.reshape(unit_idx, (1, sum_r))
+    unit_idx = ttnn.to_layout(unit_idx, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # Gather table: enc [1, enc_seq, H] -> row-major [enc_seq + 1, H] with a zero tail row. The tail
+    # is defensive only — a valid frame never indexes it (max u(f) = enc_seq - 1 for f < sum_r).
+    enc_rm = ttnn.to_layout(enc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    enc_tbl = ttnn.reshape(enc_rm, (enc_seq, hidden_size))
+    table = ttnn.pad(enc_tbl, [(0, 1), (0, 0)], value=0.0)  # [enc_seq + 1, H]
+    seen: set = set()
+    for x in (enc_tbl, enc_rm):
+        if x is enc or x is table or id(x) in seen:
+            continue
+        seen.add(id(x))
+        ttnn.deallocate(x)
+
+    gathered = ttnn.embedding(unit_idx, weight=table, layout=ttnn.TILE_LAYOUT)  # [1, sum_r, H]
+    ttnn.deallocate(unit_idx)
+    ttnn.deallocate(table)
+    return gathered
+
+
 def _hard_upsample_matmul(
     H: ttnn.Tensor,
     enc: ttnn.Tensor,
@@ -1376,12 +1448,16 @@ def _hard_upsample_nlc(
     if any(r < 0 for r in repeats_int):
         raise ValueError(f"_hard_upsample_nlc: negative repeat in {repeats_int!r}")
 
-    owns_cum_boundary_tensors = not (cumsum_inc_tile is not None and cumsum_prev_tile is not None)
-    if cumsum_inc_tile is not None and cumsum_prev_tile is not None:
+    # Gather needs only the inclusive cumulative boundary. Reuse a caller-provided (trace-packed)
+    # tile when available; otherwise build it and drop the now-unused exclusive tile.
+    del cumsum_prev_tile  # exclusive boundary no longer used by the gather path
+    if cumsum_inc_tile is not None:
         cumsum_inc = cumsum_inc_tile
-        cumsum_prev = cumsum_prev_tile
+        owns_cum = False
     else:
-        cumsum_inc, cumsum_prev = _upload_repeat_cumsum_tiles(device, repeats_int)
+        cumsum_inc, _cumsum_prev_local = _upload_repeat_cumsum_tiles(device, repeats_int)
+        ttnn.deallocate(_cumsum_prev_local)
+        owns_cum = True
 
     sum_r = int(sum(repeats_int))
     if sum_r <= 0:
@@ -1403,43 +1479,18 @@ def _hard_upsample_nlc(
         )
         owns_frame_idx = True
 
-    # Broadcast layout: cumsum_* -> [1, 1, T]; frame_idx -> [1, sum_r, 1].
-    # ge/lt broadcast to [1, sum_r, T]; the resulting H[f, t] is 1 iff the
-    # half-open boundary range ``[cumsum_prev[t], cumsum_inc[t])`` contains f.
-    c_b = ttnn.reshape(cumsum_inc, (1, 1, enc_seq))
-    cp_b = ttnn.reshape(cumsum_prev, (1, 1, enc_seq))
-    f_b = ttnn.reshape(frame_idx, (1, sum_r, 1))
-    if owns_frame_idx:
-        ttnn.deallocate(frame_idx)
-
-    lower = ttnn.ge(f_b, cp_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    upper = ttnn.lt(f_b, c_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    # ``reshape`` may alias the TILE cum vectors; do not free views of caller-owned
-    # ``hard_upsample_cums.*`` (trace pack tensors must survive across forwards).
-    if owns_cum_boundary_tensors:
-        ttnn.deallocate(c_b)
-        ttnn.deallocate(cp_b)
-    if owns_frame_idx:
-        ttnn.deallocate(f_b)
-
-    H_mask = ttnn.logical_and(lower, upper, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(lower)
-    ttnn.deallocate(upper)
-    H = ttnn.typecast(H_mask, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(H_mask)
-
-    # H: [1, sum_r, T] bf16 TILE; enc: [1, T, hidden] bf16 TILE.
-    # out: [1, sum_r, hidden]
     hidden_size = int(enc.shape[-1])
-    out = _hard_upsample_matmul(
-        H,
+    out = _hard_upsample_gather(
         enc,
         device,
-        sum_r=sum_r,
         enc_seq=enc_seq,
+        sum_r=sum_r,
         hidden_size=hidden_size,
+        cumsum_inc=cumsum_inc,
+        frame_idx=frame_idx,
+        owns_cum=owns_cum,
+        owns_frame_idx=owns_frame_idx,
     )
-    ttnn.deallocate(H)
     return ensure_interleaved_bsh(out, batch=1, seq=sum_r, channels=hidden_size)
 
 
