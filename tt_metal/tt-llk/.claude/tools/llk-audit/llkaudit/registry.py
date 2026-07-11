@@ -533,6 +533,50 @@ def mailbox_op(callee: str):
     return MAILBOX_FIFO_CALLS.get(callee)
 
 
+# --- cb-sync (kernel tier): circular-buffer credit primitives ------------------
+# These live in JIT-compiled kernels OUTSIDE tt-llk; the checker is deterministic
+# and committed, but only produces findings when fed a KERNEL fact base (the
+# on-request capture — see run.sh --full-jit). Over the tt-llk fact base there are
+# no cb_* calls, so it is trivially empty there.
+CB_CALLS = {
+    "cb_reserve_back": "reserve",  # producer: claim space
+    "cb_push_back": "push",  # producer: commit (hand a credit to the consumer)
+    "cb_wait_front": "wait",  # consumer: wait for pages
+    "cb_pop_front": "pop",  # consumer: release the pages
+}
+
+
+def cb_op(callee: str):
+    return CB_CALLS.get(callee)
+
+
+# --- noc-sync (kernel tier): NoC semaphore + write-flush primitives ------------
+NOC_SIGNAL_CALLS = {
+    "noc_semaphore_inc": "inc",
+    "noc_semaphore_set": "set",
+    "noc_semaphore_set_multicast": "mcast",
+    "noc_semaphore_set_multicast_loopback_src": "mcast",
+}
+NOC_WAIT_CALLS = ("noc_semaphore_wait", "noc_semaphore_wait_min")
+# A write is "landed" (safe to credit) only after one of these drains the NoC.
+NOC_FLUSH_CALLS = (
+    "noc_async_write_barrier",
+    "noc_async_writes_flushed",
+    "noc_async_write_barrier_with_trid",
+)
+
+
+def noc_op(callee: str):
+    """Return inc|set|mcast (a credit SIGNAL) | wait | flush | None."""
+    if callee in NOC_SIGNAL_CALLS:
+        return NOC_SIGNAL_CALLS[callee]
+    if callee in NOC_WAIT_CALLS:
+        return "wait"
+    if callee in NOC_FLUSH_CALLS:
+        return "flush"
+    return None
+
+
 def mailbox_thread_arg(arg0: str):
     """Decode a `ThreadId::MathThreadId`-style arg0 to a short thread name
     (UNPACK/MATH/PACK), or None if it isn't a recognizable ThreadId literal
