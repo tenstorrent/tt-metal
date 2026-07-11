@@ -116,7 +116,7 @@ def main(argv=None) -> int:
         "checks": {},
     }
     if changed:
-        out["changed_files"] = sorted(changed_base)
+        out["changed_files"] = sorted({os.path.basename(c) for c in changed})
     for name in selected:
         chk = ALL[name]()
         findings = scope_to_changed([f.to_dict() for f in chk.run(fb)], changed)

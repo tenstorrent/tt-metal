@@ -15,6 +15,30 @@ cd "$(dirname "$0")"
 HERE="$PWD"
 EXTRACT="$HERE/extractor/llk_extract"
 
+# --- Kernel-tier (JIT: cb-sync / noc-sync) capability probe --------------------
+# The kernel-tier module (the cb-sync / noc-sync checkers + the compiler-wrapper
+# JIT compile-command capture) reaches the JIT-compiled kernel surface that lives
+# OUTSIDE tt-llk. It is an OPT-IN, off-main capability that the full-audit runbook
+# checks out onto a scratch workspace (see .claude/skills/race-audit-all/SKILL.md
+# → "Full-audit kernel tier"); it is deliberately NOT part of the base in-tree
+# tool. This probe is what the runbook calls to decide whether to even OFFER the
+# JIT hookup — so a chosen "yes" never dangles against a missing implementation.
+KERNEL_TIER_DIR="$HERE/kernel_tier"
+kernel_tier_available() { [ -f "$KERNEL_TIER_DIR/MANIFEST" ]; }
+
+if [ "${1:-}" = "--kernel-tier-status" ]; then
+  if kernel_tier_available; then
+    echo "available"
+    echo "kernel-tier module present at $KERNEL_TIER_DIR" >&2
+  else
+    echo "unavailable"
+    echo "kernel-tier (cb-sync/noc-sync) module is not built on this branch." >&2
+    echo "To enable it, follow the 'Full-audit kernel tier' runbook in" >&2
+    echo ".claude/skills/race-audit-all/SKILL.md." >&2
+  fi
+  exit 0
+fi
+
 # Auto-build the C++ extractor on first run (or if the source is newer than the
 # binary). The binary is a git-ignored build artifact, so a fresh checkout won't
 # have it. If no suitable Clang/LLVM (>=18) is available the build fails; we then
@@ -34,12 +58,14 @@ CHECKS="all"
 OUT="$HERE/out"
 CHANGED=0
 CHANGED_BASE="main"
+FULLJIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --checks) CHECKS="$2"; shift 2;;
     --changed) CHANGED=1; shift
                # optional non-flag next token is the diff base (default: main)
                if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then CHANGED_BASE="$1"; shift; fi;;
+    --full-jit) FULLJIT=1; shift;;   # also run the opt-in kernel tier (cb/noc)
     *) OUT="$1"; shift;;
   esac
 done
@@ -125,3 +151,28 @@ for name,c in d["checks"].items():
 print(f'\nfact base -> {facts}')
 print(f'findings  -> {audit}')
 PY
+
+# --- Opt-in kernel tier (cb-sync / noc-sync over JIT-compiled kernels) ---------
+# The in-tree audit above always runs. --full-jit additionally attempts the
+# kernel tier. It DEGRADES HONESTLY: if the kernel-tier module isn't built on
+# this branch, it says so and names the classes left uncovered — a clean result
+# must never read as "cb/noc covered". See the runbook in race-audit-all.
+if [ "$FULLJIT" -eq 1 ]; then
+  echo "" >&2
+  echo "=== kernel tier (JIT: cb-sync / noc-sync) ===" >&2
+  if kernel_tier_available; then
+    echo "kernel-tier module present — bootstrapping capture + kernel checks ..." >&2
+    if ! "$KERNEL_TIER_DIR/bootstrap.sh" "$ARCH" "$OUT" >&2; then
+      echo "kernel-tier bootstrap FAILED — cb-sync / noc-sync NOT covered this run." >&2
+    fi
+  else
+    echo "kernel-tier module is NOT built on this branch, so cb-sync / noc-sync" >&2
+    echo "were NOT TOOL-RECALLED here (their surface is JIT-compiled kernels" >&2
+    echo "outside tt-llk). This is NOT the same as 'not audited': the" >&2
+    echo "race-audit-all skill still audits cb-sync / noc-sync LLM-driven (grep +" >&2
+    echo "reasoning + ISA docs, exactly as before this tool existed) — you only" >&2
+    echo "forgo the extra deterministic candidate list. To add that exhaustive" >&2
+    echo "kernel-tier recall, follow the 'Full-audit kernel tier' runbook in" >&2
+    echo ".claude/skills/race-audit-all/SKILL.md." >&2
+  fi
+fi

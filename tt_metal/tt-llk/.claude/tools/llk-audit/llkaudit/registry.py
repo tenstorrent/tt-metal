@@ -417,3 +417,78 @@ LATCHED_FIELDS = ("L1_Dest_addr",)
 def is_reconfig_fn(name: str) -> bool:
     n = name.lower()
     return any(s in n for s in RECONFIG_FN_SUBSTR)
+
+
+# --- srcreg-bank: SrcA/SrcB data-valid handshake ------------------------------
+# The dvalid flow-control primitives are the handshake CONTROL POINTS of the
+# unpacker<->Matrix-Unit bank handoff. The tool RECALLS these sites (few, clean)
+# and flags the one concrete ISA-grounded pattern — a *raw* SETDVALID on
+# Blackhole (ISA-unsupported: it corrupts ImpliedSrcBFmt; the supported form is
+# UNPACR_NOP(...,SET_DVALID,...)). The bank-flip lockstep, dvalid placement, and
+# single-thread-ownership *verdicts* are semantic and stay with the LLM (see the
+# SrcRegBank check's blind_spots).
+SRCREG_DVALID_OPS = {
+    "SETDVALID": "DVALID_SET",
+    "CLEARDVALID": "DVALID_CLEAR",
+}
+
+
+def classify_srcreg_macro(name: str):
+    """Return (op_token, role) for a dvalid ISSUE macro, or (None, None).
+
+    Excludes ``TT_OP_*`` (opcode-VALUE constants, not an issued instruction) and
+    any ``UNPACR`` family macro — ``UNPACR_NOP(...,SET_DVALID,...)`` is the
+    *supported* way to set data-valid, NOT a raw ``SETDVALID``, so it must never
+    be mistaken for the raw form the Blackhole flag targets."""
+    if not (name.startswith("TTI_") or name.startswith("TT_")) or name.startswith(
+        "TT_OP_"
+    ):
+        return None, None
+    up = name.upper()
+    if "UNPACR" in up:
+        return None, None
+    for tok, role in SRCREG_DVALID_OPS.items():
+        if tok in up:
+            return tok, role
+    return None, None
+
+
+# --- mailbox-sync (lite): in-tree RISC<->RISC FIFO endpoints -------------------
+# The functional mailbox surface INSIDE tt-llk is tiny (the T1->T0 dst_index
+# hand-off + the debug halt/unhalt handshake); the large mailbox surface (the CB
+# tile-address/value broadcast) lives in the compute API / kernels, OUTSIDE the
+# headers this tool parses (the kernel/JIT tier — see run.sh --full-jit). So the
+# tool RECALLS the in-tree endpoints and their pairing; the balance-over-
+# iterations / ordering / deadlock verdict stays with the LLM.
+#
+# Convention (Mailboxes.md): a mailbox is a DIRECTED FIFO. `mailbox_write(dest)`
+# is issued on the SOURCE core and names the DESTINATION thread; `mailbox_read`/
+# `mailbox_not_empty(src)` are issued on the DESTINATION core and name the SOURCE
+# thread. So a write and a read of the SAME physical FIFO carry DIFFERENT thread
+# args — the pairing key is the resolved (source_thread -> dest_thread) channel.
+MAILBOX_FIFO_CALLS = {
+    "mailbox_write": "write",  # push  — arg0 = DEST thread, issued on SOURCE core
+    "mailbox_read": "read",  # blocking pop — arg0 = SOURCE thread, on DEST core
+    "mailbox_not_empty": "query",  # non-blocking — arg0 = SOURCE thread, on DEST core
+}
+# (record_mailbox_value / clear_mailbox_values / debug_mailbox are the L1 debug
+# SCRATCH mailbox — a different thing; excluded by matching only the 3 names.)
+_THREADID_RE = re.compile(r"ThreadId::\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+
+def mailbox_op(callee: str):
+    return MAILBOX_FIFO_CALLS.get(callee)
+
+
+def mailbox_thread_arg(arg0: str):
+    """Decode a `ThreadId::MathThreadId`-style arg0 to a short thread name
+    (UNPACK/MATH/PACK), or None if it isn't a recognizable ThreadId literal
+    (e.g. a runtime variable — then the channel end is unresolved)."""
+    m = _THREADID_RE.search(arg0 or "")
+    if not m:
+        return None
+    n = m.group(1).upper()
+    for key in ("UNPACK", "MATH", "PACK"):  # UNPACK before PACK (startswith)
+        if n.startswith(key):
+            return key
+    return None

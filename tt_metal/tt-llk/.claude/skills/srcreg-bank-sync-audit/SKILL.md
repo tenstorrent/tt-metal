@@ -16,6 +16,24 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis (it enumerates the
+SrcA/SrcB data-valid handshake control points and flags the one ISA-grounded
+mechanical pattern):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks srcreg-bank
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
+    # candidates: out/audit.<arch>.json -> .checks["srcreg-bank"].findings
+
+`RAW_SETDVALID_BH` = a raw `TTI_SETDVALID` on Blackhole (ISA-unsupported — it
+corrupts `ImpliedSrcBFmt`; the supported form is `UNPACR_NOP(...,SET_DVALID,...)`);
+`DVALID_SET` / `DVALID_CLEAR` = the dvalid handshake control points to place- and
+lockstep-check. All are **candidates**, not verdicts. The tool only recalls the
+dvalid control points — it does NOT model bank-flip lockstep (the `MOV*2D` consume
+side), dvalid placement, single-thread ownership, the BH `DISABLE_IMPLIED_SRC?_FMT`
+bit, or the Quasar SrcS lane; **widen** with the method below for all of those. It
+never clears a site; you decide. If unbuilt, proceed manually.
+
 ## The bug class (precise)
 The backend **data** memories are shared and have their own hardware flow control, distinct from config registers, Tensix semaphores, mailboxes, and CBs:
 - **`SrcA` / `SrcB`** — each has **2 banks** carrying an `AllowedClient ∈ {Unpackers, MatrixUnit}`, plus four bank-pointer bits (`MatrixUnit::SrcABank/SrcBBank`, `Unpackers[0/1]::SrcBank`). The unpacker fills a bank and hands it to the FPU (set data-valid); the FPU consumes and hands it back. The **Wait Gate enforces this in hardware**: an FPU instruction stalls until the relevant bank's `AllowedClient == MatrixUnit`; `UNPACR` can start but stalls mid-execution until `AllowedClient` is appropriate. Software must keep the two sides' bank pointers in **lockstep** and place the valid/clear at the right point.
