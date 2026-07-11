@@ -30,7 +30,25 @@
 // Assume we are executing in tt-metal and we have assert already available.
 #include "api/debug/assert.h"
 
+// DEBUG (assert locator): the watcher reports a raw __LINE__ but cannot resolve the file, so a failing
+// LLK_ASSERT shows a misleading "line N / <current kernel>" pair. DPRINT the assert's OWN message + line on
+// failure so the exact assert is identifiable on the emulator (enable with TT_METAL_DPRINT_CORES). Guarded
+// by KERNEL_BUILD so host / non-kernel TUs keep the plain ASSERT. `message` is always a string literal, so it
+// concatenates into the DPRINT format string. Remove after.
+#if defined(KERNEL_BUILD)
+#include "api/debug/dprint.h"
+#define LLK_ASSERT(condition, message)                                         \
+    do                                                                         \
+    {                                                                          \
+        if (!(condition))                                                      \
+        {                                                                      \
+            DPRINT("LLK_ASSERT_FAIL: " message " @L{}\n", (unsigned)__LINE__); \
+        }                                                                      \
+        ASSERT(condition);                                                     \
+    } while (0)
+#else
 #define LLK_ASSERT(condition, message) ASSERT(condition)
+#endif
 
 #endif // defined(ENV_LLK_INFRA) || defined(ENABLE_LLK_ASSERT_ONLY)
 
