@@ -118,6 +118,21 @@ inline void llk_unpack_tilizeA_B_init(
     bd_val.f.z_dim = 1;
     ckernel::trisc::_configure_buf_desc_table_(operandA_id, bd_val);
 
+    // QSR: operand B (the reduce scalar) is read one face at a time by UNPACR1_FACE, but
+    // llk_unpack_hw_configure programmed its descriptor as z=4/y=1 (scalar face geom {face_r_dim=1,
+    // num_faces=4} -> nf_r==nf_c==2 -> z_dim=total_num_faces=4). That partial-face (y<16) tile in a 2x2-face
+    // (z=4) layout is unaddressable by UNPACR1_FACE -> UNPACKER_1 hardware fault (subcode 0x2). Mirror the
+    // operand-A reprogram above and describe the scalar as a single valid face (x=16, y=1, z=1). The reduce
+    // math uses tensor_shape_A (not B), so this only corrects B's own face addressing; the scalar is a single
+    // broadcast value, so one face is exactly what UNPACR1_FACE consumes per reduce iteration.
+    buffer_descriptor_u bd_val_b = {0};
+    bd_val_b.f.l1_addr_16B = get_local_dfb_interface(operandB_id).tc_slots[0].base_addr;
+    bd_val_b.f.format = static_cast<std::uint8_t>(unpack_src_format[operandB_id]);
+    bd_val_b.f.x_dim = ckernel::trisc::FACE_C_DIM;
+    bd_val_b.f.y_dim = 1;
+    bd_val_b.f.z_dim = 1;
+    ckernel::trisc::_configure_buf_desc_table_(operandB_id, bd_val_b);
+
     _llk_unpack_reduce_col_tilizeA_strided_init_(operandA_id, operandB_id, ct_dim, tensor_shape_A);
 }
 
