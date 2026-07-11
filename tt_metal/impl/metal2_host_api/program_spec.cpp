@@ -11,6 +11,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
@@ -28,6 +29,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include <core_descriptor.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -1189,6 +1191,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             dfb.num_entries > 0,
             "DataflowBufferSpec '{}' has num_entries = 0. num_entries must be set to a non-zero value.",
             dfb.unique_id);
+        dfb::detail::checked_total_size(
+            dfb.entry_size, dfb.num_entries, fmt::format("DataflowBufferSpec '{}'", dfb.unique_id.get()));
     }
 
     // Validate local DFB endpoint placement and multi-binding consistency.
