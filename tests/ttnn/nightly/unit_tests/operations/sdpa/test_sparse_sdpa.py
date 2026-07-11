@@ -10,9 +10,11 @@ tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py (shared helpers in spa
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
     make_inputs,
     golden,
@@ -227,8 +229,26 @@ _NV = {
     ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
 )
 def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv):
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail(
+            "Real-time profiler must be active for sparse_sdpa perf checks (run with TT_METAL_DEVICE_PROFILER=1)"
+        )
+
     H = 32
     nv_fn = _NV[nv]
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: nv_fn(s, T, TOPK))
-    out, _ = run_op(q, kv, indices, device, kc, V_DIM)  # no golden; correctness covered by the PCC tests
-    assert tuple(out.shape) == (1, H, S, V_DIM)
+
+    result = {}
+
+    def run():
+        result["out"], _ = run_op(q, kv, indices, device, kc, V_DIM)  # no golden; correctness covered by the PCC tests
+
+    _, records = profile_realtime_program(device, run, collect_all=True)
+    # SparseSDPAOperation dominates the prod shape by >100x; input tilize / output typecast records are
+    # negligible, so the max device duration is the sparse-attention kernel time.
+    duration_ns = max(record["duration_ns"] for record in records)
+    logger.info(
+        f"sparse_sdpa perf {nv} S={S} T={T} TOPK={TOPK} kc={kc}: "
+        f"device_kernel_duration={duration_ns / 1e3:.3f} us (records={len(records)})"
+    )
+    assert tuple(result["out"].shape) == (1, H, S, V_DIM)

@@ -28,13 +28,14 @@ Run all (perf/tracy self-skip unless INDEXER_SCORE_PERF_CHECKS=1):
 
 import os
 import time
-from unittest import mock
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="indexer_score is Blackhole-only")
 
@@ -1262,38 +1263,84 @@ def test_indexer_score_msa_m3_perf_impl(device):
 
 
 # ---------------------------------------------------------------------------
+# Real-time-profiler run builders. Each prepares the case's inputs on device (deployed HiFi2 dtypes: bf16 q,
+# bfp8 k) and returns a thunk that dispatches the op 5x. profile_realtime_program measures each dispatch; the
+# math-util check takes the min device duration (steady state). These mirror the op work in the tracy
+# perf_impl tests above (kept for manual `python -m tracy` inspection).
+# ---------------------------------------------------------------------------
+def _sp7_dsa_run(device, heads):
+    """GLX sp_rank 7 DSA (deployed TP=4/SP=8): 640 q, 56320 kv, glx_config(heads)."""
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    w_dev = to_device(w, device)
+    cfg = glx_config(heads)
+
+    def run():
+        for _ in range(5):
+            ttnn.experimental.indexer_score_dsa(
+                q_dev, k_dev, w_dev, chunk_start_idx=SP7_CHUNK_START, program_config=cfg
+            ).deallocate()
+
+    return run
+
+
+def _short_seq_dsa_run(device, heads):
+    """Resharded TP=1/SP=32 DSA grid-fill: short 160-query chunk (QC=1), short_config(heads)."""
+    q, k, w = make_inputs(heads, GLX_DIM, SHORT_SQ, GLX_T)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    w_dev = to_device(w, device)
+    cfg = short_config(heads)
+
+    def run():
+        for _ in range(5):
+            ttnn.experimental.indexer_score_dsa(
+                q_dev, k_dev, w_dev, chunk_start_idx=SHORT_CHUNK_START, program_config=cfg
+            ).deallocate()
+
+    return run
+
+
+def _m3_msa_run(device):
+    """MiniMax-M3 MSA, one SP=8 x TP=4 device (1 group, 640 q, 55296 kv, raw dot, scale=1/sqrt(d))."""
+    q, k, _ = make_inputs(1, M3_DIM, M3_SQ, M3_T)
+    q_dev = to_device(q, device, dtype=ttnn.bfloat16)
+    k_dev = to_device(k, device, dtype=ttnn.bfloat8_b)
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
+
+    def run():
+        for _ in range(5):
+            ttnn.experimental.indexer_score_msa(
+                q_dev,
+                k_dev,
+                chunk_start_idx=M3_CHUNK_START,
+                scale=M3_DIM**-0.5,
+                num_groups=1,
+                block_size=128,
+                program_config=cfg,
+            ).deallocate()
+
+    return run
+
+
+# ---------------------------------------------------------------------------
 # The math-utilization band checks (CI-gated by INDEXER_SCORE_PERF_CHECKS=1), all at the deployed HiFi2 dtypes
 # (bf16 q + bfp8 k): the deployed TP=4/SP=8 shapes GLM5, DSv32 and MiniMax-M3 at sp_rank 7, plus the resharded
-# TP=1/SP=32 grid-fill shapes glm5_tp1 and dsv32_tp1 (block-split, fullest causal). Each spawns its perf_impl
-# under tracy, reads the min DEVICE KERNEL DURATION, computes math_util = matmul FLOPs / (cores x device
-# cycles x matmul peak), and asserts it within +/- INDEXER_PERF_MARGIN of the value measured on a Blackhole
-# dev board. mm_flops is a thunk so the shape-derived FLOP count is evaluated at run time.
+# TP=1/SP=32 grid-fill shapes glm5_tp1 and dsv32_tp1 (block-split, fullest causal). Each runs its op under the
+# real-time device program profiler, takes the min device duration, computes math_util = matmul FLOPs /
+# (cores x device cycles x matmul peak), and asserts it within +/- INDEXER_PERF_MARGIN of the value measured
+# on a Blackhole dev board. mm_flops is a thunk so the shape-derived FLOP count is evaluated at run time; the
+# RT record carries no core count, so the deployed effective core count (all these shapes fill 110 cores) is
+# baked into the case.
 # (M3 is a single index head, so its matmul is a small slice -- the block-pool dominates -- hence the much
 # lower expected util than the multi-head DSA cases.)
 # ---------------------------------------------------------------------------
 _MATH_UTIL_CASES = [
-    # (case_id, perf_impl_node_id, profiler_subdir, mm_flops_thunk, expected_util) -- HiFi2 (bf16 q, bfp8 k)
-    (
-        "glm5",
-        "test_indexer_score_sp7_perf_impl[glm5]",
-        "ttnn_indexer_score_sp7",
-        lambda: indexer_mm_flops(sp7_valid_tiles(), 8),
-        70.1,
-    ),
-    (
-        "dsv32",
-        "test_indexer_score_sp7_perf_impl[dsv32]",
-        "ttnn_indexer_score_sp7",
-        lambda: indexer_mm_flops(sp7_valid_tiles(), 16),
-        76.1,
-    ),
-    (
-        "minimax_m3",
-        "test_indexer_score_msa_m3_perf_impl",
-        "ttnn_indexer_score_msa_m3",
-        lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM),
-        43.55,
-    ),
+    # (case_id, run_builder, mm_flops_thunk, expected_util, expected_cores) -- HiFi2 (bf16 q, bfp8 k)
+    ("glm5", lambda device: _sp7_dsa_run(device, 8), lambda: indexer_mm_flops(sp7_valid_tiles(), 8), 70.1, 110),
+    ("dsv32", lambda device: _sp7_dsa_run(device, 16), lambda: indexer_mm_flops(sp7_valid_tiles(), 16), 76.1, 110),
+    ("minimax_m3", _m3_msa_run, lambda: m3_valid_tiles() * (32 * 32) * (2 * M3_DIM), 43.55, 110),
     # Block-split grid fill: GLM5/DSv32 resharded TP=1/SP=32 -- a short 160-query chunk (QC=1, 5 q-groups) the
     # scheduler spreads across num_blocks=2 row-blocks (110 cores); without the fill these would use only 55
     # cores at ~half the util. These guard the feature's headline shapes. glm5_tp1 (32h) preserves the deployed
@@ -1301,17 +1348,17 @@ _MATH_UTIL_CASES = [
     # (shared KC=8, matmul-bound). dsv32_tp1 (64h) carries twice the heads.
     (
         "dsv32_tp1",
-        "test_indexer_score_short_seq_perf_impl[dsv32_tp1]",
-        "ttnn_indexer_score_short_seq",
+        lambda device: _short_seq_dsa_run(device, 64),
         lambda: indexer_mm_flops(short_valid_tiles(), 64),
         77.31,
+        110,
     ),
     (
         "glm5_tp1",
-        "test_indexer_score_short_seq_perf_impl[glm5_tp1]",
-        "ttnn_indexer_score_short_seq",
+        lambda device: _short_seq_dsa_run(device, 32),
         lambda: indexer_mm_flops(short_valid_tiles(), 32),
         75.54,
+        110,
     ),
 ]
 
@@ -1321,32 +1368,26 @@ _MATH_UTIL_CASES = [
     reason="Set INDEXER_SCORE_PERF_CHECKS=1 to run (CI: ops perf tests job)",
 )
 @pytest.mark.parametrize(
-    "case_id, perf_id, subdir, mm_flops_thunk, expected_util",
+    "case_id, run_builder, mm_flops_thunk, expected_util, expected_cores",
     _MATH_UTIL_CASES,
     ids=[c[0] for c in _MATH_UTIL_CASES],
 )
-def test_indexer_score_math_util(case_id, perf_id, subdir, mm_flops_thunk, expected_util):
-    """Per-deployment HiFi2 (bf16 q, bfp8 k) matmul math utilization via tracy, asserted within +/-
-    INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8, plus glm5_tp1 / dsv32_tp1 at the
-    resharded TP=1/SP=32 grid-fill shapes. Spawns the case's perf_impl under the profiler and compares the
-    achieved math_util to the expected value (measured on a BH dev board)."""
-    from tracy.process_model_log import run_device_profiler
-    from tests.nightly.sdpa_perf_utils import post_process_ops_log
+def test_indexer_score_math_util(device, case_id, run_builder, mm_flops_thunk, expected_util, expected_cores):
+    """Per-deployment HiFi2 (bf16 q, bfp8 k) matmul math utilization via the real-time device program
+    profiler, asserted within +/- INDEXER_PERF_MARGIN: GLM5 / DSv32 / MiniMax-M3 at the deployed TP=4/SP=8,
+    plus glm5_tp1 / dsv32_tp1 at the resharded TP=1/SP=32 grid-fill shapes. Runs the case's op inline under
+    the profiler and compares the achieved math_util to the expected value (measured on a BH dev board)."""
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail(
+            "Real-time profiler must be active for indexer_score perf checks (run with TT_METAL_DEVICE_PROFILER=1)"
+        )
 
-    command = "pytest tests/ttnn/nightly/unit_tests/operations/experimental/test_indexer_score.py::" + perf_id
-    with mock.patch.dict(os.environ, {"CI": "false"}):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-    r = post_process_ops_log(
-        subdir,
-        float_columns=["CORE COUNT", "DEVICE KERNEL DURATION [ns]"],
-        columns=["ATTRIBUTES"],
-        sum_vals=False,
-        has_signposts=False,
-    )
-    assert len(r["DEVICE KERNEL DURATION [ns]"]) > 0, "profiler returned no indexer_score ops"
+    _, records = profile_realtime_program(device, run_builder(device), collect_all=True)
+    # Each of the 5 dispatches is its own runtime_id; take the min device duration (steady state), matching
+    # the old tracy min-of-DEVICE-KERNEL-DURATION.
+    duration_ns = min(record["duration_ns"] for record in records)
 
-    core_count = int(r["CORE COUNT"][0])
-    duration_ns = float(r["DEVICE KERNEL DURATION [ns]"].min())
+    core_count = expected_cores
     peak = _MM_FLOPS_PER_CYCLE_PER_CORE["HiFi2"]
     cycles = duration_ns * _BH_CLOCK_GHZ
     utilization = (mm_flops_thunk() / (core_count * cycles * peak)) * 100 if core_count > 0 else 0.0
@@ -1355,7 +1396,8 @@ def test_indexer_score_math_util(case_id, perf_id, subdir, mm_flops_thunk, expec
     upper = expected_util * (1 + INDEXER_PERF_MARGIN)
     logger.info(
         f"indexer_score math util {case_id} (HiFi2): duration={duration_ns / 1e6:.3f} ms, cores={core_count}, "
-        f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
+        f"math_util={utilization:.2f}% (expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}]), "
+        f"records={len(records)}"
     )
     assert lower <= utilization <= upper, (
         f"{case_id} math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
