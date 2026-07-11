@@ -1,0 +1,324 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""
+Declarative pattern registry — the single place that maps LLK *names/signatures*
+to their *meaning* for the race-audit checkers.
+
+============================  EDIT HERE WHEN SIGNATURES CHANGE  ================
+The C++ extractor is deliberately semantics-free: it reports raw names (the
+function that produced a pointer, the macro that was expanded, the callee of a
+call). ALL knowledge of "get_cfg_pointer() yields a CONFIG pointer" or
+"TTI_UNPACR is a consumer" lives in the tables below. So when an LLK function is
+renamed, a macro is added, or a new cfg-pointer accessor appears, you update one
+table here — never the C++ and rarely a checker.
+================================================================================
+
+Everything is matched case-insensitively unless noted. Where a rule is a
+substring test it is documented as such (macros come in families like
+TTI_UNPACR / TTI_UNPACR_NOP / TT_UNPACR_VALID, so substring matching is the
+robust choice for them).
+"""
+
+from __future__ import annotations
+
+import re
+
+# --- Thread attribution -------------------------------------------------------
+# A CONFIG/GPR write's owning Tensix thread is inferred from the file it lives in
+# (the LLK convention). Order matters: first substring hit wins.
+THREAD_BY_FILE = [
+    ("cunpack", "UNPACK"),
+    ("llk_unpack", "UNPACK"),
+    ("unpack", "UNPACK"),
+    ("cmath", "MATH"),
+    ("llk_math", "MATH"),
+    ("math", "MATH"),
+    ("cpack", "PACK"),
+    ("llk_pack", "PACK"),
+    ("pack", "PACK"),
+]
+
+
+def thread_of(path: str) -> str:
+    p = path.lower()
+    for sub, thr in THREAD_BY_FILE:
+        if sub in p:
+            return thr
+    return "UNKNOWN"
+
+
+# --- CONFIG/GPR MMIO write provenance ----------------------------------------
+# A pointer_write fact carries provenance (how its base pointer was produced).
+# Map the producer name -> the register space written. These are the UNSAFE
+# (RISC-MMIO) write producers.
+CFG_POINTER_PRODUCERS = {
+    "get_cfg_pointer": "cfg32",
+    "get_cfg16_pointer": "cfg16",
+    "get_regfile_pointer": "regfile_gpr",
+}
+# MMIO writes expressed as a direct call (callee name -> write kind).
+MMIO_WRITE_CALLS = {
+    "reg_write": "reg_write",
+    "cfg_rmw": "cfg_rmw",
+    "cfg_rmw_gpr": "cfg_rmw",
+}
+# Variable-name substrings that identify a raw MMIO pointer when provenance is
+# only a variable (lower-confidence "name-fallback").
+CFG_VAR_NAME_HINTS = {
+    "regfile": "regfile_gpr",
+    "gpr": "regfile_gpr",
+    "mop_cfg": "mmio_ptr",
+    "cfg": "cfg_ptr",
+}
+# Cast-target substrings that identify a raw MMIO pointer write.
+CFG_CAST_HINTS = ("cfg", "mop", "base")
+
+
+def classify_write(pw: dict):
+    """Return (kind, detected_by) for a pointer_write fact, or (None, None)."""
+    prov, prod = pw.get("provenance_kind"), pw.get("producer", "")
+    if prov == "call":
+        k = CFG_POINTER_PRODUCERS.get(prod)
+        if k:
+            return k, "ast-provenance"
+        # a producer call we don't recognize as cfg — not an MMIO cfg/gpr write
+        return None, None
+    if prov == "cast":
+        t = prod.lower()
+        if "volatile" in t and any(h in t for h in CFG_CAST_HINTS):
+            return "mmio_ptr", "ast-provenance"
+        return None, None
+    if prov == "var":
+        vn = prod.lower()
+        for sub, kind in CFG_VAR_NAME_HINTS.items():
+            if sub in vn:
+                return kind, "name-fallback"
+    return None, None
+
+
+def write_call_kind(callee: str):
+    return MMIO_WRITE_CALLS.get(callee)
+
+
+CFG_WRITE_KINDS = {"cfg32", "cfg16", "cfg_ptr", "mmio_ptr", "reg_write", "cfg_rmw"}
+GPR_WRITE_KINDS = {"regfile_gpr"}
+
+
+# --- Tensix instruction / primitive macros -----------------------------------
+# Consumers must be genuine instruction macros; require a TTI_/TT_ prefix so that
+# address macros (TENSIX_MOP_CFG_BASE) are never mistaken for a MOP run.
+def _instr(name: str) -> bool:
+    return name.startswith("TTI_") or name.startswith("TT_")
+
+
+# Ordered in-stream cfg/GPR writes (SAFE — Tensix instructions through the config
+# unit). Substrings, must be instruction macros.
+ORDERED_WRITE_MACRO_SUBSTR = (
+    "REG2FLOP",
+    "WRCFG",
+    "SETC16",
+    "RMWCIB",
+    "SETADC",
+    "SETDMAREG",
+)
+# Calls that are ordered cfg writes.
+ORDERED_WRITE_CALLS = ("cfg_reg_rmw_tensix",)  # substring match on callee text
+
+STALL_MACRO_SUBSTR = ("STALLWAIT",)
+TRISC_CFG_TOKEN = (
+    "TRISC_CFG"  # the STALLWAIT condition (ISA C13) that orders a RISC cfg/GPR write
+)
+
+CONSUMER_UNPACK_SUBSTR = ("UNPACR",)
+CONSUMER_PACK_SUBSTR = ("PACR",)  # checked after UNPACR
+CONSUMER_MOP_SUBSTR = ("MOP", "REPLAY")  # excluding CFG/BASE address macros
+CONSUMER_CALLS = ("mop_run",)  # substring match on callee
+
+# RISC-blocking drains / fences (functions).
+DRAIN_CALLS = {
+    "sync_regfile_write": "sync_regfile_write",  # drains GPR (regfile) writes
+    "mop_sync": "mop_sync",  # drains in-flight MOPs
+    "tensix_sync": "tensix_sync",  # drains the whole Tensix thread
+}
+
+
+def classify_macro(name: str):
+    """Return a role string for a macro name, or None if not of interest.
+    Roles: stall | ordered_write | consumer_unpack | consumer_pack | consumer_mop
+    """
+    up = name.upper()
+    has = lambda s: s in up
+    if any(has(s) for s in STALL_MACRO_SUBSTR):
+        return "stall"
+    if _instr(name) and any(has(s) for s in ORDERED_WRITE_MACRO_SUBSTR):
+        return "ordered_write"
+    if not _instr(name):
+        return None
+    if any(has(s) for s in CONSUMER_UNPACK_SUBSTR):
+        return "consumer_unpack"
+    if any(has(s) for s in CONSUMER_PACK_SUBSTR):
+        return "consumer_pack"
+    if any(has(s) for s in CONSUMER_MOP_SUBSTR) and not has("CFG") and not has("BASE"):
+        return "consumer_mop"
+    return None
+
+
+def classify_call(callee: str, callee_text: str):
+    """Return a role for a call, or None. Roles: drain:<what> | ordered_write |
+    consumer_mop."""
+    if callee in DRAIN_CALLS:
+        return f"drain:{DRAIN_CALLS[callee]}"
+    if any(s in callee_text for s in ORDERED_WRITE_CALLS):
+        return "ordered_write"
+    if any(s in callee for s in CONSUMER_CALLS):
+        return "consumer_mop"
+    return None
+
+
+def is_consumer(role: str) -> bool:
+    return role is not None and role.startswith("consumer")
+
+
+# --- Semaphore / mutex protocol (semaphore-handshake checker) ------------------
+# Wrapper functions (callee name -> op). RISC-MMIO wrappers + t6 in-stream ones.
+SEMAPHORE_CALLS = {
+    "semaphore_post": "post",
+    "semaphore_get": "get",
+    "semaphore_read": "read",
+    "t6_semaphore_post": "post",
+    "t6_semaphore_get": "get",
+    "t6_semaphore_wait_on_max": "wait",
+    "t6_semaphore_wait_on_zero": "wait",
+    "t6_semaphore_init": "init",
+    "t6_mutex_acquire": "mutex_acquire",
+    "t6_mutex_release": "mutex_release",
+}
+# Raw ISA macros (substring, instruction-prefixed).
+SEMAPHORE_MACRO_SUBSTR = {
+    "SEMINIT": "init",
+    "SEMPOST": "post",
+    "SEMGET": "get",
+    "SEMWAIT": "wait",
+    "ATGETM": "mutex_acquire",
+    "ATRELM": "mutex_release",
+}
+
+
+def classify_semaphore_call(callee: str):
+    return SEMAPHORE_CALLS.get(callee)
+
+
+def classify_semaphore_macro(name: str):
+    if not _instr(name):
+        return None
+    up = name.upper()
+    for sub, op in SEMAPHORE_MACRO_SUBSTR.items():
+        if sub in up:
+            return op
+    return None
+
+
+def is_semaphore_wrapper_def(fn_name: str) -> bool:
+    """True if fn_name is the DEFINITION of a semaphore/mutex wrapper (its body
+    contains the primitive by definition) — not a use site."""
+    return fn_name in SEMAPHORE_CALLS
+
+
+def is_ctor_or_dtor(fn_name: str) -> bool:
+    """RAII acquire-in-ctor / release-in-dtor is balanced at the object level,
+    not per-function. Skip ctor/dtor (dtor starts with '~'; ctor/type names are
+    CamelCase, unlike snake_case LLK functions)."""
+    return bool(fn_name) and (fn_name.startswith("~") or fn_name[0].isupper())
+
+
+# --- cfg-word-overlap: cfg_defines.h resolution -------------------------------
+# The register field written is named in a pointer_write's index_text (e.g.
+# THCON_SEC0_REG1_Row_start_section_size_ADDR32) or a cfg_reg_rmw_tensix<FIELD>.
+# We resolve those to their 32-bit ADDR32 word via the arch cfg_defines.h.
+ADDR32_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*_ADDR32")
+RMW_FIELD_RE = re.compile(r"cfg_reg_rmw_tensix\s*<\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+# Relative path (from the metal repo root) to each arch's cfg_defines.h.
+CFG_DEFINES_REL = {
+    "wormhole": "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
+    "blackhole": "tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h",
+    "quasar": "tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h",
+}
+
+_DEFINE_RE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(\d+)\s*$")
+
+
+def load_addr32(cfg_defines_path: str) -> dict:
+    """Parse `#define NAME <int>` lines from a cfg_defines.h into {name: int}."""
+    out = {}
+    try:
+        with open(cfg_defines_path) as fh:
+            for ln in fh:
+                m = _DEFINE_RE.match(ln)
+                if m:
+                    out[m.group(1)] = int(m.group(2))
+    except OSError:
+        pass
+    return out
+
+
+_WORD_OFFSET_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:\+\s*(\d+))?")
+
+
+def resolve_word(text: str, addr32: dict):
+    """Resolve the 32-bit CONFIG word an expression writes: find the first
+    *_ADDR32 token (+ optional literal offset) and look it up. Returns
+    (word:int, field:str) or (None, field_or_None)."""
+    m = _WORD_OFFSET_RE.search(text or "")
+    if not m:
+        return None, None
+    field = m.group(1)
+    base = addr32.get(field)
+    if base is None:
+        return None, field
+    return base + (int(m.group(2)) if m.group(2) else 0), field
+
+
+def word_namespace(field: str) -> str:
+    """The CONFIG register FILE a field lives in. Two writes alias the same
+    physical word only within the same namespace: THCON registers are a
+    separate file (addressed relative to THCON_CFGREG_BASE_ADDR32), so their
+    ADDR32 index collides numerically with the main TENSIX config file but is
+    NOT the same word. Prefix-based; the only collision that matters in practice
+    is THCON vs the main file."""
+    return "THCON" if field.startswith("THCON") else "MAIN"
+
+
+# --- reconfig-stall -----------------------------------------------------------
+# Candidate functions: names that rewrite config a running unit samples.
+RECONFIG_FN_SUBSTR = (
+    "reconfig",
+    "_uninit",
+    "set_packer_strides",
+    "program_packer_destination",
+    "configure_unpack",
+    "configure_pack",
+    "set_packer_config",
+    "set_unpack_config",
+)
+# STALLWAIT condition tokens that actually DRAIN an execution unit (not THCON,
+# which only orders the GPR->cfg write). Keyed by the writing thread.
+DRAIN_UNIT_TOKENS = {
+    "UNPACK": ("UNPACK", "UNPACK0", "UNPACK1"),
+    "MATH": ("MATH", "WAIT_SFPU"),
+    "PACK": ("PACK",),
+}
+# Config-write macros that write the UNIT-SAMPLED CONFIG register file (the ones
+# a reconfig must drain the unit before). Deliberately EXCLUDES SETDMAREG, which
+# writes a GPR (a source value for a later REG2FLOP), not a sampled config reg —
+# so it must not be mistaken for "the reconfig write".
+RECONFIG_WRITE_MACRO_SUBSTR = ("REG2FLOP", "WRCFG", "SETC16", "RMWCIB", "SETADC")
+
+# Latched (not sampled) registers where a THCON-only order is correct and adding
+# a unit drain was reverted as over-sync. Substring match on the field name.
+LATCHED_FIELDS = ("L1_Dest_addr",)
+
+
+def is_reconfig_fn(name: str) -> bool:
+    n = name.lower()
+    return any(s in n for s in RECONFIG_FN_SUBSTR)

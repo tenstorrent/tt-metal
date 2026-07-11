@@ -24,6 +24,25 @@ The nine sub-audits span **four synchronization surfaces** (not just cross-threa
 - **Intra-thread (micro-architectural):**
   - `instruction-latency-audit` — pipeline result-latency / NOP padding on hand-written instruction sequences (compiler-grounded, arch-divergent).
 
+## Recall preflight — run the `llk-audit` tool once, up front (augmentor, not a verdict)
+Before fanning out, run the deterministic recall tool for all its checks in one
+parse pass; it feeds every sub-audit a complete known-pattern worklist over one
+shared fact base (which is also what makes the JOIN a lookup rather than a
+schema reconciliation):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole>
+    # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
+    #                                    semaphore-handshake, reconfig-stall}]
+
+Hand each sub-audit agent its check's `findings[]` as the pre-enumerated worklist,
+and instruct it to **widen beyond the tool** per that check's `blind_spots` (the
+tool recalls KNOWN patterns only — the agents must still hunt the unknown). The
+tool covers 4 of the 9 classes; the other five (dataflow-cb-sync, noc-sync,
+mailbox-sync, instruction-latency, srcreg-bank-sync) have no tool support here
+(0/near-0 tt-llk surface, unparsed SFPU, or too-semantic) and stay fully
+LLM-driven — see the tool README. The tool is **advisory**: it never clears a
+class, and its silence is "no new *known-pattern* instance," not "no bug".
+
 ## The monotonic contract (non-negotiable — this is what makes the sweep a true superset)
 A naive "run them + concatenate" can catch *less* than the audits alone (summarization loss, dedup collapse, over-resolution). To prevent that, the JOIN is **additive-only**:
 1. **Preserve every per-audit finding verbatim.** The output *includes* all nine raw reports (full finding lists, not summaries). Nothing is dropped, merged-away, or reworded.

@@ -16,6 +16,23 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Before manual analysis, get the deterministic candidate list from the recall tool
+(it enumerates every cfg/GPR MMIO write soundly, incl. macro-expanded and
+wrapper-hidden ones a grep misses):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks mmio-race
+    # candidates: out/audit.<arch>.json -> .checks["mmio-race"].findings
+
+Treat `findings[]` as your **pre-enumerated worklist** so you never re-do the
+enumeration. Hints are recall buckets, **not verdicts**: `NO_LOCAL_ORDERING` =
+triage priority (any ordering must come from a *caller* — follow the call graph);
+`LOCALLY_ORDERED` = a guard is present, verify it actually covers the consumer.
+Then **widen for what the tool cannot see** (its `blind_spots`: interprocedural
+ordering, Quasar AutoTTSync, writes in SFPU files that failed to parse) using the
+method below. The tool never clears a site — you decide. If it is unbuilt, proceed
+manually; do **not** read its absence as "no findings".
+
 ## The bug class (precise)
 A RISC-V baby core writes a Tensix CONFIG or GPR register via **MMIO** — a direct memory-mapped store from the RISC core, NOT an instruction issued to the Tensix coprocessor. That store does **not** pass through the Tensix wait gate, so a `STALLWAIT` cannot order or hold it back. If a later **Tensix instruction / MOP run / replay execution** depends on that register, you can get:
 - **write-too-late**: the consumer reads the stale value (MMIO not landed yet), or

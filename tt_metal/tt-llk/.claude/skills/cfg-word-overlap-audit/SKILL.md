@@ -16,6 +16,22 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis (it resolves every
+cfg write to its 32-bit word via cfg_defines.h, per register file, and attributes
+the thread):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks cfg-word-overlap
+    # candidates: out/audit.<arch>.json -> .checks["cfg-word-overlap"].findings
+
+`CROSS_THREAD_SHARED_WORD` = a 32-bit word ≥2 threads write — a **candidate**, not
+a race: you must still verify bit-disjoint masking (RMWCIB is byte-atomic),
+semaphore/mutex ordering, and value-invariance. `UNRESOLVED` = a field that didn't
+resolve to an ADDR32 (resolve it by hand). Note the tool partitions THCON from the
+main config file by name prefix and only partially models intra-thread full-word
+clobber — **widen for those** and for any field the ADDR32 regex missed. The tool
+never clears a word; you decide. If unbuilt, proceed manually.
+
 ## The bug class (precise)
 The three Tensix threads (T0=unpack, T1=math, T2=pack) do **not** share GPR files, but they all write the shared **backend `Config` register file** (`Config[2][...]` at `TENSIX_CFG_BASE`). LLK addresses it by *named field* (`<REG>_ADDR32` word index + `_MASK`/`_SHAMT`). Two **differently-named** fields can occupy the **same 32-bit word** — invisible from the names alone, visible only when you resolve `_ADDR32` to a number. If different threads write the same word, you can lose one thread's field. The classic example: `STACC_RELU_*` (packer) and `ALU_ACC_CTRL_Zero_Flag_disabled_*` (math/unpack) share a word; a packer full-word write zeroes the math field.
 

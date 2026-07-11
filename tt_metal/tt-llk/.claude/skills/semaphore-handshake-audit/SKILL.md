@@ -16,6 +16,20 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis:
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks semaphore-handshake
+    # candidates: out/audit.<arch>.json -> .checks["semaphore-handshake"].findings
+
+`MUTEX_IMBALANCE` = a function whose acquire/release counts differ (wrapper defs
+and RAII ctor/dtor are already excluded). `WAIT_WITHOUT_INIT` = a wait with no
+SEMINIT in the parsed tree — a **candidate only**, because the BRISC boot firmware
+inits semaphore Max out-of-tree. The tool covers only these two mechanical
+signals; **widen for** cross-thread post/get direction, cross-layer producers
+(ttnn/models), and deadlock cycles — none of which it decides (see `blind_spots`).
+It never clears a site; you decide. If unbuilt, proceed manually.
+
 ## The bug class (precise)
 The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphores[0..7]`, each a 4-bit `Value` 0–15 plus a `Max`) and **two ATGETM/ATRELM mutexes**. Unlike config-register races (covered by `cfg-word-overlap-audit`, `reconfig-stall-audit`, `mmio-race-audit`), these bugs are in the *handshake protocol*: a mis-initialized, unbalanced, wrong-direction, or wrongly-ordered post/wait/get → **lost synchronization (silent data corruption)** or **deadlock (TENSIX TIMED OUT)**.
 

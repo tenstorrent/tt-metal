@@ -16,6 +16,22 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic candidate list before manual analysis (it enumerates the
+reconfig/uninit/config-writer functions and checks each for a unit-draining stall
+before its first config write):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks reconfig-stall
+    # candidates: out/audit.<arch>.json -> .checks["reconfig-stall"].findings
+
+`NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a
+stall that orders the GPR→cfg write but drains no execution unit. Both are
+**candidates** — decide with the rule below. The tool models the latched-register
+exception only via a small allowlist (`L1_Dest_addr`); **widen for** other
+latched-vs-sampled registers (else you may false-positive) and for the "unit
+provably idle by handshake instead of stall" case. It never clears a site; you
+decide. If unbuilt, proceed manually.
+
 ## The rule (what a correct function does)
 When a flattened LLK function REWRITES config registers that a hardware execution unit reads *while running*, that unit must be **idle first** — otherwise you reprogram state out from under an in-flight op (a "reconfig escape"). The guard is a `TTI_STALLWAIT` (usually at the top of the function) whose **condition (2nd) operand** drains the matching unit:
 
