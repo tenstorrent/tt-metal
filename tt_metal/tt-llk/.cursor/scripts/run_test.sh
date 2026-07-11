@@ -306,6 +306,15 @@ _do_simulate() {
     _vlog "consume: $(_test_label) (arch=${ARCH}, mode=hardware)"
   fi
 
+  # Timestamp + resolved target at the start of every simulate/run consumer.
+  if [[ -n "$TEST_ID" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] test-id: ${TEST_ID}" >&2
+  elif [[ -n "$K_FILTER" ]]; then
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] test-id: $(_test_label) -k ${K_FILTER}" >&2
+  else
+    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] test-id: $(_test_label)" >&2
+  fi
+
   # Remove temp scripts left by runs that died before their trap fired
   find /tmp -maxdepth 1 -name 'llk_run_sim_*.sh' -mmin +60 -delete 2>/dev/null || true
 
