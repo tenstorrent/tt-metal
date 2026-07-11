@@ -253,6 +253,17 @@ class LTXDistilledPipeline(LTXPipeline):
         valid = {"s1", "s2"}
         assert set(stages).issubset(valid), f"stages must be subset of {valid} (got {stages})"
 
+        # Keyframe worker bakes the tail-padded shape (one extra latent frame) so a last-frame keyframe
+        # decodes interior; generate() pads + trims to match. Every keyframe gen — interior or last —
+        # replays this one padded shape, so the trace/upsampler/VAE below all warm at the padded count.
+        if os.environ.get("LTX_KF_TRACE_PAD", "0") in ("1", "true", "True") and self._kf_trace_anchors():
+            num_frames += TEMPORAL_COMPRESSION
+            # The upsampler + VAE decoder bake latent-T at construction; rebuild them for the padded
+            # count before the upsample/decode warmups JIT at that shape (generate() then finds them
+            # ready, so its own _ensure_* calls are no-ops). Idempotent on a base worker.
+            self._ensure_upsampler_frames(num_frames)
+            self._ensure_vae_decoder_frames(num_frames)
+
         # LTX_ITER_FAST=1 runs a single real generate, so warmup only needs to warm each stage's
         # inner_step kernels + graph state once for the trace capture: one step exercises the same
         # inner_step/Euler ops as two. The eager upsample/VAE/audio warmups are dropped there too
@@ -909,11 +920,15 @@ class LTXDistilledPipeline(LTXPipeline):
         num_frames_out = num_frames
         if images and os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True"):
             _last_lat = (num_frames - 1) // TEMPORAL_COMPRESSION  # index of the last latent frame
-            if _last_lat > 0 and any(pixel_to_latent_frame(im[1], num_frames) == _last_lat for im in images):
+            # A keyframe worker (LTX_KF_TRACE_PAD) always pads so every keyframe gen matches its one
+            # padded trace; the eager path pads only when a keyframe actually lands on the last frame.
+            _always = os.environ.get("LTX_KF_TRACE_PAD", "0") in ("1", "true", "True")
+            _last_kf = _last_lat > 0 and any(pixel_to_latent_frame(im[1], num_frames) == _last_lat for im in images)
+            if _always or _last_kf:
                 num_frames += TEMPORAL_COMPRESSION
                 logger.info(
                     f"append-token tail-pad: generating {num_frames}f, trimming to {num_frames_out}f "
-                    "(last-frame keyframe → interior)"
+                    f"({'keyframe-worker' if _always else 'last-frame keyframe'} → interior)"
                 )
 
         # Per-stage eager override. The DiT trace-capture cost is a FIXED ~2 forwards per stage
