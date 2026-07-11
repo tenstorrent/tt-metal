@@ -52,6 +52,7 @@ run from that stable raw file directly to the adjacent filtered CSV/text files.
 | `AUTODEBUG.md` | ranked review diagnosis | `dd80283b38e07b7c56bb2f24e1cc28be636a29e561b0a6a4083d032172232a0b` |
 | `AUTOFIX.md` | verified/refuted hypothesis ledger | `d0296e33e438c12b4274c8880148d94da5191139f619ca62bd6f4c0ff58e5923` |
 | `stage_review_final.md` | independent final `clean-pass` | `9c621254a95ab5be9346dc02a3fe0281102f8873f4e6f866abbffc289bb54183` |
+| `stage_review_current.md` | live-worktree independent `clean-pass` refresh | `6a6402e26d12d97f36038fe59dd465828b1aedc688fee133f1d0a4f7fbea0732` |
 | `candidates/post_projection_slice_repeated/summary.md` | 12-sample paired decode A/B | `d8888d794f2e91de02a3b806a525777e995a57ecd2cf7912b07ceeac042d6e95` |
 | `candidates/post_projection_slice_repeated/repeated_ab.log` | ordinary synchronized A/B | `cf281f276a7c7da7b4d2251591efa873ef5cf93babe845128dd412c1486dc274` |
 

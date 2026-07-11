@@ -157,3 +157,28 @@ rereview: `clean-pass`; no required work remains. See `stage_review_final.md`.
 
 Stage-owned local commit SHA:
 `ce88390ebcceb9e8d83af37ed8a166406e360370`. No push was performed.
+
+## Current live-worktree revalidation
+
+On 2026-07-11, the completed stage was revalidated at `8245b883767` before
+handoff. The four bound implementation/test hashes still exactly match
+`evidence_manifest.md`, and `ce88390e..HEAD` has no change to either decoder
+implementation or either decoder test.
+
+- `timeout 60 tt-smi -ls --local`: one Blackhole P150 visible.
+- A 1x1 TTNN mesh opened and closed successfully with
+  `trace_region_size=0` after setting `LD_LIBRARY_PATH=$PWD/build/lib`.
+- The serialized current-suite command
+  `pytest -q models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py -s`
+  passed 23 tests and skipped the 9 explicitly environment-gated
+  candidate/performance/long tests in 104.27 seconds. The active PCC,
+  mutable-trace, batch, non-aligned, cache-ownership, determinism, and both
+  layer-kind results reproduce the canonical evidence.
+- Fresh independent review `stage_review_current.md` re-derived the source and
+  gate hashes, profiler totals, functional comparisons, candidate closure,
+  watcher state, context contract, and commit scope. Verdict: `clean-pass`;
+  no required work.
+
+The live optimized-decoder files and optimized-only `context_contract.json`
+additions remain unrelated dirty state and are excluded from the fused-stage
+checkpoint. No reset, recovery, or `$autofix` rerun was needed.
