@@ -87,6 +87,11 @@ void kernel_main() {
     // batch args
     constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
     // Don't need batch; same as batch from READER args
+#ifdef SPARSE_OUTPUT
+    constexpr bool compact_output = get_compile_time_arg_val(32);
+#else
+    constexpr bool compact_output = false;
+#endif
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -129,7 +134,11 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
+#ifdef SPARSE_OUTPUT
+    constexpr auto in1_args = TensorAccessorArgs<33>();
+#else
     constexpr auto in1_args = TensorAccessorArgs<32>();
+#endif
     constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
@@ -257,7 +266,9 @@ void kernel_main() {
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
                 if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
-                    out_tensor_start_tile_id += MtNt;
+                    if constexpr (!compact_output) {
+                        out_tensor_start_tile_id += MtNt;
+                    }
                     in1_batch_tile_id += KtNt;
                     continue;
                 }

@@ -266,6 +266,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
+    const uint64_t compact_output_volume =
+        static_cast<uint64_t>(num_batch_compute) * a.logical_shape()[-2] * b.logical_shape()[-1];
+    const bool compact_output = output_tensor.logical_volume() == compact_output_volume;
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -378,7 +381,8 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)0,  // in3_tensor_stride_w
         // fuse op args
         (std::uint32_t)false,  // fuse_op
-        (std::uint32_t)false   // fuse_op_reduce_scatter
+        (std::uint32_t)false,  // fuse_op_reduce_scatter
+        (std::uint32_t)compact_output,
     };
 
     // Append TensorAccessorArgs
@@ -423,6 +427,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    mm_kernel_in1_sender_writer_defines["SPARSE_OUTPUT"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());

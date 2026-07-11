@@ -930,3 +930,63 @@ def test_dense_mask_sparse_matmul_on_independent_subdevices(device):
 
     for output in outputs:
         torch.testing.assert_close(ttnn.to_torch(output)[0, 0, 0], expected, rtol=0.1, atol=1.5)
+
+
+def test_sparse_matmul_compact_optional_output(device):
+    """A compact optional output stores only nonzero batch pairs in scan order."""
+    torch.manual_seed(0)
+    num_blocks, num_experts = 4, 8
+    m, k, n = 32, 128, 192
+    expert_for_block = [3, 1, 7, 2]
+    in0_torch = torch.randn((1, num_blocks, m, k), dtype=torch.bfloat16)
+    in1_torch = torch.randn((1, num_experts, k, n), dtype=torch.bfloat16)
+    sparsity_torch = torch.zeros((1, 1, num_blocks, num_experts), dtype=torch.bfloat16)
+    for block, expert in enumerate(expert_for_block):
+        sparsity_torch[0, 0, block, expert] = 1
+
+    in0 = ttnn.from_torch(in0_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(in1_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sparsity = ttnn.from_torch(
+        sparsity_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    compact_output = ttnn.from_torch(
+        torch.full((1, num_blocks, m, n), 99.0, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(6, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+    output = ttnn.sparse_matmul(
+        in0,
+        in1,
+        sparsity=sparsity,
+        nnz=num_blocks,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        program_config=program_config,
+        dtype=ttnn.bfloat16,
+        optional_output_tensor=compact_output,
+    )
+    output_torch = ttnn.to_torch(output).float()
+    reference = torch.stack(
+        [in0_torch[0, block].float() @ in1_torch[0, expert].float() for block, expert in enumerate(expert_for_block)]
+    ).unsqueeze(0)
+
+    assert tuple(output.shape) == (1, num_blocks, m, n)
+    assert not torch.any(output_torch == 99)
+    torch.testing.assert_close(output_torch, reference, rtol=0.1, atol=1.5)

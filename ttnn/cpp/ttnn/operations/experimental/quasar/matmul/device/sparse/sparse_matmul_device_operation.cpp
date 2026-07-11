@@ -216,8 +216,14 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& sparsity = input_tensors.at(2);
-    const bool initialize_output =
-        !operation_attributes.nnz.has_value() || operation_attributes.nnz.value() != sparsity.logical_volume();
+    const bool compact_output =
+        !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+        operation_attributes.nnz.has_value() &&
+        optional_output_tensors[0]->logical_volume() == static_cast<uint64_t>(operation_attributes.nnz.value()) *
+                                                            input_tensors.at(0).logical_shape()[-2] *
+                                                            input_tensors.at(1).logical_shape()[-1];
+    const bool initialize_output = !compact_output && (!operation_attributes.nnz.has_value() ||
+                                                       operation_attributes.nnz.value() != sparsity.logical_volume());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());

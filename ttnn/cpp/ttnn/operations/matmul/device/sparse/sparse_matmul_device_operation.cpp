@@ -261,8 +261,14 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     // non-zero. In that dense-mask case, pre-zeroing is redundant and prevents
     // independent command queues from targeting distinct sub-devices because
     // zeros_like does not carry SparseMatmulParams::sub_device_id.
-    const bool initialize_output =
-        !operation_attributes.nnz.has_value() || operation_attributes.nnz.value() != sparsity.logical_volume();
+    const bool compact_output =
+        !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+        operation_attributes.nnz.has_value() &&
+        optional_output_tensors[0]->logical_volume() == static_cast<uint64_t>(operation_attributes.nnz.value()) *
+                                                            input_tensors.at(0).logical_shape()[-2] *
+                                                            input_tensors.at(1).logical_shape()[-1];
+    const bool initialize_output = !compact_output && (!operation_attributes.nnz.has_value() ||
+                                                       operation_attributes.nnz.value() != sparsity.logical_volume());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
