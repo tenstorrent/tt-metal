@@ -135,13 +135,32 @@ returns TILE — it ignores `output_layout=ROW_MAJOR`). Untilize once (TILE→RM
 **Result:** PCC 0.99827 (unchanged). ReshapeView 7,658µs(8 ops)→11µs(3). PaddedSlice 7,459→3,761µs (transpose
 now reads RM). Device time 134.5→**123.6ms**.
 
+### EXP-4 ✅ DONE — Front-door built in NLC (drop permutes + untilizes)
+**Idea:** the embedding/expansion front-door built ``merged = [lang|unit|spk]`` channel-major (BCT) then
+permuted back to NLC for conv_pre — 2 BF16 permutes (gather NLC->BCT, merged BCT->NLC) + 3 TILE->RM
+``to_layout`` untilizes. Build it **directly in NLC**: gather returns NLC as-is; lang/spk emitted ROW_MAJOR,
+reshaped ``[B,C]->[B,1,C]`` (free view) + repeated over time; ``concat(..., dim=2)`` on the channel dim.
+**Change:** `_expand_unit_embeddings_gather` returns ``[B,t_audio,E]`` (no final permute); lang/spk embeddings
+use ``ROW_MAJOR_LAYOUT``; `_forward_one` merge concats NLC on dim=2 (no permute, no to_layout).
+**Result:** PCC 0.99827 (unchanged). BF16 permutes 4->2 ops (302->40µs); device ops 3420->3408. Front-door is
+~1% of total so time delta is small (~0.4ms) — this was an op-count/churn cleanup, not a big time win.
+
 ### Cumulative results (device time, from `tt-perf-report`, unit_seq=1024)
-- exp0 baseline (manual chunk loop): **286.2 ms**
-- exp1 (+DRAM width-slice, EXP-1): 141.0 ms
+- exp0 baseline (manual chunk loop): **286.2 ms**, 6303 ops
+- exp1 (+DRAM width-slice, EXP-1): 141.0 ms, 3420 ops
 - exp2 (+L1 resblock, EXP-2): 134.5 ms
-- exp3 (+transpose reshape, EXP-3): **123.6 ms**  → **−57% device**, **−36% wall-clock** (638→408 ms).
+- exp3 (+transpose reshape, EXP-3): 123.6 ms
+- exp4 (+NLC front-door, EXP-4): **123.2 ms**, 3408 ops  → **−57% device**, **−37% wall-clock** (638→402 ms).
 - PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512/1000) all pass unchanged.
 - useq=64 PCC 0.975 is a PRE-EXISTING short-seq accuracy bug (bit-identical with all flags off) — not ours.
+
+### Op-count note (why 3408 is still high)
+Op count is dominated by the **conv_transpose upsampling**: its DRAM height-slicing emits per-slice
+PaddedSlice(450) + SliceWrite(450) + Halo + Move + Untilize + conv. That's the next target — reducing slice
+count / restructuring the transpose is where the big op-count + block-sharded-conv(22%, 1.58% FLOPs) win is.
+Most ops show ``in0:dram_interleaved`` because activations live in DRAM between ops (read->shard->compute->
+write-back); convs show ``block/height_sharded`` (they receive the sharded tensor). Cutting that means keeping
+activations resident in L1 across more of the pipeline (done for resblock conv1->conv2; transpose still round-trips).
 
 ### Remaining top buckets (exp3) — next candidates, higher risk
 - **Conv2d block_sharded 22.4%** = conv_transpose upsampling at **1.58% FLOPs eff**. Biggest single bucket;

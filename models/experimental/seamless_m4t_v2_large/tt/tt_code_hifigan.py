@@ -595,7 +595,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         frames (``t >= t_audio_real``, where every ``cumsum_inc[s] <= t``) get ``u(t) == seq`` and
         gather an appended all-zero row — matching the old matmul's all-zero column exactly.
 
-        Returns ``[B, E_unit, t_audio]`` (channel-first) to slot into the existing lang/spk concat.
+        Returns ``[B, t_audio, E_unit]`` (NLC) to slot into the NLC lang/spk concat (channel dim).
         Replaces ``O(t_audio/32 * seq/32)`` tiny matmuls + adds + slices with one reduce + one gather.
         """
         assert batch == 1, "_expand_unit_embeddings_gather expects B == 1 (forward loops rows)."
@@ -629,13 +629,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
             seen.add(id(t))
             ttnn.deallocate(t)
 
-        # RM embedding output feeds HiFi ``_conv1d`` without a TILE→RM untilize on ``t_audio × E``.
+        # RM embedding output is already NLC ``[B, t_audio, E_unit]`` — return it as-is so the front-door
+        # concat stays NLC (no BCT permute here, no NLC permute in the caller) and feeds ``_conv1d`` directly.
         gathered = ttnn.embedding(unit_idx, weight=table, layout=ttnn.ROW_MAJOR_LAYOUT)  # [B, t_audio, E_unit]
         ttnn.deallocate(unit_idx)
         ttnn.deallocate(table)
-        expanded_BCT = ttnn.permute(gathered, (0, 2, 1))  # [B, E_unit, t_audio]
-        ttnn.deallocate(gathered)
-        return expanded_BCT
+        return gathered
 
     def _matmul_pc(self, token_rows: int, in_dim: int, out_dim: int) -> Optional[ttnn.ProgramConfig]:
         if token_rows > MATMUL_1D_SEQ_THRESHOLD:
@@ -1791,10 +1790,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
         ue = self.p.unit_embedding.weight
         use = ttnn.embedding(input_ids, weight=ue, layout=ttnn.TILE_LAYOUT)  # [B, T_units, E_unit]
 
+        # Lang/spk feed only the NLC front-door concat below, so emit them ROW_MAJOR to skip a later
+        # TILE→RM untilize (they broadcast + concat directly with the RM gather output).
         sp = self.p.speaker_embedding.weight
         la = self.p.language_embedding.weight
-        sp_e = ttnn.embedding(ttnn.squeeze(speaker_id, 1), weight=sp, layout=ttnn.TILE_LAYOUT)
-        lang_e = ttnn.embedding(ttnn.squeeze(lang_id, 1), weight=la, layout=ttnn.TILE_LAYOUT)
+        sp_e = ttnn.embedding(ttnn.squeeze(speaker_id, 1), weight=sp, layout=ttnn.ROW_MAJOR_LAYOUT)
+        lang_e = ttnn.embedding(ttnn.squeeze(lang_id, 1), weight=la, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         # ---------- duration prediction (device) ----------
         dp = self.p.dur_predictor
@@ -1853,7 +1854,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # it; padded frames (``t >= t_audio_real``) gather an all-zero row. This replaces the
         # ``O(t_audio/32 * seq/32)`` tiny-matmul + slice + concat explosion with one reduce + gather.
         frame_idx = self._cached_frame_idx_f32(t_audio)
-        expanded_BCT = self._expand_unit_embeddings_gather(
+        expanded_NLC = self._expand_unit_embeddings_gather(
             use,
             batch=batch,
             e_unit=e_unit,
@@ -1863,41 +1864,29 @@ class TTSeamlessM4Tv2CodeHifiGan:
             frame_idx=frame_idx,
         )
 
-        # ---------- broadcast lang/spk to ``t_audio`` (device) ----------
+        # ---------- broadcast lang/spk and concat in NLC (device) ----------
+        # Build ``merged_NLC = [lang | unit | spk]`` directly in NLC (concat on the channel dim). lang/spk
+        # are RM ``[B, C]`` -> ``[B, 1, C]`` (free view) -> repeat over time; the gather output is already
+        # RM NLC. Concatenating on the channel dim avoids the two permutes (gather->BCT, merged->NLC) and
+        # the three TILE->RM untilizes the old channel-major path needed.
         lang_dim = int(lang_e.shape[-1])
         spk_dim = int(sp_e.shape[-1])
-        lang_BC1 = ttnn.reshape(lang_e, (batch, lang_dim, 1))
-        spk_BC1 = ttnn.reshape(sp_e, (batch, spk_dim, 1))
+        lang_1LC = ttnn.reshape(lang_e, (batch, 1, lang_dim))
+        spk_1LC = ttnn.reshape(sp_e, (batch, 1, spk_dim))
         if t_audio == 1:
-            lang_BCT = lang_BC1
-            spk_BCT = spk_BC1
+            lang_NLC = lang_1LC
+            spk_NLC = spk_1LC
         else:
-            lang_BCT = ttnn.repeat(lang_BC1, [1, 1, t_audio])
-            spk_BCT = ttnn.repeat(spk_BC1, [1, 1, t_audio])
-            ttnn.deallocate(lang_BC1)
-            ttnn.deallocate(spk_BC1)
+            lang_NLC = ttnn.repeat(lang_1LC, [1, t_audio, 1])
+            spk_NLC = ttnn.repeat(spk_1LC, [1, t_audio, 1])
+            ttnn.deallocate(lang_1LC)
+            ttnn.deallocate(spk_1LC)
 
-        # Match expand gather's RM so concat → permute → HiFi ``_conv1d`` skips TILE→RM untilize.
-        if lang_BCT.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            lang_rm = ttnn.to_layout(lang_BCT, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(lang_BCT)
-            lang_BCT = lang_rm
-        if spk_BCT.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            spk_rm = ttnn.to_layout(spk_BCT, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(spk_BCT)
-            spk_BCT = spk_rm
-        if expanded_BCT.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-            exp_rm = ttnn.to_layout(expanded_BCT, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(expanded_BCT)
-            expanded_BCT = exp_rm
-
-        merged_BCT = ttnn.concat([lang_BCT, expanded_BCT, spk_BCT], dim=1)
-        ttnn.deallocate(lang_BCT)
-        ttnn.deallocate(expanded_BCT)
-        ttnn.deallocate(spk_BCT)
+        merged_NLC = ttnn.concat([lang_NLC, expanded_NLC, spk_NLC], dim=2)
+        ttnn.deallocate(lang_NLC)
+        ttnn.deallocate(expanded_NLC)
+        ttnn.deallocate(spk_NLC)
         ttnn.deallocate(use)
-        merged_NLC = ttnn.permute(merged_BCT, (0, 2, 1))
-        ttnn.deallocate(merged_BCT)
 
         # ---------- HiFi-GAN (device) ----------
         wav = self._hifi_gan(merged_NLC, self.p.hifi_gan, batch=batch, tlen=t_audio)
