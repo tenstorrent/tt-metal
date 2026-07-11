@@ -204,5 +204,11 @@ fresh rereview:
   `README.md`.
 - [x] No decoder optimization is deferred to multichip, full-model, or vLLM.
 
-Independent stage review and the stage-owned checkpoint SHA are appended only
-after the reviewer returns `clean-pass`.
+## Review and checkpoint
+
+The final fresh independent review returned `clean-pass`; see
+`stage_review.md`. The stage-owned implementation, tests, documentation, and
+evidence checkpoint is local commit `5e21925512d` (`Add optimized Gemma 4 31B
+decoder`). It was not pushed. The earlier review reports are preserved as
+`stage_review_initial.md` and `stage_review_second.md` with their remediations
+recorded above.
