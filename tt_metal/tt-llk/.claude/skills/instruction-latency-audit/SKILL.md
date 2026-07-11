@@ -43,10 +43,16 @@ The pass `rtl-rvtt-schedule.cc` conditionally inserts `sfpnop` after Tensix insn
 
 ## Method
 1. **Establish the freshness contract** (resolve pinned sfpi; load the live rule files; re-derive the static-delay set, the per-arch dynamic-bug errata set, and the latency table). State what you derived and from which version.
-2. **Enumerate hand-written instruction sequences** (the at-risk surface):
+2. **Enumerate hand-written instruction sequences** (the at-risk surface).
+   **Scan the KERNEL layer too, not just canonical tt-llk** — hand-written raw
+   `TTI_*`/SFPU sequences live in `ttnn/`/`models/` kernels (e.g. deepseek MoE
+   `top8_merge_sfpu.h`, `bias_bcast_sfpu.h`) and in ttnn ops that **vendor their
+   own `tt_llk` fork** under `.../kernel_includes/tt_llk/`; a canonical-tt-llk-only
+   search misses those (the largest raw-sequence surface):
    ```bash
-   cd tt_metal/tt-llk
-   grep -rInE "\bTTI_SFP[A-Z0-9_]+|\bTTI_[A-Z0-9_]+\(|sfpnop|TTI_NOP" tt_llk_* --include=*.h | grep -v /tests/
+   # from the repo root
+   grep -rInE "\bTTI_SFP[A-Z0-9_]+|\bTTI_[A-Z0-9_]+\(|sfpnop|TTI_NOP" \
+        tt_metal/tt-llk/tt_llk_* ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
    Classify each block by provenance (sfpi-generated vs raw). Skip sfpi-generated blocks.
 3. **For each raw sequence**, walk producer→consumer in program order. For every result a later instruction reads, check the producer's latency (and `xtt_delay` class) against the spacing present: enough NOPs / independent instructions to cover the latency?
