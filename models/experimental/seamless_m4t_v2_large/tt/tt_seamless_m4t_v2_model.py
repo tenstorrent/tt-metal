@@ -2997,31 +2997,45 @@ class TTSeamlessM4Tv2Model:
         # tile-padded width, so pad the vocab to a multiple of 32 with ``-1e9`` first; otherwise the
         # garbage pad columns (10082 -> 10112) can win the argmax and corrupt unit ids. Verified
         # bit-identical to the TILE argmax across tile-aligned and non-aligned ``unit_seq``.
+        #
+        # Untilize is also row-blocked (same ``_T2U_ARGMAX_ROW_BLOCK`` as argmax): a single untilize
+        # of full ``unit_seq × V`` is the dominant handoff datamove; per-block untilize+argmax keeps
+        # the same L1 CB bound and is bit-identical.
         v_t2u = int(t2u_logits_tt.shape[-1])
         v_t2u_pad = ((v_t2u + 31) // 32) * 32
-        t2u_rm = ttnn.untilize(t2u_logits_tt, use_multicore=True)
-        ttnn.deallocate(t2u_logits_tt)
-        if v_t2u_pad != v_t2u:
-            t2u_rm_p = ttnn.pad(t2u_rm, [(0, 0), (0, 0), (0, v_t2u_pad - v_t2u)], value=-1e9)
-            ttnn.deallocate(t2u_rm)
-            t2u_rm = t2u_rm_p
-        # The multicore argmax reduce-core CBs grow with (unit_seq * num_cores), so one call over a
-        # long speech sequence overflows L1. Argmax is per-row independent, so slice unit_seq into
-        # row-blocks, argmax each, and concat — bounded CBs, identical result.
-        seq_rows = int(t2u_rm.shape[-2])
+        seq_rows = int(t2u_logits_tt.shape[-2])
+        b_rows = int(t2u_logits_tt.shape[0])
         block = self._T2U_ARGMAX_ROW_BLOCK
+
+        def _argmax_rm_block(t2u_rm_blk: ttnn.Tensor) -> ttnn.Tensor:
+            rm = t2u_rm_blk
+            if v_t2u_pad != v_t2u:
+                rm_p = ttnn.pad(rm, [(0, 0), (0, 0), (0, v_t2u_pad - v_t2u)], value=-1e9)
+                ttnn.deallocate(rm)
+                rm = rm_p
+            out = ttnn.argmax(rm, dim=-1)
+            ttnn.deallocate(rm)
+            return out
+
         if seq_rows <= block:
-            unit_ids_argmax = ttnn.argmax(t2u_rm, dim=-1)  # [B, unit_seq] uint32
-            ttnn.deallocate(t2u_rm)
+            t2u_rm = ttnn.untilize(t2u_logits_tt, use_multicore=True)
+            ttnn.deallocate(t2u_logits_tt)
+            unit_ids_argmax = _argmax_rm_block(t2u_rm)
         else:
-            b_rows = int(t2u_rm.shape[0])
             parts = []
             for start in range(0, seq_rows, block):
                 end = min(start + block, seq_rows)
-                blk = ttnn.slice(t2u_rm, [0, start, 0], [b_rows, end, v_t2u_pad], (1, 1, 1))
-                parts.append(ttnn.argmax(blk, dim=-1))
-                ttnn.deallocate(blk)
-            ttnn.deallocate(t2u_rm)
+                tile_blk = ttnn.slice(
+                    t2u_logits_tt,
+                    [0, start, 0],
+                    [b_rows, end, v_t2u],
+                    (1, 1, 1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                rm_blk = ttnn.untilize(tile_blk, use_multicore=True)
+                ttnn.deallocate(tile_blk)
+                parts.append(_argmax_rm_block(rm_blk))
+            ttnn.deallocate(t2u_logits_tt)
             unit_ids_argmax = ttnn.concat(parts, dim=-1)  # [B, unit_seq] uint32
             for _p in parts:
                 ttnn.deallocate(_p)
@@ -3029,10 +3043,8 @@ class TTSeamlessM4Tv2Model:
         # On-device unit-id remap (EOS/pad mask + vocoder offset). Mirrors the HF host remap
         #   voc = (unit == eos | pad < 0.5 | unit == pad_id) ? pad_id : unit - vocoder_offset
         # Integer math runs in int32 (bf16 cannot represent unit ids up to ``t2u_vocab_size`` exactly,
-        # and uint32 elementwise ``where`` diverges); raw ids and the vocoder input are converted to
-        # uint32 ROW_MAJOR at the boundary — byte-identical to the prior host ``from_torch`` path,
-        # including sub-offset wraparound. This keeps the T2U->vocoder handoff device-resident,
-        # removing the per-utterance D2H + two H2D stalls between the two device-heavy stages.
+        # and uint32 elementwise ``where`` diverges). ``ttnn.where`` requires TILE for non-sharded
+        # inputs — tilize for remap, then emit uint32 ROW_MAJOR at the vocoder boundary.
         unit_i32 = (
             unit_ids_argmax if unit_ids_argmax.dtype == ttnn.int32 else ttnn.typecast(unit_ids_argmax, ttnn.int32)
         )

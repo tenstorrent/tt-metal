@@ -569,7 +569,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # Gather table: use [B, T_units, E_unit] -> row-major [T_units + 1, E_unit] with a zero tail
         # row so out-of-range (padding) indices gather zeros. ``use`` itself is owned by the caller,
         # so never deallocate it here — only intermediates this method creates.
-        use_rm = ttnn.to_layout(use, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if use.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            use_rm = ttnn.to_layout(use, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            use_rm = use
         use_tbl = ttnn.reshape(use_rm, (seq, e_unit))
         table = ttnn.pad(use_tbl, [(0, 1), (0, 0)], value=0.0)  # [T_units + 1, E_unit]
         seen: set[int] = set()
@@ -579,7 +582,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             seen.add(id(t))
             ttnn.deallocate(t)
 
-        gathered = ttnn.embedding(unit_idx, weight=table, layout=ttnn.TILE_LAYOUT)  # [B, t_audio, E_unit]
+        # RM embedding output feeds HiFi ``_conv1d`` without a TILE→RM untilize on ``t_audio × E``.
+        gathered = ttnn.embedding(unit_idx, weight=table, layout=ttnn.ROW_MAJOR_LAYOUT)  # [B, t_audio, E_unit]
         ttnn.deallocate(unit_idx)
         ttnn.deallocate(table)
         expanded_BCT = ttnn.permute(gathered, (0, 2, 1))  # [B, E_unit, t_audio]
@@ -1673,8 +1677,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # ---------- embeddings (all on device) ----------
         # Tables uploaded ROW_MAJOR (``_vocoder_embedding_weight_row_major``); ``layout`` here is the *output* layout.
+        # Unit emb stays TILE for duration LN/linear; expand gather + HiFi front-door use RM (below).
         ue = self.p.unit_embedding.weight
-        use = ttnn.embedding(input_ids, weight=ue, layout=ttnn.TILE_LAYOUT)  # [B, T_units, E_unit] (TILE-padded)
+        use = ttnn.embedding(input_ids, weight=ue, layout=ttnn.TILE_LAYOUT)  # [B, T_units, E_unit]
 
         sp = self.p.speaker_embedding.weight
         la = self.p.language_embedding.weight
@@ -1685,7 +1690,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dp = self.p.dur_predictor
         e_unit = int(dp.conv1.in_channels)
         # Drop TILE padding on the time / channel axes so ``seq`` matches ``cumsum_*`` and
-        # ``use_BEC @ H`` is ``[B,E,T] @ [B,T,t_audio]`` (otherwise last dim can be e.g. 106 vs T=7).
+        # expand gather sees logical ``[B, T, E]``.
         use_trim = ttnn.slice(use, [0, 0, 0], [batch, seq, e_unit], (1, 1, 1))
         use = use_trim
         log_dur = self._dur_predictor_dev(use, batch=batch, seq=seq, dp=dp)  # [B, T_units] bf16
@@ -1761,6 +1766,20 @@ class TTSeamlessM4Tv2CodeHifiGan:
             spk_BCT = ttnn.repeat(spk_BC1, [1, 1, t_audio])
             ttnn.deallocate(lang_BC1)
             ttnn.deallocate(spk_BC1)
+
+        # Match expand gather's RM so concat → permute → HiFi ``_conv1d`` skips TILE→RM untilize.
+        if lang_BCT.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            lang_rm = ttnn.to_layout(lang_BCT, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(lang_BCT)
+            lang_BCT = lang_rm
+        if spk_BCT.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            spk_rm = ttnn.to_layout(spk_BCT, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(spk_BCT)
+            spk_BCT = spk_rm
+        if expanded_BCT.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            exp_rm = ttnn.to_layout(expanded_BCT, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(expanded_BCT)
+            expanded_BCT = exp_rm
 
         merged_BCT = ttnn.concat([lang_BCT, expanded_BCT, spk_BCT], dim=1)
         ttnn.deallocate(lang_BCT)

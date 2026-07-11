@@ -1077,6 +1077,8 @@ def _conv1d_config_for(
         deallocate_activation=True,
         enable_weights_double_buffer=True,
         enable_act_double_buffer=True,
+        # Emit RM so consecutive duration/decoder convs skip TILE↔RM ping-pong (vocoder5 pattern).
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     if activation:
         _ACTIVATION_OP_TYPES = {
@@ -1094,6 +1096,15 @@ def _conv1d_config_for(
         conv_kwargs["enable_act_double_buffer"] = False
         conv_kwargs["enable_weights_double_buffer"] = False
     return ttnn.Conv1dConfig(**conv_kwargs)
+
+
+def _ensure_tile_bf16_nlc(x: ttnn.Tensor) -> ttnn.Tensor:
+    """Tilize NLC activations for LN / attention / linear consumers."""
+    if x.get_layout() == ttnn.TILE_LAYOUT and x.dtype == ttnn.bfloat16:
+        return x
+    out = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(x)
+    return out
 
 
 def _conv1d_prep_cache_key(
@@ -1518,8 +1529,13 @@ def _conv1d_same_impl(
     activation: Optional[str] = None,
     prep_cache: Optional[Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]] = None,
     deallocate_input: bool = False,
+    keep_row_major: bool = False,
 ) -> ttnn.Tensor:
-    """Single-shot same-padding Conv1d (``x_rm`` is NLC row-major)."""
+    """Single-shot same-padding Conv1d (``x_rm`` is NLC row-major).
+
+    When ``keep_row_major=True``, leave the conv output in ROW_MAJOR (for a following
+    ``_conv1d_same`` / mask multiply). Otherwise tilize for LN / attention / linear.
+    """
     batch = int(x_rm.shape[0])
     seq = int(sequence_length)
     conv_config = _conv1d_config_for(
@@ -1600,11 +1616,13 @@ def _conv1d_same_impl(
     out_nlc = _conv1d_out_to_nlc(out_tt, batch=batch, out_channels=out_channels)
     if out_nlc is not out_tt:
         ttnn.deallocate(out_tt)
-    if out_nlc.get_layout() != ttnn.TILE_LAYOUT:
-        out_tile = ttnn.to_layout(out_nlc, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(out_nlc)
-        return out_tile
-    return out_nlc
+    if keep_row_major:
+        if out_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            out_rm = ttnn.to_layout(out_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out_nlc)
+            return out_rm
+        return out_nlc
+    return _ensure_tile_bf16_nlc(out_nlc)
 
 
 def _conv1d_same(
@@ -1621,6 +1639,7 @@ def _conv1d_same(
     compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     activation: Optional[str] = None,
     prep_cache: Optional[Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]]] = None,
+    keep_row_major: bool = False,
 ) -> ttnn.Tensor:
     """Same-padding Conv1d stride 1 via ``ttnn.conv1d`` (activations ``[B,S,C]`` NLC).
 
@@ -1631,6 +1650,9 @@ def _conv1d_same(
 
     For ``sequence_length > 256``, ``_conv1d_config_for`` disables conv double-buffering.
     Wide decoder conv (``in_channels >= 512``) uses 256-row S chunks with block sharding.
+
+    ``keep_row_major=True`` leaves the output ROW_MAJOR so a following conv / mask multiply
+    skips an intermediate tilize (caller must tilize before LN / attention / linear).
     """
     batch = int(x_tile.shape[0])
     seq = int(sequence_length)
@@ -1654,6 +1676,7 @@ def _conv1d_same(
             compute_kernel_config=compute_kernel_config,
             activation=activation,
             prep_cache=prep_cache,
+            keep_row_major=keep_row_major,
         )
 
     chunk_size = _CONV1D_WIDE_CHUNK_ROWS
@@ -1685,6 +1708,7 @@ def _conv1d_same(
             activation=activation,
             prep_cache=prep_cache,
             deallocate_input=True,
+            keep_row_major=True,  # stitch in RM; tilize once after concat if needed
         )
         out_start = start - in_start
         if out_start > 0 or chunk_rows < win_len:
@@ -1702,11 +1726,14 @@ def _conv1d_same(
 
     ttnn.deallocate(x_rm)
     if len(chunks) == 1:
-        return chunks[0]
-    out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    for c in chunks:
-        ttnn.deallocate(c)
-    return out
+        out = chunks[0]
+    else:
+        out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        for c in chunks:
+            ttnn.deallocate(c)
+    if keep_row_major:
+        return out
+    return _ensure_tile_bf16_nlc(out)
 
 
 class TTSeamlessM4Tv2TextToUnitEncoder:
@@ -2478,7 +2505,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             compute_kernel_config=self._conv_compute_cfg,
             activation="relu",
             prep_cache=self._conv1d_prepared_cache,
+            keep_row_major=True,
         )
+        h = _ensure_tile_bf16_nlc(h)
         h = self._layer_norm(h, weight=p.ln1.weight, bias=p.ln1.bias)
         h = ttnn.multiply(h, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
@@ -2495,7 +2524,9 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             compute_kernel_config=self._conv_compute_cfg,
             activation="relu",
             prep_cache=self._conv1d_prepared_cache,
+            keep_row_major=True,
         )
+        h = _ensure_tile_bf16_nlc(h)
         h = self._layer_norm(h, weight=p.ln2.weight, bias=p.ln2.bias)
 
         # Final projection in float32 (weights uploaded as fp32 in preprocessing). Cast activations
@@ -2565,8 +2596,16 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             compute_kernel_config=self._conv_compute_cfg,
             activation="relu",
             prep_cache=self._conv1d_prepared_cache,
+            keep_row_major=True,
         )
-        hidden = ttnn.multiply(hidden, mask_bc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Mask multiply stays RM so conv2 skips TILE→RM untilize.
+        if mask_bc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            mask_rm = ttnn.to_layout(mask_bc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            mask_rm = mask_bc
+        hidden = ttnn.multiply(hidden, mask_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if mask_rm is not mask_bc:
+            ttnn.deallocate(mask_rm)
         hidden = _conv1d_same(
             self.device,
             hidden,
@@ -2579,7 +2618,10 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
             padding=3,
             compute_kernel_config=self._conv_compute_cfg,
             prep_cache=self._conv1d_prepared_cache,
+            keep_row_major=True,
         )
+        # One tilize before residual add + LN (residual is TILE).
+        hidden = _ensure_tile_bf16_nlc(hidden)
         hidden = ttnn.add(residual, hidden, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden = self._layer_norm(
             hidden,
