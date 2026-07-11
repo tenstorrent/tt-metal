@@ -33,23 +33,39 @@ _HIFIGAN_MAX_CONV1D_TLEN = 4096
 # Round ``t_audio`` up to stabilize shape-specialized vocoder programs; padded tail is masked/cropped.
 _VOCODER_TAUDIO_BUCKET = 256
 
-# Element budget (batch*timeline*in_channels) under which a single-shot HEIGHT-sharded conv1d fits BH L1
-# without slicing. Every B=1 vocoder stage sits at <= 6.55M elems; above it the timeline is width-sliced.
-_VOCODER_L1_SINGLESHOT_ELEMS = 8 * 1024 * 1024
+# Estimated per-core L1 ceiling (bytes) for a single-shot HEIGHT-sharded conv1d; above it the timeline is
+# width-sliced. BH L1 is ~1.5 MB/core; keep headroom for conv CBs / halo / intermediates.
+_VOCODER_L1_SINGLESHOT_BYTES = 1_200_000
+# BH worker-grid core count used to estimate the per-core activation shard (conservative).
+_VOCODER_L1_SINGLESHOT_CORES = 110
 
 
-def _vocoder_fits_l1_singleshot(timeline: int, in_channels: int, batch: int = 1) -> bool:
-    """Whether one HEIGHT-sharded conv1d over this activation fits BH L1 single-shot (no slicing)."""
-    return int(batch) * int(timeline) * int(in_channels) <= _VOCODER_L1_SINGLESHOT_ELEMS
+def _vocoder_fits_l1_singleshot(timeline: int, in_channels: int, kernel_size: int = 11, batch: int = 1) -> bool:
+    """Whether one HEIGHT-sharded conv1d fits BH L1 single-shot (no slicing).
+
+    NOT an element-count test: HEIGHT sharding splits only the timeline across cores, but the weight
+    tensor (``in_ch*out_ch*k``, ``out==in`` for resblocks) is replicated on every core and dominates L1
+    at high channel counts — 256ch/k11 (~720 KB bf8, ~1.44 MB double-buffered) overflows even at a short
+    7680-row timeline, while 16ch/k11 fits at 491520 rows. A plain ``batch*timeline*in_channels`` budget
+    mis-ranks these (256ch/7680 = 1.97M "fits" but crashes; 16ch/491520 = 7.86M is fine), so estimate the
+    per-core footprint (replicated weights + timeline-sharded activation) instead."""
+    ch = int(in_channels)
+    k = int(kernel_size)
+    cores = _VOCODER_L1_SINGLESHOT_CORES
+    weight_bytes = ch * ch * k  # bfloat8_b weights (out_ch == in_ch for resblock convs), 1 B/elem
+    rows_per_core = max(1, (int(batch) * int(timeline) + cores - 1) // cores)
+    act_bytes = rows_per_core * ch * 2 * 3  # bf16 activation, ~3 live buffers (in / out / halo)
+    est = weight_bytes * 2 + act_bytes  # weights counted twice for prep + runtime headroom
+    return est <= _VOCODER_L1_SINGLESHOT_BYTES
 
 
 def _resolve_resblock_shard_layout(
     *, in_channels: int, kernel_size: int, input_length: int, batch: int = 1
 ) -> Optional[ttnn.TensorMemoryLayout]:
-    """HEIGHT sharding for a resblock conv, kept even on long timelines while K fits and the activation
-    fits L1 (single-shot, no auto-slice); otherwise defer to the generic resolver."""
+    """HEIGHT sharding for a resblock conv, kept even on long timelines while K fits and the conv fits L1
+    single-shot (no auto-slice); otherwise defer to the generic resolver."""
     if int(in_channels) * int(kernel_size) <= _HEIGHT_SHARD_K_MAX and _vocoder_fits_l1_singleshot(
-        input_length, in_channels, batch
+        input_length, in_channels, kernel_size, batch
     ):
         return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     return _resolve_conv_shard_layout(
@@ -1116,34 +1132,53 @@ class TTSeamlessM4Tv2CodeHifiGan:
         run_single_shot_l1 = (
             shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             and int(stride) == 1
-            and _vocoder_fits_l1_singleshot(seq, in_channels, batch)
+            and _vocoder_fits_l1_singleshot(seq, in_channels, kernel_size, batch)
         )
+        # The single-shot HEIGHT-sharded L1 fit is an estimate; on a marginal overflow (op-slicing
+        # "found_valid_config" or a CB/L1 clash) for the long-timeline path, keep ``x_in`` alive and fall
+        # back to the DRAM width-slice below, which handles any timeline. (S2ST @ 2048/4096: some resblock
+        # stages sit just past the true L1 limit and crashed here before the fallback existed.)
+        single_can_fallback = run_single_shot_l1 and seq > _HIFIGAN_MAX_CONV1D_TLEN
         if seq <= _HIFIGAN_MAX_CONV1D_TLEN or run_single_shot_l1:
-            out, out_len = self._conv1d_run(
-                x_in,
-                weight=weight,
-                bias=bias,
-                batch=batch,
-                input_length=seq,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                groups=groups,
-                dilation=dilation,
-                fused_post_activation=fused_post_activation,
-                deallocate_input=rm_buf is not None,
-                shard_layout=shard_layout,
-                timeline_chunked=False,
-                row_major_output=row_major_output,
-                keep_sharded_output=keep_sharded_output,
-                l1_full=l1_full and run_single_shot_l1,
-            )
-            return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
+            try:
+                out, out_len = self._conv1d_run(
+                    x_in,
+                    weight=weight,
+                    bias=bias,
+                    batch=batch,
+                    input_length=seq,
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    kernel_size=kernel_size,
+                    stride=stride,
+                    padding=padding,
+                    groups=groups,
+                    dilation=dilation,
+                    fused_post_activation=fused_post_activation,
+                    deallocate_input=(rm_buf is not None) and not single_can_fallback,
+                    shard_layout=shard_layout,
+                    timeline_chunked=False,
+                    row_major_output=row_major_output,
+                    keep_sharded_output=keep_sharded_output,
+                    l1_full=l1_full and run_single_shot_l1,
+                )
+            except RuntimeError:
+                if not single_can_fallback:
+                    raise
+                # x_in preserved (dealloc deferred); drop through to the DRAM width-slice below.
+            else:
+                if single_can_fallback and rm_buf is not None:
+                    ttnn.deallocate(x_in)
+                return self._conv1d_trim_timeline(
+                    out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels
+                )
 
-        # Long timeline: ``ttnn.conv1d`` width-slices the timeline in DRAM itself (one op, device-managed
-        # halo). DRAM width-slicing needs the activation in DRAM; interleave a sharded input first.
+        # Long timeline / single-shot fallback: HEIGHT sharding is only valid for the single-shot L1 conv
+        # above; leaving it set here propagates a too-large shard spec into the DRAM-slice conv and makes
+        # it fail too, so drop back to auto sharding.
+        shard_layout = None
+        # ``ttnn.conv1d`` width-slices the timeline in DRAM itself (one op, device-managed halo).
+        # DRAM width-slicing needs the activation in DRAM; interleave a sharded input first.
         if ttnn.is_sharded(x_in):
             x_int = ttnn.sharded_to_interleaved(x_in, ttnn.DRAM_MEMORY_CONFIG)
             if rm_buf is not None:
