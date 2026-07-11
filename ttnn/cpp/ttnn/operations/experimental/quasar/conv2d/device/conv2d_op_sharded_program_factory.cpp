@@ -706,7 +706,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
+    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
+    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
+    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
+    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
+    // (copy_block_matmul_partials reload + re-accumulate), which IS ported/validated on Quasar. This only
+    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
+    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
+    const bool packer_l1_acc_en = false;
+    (void)determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
