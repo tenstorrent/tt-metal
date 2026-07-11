@@ -206,6 +206,20 @@ share it as residual + first-leaky input across all ``num_kernels`` resblocks, s
 - NOTE: EXP-6's "dead end" was only the sharded/row_major route. L1-interleaved intermediates still OOM the conv
   circular buffers (2.78MB > 1.5MB L1) — can't keep activations resident in L1 at the big stages.
 
+### EXP-10 ❌ DEAD END — bring conv I/O to L1 (avoid InterleavedToSharded/ShardedToInterleaved ~16%)
+**Goal:** kill the remaining I2S(8.4%)+S2I(8%) DRAM round-trip around each resblock conv. Reference models
+(SDXL resnet `tt_resnetblock2d.py`) keep activations in L1: ``sharded_to_interleaved(x, L1_MEMORY_CONFIG)``
+(not DRAM), reshard in L1, and use ``slice_config=ttnn.Conv2dL1FullSliceConfig`` (SliceType::L1_FULL). conv1d
+doc confirms: *"inputs already in L1 run fully in L1; DRAM inputs are auto width-sliced through DRAM."*
+**Tested L1-full on the vocoder conv shapes (single conv, L1 input):**
+  - k=3: OK at 102400x64 / 204800x32, but OOM at 409600x16.
+  - k=7, k=11: OOM at EVERY stage ("circular buffers grow to 2.78MB > max L1 1.5MB").
+**Why:** a DRAM input is *streamed* (small CB), but an L1-resident input counts against the CB budget, so the
+k=7/11 (and biggest-stage k=3) convs can't run L1-full. They MUST DRAM-slice → DRAM-interleaved I/O → I2S/S2I.
+The resnet hack works there only because those convs fit L1-full. **Conclusion: the ~16% conv-I/O round-trip is
+inherent for the vocoder's k=7/11 long-timeline convs on BH.** Needs a ttnn change (sharded conv output, or a
+smaller-CB conv) to remove — not a model-level fix. Best committed state stays exp11 (48.4 ms). Probe: scratchpad/l1full.py.
+
 ### Remaining top buckets (exp5) — next candidates
 - **InterleavedToSharded 26.9% (26.8ms, 94 ops)** — now #1. Resharding DRAM→L1 for each conv input (the
   activations still live in DRAM between ops). Cutting it means keeping more of the pipeline resident in L1
