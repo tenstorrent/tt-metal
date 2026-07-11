@@ -105,13 +105,15 @@ case "$ARCH" in
   *) echo "unknown arch $ARCH" >&2; exit 1;;
 esac
 
+# sfpi-gcc version whose system-header dirs we add (single source of truth).
+CLANG_VER="${SFPI_GCC_VER:-15.1.0}"
 FLAGS=(-x c++-header --target=$TGT -D__INT32_TYPE__=long
   -DENV_LLK_INFRA -D$DEF -DTENSIX_FIRMWARE -DCOMPILE_FOR_TRISC -std=c++17 -nostdinc++ -nostdinc
   -DLLK_TRISC_UNPACK -DLLK_TRISC_MATH -DLLK_TRISC_PACK -DENABLE_LLK_ASSERT -DRUNTIME_FORMATS $BOOT
-  -isystem "$SFPI/compiler/lib/gcc/riscv-tt-elf/15.1.0/include/"
+  -isystem "$SFPI/compiler/lib/gcc/riscv-tt-elf/$CLANG_VER/include/"
   -isystem "$SFPI/compiler/riscv-tt-elf/include"
-  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/15.1.0"
-  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/15.1.0/riscv-tt-elf"
+  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/$CLANG_VER"
+  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/$CLANG_VER/riscv-tt-elf"
   -isystem "$SFPI/include"
   -I"$SHIM"
   -I"$LLK_ROOT/common" -I"$LLK_ROOT/$LLK/common/inc" -I"$LLK_ROOT/$LLK/common/inc/sfpu"
@@ -147,6 +149,17 @@ fi
 # whole tree is still parsed above (cross-file context); only OUTPUT is scoped.
 CHANGED_ARG=()
 if [ "$CHANGED" -eq 1 ]; then
+  # Validate the diff base resolves — INCLUDING the default "main". On a shallow/
+  # detached checkout with no local 'main', `git diff main...HEAD` fails silently
+  # (2>/dev/null below) -> empty changed-set -> __none__ -> every finding scoped
+  # away -> 0 findings, exit 0: a false all-clear. Refuse instead.
+  if ! git -C "$METAL_DIR" rev-parse --verify --quiet "$CHANGED_BASE^{commit}" >/dev/null 2>&1; then
+    echo "llk-audit: --changed base '$CHANGED_BASE' does not resolve to a commit in" >&2
+    echo "           this checkout (shallow/detached?). Refusing to silently scope to" >&2
+    echo "           nothing (a false all-clear). Pass an explicit --changed <ref> that" >&2
+    echo "           exists here (e.g. origin/main, or a fetched base)." >&2
+    exit 1
+  fi
   mapfile -t CHG < <(
     { git -C "$METAL_DIR" diff --name-only "$CHANGED_BASE"...HEAD 2>/dev/null
       git -C "$METAL_DIR" diff --name-only 2>/dev/null

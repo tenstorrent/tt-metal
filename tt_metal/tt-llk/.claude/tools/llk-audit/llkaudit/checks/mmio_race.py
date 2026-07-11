@@ -12,7 +12,9 @@ ordering primitive follows it within the enclosing function:
 An ordered in-stream Tensix cfg write (REG2FLOP/WRCFG/SETC16) does NOT order a
 prior MMIO write, so it is never counted as a guard.
 
-Hints: LOCALLY_ORDERED | NO_LOCAL_ORDERING (the interprocedural triage queue).
+Hints: LOCALLY_ORDERED | NO_LOCAL_ORDERING (the interprocedural triage queue) |
+AUTOTTSYNC_ORDERED (Quasar only — the per-RISC TTSync HW-orders the write, so an
+otherwise-unguarded write is not a race candidate there).
 """
 from __future__ import annotations
 

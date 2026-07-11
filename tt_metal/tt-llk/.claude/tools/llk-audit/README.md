@@ -193,7 +193,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
 The HW claims the checkers encode are grounded in the tt-isa-docs
 (`BackendConfiguration.md`: the `Config` vs `ThreadConfig` split and that `SETC16`
 alone writes `ThreadConfig`; `RMWCIB.md`: byte-atomic masked RMW of `Config`;
-`STALLWAIT.md`: `TRISC_CFG` = condition C13, and the drain-unit condition bits;
-`MemoryOrdering.md`: the store-then-store race). Known modeling limitations
+`STALLWAIT.md`: the `TRISC_CFG` stall condition, and the drain-unit condition
+bits; `MemoryOrdering.md`: the store-then-store race). The checkers match
+`TRISC_CFG` by **token name**, not by a numeric value, so they are arch-correct
+even though the encoding differs per arch (Wormhole `TRISC_CFG` = condition C13;
+Blackhole = `0x400` / bit 10; Quasar = index 21). Known modeling limitations
 (StateID banks, STALLWAIT block-mask coverage, interprocedural linkage) are
 listed per check in `blind_spots`.

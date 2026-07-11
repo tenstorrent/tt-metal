@@ -23,7 +23,6 @@ class Function:
     file: str
     begin_off: int
     end_off: int
-    line: int
 
     def contains(self, file: str, off: int) -> bool:
         return file == self.file and self.begin_off <= off <= self.end_off
@@ -52,7 +51,6 @@ class FactBase:
                 f["file"],
                 f["off"],
                 f.get("end_off", f["off"]),
-                f.get("line", 0),
             )
             for f in clean
             if f["family"] == "function"

@@ -6,8 +6,9 @@ config word, written by more than one Tensix thread.
 
 Recall: resolve every config write to its 32-bit word via cfg_defines.h,
 attribute the writing thread by file, and report words written by >= 2 distinct
-threads. Whether a given pair actually races (masking disjoint bits,
-semaphore/mutex ordering) is the LLM's call.
+threads. The tool ANNOTATES masking safety (SAFE_BY_MASKING / POTENTIAL_CLOBBER /
+UNKNOWN — see _safety); semaphore/mutex ordering and value-invariance remain the
+LLM's call.
 
 Register FILE separation (per tt-isa-docs BackendConfiguration.md): the hardware
 has TWO separate arrays, both indexed from 0, so their ADDR32 numbers alias and
@@ -32,16 +33,23 @@ class CfgWordOverlap(Check):
     name = "cfg-word-overlap"
     description = "Fields sharing one 32-bit CONFIG word written by >=2 threads"
     blind_spots = (
-        "Whether a shared word actually races is deferred: disjoint-bit masking "
-        "(RMWCIB is byte-atomic), semaphore/mutex ordering, and value-invariance "
-        "are the LLM's call. Writes whose field name does not resolve to an "
+        "Disjoint-bit masking IS annotated by the tool (safety = SAFE_BY_MASKING / "
+        "POTENTIAL_CLOBBER / UNKNOWN — do not redo it); what stays deferred is "
+        "semaphore/mutex ordering and value-invariance — the LLM's call. Writes "
+        "whose field name does not resolve to an "
         "ADDR32 in cfg_defines.h are listed as 'unresolved'. Intra-thread "
         "full-word clobber (INTRA_THREAD_CLOBBER) is a candidate: a full-word "
         "write that intentionally sets the entire word (no separate masked "
         "sibling) is benign, and a sibling written only out-of-tree is missed. "
         "Config has two banks selected by CFG_STATE_ID; the tool does not model "
         "StateID, so it may over-approximate (flag a word when the threads use "
-        "different banks)."
+        "different banks). Two known under-reports (LLM must widen): (a) a "
+        "RUNTIME/loop index offset — cfg[FIELD_ADDR32 + i] — resolves the BASE "
+        "word only; sibling words base+1.. are not enumerated; (b) the masking "
+        "annotation derives a writer's bitmask from the field's own _MASK, NOT "
+        "the literal 3rd MASK operand of cfg_reg_rmw_tensix<ADDR32,SHAMT,MASK> — "
+        "a wider mask can under-report bits and mis-label SAFE_BY_MASKING (the "
+        "CROSS_THREAD_SHARED_WORD finding is still emitted regardless)."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
@@ -71,8 +79,17 @@ class CfgWordOverlap(Check):
             word, field = registry.resolve_word(pw.get("index_text", ""), fb.addr32)
             if word is not None:
                 add("CONFIG", word, field, pw, f"mmio:{kind}")
-            elif field:
-                unresolved.append(self._unresolved(pw, field))
+            else:
+                # This IS a config write (kind ∈ CFG_WRITE_KINDS) we couldn't
+                # resolve to a word — including a NON-LITERAL index like
+                # cfg[upk0_reg]= (resolve_word returns (None, None), so `field`
+                # is None). Surface it UNRESOLVED; never silently drop it (the
+                # blind_spots contract promises unresolved cfg writes are shown).
+                unresolved.append(
+                    self._unresolved(
+                        pw, field or pw.get("index_text", "") or "<runtime index>"
+                    )
+                )
         for c in fb.family("call"):
             # cfg_reg_rmw_tensix<FIELD> (field in the callee template text) and
             # the direct RMW helpers cfg_rmw/cfg_rmw_gpr (field in arg0). The
@@ -187,14 +204,6 @@ class CfgWordOverlap(Check):
         return findings + unresolved
 
     @staticmethod
-    def _is_full_word(how: str) -> bool:
-        # A write of all 32 bits: a raw cfg[]= store (cfg32/cfg_ptr/mmio_ptr) or
-        # WRCFG (WRCFG_32b/128b). NOT a masked/sized write (RMWCIB, cfg_rmw,
-        # cfg_reg_rmw_tensix, SETC16, REG2FLOP) and NOT a 16-bit cfg16 store.
-        h = how.upper()
-        return "CFG32" in h or "CFG_PTR" in h or "MMIO_PTR" in h or "WRCFG" in h
-
-    @staticmethod
     def _is_masked(how: str) -> bool:
         h = how.lower()
         return "cfg_reg_rmw_tensix" in h or "cfg_rmw" in h or "rmwcib" in h
@@ -257,8 +266,6 @@ class CfgWordOverlap(Check):
         destructive overwrite (not a concurrency race; a mutex cannot fix it, a
         masked RMW can). Candidate only: a full-word write that intentionally sets
         the entire word is benign — the LLM confirms."""
-        from collections import defaultdict
-
         out: list[Finding] = []
         for (ns, word), ws in sorted(writers.items()):
             if ns != "CONFIG":
@@ -267,7 +274,7 @@ class CfgWordOverlap(Check):
             for w in ws:
                 if w["thread"] == "UNKNOWN":
                     continue
-                if self._is_full_word(w["how"]):
+                if registry.write_is_full_word(w["how"]):
                     per_thread[w["thread"]]["full"].append(w)
                 elif self._is_masked(w["how"]):
                     per_thread[w["thread"]]["masked"].append(w)

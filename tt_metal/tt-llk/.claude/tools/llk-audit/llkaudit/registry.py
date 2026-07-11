@@ -249,11 +249,13 @@ def is_semaphore_wrapper_def(fn_name: str) -> bool:
 def is_ctor_or_dtor(fn_name: str) -> bool:
     """RAII acquire-in-ctor / release-in-dtor is balanced at the object level,
     not per-function, so those are skipped. A destructor's name starts with '~';
-    a constructor's captured name is its (CamelCase) TYPE name. Match only a
-    CamelCase type-like name (leading uppercase AND no underscore) so we do NOT
-    also swallow a genuine capitalized_snake or `Capitalized` helper function —
-    the earlier `fn_name[0].isupper()` test was too broad and could silently drop
-    a real acquire/release imbalance in any capitalized-named function."""
+    a constructor's captured name is its (CamelCase) TYPE name. Match a CamelCase
+    type-like name (leading uppercase AND no underscore). This still classifies a
+    bare no-underscore `Capitalized` helper as a ctor/dtor (accepted — LLK funcs
+    are snake_case/`_llk_*`, so this is vanishingly unlikely); it does NOT swallow
+    a `Capitalized_snake` name (it has an underscore). It is tighter than the
+    earlier bare `fn_name[0].isupper()` test, which dropped EVERY capitalized-named
+    function (incl. capitalized_snake) from the balance check."""
     if not fn_name:
         return False
     if fn_name.startswith("~"):
@@ -380,12 +382,9 @@ def field_bitmask(field_token: str, defines: dict):
     STACC_RELU_ApplyRelu_ADDR32). Returns int mask, or None if unresolved."""
     if not field_token:
         return None
-    base = field_token[:-7] if field_token.endswith("_ADDR32") else field_token
+    _S = "_ADDR32"
+    base = field_token[: -len(_S)] if field_token.endswith(_S) else field_token
     return defines.get(base + "_MASK")
-
-
-# Full-word writes (cfg[]= / WRCFG_32b) touch all 32 bits.
-_FULL_WORD_MASK = 0xFFFFFFFF
 
 
 def write_is_atomic_masked(how: str) -> bool:
