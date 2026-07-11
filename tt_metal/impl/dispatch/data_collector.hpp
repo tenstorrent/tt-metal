@@ -119,7 +119,7 @@ private:
     std::vector<tt::RealtimeProfilerCallbackListener*> realtime_callback_listeners_;
     tt::ProgramRealtimeProfilerCallbackHandle next_callback_handle_{0};
 
-    // Chip ids whose RT profiler is currently live; shares the callback-list mutex.
+    mutable std::mutex realtime_profiler_active_chips_mutex_;
     std::unordered_set<uint32_t> realtime_profiler_active_chips_;
 };
 
