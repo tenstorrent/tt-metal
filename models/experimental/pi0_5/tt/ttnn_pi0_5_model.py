@@ -641,6 +641,8 @@ class Pi0_5ModelTTNN:
             attention_mask=upstream_artifacts["prefix_attn_mask"] if upstream_artifacts else None,
             cos_override=upstream_artifacts["prefix_cos"] if upstream_artifacts else None,
             sin_override=upstream_artifacts["prefix_sin"] if upstream_artifacts else None,
+            skip_final_norm=True,  # output (final-normed hidden) is discarded here; only KV cache is used
+            kv_only_last=True,  # last VLM layer runs only to fill its KV cache → skip its dead residual+MLP
             use_cache=True,
         )
         # NOTE: tried `ttnn.deallocate(prefix_embs)` here on 2026-06-04 22:30

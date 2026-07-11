@@ -394,6 +394,8 @@ class PaliGemmaBackboneTTNN:
         use_cache: bool = False,
         cos_override: Optional[ttnn.Tensor] = None,
         sin_override: Optional[ttnn.Tensor] = None,
+        skip_final_norm: bool = False,
+        kv_only_last: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through VLM backbone using TTNN.
@@ -414,6 +416,7 @@ class PaliGemmaBackboneTTNN:
         """
         new_cache = [] if use_cache else None
 
+        last_idx = len(self.vlm_blocks) - 1
         for i, block in enumerate(self.vlm_blocks):
             past_kv = past_key_values[i] if past_key_values else None
             hidden_states, new_kv = block.forward(
@@ -424,16 +427,21 @@ class PaliGemmaBackboneTTNN:
                 position_ids,
                 past_kv,
                 use_cache,
+                kv_only=(kv_only_last and use_cache and i == last_idx),
             )
             if use_cache:
                 new_cache.append(new_kv)
 
-        # Final norm using TTNN
-        hidden_states = rms_norm_ttnn(
-            hidden_states,
-            self.vlm_norm,
-            self.config.vlm_config.rms_norm_eps,
-        )
+        # Final norm using TTNN. sample_actions uses forward_vlm ONLY to fill the prefix
+        # KV cache (its normed hidden-state output is discarded), so skip_final_norm=True
+        # elides this full-width RMSNorm as dead compute. Other callers (component PCC
+        # tests) consume the output, so the norm stays on by default.
+        if not skip_final_norm:
+            hidden_states = rms_norm_ttnn(
+                hidden_states,
+                self.vlm_norm,
+                self.config.vlm_config.rms_norm_eps,
+            )
 
         return hidden_states, new_cache
 

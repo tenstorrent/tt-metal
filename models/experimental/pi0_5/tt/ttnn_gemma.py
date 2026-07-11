@@ -1591,6 +1591,7 @@ class GemmaBlockTTNN:
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
         keep_padded: bool = False,
+        kv_only: bool = False,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass using TTNN operations.
@@ -1632,6 +1633,15 @@ class GemmaBlockTTNN:
             keep_padded=keep_padded,
         )
         ttnn.deallocate(normed)
+
+        # kv_only: this block runs ONLY to fill its KV cache (its hidden-state output is
+        # discarded downstream — e.g. the last VLM prefill layer under skip_final_norm).
+        # new_cache was already produced inside attention.forward, so the post-attention
+        # residual + norm2 + MLP + residual are all dead compute. Skip them.
+        if kv_only:
+            ttnn.deallocate(attn_output)
+            return hidden_states, new_cache
+
         hidden_states = ttnn.add(hidden_states, attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn_output)
 
