@@ -11,9 +11,15 @@ per-block, VAE via prof_vae_ltx.py). Env: TT_METAL_HOME/PYTHONPATH=worktree, cac
 
 ## Batch A — SDPA chunk sweep (SDPA = 30% of block = 6.13ms; baseline chunk (192,512)=4.85ms; NEVER swept)
 Measure RingJointSDPA FW (largest-FW op in the profile) per chunk. Test:
-`test_ring_joint_attention.py::test_ring_joint_sdpa_dit -k "ltx_s2 and <qID> and <kID> and 8rpx4up"` under `tracy -p -r`.
-- [~] q256 k512  (job 210815-17)
-- [ ] q128 k512
+`test_ring_joint_attention.py::test_ring_joint_sdpa -k "ltx_s2 and bh_glx and 8rpx4up and no_trace_no_check and <qID> and <kID>"` under `tracy -p -r`.
+**⚠️ MESH ID CORRECTED (2026-07-11 21:50Z): the driver ran these against `wh_glx` — wrong mesh. `wh_glx`=[(8,4),4]
+→ num_links=4, HW-CAPPED at 2 on this BH box (TT_FATAL fabric.cpp:163, the A2-DEAD finding), and `parallel_config_map[wh_glx]`
+has NO `ltx_s2` entry. Every driver sweep job died in ~6.2s at fabric setup = ZERO data. Correct mesh = `bh_glx`=[(8,4),2]
+(num_links=2, has ltx_s2). Also `SDPA_SWEEP_TAG` is read by nothing (no-op env var) and run_test_ring_joint_sdpa prints no
+FW — extract SDPA device FW from the newest `generated/profiler/reports/<ts>/ops_perf_results_*.csv`. Do NOT `rm -rf .logs`
+(cold tracy-kernel recompile → 220s timeout, killed 213135-31). ALL prior driver Batch-A results VOID.**
+- [~] q128 k512  (job 215000-35, bh_glx — re-take-over 21:50Z)
+- [ ] q256 k512  (driver 210815-17/213135-31 VOID: wh_glx wrong mesh)
 - [ ] q256 k256
 - [ ] q128 k256
 - [ ] q128 k128
