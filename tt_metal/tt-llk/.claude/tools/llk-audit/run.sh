@@ -17,14 +17,15 @@ EXTRACT="$HERE/extractor/llk_extract"
 LLK_ROOT="$(cd ../../.. && pwd)"            # tt_metal/tt-llk
 METAL_DIR="$(cd "$LLK_ROOT"/../.. && pwd)"  # repo root (also used for git in --changed)
 
-# --- Kernel-tier (JIT: cb-sync / noc-sync) capability probe --------------------
-# The kernel-tier module (the cb-sync / noc-sync checkers + the compiler-wrapper
-# JIT compile-command capture) reaches the JIT-compiled kernel surface that lives
-# OUTSIDE tt-llk. It is an OPT-IN, off-main capability that the full-audit runbook
-# checks out onto a scratch workspace (see .claude/skills/race-audit-all/SKILL.md
-# → "Full-audit kernel tier"); it is deliberately NOT part of the base in-tree
-# tool. This probe is what the runbook calls to decide whether to even OFFER the
-# JIT hookup — so a chosen "yes" never dangles against a missing implementation.
+# --- Kernel-tier (JIT: cb-sync / noc-sync / mailbox-sync) capability probe ------
+# The kernel-tier module (cb-sync + noc-sync + mailbox-sync checkers over the
+# captured kernels + the compiler-wrapper JIT compile-command capture) reaches the
+# JIT-compiled kernel surface that lives OUTSIDE tt-llk. It is an OPT-IN,
+# off-main capability that is BUILT ON REQUEST onto a throwaway workspace (see
+# .claude/skills/race-audit-all/SKILL.md → "Full-audit kernel tier") — it is
+# deliberately NOT part of the base in-tree tool and is NOT built here today.
+# This probe reports whether the module has been built (a kernel_tier/MANIFEST is
+# present); the base tool never builds it automatically.
 KERNEL_TIER_DIR="$HERE/kernel_tier"
 kernel_tier_available() { [ -f "$KERNEL_TIER_DIR/MANIFEST" ]; }
 
@@ -34,9 +35,9 @@ if [ "${1:-}" = "--kernel-tier-status" ]; then
     echo "kernel-tier module present at $KERNEL_TIER_DIR" >&2
   else
     echo "unavailable"
-    echo "kernel-tier (cb-sync/noc-sync) module is not built on this branch." >&2
-    echo "To enable it, follow the 'Full-audit kernel tier' runbook in" >&2
-    echo ".claude/skills/race-audit-all/SKILL.md." >&2
+    echo "kernel-tier (cb-sync/noc-sync/mailbox-sync) module is not built." >&2
+    echo "It is built ON REQUEST (not automatically) — follow the 'Full-audit" >&2
+    echo "kernel tier' runbook in .claude/skills/race-audit-all/SKILL.md." >&2
   fi
   exit 0
 fi
@@ -79,7 +80,7 @@ while [ $# -gt 0 ]; do
                   git -C "$METAL_DIR" rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1; then
                  CHANGED_BASE="$1"; shift
                fi;;
-    --full-jit) FULLJIT=1; shift;;   # also run the opt-in kernel tier (cb/noc)
+    --full-jit) FULLJIT=1; shift;;   # also run the opt-in kernel tier (cb/noc/mailbox), if built
     --*) echo "run.sh: unknown option '$1'" >&2; exit 2;;
     *) OUT="$1"; shift;;
   esac
@@ -176,27 +177,27 @@ print(f'\nfact base -> {facts}')
 print(f'findings  -> {audit}')
 PY
 
-# --- Opt-in kernel tier (cb-sync / noc-sync over JIT-compiled kernels) ---------
-# The in-tree audit above always runs. --full-jit additionally attempts the
-# kernel tier. It DEGRADES HONESTLY: if the kernel-tier module isn't built on
-# this branch, it says so and names the classes left uncovered — a clean result
-# must never read as "cb/noc covered". See the runbook in race-audit-all.
+# --- Opt-in kernel tier (cb-sync / noc-sync / mailbox-sync over JIT kernels) ----
+# The in-tree audit above always runs. --full-jit additionally RUNS the kernel
+# tier IF it has been built (kernel_tier/MANIFEST present); it never BUILDS it —
+# the module is built on request via the runbook. If absent it DEGRADES HONESTLY:
+# it says so and names the classes left uncovered — a clean result must never
+# read as "cb/noc/mailbox covered". See the runbook in race-audit-all.
 if [ "$FULLJIT" -eq 1 ]; then
   echo "" >&2
-  echo "=== kernel tier (JIT: cb-sync / noc-sync) ===" >&2
+  echo "=== kernel tier (JIT: cb-sync / noc-sync / mailbox-sync) ===" >&2
   if kernel_tier_available; then
-    echo "kernel-tier module present — bootstrapping capture + kernel checks ..." >&2
+    echo "kernel-tier module present — running capture + kernel checks ..." >&2
     if ! "$KERNEL_TIER_DIR/bootstrap.sh" "$ARCH" "$OUT" >&2; then
-      echo "kernel-tier bootstrap FAILED — cb-sync / noc-sync NOT covered this run." >&2
+      echo "kernel-tier run FAILED — cb-sync / noc-sync / mailbox-sync NOT covered this run." >&2
     fi
   else
-    echo "kernel-tier module is NOT built on this branch, so cb-sync / noc-sync" >&2
-    echo "were NOT TOOL-RECALLED here (their surface is JIT-compiled kernels" >&2
-    echo "outside tt-llk). This is NOT the same as 'not audited': the" >&2
-    echo "race-audit-all skill still audits cb-sync / noc-sync LLM-driven (grep +" >&2
-    echo "reasoning + ISA docs, exactly as before this tool existed) — you only" >&2
-    echo "forgo the extra deterministic candidate list. To add that exhaustive" >&2
-    echo "kernel-tier recall, follow the 'Full-audit kernel tier' runbook in" >&2
-    echo ".claude/skills/race-audit-all/SKILL.md." >&2
+    echo "kernel-tier module is NOT built, so cb-sync / noc-sync / mailbox-sync" >&2
+    echo "were NOT TOOL-RECALLED here (their kernel surface is JIT-compiled kernels" >&2
+    echo "outside tt-llk). This is NOT 'not audited': the race-audit-all skill still" >&2
+    echo "audits them LLM-driven (each skill's ttnn-widened grep + reasoning + ISA" >&2
+    echo "docs) — you only forgo the extra deterministic candidate list. The kernel" >&2
+    echo "tier is BUILT ON REQUEST (not automatically): follow the 'Full-audit" >&2
+    echo "kernel tier' runbook in .claude/skills/race-audit-all/SKILL.md." >&2
   fi
 fi

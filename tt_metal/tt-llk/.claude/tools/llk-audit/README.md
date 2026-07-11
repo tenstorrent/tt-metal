@@ -71,12 +71,16 @@ scoped. Use it for a PR-scoped audit.
 ### Why these six (and not the other three audits)
 Scoped by evidence — a checker ships only where deterministic recall adds value
 over the skill's own grep on a real tt-llk surface:
-- **dataflow-cb-sync / noc-sync** — 0 CB/NoC sites in the tt-llk compute lib; the
-  surface is the JIT-compiled kernels in `tt_metal/hw/inc/api` + `ttnn`/`models`,
-  which have no static compile database the in-tree parse can reach. Reachable
-  only via the **opt-in kernel tier** (`run.sh --full-jit`, off-main, sweep-grade
-  — see the *Full-audit kernel tier* runbook in `race-audit-all`), not the base
-  in-tree tool. The base tool degrades honestly and names them uncovered.
+- **dataflow-cb-sync / noc-sync** (and the **kernel-layer mailbox** surface) — 0
+  CB/NoC sites in the tt-llk compute lib; the surface is the JIT-compiled kernels
+  in `tt_metal/hw/inc/api` + `ttnn`/`models`, which have no static compile database
+  the in-tree parse can reach. Reachable only via the **opt-in kernel tier**
+  (`cb-sync + noc-sync + mailbox-sync`), which is **NOT built** and is authored
+  **on request**, off-main, when a user asks for kernel-tier recall — see the
+  *Full-audit kernel tier* runbook in `race-audit-all`. `run.sh --full-jit` today
+  only *runs* it if built; it never builds it, and degrades honestly (naming the
+  uncovered classes) when absent. Meanwhile each class's skill still LLM-audits
+  the kernel surface via its ttnn-widened grep.
 - **instruction-latency** — its surface is the SFPU files, which don't parse under
   clang (GCC vector extensions), so the AST recall the tool depends on is
   unavailable; and the verdict needs an out-of-tree version-pinned `sfpi-gcc`
@@ -90,7 +94,8 @@ over the skill's own grep on a real tt-llk surface:
 ```bash
 ./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]
                                    #   --changed scopes output to files changed vs BASE (default main)
-                                   #   --full-jit ALSO runs the opt-in kernel tier (cb/noc); degrades
+                                   #   --full-jit ALSO runs the opt-in kernel tier (cb/noc/mailbox) IF built
+                                   #     (it never builds it — that is on-request, off-main); degrades
                                    #     honestly + names the uncovered classes when the module is absent
                                    #   auto-builds the C++ extractor on first run
                                    #   (or if stale); needs Clang/LLVM >= 18 dev libs.
