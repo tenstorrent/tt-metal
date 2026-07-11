@@ -14,7 +14,20 @@ set -euo pipefail
 cd "$(dirname "$0")"
 HERE="$PWD"
 EXTRACT="$HERE/extractor/llk_extract"
-[ -x "$EXTRACT" ] || { echo "build first: extractor/build.sh" >&2; exit 1; }
+
+# Auto-build the C++ extractor on first run (or if the source is newer than the
+# binary). The binary is a git-ignored build artifact, so a fresh checkout won't
+# have it. If no suitable Clang/LLVM (>=18) is available the build fails; we then
+# exit non-zero so the calling /*-audit skill falls back to its manual method
+# (its "Recall preflight" says: if unbuilt, proceed manually — absence != "no findings").
+if [ ! -x "$EXTRACT" ] || [ "$HERE/extractor/llk_extract.cpp" -nt "$EXTRACT" ]; then
+  echo "llk-audit: extractor not built (or stale) — building once ..." >&2
+  if ! "$HERE/extractor/build.sh" >&2; then
+    echo "llk-audit: auto-build failed (need Clang/LLVM >= 18 dev libs). The audit" >&2
+    echo "           skill should proceed with its manual method." >&2
+    exit 1
+  fi
+fi
 
 ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [out_dir]}"; shift || true
 CHECKS="all"

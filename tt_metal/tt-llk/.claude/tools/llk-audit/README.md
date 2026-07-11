@@ -59,10 +59,17 @@ real tt-llk pattern:
 ## Build & run
 
 ```bash
-extractor/build.sh                 # needs Clang/LLVM >= 18 dev libs (libclang-cpp)
 ./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [out_dir]
+                                   #   auto-builds the C++ extractor on first run
+                                   #   (or if stale); needs Clang/LLVM >= 18 dev libs.
+extractor/build.sh                 # optional: build the extractor manually
 python3 tests/test_checks.py       # hermetic unit tests (no clang/repo needed)
 ```
+
+The `/*-audit` skills invoke `run.sh` in their "Recall preflight", so simply
+invoking the skill triggers the one-time extractor build. If no suitable Clang
+is present, the build fails gracefully and the skill proceeds with its manual
+method (its preflight says: absence of the tool != "no findings").
 
 `run.sh` writes `out/facts.<arch>.jsonl` (fact base) and `out/audit.<arch>.json`
 (advisory findings). Feed `audit.<arch>.json` to the matching `/*-audit` skill as
