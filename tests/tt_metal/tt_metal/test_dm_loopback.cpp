@@ -128,23 +128,25 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, DmLoopback) {
     for (uint32_t i = 0; i < num_loopback_stages; i++) {
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = dram_to_l1_names[i],
-            .runtime_arg_values = {
-                {"dram_addr", {{node, dram_address}}},
-                {"l1_addr", {{node, l1_address}}},
-                {"dram_buffer_size", {{node, 4u}}},
-                {"dram_bank_id", {{node, 0u}}},
-                {"signal_value", {{node, signal_value}}}}});
+            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+                node,
+                {{"dram_addr", dram_address},
+                 {"l1_addr", l1_address},
+                 {"dram_buffer_size", 4u},
+                 {"dram_bank_id", 0u},
+                 {"signal_value", signal_value}})});
         dram_address += 1024;
         signal_value++;
 
         params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = l1_to_dram_names[i],
-            .runtime_arg_values = {
-                {"dram_addr", {{node, dram_address}}},
-                {"l1_addr", {{node, l1_address}}},
-                {"dram_buffer_size", {{node, 4u}}},
-                {"dram_bank_id", {{node, 0u}}},
-                {"signal_value", {{node, signal_value}}}}});
+            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+                node,
+                {{"dram_addr", dram_address},
+                 {"l1_addr", l1_address},
+                 {"dram_buffer_size", 4u},
+                 {"dram_bank_id", 0u},
+                 {"signal_value", signal_value}})});
         l1_address += sizeof(uint32_t);
         signal_value++;
     }

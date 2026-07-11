@@ -204,17 +204,27 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
 
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        reader_rtas["N"][core] = N;
-        reader_rtas["C"][core] = C;
-        reader_rtas["HtWt"][core] = HtWt;
-        reader_rtas["batch_step"][core] = batch_step;
-        reader_rtas["channel_step"][core] = channel_step;
-        reader_rtas["num_pages"][core] = num_pages_per_core;
-        reader_rtas["start_id"][core] = start_tile;
-        reader_rtas["hw"][core] = hw;
-        reader_rtas["n"][core] = n;
-        writer_rtas["num_pages"][core] = num_pages_per_core;
-        writer_rtas["start_id"][core] = num_pages_read;
+        SetRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"N", N},
+                {"C", C},
+                {"HtWt", HtWt},
+                {"batch_step", batch_step},
+                {"channel_step", channel_step},
+                {"num_pages", num_pages_per_core},
+                {"start_id", start_tile},
+                {"hw", hw},
+                {"n", n},
+            });
+        SetRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"num_pages", num_pages_per_core},
+                {"start_id", num_pages_read},
+            });
 
         num_pages_read += num_pages_per_core;
     }

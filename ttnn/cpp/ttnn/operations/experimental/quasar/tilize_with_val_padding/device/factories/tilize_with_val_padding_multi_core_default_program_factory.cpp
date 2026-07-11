@@ -226,15 +226,25 @@ ttnn::device_operation::ProgramArtifacts TilizeWithValPaddingMultiCoreDefaultFac
         const uint32_t n_block_reps = static_cast<uint32_t>(assignment.size());
         max_varargs = std::max<uint32_t>(max_varargs, static_cast<uint32_t>(reader_tail.size()));
 
-        reader_node_args["padded_X_size"][core] = padded_row_size_bytes;
-        reader_node_args["pad_value"][core] = packed_pad_value;
-        reader_node_args["start_page_id"][core] = core_start_page_id;
-        reader_node_args["n_block_reps"][core] = n_block_reps;
+        SetRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"padded_X_size", padded_row_size_bytes},
+                {"pad_value", packed_pad_value},
+                {"start_page_id", core_start_page_id},
+                {"n_block_reps", n_block_reps},
+            });
         reader_varargs.emplace(core, std::move(reader_tail));
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_local;
-        writer_node_args["num_pages"][core] = num_tiles_per_core;
-        writer_node_args["start_id"][core] = tile_start_id;
+        SetRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", tile_start_id},
+            });
         tile_start_id += num_tiles_per_core;
     }
 

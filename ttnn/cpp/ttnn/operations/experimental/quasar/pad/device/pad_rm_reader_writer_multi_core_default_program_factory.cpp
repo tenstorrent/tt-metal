@@ -277,20 +277,30 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterMultiCoreDefaultProgra
         const NodeCoord node = core;
 
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-        reader_rtas["num_sticks_per_core"][node] = num_sticks_per_core;
-        reader_rtas["num_sticks_per_barrier"][node] = num_sticks_per_barrier;
-        reader_rtas["start_page_id"][node] = curr_sticks_read * num_input_pages_in_row;
-        reader_rtas["front_pad_n"][node] = static_cast<uint32_t>(front_pad[-4]);
-        reader_rtas["front_pad_c"][node] = static_cast<uint32_t>(front_pad[-3]);
-        reader_rtas["front_pad_h"][node] = static_cast<uint32_t>(front_pad[-2]);
-        reader_rtas["start_dim_h"][node] = off_h;
-        reader_rtas["start_dim_c"][node] = off_c;
-        reader_rtas["start_dim_n"][node] = off_n;
+        SetRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"num_sticks_per_core", num_sticks_per_core},
+                {"num_sticks_per_barrier", num_sticks_per_barrier},
+                {"start_page_id", curr_sticks_read * num_input_pages_in_row},
+                {"front_pad_n", static_cast<uint32_t>(front_pad[-4])},
+                {"front_pad_c", static_cast<uint32_t>(front_pad[-3])},
+                {"front_pad_h", static_cast<uint32_t>(front_pad[-2])},
+                {"start_dim_h", off_h},
+                {"start_dim_c", off_c},
+                {"start_dim_n", off_n},
+            });
 
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        writer_rtas["num_sticks_per_core"][node] = num_sticks_per_core;
-        writer_rtas["num_sticks_per_barrier"][node] = num_sticks_per_barrier;
-        writer_rtas["start_page_id"][node] = curr_sticks_write * num_output_pages_in_row;
+        SetRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core", num_sticks_per_core},
+                {"num_sticks_per_barrier", num_sticks_per_barrier},
+                {"start_page_id", curr_sticks_write * num_output_pages_in_row},
+            });
 
         curr_sticks_write += num_sticks_per_core;
 

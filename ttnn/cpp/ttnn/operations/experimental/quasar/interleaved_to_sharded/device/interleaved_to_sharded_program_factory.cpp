@@ -359,24 +359,34 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             curr_num_units_per_shard = shard_height * num_units_per_shard_width;
 
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter).
-            reader_rtas["block_height_tiles"][core] = shard_height;
-            reader_rtas["block_width_tiles"][core] = shard_width;
-            reader_rtas["padded_offset_bytes"][core] = padded_offset;
-            reader_rtas["input_width_offset_tiles"][core] = num_units_offset;
-            reader_rtas["block_num_tiles"][core] = curr_num_units_per_shard;
-            reader_rtas["start_id_offset"][core] = curr_idx_h + curr_idx_w;
-            reader_rtas["start_id_base"][core] = starting_idx_h;
+            SetRuntimeArgsForNode(
+                reader_rtas,
+                core,
+                {
+                    {"block_height_tiles", shard_height},
+                    {"block_width_tiles", shard_width},
+                    {"padded_offset_bytes", padded_offset},
+                    {"input_width_offset_tiles", num_units_offset},
+                    {"block_num_tiles", curr_num_units_per_shard},
+                    {"start_id_offset", curr_idx_h + curr_idx_w},
+                    {"start_id_base", starting_idx_h},
+                });
 
             // Writer run-time args
             uint32_t pad_offset = (num_units_per_shard_width - shard_width) * output_unit_size;
             if (dst_is_dram) {
-                writer_rtas["block_height_tiles"][core] = shard_height;
-                writer_rtas["block_width_tiles"][core] = shard_width;
-                writer_rtas["padded_offset"][core] = pad_offset;
-                writer_rtas["block_width_padded_num_tiles"][core] = curr_num_units_per_shard;
-                writer_rtas["output_width_tiles"][core] = num_units_offset;
-                writer_rtas["start_id_offset"][core] = curr_idx_h + curr_idx_w;
-                writer_rtas["start_id_base"][core] = starting_idx_h;
+                SetRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
+                        {"block_height_tiles", shard_height},
+                        {"block_width_tiles", shard_width},
+                        {"padded_offset", pad_offset},
+                        {"block_width_padded_num_tiles", curr_num_units_per_shard},
+                        {"output_width_tiles", num_units_offset},
+                        {"start_id_offset", curr_idx_h + curr_idx_w},
+                        {"start_id_base", starting_idx_h},
+                    });
             } else {
                 writer_rtas["num_units"][core] = curr_num_units_per_shard;
             }
@@ -452,25 +462,35 @@ ttnn::device_operation::ProgramArtifacts InterleavedToShardedProgramFactory::cre
             // Reader run-time args (buffer-address slot 0 is gone — bound via TensorParameter;
             // legacy slot 1 `num_units_per_row` was emitted but never read by the kernel, so it
             // is dropped here to match the kernel's actual reads).
-            reader_rtas["block_height"][core] = shard_height;
-            reader_rtas["block_width_bytes"][core] = shard_width;
-            reader_rtas["padded_block_width_bytes"][core] = padded_offset_bytes;
-            reader_rtas["aligned"][core] = static_cast<uint32_t>(aligned);
-            reader_rtas["aligned_input_width_offset_bytes"][core] = aligned_width_offset;
-            reader_rtas["aligned_block_width_bytes"][core] = aligned_shard_width;
-            reader_rtas["aligned_offset"][core] = aligned_offset;
-            reader_rtas["start_id"][core] = curr_idx_h;
+            SetRuntimeArgsForNode(
+                reader_rtas,
+                core,
+                {
+                    {"block_height", shard_height},
+                    {"block_width_bytes", shard_width},
+                    {"padded_block_width_bytes", padded_offset_bytes},
+                    {"aligned", static_cast<uint32_t>(aligned)},
+                    {"aligned_input_width_offset_bytes", aligned_width_offset},
+                    {"aligned_block_width_bytes", aligned_shard_width},
+                    {"aligned_offset", aligned_offset},
+                    {"start_id", curr_idx_h},
+                });
 
             // Writer run-time args
             if (dst_is_dram) {
                 uint32_t page_id_within_row = curr_idx_w / input_unit_size;
                 uint32_t output_width_in_pages = tt::div_up(num_units_per_row, input_unit_size);
                 uint32_t start_id = (curr_idx_h * output_width_in_pages) + page_id_within_row;
-                writer_rtas["block_height"][core] = shard_height;
-                writer_rtas["block_width_bytes"][core] = shard_width;
-                writer_rtas["padded_block_width_bytes"][core] = padded_offset_bytes;
-                writer_rtas["start_id"][core] = start_id;
-                writer_rtas["output_width_in_pages"][core] = output_width_in_pages;
+                SetRuntimeArgsForNode(
+                    writer_rtas,
+                    core,
+                    {
+                        {"block_height", shard_height},
+                        {"block_width_bytes", shard_width},
+                        {"padded_block_width_bytes", padded_offset_bytes},
+                        {"start_id", start_id},
+                        {"output_width_in_pages", output_width_in_pages},
+                    });
             } else {
                 writer_rtas["num_units"][core] = curr_num_units_per_shard;
             }

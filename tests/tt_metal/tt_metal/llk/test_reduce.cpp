@@ -497,18 +497,22 @@ void run_single_core_reduce_program(
     experimental::KernelRunArgs::RuntimeArgValues reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
-        reader_named_rtas = {
-            {"N", {{node, dims.N}}},
-            {"Ht", {{node, dims.Ht}}},
-            {"Wt", {{node, dims.Wt}}},
-            {"HtWt", {{node, dims.Ht * dims.Wt}}},
-        };
+        reader_named_rtas = experimental::CreateRuntimeArgsForNode(
+            node,
+            {
+                {"N", dims.N},
+                {"Ht", dims.Ht},
+                {"Wt", dims.Wt},
+                {"HtWt", dims.Ht * dims.Wt},
+            });
         writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
     } else {
-        reader_named_rtas = {
-            {"num_tiles", {{node, dims.num_tensor_tiles}}},
-            {"scaler", {{node, *reinterpret_cast<uint32_t*>(&scaler)}}},
-        };
+        reader_named_rtas = experimental::CreateRuntimeArgsForNode(
+            node,
+            {
+                {"num_tiles", dims.num_tensor_tiles},
+                {"scaler", *reinterpret_cast<uint32_t*>(&scaler)},
+            });
         writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
                                                                   : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
     }
@@ -521,7 +525,7 @@ void run_single_core_reduce_program(
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{"num_tiles", {{node, writer_num_tiles}}}},
+            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(node, {{"num_tiles", writer_num_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

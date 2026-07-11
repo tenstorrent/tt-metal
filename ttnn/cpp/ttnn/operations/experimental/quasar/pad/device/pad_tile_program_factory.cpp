@@ -182,19 +182,20 @@ ttnn::device_operation::ProgramArtifacts PadTileCoreProgramFactory::create_progr
     run_args.kernel_run_args = {
         KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = {{"num_pages", {{core, num_unpadded_tiles}}}, {"start_id", {{core, 0u}}}},
+            .runtime_arg_values = CreateRuntimeArgsForNode(core, {{"num_pages", num_unpadded_tiles}, {"start_id", 0u}}),
         },
         KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values =
-                {{"num_unpadded_W", {{core, num_unpadded_W}}},
-                 {"num_padded_Wt", {{core, num_padded_Wt}}},
-                 {"num_unpadded_Z", {{core, num_unpadded_Z}}},
-                 {"num_padded_Zt", {{core, num_padded_Zt}}},
-                 {"num_unpadded_Yt", {{core, num_unpadded_Yt}}},
-                 {"num_padded_Yt", {{core, num_padded_Yt}}},
-                 {"num_unpadded_Xt", {{core, num_unpadded_Xt}}},
-                 {"num_padded_Xt", {{core, num_padded_Xt}}}},
+            .runtime_arg_values = CreateRuntimeArgsForNode(
+                core,
+                {{"num_unpadded_W", num_unpadded_W},
+                 {"num_padded_Wt", num_padded_Wt},
+                 {"num_unpadded_Z", num_unpadded_Z},
+                 {"num_padded_Zt", num_padded_Zt},
+                 {"num_unpadded_Yt", num_unpadded_Yt},
+                 {"num_padded_Yt", num_padded_Yt},
+                 {"num_unpadded_Xt", num_unpadded_Xt},
+                 {"num_padded_Xt", num_padded_Xt}}),
         },
     };
     run_args.tensor_args.emplace(INPUT, input_mesh_tensor);

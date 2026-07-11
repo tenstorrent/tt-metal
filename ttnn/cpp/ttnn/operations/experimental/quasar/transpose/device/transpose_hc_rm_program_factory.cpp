@@ -161,15 +161,25 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         const NodeCoord node = core;
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        reader_rtas["num_sticks_per_core_read"][node] = num_sticks_per_core_read;
-        reader_rtas["num_read_per_barrier"][node] = num_read_per_barrier;
-        reader_rtas["start_id"][node] = curr_sticks_read;
-        reader_rtas["curr_c"][node] = curr_c;
-        reader_rtas["curr_h"][node] = curr_h;
-        reader_rtas["curr_n"][node] = curr_n;
-        writer_rtas["num_sticks_per_core_read"][node] = num_sticks_per_core_read;
-        writer_rtas["num_read_per_barrier"][node] = num_read_per_barrier;
-        writer_rtas["start_id"][node] = curr_sticks_write;
+        SetRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"num_sticks_per_core_read", num_sticks_per_core_read},
+                {"num_read_per_barrier", num_read_per_barrier},
+                {"start_id", curr_sticks_read},
+                {"curr_c", curr_c},
+                {"curr_h", curr_h},
+                {"curr_n", curr_n},
+            });
+        SetRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_sticks_per_core_read", num_sticks_per_core_read},
+                {"num_read_per_barrier", num_read_per_barrier},
+                {"start_id", curr_sticks_write},
+            });
 
         curr_sticks_write += num_sticks_per_core;
 

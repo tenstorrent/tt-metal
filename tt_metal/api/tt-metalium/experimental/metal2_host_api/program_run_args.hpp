@@ -127,6 +127,36 @@ using KernelRunArgs = ProgramRunArgs::KernelRunArgs;
 using DFBRunOverrides = ProgramRunArgs::DFBRunOverrides;
 using TensorArgument = ProgramRunArgs::TensorArgument;
 
+// Set several named RTAs for a single node.
+//
+//   SetRuntimeArgsForNode(rtas, node, {
+//       {"mcast_dest_noc_start_x", mcast[0]},
+//       {"mcast_dest_noc_start_y", mcast[1]},
+//       ...
+//   });
+inline void SetRuntimeArgsForNode(
+    KernelRunArgs::RuntimeArgValues& runtime_arg_values,
+    const NodeCoord& node,
+    std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    for (const auto& [name, value] : named_values) {
+        runtime_arg_values[name][node] = value;
+    }
+}
+
+// Build RuntimeArgValues for a single node from a flat name→value list.
+//
+//   .runtime_arg_values = CreateRuntimeArgsForNode(node, {
+//       {"src0_addr", addr},
+//       {"num_tiles", 1u},
+//       ...
+//   }),
+inline KernelRunArgs::RuntimeArgValues CreateRuntimeArgsForNode(
+    const NodeCoord& node, std::initializer_list<std::pair<std::string, uint32_t>> named_values) {
+    KernelRunArgs::RuntimeArgValues runtime_arg_values;
+    SetRuntimeArgsForNode(runtime_arg_values, node, named_values);
+    return runtime_arg_values;
+}
+
 // Resolve a TensorArgument to its MeshTensor.
 // (Switch to std::visit once MeshTensorView is added as a second variant alternative.)
 inline const MeshTensor& mesh_tensor_of(const TensorArgument& arg) {

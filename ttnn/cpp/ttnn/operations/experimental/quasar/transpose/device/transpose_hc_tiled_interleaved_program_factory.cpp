@@ -274,12 +274,22 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledInterleavedProgramFacto
 
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        reader_rtas["num_tiles"][core] = num_tiles_per_core;
-        reader_rtas["start_id"][core] = start_idx;
-        writer_rtas["start_tile_idx"][core] = start_idx;
-        writer_rtas["end_tile_idx"][core] = end_idx;
-        writer_rtas["start_padding_tile_idx"][core] = padded_start_idx;
-        writer_rtas["end_padding_tile_idx"][core] = padded_end_idx;
+        SetRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"num_tiles", num_tiles_per_core},
+                {"start_id", start_idx},
+            });
+        SetRuntimeArgsForNode(
+            writer_rtas,
+            core,
+            {
+                {"start_tile_idx", start_idx},
+                {"end_tile_idx", end_idx},
+                {"start_padding_tile_idx", padded_start_idx},
+                {"end_padding_tile_idx", padded_end_idx},
+            });
 
         start_idx = end_idx;
         padded_start_idx = padded_end_idx;

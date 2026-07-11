@@ -223,11 +223,21 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        reader_node_args["col_start_tile_id"][core] = (num_cols_read / Wt * HtWt) + (num_cols_read % Wt);
-        reader_node_args["curr_col_in_batch"][core] = num_cols_read % Wt;
-        reader_node_args["num_cols"][core] = num_cols_per_core;
-        writer_node_args["num_pages"][core] = num_cols_per_core;
-        writer_node_args["start_id"][core] = num_cols_read;
+        SetRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
+                {"curr_col_in_batch", num_cols_read % Wt},
+                {"num_cols", num_cols_per_core},
+            });
+        SetRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_cols_per_core},
+                {"start_id", num_cols_read},
+            });
         num_cols_read += num_cols_per_core;
         if (i == num_cores - 1) {
             TT_FATAL(

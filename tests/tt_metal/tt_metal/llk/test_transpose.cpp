@@ -322,11 +322,11 @@ void run_single_core_transpose(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
             .runtime_arg_values =
-                {{"N", {{node, NC}}}, {"Ht", {{node, Ht}}}, {"Wt", {{node, Wt}}}, {"HtWt", {{node, Ht * Wt}}}},
+                experimental::CreateRuntimeArgsForNode(node, {{"N", NC}, {"Ht", Ht}, {"Wt", Wt}, {"HtWt", Ht * Wt}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = {{"num_tiles", {{node, num_tensor_tiles}}}},
+            .runtime_arg_values = experimental::CreateRuntimeArgsForNode(node, {{"num_tiles", num_tensor_tiles}}),
         },
         experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };

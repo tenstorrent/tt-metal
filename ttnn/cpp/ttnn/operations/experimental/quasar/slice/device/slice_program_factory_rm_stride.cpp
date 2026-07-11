@@ -187,44 +187,64 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
         }
 
         if (using_4d_kernels) {
-            reader_node_args["tensor_rank"][core] = tensor_rank;
-            reader_node_args["input_w"][core] = input_shape[-1];
-            reader_node_args["input_h"][core] = input_shape[-2];
-            reader_node_args["input_d"][core] = input_shape[-3];
-            reader_node_args["input_n"][core] = input_shape[-4];
-            reader_node_args["output_w"][core] = output_shape[-1];
-            reader_node_args["output_h"][core] = output_shape[-2];
-            reader_node_args["output_d"][core] = output_shape[-3];
-            reader_node_args["output_n"][core] = output_shape[-4];
-            reader_node_args["slice_start_w"][core] = slice_start[-1];
-            reader_node_args["slice_end_w"][core] = slice_end[-1];
-            reader_node_args["slice_step_w"][core] = slice_step[-1];
-            reader_node_args["slice_start_h"][core] = slice_start[-2];
-            reader_node_args["slice_end_h"][core] = slice_end[-2];
-            reader_node_args["slice_step_h"][core] = slice_step[-2];
-            reader_node_args["slice_start_d"][core] = slice_start[-3];
-            reader_node_args["slice_end_d"][core] = slice_end[-3];
-            reader_node_args["slice_step_d"][core] = slice_step[-3];
-            reader_node_args["slice_start_n"][core] = slice_start[-4];
-            reader_node_args["slice_end_n"][core] = slice_end[-4];
-            reader_node_args["slice_step_n"][core] = slice_step[-4];
-            reader_node_args["element_size"][core] = element_size;
-            reader_node_args["num_rows_for_this_core"][core] = rows_for_this_core;
-            reader_node_args["start_row_for_this_core"][core] = row_start_id;
+            SetRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"tensor_rank", tensor_rank},
+                    {"input_w", input_shape[-1]},
+                    {"input_h", input_shape[-2]},
+                    {"input_d", input_shape[-3]},
+                    {"input_n", input_shape[-4]},
+                    {"output_w", output_shape[-1]},
+                    {"output_h", output_shape[-2]},
+                    {"output_d", output_shape[-3]},
+                    {"output_n", output_shape[-4]},
+                    {"slice_start_w", slice_start[-1]},
+                    {"slice_end_w", slice_end[-1]},
+                    {"slice_step_w", slice_step[-1]},
+                    {"slice_start_h", slice_start[-2]},
+                    {"slice_end_h", slice_end[-2]},
+                    {"slice_step_h", slice_step[-2]},
+                    {"slice_start_d", slice_start[-3]},
+                    {"slice_end_d", slice_end[-3]},
+                    {"slice_step_d", slice_step[-3]},
+                    {"slice_start_n", slice_start[-4]},
+                    {"slice_end_n", slice_end[-4]},
+                    {"slice_step_n", slice_step[-4]},
+                    {"element_size", element_size},
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
 
-            writer_node_args["tensor_rank"][core] = tensor_rank;
-            writer_node_args["output_w"][core] = output_shape[-1];
-            writer_node_args["output_h"][core] = output_shape[-2];
-            writer_node_args["output_d"][core] = output_shape[-3];
-            writer_node_args["output_n"][core] = output_shape[-4];
-            writer_node_args["element_size"][core] = element_size;
-            writer_node_args["num_rows_for_this_core"][core] = rows_for_this_core;
-            writer_node_args["start_row_for_this_core"][core] = row_start_id;
+            SetRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"tensor_rank", tensor_rank},
+                    {"output_w", output_shape[-1]},
+                    {"output_h", output_shape[-2]},
+                    {"output_d", output_shape[-3]},
+                    {"output_n", output_shape[-4]},
+                    {"element_size", element_size},
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
         } else {
-            reader_node_args["num_rows_for_this_core"][core] = rows_for_this_core;
-            reader_node_args["start_row_for_this_core"][core] = row_start_id;
-            writer_node_args["num_rows_for_this_core"][core] = rows_for_this_core;
-            writer_node_args["start_row_for_this_core"][core] = row_start_id;
+            SetRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
+            SetRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"num_rows_for_this_core", rows_for_this_core},
+                    {"start_row_for_this_core", row_start_id},
+                });
         }
 
         row_start_id += rows_for_this_core;

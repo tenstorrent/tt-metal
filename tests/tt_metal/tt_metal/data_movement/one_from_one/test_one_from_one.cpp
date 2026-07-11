@@ -116,14 +116,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OneFro
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs requestor_run_params{.kernel = requestor_spec.unique_id};
-    requestor_run_params.runtime_arg_values["num_of_transactions"][test_config.master_core_coord] =
-        (uint32_t)test_config.num_of_transactions;
-    requestor_run_params.runtime_arg_values["transaction_size_bytes"][test_config.master_core_coord] =
-        (uint32_t)transaction_size_bytes;
-    requestor_run_params.runtime_arg_values["responder_x"][test_config.master_core_coord] =
-        (uint32_t)physical_subordinate_core.x;
-    requestor_run_params.runtime_arg_values["responder_y"][test_config.master_core_coord] =
-        (uint32_t)physical_subordinate_core.y;
+    SetRuntimeArgsForNode(
+        requestor_run_params.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_of_transactions", (uint32_t)test_config.num_of_transactions},
+            {"transaction_size_bytes", (uint32_t)transaction_size_bytes},
+            {"responder_x", (uint32_t)physical_subordinate_core.x},
+            {"responder_y", (uint32_t)physical_subordinate_core.y},
+        });
     run_params.kernel_run_args.push_back(requestor_run_params);
     SetProgramRunArgs(program, run_params);
 

@@ -232,11 +232,21 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
-            reader_rtas["start_id"][node] = num_sticks_read;
-            reader_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
+            SetRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"start_id", num_sticks_read},
+                    {"num_hw_blocks", num_hw_blocks_per_core},
+                });
             compute_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
-            writer_rtas["start_id"][node] = num_sticks_write;
-            writer_rtas["num_hw_blocks"][node] = num_hw_blocks_per_core;
+            SetRuntimeArgsForNode(
+                writer_rtas,
+                node,
+                {
+                    {"start_id", num_sticks_write},
+                    {"num_hw_blocks", num_hw_blocks_per_core},
+                });
 
             num_sticks_read += num_hw_blocks_per_core * H;
             num_sticks_write += num_hw_blocks_per_core * W;
@@ -323,16 +333,26 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
             KernelRunArgs::RuntimeArgValues& compute_rtas = compute_run.runtime_arg_values;
-            reader_rtas["num_tiles"][node] = num_tiles_per_core;
-            reader_rtas["start_id"][node] = tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w;
-            reader_rtas["start_ht"][node] = h;
-            reader_rtas["start_wt"][node] = w;
-            reader_rtas["Ht"][node] = Ht_walk;
-            reader_rtas["Wt"][node] = Wt_walk;
-            reader_rtas["HtWt"][node] = HtWt_walk;
+            SetRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"num_tiles", num_tiles_per_core},
+                    {"start_id", tt::round_down(num_tiles_read, HtWt_walk) + (h * Wt_walk) + w},
+                    {"start_ht", h},
+                    {"start_wt", w},
+                    {"Ht", Ht_walk},
+                    {"Wt", Wt_walk},
+                    {"HtWt", HtWt_walk},
+                });
             compute_rtas["NHtWt"][node] = num_tiles_per_core;
-            writer_rtas["num_pages"][node] = num_tiles_per_core;
-            writer_rtas["start_id"][node] = num_tiles_read;
+            SetRuntimeArgsForNode(
+                writer_rtas,
+                node,
+                {
+                    {"num_pages", num_tiles_per_core},
+                    {"start_id", num_tiles_read},
+                });
 
             num_tiles_read += num_tiles_per_core;
         }

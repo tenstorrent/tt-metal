@@ -449,23 +449,33 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
             const auto& w = all_runtime_args[i].second;
 
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-            reader_rtas["read_single_h_block_per_core"][node] = r[0];
-            reader_rtas["num_C_blocks_per_core"][node] = r[1];
-            reader_rtas["num_sticks_per_shard_core"][node] = r[2];
-            reader_rtas["num_cores_read"][node] = r[3];
-            reader_rtas["read_stick_stride"][node] = r[4];
+            SetRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"read_single_h_block_per_core", r[0]},
+                    {"num_C_blocks_per_core", r[1]},
+                    {"num_sticks_per_shard_core", r[2]},
+                    {"num_cores_read", r[3]},
+                    {"read_stick_stride", r[4]},
+                });
             std::vector<uint32_t> r_varargs(r.begin() + 5, r.end());
             r_varargs.resize(max_reader_varargs, 0);
             reader_run.advanced_options.runtime_varargs[node] = std::move(r_varargs);
 
             KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-            writer_rtas["read_single_h_block_per_core"][node] = w[0];
-            writer_rtas["num_C_blocks_per_core"][node] = w[1];
-            writer_rtas["num_sticks_per_shard_core"][node] = w[2];
-            writer_rtas["num_cores_read"][node] = w[3];
-            writer_rtas["read_stick_stride"][node] = w[4];
-            writer_rtas["src_read_stick_offset"][node] = w[5];
-            writer_rtas["dst_write_stick_offset"][node] = w[6];
+            SetRuntimeArgsForNode(
+                writer_rtas,
+                node,
+                {
+                    {"read_single_h_block_per_core", w[0]},
+                    {"num_C_blocks_per_core", w[1]},
+                    {"num_sticks_per_shard_core", w[2]},
+                    {"num_cores_read", w[3]},
+                    {"read_stick_stride", w[4]},
+                    {"src_read_stick_offset", w[5]},
+                    {"dst_write_stick_offset", w[6]},
+                });
             std::vector<uint32_t> w_varargs(w.begin() + 7, w.end());
             w_varargs.resize(max_writer_varargs, 0);
             writer_run.advanced_options.runtime_varargs[node] = std::move(w_varargs);
@@ -506,11 +516,16 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
             const NodeCoord node = node_for_index(i);
             const auto& r = all_runtime_args[i].first;
             KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-            reader_rtas["num_sticks_per_core"][node] = r[0];
-            reader_rtas["start_id"][node] = r[1];
-            reader_rtas["curr_c"][node] = r[2];
-            reader_rtas["curr_h"][node] = r[3];
-            reader_rtas["curr_n"][node] = r[4];
+            SetRuntimeArgsForNode(
+                reader_rtas,
+                node,
+                {
+                    {"num_sticks_per_core", r[0]},
+                    {"start_id", r[1]},
+                    {"curr_c", r[2]},
+                    {"curr_h", r[3]},
+                    {"curr_n", r[4]},
+                });
             reader_run.advanced_options.runtime_varargs[node] = std::vector<uint32_t>(r.begin() + 5, r.end());
         }
 

@@ -199,12 +199,22 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         if (!full_cores.contains(core)) {
             continue;
         }
-        reader_rta["start_block_id"][core] = block_start_id;
-        reader_rta["num_blocks"][core] = nblocks_per_core;
-        writer_rta["start_block_id"][core] = block_start_id;
-        writer_rta["num_blocks"][core] = nblocks_per_core;
-        writer_rta["patch_height_offset"][core] = patch_height_offset;
-        writer_rta["output_offset"][core] = output_offset;
+        SetRuntimeArgsForNode(
+            reader_rta,
+            core,
+            {
+                {"start_block_id", block_start_id},
+                {"num_blocks", nblocks_per_core},
+            });
+        SetRuntimeArgsForNode(
+            writer_rta,
+            core,
+            {
+                {"start_block_id", block_start_id},
+                {"num_blocks", nblocks_per_core},
+                {"patch_height_offset", patch_height_offset},
+                {"output_offset", output_offset},
+            });
         block_start_id += nblocks_per_core;
     }
 
@@ -215,12 +225,22 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_tiled_interleaved(
         uint32_t output_offset =
             (patch_size * curr_output_height_idx * output_width) + (patch_height_offset * stride_w);
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
-        reader_rta["start_block_id"][core] = block_start_id;
-        reader_rta["num_blocks"][core] = nblocks_per_core_cliff;
-        writer_rta["start_block_id"][core] = block_start_id;
-        writer_rta["num_blocks"][core] = nblocks_per_core_cliff;
-        writer_rta["patch_height_offset"][core] = patch_height_offset;
-        writer_rta["output_offset"][core] = output_offset;
+        SetRuntimeArgsForNode(
+            reader_rta,
+            core,
+            {
+                {"start_block_id", block_start_id},
+                {"num_blocks", nblocks_per_core_cliff},
+            });
+        SetRuntimeArgsForNode(
+            writer_rta,
+            core,
+            {
+                {"start_block_id", block_start_id},
+                {"num_blocks", nblocks_per_core_cliff},
+                {"patch_height_offset", patch_height_offset},
+                {"output_offset", output_offset},
+            });
     }
 
     // ---- Assemble the spec ----
@@ -431,8 +451,13 @@ ttnn::device_operation::ProgramArtifacts fold_multi_core_row_major_interleaved(
         }
 
         curr_patches += patches_per_core;
-        reader_rta["src_index"][core] = src_idx;
-        reader_rta["curr_src_row_index"][core] = src_col_offset;
+        SetRuntimeArgsForNode(
+            reader_rta,
+            core,
+            {
+                {"src_index", src_idx},
+                {"curr_src_row_index", src_col_offset},
+            });
         writer_rta["dst_index"][core] = dst_idx;
     }
 

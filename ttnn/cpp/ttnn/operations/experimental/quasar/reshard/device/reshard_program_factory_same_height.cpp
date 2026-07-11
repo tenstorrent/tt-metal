@@ -169,14 +169,24 @@ ttnn::device_operation::ProgramArtifacts ReshardSameHeightFactory<local_is_outpu
 
         KernelRunArgs::RuntimeArgValues& k0_rtas = k0_run_args.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& k1_rtas = k1_run_args.runtime_arg_values;
-        k0_rtas["total_num_sticks"][node] = total_num_sticks_kernel_0;
-        k0_rtas["local_stride_bytes"][node] = local_stride_bytes;
-        k0_rtas["remote_stride_bytes"][node] = remote_stride_bytes;
-        k0_rtas["num_segments"][node] = num_segments;
-        k1_rtas["total_num_sticks"][node] = total_num_sticks_kernel_1;
-        k1_rtas["local_stride_bytes"][node] = local_stride_bytes;
-        k1_rtas["remote_stride_bytes"][node] = remote_stride_bytes;
-        k1_rtas["num_segments"][node] = num_segments;
+        SetRuntimeArgsForNode(
+            k0_rtas,
+            node,
+            {
+                {"total_num_sticks", total_num_sticks_kernel_0},
+                {"local_stride_bytes", local_stride_bytes},
+                {"remote_stride_bytes", remote_stride_bytes},
+                {"num_segments", num_segments},
+            });
+        SetRuntimeArgsForNode(
+            k1_rtas,
+            node,
+            {
+                {"total_num_sticks", total_num_sticks_kernel_1},
+                {"local_stride_bytes", local_stride_bytes},
+                {"remote_stride_bytes", remote_stride_bytes},
+                {"num_segments", num_segments},
+            });
 
         AdvancedKernelRunArgs::Varargs varargs_0(num_varargs, 0u);
         AdvancedKernelRunArgs::Varargs varargs_1(num_varargs, 0u);

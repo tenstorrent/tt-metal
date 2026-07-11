@@ -584,11 +584,21 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
 
         ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run_args.runtime_arg_values;
         ProgramRunArgs::KernelRunArgs::RuntimeArgValues& reader_writer_rtas = reader_writer_run_args.runtime_arg_values;
-        reader_rtas["in0_tensor_start_tile_id"][core] = in0_start_tile_id;
-        reader_rtas["batch"][core] = num_output_blocks_per_core;
-        reader_writer_rtas["in1_tensor_start_tile_id"][core] = in1_start_tile_id;
-        reader_writer_rtas["batch"][core] = num_output_blocks_per_core;
-        reader_writer_rtas["out_tensor_start_tile_id"][core] = out_start_tile_id;
+        SetRuntimeArgsForNode(
+            reader_rtas,
+            core,
+            {
+                {"in0_tensor_start_tile_id", in0_start_tile_id},
+                {"batch", num_output_blocks_per_core},
+            });
+        SetRuntimeArgsForNode(
+            reader_writer_rtas,
+            core,
+            {
+                {"in1_tensor_start_tile_id", in1_start_tile_id},
+                {"batch", num_output_blocks_per_core},
+                {"out_tensor_start_tile_id", out_start_tile_id},
+            });
 
         num_blocks_written += num_output_blocks_per_core;
     }

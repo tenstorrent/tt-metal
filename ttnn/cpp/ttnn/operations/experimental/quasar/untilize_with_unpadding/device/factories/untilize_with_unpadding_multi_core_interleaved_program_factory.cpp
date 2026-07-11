@@ -221,16 +221,26 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         // Writer named RTAs (the legacy fixed prefix, minus the dropped buffer address).
         // start_stick_id (legacy row_start_id at the core's start) is filled in by the
         // fixup loop below.
-        writer_node_args["padded_X_size"][core] = padded_row_size_bytes;
-        writer_node_args["start_stick_id"][core] = 0u;
-        writer_node_args["n_block_reps"][core] = n_block_reps;
+        SetRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"padded_X_size", padded_row_size_bytes},
+                {"start_stick_id", 0u},
+                {"n_block_reps", n_block_reps},
+            });
 
         writer_varargs.emplace(core, std::move(writer_tail));
 
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
-        reader_node_args["num_pages"][core] = num_tiles_per_core;
-        reader_node_args["start_id"][core] = tile_start_id;
+        SetRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", tile_start_id},
+            });
 
         tile_start_id += num_tiles_per_core;
     }

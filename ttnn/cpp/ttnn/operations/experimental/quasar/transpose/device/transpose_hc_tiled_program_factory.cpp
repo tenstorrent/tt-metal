@@ -208,21 +208,31 @@ ttnn::device_operation::ProgramArtifacts TransposeHCTiledProgramFactory::create_
         const NodeCoord node = core;
         KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
         KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-        reader_rtas["WT"][node] = Wt;
-        reader_rtas["H"][node] = H;
-        reader_rtas["CT"][node] = Ct;
-        reader_rtas["HW_bytes"][node] = HW_bytes;
-        reader_rtas["CHW_bytes"][node] = CHW_bytes;
-        reader_rtas["start_id"][node] = num_tiles_read;
-        reader_rtas["num_tiles"][node] = num_tiles_per_core;
-        reader_rtas["batch_addr"][node] = num_tiles_read / CtHWt * CHW_bytes;
-        reader_rtas["h"][node] = h;
-        reader_rtas["htWT"][node] = h / TILE_HEIGHT * Wt;
-        reader_rtas["ct"][node] = ct;
-        reader_rtas["ctoffs"][node] = ct * TILE_HEIGHT * HW_bytes;
-        reader_rtas["wt"][node] = num_tiles_read % Wt;
-        writer_rtas["num_pages"][node] = num_tiles_per_core;
-        writer_rtas["start_id"][node] = num_tiles_read;
+        SetRuntimeArgsForNode(
+            reader_rtas,
+            node,
+            {
+                {"WT", Wt},
+                {"H", H},
+                {"CT", Ct},
+                {"HW_bytes", HW_bytes},
+                {"CHW_bytes", CHW_bytes},
+                {"start_id", num_tiles_read},
+                {"num_tiles", num_tiles_per_core},
+                {"batch_addr", num_tiles_read / CtHWt * CHW_bytes},
+                {"h", h},
+                {"htWT", h / TILE_HEIGHT * Wt},
+                {"ct", ct},
+                {"ctoffs", ct * TILE_HEIGHT * HW_bytes},
+                {"wt", num_tiles_read % Wt},
+            });
+        SetRuntimeArgsForNode(
+            writer_rtas,
+            node,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", num_tiles_read},
+            });
 
         num_tiles_read += num_tiles_per_core;
     }

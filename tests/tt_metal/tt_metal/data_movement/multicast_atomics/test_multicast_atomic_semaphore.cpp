@@ -167,10 +167,15 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Multic
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
     for (const auto& sender_core : test_config.sender_cores) {
-        sender_run_params.runtime_arg_values["dst_start_x"][sender_core] = (uint32_t)physical_dst_start.x;
-        sender_run_params.runtime_arg_values["dst_start_y"][sender_core] = (uint32_t)physical_dst_start.y;
-        sender_run_params.runtime_arg_values["dst_end_x"][sender_core] = (uint32_t)physical_dst_end.x;
-        sender_run_params.runtime_arg_values["dst_end_y"][sender_core] = (uint32_t)physical_dst_end.y;
+        SetRuntimeArgsForNode(
+            sender_run_params.runtime_arg_values,
+            sender_core,
+            {
+                {"dst_start_x", (uint32_t)physical_dst_start.x},
+                {"dst_start_y", (uint32_t)physical_dst_start.y},
+                {"dst_end_x", (uint32_t)physical_dst_end.x},
+                {"dst_end_y", (uint32_t)physical_dst_end.y},
+            });
     }
     run_params.kernel_run_args.push_back(sender_run_params);
 

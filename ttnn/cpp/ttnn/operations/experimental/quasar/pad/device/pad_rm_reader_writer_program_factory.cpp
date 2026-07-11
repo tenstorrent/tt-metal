@@ -210,38 +210,48 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
 
     KernelRunArgs reader_run{.kernel = READER_KERNEL};
     KernelRunArgs::RuntimeArgValues& reader_rtas = reader_run.runtime_arg_values;
-    reader_rtas["num_unpadded_W"][node] = num_unpadded_W;
-    reader_rtas["num_total_W"][node] = num_total_W;
-    reader_rtas["num_unpadded_Z"][node] = num_unpadded_Z;
-    reader_rtas["num_total_Z"][node] = num_total_Z;
-    reader_rtas["num_unpadded_Y"][node] = num_unpadded_Y;
-    reader_rtas["num_total_Y"][node] = num_total_Y;
-    reader_rtas["unpadded_X_nbytes"][node] = unpadded_row_size_nbytes;
-    reader_rtas["padded_X_nbytes"][node] = padded_row_size_nbytes;
-    reader_rtas["padded_X_diff_nbytes"][node] = padded_row_diff_size_nbytes;
-    reader_rtas["pad_value_packed"][node] = packed_pad_value;
-    reader_rtas["start_src_stick_id"][node] = uint32_t{0};
-    reader_rtas["start_src_stick_wi"][node] = uint32_t{0};
-    reader_rtas["start_src_stick_offset"][node] = uint32_t{0};
-    reader_rtas["num_local_Y"][node] = num_local_Y;
-    reader_rtas["num_local_unpadded_Y"][node] = num_local_unpadded_Y;
-    reader_rtas["full_unpadded_X_nbytes"][node] = unpadded_row_size_nbytes;
-    reader_rtas["num_local_W"][node] = num_local_W;
+    SetRuntimeArgsForNode(
+        reader_rtas,
+        node,
+        {
+            {"num_unpadded_W", num_unpadded_W},
+            {"num_total_W", num_total_W},
+            {"num_unpadded_Z", num_unpadded_Z},
+            {"num_total_Z", num_total_Z},
+            {"num_unpadded_Y", num_unpadded_Y},
+            {"num_total_Y", num_total_Y},
+            {"unpadded_X_nbytes", unpadded_row_size_nbytes},
+            {"padded_X_nbytes", padded_row_size_nbytes},
+            {"padded_X_diff_nbytes", padded_row_diff_size_nbytes},
+            {"pad_value_packed", packed_pad_value},
+            {"start_src_stick_id", uint32_t{0}},
+            {"start_src_stick_wi", uint32_t{0}},
+            {"start_src_stick_offset", uint32_t{0}},
+            {"num_local_Y", num_local_Y},
+            {"num_local_unpadded_Y", num_local_unpadded_Y},
+            {"full_unpadded_X_nbytes", unpadded_row_size_nbytes},
+            {"num_local_W", num_local_W},
+        });
 
     KernelRunArgs writer_run{.kernel = WRITER_KERNEL};
     KernelRunArgs::RuntimeArgValues& writer_rtas = writer_run.runtime_arg_values;
-    writer_rtas["num_total_W"][node] = num_total_W;
-    writer_rtas["num_total_Z"][node] = num_total_Z;
-    writer_rtas["num_total_Y"][node] = num_total_Y;
-    writer_rtas["num_total_X"][node] = num_total_X;
-    writer_rtas["padded_X_nbytes"][node] = padded_row_size_nbytes;
-    writer_rtas["start_dst_stick_id"][node] = uint32_t{0};
-    writer_rtas["start_dst_stick_wi"][node] = uint32_t{0};
-    writer_rtas["num_local_Y"][node] = num_local_Y;
-    writer_rtas["num_local_unpadded_Y"][node] = num_local_unpadded_Y;
-    writer_rtas["full_padded_X_nbytes"][node] = padded_row_size_nbytes;
-    writer_rtas["dst_stick_offset"][node] = uint32_t{0};
-    writer_rtas["num_local_W"][node] = num_local_W;
+    SetRuntimeArgsForNode(
+        writer_rtas,
+        node,
+        {
+            {"num_total_W", num_total_W},
+            {"num_total_Z", num_total_Z},
+            {"num_total_Y", num_total_Y},
+            {"num_total_X", num_total_X},
+            {"padded_X_nbytes", padded_row_size_nbytes},
+            {"start_dst_stick_id", uint32_t{0}},
+            {"start_dst_stick_wi", uint32_t{0}},
+            {"num_local_Y", num_local_Y},
+            {"num_local_unpadded_Y", num_local_unpadded_Y},
+            {"full_padded_X_nbytes", padded_row_size_nbytes},
+            {"dst_stick_offset", uint32_t{0}},
+            {"num_local_W", num_local_W},
+        });
 
     WorkUnitSpec wu{
         .name = "pad_rm_reader_writer_single_core",

@@ -139,11 +139,21 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // no-op core
-            reader_node_args["start_id"][core] = 0;
-            reader_node_args["num_tiles"][core] = 0;
+            SetRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"start_id", 0u},
+                    {"num_tiles", 0u},
+                });
             reader_run_advanced.runtime_varargs.emplace(core, std::vector<uint32_t>(num_dims, 0));
-            writer_node_args["num_pages"][core] = 0;
-            writer_node_args["start_id"][core] = 0;
+            SetRuntimeArgsForNode(
+                writer_node_args,
+                core,
+                {
+                    {"num_pages", 0u},
+                    {"start_id", 0u},
+                });
             continue;
         }
 
@@ -158,12 +168,22 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
 
-        reader_node_args["start_id"][core] = start_id;
-        reader_node_args["num_tiles"][core] = num_tiles_per_core;
+        SetRuntimeArgsForNode(
+            reader_node_args,
+            core,
+            {
+                {"start_id", start_id},
+                {"num_tiles", num_tiles_per_core},
+            });
         reader_run_advanced.runtime_varargs.emplace(core, std::move(id_per_dim));
 
-        writer_node_args["num_pages"][core] = num_tiles_per_core;
-        writer_node_args["start_id"][core] = num_tiles_written;
+        SetRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_pages", num_tiles_per_core},
+                {"start_id", num_tiles_written},
+            });
 
         num_tiles_written += num_tiles_per_core;
     }

@@ -283,13 +283,23 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
                                 uint32_t num_input_blocks_to_process,
                                 uint32_t num_tiles_to_read) {
         if (use_block_reader) {
-            reader_node_args["start_shard_id"][core] = core_index;
-            reader_node_args["num_blocks"][core] = num_input_blocks_to_process;
+            SetRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"start_shard_id", core_index},
+                    {"num_blocks", num_input_blocks_to_process},
+                });
         } else if (use_backed_cb) {
             reader_node_args["num_tiles_per_core"][core] = num_tiles_to_read;
         } else {
-            reader_node_args["num_tiles"][core] = num_tiles_to_read;
-            reader_node_args["start_page_id"][core] = tile_start_index;
+            SetRuntimeArgsForNode(
+                reader_node_args,
+                core,
+                {
+                    {"num_tiles", num_tiles_to_read},
+                    {"start_page_id", tile_start_index},
+                });
         }
     };
 
@@ -328,12 +338,16 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         uint32_t width_wise_output_block_start_index = input_block_global_col_index / num_cols_per_output_block;
         uint32_t num_cols_already_processed_in_first_output_block =
             input_block_global_col_index % num_cols_per_output_block;
-        writer_node_args["num_input_blocks_to_process"][core] = num_input_blocks_to_process;
-        writer_node_args["height_wise_input_block_start_index"][core] = height_wise_input_block_start_index;
-        writer_node_args["num_unpadded_cols_per_input_block"][core] = num_unpadded_cols_per_input_block;
-        writer_node_args["width_wise_output_block_start_index"][core] = width_wise_output_block_start_index;
-        writer_node_args["num_cols_already_processed_in_first_output_block"][core] =
-            num_cols_already_processed_in_first_output_block;
+        SetRuntimeArgsForNode(
+            writer_node_args,
+            core,
+            {
+                {"num_input_blocks_to_process", num_input_blocks_to_process},
+                {"height_wise_input_block_start_index", height_wise_input_block_start_index},
+                {"num_unpadded_cols_per_input_block", num_unpadded_cols_per_input_block},
+                {"width_wise_output_block_start_index", width_wise_output_block_start_index},
+                {"num_cols_already_processed_in_first_output_block", num_cols_already_processed_in_first_output_block},
+            });
 
         if (has_full) {
             compute_full_node_args["per_core_block_cnt"][core] = num_input_blocks_to_process;
@@ -353,17 +367,26 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
         // Cliff core (interleaved only) always starts at the first output block, column 0.
         uint32_t width_wise_output_block_start_index = 0;
         uint32_t num_cols_already_processed_in_first_output_block = 0;
-        writer_node_args["num_input_blocks_to_process"][cliff_core] = num_input_blocks_to_process;
-        writer_node_args["height_wise_input_block_start_index"][cliff_core] = height_wise_input_block_start_index;
-        writer_node_args["num_unpadded_cols_per_input_block"][cliff_core] = num_unpadded_cols_per_input_block;
-        writer_node_args["width_wise_output_block_start_index"][cliff_core] = width_wise_output_block_start_index;
-        writer_node_args["num_cols_already_processed_in_first_output_block"][cliff_core] =
-            num_cols_already_processed_in_first_output_block;
+        SetRuntimeArgsForNode(
+            writer_node_args,
+            cliff_core,
+            {
+                {"num_input_blocks_to_process", num_input_blocks_to_process},
+                {"height_wise_input_block_start_index", height_wise_input_block_start_index},
+                {"num_unpadded_cols_per_input_block", num_unpadded_cols_per_input_block},
+                {"width_wise_output_block_start_index", width_wise_output_block_start_index},
+                {"num_cols_already_processed_in_first_output_block", num_cols_already_processed_in_first_output_block},
+            });
 
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         // Cliff core only exists for interleaved input.
-        reader_node_args["num_tiles"][cliff_core] = num_tiles_to_read;
-        reader_node_args["start_page_id"][cliff_core] = tile_start_index;
+        SetRuntimeArgsForNode(
+            reader_node_args,
+            cliff_core,
+            {
+                {"num_tiles", num_tiles_to_read},
+                {"start_page_id", tile_start_index},
+            });
 
         if (has_cliff) {
             compute_cliff_node_args["per_core_block_cnt"][cliff_core] = num_input_blocks_to_process;

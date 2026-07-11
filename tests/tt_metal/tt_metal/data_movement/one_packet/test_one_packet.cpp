@@ -120,13 +120,17 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 
     ProgramRunArgs run_params;
     ProgramRunArgs::KernelRunArgs krp{.kernel = kspec.unique_id};
-    krp.runtime_arg_values["num_packets"][test_config.master_core_coord] = (uint32_t)test_config.num_packets;
-    krp.runtime_arg_values["packet_size_bytes"][test_config.master_core_coord] =
-        (uint32_t)test_config.packet_size_bytes;
-    krp.runtime_arg_values["master_l1_addr"][test_config.master_core_coord] = master_l1_address;
-    krp.runtime_arg_values["subordinate_l1_addr"][test_config.master_core_coord] = subordinate_l1_address;
-    krp.runtime_arg_values["responder_x"][test_config.master_core_coord] = (uint32_t)physical_subordinate_core.x;
-    krp.runtime_arg_values["responder_y"][test_config.master_core_coord] = (uint32_t)physical_subordinate_core.y;
+    SetRuntimeArgsForNode(
+        krp.runtime_arg_values,
+        test_config.master_core_coord,
+        {
+            {"num_packets", (uint32_t)test_config.num_packets},
+            {"packet_size_bytes", (uint32_t)test_config.packet_size_bytes},
+            {"master_l1_addr", master_l1_address},
+            {"subordinate_l1_addr", subordinate_l1_address},
+            {"responder_x", (uint32_t)physical_subordinate_core.x},
+            {"responder_y", (uint32_t)physical_subordinate_core.y},
+        });
     run_params.kernel_run_args.push_back(krp);
     SetProgramRunArgs(program, run_params);
 

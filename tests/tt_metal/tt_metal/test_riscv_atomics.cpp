@@ -79,8 +79,8 @@ protected:
         const auto make_run_params = [&](const experimental::KernelSpecName& kernel_name) {
             return experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel = kernel_name,
-                .runtime_arg_values =
-                    {{"l1_counter_addr", {{core, l1_unreserved_base}}}, {"increment_times", {{core, iterations}}}},
+                .runtime_arg_values = experimental::CreateRuntimeArgsForNode(
+                    core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}),
             };
         };
 
