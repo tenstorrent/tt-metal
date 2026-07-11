@@ -192,7 +192,7 @@ void sort_barrier(
         sem_barrier.set(0);
 
         // Broadcast to all other cores
-        for (uint32_t core_id = start_core_id; core_id < num_cores; core_id++) {
+        for (uint32_t core_id = start_core_id; core_id < start_core_id + num_cores; core_id++) {
             if (core_id == this_core_id) {
                 continue;
             }
