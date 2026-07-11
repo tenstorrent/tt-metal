@@ -2514,13 +2514,15 @@ class TTSeamlessM4Tv2Model:
 
         # ---- First encode ----
         if input_features is not None:
-            # Speech encoder conv programs do not coexist with vocoder/T2U JIT in the same L1 budget.
-            # Back-to-back ``generate()`` (demo warmups) may leave decode-trace / T2U / vocoder state
-            # that collides with speech-encoder JIT on the timed run.
+            # Drop prior T2U/vocoder/decode-trace state so speech encode has L1 headroom, but do
+            # **not** ``clear_runtime_program_cache()`` here: wiping speech-encoder prep + the
+            # device program cache after ``prewarm_speech_encoder`` (or forcing a cold encode)
+            # collapses free-running S2TT/S2ST/ASR at mel 1024 into token loops. E2E teacher-forced
+            # gates prewarm then ``_encode_speech`` without that clear and stay accurate.
             self.t2u.release_forward_trace()
             self.vocoder.release_forward_trace()
             self.release_generation_runtime()
-            self.clear_runtime_program_cache()
+            self.release_text_decoder_decode_trace()
             ttnn.synchronize_device(self.device)
             enc_tt, enc_attn_tt, enc_attn_owned = self._encode_speech(input_features, attn_tt_text)
             if return_timings and attn_tt_text is not None:

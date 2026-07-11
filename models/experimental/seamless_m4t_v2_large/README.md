@@ -219,7 +219,7 @@ Task order:
 - **Text** — *A Tale of Two Cities* from `models/tt_transformers/tests/tale-of-two-cities.txt.bz2` (cached under `scripts/outputs/` when expanded).
 - **Audio** — by default, concatenated **LibriSpeech-dummy** utterances until ≥ 4096 mel frames (`scripts/outputs/long_speech_input_librispeech.wav`). Falls back to looping the demo preamble WAV if the dataset is unavailable.
 
-At mel lengths **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a **throwaway** mesh device so the timed session is fresh (avoids multi-`generate()` decode-trace collapse). The timed session skips speech-encoder dummy prewarm — `generate()` clears the program cache before encode anyway, and a dummy encode at mel 1024 poisons free-running decode into token loops. E2E teacher-forced gates still use on-bucket prewarm; dummy `_encode_speech` prewarm is skipped only for mel **1920–2560** (proxy JIT at 3072). T2ST does not use split warmups.
+At mel lengths **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a **throwaway** mesh device so the timed session is fresh (avoids multi-`generate()` decode-trace collapse). The timed session still runs speech-encoder prewarm; `generate()` releases prior T2U/vocoder/decode-trace state but does **not** wipe the program cache before speech encode (that clear was collapsing free-running mel-1024 output into token loops). Dummy `_encode_speech` prewarm is skipped only for mel **1920–2560** (proxy JIT at 3072). T2ST does not use split warmups.
 
 ```bash
 python models/experimental/seamless_m4t_v2_large/scripts/demo_perf_sweep.py

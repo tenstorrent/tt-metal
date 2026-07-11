@@ -91,9 +91,8 @@ SEQ_LEN_MAX = 4096
 # Multiple speech ``generate()`` calls in one device session (warmup + timed) leave decode-trace
 # state that collapses S2TT/S2ST/ASR on the timed run (token loops / garbage text). Observed on
 # P150 from mel 1024 upward and on BH-QB notably at 2048 mel. Warm on a throwaway device, then
-# time on a fresh session. Skip speech-encoder *dummy* prewarm on the timed session: ``generate()``
-# already clears the program cache before speech encode, and a dummy encode at mel 1024 poisons
-# free-running decode into ``ज़्`` loops (E2E teacher-forced gates still use on-bucket prewarm).
+# time on a fresh session (same pattern as cold-start preflight). Timed session still runs
+# speech-encoder prewarm; ``generate()`` must not wipe that prep via ``clear_runtime_program_cache``.
 _SPEECH_SPLIT_WARMUP_MEL = 1024
 
 
@@ -570,10 +569,7 @@ def _run_five_tasks_at_seq_len(
     log.write(f"  [3/5] S2TT @ {seq_len} mel frames")
     try:
         with demo_mod._isolated_task_session(**session_kw) as (device, tt_model):
-            # ``generate()`` clears program cache before speech encode; a dummy prewarm at mel
-            # ≥1024 only risks L1 poison (``ज़्`` loops). E2E gates still prewarm on-bucket.
-            if not speech_split_warmup:
-                demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
+            demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
             feats_tt = demo_mod.torch_feats_to_ttnn(device, speech_feats)
             attn_tt = demo_mod.torch_ids_to_ttnn(device, speech_attn)
             out, _ = demo_mod._warmup_and_time(
@@ -613,8 +609,7 @@ def _run_five_tasks_at_seq_len(
                 task="S2ST",
             )
         with demo_mod._isolated_task_session(**session_kw) as (device, tt_model):
-            if not speech_split_warmup:
-                demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
+            demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
             feats_tt = demo_mod.torch_feats_to_ttnn(device, speech_feats)
             attn_tt = demo_mod.torch_ids_to_ttnn(device, speech_attn)
             out, _ = demo_mod._warmup_and_time(
@@ -667,8 +662,7 @@ def _run_five_tasks_at_seq_len(
                 task="ASR",
             )
         with demo_mod._isolated_task_session(**session_kw) as (device, tt_model):
-            if not speech_split_warmup:
-                demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
+            demo_mod._prewarm_speech_encoder(tt_model, mel_frames)
             feats_tt = demo_mod.torch_feats_to_ttnn(device, speech_feats)
             attn_tt = demo_mod.torch_ids_to_ttnn(device, speech_attn)
             out, _ = demo_mod._warmup_and_time(
