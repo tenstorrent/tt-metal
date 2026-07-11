@@ -28,7 +28,9 @@ class ReconfigStall(Check):
         "allowlist (L1_Dest_addr); other latched registers would false-positive. "
         "Whether the running unit is provably idle by a handshake instead of a "
         "stall is not modeled. Cross-arch (WH self-guards vs BH relies-on-caller) "
-        "asymmetry is surfaced as data, not judged."
+        "asymmetry is surfaced as data, not judged. The STALLWAIT BLOCK mask "
+        "(1st operand) is not verified to actually block the config-write "
+        "instruction — only the drain condition (2nd operand) is checked."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
@@ -82,13 +84,13 @@ class ReconfigStall(Check):
                 and registry.classify_macro(f.get("name", "")) == "stall"
                 and f["off"] < first_write["off"]
             ]
-            # Only the STALLWAIT's SECOND operand (wait_res) drains a unit; the
-            # first (stall_res, e.g. STALL_UNPACK) names the block being held and
-            # must NOT be mistaken for a unit drain.
+            # Only the STALLWAIT's SECOND operand (wait_res = ConditionMask)
+            # drains a unit; the first (stall_res = BlockMask, e.g. STALL_UNPACK)
+            # names the block being held. Word-boundary match so 'PACK' does not
+            # match inside 'UNPACK' (see registry.condition_drains_unit).
             drains = any(
-                any(
-                    tok in registry.stallwait_wait_operand(s.get("text", ""))
-                    for tok in drain_tokens
+                registry.condition_drains_unit(
+                    registry.stallwait_wait_operand(s.get("text", "")), drain_tokens
                 )
                 for s in stalls_before
             )

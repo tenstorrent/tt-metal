@@ -257,6 +257,14 @@ def semaphore_target(fact: dict):
     return None, False
 
 
+def condition_drains_unit(operand: str, tokens) -> bool:
+    """True if the STALLWAIT condition `operand` waits on any of `tokens`,
+    matched at WORD boundaries. Substring matching would be wrong: 'PACK' is a
+    substring of 'UNPACK', so `p_stall::UNPACK` (unpacker drain, C1/C2) would be
+    misread as a packer drain (C3-C6)."""
+    return any(re.search(rf"\b{re.escape(t)}\b", operand) for t in tokens)
+
+
 def stallwait_wait_operand(text: str) -> str:
     """The DRAIN condition of a STALLWAIT is its SECOND operand (wait_res); the
     first (stall_res, e.g. STALL_UNPACK) names the block being held, not the unit

@@ -36,7 +36,10 @@ class CfgWordOverlap(Check):
         "(RMWCIB is byte-atomic), semaphore/mutex ordering, and value-invariance "
         "are the LLM's call. Writes whose field name does not resolve to an "
         "ADDR32 in cfg_defines.h are listed as 'unresolved'. Intra-thread "
-        "full-word clobber of a sibling field is only partially modeled."
+        "full-word clobber of a sibling field is only partially modeled. "
+        "Config has two banks selected by CFG_STATE_ID; the tool does not model "
+        "StateID, so it may over-approximate (flag a word when the threads use "
+        "different banks)."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:

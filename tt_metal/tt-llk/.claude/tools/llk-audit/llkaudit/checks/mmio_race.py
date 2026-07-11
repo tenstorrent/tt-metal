@@ -28,7 +28,9 @@ class MmioRace(Check):
         "Interprocedural ordering: a write whose guard/consumer lives in a CALLER "
         "shows as NO_LOCAL_ORDERING — the LLM must follow the call graph. "
         "Quasar AutoTTSync ordering is not modeled. Writes hidden inside SFPU "
-        "files that fail to parse are absent (see parse_errors)."
+        "files that fail to parse are absent (see parse_errors). A TRISC_CFG "
+        "(C13) stall only orders instructions its BLOCK mask holds; the tool "
+        "checks the C13 condition but not that the block mask covers the consumer."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
