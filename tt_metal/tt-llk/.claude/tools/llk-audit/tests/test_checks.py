@@ -491,15 +491,19 @@ def test_semaphore_wait_without_init_per_identity():
             )
         return FactBase("wormhole", f)
 
-    # mismatched concrete init -> flagged
+    # mismatched concrete init, no generic -> flagged, higher confidence (no tag)
     out = SemaphoreHandshake().run(base("FPU_SFPU", "SEMAPHORE_1"))
-    assert any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
+    ww = [f for f in out if f.hint == "WAIT_WITHOUT_INIT"]
+    assert len(ww) == 1 and ww[0].safety == "", ww
     # matching concrete init -> not flagged
     out = SemaphoreHandshake().run(base("SEMAPHORE_1", "SEMAPHORE_1"))
     assert not any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
-    # generic (parameterized) init present -> wildcard suppresses
+    # generic (parameterized) init present -> EMITTED as LOW_CONFIDENCE, not
+    # globally suppressed (the generic t6_sem(index) init may cover it, but a
+    # recall augmentor must not drop the candidate).
     out = SemaphoreHandshake().run(base("FPU_SFPU", "SEMAPHORE_1", generic=True))
-    assert not any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
+    ww = [f for f in out if f.hint == "WAIT_WITHOUT_INIT"]
+    assert len(ww) == 1 and ww[0].safety == "LOW_CONFIDENCE", ww
 
 
 @case
@@ -785,6 +789,272 @@ def test_diff_scope_filter():
     # scope to the math file: anchor match
     out = scope_to_changed(findings, ["/repo/.../llk_math_reduce.h"])
     assert len(out) == 1 and out[0]["file"].endswith("llk_math_reduce.h"), out
+
+
+# --- full-tool-review regression fixes ------------------------------------
+
+
+@case
+def test_cfg_word_wrcfg_128b_spans_four_words():
+    # WRCFG_128b overwrites base..base+3; a sibling write to base+2 must overlap.
+    Fp = "tt_llk_wormhole_b0/common/inc/cpack_common.h"  # PACK
+    Fm = "tt_llk_wormhole_b0/llk_lib/llk_math_common.h"  # MATH
+    facts = [
+        fn("p", Fp, 100, 200),
+        fn("m", Fm, 10, 30),
+        macro(
+            Fp,
+            110,
+            "TTI_WRCFG",
+            "TTI_WRCFG(x, p_cfg::WRCFG_128b, BASE_ADDR32)",
+            func="p",
+        ),
+        call(Fm, 12, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<SIB_ADDR32>", func="m"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"BASE_ADDR32": 40, "SIB_ADDR32": 42}  # 128b spans 40..43
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert any(f.kind == "shared_word@CONFIG:42" for f in shared), shared
+    # a WRCFG_32b (control) spans one word only -> no overlap at 42
+    facts[2] = macro(
+        Fp, 110, "TTI_WRCFG", "TTI_WRCFG(x, p_cfg::WRCFG_32b, BASE_ADDR32)", func="p"
+    )
+    fb2 = FactBase("wormhole", facts)
+    fb2.addr32 = {"BASE_ADDR32": 40, "SIB_ADDR32": 42}
+    assert not any(
+        f.kind == "shared_word@CONFIG:42"
+        for f in CfgWordOverlap().run(fb2)
+        if f.hint == "CROSS_THREAD_SHARED_WORD"
+    )
+
+
+@case
+def test_cfg_word_sfpu_file_attributed_to_math():
+    # An SFPU file (MATH thread, no unpack/math/pack token) must be attributed to
+    # MATH so its config write participates in the cross-thread analysis.
+    Fu = "tt_llk_blackhole/common/inc/cunpack_common.h"  # UNPACK
+    Fs = "tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_x.h"  # SFPU -> MATH
+    facts = [
+        fn("u", Fu, 10, 20),
+        fn("s", Fs, 30, 40),
+        call(Fu, 12, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<W_ADDR32>", func="u"),
+        call(Fs, 32, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<W_ADDR32>", func="s"),
+    ]
+    fb = FactBase("blackhole", facts)
+    fb.addr32 = {"W_ADDR32": 3, "W_MASK": 0x1}
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared) == 1, shared
+    assert "MATH" in shared[0].detail and "UNPACK" in shared[0].detail, shared[0].detail
+
+
+@case
+def test_cfg_word_threadconfig_not_a_cross_thread_race():
+    # Two threads SETC16 the same ThreadConfig word -> DIFFERENT physical
+    # registers (per-thread), NOT a data race -> must not be flagged.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    Fm = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("u", Fu, 10, 20),
+        fn("m", Fm, 30, 40),
+        macro(Fu, 12, "TTI_SETC16", "TTI_SETC16(TC_ADDR32, x)", func="u"),
+        macro(Fm, 32, "TTI_SETC16", "TTI_SETC16(TC_ADDR32, y)", func="m"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"TC_ADDR32": 5}
+    assert not any(
+        f.hint == "CROSS_THREAD_SHARED_WORD" for f in CfgWordOverlap().run(fb)
+    )
+
+
+@case
+def test_cfg_word_full_word_beats_unresolved_label():
+    # A full-word writer + a sibling whose mask is unresolved must stay
+    # POTENTIAL_CLOBBER (a certain clobber), not downgrade to UNKNOWN.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    Fm = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("u", Fu, 10, 20),
+        fn("m", Fm, 30, 40),
+        pw(Fu, 12, "get_cfg_pointer", "W_ADDR32", func="u"),  # full-word cfg[]=
+        call(Fm, 32, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<W_ADDR32>", func="m"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"W_ADDR32": 7}  # no W_MASK -> masked writer unresolved
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared) == 1 and shared[0].safety == "POTENTIAL_CLOBBER", shared
+
+
+@case
+def test_mailbox_query_does_not_pair_a_write():
+    # A non-blocking not_empty query does NOT drain the FIFO, so it must not make
+    # a writer look PAIRED (that would mask a no-reader deadlock).
+    Fm = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    facts = [
+        fn("m", Fm, 10, 20),
+        fn("u", Fu, 30, 40),
+        call(Fm, 12, "mailbox_write", func="m", arg0="ThreadId::UnpackThreadId"),
+        call(Fu, 32, "mailbox_not_empty", func="u", arg0="ThreadId::MathThreadId"),
+    ]
+    out = MailboxSync().run(FactBase("wormhole", facts))
+    w = next(f for f in out if f.kind == "mailbox:write")
+    assert w.hint == "UNPAIRED_ENDPOINT", w  # query alone does not pair a write
+    q = next(f for f in out if f.kind == "mailbox:query")
+    assert q.hint == "PAIRED_CHANNEL", q  # the query IS satisfied by the writer
+
+
+@case
+def test_reconfig_latched_first_then_undrained_sampled():
+    # A latched write FIRST must not abandon the whole function: a later
+    # undrained SAMPLED write must still be flagged.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"  # PACK
+    facts = [
+        fn("program_packer_reconfig", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_REG2FLOP",
+            "TTI_REG2FLOP(1,0,0,0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - X, Y)",
+            func="program_packer_reconfig",
+        ),
+        macro(
+            F,
+            150,
+            "TTI_WRCFG",
+            "TTI_WRCFG(TMP, WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32)",
+            func="program_packer_reconfig",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN" and out[0].line == 150, out
+
+
+@case
+def test_reconfig_drain_invalidated_by_reissue():
+    # drain -> write (ok) -> PACR re-arms PACK -> write (flagged DRAIN_REARMED).
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"  # PACK
+    facts = [
+        fn("set_packer_config", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK)",
+            func="set_packer_config",
+        ),
+        macro(
+            F,
+            120,
+            "TTI_WRCFG",
+            "TTI_WRCFG(a, WRCFG_32b, WA_ADDR32)",
+            func="set_packer_config",
+        ),
+        macro(
+            F, 130, "TTI_PACR", "TTI_PACR(0)", func="set_packer_config"
+        ),  # re-arms PACK
+        macro(
+            F,
+            140,
+            "TTI_WRCFG",
+            "TTI_WRCFG(b, WRCFG_32b, WB_ADDR32)",
+            func="set_packer_config",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "DRAIN_REARMED" and out[0].line == 140, out
+
+
+@case
+def test_mmio_matrix_op_is_a_consumer():
+    # A matrix issue (TTI_MVMUL) consumes config; a guard placed AFTER it cannot
+    # un-race it -> NO_LOCAL_ORDERING.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("f", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "ALU_ADDR32", func="f"),
+        macro(F, 120, "TTI_MVMUL", "TTI_MVMUL(0)", func="f"),  # consumer_math
+        macro(
+            F,
+            130,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::TRISC_CFG)",
+            func="f",
+        ),
+    ]
+    out = MmioRace().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "NO_LOCAL_ORDERING", out
+    # control: guard BEFORE the matrix op -> LOCALLY_ORDERED
+    facts[2] = macro(
+        F,
+        120,
+        "TTI_STALLWAIT",
+        "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::TRISC_CFG)",
+        func="f",
+    )
+    facts[3] = macro(F, 130, "TTI_MVMUL", "TTI_MVMUL(0)", func="f")
+    assert MmioRace().run(FactBase("wormhole", facts))[0].hint == "LOCALLY_ORDERED"
+
+
+@case
+def test_mmio_mop_sync_and_tensix_sync_order_writes():
+    F = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    for drain in ("mop_sync", "tensix_sync"):
+        facts = [
+            fn("f", F, 100, 200),
+            pw(F, 110, "get_cfg_pointer", "SOME_ADDR32", func="f"),
+            call(F, 120, drain, func="f"),
+        ]
+        out = MmioRace().run(FactBase("wormhole", facts))
+        assert out[0].hint == "LOCALLY_ORDERED", (drain, out)
+
+
+@case
+def test_diff_scope_none_sentinel():
+    # run.sh passes --changed-files __none__ when no LLK header changed; it must
+    # scope to nothing (empty), not everything.
+    from llkaudit.cli import scope_to_changed
+
+    findings = [{"file": "/x/cpack_common.h", "evidence": ["cpack_common.h:5 F"]}]
+    assert scope_to_changed(findings, ["__none__"]) == []
+
+
+@case
+def test_is_ctor_or_dtor_tightened():
+    from llkaudit import registry
+
+    assert registry.is_ctor_or_dtor("~T6MutexLockGuard")  # dtor
+    assert registry.is_ctor_or_dtor("T6MutexLockGuard")  # CamelCase ctor/type
+    assert not registry.is_ctor_or_dtor("set_packer_config")  # snake fn
+    assert not registry.is_ctor_or_dtor("Process_tile")  # Capitalized_snake kept
+    assert not registry.is_ctor_or_dtor("")
+
+
+@case
+def test_cli_empty_checks_is_hard_error():
+    import os
+    import tempfile
+
+    from llkaudit import cli
+
+    fd, path = tempfile.mkstemp(suffix=".jsonl")
+    os.close(fd)
+    with open(path, "w") as f:
+        f.write('{"arch":"wormhole","parse_errors":0,"facts":[]}')
+    try:
+        for bad in ("", ",", " "):
+            try:
+                cli.main(["--arch", "wormhole", "--facts", path, "--checks", bad])
+                assert False, f"empty --checks {bad!r} should have errored"
+            except SystemExit as e:
+                assert e.code != 0
+    finally:
+        os.remove(path)
 
 
 def main():

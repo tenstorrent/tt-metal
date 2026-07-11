@@ -24,12 +24,18 @@ Get the deterministic candidate list before manual analysis:
     # candidates: out/audit.<arch>.json -> .checks["semaphore-handshake"].findings
 
 `MUTEX_IMBALANCE` = a function whose acquire/release counts differ (wrapper defs
-and RAII ctor/dtor are already excluded). `WAIT_WITHOUT_INIT` = a wait with no
-SEMINIT in the parsed tree — a **candidate only**, because the BRISC boot firmware
-inits semaphore Max out-of-tree. The tool covers only these two mechanical
-signals; **widen for** cross-thread post/get direction, cross-layer producers
-(ttnn/models), and deadlock cycles — none of which it decides (see `blind_spots`).
-It never clears a site; you decide. If unbuilt, proceed manually.
+and RAII ctor/dtor are already excluded). `WAIT_WITHOUT_INIT` = a wait whose
+identity has no matching **concrete** SEMINIT in the parsed tree — a **candidate
+only** (the BRISC boot firmware inits Max out-of-tree, and the generic
+`t6_sem(index)` wrapper can init any semaphore). A finding tagged
+`safety: LOW_CONFIDENCE` means a generic init IS present and *may* cover it —
+still surfaced, just lower priority; an untagged one has no init of any kind in
+tree. Wait/init identity vocabularies (`semaphore::NAME` vs `p_stall::SEMAPHORE_n`)
+don't reconcile statically, so treat every one as a lead to confirm, not a verdict.
+The tool covers only these two mechanical signals; **widen for** cross-thread
+post/get direction, cross-layer producers (ttnn/models), and deadlock cycles —
+none of which it decides (see `blind_spots`). It never clears a site; you decide.
+If unbuilt, proceed manually.
 
 ## The bug class (precise)
 The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphores[0..7]`, each a 4-bit `Value` 0–15 plus a `Max`) and **two ATGETM/ATRELM mutexes**. Unlike config-register races (covered by `cfg-word-overlap-audit`, `reconfig-stall-audit`, `mmio-race-audit`), these bugs are in the *handshake protocol*: a mis-initialized, unbalanced, wrong-direction, or wrongly-ordered post/wait/get → **lost synchronization (silent data corruption)** or **deadlock (TENSIX TIMED OUT)**.

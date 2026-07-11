@@ -14,6 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 HERE="$PWD"
 EXTRACT="$HERE/extractor/llk_extract"
+LLK_ROOT="$(cd ../../.. && pwd)"            # tt_metal/tt-llk
+METAL_DIR="$(cd "$LLK_ROOT"/../.. && pwd)"  # repo root (also used for git in --changed)
 
 # --- Kernel-tier (JIT: cb-sync / noc-sync) capability probe --------------------
 # The kernel-tier module (the cb-sync / noc-sync checkers + the compiler-wrapper
@@ -61,18 +63,29 @@ CHANGED_BASE="main"
 FULLJIT=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --checks) CHECKS="$2"; shift 2;;
+    --checks)
+      # Require a real value (not the next flag, not missing) so `--checks` does
+      # not swallow `--changed` or crash on an unbound $2.
+      if [ $# -lt 2 ] || [ "${2#-}" != "$2" ]; then
+        echo "run.sh: --checks needs a value (comma-separated names or 'all')" >&2; exit 2
+      fi
+      CHECKS="$2"; shift 2;;
     --changed) CHANGED=1; shift
-               # optional non-flag next token is the diff base (default: main)
-               if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then CHANGED_BASE="$1"; shift; fi;;
+               # An optional next token is the diff BASE — but ONLY if it is a
+               # real git ref. Otherwise it is the out_dir; swallowing it would
+               # set a bogus base -> empty diff -> every finding scoped away
+               # (a silent false all-clear).
+               if [ $# -gt 0 ] && [ "${1#-}" = "$1" ] && \
+                  git -C "$METAL_DIR" rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1; then
+                 CHANGED_BASE="$1"; shift
+               fi;;
     --full-jit) FULLJIT=1; shift;;   # also run the opt-in kernel tier (cb/noc)
+    --*) echo "run.sh: unknown option '$1'" >&2; exit 2;;
     *) OUT="$1"; shift;;
   esac
 done
 mkdir -p "$OUT"
 
-LLK_ROOT="$(cd ../../.. && pwd)"           # tt_metal/tt-llk
-METAL_DIR="$(cd "$LLK_ROOT"/../.. && pwd)"  # repo root
 SFPI="$LLK_ROOT/tests/sfpi"
 
 # SFPU vector code (sfpi_classes.h) uses GCC vector extensions clang rejects and
@@ -116,6 +129,17 @@ for h in "${HEADERS[@]}"; do
   fi
 done
 [ "$FAIL" -eq 0 ] || echo "($FAIL header(s) failed to parse — see $OUT/parse.log; expected for SFPU-heavy files)" >&2
+
+# Empty-fact-base floor: if NOTHING parsed, the run is not a clean audit — it is
+# a broken toolchain. Refuse to emit a false all-clear (0 findings, exit 0);
+# exit non-zero like the build-failure path so the calling skill falls back to
+# its manual method. (Some SFPU-heavy failures are expected; ALL failing is not.)
+if [ ! -s "$FACTS" ]; then
+  echo "llk-audit: fact base is EMPTY ($FAIL/${#HEADERS[@]} headers failed to parse)." >&2
+  echo "           This is a broken run, NOT a clean audit — refusing a false" >&2
+  echo "           all-clear. Check the toolchain / SFPI include paths ($OUT/parse.log)." >&2
+  exit 1
+fi
 
 # Diff-scoped mode: collect the changed LLK headers (committed vs BASE + working
 # tree) so the CLI can filter findings to those touching a changed file. The
