@@ -214,17 +214,17 @@ void DataCollector::DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerC
 }
 
 void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     realtime_profiler_active_chips_.insert(chip_id);
 }
 
 void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     realtime_profiler_active_chips_.erase(chip_id);
 }
 
 bool DataCollector::IsRealtimeProfilerActive() const {
-    std::lock_guard<std::mutex> lock(program_realtime_profiler_callbacks_mutex_);
+    std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     return !realtime_profiler_active_chips_.empty();
 }
 
