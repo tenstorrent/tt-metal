@@ -16,6 +16,14 @@
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
+// Enable the B0FDE5EE / B0FDE5C0 buffer-descriptor ring-buffer locators below (validate_buffer_desc /
+// _configure_buf_desc_table_). ring_buffer.h defines WATCHER_RING_BUFFER_PUSH only under a metal kernel/fw
+// build with watcher on; the standalone tt-llk infra build defines neither KERNEL_BUILD nor FW_BUILD, so it
+// is skipped and the #ifdef instrumentation compiles out (keeps the standalone build clean). Remove after.
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "api/debug/ring_buffer.h"
+#endif
+
 namespace ckernel::trisc
 {
 // Num of words in buffer descriptor struct
