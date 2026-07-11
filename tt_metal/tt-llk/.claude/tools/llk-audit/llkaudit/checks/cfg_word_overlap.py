@@ -36,7 +36,9 @@ class CfgWordOverlap(Check):
         "(RMWCIB is byte-atomic), semaphore/mutex ordering, and value-invariance "
         "are the LLM's call. Writes whose field name does not resolve to an "
         "ADDR32 in cfg_defines.h are listed as 'unresolved'. Intra-thread "
-        "full-word clobber of a sibling field is only partially modeled. "
+        "full-word clobber (INTRA_THREAD_CLOBBER) is a candidate: a full-word "
+        "write that intentionally sets the entire word (no separate masked "
+        "sibling) is benign, and a sibling written only out-of-tree is missed. "
         "Config has two banks selected by CFG_STATE_ID; the tool does not model "
         "StateID, so it may over-approximate (flag a word when the threads use "
         "different banks)."
@@ -138,7 +140,75 @@ class CfgWordOverlap(Check):
                     evidence=ev,
                 )
             )
+
+        findings += self._intra_thread_clobber(writers)
         return findings + unresolved
+
+    @staticmethod
+    def _is_full_word(how: str) -> bool:
+        # A write of all 32 bits: a raw cfg[]= store (cfg32/cfg_ptr/mmio_ptr) or
+        # WRCFG (WRCFG_32b/128b). NOT a masked/sized write (RMWCIB, cfg_rmw,
+        # cfg_reg_rmw_tensix, SETC16, REG2FLOP) and NOT a 16-bit cfg16 store.
+        h = how.upper()
+        return "CFG32" in h or "CFG_PTR" in h or "MMIO_PTR" in h or "WRCFG" in h
+
+    @staticmethod
+    def _is_masked(how: str) -> bool:
+        h = how.lower()
+        return "cfg_reg_rmw_tensix" in h or "cfg_rmw" in h or "rmwcib" in h
+
+    def _intra_thread_clobber(self, writers) -> list[Finding]:
+        """Pattern 3: a full-word write (cfg[]=/WRCFG_32b) to a multi-field Config
+        word, where the SAME thread also sets a DIFFERENT field of that word via a
+        masked RMW elsewhere. The full-word write is built from only its own field
+        and writes 0 into the sibling the thread set separately — a deterministic
+        destructive overwrite (not a concurrency race; a mutex cannot fix it, a
+        masked RMW can). Candidate only: a full-word write that intentionally sets
+        the entire word is benign — the LLM confirms."""
+        from collections import defaultdict
+
+        out: list[Finding] = []
+        for (ns, word), ws in sorted(writers.items()):
+            if ns != "CONFIG":
+                continue
+            per_thread = defaultdict(lambda: {"full": [], "masked": []})
+            for w in ws:
+                if w["thread"] == "UNKNOWN":
+                    continue
+                if self._is_full_word(w["how"]):
+                    per_thread[w["thread"]]["full"].append(w)
+                elif self._is_masked(w["how"]):
+                    per_thread[w["thread"]]["masked"].append(w)
+            for thr, d in per_thread.items():
+                full_fields = {w["field"] for w in d["full"]}
+                clobbered = [w for w in d["masked"] if w["field"] not in full_fields]
+                if not d["full"] or not clobbered:
+                    continue
+                anchor = d["full"][0]
+                ev = [self._w_ev(w, "full-word write") for w in d["full"]] + [
+                    self._w_ev(w, "masked sibling (may be zeroed)") for w in clobbered
+                ]
+                out.append(
+                    Finding(
+                        file=anchor["file"],
+                        line=anchor["line"],
+                        function=anchor["function"],
+                        kind=f"clobber@CONFIG:{word}",
+                        hint="INTRA_THREAD_CLOBBER",
+                        detail=(
+                            f"[{thr}] full-word write of {sorted(full_fields)} to word "
+                            f"{word} may zero sibling field(s) "
+                            f"{sorted({w['field'] for w in clobbered})} the same thread "
+                            f"sets via masked RMW"
+                        ),
+                        evidence=ev,
+                    )
+                )
+        return out
+
+    @staticmethod
+    def _w_ev(w: dict, what: str) -> str:
+        return f'{w["file"].split("/")[-1]}:{w["line"]} [{w["thread"]}] {w["field"]} ({w["how"]}) {what}'
 
     def _unresolved(self, fact: dict, field: str) -> Finding:
         return Finding(
