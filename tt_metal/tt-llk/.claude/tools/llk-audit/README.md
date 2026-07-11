@@ -110,3 +110,11 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   latched `program_packer_destination` (`L1_Dest_addr`); exercises `THCON_ONLY` on BH.
 - `semaphore-handshake` sees all ops (17 post / 20 get / 4 init / balanced mutexes
   on WH) and correctly reports no imbalance — after excluding wrapper defs + RAII.
+
+The HW claims the checkers encode are grounded in the tt-isa-docs
+(`BackendConfiguration.md`: the `Config` vs `ThreadConfig` split and that `SETC16`
+alone writes `ThreadConfig`; `RMWCIB.md`: byte-atomic masked RMW of `Config`;
+`STALLWAIT.md`: `TRISC_CFG` = condition C13, and the drain-unit condition bits;
+`MemoryOrdering.md`: the store-then-store race). Known modeling limitations
+(StateID banks, STALLWAIT block-mask coverage, interprocedural linkage) are
+listed per check in `blind_spots`.

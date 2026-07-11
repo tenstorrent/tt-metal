@@ -500,6 +500,41 @@ def test_semaphore_wait_without_init_per_identity():
     assert not any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
 
 
+@case
+def test_reconfig_pack_not_drained_by_unpack_condition():
+    # 'PACK' is a substring of 'UNPACK'. A PACK-thread reconfig whose STALLWAIT
+    # condition drains only the UNPACKER must NOT be treated as PACK-drained.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [
+        fn("set_packer_config", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK)",
+            func="set_packer_config",
+        ),
+        macro(
+            F,
+            120,
+            "TTI_WRCFG",
+            "TTI_WRCFG(TMP, WRCFG_32b, SOME_ADDR32)",
+            func="set_packer_config",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "THCON_ONLY", out  # NOT silently drained
+    # a genuine PACK drain in the condition -> not flagged
+    facts[1] = macro(
+        F,
+        110,
+        "TTI_STALLWAIT",
+        "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK)",
+        func="set_packer_config",
+    )
+    assert ReconfigStall().run(FactBase("wormhole", facts)) == []
+
+
 def main():
     failed = 0
     for c in CASES:
