@@ -355,7 +355,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
 
-    const bool slice_inner_dim = (height_sharded && !enable_activation_reuse) || (block_sharded && !full_inner_dim);
+    // full_inner_dim => keep the whole reduction dim in one K-block (num_blocks_act_w = 1, no matmul-partials
+    // accumulate). For height-sharded this is the Quasar fit-guarded "no-spill" path (set upstream in conv2d.cpp
+    // for small-K convs whose full window fits L1); block-sharded already used it. When full_inner_dim is false we
+    // slice by kernel row and spill as before.
+    const bool slice_inner_dim =
+        (height_sharded && !enable_activation_reuse && !full_inner_dim) || (block_sharded && !full_inner_dim);
 
     uint32_t conv_act_c_blocks = 1;
     uint32_t out_conv_c_blocks = 1;

@@ -448,6 +448,43 @@ Result conv2d_L1(
         conv_is_1d_depthwise,
         coalesce_1d_depthwise_kw_reads);
 
+    // ---- FIT-GUARDED Quasar "no-spill" (single K-block) conv path ----
+    // The Quasar matmul-partials K-accumulate (RESTORE_PARTIALS_WR / QSR_RESTORE_WR g_dfb ring rewind in
+    // conv_bmm_tilize_metal2.cpp) is a known-broken LLK path: the packer PACR0_TILE_INC in-place accumulate
+    // mis-addresses the matmul_partials CB after the ring rewind and writes OOB in L1 (ERROR_TRISC1, opcode
+    // 0x19). The reduction dim K is spilled into filter_h blocks (num_blocks_act_w = filter_h) only because a
+    // height-sharded conv slices its inner dim by kernel row. When the WHOLE reduction dim
+    // (filter_h*filter_w*in_channels) fits in one small K-block we can instead run a single matmul block, so
+    // matmul_partials is never accumulated (compute kernel spill = in0_num_blocks_w > 1 stays false).
+    //
+    // Lever = full_inner_dim (same "don't slice the reduction dim" semantics block-sharded already uses):
+    //   (i)   override block_config.act_block_w_ntiles to the FULL-K tile count (was one filter row),
+    //   (ii)  conv_config.full_inner_dim = true  -> factory slice_inner_dim = false -> num_blocks_act_w = 1
+    //         and the reader reads the full window per block,
+    //   (iii) force the weight matrix into its full-inner-dim (single-block) layout below.
+    // FIT GUARD: height-sharded, real conv (not 1x1-matmul, not depthwise), filter_h > 1 (so the sliced path
+    // would actually spill), and the full single K-block is small enough to fit L1 / the uint16 DFB ring.
+    // Deep/large-K convs (e.g. resnet layer2+ >32 K-tiles) fall through and keep the (validated) spilling path.
+    // NOTE: this is Quasar-only (experimental/quasar/conv2d tree); the shared conv2d_utils / prepare_conv2d_weights
+    // decisions are left untouched, so non-Quasar convs (which set full_inner_dim=true on height-sharded layers,
+    // e.g. resnet50) are unaffected.
+    constexpr uint32_t kQuasarConvNoSpillMaxKTiles = 32;  // stem full-K ~= 16 tiles; conservative L1/DFB headroom
+    const bool height_sharded_conv = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t full_inner_dim_k_ntiles =
+        tt::round_up(in_channels_padded * kernel_size[0] * kernel_size[1], tt::constants::TILE_WIDTH) /
+        tt::constants::TILE_HEIGHT;
+    const bool force_conv_no_spill = height_sharded_conv && !mm_conv && !conv_is_1d_depthwise && (kernel_size[0] > 1) &&
+                                     (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
+    if (force_conv_no_spill) {
+        opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
+        conv_config.full_inner_dim = true;
+        log_debug(
+            tt::LogOp,
+            "conv2d Quasar: forcing no-spill full-inner-dim path (act_block_w_ntiles={} K-tiles, "
+            "num_blocks_act_w=1) to avoid the broken matmul-partials K-accumulate.",
+            full_inner_dim_k_ntiles);
+    }
+
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
@@ -468,7 +505,12 @@ Result conv2d_L1(
         bias_tensor.has_value(),
         conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse,
+        // Height-sharded weight layout picks full-inner-dim (single-block, [r][s][c] flattened, no per-kernel-row
+        // tile padding) vs sliced-by-kernel-row via this activation-reuse arg (to_weight_special_padding_tile_layout).
+        // For the no-spill path we need the full-inner-dim layout so it matches act_block_w_ntiles = full K and the
+        // factory's single-block reader. We only borrow the layout here; enable_activation_reuse is NOT passed on to
+        // the device op (line below), so the deferred split-reader reuse optimization stays off.
+        conv_config.enable_activation_reuse || force_conv_no_spill,
         coalesce_1d_depthwise_kw_reads,
         orig_stride);
 
