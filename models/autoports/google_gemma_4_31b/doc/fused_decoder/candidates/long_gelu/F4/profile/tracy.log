@@ -1,0 +1,488 @@
+2026-07-11 09:04:48.258 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile
+2026-07-11 09:04:48.260 | INFO     | __main__:main:395 - Using port 8086
+2026-07-11 09:04:48.260 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-11 09:04:48.264 | INFO     | tracy:run_report_setup:112 - Capture command: ('/localdev/odjuricic/tt-metal/build/tools/profiler/bin/tracy-capture -o models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-07-11 09:04:48.277 | INFO     | __main__:main:413 - Test process started
+2026-07-11 09:04:49.603 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile
+2026-07-11 09:04:49.927 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate 2026-07-11 09:04:54.382 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 09:04:54.382 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 09:04:54.383 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 09:04:54.383 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 09:04:54.384 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 09:04:54.384 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 09:04:54.384 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 09:04:54.426 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 09:04:54.426 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 09:04:54.426 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 09:04:54.426 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 09:04:54.427 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 09:04:54.471 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 09:04:54.658 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 09:04:54.658 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 09:04:54.658 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 09:04:54.658 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 09:04:54.658 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 09:04:54.658 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 09:04:54.722 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-07-11 09:04:54.783 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 09:04:55.356 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349952 GHz, device_time_at_sync=12202014738706 cycles (realtime_profiler_manager.cpp:1127)
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/7108596157407889417/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/7108596157407889417/ncrisc/ncrisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/7108596157407889417/ncrisc/ncrisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_receiver/7108596157407889417/\"" -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,168,1,13,0,1,1,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/2530099903258357702/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/2530099903258357702/ncrisc/ncrisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/2530099903258357702/ncrisc/ncrisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_receiver/2530099903258357702/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,168,1,13,0,1,1,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc2/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/runtime/sfpi/include -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc2/trisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc2/trisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"bmm_large_block_zm_fused_bias_activation/3830561723537766939/\"" -DKERNEL_COMPILE_TIME_ARGS=1,1,1,1,31,62,62,168,1,13,1,2,2,1,62,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"bias_ntiles\",62}, {\"cb_intermed0\",5}, {\"cb_out\",4}, {\"cb_in0_transposed\",10}, {\"cb_bias\",3}, {\"cb_in1\",1}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/matmul.h:7,
+                 from /localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp:7,
+                 from ../chlkc_pack.cpp:3,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:712:5: note: in expansion of macro 'DO_PRAGMA'
+  712 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc0/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/runtime/sfpi/include -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc0/trisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc0/trisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"bmm_large_block_zm_fused_bias_activation/3830561723537766939/\"" -DKERNEL_COMPILE_TIME_ARGS=1,1,1,1,31,62,62,168,1,13,1,2,2,1,62,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"bias_ntiles\",62}, {\"cb_intermed0\",5}, {\"cb_out\",4}, {\"cb_in0_transposed\",10}, {\"cb_bias\",3}, {\"cb_in1\",1}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/matmul.h:7,
+                 from /localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp:7,
+                 from ../chlkc_unpack.cpp:3,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:707:5: note: in expansion of macro 'DO_PRAGMA'
+  707 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/8752017124346965888/brisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/8752017124346965888/brisc/brisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/8752017124346965888/brisc/brisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_receiver_writer_padding/8752017124346965888/\"" -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=62,168,1,13,2,3,1,1,672,2,672,62,672,2,1,2,86016,0,0,2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/13881701732417450031/brisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/13881701732417450031/brisc/brisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_receiver_writer_padding/13881701732417450031/brisc/brisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_receiver_writer_padding/13881701732417450031/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=62,168,1,13,2,3,1,1,672,2,672,62,672,2,1,2,86016,0,0,2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_sender_padding/1729378596466059847/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_sender_padding/1729378596466059847/ncrisc/ncrisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_sender_padding/1729378596466059847/ncrisc/ncrisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_sender_padding/1729378596466059847/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,168,1,168,1,1,1,0,0,0,0,0,168,1,13,0,1,10,10,21504,1,1,0,0,0,1,0,0,2,2048,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",6}, {\"cb_in0_sharded\",2}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc1/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/runtime/sfpi/include -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc1/trisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/3830561723537766939/trisc1/trisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"bmm_large_block_zm_fused_bias_activation/3830561723537766939/\"" -DKERNEL_COMPILE_TIME_ARGS=1,1,1,1,31,62,62,168,1,13,1,2,2,1,62,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"bias_ntiles\",62}, {\"cb_intermed0\",5}, {\"cb_out\",4}, {\"cb_in0_transposed\",10}, {\"cb_bias\",3}, {\"cb_in1\",1}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/7280929140759187587/brisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/7280929140759187587/brisc/brisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/7280929140759187587/brisc/brisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/7280929140759187587/\"" -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,672,672,62,62,1,62,168,1,13,2,3,9,9,112896,1,1,0,0,1,672,2,672,62,672,2,1,2,86016,0,0,0,2,2048,0,0,2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/3984576387384900964/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/3984576387384900964/ncrisc/ncrisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_receiver/3984576387384900964/ncrisc/ncrisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_receiver/3984576387384900964/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=8,84,1,32,0,1,1,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16470810515642248650/brisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16470810515642248650/brisc/brisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in1_sender_writer_padding/16470810515642248650/brisc/brisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in1_sender_writer_padding/16470810515642248650/\"" -DSKIP_MCAST='1' -DNOC_INDEX='0' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,672,1344,7,7,2,14,84,1,32,0,0,0,0,112896,1,1,0,0,1,672,7,672,7,2688,7,1,7,86016,0,0,0,2,2048,0,0,2,2048 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",7}, {\"cb_out\",4}, {\"cb_bias\",3}, {\"cb_in1\",1}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: BRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc0, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc0/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/runtime/sfpi/include -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc0/trisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc0/trisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=2 -DUCK_CHLKC_UNPACK -DCOMPILE_FOR_TRISC=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"bmm_large_block_zm_fused_bias_activation/4481079337918375504/\"" -DKERNEL_COMPILE_TIME_ARGS=2,4,8,2,1,14,7,84,1,32,1,7,7,1,28,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"activation_param1\",0}, {\"bias_ntiles\",7}, {\"cb_intermed0\",5}, {\"cb_out\",4}, {\"activation_param2\",0}, {\"activation_param0\",1}, {\"cb_in0_transposed\",10}, {\"cb_bias\",3}, {\"cb_in1\",1}, {\"activation_type\",1}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:13,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:15,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/matmul.h:7,
+                 from /localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp:7,
+                 from ../chlkc_unpack.cpp:3,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:26,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h: In function 'void llk_wait_tiles(int, int32_t)':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-WAIT-FRONT,/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h,19,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:707:5: note: in expansion of macro 'DO_PRAGMA'
+  707 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_unpack.h:19:5: note: in expansion of macro 'DeviceZoneScopedSumN1'
+   19 |     DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_sender_padding/11789678568178607/ncrisc/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_sender_padding/11789678568178607/ncrisc/ncrisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/reader_bmm_tile_layout_in0_sender_padding/11789678568178607/ncrisc/ncrisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"reader_bmm_tile_layout_in0_sender_padding/11789678568178607/\"" -DNOC_INDEX='1' -DNOC_MODE='0' -DKERNEL_COMPILE_TIME_ARGS=1,168,2,672,2,4,8,0,0,0,0,0,84,1,32,0,1,95,98,21504,1,1,0,0,0,1,0,0,2,2048,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"cb_sparsity\",6}, {\"cb_in0_sharded\",2}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,395,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:35:5: note: in expansion of macro 'DO_PRAGMA'
+   35 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:395:5: note: in expansion of macro 'SrcLocNameToHash'
+  395 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: NCRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc2, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc2/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/runtime/sfpi/include -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc2/trisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc2/trisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=4 -DUCK_CHLKC_PACK -DCOMPILE_FOR_TRISC=2 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"bmm_large_block_zm_fused_bias_activation/4481079337918375504/\"" -DKERNEL_COMPILE_TIME_ARGS=2,4,8,2,1,14,7,84,1,32,1,7,7,1,28,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"activation_param1\",0}, {\"bias_ntiles\",7}, {\"cb_intermed0\",5}, {\"cb_out\",4}, {\"activation_param2\",0}, {\"activation_param0\",1}, {\"cb_in0_transposed\",10}, {\"cb_bias\",3}, {\"cb_in1\",1}, {\"activation_type\",1}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:14,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/cb_api.h:12,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/common.h:11,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/inc/api/compute/matmul.h:7,
+                 from /localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp:7,
+                 from ../chlkc_pack.cpp:3,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common/chlkc_list.h:21,
+                 from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:13:
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h: In function 'void llk_wait_for_free_tiles(int32_t, int32_t)':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: CB-COMPUTE-RESERVE-BACK,/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h,21,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:712:5: note: in expansion of macro 'DO_PRAGMA'
+  712 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io/llk_io_pack.h:21:5: note: in expansion of macro 'DeviceZoneScopedSumN2'
+   21 |     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+      |     ^~~~~~~~~~~~~~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building trisc1, compile step:
+cd /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc1/ && /localdev/odjuricic/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O3 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh-tensix -I. -I.. -I/localdev/odjuricic/tt-metal/ -I/localdev/odjuricic/tt-metal/ttnn -I/localdev/odjuricic/tt-metal/ttnn/cpp -I/localdev/odjuricic/tt-metal/tt_metal -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/common -I/localdev/odjuricic/tt-metal/tt_metal/hostdevcommon/api -I/localdev/odjuricic/tt-metal/tt_metal/api/ -I/localdev/odjuricic/tt-metal/runtime/sfpi/include -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/odjuricic/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/odjuricic/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api -I/localdev/odjuricic/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu -I/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/localdev/odjuricic/tt-metal/ttnn/cpp/ttnn/operations/matmul/device/kernels/compute -c -o /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc1/trisck.12164159001247977670.o /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc -MF /localdev/odjuricic/tt-metal/.exp_run/tt-metal-cache/tt-metal-cache12569132917722018041/kernels/bmm_large_block_zm_fused_bias_activation/4481079337918375504/trisc1/trisck.12164159001247977670.d -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=3 -DUCK_CHLKC_MATH -DCOMPILE_FOR_TRISC=1 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFULL_KERNEL_NAME="\"bmm_large_block_zm_fused_bias_activation/4481079337918375504/\"" -DKERNEL_COMPILE_TIME_ARGS=2,4,8,2,1,14,7,84,1,32,1,7,7,1,28,0,0,0 -DKERNEL_COMPILE_TIME_ARG_MAP="{\"activation_param1\",0}, {\"bias_ntiles\",7}, {\"cb_intermed0\",5}, {\"cb_out\",4}, {\"activation_param2\",0}, {\"activation_param0\",1}, {\"cb_in0_transposed\",10}, {\"cb_bias\",3}, {\"cb_in1\",1}, {\"activation_type\",1}, {\"cb_in0\",0}, "
+In file included from /localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:15:
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc: In function 'uint32_t _start()':
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:25:22: note: '#pragma message: TRISC-KERNEL,/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc,86,KERNEL_PROFILER'
+   25 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:702:5: note: in expansion of macro 'DO_PRAGMA'
+  702 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/localdev/odjuricic/tt-metal/tt_metal/hw/firmware/src/tt-1xx/trisck.cc:86:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   86 |     DeviceZoneScopedMainChildN("TRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-07-11 09:05:01.902 | INFO     | tracy:signpost:49 - LONG_GELU_B0
+2026-07-11 09:05:01.914 | INFO     | tracy:signpost:49 - LONG_GELU_B0_END
+2026-07-11 09:05:01.914 | INFO     | tracy:signpost:49 - LONG_GELU_F4
+2026-07-11 09:05:01.932 | INFO     | tracy:signpost:49 - LONG_GELU_F4_END
+PCC=0.9996926042937556
+LONG_GELU_GATE candidate=F4 shape=M4096_K5376_N21504 pcc=0.9996926042937556 B0_median_us=11188.8745 candidate_median_us=18622.407 B0_samples_us=[11214.715, 11205.784, 11125.145, 11144.434, 11263.644, 11171.965] candidate_samples_us=[18629.257, 18613.038, 18615.557, 18612.418, 18643.739, 18631.348]
+PASSED2026-07-11 09:05:02.896 | info     |           Metal | Device kernel duration perf summary (device=0): count=24, min=907581ns, avg=9833257.3ns, max=18486919ns (profiler_analysis.cpp:675)
+2026-07-11 09:05:02.896 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=1758000ns, range=[0..17580000), underflow(<0ns)=0, overflow(>=17580000ns)=8) (profiler_analysis.cpp:718)
+2026-07-11 09:05:02.896 | info     |           Metal |   [           0 ..      1758000) |########################################|        8 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [     1758000 ..      3516000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [     3516000 ..      5274000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [     5274000 ..      7032000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [     7032000 ..      8790000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [     8790000 ..     10548000) |########################################|        8 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [    10548000 ..     12306000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [    12306000 ..     14064000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [    14064000 ..     15822000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:05:02.896 | info     |           Metal |   [    15822000 ..     17580000) |                                        |        0 (profiler_analysis.cpp:723)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+6.36s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+1.24s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+1.16s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+======================== 1 passed, 3 warnings in 10.12s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 09:05:05.246 | info     |    BuildKernels | JIT cache stats: 23/38 hits (60.5%) [23 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 09:05:05.246 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 09:05:05.254 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 09:05:05.254 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 09:05:05.383 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 09:05:05.383 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 09:05:05.383 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 9 ns
+
+Frames: 2
+Time span: 17.28 s
+Zones: 52,082
+Elapsed time: 15.61 s
+Saving trace... done!
+Trace size 494.07 KB (18.62% ratio)
+2026-07-11 09:05:05.597 | INFO     | __main__:main:452 - Copying /localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/odjuricic/tt-metal/build/profiler/build_wasm/traces/-s_2026_07_11_09_05_05.tracy
+2026-07-11 09:05:05.598 | WARNING  | __main__:main:457 - Could not copy /localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/odjuricic/tt-metal/build/profiler/build_wasm/traces/-s_2026_07_11_09_05_05.tracy: [Errno 2] No such file or directory: '/localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-07-11 09:05:05.598 | INFO     | __main__:main:464 - embed.tracy -> traces/-s_2026_07_11_09_05_05.tracy
+2026-07-11 09:05:05.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-11 09:05:05.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-11 09:05:05.598 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-11 09:05:05.667 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/.logs/tracy_ops_times.csv
+2026-07-11 09:05:05.675 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/.logs/tracy_ops_data.csv
+2026-07-11 09:05:05.675 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/localdev/odjuricic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-07-11 09:05:05.823 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-11 09:05:05.823 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-11 09:05:05.956 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-11 09:05:05.956 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-11 09:05:05.975 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-11 09:05:05.993 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/reports/2026_07_11_09_05_05/ops_perf_results_2026_07_11_09_05_05.csv

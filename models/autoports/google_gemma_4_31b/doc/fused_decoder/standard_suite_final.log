@@ -1,0 +1,249 @@
+2026-07-11T09:49:10Z
+5fa49e9fa2589c64e74771c9759b674de19a4e42
+941dd1d16b64246111e8402d875cbb7fc1cc6bbf6b33465ff0ba97103df90af6  models/autoports/google_gemma_4_31b/tt/fused_decoder.py
+2f8a26cbdd8ebb46c8ba478080c963cd288c7936854a7023227ad58d69a144f2  models/autoports/google_gemma_4_31b/tt/functional_decoder.py
+29b99b8c51d8bc3f5052da35f37477267e66215627ece3e100e012071b3eee06  models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py
+2fd1278ecd6703a62ba6292fa67644c1c7d3e7bc97b4d7877c1b3d9584d2d6be  models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py
+2026-07-11 09:49:14.091 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 32 items
+
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-0-sliding_attention] 2026-07-11 09:49:16.895 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 09:49:16.895 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 09:49:16.895 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 09:49:16.895 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 09:49:16.896 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 09:49:16.896 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 09:49:16.896 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 09:49:16.938 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 09:49:16.939 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 09:49:16.939 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 09:49:16.939 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 09:49:16.940 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 09:49:16.953 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 09:49:17.138 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 09:49:17.138 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 09:49:17.138 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 09:49:17.138 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 09:49:17.139 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 09:49:17.139 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 09:49:17.145 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-11 09:49:17.209 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 09:49:17.778 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349981 GHz, device_time_at_sync=14783344426283 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+PCC=0.99959686519651
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-5-full_attention] PCC=0.9995855601446522
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-0-sliding_attention] PCC=0.9993012933590529
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-5-full_attention] PCC=0.9992725506976833
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-0-sliding_attention] PCC=0.9992646469962472
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-5-full_attention] PCC=0.9992333176980527
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[0-sliding_attention] PCC=0.9996291558392226
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[5-full_attention] PCC=0.9996241336981911
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[prefill-0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[prefill-5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[decode-0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[decode-5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_runtime_path_source_audit PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-0-sliding_attention] PCC=0.9993037220796375
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-5-full_attention] PCC=0.9992954641190755
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-0-sliding_attention] PCC=0.9993347818338632
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-5-full_attention] PCC=0.9993486785595469
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[0-sliding_attention] PCC=0.9994098404951889
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[5-full_attention] PCC=0.9994791118648941
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention] PCC=0.9996697389369403
+PCC=0.9987940353331073
+TRACE_MUTATION kind=sliding_attention case=random seed=20261333 positions=737->738 correct_rmse=0.02083011530339718 stale_rmse=0.5709885954856873
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention] PCC=0.9994549299352342
+PCC=0.9994291046781918
+TRACE_MUTATION kind=full_attention case=random seed=20261338 positions=321->322 correct_rmse=0.010360670275986195 stale_rmse=0.3831114172935486
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention] PCC=0.9989972214422035
+PCC=0.9995988626385373
+TRACE_MUTATION kind=sliding_attention case=window_wrap seed=None positions=1023->1024 correct_rmse=0.0210209172219038 stale_rmse=0.5109914541244507
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention] PCC=0.9994656040480271
+PCC=0.9993845282908638
+TRACE_MUTATION kind=full_attention case=window_wrap seed=None positions=1023->1024 correct_rmse=0.012502898462116718 stale_rmse=0.44364872574806213
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1025] PCC=0.9976489451962358
+SLIDING_CACHE_OWNERSHIP seq_len=1025 logical=2 physical_block=15 block_offset=2
+PCC=0.9998895075651395
+PCC=0.9999089883821167
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1057] PCC=0.9992712216163254
+SLIDING_CACHE_OWNERSHIP seq_len=1057 logical=34 physical_block=15 block_offset=34
+PCC=0.9998854077360355
+PCC=0.9999109423017835
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[0-sliding_attention] PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[5-full_attention] PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_long_nonaligned_prefill_capacity[0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_long_nonaligned_prefill_capacity[5-full_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_exact_context_distinct_traced_decode[0-sliding_attention] SKIPPED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_exact_context_distinct_traced_decode[5-full_attention] SKIPPED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+5.63s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+5.56s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-5-full_attention]
+5.39s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[5-full_attention]
+5.27s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[0-sliding_attention]
+5.19s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-0-sliding_attention]
+4.84s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1057]
+4.79s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+4.74s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1025]
+4.72s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+4.59s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-5-full_attention]
+4.51s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+4.34s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-5-full_attention]
+4.25s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-5-full_attention]
+4.23s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[5-full_attention]
+4.23s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-5-full_attention]
+4.22s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-0-sliding_attention]
+3.88s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-0-sliding_attention]
+3.87s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-0-sliding_attention]
+3.83s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[0-sliding_attention]
+3.83s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-0-sliding_attention]
+3.30s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[5-full_attention]
+1.93s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[0-sliding_attention]
+1.14s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-0-sliding_attention]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[0-sliding_attention]
+0.24s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1057]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1025]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_runtime_path_source_audit
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-0-sliding_attention]
+0.16s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_exact_context_distinct_traced_decode[5-full_attention]
+0.01s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_runtime_path_source_audit
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1057]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1025]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_runtime_path_source_audit
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[prefill-0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_long_nonaligned_prefill_capacity[0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[prefill-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[decode-5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[prefill-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_long_nonaligned_prefill_capacity[0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[decode-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_long_nonaligned_prefill_capacity[5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[prefill-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_exact_context_distinct_traced_decode[0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[decode-5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_long_nonaligned_prefill_capacity[5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_warmed_performance[decode-0-sliding_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_exact_context_distinct_traced_decode[5-full_attention]
+0.00s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_exact_context_distinct_traced_decode[0-sliding_attention]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[32-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[33-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_prefill_pcc[128-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_real_weight_paged_decode_trace_pcc[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_runtime_path_source_audit
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[2-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batched_nonaligned_paged_prefill[32-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_batch_32_paged_decode_trace_pcc[5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1025]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_sliding_padding_cache_ownership_and_decode[1057]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_advertised_context_paged_decode[5-full_attention]
+SKIPPED [1] models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py:55: select one long GELU candidate
+SKIPPED [4] models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py:240: set GEMMA4_FUSED_PERF to collect Tracy evidence
+SKIPPED [2] models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py:383: set GEMMA4_LONG_PREFILL for capacity probe
+SKIPPED [2] models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py:390: set GEMMA4_LONG_DECODE for genuine advertised-context decode
+============ 23 passed, 9 skipped, 3 warnings in 105.14s (0:01:45) =============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 09:51:02.627 | info     |    BuildKernels | JIT cache stats: 809/809 hits (100.0%) [809 cached, 819 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 09:51:02.627 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 09:51:02.640 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 09:51:02.640 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 09:51:02.775 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 09:51:02.775 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 09:51:02.775 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

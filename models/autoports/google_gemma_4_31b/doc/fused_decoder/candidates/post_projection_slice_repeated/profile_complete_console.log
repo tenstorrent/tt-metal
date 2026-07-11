@@ -1,0 +1,162 @@
+2026-07-11 09:13:51.186 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/post_projection_slice_repeated/profile_complete
+2026-07-11 09:13:51.187 | INFO     | __main__:main:395 - Using port 8086
+2026-07-11 09:13:51.188 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-11 09:13:51.192 | INFO     | tracy:run_report_setup:112 - Capture command: ('/localdev/odjuricic/tt-metal/build/tools/profiler/bin/tracy-capture -o models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/post_projection_slice_repeated/profile_complete/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-07-11 09:13:51.204 | INFO     | __main__:main:413 - Test process started
+2026-07-11 09:13:52.527 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/post_projection_slice_repeated/profile_complete
+2026-07-11 09:13:52.851 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_post_projection_slice_repeated_ab 2026-07-11 09:13:57.318 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 09:13:57.318 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 09:13:57.318 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 09:13:57.318 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 09:13:57.319 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 09:13:57.319 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 09:13:57.319 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 09:13:57.361 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 09:13:57.361 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 09:13:57.361 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 09:13:57.361 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 09:13:57.362 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 09:13:57.427 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 09:13:57.614 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 09:13:57.614 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 09:13:57.614 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 09:13:57.614 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 09:13:57.614 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 09:13:57.614 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 09:13:57.675 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-07-11 09:13:57.737 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 09:13:58.311 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349942 GHz, device_time_at_sync=12659779796664 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-11 09:14:00.465 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:110)
+2026-07-11 09:14:00.611 | INFO     | tracy:signpost:49 - POST_SLICE_selected_00
+2026-07-11 09:14:00.614 | INFO     | tracy:signpost:49 - POST_SLICE_selected_00_END
+2026-07-11 09:14:00.614 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_00
+2026-07-11 09:14:00.617 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_00_END
+2026-07-11 09:14:00.618 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_01
+2026-07-11 09:14:00.621 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_01_END
+2026-07-11 09:14:00.621 | INFO     | tracy:signpost:49 - POST_SLICE_selected_01
+2026-07-11 09:14:00.624 | INFO     | tracy:signpost:49 - POST_SLICE_selected_01_END
+2026-07-11 09:14:00.624 | INFO     | tracy:signpost:49 - POST_SLICE_selected_02
+2026-07-11 09:14:00.627 | INFO     | tracy:signpost:49 - POST_SLICE_selected_02_END
+2026-07-11 09:14:00.627 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_02
+2026-07-11 09:14:00.630 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_02_END
+2026-07-11 09:14:00.630 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_03
+2026-07-11 09:14:00.633 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_03_END
+2026-07-11 09:14:00.633 | INFO     | tracy:signpost:49 - POST_SLICE_selected_03
+2026-07-11 09:14:00.636 | INFO     | tracy:signpost:49 - POST_SLICE_selected_03_END
+2026-07-11 09:14:00.636 | INFO     | tracy:signpost:49 - POST_SLICE_selected_04
+2026-07-11 09:14:00.639 | INFO     | tracy:signpost:49 - POST_SLICE_selected_04_END
+2026-07-11 09:14:00.639 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_04
+2026-07-11 09:14:00.642 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_04_END
+2026-07-11 09:14:00.642 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_05
+2026-07-11 09:14:00.645 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_05_END
+2026-07-11 09:14:00.646 | INFO     | tracy:signpost:49 - POST_SLICE_selected_05
+2026-07-11 09:14:00.648 | INFO     | tracy:signpost:49 - POST_SLICE_selected_05_END
+2026-07-11 09:14:00.649 | INFO     | tracy:signpost:49 - POST_SLICE_selected_06
+2026-07-11 09:14:00.651 | INFO     | tracy:signpost:49 - POST_SLICE_selected_06_END
+2026-07-11 09:14:00.652 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_06
+2026-07-11 09:14:00.654 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_06_END
+2026-07-11 09:14:00.655 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_07
+2026-07-11 09:14:00.658 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_07_END
+2026-07-11 09:14:00.658 | INFO     | tracy:signpost:49 - POST_SLICE_selected_07
+2026-07-11 09:14:00.661 | INFO     | tracy:signpost:49 - POST_SLICE_selected_07_END
+2026-07-11 09:14:00.661 | INFO     | tracy:signpost:49 - POST_SLICE_selected_08
+2026-07-11 09:14:00.664 | INFO     | tracy:signpost:49 - POST_SLICE_selected_08_END
+2026-07-11 09:14:00.664 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_08
+2026-07-11 09:14:00.667 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_08_END
+2026-07-11 09:14:00.667 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_09
+2026-07-11 09:14:00.670 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_09_END
+2026-07-11 09:14:00.670 | INFO     | tracy:signpost:49 - POST_SLICE_selected_09
+2026-07-11 09:14:00.673 | INFO     | tracy:signpost:49 - POST_SLICE_selected_09_END
+2026-07-11 09:14:00.673 | INFO     | tracy:signpost:49 - POST_SLICE_selected_10
+2026-07-11 09:14:00.676 | INFO     | tracy:signpost:49 - POST_SLICE_selected_10_END
+2026-07-11 09:14:00.676 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_10
+2026-07-11 09:14:00.679 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_10_END
+2026-07-11 09:14:00.679 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_11
+2026-07-11 09:14:00.682 | INFO     | tracy:signpost:49 - POST_SLICE_candidate_11_END
+2026-07-11 09:14:00.682 | INFO     | tracy:signpost:49 - POST_SLICE_selected_11
+2026-07-11 09:14:00.685 | INFO     | tracy:signpost:49 - POST_SLICE_selected_11_END
+PCC=1.0
+POST_PROJECTION_SLICE_REPEATED_AB timing=synchronized_host_trace_replay pcc=1.0 deterministic=True samples_per_variant=12 selected_median_us=2664.7415 selected_min_us=2646.457 selected_max_us=2679.547 selected_spread_us=33.090000000000146 candidate_median_us=2660.9565000000002 candidate_min_us=2642.657 candidate_max_us=2663.556 candidate_spread_us=20.898999999999887 median_difference_candidate_minus_selected_us=-3.7849999999998545 cycle_differences_candidate_minus_selected_us=[-9.560499999999593, -5.154999999999745, -3.8150000000000546, -0.6509999999998399, -6.4900000000002365, -2.9845000000000255] selected_samples_us=[2679.547, 2665.227, 2646.457, 2664.937, 2664.107, 2663.737, 2664.427, 2657.437, 2665.487, 2667.507, 2666.387, 2664.546] candidate_samples_us=[2663.556, 2662.097, 2642.657, 2658.427, 2662.167, 2658.047, 2660.486, 2660.076, 2661.637, 2658.377, 2661.427, 2663.537]
+PASSED2026-07-11 09:14:02.081 | info     |           Metal | Device kernel duration perf summary (device=0): count=1314, min=601ns, avg=64615.5ns, max=574290ns (profiler_analysis.cpp:675)
+2026-07-11 09:14:02.081 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=57400ns, range=[0..574000), underflow(<0ns)=0, overflow(>=574000ns)=4) (profiler_analysis.cpp:718)
+2026-07-11 09:14:02.081 | info     |           Metal |   [           0 ..        57400) |########################################|     1145 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [       57400 ..       114800) |                                        |        3 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      114800 ..       172200) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      172200 ..       229600) |#                                       |       34 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      229600 ..       287000) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      287000 ..       344400) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      344400 ..       401800) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      401800 ..       459200) |#                                       |       33 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      459200 ..       516600) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 09:14:02.081 | info     |           Metal |   [      516600 ..       574000) |###                                     |       95 (profiler_analysis.cpp:723)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.31s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_post_projection_slice_repeated_ab
+2.12s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_post_projection_slice_repeated_ab
+1.25s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_post_projection_slice_repeated_ab
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_post_projection_slice_repeated_ab
+======================== 1 passed, 3 warnings in 7.07s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 09:14:05.161 | info     |    BuildKernels | JIT cache stats: 140/140 hits (100.0%) [140 cached, 65 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 09:14:05.161 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 09:14:05.169 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 09:14:05.170 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 09:14:05.339 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 09:14:05.339 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 09:14:05.339 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 9 ns
+
+Frames: 2
+Time span: 12.78 s
+Zones: 927,713
+Elapsed time: 12.71 s
+Saving trace... done!
+Trace size 8564.19 KB (18.58% ratio)
+2026-07-11 09:14:05.671 | INFO     | __main__:main:452 - Copying /localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/odjuricic/tt-metal/build/profiler/build_wasm/traces/-s_2026_07_11_09_14_05.tracy
+2026-07-11 09:14:05.672 | WARNING  | __main__:main:457 - Could not copy /localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/odjuricic/tt-metal/build/profiler/build_wasm/traces/-s_2026_07_11_09_14_05.tracy: [Errno 2] No such file or directory: '/localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-07-11 09:14:05.672 | INFO     | __main__:main:464 - embed.tracy -> traces/-s_2026_07_11_09_14_05.tracy
+2026-07-11 09:14:05.672 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-11 09:14:05.672 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-11 09:14:05.672 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-11 09:14:06.643 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/post_projection_slice_repeated/profile_complete/.logs/tracy_ops_times.csv
+2026-07-11 09:14:06.686 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/post_projection_slice_repeated/profile_complete/.logs/tracy_ops_data.csv
+2026-07-11 09:14:06.686 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/localdev/odjuricic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-07-11 09:14:08.662 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-11 09:14:08.663 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-11 09:14:11.088 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-11 09:14:11.089 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-11 09:14:11.250 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-11 09:14:12.318 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/post_projection_slice_repeated/profile_complete/reports/2026_07_11_09_14_11/ops_perf_results_2026_07_11_09_14_11.csv

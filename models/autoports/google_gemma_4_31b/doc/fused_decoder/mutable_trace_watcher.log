@@ -1,0 +1,102 @@
+2026-07-11 08:58:41.845 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention] 2026-07-11 08:58:44.626 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 08:58:44.626 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 08:58:44.626 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 08:58:44.626 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 08:58:44.627 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 08:58:44.627 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 08:58:44.627 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 08:58:44.669 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 08:58:44.669 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 08:58:44.669 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 08:58:44.669 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 08:58:44.670 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 08:58:44.731 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 08:58:44.899 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 08:58:44.899 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 08:58:44.899 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 08:58:44.899 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 08:58:44.899 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 08:58:44.899 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 08:58:44.926 | info     |       LLRuntime | Watcher log file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/fused_decoder/mutable_trace_watcher/generated/watcher/watcher.log (watcher_server.cpp:286)
+2026-07-11 08:58:44.926 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:132)
+2026-07-11 08:58:44.926 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:547)
+2026-07-11 08:58:44.926 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+2026-07-11 08:58:44.982 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 08:58:45.551 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349973 GHz, device_time_at_sync=11874017478549 cycles (realtime_profiler_manager.cpp:1127)
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+PCC=0.9996697389369403
+PCC=0.9987940353331073
+TRACE_MUTATION kind=sliding_attention case=random seed=20261333 positions=737->738 correct_rmse=0.02083011530339718 stale_rmse=0.5709885954856873
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention] 2026-07-11 08:58:54.940 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+PCC=0.9994549299352342
+PCC=0.9994291046781918
+TRACE_MUTATION kind=full_attention case=random seed=20261338 positions=321->322 correct_rmse=0.010360670275986195 stale_rmse=0.3831114172935486
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention] PCC=0.9989972214422035
+PCC=0.9995988626385373
+TRACE_MUTATION kind=sliding_attention case=window_wrap seed=None positions=1023->1024 correct_rmse=0.0210209172219038 stale_rmse=0.5109914541244507
+PASSED
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention] 2026-07-11 08:59:04.955 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:393)
+PCC=0.9994656040480271
+PCC=0.9993845282908638
+TRACE_MUTATION kind=full_attention case=window_wrap seed=None positions=1023->1024 correct_rmse=0.012502898462116718 stale_rmse=0.44364872574806213
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+6.19s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+5.87s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+5.25s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+5.17s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+1.19s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+0.23s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+0.13s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+0.00s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[random-5-full_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-0-sliding_attention]
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_fused_changed_trace_buffers_random_and_boundaries[window_wrap-5-full_attention]
+======================== 4 passed, 3 warnings in 26.06s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 08:59:11.307 | info     |    BuildKernels | JIT cache stats: 415/417 hits (99.5%) [415 cached, 263 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 08:59:11.307 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 08:59:11.308 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:595)
+2026-07-11 08:59:11.309 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:181)
+2026-07-11 08:59:11.315 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 08:59:11.315 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 08:59:11.444 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 08:59:11.445 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 08:59:11.445 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

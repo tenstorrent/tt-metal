@@ -1,0 +1,9 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'FUSED_PERF_PREFILL'.
+Using operations until 'FUSED_PERF_PREFILL_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/google_gemma_4_31b/doc/fused_decoder/tracy/sliding/prefill/prefill_perf_report.csv
+Overall DRAM roofline (modeled ops): 56.3% (288 GB/s)

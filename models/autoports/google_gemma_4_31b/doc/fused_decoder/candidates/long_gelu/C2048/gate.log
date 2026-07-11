@@ -1,0 +1,69 @@
+2026-07-11 09:07:39.696 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate 2026-07-11 09:07:42.495 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 09:07:42.495 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 09:07:42.495 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 09:07:42.495 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 09:07:42.496 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 09:07:42.496 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 09:07:42.496 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 09:07:42.538 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 09:07:42.539 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 09:07:42.539 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 09:07:42.539 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 09:07:42.540 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 09:07:42.588 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 09:07:42.774 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 09:07:42.774 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 09:07:42.774 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 09:07:42.774 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 09:07:42.775 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 09:07:42.775 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 09:07:42.781 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-11 09:07:42.845 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 09:07:43.414 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349975 GHz, device_time_at_sync=12342381571685 cycles (realtime_profiler_manager.cpp:1127)
+PCC=0.999768729974439
+LONG_GELU_GATE candidate=C2048 shape=M2048_K5376_N21504 chunks_per_4096=2 pcc=0.999768729974439 B0_median_us=3116.955 candidate_median_us=9362.288499999999 B0_normalized_4096_us=6233.91 candidate_normalized_4096_us=18724.576999999997 B0_samples_us=[3233.224, 3117.535, 3115.864, 3120.444, 3116.375, 3111.985] candidate_samples_us=[9365.364, 9350.273, 9370.834, 9362.844, 9361.733, 9358.854]
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+4.50s call     models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+1.18s setup    models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+0.12s teardown models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_fused_decoder.py::test_long_gelu_real_weight_gate_candidate
+======================== 1 passed, 3 warnings in 7.37s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 09:07:50.486 | info     |    BuildKernels | JIT cache stats: 13/25 hits (52.0%) [13 cached, 0 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 09:07:50.486 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 09:07:50.494 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 09:07:50.494 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 09:07:50.699 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 09:07:50.700 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 09:07:50.700 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

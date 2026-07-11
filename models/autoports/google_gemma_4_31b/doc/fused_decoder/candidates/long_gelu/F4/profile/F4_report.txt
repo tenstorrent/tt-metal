@@ -1,0 +1,11 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'LONG_GELU_F4'.
+Using operations until 'LONG_GELU_F4_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/F4_ops.csv
+Overall DRAM roofline (modeled ops): 4.8% (24 GB/s)
+Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/F4_summary.csv.csv
+Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/fused_decoder/candidates/long_gelu/F4/profile/F4_summary.csv.png

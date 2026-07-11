@@ -1,0 +1,2 @@
+Total % [%],Op Code,Device Time Sum [μs],Op Count,Op Category,Min FLOPs [%],Max FLOPs [%],Mean FLOPs [%],Std FLOPs [%],Weighted Mean FLOPs [%]
+100.00,MatmulDeviceOperation (in0:dram_interleaved),18480.29,1,Compute,9.65,9.65,9.65,,9.65
