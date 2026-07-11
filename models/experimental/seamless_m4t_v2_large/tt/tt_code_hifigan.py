@@ -11,7 +11,6 @@ Output waveform lengths are computed on host from ``t_audio`` and uploaded as in
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -29,51 +28,14 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 
 # Both matmul dims must stay small on BH; ``t_audio`` alone can be thousands of frames.
 _VOCODER_EXPAND_MATMUL_CHUNK = TILE
-# Max upsampled time for a single unsliced ``ttnn.conv1d`` on BH. Above this, the timeline is sliced:
-# by default (``_vocoder_conv1d_dram_slice_enabled``) ``ttnn.conv1d`` width-slices it in DRAM in one op;
-# with that disabled, the legacy manual fixed-window chunk loop runs instead.
+# Timelines up to this fit a single unsliced ``ttnn.conv1d`` on BH; longer ones are width-sliced in DRAM.
 _HIFIGAN_MAX_CONV1D_TLEN = 4096
-# Conv1d chunk interior (halo + interior must fit ``_HIFIGAN_MAX_CONV1D_TLEN``).
-_VOCODER_CONV1D_INTERIOR = 3968
-# Channel-aware chunking. HiFi-GAN halves channels at each upsample, so the late stages (16-64 ch)
-# fit far more time rows in the same L1 as the widest conv — yet a fixed-row ``interior`` chunks them
-# just as finely (the late, low-channel, long-timeline stages dominate the chunk count and thus the
-# ~37k vocoder ops + the O(n²) per-chunk timeline slicing). Size the chunk interior to a constant
-# *element* budget (``interior * in_channels``) so low-channel stages chunk much wider. Budget =
-# baseline interior × widest HiFi-GAN channel (proven safe at 3968). The result is clamped to
-# ``[_VOCODER_CONV1D_INTERIOR, _VOCODER_CONV1D_MAX_INTERIOR]`` (the floor keeps the widest convs
-# unchanged; the cap is the conv1d single-shot row ceiling) and tile-aligned. See ``_vocoder_conv1d_chunk_interior``.
-_VOCODER_CONV1D_ELEM_BUDGET = 3968 * 512
-# 49152 fits conv1d L1_SMALL on BH with ``config_tensors_in_dram`` on chunked timelines (65536 OOMs).
-# 32768 was the prior ceiling; raising ~1.5× cuts late (16–32 ch) chunk counts when the element
-# budget allows interiors above 32768. Override via ``SEAMLESS_VOCODER_CONV1D_MAX_INTERIOR``.
-_VOCODER_CONV1D_MAX_INTERIOR = 49152
-
 # Round ``t_audio`` up to stabilize shape-specialized vocoder programs; padded tail is masked/cropped.
 _VOCODER_TAUDIO_BUCKET = 256
 
-
-def _vocoder_conv1d_dram_slice_enabled() -> bool:
-    """Long HiFi-GAN conv1d timelines: let ``ttnn.conv1d`` width-slice in DRAM (one op) instead of the
-    manual Python chunk loop (per-chunk slice-in/slice-out + concat). The device handles halo/windowing
-    internally, collapsing the dominant Slice/Untilize/Tilize glue that surrounded every chunk.
-    Set ``SEAMLESS_VOCODER_CONV1D_DRAM_SLICE=0`` to fall back to the manual chunk loop (A/B / rollback)."""
-    return os.environ.get("SEAMLESS_VOCODER_CONV1D_DRAM_SLICE", "1") != "0"
-
-
-def _vocoder_resblock_l1_enabled() -> bool:
-    """Keep HiFi-GAN resblock convs resident in L1: run each conv single-shot with HEIGHT sharding (no
-    DRAM width-slicing) so ``conv1 -> conv2`` hand off sharded in L1 instead of round-tripping DRAM
-    (kills the ``InterleavedToSharded``/``ShardedToInterleaved`` churn and moves long convs off the
-    inefficient block-sharded auto path). Measured to fit BH L1 for every vocoder stage at B=1
-    (up to 409600x16). Set ``SEAMLESS_VOCODER_RESBLOCK_L1=0`` to fall back to the DRAM width-slice path."""
-    return os.environ.get("SEAMLESS_VOCODER_RESBLOCK_L1", "1") != "0"
-
-
-# Element budget (batch*timeline*in_channels) under which a single-shot HEIGHT-sharded conv1d fits BH
-# L1 without slicing. Every B=1 vocoder stage sits at <= 6.55M elems; above the budget we fall back to
-# the DRAM width-slice path. Override via ``SEAMLESS_VOCODER_L1_SINGLESHOT_ELEMS``.
-_VOCODER_L1_SINGLESHOT_ELEMS = int(os.environ.get("SEAMLESS_VOCODER_L1_SINGLESHOT_ELEMS", str(8 * 1024 * 1024)))
+# Element budget (batch*timeline*in_channels) under which a single-shot HEIGHT-sharded conv1d fits BH L1
+# without slicing. Every B=1 vocoder stage sits at <= 6.55M elems; above it the timeline is width-sliced.
+_VOCODER_L1_SINGLESHOT_ELEMS = 8 * 1024 * 1024
 
 
 def _vocoder_fits_l1_singleshot(timeline: int, in_channels: int, batch: int = 1) -> bool:
@@ -81,24 +43,13 @@ def _vocoder_fits_l1_singleshot(timeline: int, in_channels: int, batch: int = 1)
     return int(batch) * int(timeline) * int(in_channels) <= _VOCODER_L1_SINGLESHOT_ELEMS
 
 
-def _vocoder_resblock_l1_full_enabled() -> bool:
-    """Run resblock convs L1-full (``Conv2dL1FullSliceConfig`` + act_block_h=32) so ``conv1`` keeps its
-    output sharded in L1 and ``conv2`` consumes it there — no DRAM ShardedToInterleaved/InterleavedToSharded
-    round-trip between the pair. Verified L1-fitting for every vocoder resblock shape (to 409600x16, k=11).
-    Requires RESBLOCK_L1. Set ``SEAMLESS_VOCODER_RESBLOCK_L1_FULL=0`` to disable."""
-    return _vocoder_resblock_l1_enabled() and os.environ.get("SEAMLESS_VOCODER_RESBLOCK_L1_FULL", "1") != "0"
-
-
 def _resolve_resblock_shard_layout(
     *, in_channels: int, kernel_size: int, input_length: int, batch: int = 1
 ) -> Optional[ttnn.TensorMemoryLayout]:
-    """HEIGHT sharding for a resblock conv. With L1-resident mode, keep HEIGHT on long timelines too
-    (single-shot, no auto-slice) while K fits and the activation fits L1; otherwise defer to the generic
-    resolver (which caps HEIGHT at ``_HEIGHT_SHARD_MAX_TLEN`` and lets the device auto-pick)."""
-    if (
-        _vocoder_resblock_l1_enabled()
-        and int(in_channels) * int(kernel_size) <= _HEIGHT_SHARD_K_MAX
-        and _vocoder_fits_l1_singleshot(input_length, in_channels, batch)
+    """HEIGHT sharding for a resblock conv, kept even on long timelines while K fits and the activation
+    fits L1 (single-shot, no auto-slice); otherwise defer to the generic resolver."""
+    if int(in_channels) * int(kernel_size) <= _HEIGHT_SHARD_K_MAX and _vocoder_fits_l1_singleshot(
+        input_length, in_channels, batch
     ):
         return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     return _resolve_conv_shard_layout(
@@ -106,53 +57,23 @@ def _resolve_resblock_shard_layout(
     )
 
 
-def _vocoder_conv1d_max_interior() -> int:
-    raw = os.environ.get("SEAMLESS_VOCODER_CONV1D_MAX_INTERIOR")
-    if raw is not None:
-        return max(_VOCODER_CONV1D_INTERIOR, int(raw))
-    return _VOCODER_CONV1D_MAX_INTERIOR
-
-
-def _vocoder_conv1d_elem_budget() -> int:
-    raw = os.environ.get("SEAMLESS_VOCODER_CONV1D_ELEM_BUDGET")
-    if raw is not None:
-        return max(_VOCODER_CONV1D_ELEM_BUDGET, int(raw))
-    return _VOCODER_CONV1D_ELEM_BUDGET
-
-
-def _vocoder_conv1d_chunk_interior(in_channels: int) -> int:
-    """Tile-aligned interior rows for one HiFi-GAN conv1d chunk (channel-aware element budget)."""
-    c = max(1, int(in_channels))
-    interior = (_vocoder_conv1d_elem_budget() // c // 32) * 32
-    return max(_VOCODER_CONV1D_INTERIOR, min(_vocoder_conv1d_max_interior(), interior))
-
-
 def _vocoder_conv1d_prep_length(timeline_length: int, *, in_channels: int, padding: int) -> Tuple[int, bool]:
-    """Return ``(conv input_width, timeline_chunked)`` for prepare/forward on a long mel timeline."""
+    """Return ``(conv input_width, timeline_chunked)``; timelines beyond the single-shot cap are DRAM width-sliced."""
     seq = int(timeline_length)
-    if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
-        return seq, False
-    fixed_in = _vocoder_conv1d_chunk_interior(in_channels) + 2 * int(padding)
-    if seq <= fixed_in:
-        return seq, True
-    return fixed_in, True
+    return seq, seq > _HIFIGAN_MAX_CONV1D_TLEN
 
 
-# Round short single-shot conv1d timelines up to this step so the nondeterministic decode/T2U output
-# length maps to a FEW stable conv shapes (compiled/prepped once, reused) instead of a cold compile +
-# program-cache bloat on every distinct length (~5x speech-output repeated-run slowdown). Tile-aligned.
-_VOCODER_CONV1D_BUCKET_STEP = int(os.environ.get("SEAMLESS_VOCODER_CONV1D_BUCKET", "256"))
+# Round conv1d timelines up to this step so nondeterministic decode/T2U output lengths map to a few stable,
+# reused conv shapes instead of a cold compile per distinct length. Tile-aligned.
+_VOCODER_CONV1D_BUCKET_STEP = 256
 
 
 def _vocoder_timeline_bucket(length: int) -> int:
-    """Tile-aligned bucket for any vocoder conv1d timeline (short or chunked).
-
-    ``SEAMLESS_VOCODER_CONV1D_BUCKET<=1`` disables bucketing (exact length) for A/B."""
+    """Tile-aligned bucket for any vocoder conv1d timeline."""
     L = int(length)
-    raw = _VOCODER_CONV1D_BUCKET_STEP
-    if L <= 0 or raw <= 1:
+    if L <= 0:
         return L
-    step = max(32, raw)
+    step = _VOCODER_CONV1D_BUCKET_STEP
     return ((L + step - 1) // step) * step
 
 
@@ -192,29 +113,21 @@ def _slice_nlc_time(
     raise RuntimeError(f"cannot slice NLC tensor with shape {tuple(x.shape)}")
 
 
-# Target elements (rows*in_channels) per conv_transpose DRAM height slice. The old formula fixed the
-# *slice count* (up to 128), producing ~16x more, tiny slices than L1 needs — each slice pays its own
-# PaddedSlice/SliceWrite/Halo/Move/Untilize, so it dominated the vocoder op count. Sizing by elements
-# instead uses few large slices: measured L1_SMALL floor is ~819K elems/slice (32ch); 512K keeps ~1.6x
-# margin. Fewer slices ≈ proportionally fewer per-slice ops. Override via ``SEAMLESS_VOCODER_TRANSPOSE_SLICE_ELEMS``;
-# set ``SEAMLESS_VOCODER_TRANSPOSE_FIXED_SLICES=1`` to restore the legacy fixed-count formula.
-_VOCODER_TRANSPOSE_SLICE_ELEMS = int(os.environ.get("SEAMLESS_VOCODER_TRANSPOSE_SLICE_ELEMS", str(512 * 1024)))
-_VOCODER_TRANSPOSE_MIN_SLICES = 8  # measured L1_SMALL floor at BH for the widest (stage4) transpose.
+# Target elements (rows*in_channels) per conv_transpose DRAM height slice: few large slices (each pays its
+# own PaddedSlice/SliceWrite) rather than many tiny ones. 512K keeps ~1.6x margin under the BH L1_SMALL floor.
+_VOCODER_TRANSPOSE_SLICE_ELEMS = 512 * 1024
+_VOCODER_TRANSPOSE_MIN_SLICES = 8
 
 
 def _vocoder_dram_slice_count(input_length: int, in_channels: int = 0) -> int:
-    """DRAM height slices for long vocoder upsample timelines on Blackhole.
-
-    With ``in_channels`` and element-budget mode (default), size each slice to a fixed element count so a
-    few large slices fit L1 — far fewer per-slice ops than the legacy fixed-count formula."""
+    """DRAM height slices for a long vocoder upsample timeline: size each to a fixed element budget."""
     il = int(input_length)
-    if int(in_channels) > 0 and os.environ.get("SEAMLESS_VOCODER_TRANSPOSE_FIXED_SLICES", "0") == "0":
+    if int(in_channels) > 0:
         slices = (il * int(in_channels) + _VOCODER_TRANSPOSE_SLICE_ELEMS - 1) // _VOCODER_TRANSPOSE_SLICE_ELEMS
         return min(128, max(_VOCODER_TRANSPOSE_MIN_SLICES, slices))
     if il <= MATMUL_1D_SEQ_THRESHOLD:
         return 16
-    target_rows = 128
-    return min(128, max(16, (il + target_rows - 1) // target_rows))
+    return min(128, max(16, (il + 127) // 128))
 
 
 def _vocoder_dram_slice_pad_h(input_length: int, *, in_channels: int = 0) -> int:
@@ -439,13 +352,12 @@ def _vocoder_conv1d_config(
             shard_layout=shard_layout,
             act_block_h=act_block_h,
         )
-    # Chunked HiFi-GAN timelines: spill conv indices to DRAM (frees L1_SMALL for wider interiors)
-    # and emit ROW_MAJOR activations so chunk stitch avoids per-chunk untilize/tilize (vocoder5 TM).
+    # DRAM width-sliced timelines: spill conv indices to DRAM (frees L1_SMALL) and emit ROW_MAJOR output.
     if timeline_chunked:
         conv_kwargs["config_tensors_in_dram"] = True
         conv_kwargs["output_layout"] = ttnn.ROW_MAJOR_LAYOUT
     elif row_major_output:
-        # Single-shot tail (e.g. conv_post): keep RM through tanh / waveform path (vocoder6 TM).
+        # Single-shot tail (e.g. conv_post): keep ROW_MAJOR through the tanh / waveform path.
         conv_kwargs["output_layout"] = ttnn.ROW_MAJOR_LAYOUT
     return ttnn.Conv1dConfig(**conv_kwargs)
 
@@ -518,9 +430,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self.leaky_slope = float(config.leaky_relu_slope)
         self.num_kernels = len(config.resblock_kernel_sizes)
 
-        # HiFi4 math fidelity for waveform PCC. (Measured: HiFi2 saves only ~1% total device time
-        # because ~80% of the vocoder is data movement, not conv math — not worth the PCC-margin hit;
-        # LoFi fails outright. The real bottleneck is the layout/slice/untilize glue.)
+        # HiFi4 math fidelity for waveform PCC (HiFi2 costs PCC margin for little gain; LoFi fails outright).
         self._compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1170,8 +1080,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
         # ``accept_tile_input`` opts a caller out of the defensive TILE->RM untilize when the TILE input
-        # comes from a previous conv (conv-derived NLC): ``ttnn.conv1d`` consumes it directly (verified
-        # PCC-clean for every resblock shape), which removes the dominant UntilizeWithUnpadding bucket.
+        # comes from a previous conv (conv-derived NLC): ``ttnn.conv1d`` consumes interleaved TILE directly.
         seq = int(input_length)
         x_in = x_nlc
         rm_buf: Optional[ttnn.Tensor] = None
@@ -1205,8 +1114,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # it is HEIGHT-sharded and the activation fits the L1 element budget — no DRAM slicing, and the
         # sharded output can be handed straight to the next conv (``keep_sharded_output``).
         run_single_shot_l1 = (
-            _vocoder_resblock_l1_enabled()
-            and shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
             and int(stride) == 1
             and _vocoder_fits_l1_singleshot(seq, in_channels, batch)
         )
@@ -1234,151 +1142,36 @@ class TTSeamlessM4Tv2CodeHifiGan:
             )
             return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
-        # Long timeline: let ``ttnn.conv1d`` width-slice in DRAM (one op, device-managed halo) instead
-        # of the manual Python chunk loop below. Collapses the per-chunk slice-in/slice-out + concat
-        # (the dominant Slice/Untilize/Tilize glue in the vocoder perf report).
-        if _vocoder_conv1d_dram_slice_enabled():
-            # DRAM width-slicing requires the activation in DRAM; interleave a sharded input first.
-            if ttnn.is_sharded(x_in):
-                x_int = ttnn.sharded_to_interleaved(x_in, ttnn.DRAM_MEMORY_CONFIG)
-                if rm_buf is not None:
-                    ttnn.deallocate(rm_buf)
-                elif x_in is not x_nlc:
-                    ttnn.deallocate(x_in)
-                x_in = x_int
-                rm_buf = x_int
-            slice_config = ttnn.Conv2dSliceConfig(
-                slice_type=ttnn.Conv2dDRAMSliceWidth,
-                num_slices=0,  # 0 = device auto-picks the slice count for this timeline/L1 budget.
-            )
-            out, out_len = self._conv1d_run(
-                x_in,
-                weight=weight,
-                bias=bias,
-                batch=batch,
-                input_length=seq,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                groups=groups,
-                dilation=dilation,
-                fused_post_activation=fused_post_activation,
-                deallocate_input=rm_buf is not None,
-                shard_layout=shard_layout,
-                timeline_chunked=True,
-                # DRAM width-sliced output is interleaved (same as the old multi-chunk concat result).
-                keep_sharded_output=False,
-                slice_config=slice_config,
-            )
-            return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
-
-        # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
-        halo = int(padding)
-        interior = _vocoder_conv1d_chunk_interior(in_channels)
-        fixed_in = interior + 2 * halo
-        if seq <= fixed_in:
-            out, out_len = self._conv1d_run(
-                x_in,
-                weight=weight,
-                bias=bias,
-                batch=batch,
-                input_length=seq,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                groups=groups,
-                dilation=dilation,
-                fused_post_activation=fused_post_activation,
-                deallocate_input=rm_buf is not None,
-                shard_layout=shard_layout,
-                timeline_chunked=True,
-                row_major_output=False,
-                keep_sharded_output=keep_sharded_output,
-            )
-            return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
-
-        num_chunks = (seq + interior - 1) // interior
-        # Multi-chunk stitch concat requires interleaved RM chunk tensors.
-        chunk_keep_sharded = keep_sharded_output and num_chunks == 1
-        chunks: list[ttnn.Tensor] = []
-        for start in range(0, seq, interior):
-            end = min(start + interior, seq)
-            chunk_rows = end - start
-            in_start = max(0, start - halo)
-            in_end = min(seq, end + halo)
-            # Interior chunks already span ``fixed_in``. The first chunk is short by ``halo`` on
-            # the right; the last is short on the left — extend the slice instead of zero-padding
-            # (avoids a large ``concat([x_win, pad])`` on long timelines).
-            if in_end - in_start < fixed_in:
-                if in_end == seq:
-                    in_start = max(0, in_end - fixed_in)
-                elif in_start == 0:
-                    in_end = min(seq, fixed_in)
-            x_win = ttnn.slice(
-                x_in,
-                [0, in_start, 0],
-                [batch, in_end, in_channels],
-                (1, 1, 1),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            win_len = in_end - in_start
-            if win_len < fixed_in:
-                pad_rows = fixed_in - win_len
-                pad = ttnn.zeros(
-                    (batch, pad_rows, in_channels),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.device,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                x_win = ttnn.concat([x_win, pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(pad)
-            out_win, _ = self._conv1d_run(
-                x_win,
-                weight=weight,
-                bias=bias,
-                batch=batch,
-                input_length=fixed_in,
-                in_channels=in_channels,
-                out_channels=out_channels,
-                kernel_size=kernel_size,
-                stride=stride,
-                padding=padding,
-                groups=groups,
-                dilation=dilation,
-                fused_post_activation=fused_post_activation,
-                deallocate_input=True,
-                shard_layout=shard_layout,
-                timeline_chunked=True,
-                keep_sharded_output=chunk_keep_sharded,
-            )
-            out_start = start - in_start
-            out_chunk = ttnn.slice(
-                out_win,
-                [0, out_start, 0],
-                [batch, out_start + chunk_rows, out_channels],
-                (1, 1, 1),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(out_win)
-            chunks.append(out_chunk)
-
-        if rm_buf is not None:
-            ttnn.deallocate(rm_buf)
-        elif x_in is not x_nlc:
-            ttnn.deallocate(x_in)
-
-        if len(chunks) == 1:
-            out, out_len = chunks[0], seq
-        else:
-            out = ttnn.concat(chunks, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            for c in chunks:
-                ttnn.deallocate(c)
-            out_len = seq
+        # Long timeline: ``ttnn.conv1d`` width-slices the timeline in DRAM itself (one op, device-managed
+        # halo). DRAM width-slicing needs the activation in DRAM; interleave a sharded input first.
+        if ttnn.is_sharded(x_in):
+            x_int = ttnn.sharded_to_interleaved(x_in, ttnn.DRAM_MEMORY_CONFIG)
+            if rm_buf is not None:
+                ttnn.deallocate(rm_buf)
+            elif x_in is not x_nlc:
+                ttnn.deallocate(x_in)
+            x_in = x_int
+            rm_buf = x_int
+        out, out_len = self._conv1d_run(
+            x_in,
+            weight=weight,
+            bias=bias,
+            batch=batch,
+            input_length=seq,
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=groups,
+            dilation=dilation,
+            fused_post_activation=fused_post_activation,
+            deallocate_input=rm_buf is not None,
+            shard_layout=shard_layout,
+            timeline_chunked=True,
+            keep_sharded_output=False,
+            slice_config=ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=0),
+        )
         return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
     def _pad_nlc_time(
@@ -1496,8 +1289,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         bias = layer["bias"]
 
         # ``conv_transpose2d`` needs NHWC ([B,T,1,C]); the [B,T,C]->[B,T,1,C] reshape is a free view on
-        # ROW_MAJOR but a full relayout on TILE (~2.7ms/stage, the ReshapeView bucket in the perf report).
-        # Untilize once here (~0.17ms) so the reshape is free and the conv gets its natural RM input.
+        # ROW_MAJOR but a full relayout on TILE. Untilize once here so the reshape is free and the conv
+        # gets its natural ROW_MAJOR input.
         if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT and not ttnn.is_sharded(x_nlc):
             x_rm = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(x_nlc)
@@ -1666,9 +1459,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 ),
                 keep_sharded_output=True,
                 # Conv-derived TILE input: ttnn.conv1d consumes it directly, skipping the TILE->RM untilize.
-                accept_tile_input=_vocoder_resblock_l1_enabled(),
+                accept_tile_input=True,
                 # L1-full: keep conv1's output sharded in L1 so conv2 consumes it there (no DRAM reshard).
-                l1_full=_vocoder_resblock_l1_full_enabled(),
+                l1_full=True,
             )
             x_nlc, tlen = self._conv1d(
                 x_nlc,
@@ -1690,8 +1483,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
                     batch=batch,
                 ),
                 accept_sharded_input=True,
-                accept_tile_input=_vocoder_resblock_l1_enabled(),
-                l1_full=_vocoder_resblock_l1_full_enabled(),
+                accept_tile_input=True,
+                l1_full=True,
             )
             x_nlc = ttnn.add(x_nlc, residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x_nlc
@@ -1701,19 +1494,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         return self._hifi_gan_once(x_nlc, hg, batch=batch, tlen=tlen)
 
     def _hifi_gan_once(self, x_nlc: ttnn.Tensor, hg: Any, *, batch: int, tlen: int) -> ttnn.Tensor:
-        import os as _os_vt, time as _t_vt
-
-        _vt_on = bool(_os_vt.environ.get("VOC_TIMING"))
-
-        def _vt(name: str, t0: float) -> float:
-            if _vt_on:
-                ttnn.synchronize_device(self.device)
-                now = _t_vt.time()
-                print(f"[VOC-TIMING] {name} (tlen={tlen}): {now - t0:.1f}s", flush=True)
-                return now
-            return t0
-
-        _vt0 = _t_vt.time()
         cp = hg.conv_pre
         h, tlen = self._conv1d(
             x_nlc,
@@ -1735,7 +1515,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ),
         )
         ttnn.deallocate(x_nlc)
-        _vt0 = _vt("conv_pre", _vt0)
 
         for i, up_layer in enumerate(hg.upsampler):
             h = ttnn.leaky_relu(h, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -1747,13 +1526,11 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 in_channels=int(up_layer["in_channels"]),
                 out_channels=int(up_layer["out_channels"]),
             )
-            _vt0 = _vt(f"stage{i} conv_transpose -> tlen={tlen}", _vt0)
             channels = self.cfg.upsample_initial_channel // (2 ** (i + 1))
             # The transpose emits ROW_MAJOR ``h``, but the resblock convs want TILE: a RM->sharded conv
-            # I2S tilizes on the fly (~815µs/conv at the big stages) and the residual add re-tilizes RM,
-            # whereas TILE->sharded is ~10x cheaper. Tilize ``h`` once per stage (shared as residual +
-            # first-leaky input across all resblocks) so every downstream conv/add sees TILE.
-            if _vocoder_resblock_l1_enabled() and h.get_layout() != ttnn.TILE_LAYOUT:
+            # I2S tilizes on the fly (~10x costlier than TILE->sharded) and the residual add re-tilizes RM.
+            # Tilize ``h`` once per stage (shared as residual + first-leaky input across all resblocks).
+            if h.get_layout() != ttnn.TILE_LAYOUT:
                 h_t = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(h)
                 h = h_t
@@ -1775,12 +1552,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
             ttnn.deallocate(acc)
             ttnn.deallocate(h)
             h = acc_scaled
-            _vt0 = _vt(f"stage{i} resblocks", _vt0)
 
-        # Match HF: line 2489 of ``modeling_seamless_m4t_v2.py`` calls
-        # ``nn.functional.leaky_relu(hidden_states)`` with the default 0.01 slope, NOT
-        # ``self.leaky_relu_slope``. The other leaky_relus in the upsample loop and inside the
-        # residual blocks do use ``cfg.leaky_relu_slope``.
+        # HF applies leaky_relu with the default 0.01 slope here (not ``cfg.leaky_relu_slope``, which the
+        # upsample-loop and residual-block leaky_relus use).
         h = ttnn.leaky_relu(h, negative_slope=0.01, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         cpost = hg.conv_post
         _, cpost_chunked = _vocoder_conv1d_prep_length(
