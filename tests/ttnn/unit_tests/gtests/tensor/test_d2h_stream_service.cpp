@@ -36,7 +36,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/outbound_socket_service_sync/outbound_socket_service_sync.hpp"
 #include "ttnn/services/layer_ack_service.hpp"
-#include <internal/service/inter_process_counter_channel.hpp>
+#include <internal/disaggregation/layer_completion_message.hpp>
+#include <internal/disaggregation/layer_completion_queue.hpp>
 
 namespace ttnn::distributed::test {
 namespace {
@@ -482,10 +483,11 @@ void run_d2h_metadata_only_case(
 }
 
 // Drives `num_records` metadata-only sends with NO synchronize between them and asserts
-// the LayerAckService reader thread injected exactly one ack per record onto the counter
-// channel — then that stop() joins the reader promptly even though no final record arrives
-// to unblock it (bounded teardown). The full round-trip: device op -> D2H socket ->
-// read_metadata() -> inject(1) -> connector observes the count.
+// the LayerAckService reader thread pushed exactly one completion per record into the
+// router-owned LayerCompletionQueue ring, each with a globally-dense seq (0,1,2,...) — then
+// that stop() joins the reader promptly even though no final record arrives to unblock it
+// (bounded teardown). The full round-trip: device op -> D2H socket -> read_metadata() ->
+// derive seq -> ring push -> this test (standing in for the router) pops + verifies.
 void run_layer_ack_service_case(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     const tt::tt_metal::CoreRange& worker_cores,  // single core -> num_workers == 1
@@ -503,18 +505,22 @@ void run_layer_ack_service_case(
     };
     tt::tt_metal::D2HStreamService service(mesh_device, std::move(cfg));
 
-    // Unique shm name per invocation: the owner ctor uses O_CREAT|O_EXCL and throws on a
+    // Unique shm name per invocation: the owner (create) uses O_CREAT|O_EXCL and throws on a
     // stale segment, so a fixed name would collide across the sweep's cases and reruns.
     static std::atomic<uint32_t> seq{0};
     const std::string shm = "/tt_test_layer_ack_" + std::to_string(::getpid()) + "_" + std::to_string(seq.fetch_add(1));
 
-    // Owner side: LayerAckService injects here. Connector side: stands in for the
-    // scheduler process and drains the count (pending()/try_consume_all() are
-    // connector-only; they throw on the owner).
-    tt::tt_metal::distributed::InterProcessCounterChannel ack_channel(shm);
-    auto consumer = tt::tt_metal::distributed::InterProcessCounterChannel::connect(shm);
+    // This test stands in for the LayerCompletionRouter: it OWNS the ring (create) and pops
+    // completions off it. LayerAckService connects to the same ring by name in start(), so the
+    // ring must exist first (mirrors the router-before-service construction ordering).
+    auto ring = tt::tt_metal::internal::LayerCompletionQueue::create(shm);
 
-    tt::tt_metal::LayerAckService layer_ack(service, ack_channel);
+    // seq-derivation inputs: treat this rank as owning all `num_records` layers of a single
+    // chunk (first_layer_idx=0, local_layers=num_layers=num_records), so the k-th record maps
+    // to chunk=0, layer=k, seq=k — a dense 0,1,2,... sequence this test verifies exactly.
+    const uint32_t source_rank = 0;
+    tt::tt_metal::LayerAckService layer_ack(
+        service, shm, source_rank, /*num_layers=*/num_records, /*first_layer_idx=*/0, /*local_layers=*/num_records);
     layer_ack.start();
 
     // Record: [1,1,1,n] uint32 replicated DRAM. Content is irrelevant to the ack count
@@ -538,28 +544,38 @@ void run_layer_ack_service_case(
     // Ensure every device op has executed and pushed its record to the socket.
     tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
 
-    // The reader consumes asynchronously; poll the connector until it observes all
-    // records (bounded, so a stuck reader fails the test instead of hanging it).
-    uint32_t seen = 0;
+    // The reader pushes asynchronously; poll the ring until we pop all records (bounded, so a
+    // stuck reader fails the test instead of hanging it). Records arrive in FIFO order from the
+    // single producer, so collect the seqs and verify they are exactly 0,1,...,N-1.
+    std::vector<uint64_t> seqs;
+    tt::tt_metal::internal::LayerCompletionMessage msg{};
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (seen < num_records && std::chrono::steady_clock::now() < deadline) {
-        seen += consumer->try_consume_all();
-        if (seen < num_records) {
+    while (seqs.size() < num_records && std::chrono::steady_clock::now() < deadline) {
+        if (ring->try_pop(msg)) {
+            EXPECT_EQ(msg.source_rank, source_rank);
+            EXPECT_EQ(msg.request_id, 0u) << "all records here belong to chunk 0";
+            EXPECT_EQ(msg.layer_idx, msg.seq) << "single-chunk, first_layer_idx=0: global layer == seq";
+            EXPECT_EQ(msg.reserved, 0u) << "real completions must not set the sentinel field";
+            seqs.push_back(msg.seq);
+        } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
-    EXPECT_EQ(seen, num_records) << "LayerAckService must inject exactly one ack per record";
+    ASSERT_EQ(seqs.size(), static_cast<size_t>(num_records))
+        << "LayerAckService must push exactly one completion per record";
+    for (uint32_t i = 0; i < num_records; ++i) {
+        EXPECT_EQ(seqs[i], static_cast<uint64_t>(i)) << "seq must be globally dense (0..N-1) in FIFO order";
+    }
 
-    // Let any stray extra ack (there should be none) settle, then confirm none arrived.
+    // Let any stray extra push (there should be none) settle, then confirm the ring is empty.
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    EXPECT_EQ(consumer->try_consume_all(), 0u) << "LayerAckService injected spurious acks";
+    EXPECT_FALSE(ring->try_pop(msg)) << "LayerAckService pushed spurious completions";
 
     // Bounded teardown: no record is in flight, yet stop() must still join the reader
     // promptly (the poll-based loop sees running_==false within a poll tick).
     layer_ack.stop();
 
-    consumer->shutdown();
-    ack_channel.shutdown();
+    ring->shutdown();
 }
 
 // Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
