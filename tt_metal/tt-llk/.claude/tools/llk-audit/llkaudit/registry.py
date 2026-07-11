@@ -231,6 +231,54 @@ def is_ctor_or_dtor(fn_name: str) -> bool:
     return bool(fn_name) and (fn_name.startswith("~") or fn_name[0].isupper())
 
 
+# Semaphore identity. Waits name the semaphore as `semaphore::NAME`; SEMINIT
+# names it as `p_stall::SEMAPHORE_n`; the generic wrapper uses a parameterized
+# `t6_sem(index)`. These vocabularies do not reconcile statically, so identity
+# matching is best-effort and a *parameterized* (generic) init is treated as a
+# wildcard that inits any semaphore (see the semaphore-handshake checker).
+_SEM_NAME_RE = re.compile(r"semaphore::\s*([A-Za-z_][A-Za-z0-9_]*)")
+_SEM_PSTALL_RE = re.compile(r"p_stall::\s*(SEM[A-Za-z0-9_]*)")
+
+
+def semaphore_target(fact: dict):
+    """Return (semaphore_id | None, is_parameterized). `is_parameterized` marks
+    a generic init/wait over an index variable (e.g. t6_sem(index))."""
+    text = (
+        fact.get("arg0", "") if fact.get("family") == "call" else fact.get("text", "")
+    )
+    if "t6_sem(" in text or "index" in text.lower():
+        return None, True
+    m = _SEM_NAME_RE.search(text)
+    if m:
+        return m.group(1), False
+    m = _SEM_PSTALL_RE.search(text)  # e.g. p_stall::SEMAPHORE_1 (NOT p_stall::STALL_*)
+    if m:
+        return m.group(1), False
+    return None, False
+
+
+def stallwait_wait_operand(text: str) -> str:
+    """The DRAIN condition of a STALLWAIT is its SECOND operand (wait_res); the
+    first (stall_res, e.g. STALL_UNPACK) names the block being held, not the unit
+    being drained. Return the text of the 2nd top-level argument (or "")."""
+    lp = text.find("(")
+    rp = text.rfind(")")
+    if lp < 0 or rp <= lp:
+        return ""
+    inner = text[lp + 1 : rp]
+    depth, start, args = 0, 0, []
+    for i, ch in enumerate(inner):
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            args.append(inner[start:i])
+            start = i + 1
+    args.append(inner[start:])
+    return args[1].strip() if len(args) >= 2 else ""
+
+
 # --- cfg-word-overlap: cfg_defines.h resolution -------------------------------
 # The register field written is named in a pointer_write's index_text (e.g.
 # THCON_SEC0_REG1_Row_start_section_size_ADDR32) or a cfg_reg_rmw_tensix<FIELD>.
@@ -263,20 +311,29 @@ def load_addr32(cfg_defines_path: str) -> dict:
 
 
 _WORD_OFFSET_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:\+\s*(\d+))?")
+# cfg_rmw / cfg_reg_rmw_tensix take a FIELD_RMW composite alias; the sibling
+# word-address macro is FIELD_ADDR32.
+_RMW_ALIAS_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)_RMW\b")
 
 
 def resolve_word(text: str, addr32: dict):
     """Resolve the 32-bit CONFIG word an expression writes: find the first
-    *_ADDR32 token (+ optional literal offset) and look it up. Returns
+    *_ADDR32 token (+ optional literal offset) and look it up. Falls back to a
+    *_RMW alias (FIELD_RMW -> FIELD_ADDR32). Returns
     (word:int, field:str) or (None, field_or_None)."""
     m = _WORD_OFFSET_RE.search(text or "")
-    if not m:
-        return None, None
-    field = m.group(1)
-    base = addr32.get(field)
-    if base is None:
-        return None, field
-    return base + (int(m.group(2)) if m.group(2) else 0), field
+    if m:
+        field = m.group(1)
+        base = addr32.get(field)
+        if base is None:
+            return None, field
+        return base + (int(m.group(2)) if m.group(2) else 0), field
+    a = _RMW_ALIAS_RE.search(text or "")
+    if a:
+        field = a.group(1) + "_ADDR32"
+        base = addr32.get(field)
+        return (base, field) if base is not None else (None, field)
+    return None, None
 
 
 def word_namespace(field: str) -> str:

@@ -79,21 +79,47 @@ class SemaphoreHandshake(Check):
                     )
                 )
 
-        # 2) wait-without-init (fact-base-wide)
-        has_init = any(op == "init" for op, _ in ops)
-        if not has_init:
+        # 2) wait-without-init, matched PER SEMAPHORE IDENTITY (not a single
+        # global flag). Inits and waits use different vocabularies
+        # (p_stall::SEMAPHORE_n vs semaphore::NAME) and a generic parameterized
+        # init (t6_sem(index)) can init any semaphore, so:
+        #   - a parameterized/generic init is a WILDCARD -> suppress all waits;
+        #   - otherwise flag a wait whose identity has no matching concrete init.
+        # Init identities are gathered from ALL init ops (incl. the wrapper
+        # definitions), since that is where the generic init lives.
+        init_ids: set[str] = set()
+        wildcard = False
+        for c in fb.family("call"):
+            if registry.classify_semaphore_call(c.get("name", "")) == "init":
+                sid, param = registry.semaphore_target(c)
+                wildcard = wildcard or param
+                if sid:
+                    init_ids.add(sid)
+        for m in fb.family("macro"):
+            if registry.classify_semaphore_macro(m.get("name", "")) == "init":
+                sid, param = registry.semaphore_target(m)
+                wildcard = wildcard or param
+                if sid:
+                    init_ids.add(sid)
+
+        if not wildcard:
             for op, f in ops:
-                if op == "wait":
-                    findings.append(
-                        Finding(
-                            file=f["file"],
-                            line=f["line"],
-                            function=f.get("function", "?"),
-                            kind="wait_without_init",
-                            hint="WAIT_WITHOUT_INIT",
-                            detail="semaphore wait with no SEMINIT in the parsed tree "
-                            "(BRISC boot firmware may init out-of-tree)",
-                            evidence=[self._ev(f, f.get("name", "wait"))],
-                        )
+                if op != "wait":
+                    continue
+                sid, param = registry.semaphore_target(f)
+                if param or (sid and sid in init_ids):
+                    continue
+                findings.append(
+                    Finding(
+                        file=f["file"],
+                        line=f["line"],
+                        function=f.get("function", "?"),
+                        kind="wait_without_init",
+                        hint="WAIT_WITHOUT_INIT",
+                        detail=f"wait on semaphore '{sid or '?'}' with no matching "
+                        "SEMINIT in the parsed tree (BRISC boot firmware may init "
+                        "out-of-tree)",
+                        evidence=[self._ev(f, f.get("name", "wait"))],
                     )
+                )
         return findings

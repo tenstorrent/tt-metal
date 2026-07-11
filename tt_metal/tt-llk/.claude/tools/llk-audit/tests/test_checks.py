@@ -277,6 +277,179 @@ def test_reconfig_no_unit_drain_flagged():
     assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN", out
 
 
+# --- Copilot review regressions -------------------------------------------
+
+
+@case
+def test_reconfig_stallwait_wait_operand_only():
+    # #3: STALLWAIT(STALL_UNPACK, TRISC_CFG) — the UNPACK is the stall_res (1st
+    # operand), the wait_res is TRISC_CFG. It must NOT count as a unit drain.
+    F = "tt_llk_wormhole_b0/llk_lib/llk_unpack_reconfig.h"
+    facts = [
+        fn("_llk_unpack_reconfig_data_format_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG)",
+            func="_llk_unpack_reconfig_data_format_",
+        ),
+        macro(
+            F,
+            120,
+            "TTI_WRCFG",
+            "TTI_WRCFG(TMP, WRCFG_32b, SOME_ADDR32)",
+            func="_llk_unpack_reconfig_data_format_",
+        ),
+    ]
+    out = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "THCON_ONLY", out
+    # positive control: a real unit drain in the wait_res -> not flagged
+    facts[1] = macro(
+        F,
+        110,
+        "TTI_STALLWAIT",
+        "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK)",
+        func="_llk_unpack_reconfig_data_format_",
+    )
+    assert ReconfigStall().run(FactBase("wormhole", facts)) == []
+
+
+@case
+def test_mmio_guard_after_consumer_is_not_ordering():
+    # #4: write, then a consumer, then a TRISC_CFG stall. The stall follows the
+    # consumer, so it cannot order that consumer -> NO_LOCAL_ORDERING.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_A_topk_xl_copy.h"
+    facts = [
+        fn("_llk_unpack_A_topk_", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "SOME_ADDR32", func="_llk_unpack_A_topk_"),
+        macro(
+            F,
+            120,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, x)",
+            func="_llk_unpack_A_topk_",
+        ),
+        macro(
+            F,
+            130,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG)",
+            func="_llk_unpack_A_topk_",
+        ),
+    ]
+    out = MmioRace().run(FactBase("blackhole", facts))
+    assert len(out) == 1 and out[0].hint == "NO_LOCAL_ORDERING", out
+    # control: guard BEFORE the consumer -> ordered
+    facts[2], facts[3] = facts[3], facts[2]
+    facts[2] = macro(
+        F,
+        120,
+        "TTI_STALLWAIT",
+        "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG)",
+        func="_llk_unpack_A_topk_",
+    )
+    facts[3] = macro(
+        F, 130, "TTI_UNPACR_NOP", "TTI_UNPACR_NOP(SrcA, x)", func="_llk_unpack_A_topk_"
+    )
+    assert MmioRace().run(FactBase("blackhole", facts))[0].hint == "LOCALLY_ORDERED"
+
+
+@case
+def test_cfg_word_overlap_includes_cfg_rmw_calls():
+    # #5: cfg_rmw / cfg_rmw_gpr must enter the shared-word map.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    Fp = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [
+        fn("u", Fu, 10, 20),
+        fn("p", Fp, 30, 40),
+        call(Fu, 12, "cfg_rmw", func="u", arg0="SHARED_FIELD_RMW"),
+        call(Fp, 32, "cfg_rmw_gpr", func="p", arg0="SHARED_FIELD_RMW"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"SHARED_FIELD_ADDR32": 7}  # _RMW alias -> _ADDR32
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared) == 1 and ":7" in shared[0].kind, shared
+
+
+@case
+def test_cfg_word_overlap_cfg_rmw_runtime_arg_is_unresolved():
+    # #5b: cfg_rmw with a runtime address variable -> surfaced as UNRESOLVED.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [fn("f", F, 10, 20), call(F, 12, "cfg_rmw", func="f", arg0="cfg_addr32")]
+    out = CfgWordOverlap().run(FactBase("wormhole", facts))
+    assert any(f.hint == "UNRESOLVED" for f in out), out
+
+
+@case
+def test_cfg_word_overlap_unresolved_ordered_write():
+    # #6: an ordered-write macro whose ADDR32 isn't in cfg_defines -> UNRESOLVED
+    # (not silently dropped).
+    F = "tt_llk_wormhole_b0/llk_lib/llk_math_common.h"
+    facts = [
+        fn("m", F, 10, 20),
+        macro(F, 12, "TTI_SETC16", "TTI_SETC16(NEWLY_ADDED_FIELD_ADDR32, x)", func="m"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {}  # field not defined -> drift
+    out = CfgWordOverlap().run(fb)
+    assert any(
+        f.hint == "UNRESOLVED" and "NEWLY_ADDED_FIELD" in f.detail for f in out
+    ), out
+
+
+@case
+def test_semaphore_wait_without_init_per_identity():
+    # #2: a concrete wait on SEM_X with only a concrete init of SEM_Y (no generic
+    # init) -> flagged; matching init -> not flagged; generic init -> wildcard.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+
+    def base(waited, inited, generic=False):
+        f = [fn("use", F, 100, 200), fn("init_fn", F, 50, 80)]
+        f.append(
+            call(
+                F,
+                110,
+                "t6_semaphore_wait_on_zero",
+                func="use",
+                arg0=f"semaphore::{waited}",
+            )
+        )
+        if generic:
+            f.append(
+                macro(
+                    F,
+                    60,
+                    "TTI_SEMINIT",
+                    "TTI_SEMINIT(max_value, 0, semaphore::t6_sem(index))",
+                    func="init_fn",
+                )
+            )
+        else:
+            f.append(
+                macro(
+                    F,
+                    60,
+                    "TTI_SEMINIT",
+                    f"TTI_SEMINIT(1, 0, p_stall::{inited})",
+                    func="init_fn",
+                )
+            )
+        return FactBase("wormhole", f)
+
+    # mismatched concrete init -> flagged
+    out = SemaphoreHandshake().run(base("FPU_SFPU", "SEMAPHORE_1"))
+    assert any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
+    # matching concrete init -> not flagged
+    out = SemaphoreHandshake().run(base("SEMAPHORE_1", "SEMAPHORE_1"))
+    assert not any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
+    # generic (parameterized) init present -> wildcard suppresses
+    out = SemaphoreHandshake().run(base("FPU_SFPU", "SEMAPHORE_1", generic=True))
+    assert not any(f.hint == "WAIT_WITHOUT_INIT" for f in out), out
+
+
 def main():
     failed = 0
     for c in CASES:

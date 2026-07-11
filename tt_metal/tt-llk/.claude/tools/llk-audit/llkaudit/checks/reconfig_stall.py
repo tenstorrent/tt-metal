@@ -82,8 +82,14 @@ class ReconfigStall(Check):
                 and registry.classify_macro(f.get("name", "")) == "stall"
                 and f["off"] < first_write["off"]
             ]
+            # Only the STALLWAIT's SECOND operand (wait_res) drains a unit; the
+            # first (stall_res, e.g. STALL_UNPACK) names the block being held and
+            # must NOT be mistaken for a unit drain.
             drains = any(
-                any(tok in s.get("text", "") for tok in drain_tokens)
+                any(
+                    tok in registry.stallwait_wait_operand(s.get("text", ""))
+                    for tok in drain_tokens
+                )
                 for s in stalls_before
             )
 
