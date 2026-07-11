@@ -56,7 +56,7 @@ constexpr uint32_t kNumProgramsInTrace = 4096;
 
 constexpr uint32_t kDefaultStressReplaySeconds = 60;
 
-constexpr uint32_t kDefaultDropAccountingSeconds = 15;
+constexpr uint32_t kDefaultDropAccountingSeconds = 60;
 
 // Trace stores one EnqueueProgram dispatch packet per program. Blank-kernel
 // programs with no CBs / no runtime args are tiny (~hundreds of bytes), so
@@ -147,7 +147,7 @@ std::shared_ptr<distributed::MeshDevice> open_unit_mesh() {
         0, DEFAULT_L1_SMALL_SIZE, kTraceRegionSize, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
 }
 
-TEST(RealtimeProfilerStress, NIGHTLY_PeakLoadPreservesRecords) {
+TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     auto mesh_device = open_full_mesh();
     ASSERT_NE(mesh_device, nullptr);
 
@@ -291,7 +291,7 @@ TEST(RealtimeProfilerStress, NIGHTLY_PeakLoadPreservesRecords) {
     EXPECT_TRUE(mesh_device->close());
 }
 
-TEST(RealtimeProfilerStress, NIGHTLY_CallbackDeliveryLatency) {
+TEST(RealtimeProfilerStress, CallbackDeliveryLatency) {
     using namespace std::chrono_literals;
     constexpr uint32_t kPacedId = 0x6AC0;
     constexpr std::array<std::chrono::microseconds, 5> kGaps = {5us, 50us, 200us, 1000us, 5000us};
@@ -412,7 +412,7 @@ TEST(RealtimeProfilerStress, NIGHTLY_CallbackDeliveryLatency) {
 // Three consumers read the same record stream at different throttled rates. Verifies the per-reader
 // drop accounting: for every consumer, received + dropped covers every record produced, and a
 // throttled consumer drops no more than its sustain rate forces (no over-dropping).
-TEST(RealtimeProfilerStress, NIGHTLY_ConsumerDropAccountingUnderLoad) {
+TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     const std::chrono::seconds run_window(
         tt::parse_env<std::uint32_t>("TT_RT_PROFILER_DROP_ACCOUNTING", kDefaultDropAccountingSeconds));
 
