@@ -533,6 +533,17 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_data_format(curr_matmul_out_cb);
                 }
+#ifdef ARCH_QUASAR
+                // QSR quirk #1 (buffer descriptors are baked at op init, not recomputed per pack): the pack
+                // BD was last programmed for dfb::out (compute_kernel_hw_startup) and the tilize left it
+                // stale — it is NEVER repointed to the real matmul output CB. pack_tile_block below runs the
+                // init-baked MOP applying matmul_partials' tile *offset* on top of out's L1 *base* -> OOB
+                // write -> PACR0_TILE_INC / ERROR_TRISC1 fault. Repoint the pack BD to the actual output CB
+                // here (once per K-block; the reload path at 539+ doesn't touch pack config). WH/BH don't
+                // need this (they recompute the full L1 addr from fifo_wr_ptr each pack). Mirrors
+                // compute_pool_2d.cpp's llk_pack_init re-init. See ~/QuasarProgrammingQuirks.md quirk #1.
+                PACK((llk_pack_init(curr_matmul_out_cb)));
+#endif
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
