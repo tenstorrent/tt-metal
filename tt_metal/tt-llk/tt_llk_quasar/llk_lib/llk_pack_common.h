@@ -55,6 +55,11 @@ inline void _llk_pack_reconfig_data_format_(const std::uint32_t pack_src_format,
 {
     static_assert((PACK_SEL == p_pacr::PACK0) || (PACK_SEL == p_pacr::PACK1), "PACK_SEL can only be set to p_pacr::PACK0/PACK1");
 
+    // DEBUG (DPRINT locator): dump the (src -> dst) format pair fed to the packer reconfig, so we can name
+    // the unsupported combination that trips the assert below on the emulator (no ring buffer). Remove after.
+#if defined(KERNEL_BUILD)
+    DPRINT("QSR_PACK_RECFG src={} dst={}\n", (std::uint32_t)pack_src_format, (std::uint32_t)pack_dst_format);
+#endif
     LLK_ASSERT(
         ckernel::pack::is_quasar_pack_reconfig_pair_supported(pack_src_format, pack_dst_format),
         "Unsupported Quasar packer IN_DATA_FORMAT for this dest register and L1 format.");
