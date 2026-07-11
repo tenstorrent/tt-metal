@@ -94,8 +94,13 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
    fields that don't resolve to an ADDR32 are reported `UNRESOLVED`. Whether a
    shared word actually races (bit-disjoint masking, mutex/semaphore ordering,
    value-invariance) is deferred.
-5. **Quasar** enables HW AutoTTSync; the tool still enumerates, but treat QSR
-   output per that mechanism.
+5. **Quasar** is validated. Its config-write idiom is `cfg_rmw(FIELD_RMW, …)`
+   (the `_RMW` composite is captured at the preprocessor level so the field
+   resolves). Its per-RISC **TTSync/AutoTTSync** HW-orders the RISC-write ->
+   consuming-instruction direction (Confluence "Every Conceivable TTSync Detail",
+   1340276980), so mmio-race reports those as `AUTOTTSYNC_ORDERED` rather than
+   race candidates — it does NOT cover an MMIO *read* awaiting a multi-cycle
+   result (`wait_*_idle`), nor the `EN_SUBDIVIDED` cross-unpacker corner.
 
 ## Validated against ground truth
 
@@ -110,6 +115,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   latched `program_packer_destination` (`L1_Dest_addr`); exercises `THCON_ONLY` on BH.
 - `semaphore-handshake` sees all ops (17 post / 20 get / 4 init / balanced mutexes
   on WH) and correctly reports no imbalance — after excluding wrapper defs + RAII.
+- **Quasar**: all 122 `cfg_rmw` writes resolve and are each single-thread-owned
+  (12 PACK-only, 7 UNPACK-only words) → 0 cross-thread shared words, matching the
+  skill's per-engine-ownership conclusion; mmio-race's 169 unguarded writes are
+  correctly `AUTOTTSYNC_ORDERED`; reconfig recall works via `cfg_rmw`.
 
 The HW claims the checkers encode are grounded in the tt-isa-docs
 (`BackendConfiguration.md`: the `Config` vs `ThreadConfig` split and that `SETC16`

@@ -535,6 +535,65 @@ def test_reconfig_pack_not_drained_by_unpack_condition():
     assert ReconfigStall().run(FactBase("wormhole", facts)) == []
 
 
+# --- Quasar validation regressions ----------------------------------------
+
+
+@case
+def test_cfg_word_cfg_rmw_via_rmw_macro_and_no_empty_noise():
+    # Quasar writes config via cfg_rmw(FIELD_RMW,...); FIELD_RMW is captured as an
+    # object-macro fact. Two threads on the same word -> CROSS_THREAD; the empty
+    # arg0 cfg_rmw call must NOT emit a '?' UNRESOLVED.
+    Fp = "tt_llk_quasar/common/inc/cpack_common.h"
+    Fm = "tt_llk_quasar/common/inc/cmath_common.h"
+    facts = [
+        fn("p", Fp, 10, 20),
+        fn("m", Fm, 30, 40),
+        macro(Fp, 12, "SHARED_FIELD_RMW", "SHARED_FIELD_RMW", func="p"),
+        macro(Fm, 32, "SHARED_FIELD_RMW", "SHARED_FIELD_RMW", func="m"),
+        call(Fp, 13, "cfg_rmw", func="p", arg0=""),  # macro-expanded arg -> empty
+    ]
+    fb = FactBase("quasar", facts)
+    fb.addr32 = {"SHARED_FIELD_ADDR32": 5}
+    out = CfgWordOverlap().run(fb)
+    shared = [f for f in out if f.hint == "CROSS_THREAD_SHARED_WORD"]
+    assert len(shared) == 1 and ":5" in shared[0].kind, shared
+    assert all(
+        "could not resolve ?" not in f.detail for f in out
+    ), "empty cfg_rmw noise"
+
+
+@case
+def test_mmio_quasar_autottsync_ordered():
+    # On Quasar the per-RISC TTSync HW-orders the write->consume direction, so an
+    # unguarded cfg write is AUTOTTSYNC_ORDERED, not a race candidate. Same write
+    # on WH stays NO_LOCAL_ORDERING.
+    F = "tt_llk_quasar/common/inc/ckernel_trisc_common.h"
+    facts = [
+        fn("f", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "SOME_ADDR32", func="f"),
+    ]
+    assert MmioRace().run(FactBase("quasar", facts))[0].hint == "AUTOTTSYNC_ORDERED"
+    FW = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts_wh = [
+        fn("f", FW, 100, 200),
+        pw(FW, 110, "get_cfg_pointer", "SOME_ADDR32", func="f"),
+    ]
+    assert MmioRace().run(FactBase("wormhole", facts_wh))[0].hint == "NO_LOCAL_ORDERING"
+
+
+@case
+def test_reconfig_detects_cfg_rmw_write():
+    # A reconfig whose config write is a cfg_rmw call (Quasar's idiom) must be
+    # detected, not skipped as "writes nothing".
+    F = "tt_llk_quasar/common/inc/cpack_common.h"
+    facts = [
+        fn("_llk_pack_reconfig_data_format_", F, 100, 200),
+        call(F, 120, "cfg_rmw", func="_llk_pack_reconfig_data_format_", arg0=""),
+    ]
+    out = ReconfigStall().run(FactBase("quasar", facts))
+    assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN", out
+
+
 def main():
     failed = 0
     for c in CASES:

@@ -63,8 +63,11 @@ class ReconfigStall(Check):
                 elif f["family"] == "macro" and is_cfg_write_macro(f.get("name", "")):
                     first_write = f
                     break
-                elif f["family"] == "call" and "cfg_reg_rmw_tensix" in f.get(
-                    "text", ""
+                elif f["family"] == "call" and (
+                    "cfg_reg_rmw_tensix" in f.get("text", "")
+                    # cfg_rmw / cfg_rmw_gpr — Quasar's dominant config-write idiom;
+                    # without this a Quasar reconfig looks like it writes nothing.
+                    or registry.write_call_kind(f.get("name", ""))
                 ):
                     first_write = f
                     break
