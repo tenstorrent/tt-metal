@@ -1151,14 +1151,26 @@ class TTSeamlessM4Tv2CodeHifiGan:
         row_major_output: bool = False,
         keep_sharded_output: bool = False,
         accept_sharded_input: bool = False,
+        accept_tile_input: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
+        # ``accept_tile_input`` opts a caller out of the defensive TILE->RM untilize when the TILE input
+        # comes from a previous conv (conv-derived NLC): ``ttnn.conv1d`` consumes it directly (verified
+        # PCC-clean for every resblock shape), which removes the dominant UntilizeWithUnpadding bucket.
         seq = int(input_length)
         x_in = x_nlc
         rm_buf: Optional[ttnn.Tensor] = None
         if accept_sharded_input and ttnn.is_sharded(x_nlc):
             pass
+        elif (
+            accept_tile_input
+            and int(stride) == 1
+            and not ttnn.is_sharded(x_nlc)
+            and x_nlc.get_layout() == ttnn.TILE_LAYOUT
+            and _vocoder_timeline_bucket(seq) <= seq  # no right-pad bucket (else needs RM concat)
+        ):
+            pass  # feed TILE interleaved straight to ttnn.conv1d (no untilize)
         elif x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
@@ -1638,6 +1650,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
                     batch=batch,
                 ),
                 keep_sharded_output=True,
+                # Conv-derived TILE input: ttnn.conv1d consumes it directly, skipping the TILE->RM untilize.
+                accept_tile_input=_vocoder_resblock_l1_enabled(),
             )
             x_nlc, tlen = self._conv1d(
                 x_nlc,
@@ -1659,6 +1673,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                     batch=batch,
                 ),
                 accept_sharded_input=True,
+                accept_tile_input=_vocoder_resblock_l1_enabled(),
             )
             x_nlc = ttnn.add(x_nlc, residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x_nlc
