@@ -53,6 +53,11 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
     TILE = ttnn.TILE_SIZE
+    prefetcher = make_prefetcher(device, num_tensors=1, num_layers=1, num_receiver_cores=recv_per_bank)
+    assert prefetcher.__class__.__name__ == "TensorPrefetcher", (
+        f"Expected TensorPrefetcher but got {prefetcher.__class__.__name__}; "
+        "check model geometry and device firmware support."
+    )
 
     # Small synthetic shape — this is a wiring smoke test, not a perf-target shape.
     # Sized so the GCB fits the remote-CB page cap (~2 MB) at every ring size we sweep.
@@ -79,10 +84,9 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
         pt_weight, device=device, dtype=dtype, memory_config=weight_mem_config, layout=ttnn.TILE_LAYOUT
     )
 
-    # ---- Build the activation: width-sharded over the receiver rectangle ----
-    receiver_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, recv_per_bank - 1))}
-    )
+    # ---- Build the activation: width-sharded over the production receiver ring ----
+    receiver_core_range_set = prefetcher.to_core_range_set(prefetcher.receiver_cores())
+    assert receiver_core_range_set.num_cores() == ring_size
     pt_act = torch.randn(1, 1, M, K)
     K_per_shard = round_up(math.ceil(K / ring_size), TILE)
     act_mem_config = ttnn.create_sharded_memory_config(
@@ -121,11 +125,6 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
     )
 
     # ---- Construct TensorPrefetcher, drive its lifecycle ----
-    prefetcher = make_prefetcher(device, num_tensors=1, num_layers=1, num_receiver_cores=recv_per_bank)
-    assert prefetcher.__class__.__name__ == "TensorPrefetcher", (
-        f"Expected TensorPrefetcher but got {prefetcher.__class__.__name__}; "
-        "check model geometry and device firmware support."
-    )
     prefetcher.insert_tensor(tt_weight, program_config=program_config)
     prefetcher.init(Mode.DECODE)
 

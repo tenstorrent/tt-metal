@@ -19,11 +19,28 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.recv_contig_layout import bank_receivers_contiguous as _bank_receivers_contiguous
 from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
 from models.tt_transformers.tt.recv_contig_layout import ring_pos_coord as _ring_pos_coord
 
 STREAMING_GCB_MAX_SIZE = 788032
+
+_SPREAD_CONTIGUOUS_RING32_BANK_CORES = (
+    ((0, 0), (1, 0), (2, 0), (6, 0)),
+    ((0, 1), (1, 1), (3, 1), (6, 1)),
+    ((0, 2), (1, 2), (2, 2), (4, 2)),
+    ((0, 4), (1, 4), (4, 4), (5, 4)),
+    ((7, 5), (8, 5), (9, 5), (10, 5)),
+    ((2, 6), (3, 6), (7, 6), (8, 6)),
+    ((0, 7), (7, 7), (9, 7), (10, 7)),
+    ((0, 8), (6, 8), (7, 8), (8, 8)),
+)
+
+
+def _receiver_ring_cores(num_senders: int, receivers_per_sender: int) -> List[ttnn.CoreCoord]:
+    """Return receiver cores in contiguous bank-arc/ring-position order."""
+    if num_senders == 8 and receivers_per_sender == 4:
+        return [ttnn.CoreCoord(x, y) for bank_cores in _SPREAD_CONTIGUOUS_RING32_BANK_CORES for x, y in bank_cores]
+    return [_ring_pos_coord(ring_pos, num_senders) for ring_pos in range(num_senders * receivers_per_sender)]
 
 
 def gcb_block_bytes(k_tiles: int, per_core_n_tiles: int, ring_size: int, tile_bytes: int) -> int:
@@ -123,10 +140,10 @@ def is_tensor_prefetcher_config_supported(
 class TensorPrefetcher(LightweightModule):
     """Tensor-prefetcher state shared by Tensor-Prefetcher-fed model matmuls.
 
-    Receiver layout is a ``num_dram_banks × recv_per_bank`` rectangle anchored at ``(0,0)``
-    on the worker grid. Bank ``b``'s receivers occupy ring positions ``[b*r, (b+1)*r)`` in
-    row-major. DRAM sender cores live on a separate programmable core type so they don't
-    occupy worker grid coordinates.
+    Bank ``b``'s receivers occupy contiguous ring positions ``[b*r, (b+1)*r)``. The verified
+    8-bank, 4-receiver configuration uses a congestion-optimized sparse placement; other
+    configurations retain the rectangular row-major placement. DRAM sender cores live on a
+    separate programmable core type and don't occupy worker grid coordinates.
     """
 
     def __init__(
@@ -165,13 +182,10 @@ class TensorPrefetcher(LightweightModule):
         self.num_receiver_cores: int = picked
         self.ring_size: int = self.num_senders * self.num_receiver_cores
 
-        # Receiver rectangle is num_senders (cols) x num_receiver_cores (rows): ring position r
-        # maps to (col=r%num_senders, row=r//num_senders).
-        #
         # Receiver cores in ring-position order. The gather_in0 matmul walks its core_grid in
         # this order, so ring core r computes output N-cols [r*per_core_N, (r+1)*per_core_N).
         # receiver_cores() returns this list (flattened) as the matmul grid.
-        self._ring_cores: List[ttnn.CoreCoord] = [_ring_pos_coord(r, self.num_senders) for r in range(self.ring_size)]
+        self._ring_cores: List[ttnn.CoreCoord] = _receiver_ring_cores(self.num_senders, self.num_receiver_cores)
 
         # Consumer sub-device covers the entire worker grid. DRAM senders are on a
         # separate programmable core type and are not in this set. The matmul receivers
@@ -184,7 +198,15 @@ class TensorPrefetcher(LightweightModule):
         # arc [b*num_receiver_cores, (b+1)*num_receiver_cores), matching the CONTIGUOUS_1D
         # NdShardSpec required by the gather_in0 matmul's bank-to-receiver validation.
         self._bank_to_receivers: List = [
-            (b, _bank_receivers_contiguous(b, self.num_receiver_cores, self.num_senders))
+            (
+                b,
+                ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(core, core)
+                        for core in self._ring_cores[b * self.num_receiver_cores : (b + 1) * self.num_receiver_cores]
+                    ]
+                ),
+            )
             for b in range(self.num_senders)
         ]
 
@@ -206,6 +228,7 @@ class TensorPrefetcher(LightweightModule):
         logger.info(
             f"[TensorPrefetcher] model={self.model_name} banks={self.num_senders} "
             f"recv/bank={self.num_receiver_cores} ring={self.ring_size} "
+            f"layout={'spread' if self.num_senders == 8 and self.num_receiver_cores == 4 else 'rectangle'} "
             f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
         )
 
@@ -299,11 +322,11 @@ class TensorPrefetcher(LightweightModule):
         The model flattens this (via ``to_core_range_set``) into the matmul ``core_grid``; the
         gather_in0 matmul walks that grid in order, so ring core r computes N-cols
         [r*per_core_N, ...) and must receive shard r. This ring order is intentionally
-        decoupled from ``_bank_to_receivers`` (strided), which only feeds the DRAM-sender GCB.
+        grouped into contiguous per-bank arcs in ``_bank_to_receivers``.
 
         ``sender_active``/``receiver_active`` are accepted for parity with the worker-core
         ``Prefetcher.receiver_cores`` signature but are ignored — the DRAM-core path has no
-        inactive subset (every DRAM bank is a sender, every receiver in the rectangle is active).
+        inactive subset (every DRAM bank is a sender and every configured ring core is active).
         """
         del sender_active, receiver_active
         return [ttnn.CoreRangeSet([ttnn.CoreRange(c, c)]) for c in self._ring_cores]
@@ -336,7 +359,7 @@ class TensorPrefetcher(LightweightModule):
 
         The recv-contig layout allocates the weight as an NdShardSpec with ``num_shards =
         ring_size`` (over-subscribed relative to the ``num_senders`` DRAM banks) distributed
-        round-robin, each shard ``(K, N // ring_size)``. Paired with the strided GCB topology,
+        contiguously by bank, each shard ``(K, N // ring_size)``. Paired with the contiguous GCB topology,
         shard r (columns [r*n_per_recv, (r+1)*n_per_recv)) is delivered to ring position r —
         exactly the weight slice the gather_in0 matmul's ring core r consumes.
         """
@@ -351,12 +374,13 @@ class TensorPrefetcher(LightweightModule):
         )
 
     def dynamic_worker_core_grid(self, num_cores: int) -> ttnn.CoreRangeSet:
-        """Allocate ``num_cores`` worker cores as a SOLID rectangle below the receiver rectangle.
+        """Allocate ``num_cores`` worker cores as a solid model-helper rectangle.
 
-        The receiver rectangle occupies rows ``0..num_receiver_cores-1``; the returned grid sits in
-        rows ``num_receiver_cores..``. It must be a filled rectangle (``num_cores() == bounding-box``)
-        because consumers like the residual RMSNorm assert ``shard_spec.grid.num_cores() ==
-        bbox_num_cores`` — a ragged row-major spill (one full row + a partial tail) fails that check.
+        The returned grid remains anchored below row ``num_receiver_cores`` to preserve the existing
+        model configurations. With the sparse ring-32 placement it can intersect receiver cores;
+        this is supported because the persistent GCB and model programs use disjoint L1 regions.
+        It must be filled (``num_cores() == bounding-box``) because consumers like residual RMSNorm
+        require a rectangular shard grid.
 
         We pick the tallest rectangle ``width x height`` with ``width * height == num_cores`` that
         fits in ``grid_x`` columns and the available rows below the receiver rectangle, anchored at
