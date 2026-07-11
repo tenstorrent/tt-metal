@@ -315,8 +315,12 @@ class LTXDistilledPipeline(LTXPipeline):
             self.encode_prompts(["warmup"], use_cache=False)
 
         # Real distilled sigmas so warmup hits the same branches (incl. sigma_next == 0 final step).
-        s1_sigmas = list(DISTILLED_SIGMA_VALUES)[:warmup_steps] + [0.0]
-        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:warmup_steps] + [0.0]
+        # Drop the schedule's terminal 0.0 before slicing: a short schedule (len-1 <= warmup_steps,
+        # e.g. the fast 1-step S2) would otherwise keep that 0.0 AND get another appended, leaving a
+        # sigma=0 step — which the image-cond pin path (dt/sigma) divides by. Kernels are shape-driven,
+        # so one fewer warmup step still compiles the same inner_step the real gen replays.
+        s1_sigmas = list(DISTILLED_SIGMA_VALUES[:-1])[:warmup_steps] + [0.0]
+        s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES[:-1])[:warmup_steps] + [0.0]
 
         if "s1" in stages and not skip_dit_warmup:
             s1_h, s1_w = height // 2, width // 2
