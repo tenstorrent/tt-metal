@@ -89,6 +89,10 @@ struct RealtimeProfilerRuntimeSizes {
     static constexpr uint32_t core_l1_size = sizeof(RealtimeProfilerCoreL1);
 };
 
+static_assert(
+    RealtimeProfilerRuntimeSizes::fifo_pages >= RT_PROFILER_RING_CAPACITY,
+    "Host D2H FIFO must be at least as deep as the device ring (RT_PROFILER_RING_CAPACITY)");
+
 constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 
 // Compute the RT-profiler L1 carve-out addresses from a base anchored past UNRESERVED (outside the user-space
