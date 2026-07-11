@@ -16,6 +16,25 @@ user_invocable: true
 >
 > **Persisting results — single writer, incremental.** Agents only **return** their findings; they never write a shared file (no concurrent-write clobbering). If findings are persisted to a file, the orchestrator/caller is the **sole writer** and **appends each wave's returns as they arrive** — incremental, never only-at-the-end — so an interrupt preserves every completed wave's findings.
 
+## Recall preflight — run the `llk-audit` tool first (augmentor, not a verdict)
+Get the deterministic in-tree candidate list before manual analysis (it
+enumerates every in-tree mailbox FIFO endpoint and pairs writers with readers of
+the same directed channel):
+
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks mailbox-sync
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
+    # candidates: out/audit.<arch>.json -> .checks["mailbox-sync"].findings
+
+`PAIRED_CHANNEL` = a FIFO endpoint whose opposite end (writer↔reader) is present
+in tt-llk; `UNPAIRED_ENDPOINT` = a resolved channel with no in-tree partner (the
+partner is likely in the compute-API/kernel tier, OR a real imbalance);
+`UNRESOLVED_ENDPOINT` = the issuing thread isn't derivable from the file (e.g.
+`ckernel_debug.h`). All are **candidates**. The tool sees only the IN-TREE surface
+— the CB tile-address/value broadcast and user kernels are OUT of scope (the
+kernel/JIT tier, `run.sh --full-jit`); and pairing is a static same-channel match,
+NOT a balance/symmetry/overflow/ordering verdict. **Widen** with the method below.
+It never clears a site; you decide. If unbuilt, proceed manually.
+
 ## The bug class (precise)
 Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unpack, T1/math, T2/pack, B) — a sync path entirely separate from Tensix semaphores (`semaphore-handshake-audit`), config registers, and MMIO. A misused mailbox → **deadlock** (blocking read on an empty FIFO that never gets written, or a writer stalled forever on a full FIFO) or **stale/lost data** (ordering to *other* memory not enforced by default — see the fence note below).
 

@@ -14,9 +14,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llkaudit.checks.cfg_word_overlap import CfgWordOverlap
+from llkaudit.checks.mailbox_sync import MailboxSync
 from llkaudit.checks.mmio_race import MmioRace
 from llkaudit.checks.reconfig_stall import ReconfigStall
 from llkaudit.checks.semaphore_handshake import SemaphoreHandshake
+from llkaudit.checks.srcreg_bank import SrcRegBank
 from llkaudit.factbase import FactBase
 
 
@@ -690,6 +692,81 @@ def test_cfg_word_dedup_double_captured_rmw():
     out = [f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"]
     assert len(out) == 1 and out[0].safety == "SAFE_BY_MASKING", out
     assert len(out[0].evidence) == 2, out[0].evidence  # not double-listed
+
+
+# --- srcreg-bank ----------------------------------------------------------
+
+
+@case
+def test_srcreg_raw_setdvalid_blackhole_flagged():
+    # A raw TTI_SETDVALID on Blackhole is ISA-unsupported -> RAW_SETDVALID_BH.
+    F = "tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_datacopy.h"
+    facts = [
+        fn("_llk_math_eltwise_unary_datacopy_", F, 100, 300),
+        macro(F, 109, "TTI_SETDVALID", "TTI_SETDVALID(0b10)", func="dc"),
+    ]
+    out = SrcRegBank().run(FactBase("blackhole", facts))
+    assert len(out) == 1 and out[0].hint == "RAW_SETDVALID_BH", out
+    # Same macro on Wormhole is a normal dvalid control point, NOT the BH flag.
+    out_wh = SrcRegBank().run(FactBase("wormhole", facts))
+    assert len(out_wh) == 1 and out_wh[0].hint == "DVALID_SET", out_wh
+
+
+@case
+def test_srcreg_cleardvalid_and_supported_forms():
+    F = "tt_llk_blackhole/common/inc/cunpack_common.h"
+    facts = [
+        fn("u", F, 100, 300),
+        macro(F, 110, "TTI_CLEARDVALID", "TTI_CLEARDVALID(0b01)", func="u"),
+        # UNPACR_NOP(...,SET_DVALID,...) is the SUPPORTED set form -> not a raw
+        # SETDVALID, must NOT be flagged.
+        macro(F, 120, "TTI_UNPACR_NOP", "TTI_UNPACR_NOP(SrcA, SET_DVALID)", func="u"),
+        # TT_OP_SETDVALID is the opcode-VALUE constant, not an issue -> excluded.
+        macro(F, 130, "TT_OP_SETDVALID", "", func="u"),
+    ]
+    out = SrcRegBank().run(FactBase("blackhole", facts))
+    assert len(out) == 1 and out[0].hint == "DVALID_CLEAR", out
+
+
+# --- mailbox-sync (lite) --------------------------------------------------
+
+
+@case
+def test_mailbox_paired_channel():
+    # cmath writes dst_index to UNPACK (MATH->UNPACK); cunpack reads from MATH
+    # (MATH->UNPACK) -> same resolved channel -> both PAIRED.
+    Fm = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    facts = [
+        fn("m", Fm, 200, 260),
+        fn("u", Fu, 990, 1010),
+        call(Fm, 239, "mailbox_write", func="m", arg0="ThreadId::UnpackThreadId"),
+        call(Fu, 1000, "mailbox_read", func="u", arg0="ThreadId::MathThreadId"),
+    ]
+    out = MailboxSync().run(FactBase("wormhole", facts))
+    assert len(out) == 2 and all(f.hint == "PAIRED_CHANNEL" for f in out), out
+    assert all("MATH->UNPACK" in f.detail for f in out), out
+    # the write finding lists the read as its partner evidence
+    w = next(f for f in out if f.kind == "mailbox:write")
+    assert any("read" in e and "1000" in e for e in w.evidence), w.evidence
+
+
+@case
+def test_mailbox_unpaired_and_unresolved():
+    # A write with no in-tree reader -> UNPAIRED. A debug endpoint whose issuing
+    # thread isn't derivable from the file -> UNRESOLVED.
+    Fm = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    Fd = "tt_llk_wormhole_b0/common/inc/ckernel_debug.h"
+    facts = [
+        fn("m", Fm, 200, 260),
+        fn("d", Fd, 100, 160),
+        call(Fm, 239, "mailbox_write", func="m", arg0="ThreadId::UnpackThreadId"),
+        call(Fd, 113, "mailbox_write", func="d", arg0="ThreadId::MathThreadId"),
+    ]
+    out = MailboxSync().run(FactBase("wormhole", facts))
+    by_line = {f.line: f.hint for f in out}
+    assert by_line[239] == "UNPAIRED_ENDPOINT", out  # no reader present
+    assert by_line[113] == "UNRESOLVED_ENDPOINT", out  # ckernel_debug -> no thread
 
 
 @case

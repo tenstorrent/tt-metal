@@ -30,19 +30,78 @@ parse pass; it feeds every sub-audit a complete known-pattern worklist over one
 shared fact base (which is also what makes the JOIN a lookup rather than a
 schema reconciliation):
 
-    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole>
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar>
     # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
     # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
-    #                                    semaphore-handshake, reconfig-stall}]
+    #                                    semaphore-handshake, reconfig-stall,
+    #                                    srcreg-bank, mailbox-sync}]
 
 Hand each sub-audit agent its check's `findings[]` as the pre-enumerated worklist,
 and instruct it to **widen beyond the tool** per that check's `blind_spots` (the
 tool recalls KNOWN patterns only — the agents must still hunt the unknown). The
-tool covers 4 of the 9 classes; the other five (dataflow-cb-sync, noc-sync,
-mailbox-sync, instruction-latency, srcreg-bank-sync) have no tool support here
-(0/near-0 tt-llk surface, unparsed SFPU, or too-semantic) and stay fully
-LLM-driven — see the tool README. The tool is **advisory**: it never clears a
-class, and its silence is "no new *known-pattern* instance," not "no bug".
+tool covers **6 of the 9** classes (mmio-race, cfg-word-overlap,
+semaphore-handshake, reconfig-stall, srcreg-bank, mailbox-sync). The other three
+stay fully LLM-driven here: **instruction-latency** (its surface is the SFPU
+files clang can't parse + its verdict needs the out-of-tree pinned `sfpi-gcc`
+latency table), and **dataflow-cb-sync** / **noc-sync** (their surface is the
+JIT-compiled kernels OUTSIDE tt-llk — reachable only via the opt-in kernel tier,
+see *Full-audit kernel tier* below). `srcreg-bank` recalls only the dvalid
+control points + the raw-`SETDVALID`-on-BH flag (not the bank-flip lockstep
+verdict), and `mailbox-sync` covers only the IN-TREE mailbox surface (the CB
+broadcast is kernel-tier) — so both still need heavy LLM widening per their
+`blind_spots`. The tool is **advisory**: it never clears a class, and its silence
+is "no new *known-pattern* instance," not "no bug".
+
+## Full-audit kernel tier (opt-in, JIT-dependent) — the cb-sync / noc-sync runbook
+`dataflow-cb-sync` and `noc-sync` audit the CB-credit and NoC-handshake surface,
+which lives in **JIT-compiled kernels OUTSIDE tt-llk** (no static compile
+database — the in-tree fixed-flags parse can't reach it). Recall over that
+surface is therefore an **opt-in, off-main capability** the tool summons onto a
+throwaway workspace; it never touches main and is not part of the base tool.
+
+**When to offer it — gate on BOTH conditions:**
+1. **Mode:** the user asked for a **full / exhaustive** sweep (NOT a diff/PR-scoped
+   `--changed` run). A diff/PR run **never** prompts — the fast path stays clean.
+2. **Capability:** the kernel-tier module is actually present. Probe it:
+
+       cd .claude/tools/llk-audit && ./run.sh --kernel-tier-status   # -> "available" | "unavailable"
+
+   If it prints `unavailable`, do **NOT** offer a JIT hookup (a chosen "yes" would
+   dangle against a missing implementation, and the LLM must never improvise a
+   capture). Proceed with the in-tree sweep and **tell the user precisely what
+   that means for cb-sync / noc-sync: they are NOT tool-recalled, but they are
+   STILL AUDITED — LLM-driven via grep + reasoning + ISA docs, exactly as before
+   this tool existed. "Not tool-recalled" ≠ "left out."** The only thing forgone
+   is the extra deterministic candidate list (grep-fidelity recall, so
+   macro-wrapped/aliased calls and cross-kernel pairing may be missed — state
+   that as the coverage bound). This is the honest degrade, not a failure.
+
+**If capability is `available`, prompt the user** (be cost-honest): hooking the
+JIT runs a workload build (runtime, minutes), gives **periodic-sweep-grade**
+coverage that is **complete only over the kernel variants actually exercised**
+(state this — a clean cb/noc result must never read as "all kernels covered"),
+and is off-main. Make clear that declining costs nothing versus the pre-tool
+baseline — **on "no", cb-sync / noc-sync are still LLM-audited by their skills**;
+you only skip the extra deterministic recall layer. On **yes**, run the runbook;
+on **no**, proceed with the in-tree sweep + the LLM-driven cb/noc audit and state
+that coverage bound explicitly.
+
+**The runbook (what a "yes" executes — a documented procedure, not improvisation):**
+1. **Check out a scratch workspace** off latest `main` (throwaway; main untouched).
+2. **Add the capability:** `./run.sh <arch> --full-jit` bootstraps the kernel-tier
+   module (installs the compiler-wrapper shim + builds the cb/noc checkers).
+3. **Capture:** run a workload build under the wrapper → `compile_commands.json`.
+4. **Audit + merge:** run the cb-sync / noc-sync checkers over the captured
+   kernels; merge/dedup their candidates with the in-tree findings.
+5. **Report coverage:** which kernel variants were captured, which files failed to
+   parse — as an explicit ledger (no silent caps).
+6. **Restore** the original branch; discard the scratch workspace.
+
+The runbook, the module, and the wrapper all live **inside tt-llk**
+(`.claude/tools/llk-audit/`); the scratch workspace is only where they *run*, with
+zero permanent footprint outside tt-llk. Whatever the kernel tier surfaces is
+**candidates** (augmentor) — the data-before-credit ordering and cross-kernel
+producer↔consumer pairing verdicts stay with the sub-audit skills.
 
 ## The monotonic contract (non-negotiable — this is what makes the sweep a true superset)
 A naive "run them + concatenate" can catch *less* than the audits alone (summarization loss, dedup collapse, over-resolution). To prevent that, the JOIN is **additive-only**:

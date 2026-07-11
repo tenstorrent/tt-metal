@@ -40,9 +40,16 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads; intra-thread full-word clobber | `CROSS_THREAD_SHARED_WORD` / `INTRA_THREAD_CLOBBER` / `UNRESOLVED` |
 | `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no in-tree init | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall | `NO_UNIT_DRAIN` / `THCON_ONLY` |
+| `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` |
+| `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
 
 Every finding is a **recall bucket, not a verdict**, and every check declares its
-`blind_spots` in the output.
+`blind_spots` in the output. `srcreg-bank` and `mailbox-sync` are deliberately
+**narrow recallers**: `srcreg-bank` enumerates the dvalid control points and
+flags the one mechanical ISA pattern (raw `SETDVALID` on BH) but does NOT model
+the bank-flip lockstep verdict; `mailbox-sync` covers only the tiny IN-TREE
+mailbox surface (the CB tile-address/value broadcast is kernel-tier) and pairs
+statically — balance/symmetry/overflow/ordering stay with the skill.
 
 **cfg-word `safety` annotation.** A `CROSS_THREAD_SHARED_WORD` finding is *always*
 emitted (multi-thread access to a word is worth seeing even when race-safe — it
@@ -59,25 +66,33 @@ evidence line (so a shared word whose partner writer is in a changed file still
 surfaces). The whole tree is still parsed for cross-file context; only output is
 scoped. Use it for a PR-scoped audit.
 
-### Why these four (and not the other nine audits)
-Scoped by evidence — a checker ships only where AST recall is exhaustive on a
-real tt-llk pattern:
-- **dataflow-cb-sync / noc-sync** — 0 CB/NoC sites in the tt-llk compute lib (they
-  live in `tt_metal/hw/inc/api` + `ttnn`/`models`). A tt-llk-scoped checker finds
-  nothing → dropped.
-- **mailbox-sync** — exactly one functional pair in tt-llk; surface is elsewhere → dropped.
+### Why these six (and not the other three audits)
+Scoped by evidence — a checker ships only where deterministic recall adds value
+over the skill's own grep on a real tt-llk surface:
+- **dataflow-cb-sync / noc-sync** — 0 CB/NoC sites in the tt-llk compute lib; the
+  surface is the JIT-compiled kernels in `tt_metal/hw/inc/api` + `ttnn`/`models`,
+  which have no static compile database the in-tree parse can reach. Reachable
+  only via the **opt-in kernel tier** (`run.sh --full-jit`, off-main, sweep-grade
+  — see the *Full-audit kernel tier* runbook in `race-audit-all`), not the base
+  in-tree tool. The base tool degrades honestly and names them uncovered.
 - **instruction-latency** — its surface is the SFPU files, which don't parse under
-  clang (GCC vector extensions), and the verdict needs an out-of-tree version-pinned
-  latency table → deferred until SFPU parsing is solved.
-- **srcreg-bank-sync** — too semantic for exhaustive recall → LLM-led.
+  clang (GCC vector extensions), so the AST recall the tool depends on is
+  unavailable; and the verdict needs an out-of-tree version-pinned `sfpi-gcc`
+  latency table → stays fully LLM-driven.
+- **srcreg-bank** and **mailbox-sync** — narrow recallers that DO add value in
+  tree (a clean control-point/endpoint inventory + one mechanical ISA flag) while
+  leaving the semantic verdict to the skill; see the note under *Checks* above.
 
 ## Build & run
 
 ```bash
-./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [--changed [BASE]] [out_dir]
+./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]
                                    #   --changed scopes output to files changed vs BASE (default main)
+                                   #   --full-jit ALSO runs the opt-in kernel tier (cb/noc); degrades
+                                   #     honestly + names the uncovered classes when the module is absent
                                    #   auto-builds the C++ extractor on first run
                                    #   (or if stale); needs Clang/LLVM >= 18 dev libs.
+./run.sh --kernel-tier-status      # probe the kernel-tier capability ("available"/"unavailable")
 extractor/build.sh                 # optional: build the extractor manually
 python3 tests/test_checks.py       # hermetic unit tests (no clang/repo needed)
 ```
@@ -100,6 +115,8 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new drain/sync function → `DRAIN_CALLS`
 - new reconfig function name → `RECONFIG_FN_SUBSTR`; new latched register → `LATCHED_FIELDS`
 - new semaphore/mutex wrapper → `SEMAPHORE_CALLS`
+- new dvalid op / renamed SETDVALID/CLEARDVALID → `SRCREG_DVALID_OPS`
+- new mailbox primitive → `MAILBOX_FIFO_CALLS`
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
 
@@ -140,6 +157,13 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   latched `program_packer_destination` (`L1_Dest_addr`); exercises `THCON_ONLY` on BH.
 - `semaphore-handshake` sees all ops (17 post / 20 get / 4 init / balanced mutexes
   on WH) and correctly reports no imbalance — after excluding wrapper defs + RAII.
+- `srcreg-bank` (BH) flags the raw `TTI_SETDVALID` sites — including the three real
+  ones in `llk_math_eltwise_unary_datacopy.h` (ISA-unsupported on BH, a genuine
+  recall win) — and recalls the `CLEARDVALID` control points; on WH/QSR the same
+  `SETDVALID` is a plain `DVALID_SET` candidate (no BH flag).
+- `mailbox-sync` (WH/BH) pairs the `MATH→UNPACK` dst_index channel (cmath write ↔
+  cunpack read → `PAIRED_CHANNEL`) and marks the thread-agnostic `ckernel_debug.h`
+  halt/unhalt endpoints `UNRESOLVED_ENDPOINT`; Quasar has no in-tree FIFO → 0.
 - **Quasar**: all 122 `cfg_rmw` writes resolve and are each single-thread-owned
   (12 PACK-only, 7 UNPACK-only words) → 0 cross-thread shared words, matching the
   skill's per-engine-ownership conclusion; mmio-race's 169 unguarded writes are
