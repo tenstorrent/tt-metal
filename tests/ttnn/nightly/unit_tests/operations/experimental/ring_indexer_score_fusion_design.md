@@ -240,7 +240,7 @@ Honest and modest.
 | **D** ✅ | Dual-source local shard: reader reads its own shard from a second accessor over the SP-sharded `k_local` (local page `= (BC_KTILE(L) − ring_index·sll_t)·Dt`), remote shards from the gathered buffer; `k_batch_page_offset` preserved on the remote path. Factory passes `k_local` accessor CT args + address (slot 33). **Test seeds the gathered buffer with ZEROS** so a correct score proves device-side local sourcing. | **PASSED (2026-07-08).** All 4 cases green (0 failures), incl. both block_cyclic (the exact-equality hinge). `k_local`'s within-shard tile order matches the gathered band (both = `shard(k_host)`), so the local page math is exact. The Step-B host seed is gone — the op no longer needs the caller to pre-populate the local band. |
 | **E** ✅ (reorder; profiling TODO) | Reorder the `(group,band)` walk local-first then remote by ring arrival: a host-computed per-core permutation (`RingIdSequencer` replay → `shard_order`; `band_readiness = max arrival-iter over the band's shards`; `stable_sort`) fed IDENTICALLY to reader/compute/writer via rt slots 34/10/11 (read directly per-iteration, no on-device array). Reader now reads q/w BEFORE the band loop (decouples the q-mcast rendezvous from the fabric gate). `stream_heads` disallowed on the fused path (`TT_FATAL HB==Hi`), so no phantom bands. | **REORDER PASSED (2026-07-08):** all 4 cases green, lockstep holds (no hang/desync), band identity preserved (output unperturbed). Perm is identical within a k-mcast column (device-deterministic `band_readiness`), so k-mcast stays in lockstep. **PROFILED + FIXED (2026-07-08):** device profiling found the "net loss" was a schedule bug (reserved row halved the compute grid; contiguous per-column bands load-imbalanced the arrival). Fixes — reserve a COLUMN, STRIPE bands, signal only k-senders — made fused **faster than the two-op floor and near-ideal for dsv32**. See the "Perf root-cause + fix" section at the top. |
 | **E+** ✅ | Perf fix: column-reserve + band-striping + k-sender-only signalling; `num_links=2` and block-cyclic `k_chunk_size | chunk_local` as config levers. | **DONE (2026-07-08), all 4 cases green.** Device: glm5-contig 694→336µs (nl2), dsv32-contig 376µs (+44 of ideal, AG hidden), glm5-bc 349µs with aligned KC. |
-| **F** (partial) | Production dtype + config. **DONE:** bfp8_b K (both `k_local` + gathered) at PCC≥0.999 — `test_indexer_score_ring4_fused_bfp8_k`; `num_links=2` (production Blackhole) folded into the correctness matrix; head-streaming config rejected at validate — `test_..._rejects_head_streaming`; `cache_batch_idx` multi-user path fixed + covered (local-shard slot offset `k_batch_page_offset/ring_size`; open question 9) — `test_indexer_score_ring4_fused_indexed_cache` (B=2); mid-slab straddle / rotated-prefill (multiturn) covered — `test_indexer_score_ring4_fused_straddle`; runtime `kv_len` (padded / over-allocated cache) covered — `test_indexer_score_ring4_fused_runtime_kv_len` (open question 5 resolved). **REMAINING:** block-pool (`block_size>0`, disallowed on the fused path today), the AG `input_batch_slice_idx` vs `cache_batch_idx` hashing conflict (open question 4), and wiring into `indexer.py`. | Production readiness. |
+| **F** ✅ | Production dtype + config. **DONE:** bfp8_b K (both `k_local` + gathered) at PCC≥0.999 — `test_indexer_score_ring4_fused_bfp8_k`; `num_links=2` (production Blackhole) folded into the correctness matrix; head-streaming config rejected at validate — `test_..._rejects_head_streaming`; `cache_batch_idx` multi-user path fixed + covered (local-shard slot offset `k_batch_page_offset/ring_size`; open q 9) — `test_indexer_score_ring4_fused_indexed_cache` (B=2) + `test_indexer_score_ring4_fused_cache_batch_idx_reuse` (cache-hit slot re-apply, open q 4 RESOLVED); mid-slab straddle / rotated-prefill (multiturn) covered — `test_indexer_score_ring4_fused_straddle`; runtime `kv_len` (padded / over-allocated cache) covered — `test_indexer_score_ring4_fused_runtime_kv_len` (open q 5 resolved); **program-cache stale-scalar re-patch** (chunk_start/kv_len/cache_batch_idx re-applied on a hit) — `test_indexer_score_ring4_fused_program_cache_reuse`; **wired into `indexer.py`** (`_score_blockcyclic` dispatch → `_score_blockcyclic_fused` on the SP>1 all-heads-resident path, unfused fallback otherwise). **OUT OF SCOPE:** block-pool (`block_size>0`) and the other MSA knobs (`num_groups>1`, `synthesize_gate`) — the fused op is DSA-only and DSA never pools; block-pool is a MiniMax-M3 MSA selection knob with no DSA/model consumer, so it stays rejected at the fused factory (kept a `TT_FATAL`). | Production ready. |
 
 **Strategic call:** Step A is a go/no-go gate requiring zero kernel changes. It either greenlights the port
 or saves building on sand.
@@ -267,9 +267,10 @@ or saves building on sand.
 6. **Overlap overstatement / head-of-line blocking.** Real overlap needs the Step-E reorder, which then risks
    the `stream_heads` phantom-band q-mcast rendezvous hang; the bf16 oracle uses `head_group_size=0` and never
    exercises it.
-7. **block-pool path unverified** by the bf16 dense ring4 oracle. → Step F.
-   (bfp8_b K covered at PCC≥0.999; `cache_batch_idx` multi-user path fixed + covered by
-   `test_indexer_score_ring4_fused_indexed_cache` — open q 9 resolved.)
+7. **N/A — block-pool is OUT OF SCOPE** (DSA-only op; block-pool is a MiniMax-M3 MSA knob DSA never uses,
+   with no model consumer — the fused factory keeps its `block_size==0` reject). (bfp8_b K covered at
+   PCC≥0.999; `cache_batch_idx` multi-user path fixed + covered by
+   `test_indexer_score_ring4_fused_indexed_cache` + `_cache_batch_idx_reuse` — open q 9 + 4 resolved.)
 
 ---
 
@@ -285,9 +286,17 @@ or saves building on sand.
 3. Does `write_k`/`update_padded_kv_cache` leave the SP-sharded local cache in the within-shard order
    `BC_KTILE(L) - ring_index·sll_t` assumes, including trailing pad rows beyond `sll`? (The oracle uses an
    unpadded `_to_slab` tensor, so this is untested.)
-4. How is `cache_batch_idx` (multi-user KV cache, hash-excluded today so one program serves all users)
-   reconciled with the AG helper's build-time `input_batch_slice_idx`? Force it into the hash (regresses cache
-   reuse) or gather all users (blows up the DRAM scratch)?
+4. **RESOLVED — gather ALL users, apply `cache_batch_idx` at READ time (no hashing conflict).** The fused
+   factory calls the AG helper WITHOUT `input_batch_slice_idx` (left `nullopt`), so the gather is
+   batch-agnostic: it concats the full `[B,1,sll,D]` local shard into `[B,1,T,D]` for every user slot. The AG
+   never bakes `cache_batch_idx`, so it stays hash-EXCLUDED (one program serves all slots) and is applied purely
+   at read via the reader's `k_batch_page_offset` (remote branch `+k_batch_page_offset`, local branch
+   `+k_batch_page_offset/ring_size`) — which the descriptor factory's `override_runtime_arguments` re-applies on a
+   program-cache HIT (reader slot 25), same as the other hash-excluded scalars. Cost: the gathered scratch is
+   `[B,1,T,D]` (all users) not `[1,1,T,D]` — the "gather all users" branch of the original trade-off; acceptable
+   for the small decode batch. Covered by `test_indexer_score_ring4_fused_indexed_cache` (B=2, cold dispatches per
+   slot) AND `test_indexer_score_ring4_fused_cache_batch_idx_reuse` (slot0 then slot1 on ONE device → the 2nd is a
+   cache hit, guarding the slot-25 re-apply).
 5. **RESOLVED (no deadlock).** `band_count = ceil(Tt/KC)` is built over the FULL allocated T, not `kv_len`, so
    the reader visits every band and gates on every shard while the AG gathers the full T — no shard is
    waited-on-but-undelivered. `kv_len` only bounds the compute's valid columns (`span.set_valid_k_len_tiles`);

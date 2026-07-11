@@ -320,6 +320,55 @@ def test_indexer_score_ring4_fused_program_cache_reuse(case_id, heads):
         _close_ring4_ccl(parent, submesh, stall_group)
 
 
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_ring4_fused_cache_batch_idx_reuse(case_id, heads):
+    """Two dispatches, IDENTICAL shapes but a DIFFERENT cache_batch_idx (slot0 then slot1), SAME device -> the
+    2nd hits the cached program. cache_batch_idx is HASH-EXCLUDED (one program serves every user slot; the decode
+    loop dispatches per user with the same shapes) and feeds the reader's k_batch_page_offset (slot 25 -- BOTH
+    the remote gathered read and the 1/ring local shard read). If the descriptor factory doesn't re-apply it on a
+    cache hit, slot1 reads slot0's page offset and mixes users. Regression guard for the hash-excluded-scalar
+    re-patch on the cache_batch_idx axis (the program_cache_reuse test guards the chunk_start/kv_len axis; this
+    guards cache_batch_idx, closing open-q4 -- the AG is batch-agnostic so the slot is applied purely at read)."""
+    num_users = 2
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        # Shared q/w scoring distinct per-user caches (distinct seed per slot so a wrong-slot read changes the score).
+        q_g, _, w_g = _global_inputs(heads, CHUNK_GLOBAL, T, seed=42)
+        k_multi = torch.cat([_global_inputs(heads, CHUNK_GLOBAL, T, seed=100 + u)[1] for u in range(num_users)], dim=0)
+        shard = ttnn.ShardTensorToMesh(submesh, dim=2)
+        q_dev = ttnn.from_torch(q_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+        w_dev = ttnn.from_torch(w_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+        k_local = _shard_k(submesh, k_multi)  # [num_users,1,sll,D] (AG input)
+        k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_multi))  # [num_users,1,T,D], AG fills remote
+
+        def _score(slot):  # identical shapes each call -> 2nd is a program-cache hit
+            out = ttnn.experimental.indexer_score_dsa_fused(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                cache_batch_idx=slot,
+                program_config=glx_config(heads),
+            )
+            ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+            return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
+
+        out0 = _score(0)  # cache miss / build
+        out1 = _score(1)  # cache HIT -- must re-apply cache_batch_idx (both remote + local page offset)
+        ref0 = _per_sp_ref(q_g, k_multi[0:1], w_g, RING, QB_HISTORY)
+        ref1 = _per_sp_ref(q_g, k_multi[1:2], w_g, RING, QB_HISTORY)
+        assert_indexer_match(out0, ref0, CHUNK_GLOBAL, T, check_neg=True)
+        assert_indexer_match(out1, ref1, CHUNK_GLOBAL, T, check_neg=True)
+        logger.info(f"ring4 fused cache_batch_idx reuse (heads={heads}): slot1 re-applied on cache hit")
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
+
+
 def test_indexer_score_ring4_fused_rejects_head_streaming(expect_error):
     """The fused path requires all heads resident (head_group_size 0 or Hi); a streaming config
     (0 < head_group_size < Hi) must be rejected at validate, not silently mis-scheduled. The rejection is
