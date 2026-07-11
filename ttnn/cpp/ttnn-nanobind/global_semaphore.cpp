@@ -78,21 +78,6 @@ void py_module(nb::module_& mod) {
                 global_semaphore (GlobalSemaphore): The global semaphore object.
                 reset_value (int): The value to reset the global semaphore to.
             )doc");
-
-    mod.def(
-        "read_global_semaphore_value",
-        nb::overload_cast<const GlobalSemaphore&>(&read_global_semaphore_value),
-        nb::arg("global_semaphore"),
-        R"doc(
-            Read the current per-core values of the global semaphore from device.
-
-            Returns a list of uint32 values, one per core in the semaphore's CoreRangeSet,
-            in the order the CoreRangeSet enumerates them. Blocking — waits for all
-            in-flight operations on the sem's CQ to drain before reading.
-
-            Args:
-                global_semaphore (GlobalSemaphore): The global semaphore object.
-            )doc");
 }
 
 }  // namespace ttnn::global_semaphore

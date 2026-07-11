@@ -27,8 +27,4 @@ void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint3
     global_semaphore.reset_semaphore_value(reset_value);
 }
 
-std::vector<uint32_t> read_global_semaphore_value(const GlobalSemaphore& global_semaphore) {
-    return global_semaphore.read_semaphore_values();
-}
-
 }  // namespace ttnn::global_semaphore

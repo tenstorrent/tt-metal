@@ -23,6 +23,4 @@ tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& glo
 
 void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint32_t reset_value);
 
-std::vector<uint32_t> read_global_semaphore_value(const GlobalSemaphore& global_semaphore);
-
 }  // namespace ttnn::global_semaphore
