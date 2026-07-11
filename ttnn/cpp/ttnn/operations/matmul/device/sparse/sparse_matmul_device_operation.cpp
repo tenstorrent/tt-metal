@@ -256,6 +256,13 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
+    const auto& sparsity = input_tensors.at(2);
+    // The sparse kernel writes every output block when every sparsity entry is
+    // non-zero. In that dense-mask case, pre-zeroing is redundant and prevents
+    // independent command queues from targeting distinct sub-devices because
+    // zeros_like does not carry SparseMatmulParams::sub_device_id.
+    const bool initialize_output =
+        !operation_attributes.nnz.has_value() || operation_attributes.nnz.value() != sparsity.logical_volume();
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -265,14 +272,16 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
-        for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::zeros_like(
-                output_tensor,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::optional<Tensor>(output_tensor));
+        if (initialize_output) {
+            for (auto& output_tensor : output_tensors) {
+                output_tensor = ttnn::zeros_like(
+                    output_tensor,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::optional<Tensor>(output_tensor));
+            }
         }
         return output_tensors;
     }
@@ -282,14 +291,16 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
-    for (auto& output_tensor : output_tensors) {
-        output_tensor = ttnn::zeros_like(
-            output_tensor,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::nullopt,
-            std::optional<Tensor>(output_tensor));
+    if (initialize_output) {
+        for (auto& output_tensor : output_tensors) {
+            output_tensor = ttnn::zeros_like(
+                output_tensor,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                std::optional<Tensor>(output_tensor));
+        }
     }
     return output_tensors;
 }

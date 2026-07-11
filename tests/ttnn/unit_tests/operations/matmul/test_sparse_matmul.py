@@ -11,6 +11,7 @@ import random
 import torch
 import ttnn
 
+from models.common.utility_functions import skip_for_slow_dispatch
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
@@ -845,3 +846,87 @@ def test_sparse_matmul_sparsity_wrong_layout(device, expect_error):
             output_tile=ttnn.Tile([tile_h, tile_w]),
             program_config=pc,
         )
+
+
+@skip_for_slow_dispatch()
+@pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
+def test_dense_mask_sparse_matmul_on_independent_subdevices(device):
+    """Dense sparse masks can run concurrently on offset sub-devices.
+
+    When nnz equals the sparsity volume, sparse_matmul fully overwrites its
+    output. This must not enqueue a redundant zeros_like on the default
+    sub-device, and the sparse 1D factory must anchor its program at the
+    selected sub-device's worker-grid origin.
+    """
+    grid = device.compute_with_storage_grid_size()
+    if grid.y < 2:
+        pytest.skip("Test requires at least two worker rows")
+
+    torch.manual_seed(0)
+    in0_torch = torch.randn((1, 1, 32, 128), dtype=torch.bfloat16)
+    in1_torch = torch.randn((1, 128, 128, 192), dtype=torch.bfloat16)
+    expected = in0_torch[0, 0] @ in1_torch[0]
+    in0 = ttnn.from_torch(in0_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    in1 = ttnn.from_torch(in1_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sparsity = ttnn.from_torch(
+        torch.ones((1, 1, 1, 128), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    outputs = [
+        ttnn.from_torch(
+            torch.full((1, 1, 1, 128, 32, 192), 99.0, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        for _ in range(2)
+    ]
+
+    row0 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, 0))})
+    remaining_rows = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([row0]), ttnn.SubDevice([remaining_rows])], 0)
+    sub_device_ids = [ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)]
+
+    def program_config(start_y):
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(6, 1),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            out_block_h=1,
+            out_block_w=1,
+            per_core_M=1,
+            per_core_N=1,
+            fuse_batch=False,
+            fused_activation=None,
+            mcast_in0=True,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, start_y), ttnn.CoreCoord(5, start_y))}
+            ),
+        )
+
+    try:
+        device.load_sub_device_manager(manager)
+        device.set_sub_device_stall_group(sub_device_ids)
+        for cq_id, sub_device_id in enumerate(sub_device_ids):
+            with ttnn.command_queue(cq_id):
+                ttnn.sparse_matmul(
+                    in0,
+                    in1,
+                    sparsity=sparsity,
+                    nnz=128,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    program_config=program_config(cq_id),
+                    optional_output_tensor=outputs[cq_id],
+                    sub_device_id=sub_device_id,
+                )
+        ttnn.synchronize_device(device)
+    finally:
+        device.reset_sub_device_stall_group()
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+    for output in outputs:
+        torch.testing.assert_close(ttnn.to_torch(output)[0, 0, 0], expected, rtol=0.1, atol=1.5)

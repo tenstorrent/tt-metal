@@ -195,11 +195,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     uint32_t interm0_CB_size = interm0_CB_tiles * interm0_single_tile_size;
 
     CoreCoord start_core = {0, 0};
+    if (operation_attributes.sub_device_id.has_value()) {
+        const auto sub_device_cores = a.device()->worker_cores(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.sub_device_id.value());
+        start_core = sub_device_cores.bounding_box().start_coord;
+    }
 
     // The matmul region is the rectangle of size `compute_with_storage_grid_size`
-    // anchored at `start_core`. The sparse 1D matmul path does not yet anchor at a sub-device
-    // start, but keeping the rectangle expression here keeps the API uniform with the dense 1D
-    // path and is safe (matmul_core_rect == full compute grid when start_core == (0, 0)).
+    // anchored at `start_core`, including offset sub-device worker grids.
     CoreRangeSet matmul_core_rect(CoreRange(
         start_core,
         CoreCoord(
