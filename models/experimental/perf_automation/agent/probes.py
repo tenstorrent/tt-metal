@@ -283,6 +283,29 @@ def detect_perf_crash(log_text: str) -> str | None:
     return cm.group(1).strip() if cm else None
 
 
+_MARKER_DROP_RE = re.compile(
+    r"markers were dropped"
+    r"|marker was dropped"
+    r"|PERF_AUTOMATION_ORPHAN_SKIP"
+    r"|report will be partial"
+    r"|DRAM[- ]buffer overflow"
+    r"|marker imbalance"
+    r"|dropped due to DRAM",
+    re.IGNORECASE,
+)
+
+_MAX_PROFILER_SUPPORT_COUNT = 2_000_000
+_MAX_HEAL_ATTEMPTS = 4
+_HEAL_GROWTH = 8
+
+
+def detect_marker_drop(log_text: str) -> str | None:
+    if not log_text:
+        return None
+    m = _MARKER_DROP_RE.search(log_text)
+    return m.group(0) if m else None
+
+
 class PreflightError(Exception):
     """The discovered perf test selects zero tests (the S512 trap)."""
 
@@ -605,27 +628,46 @@ def make_run_profiled(
             pass
         node_id = resolve_node_id(root, perf_test, case, env=env, runner=collect_runner)
         cmd = build_tracy_command(node_id, None, out_dir)
+        support_count = int(env.get("TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT") or 0)
         t_start = time.monotonic()
-        for _attempt in range(retries + 1):
-            watermark = time.time() - 0.05
-            try:
-                code = execute(cmd, root, env, timeout_s, log_path)
-                break
-            except TracyHangError:
-                if _attempt >= retries:
-                    raise
-                device_reset()
+        partial_reason = None
+        heal_attempt = 0
+        while True:
+            if support_count > 0:
+                env["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(support_count)
+            for _attempt in range(retries + 1):
+                watermark = time.time() - 0.05
+                try:
+                    code = execute(cmd, root, env, timeout_s, log_path)
+                    break
+                except TracyHangError:
+                    if _attempt >= retries:
+                        raise
+                    device_reset()
+            if code != 0:
+                tail = "\n".join(log_path.read_text().splitlines()[-15:]) if log_path.is_file() else ""
+                raise TracyRunError(f"tracy run exit {code}; log {log_path}; tail:\n{tail}")
+            log_text = log_path.read_text() if log_path.is_file() else ""
+            # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
+            # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
+            # op_count_mismatch measurement. Detect the runtime crash here and raise PerfRunFailed
+            # (carries the error) so REMEASURE routes it to REPAIR_CODE and the agent fixes its edit.
+            crash = detect_perf_crash(log_text)
+            if crash:
+                raise PerfRunFailed(crash, log_path)
+            drop = detect_marker_drop(log_text)
+            if drop and support_count < _MAX_PROFILER_SUPPORT_COUNT and heal_attempt < _MAX_HEAL_ATTEMPTS:
+                heal_attempt += 1
+                support_count = min(max(support_count, 1000) * _HEAL_GROWTH, _MAX_PROFILER_SUPPORT_COUNT)
+                with open(log_path, "a") as fh:
+                    fh.write(
+                        f"\n[harness] profiler buffer grew to TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT="
+                        f"{support_count}; re-profiling (heal {heal_attempt}/{_MAX_HEAL_ATTEMPTS})\n"
+                    )
+                continue
+            partial_reason = drop
+            break
         wall_ms = (time.monotonic() - t_start) * 1000.0
-        if code != 0:
-            tail = "\n".join(log_path.read_text().splitlines()[-15:]) if log_path.is_file() else ""
-            raise TracyRunError(f"tracy run exit {code}; log {log_path}; tail:\n{tail}")
-        # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
-        # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
-        # op_count_mismatch measurement. Detect the runtime crash here and raise PerfRunFailed
-        # (carries the error) so REMEASURE routes it to REPAIR_CODE and the agent fixes its edit.
-        crash = detect_perf_crash(log_path.read_text() if log_path.is_file() else "")
-        if crash:
-            raise PerfRunFailed(crash, log_path)
 
         # layer 1: directed output (-o). out_dir PERSISTS across iterations, so a PRIOR
         # run's CSV is still sitting here -- filter to THIS run (mtime > watermark) or the
@@ -664,6 +706,11 @@ def make_run_profiled(
         _validate_csv(newest, log_path)
         dest = profiles_dir / f"run{i}_raw.csv"
         shutil.copyfile(newest, dest)
+        if partial_reason:
+            try:
+                (profiles_dir / f"run{i}.partial").write_text(str(partial_reason))
+            except Exception:
+                pass
         return dest, wall_ms
 
     return run_profiled

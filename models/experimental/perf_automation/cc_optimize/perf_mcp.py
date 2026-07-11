@@ -400,6 +400,24 @@ def _persist_artifacts(prof: dict) -> dict:
     return prof
 
 
+def _detect_partial_capture(profiles_dir) -> str | None:
+    try:
+        d = Path(profiles_dir)
+        for sc in sorted(d.glob("*.partial")):
+            txt = sc.read_text().strip()
+            if txt:
+                return txt
+        from agent.probes import detect_marker_drop
+
+        for log in sorted(d.glob("*_tracy.log")):
+            hit = detect_marker_drop(log.read_text())
+            if hit:
+                return hit
+    except Exception:
+        return None
+    return None
+
+
 def _profile_once() -> dict:
     ctx = _Ctx()
     tmpdir = ctx.run.dir
@@ -410,8 +428,9 @@ def _profile_once() -> dict:
             prof = roofline.annotate_profile(prof, _ENV)
         except Exception:  # annotation is best-effort; raw profile still usable
             pass
-        # Persist per-op CSVs to a stable path BEFORE the finally reaps tmpdir, so the
-        # artifact paths handed back stay readable (e.g. for op->source attribution).
+        partial = _detect_partial_capture(ctx.run.profiles_dir)
+        if partial:
+            prof["capture_partial"] = partial
         prof = _persist_artifacts(prof)
         return prof
     finally:
@@ -458,6 +477,14 @@ def profile_model() -> dict:
         prof = _profile_once()
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)[-800:]}
+    if prof.get("capture_partial"):
+        return {
+            "ok": False,
+            "error": (
+                f"partial capture (profiler dropped markers: {prof['capture_partial']}); baseline NOT "
+                f"recorded — auto-heal could not get a clean run. Re-profile a smaller/signposted region."
+            ),
+        }
     _BASELINE_PATH.write_text(json.dumps(prof))
     dev = round(float(prof.get("device_ms", 0.0)), 4)
     target, at_floor, residual_gap, open_ops = None, None, None, []
@@ -503,6 +530,12 @@ def measure_candidate() -> dict:
         return {"verdict": "REJECTED", "reason": f"profiler crashed: {str(exc)[-600:]}"}
     _note_device_ok()
     dev = round(float(prof.get("device_ms", 0.0)), 4)
+    if prof.get("capture_partial"):
+        return {
+            "verdict": "REJECTED",
+            "reason": f"partial_capture: profiler dropped markers ({prof['capture_partial']})",
+            "device_ms": dev,
+        }
     if not _BASELINE_PATH.exists():
         return {"verdict": "valid", "device_ms": dev, "note": "no baseline recorded; call profile_model first"}
     baseline = json.loads(_BASELINE_PATH.read_text())

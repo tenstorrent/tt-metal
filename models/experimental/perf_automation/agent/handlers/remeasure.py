@@ -41,6 +41,8 @@ def _comparable(baseline, iter_profile, tol=0.25, floor_ms=None, floor_margin=0.
     Op-count INFLATION stays a hard reject (it's a measurement double-count glitch, never an
     optimization). When `floor_ms` is None (caller has no roofline), fall back to the old op-count-
     drop heuristic for backward compatibility (conservative)."""
+    if iter_profile.get("capture_partial"):
+        return False, f"partial_capture: profiler dropped markers ({iter_profile.get('capture_partial')})"
     b_ops = _op_count(baseline)
     if b_ops == 0:
         return True, None  # no baseline op count -> nothing to compare against
