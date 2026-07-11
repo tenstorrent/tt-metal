@@ -53,10 +53,13 @@ def scope_to_changed(findings: list, changed_files: list) -> list:
     def touches(fd: dict) -> bool:
         if os.path.basename(fd.get("file", "")) in base:
             return True
-        # Match the "basename:" prefix token of an evidence line (which is
-        # "basename:line: what"), not a bare substring, so a short basename that
-        # merely appears inside the free-text detail doesn't over-match.
-        return any(f"{cb}:" in ev for ev in fd.get("evidence", []) for cb in base)
+        # Every evidence line starts with "basename:line…", so anchor to that
+        # PREFIX (startswith), not a bare substring — otherwise scoping to
+        # `params.h` would leak a finding whose evidence is `..._sfpu_params.h:12`
+        # (its basename ends with, but isn't, `params.h`).
+        return any(
+            ev.startswith(f"{cb}:") for ev in fd.get("evidence", []) for cb in base
+        )
 
     return [f for f in findings if touches(f)]
 

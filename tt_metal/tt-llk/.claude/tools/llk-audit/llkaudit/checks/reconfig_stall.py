@@ -66,12 +66,14 @@ class ReconfigStall(Check):
                         s in up for s in registry.RECONFIG_WRITE_MACRO_SUBSTR
                     )
                 if f["family"] == "call":
+                    # cfg_rmw / cfg_rmw_gpr — Quasar's dominant config-write idiom;
+                    # without these a Quasar reconfig looks like it writes nothing.
+                    # Gate on those two names ONLY (not write_call_kind, which also
+                    # matches reg_write — a raw/GPR register write that needs no
+                    # unit drain and must not get a spurious NO_UNIT_DRAIN).
                     return bool(
                         "cfg_reg_rmw_tensix" in f.get("text", "")
-                        # cfg_rmw / cfg_rmw_gpr — Quasar's dominant config-write
-                        # idiom; without this a Quasar reconfig looks like it
-                        # writes nothing.
-                        or registry.write_call_kind(f.get("name", ""))
+                        or f.get("name", "") in ("cfg_rmw", "cfg_rmw_gpr")
                     )
                 return False
 

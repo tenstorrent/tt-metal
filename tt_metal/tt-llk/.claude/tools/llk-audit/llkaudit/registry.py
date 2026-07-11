@@ -165,6 +165,8 @@ DRAIN_CALLS = {
 def classify_macro(name: str):
     """Return a role string for a macro name, or None if not of interest.
     Roles: stall | ordered_write | consumer_unpack | consumer_pack | consumer_mop
+    | consumer_math (matrix/FPU issue that consumes config — used by mmio-race and
+    reconfig_stall.reissues_unit)
     """
     up = name.upper()
     has = lambda s: s in up

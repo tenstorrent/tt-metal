@@ -6,7 +6,7 @@
 #   1. extract a generic fact base from every LLK header (parse once each),
 #   2. run the selected Python checkers over the merged fact base.
 #
-#   run.sh <wormhole|blackhole|quasar> [--checks a,b] [out_dir]
+#   run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]
 #
 # Produces <out_dir>/facts.<arch>.jsonl (raw fact base) and
 #          <out_dir>/audit.<arch>.json  (advisory findings). Prints a summary.
@@ -56,7 +56,7 @@ if [ ! -x "$EXTRACT" ] || [ "$HERE/extractor/llk_extract.cpp" -nt "$EXTRACT" ]; 
   fi
 fi
 
-ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [out_dir]}"; shift || true
+ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [--full-jit] [out_dir]}"; shift || true
 CHECKS="all"
 OUT="$HERE/out"
 CHANGED=0

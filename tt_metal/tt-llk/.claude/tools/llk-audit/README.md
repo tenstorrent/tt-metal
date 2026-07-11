@@ -36,7 +36,7 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 
 | Check | What it recalls | Hints |
 |---|---|---|
-| `mmio-race` | RISC MMIO cfg/GPR write vs. consuming Tensix instruction/MOP; is an applicable ordering primitive local? | `LOCALLY_ORDERED` / `NO_LOCAL_ORDERING` |
+| `mmio-race` | RISC MMIO cfg/GPR write vs. consuming Tensix instruction/MOP; is an applicable ordering primitive local? | `LOCALLY_ORDERED` / `NO_LOCAL_ORDERING` / `AUTOTTSYNC_ORDERED` (Quasar) |
 | `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads; intra-thread full-word clobber | `CROSS_THREAD_SHARED_WORD` / `INTRA_THREAD_CLOBBER` / `UNRESOLVED` |
 | `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no matching concrete init (emitted as a candidate, `safety: LOW_CONFIDENCE` when a generic init may cover it) | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` |
