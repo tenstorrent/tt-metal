@@ -29,6 +29,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/debug/dprint.h"  // DEBUG (matmul-pack address locator, remove after)
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -617,6 +618,16 @@ void kernel_main() {
                             }
 
                             uint32_t start_dst_index = 0;
+                            // DEBUG (matmul-pack OOB locator): the pack faults with PACR0_TILE_INC at ~0x37d90.
+                            // Print the target CB + its current write ptr + capacity so we can see whether the
+                            // write address exceeds the CB extent (offset wrong / CB too small). Remove after.
+                            PACK(DPRINT(
+                                "MMPACK cb={} wptr={} nent={} esz={} nt={}\n",
+                                (uint32_t)curr_matmul_out_cb,
+                                (uint32_t)curr_out_cb.get_write_ptr(),
+                                (uint32_t)curr_out_cb.get_total_num_entries(),
+                                (uint32_t)curr_out_cb.get_entry_size(),
+                                (uint32_t)out_subblock_num_tiles));
                             pack_tile_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
 
                             tile_regs_release();
