@@ -339,9 +339,14 @@ TEST(BroadcastRing, ConcurrentIntegrityUnderDropPressure) {
         ready.count_down();
         start.wait();
         while (true) {
+            const bool done = writer_done.load(std::memory_order_acquire);
+            const uint64_t dropped_before = reader.dropped();
             auto batch = reader.read_batch(std::span<ProgramRealtimeRecord>(out));
             if (batch.empty()) {
-                if (writer_done.load(std::memory_order_acquire)) {
+                if (reader.dropped() != dropped_before) {
+                    continue;
+                }
+                if (done) {
                     break;
                 }
                 std::this_thread::yield();
@@ -531,6 +536,7 @@ TEST(BroadcastRing, ConcurrentBlockingWaitDeliversEveryItem) {
         uint64_t got = 0;
         while (true) {
             const auto token = readers[idx].wait_token();
+            const bool stopping = stop.load(std::memory_order_acquire);
             auto batch = readers[idx].read_batch(std::span<ProgramRealtimeRecord>(out));
             if (!batch.empty()) {
                 results[idx].received.insert(results[idx].received.end(), batch.begin(), batch.end());
@@ -538,7 +544,7 @@ TEST(BroadcastRing, ConcurrentBlockingWaitDeliversEveryItem) {
                 consumed[idx].store(got, std::memory_order_release);
                 continue;
             }
-            if (stop.load(std::memory_order_acquire)) {
+            if (stopping) {
                 break;
             }
             readers[idx].wait(token);
@@ -598,39 +604,41 @@ TEST(BroadcastRing, ConcurrentBlockingWaitDeliversEveryItem) {
 TEST(BroadcastRing, ConcurrentReaderChurnUnderLiveWriter) {
     constexpr size_t kCapacity = 512;
     constexpr size_t kReadBatchSize = 64;
-    constexpr uint32_t kChurnIterations = 2000;
     constexpr size_t kMaxPublishBatchSize = 128;
-    constexpr uint64_t kMaxRecords = 1u << 28;
+    constexpr uint64_t kLongReaderTarget = 1u << 16;
 
     BroadcastRing<ProgramRealtimeRecord> ring(kCapacity);
     auto long_reader = ring.make_reader();
 
     std::latch ready{3};
     std::latch start{1};
-    std::atomic<bool> churn_done{false};
+    std::atomic<bool> long_done{false};
+    std::atomic<uint64_t> long_consumed{0};
 
     auto long_result = std::vector<ProgramRealtimeRecord>{};
+    long_result.reserve(kLongReaderTarget + kReadBatchSize);
     std::thread long_thread([&]() {
         std::array<ProgramRealtimeRecord, kReadBatchSize> out;
         ready.count_down();
         start.wait();
-        while (!churn_done.load(std::memory_order_acquire)) {
+        while (long_result.size() < kLongReaderTarget) {
             auto batch = long_reader.read_batch(std::span<ProgramRealtimeRecord>(out));
             long_result.insert(long_result.end(), batch.begin(), batch.end());
+            long_consumed.store(long_result.size(), std::memory_order_release);
         }
+        long_done.store(true, std::memory_order_release);
     });
 
     std::thread churn_thread([&]() {
         std::array<ProgramRealtimeRecord, kReadBatchSize> out;
         ready.count_down();
         start.wait();
-        for (uint32_t i = 0; i < kChurnIterations; ++i) {
+        while (!long_done.load(std::memory_order_acquire)) {
             auto reader = ring.make_reader();
             for (int reads = 0; reads < 3; ++reads) {
                 (void)reader.read_batch(std::span<ProgramRealtimeRecord>(out));
             }
         }
-        churn_done.store(true, std::memory_order_release);
     });
 
     std::thread writer_thread([&]() {
@@ -638,7 +646,11 @@ TEST(BroadcastRing, ConcurrentReaderChurnUnderLiveWriter) {
         start.wait();
         std::array<ProgramRealtimeRecord, kMaxPublishBatchSize> records;
         uint64_t next = 0;
-        while (!churn_done.load(std::memory_order_acquire) && next < kMaxRecords) {
+        while (!long_done.load(std::memory_order_acquire)) {
+            while (next + kMaxPublishBatchSize - long_consumed.load(std::memory_order_acquire) > kCapacity / 2 &&
+                   !long_done.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
             const uint64_t base = next;
             for (size_t k = 0; k < kMaxPublishBatchSize; ++k) {
                 records[k] = make_seq_record(static_cast<uint32_t>(base + k));
@@ -650,9 +662,9 @@ TEST(BroadcastRing, ConcurrentReaderChurnUnderLiveWriter) {
 
     ready.wait();
     start.count_down();
+    long_thread.join();
     churn_thread.join();
     writer_thread.join();
-    long_thread.join();
 
     uint32_t prev_seq = 0;
     bool has_prev = false;
@@ -665,7 +677,100 @@ TEST(BroadcastRing, ConcurrentReaderChurnUnderLiveWriter) {
         prev_seq = seq;
         has_prev = true;
     }
-    EXPECT_GT(long_result.size(), 0u);
+    EXPECT_EQ(long_reader.dropped(), 0u);
+    EXPECT_GE(long_result.size(), kLongReaderTarget);
+}
+
+TEST(BroadcastRing, ConcurrentLockedSlotIntegrity) {
+    struct NonTrivialRecord {
+        uint32_t seq = 0;
+        std::string payload;
+    };
+    static_assert(!BroadcastRing<NonTrivialRecord>::is_always_lock_free);
+
+    constexpr uint64_t kTotalRecords = 1u << 15;
+    constexpr size_t kCapacity = 256;
+    constexpr size_t kReadBatchSize = 32;
+    constexpr size_t kMaxPublishBatchSize = 48;
+
+    // Heap-allocated and uniquely derived from seq so a corrupted or wrong-generation slot is detectable.
+    auto make_payload = [](uint32_t seq) {
+        return "rec-" + std::to_string(seq) + std::string(32, static_cast<char>('a' + seq % 26));
+    };
+
+    BroadcastRing<NonTrivialRecord> ring(kCapacity);
+    auto reader = ring.make_reader();
+
+    std::vector<NonTrivialRecord> received;
+    received.reserve(kTotalRecords);
+    uint64_t dropped = 0;
+
+    std::latch ready{2};
+    std::latch start{1};
+    std::atomic<bool> writer_done{false};
+
+    std::thread reader_thread([&]() {
+        std::array<NonTrivialRecord, kReadBatchSize> out;
+        ready.count_down();
+        start.wait();
+        while (true) {
+            const bool done = writer_done.load(std::memory_order_acquire);
+            const uint64_t dropped_before = reader.dropped();
+            auto batch = reader.read_batch(std::span<NonTrivialRecord>(out));
+            if (batch.empty()) {
+                if (reader.dropped() != dropped_before) {
+                    continue;
+                }
+                if (done) {
+                    break;
+                }
+                std::this_thread::yield();
+                continue;
+            }
+            for (auto& r : batch) {
+                received.push_back(std::move(r));
+            }
+        }
+        dropped = reader.dropped();
+    });
+
+    std::thread writer_thread([&]() {
+        ready.count_down();
+        start.wait();
+        std::mt19937 rng(kBatchSeed);
+        std::uniform_int_distribution<size_t> pick_batch(1, kMaxPublishBatchSize);
+        std::vector<NonTrivialRecord> records(kMaxPublishBatchSize);
+        uint64_t next = 0;
+        while (next < kTotalRecords) {
+            const uint64_t base = next;
+            const size_t batch_size = std::min<uint64_t>(pick_batch(rng), kTotalRecords - base);
+            for (size_t k = 0; k < batch_size; ++k) {
+                records[k].seq = static_cast<uint32_t>(base + k);
+                records[k].payload = make_payload(static_cast<uint32_t>(base + k));
+            }
+            ring.writer().publish_batch_move(std::span<NonTrivialRecord>(records.data(), batch_size));
+            next += batch_size;
+        }
+        writer_done.store(true, std::memory_order_release);
+    });
+
+    ready.wait();
+    start.count_down();
+    writer_thread.join();
+    reader_thread.join();
+
+    EXPECT_EQ(received.size() + dropped, kTotalRecords);
+    uint32_t prev_seq = 0;
+    bool has_prev = false;
+    for (const auto& r : received) {
+        ASSERT_EQ(r.payload, make_payload(r.seq)) << "corrupted LockedSlot record at seq " << r.seq;
+        if (has_prev) {
+            ASSERT_GT(r.seq, prev_seq) << "out-of-order / duplicate LockedSlot delivery at seq " << r.seq;
+        }
+        prev_seq = r.seq;
+        has_prev = true;
+    }
+    EXPECT_GT(received.size(), 0u);
 }
 
 }  // namespace
