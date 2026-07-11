@@ -25,8 +25,8 @@ no-op; run_test_ring_joint_sdpa prints no FW → extract SDPA device FW from new
 ops_perf_results_*.csv`. Do NOT `rm -rf .logs` (cold tracy recompile → 220s timeout, killed 213135-31). ALL prior Batch-A VOID.**
 EXACT node-id format (from collect-only 215404-37, 384 ltx_s2 cells): `test_ring_joint_sdpa[blackhole-<mesh>-line-<check>-<kID>-<qID>-<parallelID>-ltx_s2]`.
 Target cell dispatched: `...[blackhole-bh_glx-line-no_trace_no_check-k512-q128-8rpx4up-ltx_s2]`.
-- [~] q128 k512  (job 215546-39, exact node-id, bh_glx — 21:56Z; 215000-35 first-try was 0 tests via tracy `-k` mangle)
-- [ ] q256 k512  (driver 210815-17/213135-31 VOID: 0 tests, same tracy `-k` mangle)
+- [x] q128 k512  → **SDPA FW median 4.74ms / mean 4.91ms** (n=32, job 215546-39, JIT 173/175 warm, PASSED). vs 4.85ms baseline = within ±2.3% = **NO WIN** (>5% gate not met). Env-file dispatch: broker param is `env:` (not `env_file`), `opt/env_sdpa.yaml`.
+- [~] q256 k512  (job 220638-41, exact node-id bh_glx, env=opt/env_sdpa.yaml — 22:06Z; driver 210815-17/213135-31 VOID: 0 tests, tracy `-k` mangle)
 - [ ] q256 k256
 - [ ] q128 k256
 - [ ] q128 k128
