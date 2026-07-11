@@ -239,20 +239,13 @@ ProgramArtifacts create_sharded_artifacts(
         .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
     };
 
-    m2::DataMovementHardwareConfig writer_hw;
-    if (a.device()->arch() == tt::ARCH::QUASAR) {
-        writer_hw = m2::DataMovementGen2Config{};
-    } else {
-        writer_hw = m2::DataMovementGen1Config{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0};
-    }
-
     m2::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = std::filesystem::path(kShardedWriterDfb),
         .num_threads = 1,
         .dfb_bindings = {m2::ConsumerOf(OUT, "out")},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = std::move(writer_hw),
+        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
     };
 
     // bf8/bf16 outputs do not need fp32 dest accumulation (matches descriptor factory: false unless

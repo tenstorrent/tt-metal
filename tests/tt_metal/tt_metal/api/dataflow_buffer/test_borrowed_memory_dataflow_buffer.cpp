@@ -36,11 +36,10 @@ namespace {
 
 using namespace experimental;
 using test_helpers::MakeMinimalGen1ComputeKernel;
+using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
-using test_helpers::MakeMinimalReaderDMKernel;
 using test_helpers::MakeMinimalWorkUnit;
-using test_helpers::MakeMinimalWriterDMKernel;
 
 // Kernel paths shared with the standard DFB tests.
 constexpr const char* DFB_PRODUCER_KERNEL =
@@ -112,8 +111,9 @@ void run_borrowed_memory_dfb_program(
     spec.name = "borrowed_memory_dfb_test";
 
     // --- Producer kernel (dfb_producer.cpp) ---
-    KernelSpec producer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("producer", cfg.num_producers)
-                                                      : MakeMinimalWriterDMKernel("producer");
+    KernelSpec producer_spec = (arch == ARCH::QUASAR)
+                                   ? MakeMinimalGen2DMKernel("producer", cfg.num_producers)
+                                   : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer},
@@ -142,7 +142,7 @@ void run_borrowed_memory_dfb_program(
     } else {
         // dfb_consumer.cpp: reads DFB and writes to dst_tensor.
         consumer_spec = (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("consumer", cfg.num_consumers)
-                                               : MakeMinimalReaderDMKernel("consumer");
+                                               : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
         consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
         consumer_spec.compile_time_args = {
             {"num_entries_per_consumer", entries_per_consumer},
@@ -306,11 +306,10 @@ void run_update_address_test(
     ProgramSpec spec;
     spec.name = "borrowed_dfb_update_address";
 
-    // Gen1 producer uses the writer role (RISCV_0/NOC_1) so it pairs with the reader-role DM consumer
-    // (RISCV_1/NOC_0) on distinct processors AND distinct NOCs; two dedicated-NOC DM kernels sharing a
-    // NOC would fail spec validation.
-    KernelSpec producer_spec =
-        (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("producer") : MakeMinimalWriterDMKernel("producer");
+    // Gen1: RISCV_0/NOC_0 producer + RISCV_1/NOC_1 consumer (MakeMinimalGen1DMKernel pairs processor→NOC).
+    KernelSpec producer_spec = (arch == ARCH::QUASAR)
+                                   ? MakeMinimalGen2DMKernel("producer")
+                                   : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
     producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_args = {
         {"num_entries_per_producer", num_entries},
@@ -324,8 +323,9 @@ void run_update_address_test(
     };
     producer_spec.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"borrowed_dfb"}, "out"));
 
-    KernelSpec consumer_spec =
-        (arch == ARCH::QUASAR) ? MakeMinimalGen2DMKernel("consumer") : MakeMinimalReaderDMKernel("consumer");
+    KernelSpec consumer_spec = (arch == ARCH::QUASAR)
+                                   ? MakeMinimalGen2DMKernel("consumer")
+                                   : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
     consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
     consumer_spec.compile_time_args = {
         {"num_entries_per_consumer", num_entries},
