@@ -23,11 +23,13 @@ CXX="${CXX:-clang++}"
 LIBDIR="$($LLVM_CONFIG --libdir)"
 
 # Prefer unversioned -l; fall back to the HIGHEST versioned .so if no dev symlink
-# (sort -V so .so.20 beats .so.9; 2>/dev/null so a no-match doesn't trip -e).
+# (sort -V so .so.20 beats .so.9). The trailing `|| true` keeps a no-match `ls`
+# from failing the pipeline under `pipefail` and tripping `set -e` here (this is
+# the command after the final `||`); an empty result then fails loudly at link.
 CLANG_CPP="-lclang-cpp"
-[ -e "$LIBDIR/libclang-cpp.so" ] || CLANG_CPP="$(ls "$LIBDIR"/libclang-cpp.so.* 2>/dev/null | sort -V | tail -1)"
+[ -e "$LIBDIR/libclang-cpp.so" ] || CLANG_CPP="$(ls "$LIBDIR"/libclang-cpp.so.* 2>/dev/null | sort -V | tail -1 || true)"
 LLVM_LIB="-lLLVM"
-[ -e "$LIBDIR/libLLVM.so" ] || LLVM_LIB="$(ls "$LIBDIR"/libLLVM.so.* 2>/dev/null | sort -V | tail -1)"
+[ -e "$LIBDIR/libLLVM.so" ] || LLVM_LIB="$(ls "$LIBDIR"/libLLVM.so.* 2>/dev/null | sort -V | tail -1 || true)"
 
 echo "Using $($LLVM_CONFIG --version) at $LIBDIR"
 $CXX -std=c++17 -fno-rtti -O2 \

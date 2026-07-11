@@ -118,6 +118,12 @@ class CfgWordOverlap(Check):
         for m in fb.family("macro"):
             name = m.get("name", "")
             if registry.classify_macro(name) == "ordered_write":
+                if "SETDMAREG" in name.upper():
+                    # SETDMAREG writes a GPR (a source value), NOT a sampled
+                    # config word — reconfig-stall excludes it for the same
+                    # reason. Skip so it can't be mis-attributed as a Config
+                    # writer (it would be if its text ever carried an _ADDR32).
+                    continue
                 word, field = registry.resolve_word(m.get("text", ""), fb.addr32)
                 # SETC16 targets ThreadConfig; all other ordered writes target Config.
                 ns = "THREAD" if "SETC16" in name.upper() else "CONFIG"
