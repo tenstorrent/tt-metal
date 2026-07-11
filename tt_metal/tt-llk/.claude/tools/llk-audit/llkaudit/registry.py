@@ -290,9 +290,8 @@ def stallwait_wait_operand(text: str) -> str:
 # --- cfg-word-overlap: cfg_defines.h resolution -------------------------------
 # The register field written is named in a pointer_write's index_text (e.g.
 # THCON_SEC0_REG1_Row_start_section_size_ADDR32) or a cfg_reg_rmw_tensix<FIELD>.
-# We resolve those to their 32-bit ADDR32 word via the arch cfg_defines.h.
-ADDR32_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*_ADDR32")
-RMW_FIELD_RE = re.compile(r"cfg_reg_rmw_tensix\s*<\s*([A-Za-z_][A-Za-z0-9_]*)")
+# We resolve those to their 32-bit ADDR32 word via the arch cfg_defines.h — see
+# resolve_word (below), which uses _WORD_OFFSET_RE / _RMW_ALIAS_RE.
 
 # Relative path (from the metal repo root) to each arch's cfg_defines.h.
 CFG_DEFINES_REL = {
