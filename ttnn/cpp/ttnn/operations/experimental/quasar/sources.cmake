@@ -167,6 +167,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     reshape_view/device/reshape_rm_program_factory.cpp
     reshape_view/device/reshape_rm_metal2_program_factory.cpp
     reshape_view/device/reshape_tiled_program_factory.cpp
+    reshape_view/device/reshape_tiled_metal2_program_factory.cpp
     # untilize
     untilize/untilize.cpp
     untilize/device/untilize_device_operation.cpp

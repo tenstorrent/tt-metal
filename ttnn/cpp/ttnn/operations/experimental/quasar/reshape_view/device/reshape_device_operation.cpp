@@ -20,6 +20,12 @@ ReshapeViewDeviceOperation::program_factory_t ReshapeViewDeviceOperation::select
         }
         return ReshapeViewRMProgramFactory{};
     }
+    // TILE layout: Quasar cannot build the legacy DataMovementKernel the tiled descriptor path emits
+    // (kernel.hpp:382), so route Quasar to the Metal-2 (ProgramSpec + QuasarDataMovementKernel) factory.
+    // WH/BH keep the legacy WorkloadDescriptor path unchanged.
+    if (tensor_args.input.device()->arch() == tt::ARCH::QUASAR) {
+        return ReshapeViewTiledMetalV2ProgramFactory{};
+    }
     return ReshapeViewTiledProgramFactory{};
 }
 
