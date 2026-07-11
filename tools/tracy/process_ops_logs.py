@@ -1588,12 +1588,28 @@ def generate_reports(
                     dm_start_cycle = device_perf_row.get("DEVICE KERNEL DM START CYCLE")
                     dm_end_cycle = device_perf_row.get("DEVICE KERNEL DM END CYCLE")
 
+                    # A traced/replayed op whose kernel appears to end before it started, or to start before the
+                    # previous op on the same device finished, has an unmeasurable device duration (e.g. a stale
+                    # start cycle on Blackhole). Mark such rows invalid instead of emitting a stale multi-second
+                    # duration with a compensating negative op-to-op gap.
+                    prev_kernel_end_cycle = prev_device_kernel_end_cycle.get(perf_device_id)
+                    kernel_timing_invalid = (
+                        kernel_start_cycle is not None
+                        and kernel_end_cycle is not None
+                        and (
+                            kernel_end_cycle < kernel_start_cycle
+                            or (prev_kernel_end_cycle is not None and kernel_start_cycle < prev_kernel_end_cycle)
+                        )
+                    )
+
                     # Prefer the C++-computed op-to-op latency if it is present in the perf row.
                     # The Python recomputation uses host ordering which can diverge from device ordering
                     # under async/multi-device execution; using the authoritative device-side value keeps
                     # python and cpp reports consistent.
                     perf_kernel_latency = device_perf_row.get("OP TO OP LATENCY [ns]")
-                    if perf_kernel_latency not in (None, ""):
+                    if kernel_timing_invalid:
+                        csv_row["OP TO OP LATENCY [ns]"] = ""
+                    elif perf_kernel_latency not in (None, ""):
                         csv_row["OP TO OP LATENCY [ns]"] = perf_kernel_latency
                     elif (
                         ns_per_cycle
@@ -1646,6 +1662,8 @@ def generate_reports(
                         "OP TO OP LATENCY [ns]",
                         "OP TO OP LATENCY BR/NRISC START [ns]",
                     }
+                    if kernel_timing_invalid:
+                        skip_headers.add("DEVICE KERNEL DURATION [ns]")
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
