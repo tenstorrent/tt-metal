@@ -16,12 +16,11 @@
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
-// Enable the B0FDE5EE / B0FDE5C0 buffer-descriptor ring-buffer locators below (validate_buffer_desc /
-// _configure_buf_desc_table_). ring_buffer.h defines WATCHER_RING_BUFFER_PUSH only under a metal kernel/fw
-// build with watcher on; the standalone tt-llk infra build defines neither KERNEL_BUILD nor FW_BUILD, so it
-// is skipped and the #ifdef instrumentation compiles out (keeps the standalone build clean). Remove after.
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "api/debug/ring_buffer.h"
+// DEBUG (buffer-descriptor locator via DPRINT — the emulator has no watcher ring buffer, so the
+// WATCHER_RING_BUFFER_PUSH locators below never fire there; DPRINT works). Guarded by KERNEL_BUILD so the
+// standalone tt-llk infra build (no api/ include path, no DPRINT) still compiles. Remove after.
+#if defined(KERNEL_BUILD)
+#include "api/debug/dprint.h"
 #endif
 
 namespace ckernel::trisc
@@ -174,6 +173,17 @@ inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const bu
         WATCHER_RING_BUFFER_PUSH((std::uint32_t)buf_desc.f.z_dim);
         WATCHER_RING_BUFFER_PUSH((std::uint32_t)buf_desc.f.l1_addr_16B);
     }
+#endif
+    // DEBUG (DPRINT locator): dump every configured descriptor's operand id + dims just before the
+    // validate assert, so we can name WHICH CB programs the invalid (non-pow2 y / z not in {1,4}) tile on
+    // the emulator (no ring buffer). Enable with TT_METAL_DPRINT_CORES on the compute core. Remove after.
+#if defined(KERNEL_BUILD)
+    DPRINT(
+        "QSR_BD id={} x={} y={} z={}\n",
+        (std::uint32_t)buf_desc_id,
+        (std::uint32_t)buf_desc.f.x_dim,
+        (std::uint32_t)buf_desc.f.y_dim,
+        (std::uint32_t)buf_desc.f.z_dim);
 #endif
     validate_buffer_desc(buf_desc);
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
