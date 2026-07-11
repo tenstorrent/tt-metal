@@ -197,8 +197,9 @@ share it as residual + first-leaky input across all ``num_kernels`` resblocks, s
 - exp5 (+element-budget transpose slicing, EXP-5): 99.9 ms, 1012 ops
 - exp9 (+hoist shared leaky, EXP-7): 95.2 ms, 1002 ops
 - exp10 (+accept_tile_input, EXP-8): 57.0 ms, 927 ops
-- exp11 (+tilize stage input once, EXP-9): **48.4 ms**, **917 ops**
-  → **−83% device time, −85% op count, −52% wall-clock (638→306 ms).**
+- exp11 (+tilize stage input once, EXP-9): 48.4 ms, 917 ops
+- exp12 (+L1-full resblock conv chain, EXP-11): **44.9 ms**, **782 ops**
+  → **−84% device time, −88% op count, −53% wall-clock (638→297 ms).**
 - PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512) pass unchanged.
 - useq=64 PCC 0.975 is a PRE-EXISTING short-seq accuracy bug (bit-identical with all flags off) — not ours.
 - KEY LAYOUT RULE for this model: conv inputs should be **TILE** (TILE→sharded I2S is ~10x cheaper than
@@ -206,7 +207,22 @@ share it as residual + first-leaky input across all ``num_kernels`` resblocks, s
 - NOTE: EXP-6's "dead end" was only the sharded/row_major route. L1-interleaved intermediates still OOM the conv
   circular buffers (2.78MB > 1.5MB L1) — can't keep activations resident in L1 at the big stages.
 
-### EXP-10 ❌ DEAD END — bring conv I/O to L1 (avoid InterleavedToSharded/ShardedToInterleaved ~16%)
+### EXP-11 ✅ DONE — L1-full resblock conv chain (the EXP-10 "dead end", SOLVED)
+**EXP-10 below concluded L1 residency was impossible — that was WRONG.** It failed because the L1-full test
+used a large auto ``act_block_h`` AND omitted the slice config. The fix is BOTH together:
+``slice_config=ttnn.Conv2dL1FullSliceConfig`` **+** ``act_block_h_override=32``. With those, ``ttnn.conv1d``
+runs fully in L1 and **returns a sharded L1 output** — verified L1-fitting for every resblock shape (to
+409600x16, k=11) and reshape/leaky preserve the sharding. So conv1 keeps its output sharded in L1 and conv2
+consumes it there, eliminating the conv1->conv2 DRAM ShardedToInterleaved+InterleavedToSharded round-trip.
+**Change:** `_vocoder_resblock_l1_full_enabled()` (default on, ``SEAMLESS_VOCODER_RESBLOCK_L1_FULL=0`` to
+disable); ``l1_full`` param threaded through `_conv1d`/`_conv1d_run` (sets the L1-full slice config); both
+resblock convs set ``l1_full=True`` (conv1 keep_sharded, conv2 accept_sharded -> S2I for the add).
+**Result:** PCC 0.99827 (multi-shape 128/512 pass). Device ops 917->782 (-135); InterleavedToSharded
+4.1->2.5ms (94->49 ops), ShardedToInterleaved 3.9->2.0ms (91->46). Device time 48.4->**44.9ms**.
+NOTE: caps at act_block_h=32 (abh=16 hard-crashed the driver); creating a >~10MB tensor directly in L1 also
+crashes — always feed DRAM input + L1FullSliceConfig, never allocate the big activation to L1 directly.
+
+### EXP-10 ⚠️ SUPERSEDED by EXP-11 — (original "dead end" reasoning was incomplete)
 **Goal:** kill the remaining I2S(8.4%)+S2I(8%) DRAM round-trip around each resblock conv. Reference models
 (SDXL resnet `tt_resnetblock2d.py`) keep activations in L1: ``sharded_to_interleaved(x, L1_MEMORY_CONFIG)``
 (not DRAM), reshard in L1, and use ``slice_config=ttnn.Conv2dL1FullSliceConfig`` (SliceType::L1_FULL). conv1d

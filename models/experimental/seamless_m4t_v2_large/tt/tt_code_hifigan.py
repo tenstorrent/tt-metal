@@ -81,6 +81,14 @@ def _vocoder_fits_l1_singleshot(timeline: int, in_channels: int, batch: int = 1)
     return int(batch) * int(timeline) * int(in_channels) <= _VOCODER_L1_SINGLESHOT_ELEMS
 
 
+def _vocoder_resblock_l1_full_enabled() -> bool:
+    """Run resblock convs L1-full (``Conv2dL1FullSliceConfig`` + act_block_h=32) so ``conv1`` keeps its
+    output sharded in L1 and ``conv2`` consumes it there — no DRAM ShardedToInterleaved/InterleavedToSharded
+    round-trip between the pair. Verified L1-fitting for every vocoder resblock shape (to 409600x16, k=11).
+    Requires RESBLOCK_L1. Set ``SEAMLESS_VOCODER_RESBLOCK_L1_FULL=0`` to disable."""
+    return _vocoder_resblock_l1_enabled() and os.environ.get("SEAMLESS_VOCODER_RESBLOCK_L1_FULL", "1") != "0"
+
+
 def _resolve_resblock_shard_layout(
     *, in_channels: int, kernel_size: int, input_length: int, batch: int = 1
 ) -> Optional[ttnn.TensorMemoryLayout]:
@@ -986,6 +994,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         row_major_output: bool = False,
         keep_sharded_output: bool = False,
         slice_config: Optional[Any] = None,
+        l1_full: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         """Single-shot ``ttnn.conv1d``; input is row-major NLC or an already-sharded activation.
 
@@ -1059,6 +1068,10 @@ class TTSeamlessM4Tv2CodeHifiGan:
             dtype=ttnn.bfloat16,
             return_output_dim=True,
         )
+        if slice_config is None and l1_full:
+            # Keep the whole conv resident in L1 (input->compute->output), so a sharded output can hand
+            # straight to the next conv with no DRAM reshard. Needs a small act_block_h (set above) to fit L1.
+            slice_config = ttnn.Conv2dL1FullSliceConfig
         if slice_config is not None:
             conv1d_kwargs["slice_config"] = slice_config
         out, out_len = ttnn.conv1d(**conv1d_kwargs)
@@ -1152,6 +1165,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         keep_sharded_output: bool = False,
         accept_sharded_input: bool = False,
         accept_tile_input: bool = False,
+        l1_full: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
@@ -1216,6 +1230,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 timeline_chunked=False,
                 row_major_output=row_major_output,
                 keep_sharded_output=keep_sharded_output,
+                l1_full=l1_full and run_single_shot_l1,
             )
             return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
@@ -1652,6 +1667,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 keep_sharded_output=True,
                 # Conv-derived TILE input: ttnn.conv1d consumes it directly, skipping the TILE->RM untilize.
                 accept_tile_input=_vocoder_resblock_l1_enabled(),
+                # L1-full: keep conv1's output sharded in L1 so conv2 consumes it there (no DRAM reshard).
+                l1_full=_vocoder_resblock_l1_full_enabled(),
             )
             x_nlc, tlen = self._conv1d(
                 x_nlc,
@@ -1674,6 +1691,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 ),
                 accept_sharded_input=True,
                 accept_tile_input=_vocoder_resblock_l1_enabled(),
+                l1_full=_vocoder_resblock_l1_full_enabled(),
             )
             x_nlc = ttnn.add(x_nlc, residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x_nlc
