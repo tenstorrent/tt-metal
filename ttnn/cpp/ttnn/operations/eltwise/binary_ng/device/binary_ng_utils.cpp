@@ -592,80 +592,94 @@ void add_activation_defines(
 }
 
 std::map<std::string, std::string> make_dataflow_defines(
-    const DataType dtype, const std::optional<DataType> b_dtype_opt) {
+    const DataType dtype,
+    const std::optional<DataType> b_dtype_opt,
+    const uint32_t tile_height,
+    const std::optional<uint32_t> b_tile_height_opt) {
     std::map<std::string, std::string> defines;
     const auto b_dtype = b_dtype_opt.value_or(dtype);
+    const auto b_tile_height = b_tile_height_opt.value_or(tile_height);
+
+    // Tile width is fixed at 32; the tile height may be smaller than 32 (tiny tile). The tiled fill
+    // helpers are templated on the tile height, so thread it through as an explicit template argument.
+    // Blocked formats (BFLOAT8_B / BFLOAT4_B) and the row-major helpers do not support tiny tiles and
+    // are left unparameterized.
+    const std::string h = std::to_string(tile_height);
+    const std::string tile_hw = std::to_string(tile_height * tt::constants::TILE_WIDTH);
+    const std::string h_b = std::to_string(b_tile_height);
+    const std::string tile_hw_b = std::to_string(b_tile_height * tt::constants::TILE_WIDTH);
+
     // to maintain backward compatibility, we need to support both dtype and b_dtype
     if (dtype == DataType::FLOAT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column<" + h + ">";
         defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
-        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float, " + h + ">";
+        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<" + tile_hw + ", float>";
     } else if (dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
-        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t, " + h + ">";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<" + tile_hw + ", int32_t>";
     } else if (dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm";
         defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm";
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
-        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t, " + h + ">";
+        defines["FILL_WITH_VALUE"] = "fill_with_val<" + tile_hw + ", uint32_t>";
     } else if (dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp8";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp8";
-        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16<" + h + ">";
     } else if (dtype == DataType::BFLOAT4_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp4";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp4";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp4";
-        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16<" + h + ">";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_RM"] = "fill_tile_with_first_column_rm_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_RM"] = "fill_tile_with_first_row_rm_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
-        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16<" + h + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16<" + h + ">";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16<" + h + ">";
     }
 
     if (b_dtype == DataType::FLOAT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
-        defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float, " + h_b + ">";
+        defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<" + tile_hw_b + ", float>";
     } else if (b_dtype == DataType::INT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t, " + h_b + ">";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val<" + tile_hw_b + ", int32_t>";
     } else if (b_dtype == DataType::UINT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t, " + h_b + ">";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val<" + tile_hw_b + ", uint32_t>";
     } else if (b_dtype == DataType::BFLOAT8_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16<" + h_b + ">";
     } else if (b_dtype == DataType::BFLOAT4_B) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16<" + h_b + ">";
     } else {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16<" + h_b + ">";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16<" + h_b + ">";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16<" + h_b + ">";
     }
     return defines;
 }

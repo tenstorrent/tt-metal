@@ -43,8 +43,10 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
     const std::uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
     const std::uint32_t NC = N * C;
 
-    const std::uint32_t Wt = W / TILE_WIDTH;
-    const std::uint32_t Ht = H / TILE_HEIGHT;
+    const auto& tile = a.tensor_spec().tile();
+
+    const std::uint32_t Wt = W / tile.get_width();
+    const std::uint32_t Ht = H / tile.get_height();
     const std::uint32_t HtWt = Ht * Wt;
 
     const std::uint32_t num_tensor_tiles = NC * Ht * Wt;
@@ -66,9 +68,9 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
     const tt::DataFormat src1_cb_data_format = datatype_to_dataformat_converter(b.dtype());
     const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output.dtype());
 
-    const std::uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
-    const std::uint32_t src1_single_tile_size = tt::tile_size(src1_cb_data_format);
-    const std::uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
+    const std::uint32_t src0_single_tile_size = tile.get_tile_size(src0_cb_data_format);
+    const std::uint32_t src1_single_tile_size = tile.get_tile_size(src1_cb_data_format);
+    const std::uint32_t dst_single_tile_size = tile.get_tile_size(dst_cb_data_format);
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const std::uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -83,7 +85,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
     const std::uint32_t num_input_tiles = 2;
     std::uint32_t num_tiles_per_shard = 0;
     if (shard_spec.has_value()) {
-        num_tiles_per_shard = shard_spec.value().shape[0] * shard_spec.value().shape[1] / TILE_HW;
+        num_tiles_per_shard = shard_spec.value().shape[0] * shard_spec.value().shape[1] / tile.get_tile_hw();
         num_tiles_per_core_group_1 = num_tiles_per_shard;
         num_tiles_per_core_group_2 = 0;
         all_cores = shard_spec.value().grid;
@@ -119,6 +121,7 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
         .entry_size = src0_single_tile_size,
         .num_entries = num_input_tiles_cb0,
         .data_format_metadata = src0_cb_data_format,
+        .tile_format_metadata = tile,
     };
     if (src0_sharded) {
         // c_0 borrows the resident input_a shard; the reader push_backs it (no NoC read) to signal the
@@ -130,12 +133,14 @@ ttnn::device_operation::ProgramArtifacts BcastMultiCoreHWProgramFactory::create_
         .entry_size = src1_single_tile_size,
         .num_entries = num_input_tiles,
         .data_format_metadata = src1_cb_data_format,
+        .tile_format_metadata = tile,
     };
     DataflowBufferSpec out_dfb{
         .unique_id = OUT,
         .entry_size = dst_single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = dst_cb_data_format,
+        .tile_format_metadata = tile,
     };
     if (output_sharded) {
         // c_16 borrows the resident output shard; compute produces into it, the (donor) writer wait_fronts
