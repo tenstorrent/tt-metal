@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="30.472" timestamp="2026-07-11T12:55:52.001841+00:00" hostname="spawner-exp-d-gemma31"><testcase classname="models.autoports.google_gemma_4_31b.tests.test_optimized_decoder" name="test_optimized_real_weight_paged_decode_trace_pcc[0-sliding_attention]" time="28.814"><properties><property name="start_timestamp" value="2026-07-11T12:55:54" /><property name="end_timestamp" value="2026-07-11T12:56:22" /></properties><failure message="AssertionError: PCC 0.9922048330855174 below 0.995&#10;assert False">hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_idx = 0
+layer_kind = 'sliding_attention'
+
+    @pytest.mark.parametrize("layer_idx,layer_kind", LAYER_KINDS)
+    def test_optimized_real_weight_paged_decode_trace_pcc(hf_config, mesh_device, layer_idx, layer_kind):
+        prompt_len = 32
+        state = _layer_state(layer_idx)
+        hf_layer = Gemma4TextDecoderLayer(hf_config, layer_idx).to(torch.bfloat16).eval()
+        hf_layer.load_state_dict(_local_state(state, layer_idx))
+        decoder = _decoder(state, hf_config, layer_idx, mesh_device)
+        cache, page_table = _paged_state(hf_config, layer_idx, 128, mesh_device)
+        prompt_rope = _rope_device(hf_config, layer_idx, prompt_len, mesh_device, decode=False)
+        decode_rope = _rope_device(hf_config, layer_idx, 128, mesh_device, decode=True)
+        torch.manual_seed(20260721 + layer_idx)
+        prompt = torch.randn(1, prompt_len, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02
+        token = torch.randn(1, 1, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02
+        decoder.prefill_forward(
+            _tt_input(prompt, mesh_device),
+            rope_mats=prompt_rope,
+            page_table=page_table,
+            kv_cache=cache,
+            valid_seq_len=prompt_len,
+        )
+        pos_u_host = torch.zeros((1, 32), dtype=torch.int32)
+        pos_u_host[0, 0] = prompt_len
+        pos_u = ttnn.from_torch(pos_u_host, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        pos_i = ttnn.from_torch(
+            torch.tensor([prompt_len], dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        tt_token = _tt_input(token, mesh_device)
+
+        dynamic_cache = DynamicCache()
+        positions = torch.arange(prompt_len).reshape(1, -1)
+        causal = torch.triu(torch.full((1, 1, prompt_len, prompt_len), float("-inf")), diagonal=1)
+        with torch.no_grad():
+            hf_layer(
+                prompt,
+                position_embeddings=_rope_host(hf_config, layer_idx, positions),
+                attention_mask=causal,
+                past_key_values=dynamic_cache,
+            )
+            reference = hf_layer(
+                token,
+                position_embeddings=_rope_host(hf_config, layer_idx, [prompt_len]),
+                attention_mask=torch.zeros(1, 1, 1, prompt_len + 1),
+                past_key_values=dynamic_cache,
+            )
+
+        def call():
+            return decoder.decode_forward(
+                tt_token,
+                rope_mats=decode_rope,
+                page_table=page_table,
+                kv_cache=cache,
+                current_position=pos_u,
+                current_position_cache=pos_i,
+            )
+
+        warm = call()
+        ttnn.synchronize_device(mesh_device)
+        warm.deallocate(True)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        output = call()
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        try:
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+            replay_one = _to_host(output).clone()
+&gt;           _assert_pcc(reference, replay_one)
+
+models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py:298:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+reference = tensor([[[ 0.0461,  0.0435,  0.0117,  ...,  0.0461, -0.0376, -0.0056]]],
+       dtype=torch.bfloat16)
+actual = tensor([[[ 0.0576,  0.0574,  0.0147,  ...,  0.0408, -0.0229, -0.0020]]])
+threshold = 0.995
+
+    def _assert_pcc(reference, actual, threshold=0.995):
+        passing, pcc = comp_pcc(reference.float(), actual.float(), threshold)
+        print(f"PCC={pcc}")
+&gt;       assert passing, f"PCC {pcc} below {threshold}"
+E       AssertionError: PCC 0.9922048330855174 below 0.995
+E       assert False
+
+models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py:141: AssertionError</failure></testcase></testsuite></testsuites>

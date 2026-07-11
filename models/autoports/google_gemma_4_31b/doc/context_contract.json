@@ -2,14 +2,19 @@
   "hf_model_id": "google/gemma-4-31B",
   "hf_advertised_context": 262144,
   "functional_decoder_supported_context": 262144,
+  "optimized_decoder_supported_context": 262144,
   "largest_prefill_context_tested": 262144,
   "largest_decode_context_tested": 262144,
   "largest_populated_decode_context_tested": 262144,
   "decode_history_tokens_tested": 262143,
   "largest_decode_absolute_position_tested": 262143,
   "largest_non_aligned_prefill_tested": 262113,
+  "optimized_decoder_largest_prefill_context_tested": 262144,
+  "optimized_decoder_largest_decode_context_tested": 262144,
+  "optimized_decoder_largest_non_aligned_prefill_tested": 262113,
   "capability_reduction": null,
   "page_block_size": 64,
+  "optimized_decoder_kv_cache_dtype": "bfloat8_b",
   "layer_kinds": {
     "sliding_attention": {
       "representative_layer": 0,
@@ -34,6 +39,11 @@
     "near_context_sliding": "functional_decoder/logs/prefill_near_context_262113_sliding.log",
     "near_context_full": "functional_decoder/logs/prefill_near_context_262113_full.log",
     "advertised_decode_sliding": "functional_decoder/logs/decode_context_262144_sliding.log",
-    "advertised_decode_full": "functional_decoder/logs/decode_context_262144_full.log"
+    "advertised_decode_full": "functional_decoder/logs/decode_context_262144_full.log",
+    "optimized_bfp8_cache_non_aligned": "optimized_decoder/evidence/context_262113_bfp8.xml",
+    "optimized_bfp8_cache_exact_sliding": "optimized_decoder/evidence/context_262144_sliding_bfp8.xml",
+    "optimized_bfp8_cache_exact_full": "optimized_decoder/evidence/context_262144_full_bfp8.xml",
+    "optimized_bfp8_cache_exact_distinct_hf_oracle": "optimized_decoder/evidence/context_262144_distinct_hf_oracle.xml",
+    "optimized_bfp8_cache_standard_suite": "optimized_decoder/evidence/standard_suite.xml"
   }
 }

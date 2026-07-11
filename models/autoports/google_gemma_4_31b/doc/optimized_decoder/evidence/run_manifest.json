@@ -1,0 +1,26 @@
+{
+  "stage": "03-optimized-decoder",
+  "model": "google/gemma-4-31B",
+  "hardware": "Blackhole P150, single device, 1x1 TTNN mesh",
+  "repo_head_before_stage_commit": "d62607a7f4e",
+  "source_hashes": {
+    "fused_decoder.py": "941dd1d16b64246111e8402d875cbb7fc1cc6bbf6b33465ff0ba97103df90af6",
+    "optimized_decoder.py": "9da6bf3ef64d5e4d2ea5fd8071e518e2b666d39802701adab42ab4021efa928b",
+    "test_optimized_decoder.py": "a096a0bc643d72e2fb29ada72d71992e407fcf54133ecc53f7ad37adeac9eb6b"
+  },
+  "binding": "The authoritative frozen-source suite, baseline/final timing, profiles, watcher run, distinct exact-context HF oracle, and bound candidate logs print RUN_BINDING with the complete effective policy, relevant Gemma environment, and these source hashes. Earlier bounded-capacity artifacts predate RUN_BINDING and are explicitly scoped as legacy capacity evidence in README.md/work_log.md.",
+  "final_commands": {
+    "suite": "pytest -q models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py --junitxml=.../evidence/standard_suite.xml -s",
+    "baseline": "GEMMA4_OPT_BENCH=1 GEMMA4_OPT_BENCH_IMPLEMENTATION=fused pytest -q models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py -k warmed_latency --junitxml=.../evidence/fused_warmed_baseline.xml -s",
+    "optimized_latency": "GEMMA4_OPT_BENCH=1 pytest -q models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py -k warmed_latency --junitxml=.../evidence/final_warmed_latency.xml -s",
+    "exact_context_oracle": "GEMMA4_LONG_DECODE=262144 pytest -q models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py -k optimized_exact_context_distinct_traced_decode --timeout=900 --junitxml=.../evidence/context_262144_distinct_hf_oracle.xml -s",
+    "watcher": "TT_METAL_WATCHER=10 pytest -q models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py -k optimized_changed_trace_buffers_random_and_boundaries --junitxml=.../evidence/watcher_mutable_trace.xml -s",
+    "profile": "GEMMA4_OPT_PROFILE=1 python -m tracy -r -p -v --output-folder <tracy-kind-mode-final> -m pytest <single optimized profile node> -s"
+  },
+  "artifact_roots": {
+    "acceptance": "models/autoports/google_gemma_4_31b/doc/optimized_decoder/evidence",
+    "candidates": "models/autoports/google_gemma_4_31b/doc/optimized_decoder/candidates",
+    "profiles": "models/autoports/google_gemma_4_31b/doc/optimized_decoder/tracy",
+    "watcher": "models/autoports/google_gemma_4_31b/doc/optimized_decoder/watcher_final"
+  }
+}

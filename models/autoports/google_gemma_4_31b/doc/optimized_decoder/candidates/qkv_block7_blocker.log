@@ -1,0 +1,278 @@
+2026-07-11 12:43:27.968 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py::test_optimized_warmed_latency[decode-0-sliding_attention] 2026-07-11 12:43:30.762 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 12:43:30.762 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 12:43:30.762 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 12:43:30.762 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 12:43:30.763 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 12:43:30.763 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 12:43:30.763 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 12:43:30.805 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 12:43:30.805 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 12:43:30.805 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 12:43:30.805 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 12:43:30.806 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 12:43:30.882 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 12:43:31.066 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 12:43:31.066 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 12:43:31.066 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 12:43:31.066 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 12:43:31.066 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 12:43:31.066 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 12:43:31.073 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-11 12:43:31.137 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 12:43:31.707 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349957 GHz, device_time_at_sync=26330160170594 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-11 12:43:57.375 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1733376 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+RUN_BINDING {"environment": {"GEMMA4_OPT_BENCH": "1", "GEMMA4_OPT_QKV_BLOCK_W": "7"}, "implementation": "optimized", "policy": {"attention_math_fidelity": "MathFidelity.LoFi", "attention_projection_topology": "packed", "attention_weight_dtype": "DataType.BFLOAT8_B", "decode_num_cores": "8", "down_in0_block_w": "21", "gate_up_in0_block_w": "7", "kv_cache_dtype": "DataType.BFLOAT8_B", "mlp_down_math_fidelity": "MathFidelity.LoFi", "mlp_down_weight_dtype": "DataType.BFLOAT4_B", "mlp_gate_up_math_fidelity": "MathFidelity.LoFi", "mlp_gate_up_topology": "separate", "mlp_gate_up_weight_dtype": "DataType.BFLOAT4_B", "mlp_packed_output_dtype": "DataType.BFLOAT16", "name": "p150_bfp8attn_bfp4mlp_lofi_dram_sharded_v1", "o_proj_in0_block_w": "8", "prefill_qkv_topology": "interleaved_2d", "qkv_in0_block_w": "7"}, "source_hashes": {"fused_decoder": "941dd1d16b64246111e8402d875cbb7fc1cc6bbf6b33465ff0ba97103df90af6", "optimized_decoder": "9da6bf3ef64d5e4d2ea5fd8071e518e2b666d39802701adab42ab4021efa928b", "optimized_tests": "a096a0bc643d72e2fb29ada72d71992e407fcf54133ecc53f7ad37adeac9eb6b"}}
+FAILED
+
+=================================== FAILURES ===================================
+__________ test_optimized_warmed_latency[decode-0-sliding_attention] ___________
+
+hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_idx = 0
+layer_kind = 'sliding_attention', perf_mode = 'decode'
+
+    @pytest.mark.skipif("GEMMA4_OPT_BENCH" not in os.environ, reason="set GEMMA4_OPT_BENCH for warmed timing")
+    @pytest.mark.parametrize("layer_idx,layer_kind", LAYER_KINDS)
+    @pytest.mark.parametrize("perf_mode", ["prefill", "decode"])
+    def test_optimized_warmed_latency(hf_config, mesh_device, layer_idx, layer_kind, perf_mode):
+        state = _layer_state(layer_idx)
+        implementation, decoder = _benchmark_decoder(state, hf_config, layer_idx, mesh_device)
+        cache_factory = _functional_paged_state if implementation == "fused" else _paged_state
+        cache, page_table = cache_factory(hf_config, layer_idx, 128, mesh_device)
+        torch.manual_seed(20261300 + layer_idx)
+        if perf_mode == "prefill":
+            seq_len = 128
+            hidden = _tt_input(torch.randn(1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02, mesh_device)
+            rope = _rope_device(hf_config, layer_idx, seq_len, mesh_device, decode=False)
+
+            def call():
+                return decoder.prefill_forward(
+                    hidden, rope_mats=rope, page_table=page_table, kv_cache=cache, valid_seq_len=seq_len
+                )
+
+            warm = call()
+            ttnn.synchronize_device(mesh_device)
+            warm.deallocate(True)
+            samples = []
+            for _ in range(8):
+                start = time.perf_counter_ns()
+                output = call()
+                ttnn.synchronize_device(mesh_device)
+                samples.append((time.perf_counter_ns() - start) / 1_000_000)
+                output.deallocate(True)
+            policy = decoder.policy.name if implementation == "optimized" else "fused_bf16"
+            print(f"OPT_WARMED implementation={implementation} policy={policy} kind={layer_kind} mode=prefill median_ms={statistics.median(samples)} samples_ms={samples}")
+            return
+
+        prompt_len = 32
+        prompt = _tt_input(torch.randn(1, prompt_len, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02, mesh_device)
+        decoder.prefill_forward(
+            prompt,
+            rope_mats=_rope_device(hf_config, layer_idx, prompt_len, mesh_device, decode=False),
+            page_table=page_table,
+            kv_cache=cache,
+            valid_seq_len=prompt_len,
+        )
+        token = _tt_input(torch.randn(1, 1, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02, mesh_device)
+        rope = _rope_device(hf_config, layer_idx, 128, mesh_device, decode=True)
+        pos_u_host = torch.zeros((1, 32), dtype=torch.int32)
+        pos_u_host[0, 0] = prompt_len
+        pos_u = ttnn.from_torch(pos_u_host, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        pos_i = ttnn.from_torch(torch.tensor([prompt_len], dtype=torch.int32), device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        def call():
+            return decoder.decode_forward(token, rope_mats=rope, page_table=page_table, kv_cache=cache, current_position=pos_u, current_position_cache=pos_i)
+
+>       warm = call()
+
+models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py:358:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py:356: in call
+    return decoder.decode_forward(token, rope_mats=rope, page_table=page_table, kv_cache=cache, current_position=pos_u, current_position_cache=pos_i)
+models/autoports/google_gemma_4_31b/tt/functional_decoder.py:570: in decode_forward
+    return self._forward_device(
+models/autoports/google_gemma_4_31b/tt/optimized_decoder.py:899: in _forward_device
+    return FusedDecoder._forward_device(self, hidden_states, is_decode=is_decode, **kwargs)
+models/autoports/google_gemma_4_31b/tt/fused_decoder.py:447: in _forward_device
+    attn_output = self._decode_attention(
+models/autoports/google_gemma_4_31b/tt/optimized_decoder.py:510: in _decode_attention
+    qkv_sharded = ttnn.linear(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.linear', function=<ttnn._ttnn.operations.matmul.linear_t object at 0x7...<function default_postprocess_golden_function_outputs at 0x7fb91768a710>, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[ 3.6250e+00,  7.1875e-01,  ...,  2.7344e+00,  9.5000e+00]]]], shape=Shape([1, 1, 1, 5376]), dtype=Dat...  ..., -1.1719e-02, -1.1719e-02]]]], shape=Shape([1, 1, 5376, 16384]), dtype=DataType::BFLOAT8_B, layout=Layout::TILE))
+function_kwargs = {'compute_kernel_config': <ttnn._ttnn.operations.core.WormholeComputeKernelConfig object at 0x7fb9146fa4f0>, 'memory_c...ultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=7,per_core_M=1,per_core_N=64,fused_activation=std::nullopt)}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_THROW @ /home/ubuntu/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception
+E               info:
+E               Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1733376 B which is beyond max L1 size of 1572864 B
+E               backtrace:
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(+0x16d8d2a) [0x7fb98d54fd2a]
+E                --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+E                --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+E                --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x3de) [0x7fb98d70275e]
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(+0x1899148) [0x7fb98d710148]
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xe6) [0x7fb98d701f46]
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16e) [0x7fb98d700a2e]
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x4ea) [0x7fb98d6ff93a]
+E                --- ttnn::prim::matmul(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, ttnn::prim::MatmulParams const&)
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(+0x181bd61) [0x7fb98d692d61]
+E                --- /localdev/odjuricic/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKN2tt8tt_metal6TensorES6_RKSt8optionalIS5_EbbRKS7_IKNS3_12MemoryConfigEES7_IKNS3_8DataTypeEERKS7_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS7_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES7_IKNS_19ComputeKernelConfigEES7_IKNS_5types8CoreGridEERKS7_IKNS3_4TileEES7_IS4_ERKS7_IKNS3_12experimental20GlobalCircularBufferEERKS7_IN4ttsl10StrongTypeIhNS3_14SubDeviceIdTagEEEE+0x2e6) [0x7fb98d694456]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4daac8) [0x7fb98e1c6ac8]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x4da7ae) [0x7fb98e1c67ae]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7fb98dffe325]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x556c24c4fc65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x556c24c83b46]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x556c24bb187c]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x556c24c4fc65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x556c24c83b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x556c24bde2a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x556c24bdde59]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x556c24bab778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x556c24bdde59]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x556c24bafc17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x556c24c4fc65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x556c24c83b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x556c24bde2a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x556c24bb0034]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x556c24bafc17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x556c24c4fc65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x556c24c83b46]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x556c24bb187c]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x556c24bab778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x556c24bab778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x556c24bde0b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x556c24bafc17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x556c24b54350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x556c24c4fc65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x556c24c83b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x556c24bde2a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x556c24bab5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x556c24bafc17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x556c24bb1aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x556c24b52352]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/optimized_decoder/candidates/qkv_block7_blocker.xml -
+============================== slowest durations ===============================
+25.42s call     models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py::test_optimized_warmed_latency[decode-0-sliding_attention]
+1.20s setup    models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py::test_optimized_warmed_latency[decode-0-sliding_attention]
+0.12s teardown models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py::test_optimized_warmed_latency[decode-0-sliding_attention]
+=========================== short test summary info ============================
+FAILED models/autoports/google_gemma_4_31b/tests/test_optimized_decoder.py::test_optimized_warmed_latency[decode-0-sliding_attention]
+======================== 1 failed, 3 warnings in 29.19s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 12:44:00.552 | info     |    BuildKernels | JIT cache stats: 103/103 hits (100.0%) [103 cached, 20 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 12:44:00.552 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 12:44:00.560 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 12:44:00.560 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 12:44:00.695 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 12:44:00.695 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 12:44:00.695 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
