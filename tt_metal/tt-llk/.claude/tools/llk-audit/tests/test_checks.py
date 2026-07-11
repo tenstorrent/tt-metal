@@ -594,6 +594,35 @@ def test_reconfig_detects_cfg_rmw_write():
     assert len(out) == 1 and out[0].hint == "NO_UNIT_DRAIN", out
 
 
+@case
+def test_cfg_word_intra_thread_full_word_clobber():
+    # Same thread: a full-word cfg[]= write of field A to word W, and a masked
+    # cfg_reg_rmw_tensix of sibling field B (same word) elsewhere -> the full-word
+    # write may zero B. Flagged INTRA_THREAD_CLOBBER.
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"  # PACK thread
+    facts = [
+        fn("f", F, 100, 300),
+        pw(F, 110, "get_cfg_pointer", "FIELD_A_ADDR32", func="f"),  # full-word cfg[]=
+        call(
+            F, 200, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FIELD_B_ADDR32>", func="f"
+        ),  # masked sibling
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"FIELD_A_ADDR32": 9, "FIELD_B_ADDR32": 9}  # same word
+    out = CfgWordOverlap().run(fb)
+    clob = [f for f in out if f.hint == "INTRA_THREAD_CLOBBER"]
+    assert len(clob) == 1 and "clobber@CONFIG:9" == clob[0].kind, clob
+    assert "FIELD_B" in clob[0].detail, clob[0].detail
+    # Control: a lone full-word write with NO masked sibling -> not a clobber.
+    facts2 = [
+        fn("g", F, 100, 300),
+        pw(F, 110, "get_cfg_pointer", "FIELD_A_ADDR32", func="g"),
+    ]
+    fb2 = FactBase("wormhole", facts2)
+    fb2.addr32 = {"FIELD_A_ADDR32": 9}
+    assert not any(f.hint == "INTRA_THREAD_CLOBBER" for f in CfgWordOverlap().run(fb2))
+
+
 def main():
     failed = 0
     for c in CASES:
