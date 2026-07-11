@@ -1198,7 +1198,7 @@ inline void init_reduce_max_min_int32_signed() {
  * operations)
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, bool clear_high_bits>
-inline void init_reduce_max_min(std::uint32_t num_cols) {
+inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
 #ifdef DISABLE_SFPLOADMACRO
     init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
     return;
@@ -1520,7 +1520,7 @@ template <
     InstrModLoadStore INSTRUCTION_MODE,
     bool clear_high_bits,
     bool pack_low16>
-inline void calculate_reduce_max_min(const std::uint32_t block_ct_dim = 1, const std::uint32_t block_rt_dim = 1) {
+inline void calculate_reduce_max_min([[maybe_unused]] const std::uint32_t block_ct_dim = 1, [[maybe_unused]] const std::uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL ||
             ((pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_ROW),
