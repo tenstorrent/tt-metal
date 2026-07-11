@@ -21,7 +21,7 @@ Before manual analysis, get the deterministic candidate list from the recall too
 (it enumerates every cfg/GPR MMIO write soundly, incl. macro-expanded and
 wrapper-hidden ones a grep misses):
 
-    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks mmio-race
+    cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole|quasar> --checks mmio-race
     # For a PR/branch-scoped audit, add --changed [BASE] (BASE defaults to main):
     #   ./run.sh <arch> --checks mmio-race --changed        # only findings touching files changed vs main
     # candidates: out/audit.<arch>.json -> .checks["mmio-race"].findings
@@ -29,7 +29,9 @@ wrapper-hidden ones a grep misses):
 Treat `findings[]` as your **pre-enumerated worklist** so you never re-do the
 enumeration. Hints are recall buckets, **not verdicts**: `NO_LOCAL_ORDERING` =
 triage priority (any ordering must come from a *caller* — follow the call graph);
-`LOCALLY_ORDERED` = a guard is present, verify it actually covers the consumer.
+`LOCALLY_ORDERED` = a guard is present, verify it actually covers the consumer;
+`AUTOTTSYNC_ORDERED` (Quasar only) = the per-RISC TTSync HW-orders the write, so
+it's not a race candidate there (confirm the AutoTTSync model per the arch note).
 Then **widen for what the tool cannot see** (its `blind_spots`: interprocedural
 ordering, Quasar AutoTTSync, writes in SFPU files that failed to parse) using the
 method below. The tool never clears a site — you decide. If it is unbuilt, proceed

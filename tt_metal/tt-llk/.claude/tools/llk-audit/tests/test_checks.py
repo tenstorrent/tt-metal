@@ -1161,6 +1161,54 @@ def test_cfg_word_nonliteral_index_surfaces_unresolved():
     assert any(f.hint == "UNRESOLVED" for f in out), out
 
 
+# --- package-review follow-up (registry primitive completeness) -----------
+
+
+@case
+def test_noc_sync_remote_signals_and_local_set():
+    K = "ttnn/cpp/x/writer.cpp"
+    # remote credit signals with no preceding flush -> flagged
+    for sig in ("noc_semaphore_inc_multicast", "noc_semaphore_set_remote"):
+        facts = [
+            fn("kernel_main", K, 0, 100),
+            call(K, 20, sig, func="kernel_main", arg0="sem"),
+        ]
+        out = NocSync().run(FactBase("wormhole", facts))
+        assert len(out) == 1 and out[0].hint == "NOC_SIGNAL_NO_FLUSH", (sig, out)
+    # plain noc_semaphore_set is a LOCAL reset, NOT a remote signal -> not flagged
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 20, "noc_semaphore_set", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", facts)) == []
+    # noc_async_write_flushed_with_trid counts as a flush -> a signal after it is ok
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_write_flushed_with_trid", func="kernel_main"),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", facts)) == []
+
+
+@case
+def test_cb_sync_remote_cb_family():
+    K = "ttnn/cpp/x/remote_writer.cpp"
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "remote_cb_reserve_back", func="kernel_main", arg0="cb_r"),
+        call(K, 20, "remote_cb_reserve_back", func="kernel_main", arg0="cb_r"),
+        call(
+            K,
+            30,
+            "remote_cb_push_back_and_write_pages",
+            func="kernel_main",
+            arg0="cb_r",
+        ),
+    ]
+    out = CbSync().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "CB_RESERVE_PUSH_IMBALANCE", out
+
+
 def main():
     failed = 0
     for c in CASES:

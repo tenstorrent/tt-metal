@@ -38,7 +38,8 @@ CBs are the credit-based FIFOs connecting **producers** (a reader on RISCV B, or
 ## Method
 1. Enumerate CB sites:
    ```bash
-   cd tt_metal && grep -rInE '\bcb_(reserve_back|push_back|wait_front|pop_front)\b|pages_(received|acked)|fifo_(rd|wr)_ptr|Remote(Sender|Receiver)CBInterface' \
+   # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
+   grep -rInE '\bcb_(reserve_back|push_back|wait_front|pop_front)\b|pages_(received|acked)|fifo_(rd|wr)_ptr|Remote(Sender|Receiver)CBInterface' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
    **Exhaustive run — no sampling.** That grep yields the full kernel set (typically ~150–200 files across the CCL/dataflow families — all_gather, reduce_scatter, all_to_all, llama, moe, deepseek, broadcast, sdpa, matmul, prefetcher, unary/binary readers-writers). Enumerate them **all** into the run's coverage ledger and fan out (≥) one cell per kernel-family; **do not sample** — "sampled 6 of 186" is a blocking incompleteness per `race-audit-all`, not a caveat. This class is **in scope** (frontmatter): "the CB races live above tt-llk, run it separately" is not a valid skip — audit them here, now.

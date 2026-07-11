@@ -35,7 +35,8 @@ Cores coordinate across the NoC with **NoC semaphores** (L1 counters bumped by r
 ## Method
 1. Enumerate (scope reaches beyond tt-llk):
    ```bash
-   cd tt_metal && grep -rInE '\bnoc_semaphore_(wait|set|inc|set_multicast)\b|\bnoc_async_(read|write)_barrier\b|\bnoc_async_writes_flushed\b' \
+   # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
+   grep -rInE '\bnoc_semaphore_(wait|set|inc|set_multicast|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|inline_dw_write)\b' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
    **Exhaustive run — in scope, no sampling.** The tt-llk header tree has ~0 NoC sites — that is *expected* (the primitives live one layer up) and is **NOT** a reason to report "no findings / out of layer." The sites are in `tt_metal/hw/inc/api/dataflow` + `ttnn/cpp` + `models`, which the grep above (and the frontmatter) target. Enumerate **all** matching kernels into the run's coverage ledger and fan out per kernel-family; do not sample.
