@@ -9,10 +9,13 @@ envelope.
 The fact-base input is the concatenated per-file JSON the extractor prints
 (run.sh produces it). Output envelope:
 
-  { tool, arch, authority: "advisory", parse_errors,
+  { tool, arch, authority: "advisory", parse_errors, scoped_to_changed,
+    changed_files? (diff-scoped only),
     checks: { <name>: { description, blind_spots, count, findings: [...] } } }
 
-Exit code is ALWAYS 0 (augmentor, never a gate).
+A successful run exits 0 (augmentor, never a gate — it does not fail on findings).
+Argument errors (unknown check, unreadable --facts, bad --arch) exit 2 via
+argparse, as usual.
 """
 from __future__ import annotations
 
@@ -60,12 +63,12 @@ def scope_to_changed(findings: list, changed_files: list) -> list:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="llkaudit")
-    ap.add_argument(
-        "--arch", required=True, choices=("wormhole", "blackhole", "quasar")
-    )
+    # --arch/--facts are needed for an audit but NOT for --list, so they are not
+    # argparse-`required` (that would make `--list` exit 2 before it runs); they
+    # are validated manually below once --list is handled.
+    ap.add_argument("--arch", choices=("wormhole", "blackhole", "quasar"))
     ap.add_argument(
         "--facts",
-        required=True,
         help="file of concatenated per-file extractor JSON (- for stdin)",
     )
     ap.add_argument(
@@ -92,6 +95,12 @@ def main(argv=None) -> int:
         for name, cls in ALL.items():
             print(f"{name:22} {cls.description}")
         return 0
+
+    # Not listing -> an audit; now --arch and --facts are required.
+    if not args.arch:
+        ap.error("--arch is required (choices: wormhole, blackhole, quasar)")
+    if not args.facts:
+        ap.error("--facts is required (- for stdin)")
 
     if args.facts == "-":
         text = sys.stdin.read()

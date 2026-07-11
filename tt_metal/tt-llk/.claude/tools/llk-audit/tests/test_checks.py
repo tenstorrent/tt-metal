@@ -394,8 +394,7 @@ def test_mmio_guard_after_consumer_is_not_ordering():
     ]
     out = MmioRace().run(FactBase("blackhole", facts))
     assert len(out) == 1 and out[0].hint == "NO_LOCAL_ORDERING", out
-    # control: guard BEFORE the consumer -> ordered
-    facts[2], facts[3] = facts[3], facts[2]
+    # control: guard BEFORE the consumer -> ordered (reassign both slots)
     facts[2] = macro(
         F,
         120,
@@ -1128,6 +1127,38 @@ def test_cb_noc_empty_over_tt_llk():
     ]
     assert CbSync().run(FactBase("wormhole", facts)) == []
     assert NocSync().run(FactBase("wormhole", facts)) == []
+
+
+# --- bot-review follow-up fixes -------------------------------------------
+
+
+@case
+def test_cli_list_without_required_args():
+    # `--list` must work WITHOUT --arch/--facts (they are validated only for an
+    # actual audit) — previously it exited 2 on the missing required args.
+    import contextlib
+    import io
+
+    from llkaudit import cli
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = cli.main(["--list"])
+    assert rc == 0, rc
+    assert "mmio-race" in buf.getvalue() and "cb-sync" in buf.getvalue()
+
+
+@case
+def test_cfg_word_nonliteral_index_surfaces_unresolved():
+    # A config write through a NON-LITERAL index (cfg[upk0_reg]=) can't resolve to
+    # a word; it must surface as UNRESOLVED, not be silently dropped.
+    F = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
+    facts = [
+        fn("_llk_unpack_A_", F, 100, 200),
+        pw(F, 110, "get_cfg_pointer", "upk0_reg", func="_llk_unpack_A_"),
+    ]
+    out = CfgWordOverlap().run(FactBase("wormhole", facts))
+    assert any(f.hint == "UNRESOLVED" for f in out), out
 
 
 def main():
