@@ -51,10 +51,15 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 4. **Dst/LReg overwrite outside the known primitives.** A raw FPU/SFPU/pack access to `Dst`, or cross-thread `LReg`, that is NOT ordered by `MATH_PACK` / `mutex::SFPU` → flag and hand the semaphore half to `semaphore-handshake-audit`; this audit confirms the data-register access itself.
 
 ## Method
-1. Enumerate the handshake primitives and bank bookkeeping:
+1. Enumerate the handshake primitives and bank bookkeeping. **Scan the KERNEL
+   layer too, not just canonical tt-llk** — hand-written dvalid/bank/`MOV*2D`
+   sequences live in `ttnn/`/`models/` kernels (and in ttnn ops that **vendor
+   their own `tt_llk` fork** under `.../kernel_includes/tt_llk/`), which a
+   canonical-tt-llk-only search misses:
    ```bash
-   cd tt_metal/tt-llk
-   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|SrcA?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" tt_llk_* --include=*.h | grep -v /tests/
+   # from the repo root
+   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|SrcA?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" \
+        tt_metal/tt-llk/tt_llk_* tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
 2. Per unpack→math op, pair the unpacker's fill/flip with the FPU's consume/flip; trace the bank pointer on both sides across the tile loop. Confirm lockstep, valid/clear ordering, and single-thread ownership.
 3. For Dst/LReg, identify the accessing threads and the mediating primitive (or its absence).
