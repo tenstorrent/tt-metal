@@ -99,8 +99,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
 
 ## Validated against ground truth
 
-- `mmio-race` reproduces the earlier hand-validated result exactly (WH 91: 67/24,
-  BH 79: 59/20), incl. `_llk_unpack_A_`→`LOCALLY_ORDERED` and the
+- `mmio-race` reproduces the earlier hand-validated result (WH 91: 67/24,
+  BH 79: 60/19 — one BH write is `NO_LOCAL_ORDERING` because its only guard
+  follows a consumer, which the "guard must precede the first consumer" rule
+  correctly refuses to credit), incl. `_llk_unpack_A_`→`LOCALLY_ORDERED` and the
   `THCON_SEC0_REG3_Base_address` writes→`NO_LOCAL_ORDERING`.
 - `cfg-word-overlap` finds the known shared MAIN words (ALU-format words 0/1/2 incl.
   STACC_RELU on WH; 1/2 on BH) and suppresses the THCON/main same-index false alias.

@@ -67,7 +67,11 @@ class MmioRace(Check):
                         or role in ("drain:mop_sync", "drain:tensix_sync")
                         or (is_gpr and role == "drain:sync_regfile_write")
                     )
-                    if applicable and not local_ordering:
+                    # A guard orders the write only if it precedes the FIRST
+                    # consumer: a guard AFTER a consumer cannot un-race that
+                    # consumer (it only orders vs the next run). So once a
+                    # consumer is seen, stop crediting guards.
+                    if applicable and not local_ordering and consumer_after is None:
                         local_ordering = True
                         guard = (p.get("name") or "", p["line"])
                     if registry.is_consumer(role) and consumer_after is None:

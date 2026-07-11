@@ -60,17 +60,28 @@ class CfgWordOverlap(Check):
             elif field:
                 unresolved.append(self._unresolved(pw, field))
         for c in fb.family("call"):
+            # cfg_reg_rmw_tensix<FIELD> (field in the callee template text) and
+            # the direct RMW helpers cfg_rmw/cfg_rmw_gpr (field in arg0). The
+            # latter often take a runtime address variable -> UNRESOLVED (still
+            # surfaced, since an unresolved cfg RMW may touch a shared word).
+            src = None
             if "cfg_reg_rmw_tensix" in c.get("text", ""):
-                word, field = registry.resolve_word(c.get("text", ""), fb.addr32)
+                src = c.get("text", "")
+            elif registry.write_call_kind(c.get("name", "")):  # cfg_rmw / cfg_rmw_gpr
+                src = c.get("arg0", "")
+            if src is not None:
+                word, field = registry.resolve_word(src, fb.addr32)
                 if word is not None:
-                    add(word, field, c, "cfg_reg_rmw_tensix")
-                elif field:
-                    unresolved.append(self._unresolved(c, field))
+                    add(word, field, c, c.get("name") or "cfg_reg_rmw_tensix")
+                else:
+                    unresolved.append(self._unresolved(c, field or src or "?"))
         for m in fb.family("macro"):
             if registry.classify_macro(m.get("name", "")) == "ordered_write":
                 word, field = registry.resolve_word(m.get("text", ""), fb.addr32)
                 if word is not None:
                     add(word, field, m, f"instr:{m.get('name','')}")
+                elif field:
+                    unresolved.append(self._unresolved(m, field))
 
         findings: list[Finding] = []
         for (ns, word), ws in sorted(writers.items()):
