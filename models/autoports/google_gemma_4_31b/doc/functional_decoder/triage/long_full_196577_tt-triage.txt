@@ -1,0 +1,29 @@
+tt-triage capture attempt for the live 196577-token full-attention stall
+Date: 2026-07-11 UTC
+
+Command:
+  timeout 180 tools/tt-triage.py --llm-output \
+    --llm-output-path .../long_full_196577_tt-triage.txt \
+    --triage-summary-path .../long_full_196577_summary.txt
+
+The capture tool failed before producing its normal LLM report because UMD
+topology discovery could not access the stalled device:
+
+  UmdBaseException: NOC0 is hung on PCIe device ID 0.
+  Location: /project/device/tt_device/tt_device.cpp:113
+
+The subsequent bounded health check failed with:
+
+  Read 0xffffffff over PCIe ID 0: the board should be reset.
+
+Recovery:
+
+  timeout 180 tt-smi -r
+  timeout 60 tt-smi -ls --local
+  open/close ttnn.MeshShape(1, 1) -> MESH_SMOKE_OK
+
+The original legacy 8192-query chunk path was replaced by a 1024-query
+streaming path. Final full-attention prefill then passed at both 262144 and
+262113 tokens. This file preserves the capture failure itself; the original
+console traceback was returned by the triage command but the tool did not write
+its requested output file because initialization failed.

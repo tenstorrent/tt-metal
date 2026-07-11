@@ -1,0 +1,240 @@
+2026-07-11 05:34:20.157 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 1700.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_long_nonaligned_prefill_capacity[5-full_attention] 2026-07-11 05:34:22.920 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 05:34:22.920 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 05:34:22.921 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 05:34:22.921 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 05:34:22.922 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 05:34:22.922 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 05:34:22.922 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 05:34:22.964 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 05:34:22.964 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 05:34:22.964 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 05:34:22.964 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 05:34:22.965 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 05:34:23.049 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 05:34:23.234 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 05:34:23.234 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 05:34:23.234 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 05:34:23.234 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 05:34:23.234 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 05:34:23.234 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 05:34:23.241 | info     |    BuildKernels | Using pre-compiled firmware from: /localdev/odjuricic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-07-11 05:34:23.305 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 05:34:23.875 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349963 GHz, device_time_at_sync=45559700083 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-11 05:35:14.926 | critical |          Always | TT_FATAL: K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: 131136, Q: 128, chunk_start_idx: 131072 (assert.hpp:104)
+FAILED
+
+=================================== FAILURES ===================================
+___________ test_long_nonaligned_prefill_capacity[5-full_attention] ____________
+
+hf_config = Gemma4TextConfig {
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "attention_k_eq_v": true,
+  "bos_token_id"...
+  "use_cache": true,
+  "use_double_wide_mlp": false,
+  "vocab_size": 262144,
+  "vocab_size_per_layer_input": 262144
+}
+
+mesh_device = MeshDevice(1x1 grid, 1 devices), layer_idx = 5
+layer_kind = 'full_attention'
+
+    @pytest.mark.skipif("GEMMA4_LONG_PREFILL" not in os.environ, reason="set GEMMA4_LONG_PREFILL to run capacity probe")
+    @pytest.mark.parametrize("layer_idx,layer_kind", LAYER_KINDS)
+    def test_long_nonaligned_prefill_capacity(hf_config, mesh_device, layer_idx, layer_kind):
+        seq_len = int(os.environ["GEMMA4_LONG_PREFILL"])
+        state = _layer_state(layer_idx)
+        decoder = FunctionalDecoder.from_state_dict(state, hf_config=hf_config, layer_idx=layer_idx, mesh_device=mesh_device)
+        cache, page_table = _paged_state(hf_config, layer_idx, seq_len, mesh_device)
+        rope = _rope_device(hf_config, layer_idx, seq_len, mesh_device, decode=False)
+        torch.manual_seed(20261100 + layer_idx)
+        hidden = torch.randn(1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16) * 0.02
+>       output = decoder.prefill_forward(
+            _tt_input(hidden, mesh_device),
+            rope_mats=rope,
+            page_table=page_table,
+            kv_cache=cache,
+            valid_seq_len=seq_len,
+        )
+
+models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py:352:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+models/autoports/google_gemma_4_31b/tt/functional_decoder.py:301: in prefill_forward
+    output = self._forward_device(
+models/autoports/google_gemma_4_31b/tt/functional_decoder.py:222: in _forward_device
+    attn_output = self._prefill_attention(
+models/autoports/google_gemma_4_31b/tt/functional_decoder.py:165: in _prefill_attention
+    sdpa = chunked_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, config.head_dim, scale=1.0)
+models/demos/gemma4/tt/attention/operations.py:264: in chunked_prefill_sdpa
+    out_chunk = ttnn.transformer.chunked_scaled_dot_product_attention(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = FastOperation(python_fully_qualified_name='ttnn.transformer.chunked_scaled_dot_product_attention', function=<ttnn._ttn...uts=None, golden_function=None, postprocess_golden_function_outputs=None, is_cpp_operation=True, is_experimental=False)
+function_args = (ttnn.Tensor([[[[-8.7891e-01, -6.9141e-01,  ..., -1.3750e+00, -2.5195e-01],
+               [ 0.0000e+00,  0.0000e+00, ....Tensor([[    2,     1,  ...,     4,     3]], shape=Shape([1, 2049]), dtype=DataType::INT32, layout=Layout::ROW_MAJOR))
+function_kwargs = {'chunk_start_idx': 131072, 'program_config': SDPAProgramConfig(compute_with_storage_grid_size=8-4, sub_core_grids=std::nullopt, q_chunk_size=128, k_chunk_size=128, exp_approx_mode=false, max_cores_per_head_batch=16), 'scale': 1.0}
+cq_id = None, recording = False
+
+    def __call__(self, *function_args, **function_kwargs):
+        cq_id = None
+        if "queue_id" in function_kwargs:
+            cq_id = function_kwargs.pop("queue_id")
+        elif "cq_id" in function_kwargs:
+            cq_id = function_kwargs.pop("cq_id")
+
+        recording = ttnn.graph.is_python_io_recording_enabled()
+        if recording:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
+        try:
+            if cq_id is None:
+>               result = self.function(*function_args, **function_kwargs)
+E               RuntimeError: TT_FATAL @ /home/ubuntu/tt-metal/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_device_operation.cpp:305: kv_length >= q_shape[2] + attrs.chunk_start_idx.value()
+E               info:
+E               K's sequence length must be >= Q's sequence length + chunk_start_idx. Got K: 131136, Q: 128, chunk_start_idx: 131072
+E               backtrace:
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(+0x1bcdb5a) [0x7f1870d5db5a]
+E                --- ttnn::prim::SDPAOperation::validate_on_program_cache_miss(ttnn::prim::SDPAParams const&, ttnn::prim::SDPAInputs const&)
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim13SDPAOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x194) [0x7f1870d69e44]
+E                --- /localdev/odjuricic/tt-metal/build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim13SDPAOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x2db) [0x7f1870d5c79b]
+E                --- ttnn::prim::sdpa(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, std::optional<tt::tt_metal::Tensor> const&, bool, std::optional<float>, std::optional<unsigned int>, std::optional<long>, std::optional<tt::tt_metal::Tensor> const&, bool, std::optional<unsigned int>, tt::tt_metal::MemoryConfig const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig>, ttnn::ComputeKernelConfig)
+E                --- ttnn::transformer::chunked_scaled_dot_product_attention(tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, tt::tt_metal::Tensor const&, long, std::optional<float>, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::operations::transformer::SDPAProgramConfig>, std::optional<ttnn::ComputeKernelConfig>)
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x43e71d) [0x7f187144371d]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x44a3b9) [0x7f187144f3b9]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x44a176) [0x7f187144f176]
+E                --- /localdev/odjuricic/tt-metal/ttnn/ttnn/_ttnn.so(+0x312325) [0x7f1871317325]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x561224411c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x561224445b46]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x56122437387c]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x561224411c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x561224445b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x5612243a02a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x36749) [0x56122439fe59]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x561224371c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x561224411c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x561224445b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x5612243a02a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8924) [0x561224372034]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x561224371c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x561224411c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x561224445b46]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa16c) [0x56122437387c]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x56122436d778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x4068) [0x56122436d778]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x2fd0b9) [0x5612243a00b9]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x561224371c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x561224411c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x561224445b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x5612243a02a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x8507) [0x561224371c17]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(+0x273350) [0x561224316350]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0xa3df) [0x561224373aef]
+E                --- /opt/venv/bin/python3(_PyFunction_Vectorcall+0x202) [0x561224314352]
+E                --- /opt/venv/bin/python3(_PyObject_Call_Prepend+0x115) [0x561224411c65]
+E                --- /opt/venv/bin/python3(+0x3a2b46) [0x561224445b46]
+E                --- /opt/venv/bin/python3(+0x2fd2a2) [0x5612243a02a2]
+E                --- /opt/venv/bin/python3(_PyEval_EvalFrameDefault+0x3eef) [0x56122436d5ff]
+
+ttnn/ttnn/decorators.py:473: RuntimeError
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+50.80s call     models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_long_nonaligned_prefill_capacity[5-full_attention]
+1.22s setup    models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_long_nonaligned_prefill_capacity[5-full_attention]
+0.12s teardown models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_long_nonaligned_prefill_capacity[5-full_attention]
+=========================== short test summary info ============================
+FAILED models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_long_nonaligned_prefill_capacity[5-full_attention]
+======================== 1 failed, 3 warnings in 56.91s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 05:35:20.565 | info     |    BuildKernels | JIT cache stats: 36/163 hits (22.1%) [36 cached, 39 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 05:35:20.565 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 05:35:20.573 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 05:35:20.573 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 05:35:20.766 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 05:35:20.766 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 05:35:20.766 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

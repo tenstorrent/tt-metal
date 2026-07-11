@@ -1,0 +1,42 @@
+{
+  "checkpoint": "google/gemma-4-31B",
+  "layers": {
+    "0": {
+      "kind": "sliding_attention",
+      "tensors": {
+        "input_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 4.872105598, "std": 6.525421143},
+        "layer_scalar": {"shape": [1], "dtype": "bfloat16", "mean": 0.096679688, "std": null},
+        "mlp.down_proj.weight": {"shape": [5376, 21504], "dtype": "bfloat16", "mean": 0.000000213, "std": 0.006981417},
+        "mlp.gate_proj.weight": {"shape": [21504, 5376], "dtype": "bfloat16", "mean": 0.000016152, "std": 0.013410945},
+        "mlp.up_proj.weight": {"shape": [21504, 5376], "dtype": "bfloat16", "mean": 0.000001083, "std": 0.013410970},
+        "post_attention_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 1.683806658, "std": 5.236269474},
+        "post_feedforward_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 1.215256691, "std": 1.507808685},
+        "pre_feedforward_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 2.834299088, "std": 1.036795735},
+        "self_attn.k_norm.weight": {"shape": [256], "dtype": "bfloat16", "mean": 0.122070312, "std": 0.0},
+        "self_attn.k_proj.weight": {"shape": [4096, 5376], "dtype": "bfloat16", "mean": 0.000004474, "std": 0.013932010},
+        "self_attn.o_proj.weight": {"shape": [5376, 8192], "dtype": "bfloat16", "mean": -0.000001868, "std": 0.010940696},
+        "self_attn.q_norm.weight": {"shape": [256], "dtype": "bfloat16", "mean": 1.023437500, "std": 0.0},
+        "self_attn.q_proj.weight": {"shape": [8192, 5376], "dtype": "bfloat16", "mean": -0.000001003, "std": 0.013931996},
+        "self_attn.v_proj.weight": {"shape": [4096, 5376], "dtype": "bfloat16", "mean": -0.000000649, "std": 0.013932224}
+      }
+    },
+    "5": {
+      "kind": "full_attention",
+      "tensors": {
+        "input_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 25.693386078, "std": 23.679660797},
+        "layer_scalar": {"shape": [1], "dtype": "bfloat16", "mean": 0.878906250, "std": null},
+        "mlp.down_proj.weight": {"shape": [5376, 21504], "dtype": "bfloat16", "mean": -0.000000804, "std": 0.006625372},
+        "mlp.gate_proj.weight": {"shape": [21504, 5376], "dtype": "bfloat16", "mean": -0.000031544, "std": 0.013936886},
+        "mlp.up_proj.weight": {"shape": [21504, 5376], "dtype": "bfloat16", "mean": -0.000002563, "std": 0.013936962},
+        "post_attention_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 0.119949706, "std": 0.266329914},
+        "post_feedforward_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 0.085153848, "std": 0.124773487},
+        "pre_feedforward_layernorm.weight": {"shape": [5376], "dtype": "bfloat16", "mean": 67.985061646, "std": 45.216449738},
+        "self_attn.k_norm.weight": {"shape": [512], "dtype": "bfloat16", "mean": 0.061523438, "std": 0.0},
+        "self_attn.k_proj.weight": {"shape": [2048, 5376], "dtype": "bfloat16", "mean": 0.000005719, "std": 0.013564505},
+        "self_attn.o_proj.weight": {"shape": [5376, 16384], "dtype": "bfloat16", "mean": 0.000000062, "std": 0.007677888},
+        "self_attn.q_norm.weight": {"shape": [512], "dtype": "bfloat16", "mean": 1.015625000, "std": 0.0},
+        "self_attn.q_proj.weight": {"shape": [16384, 5376], "dtype": "bfloat16", "mean": -0.000001843, "std": 0.013564348}
+      }
+    }
+  }
+}
