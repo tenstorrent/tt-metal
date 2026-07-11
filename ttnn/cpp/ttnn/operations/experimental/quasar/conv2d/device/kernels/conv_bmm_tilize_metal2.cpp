@@ -697,6 +697,15 @@ void kernel_main() {
                 if constexpr (packer_l1_acc) {
                     pack_reconfig_l1_acc(0);
                 }
+#ifdef ARCH_QUASAR
+                // QSR quirk #1: pack_reconfig_data_format above sets only the gasket FORMAT, not the pack
+                // buffer descriptor. The pack BD is still pointed at matmul_partials (from the matmul-block
+                // pack_init); pack_tile below targets untilize_mode_out_cb_id -> stale base + new offset ->
+                // OOB PACR0_TILE_INC / ERROR_TRISC1 (this is the fault that surfaced after the matmul-pack
+                // fix, at a higher L1 addr). Repoint the pack BD to the actual pack target CB. See
+                // ~/QuasarProgrammingQuirks.md quirk #1.
+                PACK((llk_pack_init(untilize_mode_out_cb_id)));
+#endif
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
                 add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
