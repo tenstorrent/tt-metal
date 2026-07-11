@@ -841,6 +841,22 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_height = height // 2
         s1_width = width // 2
 
+        # Append-token tail-pad. A keyframe pinned to the LAST latent frame has no neighbor after it,
+        # so its freed grid frame settles onto the static anchor and the causal VAE holds the clip's
+        # final pixels (a frozen tail). Generate one extra latent frame (TEMPORAL_COMPRESSION more
+        # pixel frames) so that last keyframe becomes INTERIOR — it regains a moving neighbor and flows
+        # through append-token like any interior pin — then trim the padded tail back off before export.
+        # Only engages for append-token last-frame i2v; a no-op (num_frames_out == num_frames) otherwise.
+        num_frames_out = num_frames
+        if images and os.environ.get("LTX_KF_APPEND_TOKEN", "0") in ("1", "true", "True"):
+            _last_lat = (num_frames - 1) // TEMPORAL_COMPRESSION  # index of the last latent frame
+            if _last_lat > 0 and any(pixel_to_latent_frame(im[1], num_frames) == _last_lat for im in images):
+                num_frames += TEMPORAL_COMPRESSION
+                logger.info(
+                    f"append-token tail-pad: generating {num_frames}f, trimming to {num_frames_out}f "
+                    "(last-frame keyframe → interior)"
+                )
+
         # Per-stage eager override. The DiT trace-capture cost is a FIXED ~2 forwards per stage
         # (one prep_run compile/alloc forward + one record forward — see @traced_function/Tracer),
         # independent of step count, so for a single-generate run a stage with few denoise steps can
@@ -966,6 +982,7 @@ class LTXDistilledPipeline(LTXPipeline):
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
+        self._ensure_upsampler_frames(num_frames)  # tail-pad upsamples one extra latent frame
         self._prepare_upsampler()
         upsampled = upsample_latent(self.upsampler, s1_spatial, *self._vae_per_channel_stats())
         t_upsample = time.time() - t0
@@ -996,6 +1013,7 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Stage 2 denoise: {t_stage2:.1f}s")
 
         t0 = time.time()
+        self._ensure_vae_decoder_frames(num_frames)  # tail-pad decodes one extra latent frame
         self._prepare_vae()
         if self.dynamic_load:
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
@@ -1006,12 +1024,14 @@ class LTXDistilledPipeline(LTXPipeline):
         decode_type = "float" if output_path is not None else output_type
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
+        if num_frames_out != num_frames:
+            video_pixels = video_pixels[:, :, :num_frames_out]  # (B,3,F,H,W): drop the tail-pad frame(s)
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
 
         t0 = time.time()
-        audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
+        audio_obj = self.decode_audio(s2_audio, num_frames_out, fps=fps)  # trim padded waveform to requested length
         t_audio_decode = time.time() - t0
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")

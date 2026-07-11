@@ -724,13 +724,15 @@ class LTXPipeline:
             width=width or None,
         )
 
-    def _new_upsampler(self) -> LTXLatentUpsampler:
+    def _new_upsampler(self, num_frames: int | None = None) -> LTXLatentUpsampler:
         """Spatial-2x latent upsampler at stage-1 shape: input H/W = full // (SPATIAL_COMPRESSION*2)
         (stage 1 runs at half-res, then the VAE compresses by SPATIAL_COMPRESSION),
-        latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1. Config read from checkpoint header."""
+        latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1. Config read from checkpoint header.
+        ``num_frames`` overrides the pinned frame count (append-token tail-pad decodes one extra latent
+        frame); default is the create-time ``_init_num_frames``."""
         with safe_open(self._upsampler_path, framework="pt") as f:
             cfg = json.loads(f.metadata()["config"])
-        latent_frames = (self._init_num_frames - 1) // TEMPORAL_COMPRESSION + 1
+        latent_frames = ((num_frames or self._init_num_frames) - 1) // TEMPORAL_COMPRESSION + 1
         # Round the s1 input H/W up to the mesh factors so the upsampler's pinned GroupNorm
         # and conv dims are built for even shards; upsample_latent replicate-pads runtime
         # input to match and crops the output. Even shards skip the halo crop-masking that
@@ -755,6 +757,44 @@ class LTXPipeline:
             ccl_manager=self.vae_ccl_manager,
             num_frames=latent_frames,
         )
+
+    def _ensure_upsampler_frames(self, num_frames: int) -> None:
+        """Rebuild the latent upsampler for a new pinned frame count. The upsampler bakes its
+        GroupNorm3D shapes (latent T) at construction, so the append-token tail-pad — which decodes
+        one extra latent frame so a last-frame keyframe becomes interior — needs a fresh module.
+        Cheap: construction pushes no device weights (the next ``_prepare_upsampler`` loads them,
+        under a frame-count-distinct blocking cache key). Dealloc the old weights first, then
+        re-wire the coresident exclusions so the rebuilt module evicts / gets evicted correctly
+        (idempotent dealloc makes any lingering stale refs harmless)."""
+        if self.upsampler is None or getattr(self, "_upsampler_nf", None) == num_frames:
+            return
+        if self.upsampler.is_loaded():
+            self.upsampler.deallocate_weights()
+        self.upsampler = self._new_upsampler(num_frames)
+        self._upsampler_nf = num_frames
+        self._register_coresident_exclusions()
+
+    def _ensure_vae_decoder_frames(self, num_frames: int) -> None:
+        """Rebuild the VAE decoder for a new pinned frame count — same GroupNorm3D frame-count baking
+        as the upsampler (see ``_ensure_upsampler_frames``); the tail-pad decodes one extra latent
+        frame, so the decoder built for the create-time count must be replaced."""
+        if self.vae_decoder is None or getattr(self, "_vae_decoder_nf", None) == num_frames:
+            return
+        if self.vae_decoder.is_loaded():
+            self.vae_decoder.deallocate_weights()
+        self.vae_decoder = LTXVideoDecoder(
+            decoder_blocks=self._vae_decoder_blocks,
+            causal=self._vae_causal,
+            base_channels=self._vae_base_channels,
+            mesh_device=self.mesh_device,
+            parallel_config=self.vae_parallel_config,
+            ccl_manager=self.vae_ccl_manager,
+            num_frames=num_frames or None,
+            height=self._init_height or None,
+            width=self._init_width or None,
+        )
+        self._vae_decoder_nf = num_frames
+        self._register_coresident_exclusions()
 
     def _instantiate_modules(
         self, extra_variants: list[tuple[str, list[LoraSpec]]], *, audio_only: bool = False
@@ -799,6 +839,7 @@ class LTXPipeline:
                 height=self._init_height or None,
                 width=self._init_width or None,
             )
+            self._vae_decoder_nf = self._init_num_frames
 
         if self._vae_encoder_blocks and self._init_height > 0 and self._init_width > 0:
             # Single-frame image conditioning; blocking falls back to channel-keyed entries so the
@@ -811,6 +852,7 @@ class LTXPipeline:
             ), f"{type(self).__name__} requires num_frames/height/width at create_pipeline."
             self._upsampler_path = LTXPipeline._resolve_checkpoint_file(LTX_UPSAMPLER_HF_REF)
             self.upsampler = self._new_upsampler()
+            self._upsampler_nf = self._init_num_frames
 
         if self.checkpoint_name is not None:
             self._new_audio_decoder()
