@@ -1623,7 +1623,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
     std::vector<ValidatedSizeOverride> validated;
     validated.reserve(overrides.size());
 
-    std::unordered_map<uint32_t, uint64_t> new_total_by_id;
+    std::unordered_map<uint32_t, uint32_t> new_total_by_id;
     new_total_by_id.reserve(overrides.size());
     for (const auto& o : overrides) {
         auto dfb = get_dataflow_buffer(o.dfb_id);
@@ -1657,7 +1657,7 @@ void ProgramImpl::apply_dfb_size_overrides(const std::vector<DfbSizeOverride>& o
         group.push_back(primary_id);
         group.insert(group.end(), primary->alias_secondary_ids.begin(), primary->alias_secondary_ids.end());
 
-        std::optional<uint64_t> agreed_total;
+        std::optional<uint32_t> agreed_total;
         for (uint32_t member_id : group) {
             auto it = new_total_by_id.find(member_id);
             TT_FATAL(

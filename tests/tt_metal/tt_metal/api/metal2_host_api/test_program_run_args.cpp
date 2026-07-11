@@ -1278,7 +1278,7 @@ TEST_F(ProgramRunArgsTestQuasar, NamedAndVarargRTAsCoexistSucceeds) {
 //   2. finalize_dataflow_buffer_configs (would normally run inside the dispatch pipeline at
 //                                first enqueue) populates per-DFB `groups[].l1_by_core`
 //                                entries with placeholder addr = 0.
-//   3. SetProgramRunArgs / UpdateTensorArgs → AttachBorrowedDFBBuffers resolves the
+//   3. SetProgramRunArgs / UpdateTensorArgs → borrowed-attachment preparation resolves the
 //                                bound MeshTensor, extracts its reference-buffer address, and
 //                                calls dfb->set_borrowed_memory_base_addr(addr), which
 //                                overwrites every `groups[].l1_by_core` entry (and any
@@ -1437,7 +1437,7 @@ TEST_F(ProgramRunArgsTestQuasar, BorrowedDFB_UpdateTensorArgsRefreshesAddress) {
 }
 
 // Guard: resizing a borrowed-memory DFB on the partial-update path without supplying its backing
-// tensor is rejected — otherwise the per-bank fit check in AttachBorrowedDFBBuffers never re-runs
+// tensor is rejected — otherwise borrowed-attachment preparation never re-runs the per-bank fit check
 // against the new size, and a grown DFB could silently overflow its borrowed buffer at execution.
 TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithoutTensorFails) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
@@ -1459,7 +1459,7 @@ TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithout
 }
 
 // Supplying the backing tensor alongside the resize is accepted: the fit check re-runs and the new
-// size (48 B) still fits the 64 B backing.
+// size (64 B) still fits the 64 B backing.
 TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_ResizingBorrowedDFBWithTensorSucceeds) {
     ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
     Program program = MakeProgramFromSpec(*mesh_device_, spec);
@@ -1539,6 +1539,28 @@ TEST_F(ProgramRunArgsTestQuasar, SetProgramRunArgs_InvalidSecondBorrowedDFBLeave
     EXPECT_EQ(dfb_b->config.num_entries, original_b.num_entries);
     EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb_a"), 0U);
     EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb_b"), 0U);
+}
+
+TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BeforeInitialSetFailureLeavesBorrowedDFBStateUnchanged) {
+    ProgramSpec spec = MakeBorrowedDFBProgramSpecForRunArgs();
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    program.impl().finalize_dataflow_buffer_configs();
+
+    MeshTensor tensor = MeshTensor::allocate_on_device(*mesh_device_, spec.tensor_parameters[0].spec, TensorTopology{});
+    auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle("dfb"));
+    const auto original_config = dfb->config;
+    ASSERT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0U);
+
+    ProgramRunArgs update;
+    update.dfb_run_overrides.push_back({.dfb = DFBSpecName{"dfb"}, .num_entries = 4});
+    update.tensor_args = {{TensorParamName{"borrowed_tensor"}, TensorArgument{tensor}}};
+
+    EXPECT_THAT(
+        [&] { UpdateProgramRunArgs(program, update); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA buffer not allocated")));
+    EXPECT_EQ(dfb->config.entry_size, original_config.entry_size);
+    EXPECT_EQ(dfb->config.num_entries, original_config.num_entries);
+    EXPECT_EQ(PeekBorrowedDFBAddress(program, "dfb"), 0U);
 }
 
 TEST_F(ProgramRunArgsTestQuasar, UpdateProgramRunArgs_BorrowedDFBOverflowFailsWithoutMutation) {

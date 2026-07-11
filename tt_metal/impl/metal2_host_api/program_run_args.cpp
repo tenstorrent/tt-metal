@@ -414,7 +414,7 @@ uint32_t ValidateBorrowedDFBBackingBuffer(
         "Borrowed-memory DFB id {} (from TensorParameter '{}') requires an L1-resident backing memory.",
         dfb_id,
         tp_name);
-    const uint64_t dfb_total_bytes = dfb::detail::checked_total_size(
+    const uint32_t dfb_total_bytes = dfb::detail::checked_total_size(
         entry_size, num_entries, fmt::format("Borrowed-memory DFB {} from TensorParameter '{}'", dfb_id, tp_name));
     TT_FATAL(
         dfb_total_bytes <= buffer.aligned_size_per_bank(),
@@ -468,6 +468,10 @@ std::vector<ValidatedBorrowedAttachment> PrepareBorrowedDFBAttachments(
         }
 
         auto dfb_impl = program_impl.get_dataflow_buffer(dfb_id);
+        TT_FATAL(
+            dfb_impl->borrows_memory(),
+            "Internal error: borrowed-memory binding for DFB {} refers to a DFB that does not borrow memory.",
+            dfb_id);
         const auto override = override_by_id.find(dfb_id);
         const uint32_t entry_size = override == override_by_id.end()
                                         ? dfb_impl->config.entry_size
@@ -1251,7 +1255,8 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
         tensor_by_param.emplace(param_name.get(), &mesh_tensor_of(tensor_arg));
     }
 
-    // Resolve candidate DFB sizes and every supplied borrowed attachment before either live state changes.
+    // Resolve candidate DFB sizes and every supplied borrowed attachment before changing either live DFB sizes or
+    // borrowed addresses.
     std::vector<detail::ProgramImpl::DfbSizeOverride> size_overrides;
     size_overrides.reserve(params.dfb_run_overrides.size());
     for (const auto& dfb_params : params.dfb_run_overrides) {
@@ -1263,7 +1268,6 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
     }
     const auto borrowed_attachments =
         PrepareBorrowedDFBAttachments(program_impl, tensor_by_param, size_overrides, /*require_all=*/false);
-    program_impl.apply_dfb_size_overrides(size_overrides);
 
     // ---- Tensor bindings: patch CRTA address slots for SUPPLIED tensors only ----
     // (Invariant tensors omitted from params keep their previously-patched binding slots.)
@@ -1300,6 +1304,10 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
             }
         }
     }
+    // Keep the DFB size and borrowed-address commits adjacent. Tensor-binding CRTA patching above can reject an
+    // UpdateProgramRunArgs call made before the initial SetProgramRunArgs; that failure must not leave a new DFB size
+    // paired with the old borrowed address.
+    program_impl.apply_dfb_size_overrides(size_overrides);
     CommitBorrowedDFBAttachments(borrowed_attachments);
 }
 
