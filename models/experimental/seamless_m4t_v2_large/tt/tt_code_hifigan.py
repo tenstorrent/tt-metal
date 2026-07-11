@@ -1731,6 +1731,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
             )
             _vt0 = _vt(f"stage{i} conv_transpose -> tlen={tlen}", _vt0)
             channels = self.cfg.upsample_initial_channel // (2 ** (i + 1))
+            # The transpose emits ROW_MAJOR ``h``, but the resblock convs want TILE: a RM->sharded conv
+            # I2S tilizes on the fly (~815µs/conv at the big stages) and the residual add re-tilizes RM,
+            # whereas TILE->sharded is ~10x cheaper. Tilize ``h`` once per stage (shared as residual +
+            # first-leaky input across all resblocks) so every downstream conv/add sees TILE.
+            if _vocoder_resblock_l1_enabled() and h.get_layout() != ttnn.TILE_LAYOUT:
+                h_t = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(h)
+                h = h_t
             # All ``num_kernels`` resblocks consume the same stage input ``h`` and each starts with
             # ``leaky_relu(h)``; compute it once and share (residual still uses the raw ``h``).
             h_leaky = ttnn.leaky_relu(h, negative_slope=self.leaky_slope, memory_config=ttnn.DRAM_MEMORY_CONFIG)

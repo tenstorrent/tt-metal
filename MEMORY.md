@@ -179,6 +179,15 @@ resblock convs (gated by ``SEAMLESS_VOCODER_RESBLOCK_L1``).
 **Result:** PCC 0.99827 (unchanged). UntilizeWithUnpadding 16.3ms/17ops → **gone**; InterleavedToSharded
 26.8ms → **7.8ms** (TILE→sharded is far cheaper than RM→sharded). Device ops 1002→927, device time 95.2→**57.0ms**.
 
+### EXP-9 ✅ DONE — Tilize stage input once so resblocks run on TILE (cheap I2S, no residual tilize)
+**Idea:** the transpose emits ROW_MAJOR ``h``, but resblock convs want TILE. RM→sharded conv I2S tilizes on
+the fly (**815µs** at big stages) and the residual ``add`` re-tilizes the RM residual (~831µs), whereas
+TILE→sharded I2S is **~70µs** (~10x cheaper). Tilize ``h`` **once per stage** (right after the transpose) and
+share it as residual + first-leaky input across all ``num_kernels`` resblocks, so every downstream conv/add sees TILE.
+**Change:** one ``to_layout(TILE)`` on ``h`` in `_hifi_gan_once` before the resblock loop (gated by RESBLOCK_L1).
+**Result:** PCC 0.99827. InterleavedToSharded 7.8→**4.1ms** (−48%); leaky 4.8→2.8ms; Tilize buckets 4.5→1.5ms
+(the per-stage tilize is cheaper than the residual tilizes it removes). Device ops 927→917, device time 57.0→**48.4ms**.
+
 ### Cumulative results (device time, from `tt-perf-report`, unit_seq=1024)
 - exp0 baseline (manual chunk loop): **286.2 ms**, 6303 ops
 - exp1 (+DRAM width-slice, EXP-1): 141.0 ms, 3420 ops
@@ -187,12 +196,15 @@ resblock convs (gated by ``SEAMLESS_VOCODER_RESBLOCK_L1``).
 - exp4 (+NLC front-door, EXP-4): 123.2 ms, 3408 ops
 - exp5 (+element-budget transpose slicing, EXP-5): 99.9 ms, 1012 ops
 - exp9 (+hoist shared leaky, EXP-7): 95.2 ms, 1002 ops
-- exp10 (+accept_tile_input, EXP-8): **57.0 ms**, **927 ops**
-  → **−80% device time, −85% op count, −51% wall-clock (638→310 ms).**
+- exp10 (+accept_tile_input, EXP-8): 57.0 ms, 927 ops
+- exp11 (+tilize stage input once, EXP-9): **48.4 ms**, **917 ops**
+  → **−83% device time, −85% op count, −52% wall-clock (638→306 ms).**
 - PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512) pass unchanged.
 - useq=64 PCC 0.975 is a PRE-EXISTING short-seq accuracy bug (bit-identical with all flags off) — not ours.
-- NOTE: EXP-6's "dead end" was only the sharded/row_major route; the untilize itself WAS solvable via
-  accept_tile_input (EXP-8). L1-interleaved intermediates still OOM the conv circular buffers (2.78MB > 1.5MB L1).
+- KEY LAYOUT RULE for this model: conv inputs should be **TILE** (TILE→sharded I2S is ~10x cheaper than
+  RM→sharded), and ttnn.conv1d accepts interleaved TILE directly (EXP-8). Keep the resblock chain TILE end-to-end.
+- NOTE: EXP-6's "dead end" was only the sharded/row_major route. L1-interleaved intermediates still OOM the conv
+  circular buffers (2.78MB > 1.5MB L1) — can't keep activations resident in L1 at the big stages.
 
 ### Remaining top buckets (exp5) — next candidates
 - **InterleavedToSharded 26.9% (26.8ms, 94 ops)** — now #1. Resharding DRAM→L1 for each conv input (the
