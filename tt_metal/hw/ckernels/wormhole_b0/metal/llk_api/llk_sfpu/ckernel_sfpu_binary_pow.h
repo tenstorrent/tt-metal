@@ -237,12 +237,15 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
 
     // 2**frac via the accurate exp helper (frac is small), then scale by 2**k.
     sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
-    y = sfpi::setexp(y, sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int);
-
-    // setexp applies the 2**k magnitude by writing the 8-bit exponent field, which wraps
-    // instead of saturating, so a huge exponent silently wraps to a finite value rather
-    // than overflowing. Clamp to inf explicitly (matches _sfpu_pow2_f32_accurate_hilo_).
-    v_if(s >= 128.0f) { y = std::numeric_limits<float>::infinity(); }
+    // setexp writes the 8-bit exponent field and wraps instead of saturating, so an
+    // overflowing magnitude silently becomes a finite value. Detect overflow from the
+    // biased exponent about to be written (>= 255 is the inf field) and clamp explicitly.
+    // Checking out_exp (already needed by setexp) instead of keeping the float s live
+    // across the exp helper avoids pushing this kernel past the SFPU register-allocator
+    // budget (reload-insn ICE); out_exp >= 255 is equivalent to s >= 128.
+    sfpi::vInt out_exp = sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int;
+    y = sfpi::setexp(y, out_exp);
+    v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
