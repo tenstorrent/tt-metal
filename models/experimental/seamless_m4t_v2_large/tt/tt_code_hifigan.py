@@ -29,7 +29,9 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 
 # Both matmul dims must stay small on BH; ``t_audio`` alone can be thousands of frames.
 _VOCODER_EXPAND_MATMUL_CHUNK = TILE
-# Max upsampled time for a single ``ttnn.conv1d`` on BH (above this, use fixed-window chunks).
+# Max upsampled time for a single unsliced ``ttnn.conv1d`` on BH. Above this, the timeline is sliced:
+# by default (``_vocoder_conv1d_dram_slice_enabled``) ``ttnn.conv1d`` width-slices it in DRAM in one op;
+# with that disabled, the legacy manual fixed-window chunk loop runs instead.
 _HIFIGAN_MAX_CONV1D_TLEN = 4096
 # Conv1d chunk interior (halo + interior must fit ``_HIFIGAN_MAX_CONV1D_TLEN``).
 _VOCODER_CONV1D_INTERIOR = 3968
@@ -49,6 +51,14 @@ _VOCODER_CONV1D_MAX_INTERIOR = 49152
 
 # Round ``t_audio`` up to stabilize shape-specialized vocoder programs; padded tail is masked/cropped.
 _VOCODER_TAUDIO_BUCKET = 256
+
+
+def _vocoder_conv1d_dram_slice_enabled() -> bool:
+    """Long HiFi-GAN conv1d timelines: let ``ttnn.conv1d`` width-slice in DRAM (one op) instead of the
+    manual Python chunk loop (per-chunk slice-in/slice-out + concat). The device handles halo/windowing
+    internally, collapsing the dominant Slice/Untilize/Tilize glue that surrounded every chunk.
+    Set ``SEAMLESS_VOCODER_CONV1D_DRAM_SLICE=0`` to fall back to the manual chunk loop (A/B / rollback)."""
+    return os.environ.get("SEAMLESS_VOCODER_CONV1D_DRAM_SLICE", "1") != "0"
 
 
 def _vocoder_conv1d_max_interior() -> int:
@@ -923,8 +933,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
         timeline_chunked: bool = False,
         row_major_output: bool = False,
         keep_sharded_output: bool = False,
+        slice_config: Optional[Any] = None,
     ) -> Tuple[ttnn.Tensor, int]:
-        """Single-shot ``ttnn.conv1d``; input is row-major NLC or an already-sharded activation."""
+        """Single-shot ``ttnn.conv1d``; input is row-major NLC or an already-sharded activation.
+
+        When ``slice_config`` is given, ``ttnn.conv1d`` slices the timeline (width) in DRAM itself —
+        used for long HiFi-GAN timelines in place of the manual Python chunk loop."""
         # Short single-shot length-bucketing (``<= _HIFIGAN_MAX_CONV1D_TLEN``): pad timeline to a fixed
         # bucket so few stable shapes compile once. Long/chunked timelines are bucketed in ``_conv1d``
         # (with sharded-aware trim via ``_slice_nlc_time``) before the chunk loop.
@@ -974,7 +988,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         cached = self._conv1d_prepared_cache.get(cache_key) if use_prepared_weights else None
         weight_tensor = cached[0] if cached is not None else weight
         bias_tensor = cached[1] if cached is not None else bias
-        out, out_len = ttnn.conv1d(
+        conv1d_kwargs: dict = dict(
             input_tensor=x_rm,
             weight_tensor=weight_tensor,
             in_channels=in_channels,
@@ -993,6 +1007,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
             dtype=ttnn.bfloat16,
             return_output_dim=True,
         )
+        if slice_config is not None:
+            conv1d_kwargs["slice_config"] = slice_config
+        out, out_len = ttnn.conv1d(**conv1d_kwargs)
         if deallocate_input:
             ttnn.deallocate(x_rm)
         out_len = int(out_len)
@@ -1127,6 +1144,46 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 timeline_chunked=False,
                 row_major_output=row_major_output,
                 keep_sharded_output=keep_sharded_output,
+            )
+            return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
+
+        # Long timeline: let ``ttnn.conv1d`` width-slice in DRAM (one op, device-managed halo) instead
+        # of the manual Python chunk loop below. Collapses the per-chunk slice-in/slice-out + concat
+        # (the dominant Slice/Untilize/Tilize glue in the vocoder perf report).
+        if _vocoder_conv1d_dram_slice_enabled():
+            # DRAM width-slicing requires the activation in DRAM; interleave a sharded input first.
+            if ttnn.is_sharded(x_in):
+                x_int = ttnn.sharded_to_interleaved(x_in, ttnn.DRAM_MEMORY_CONFIG)
+                if rm_buf is not None:
+                    ttnn.deallocate(rm_buf)
+                elif x_in is not x_nlc:
+                    ttnn.deallocate(x_in)
+                x_in = x_int
+                rm_buf = x_int
+            slice_config = ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceWidth,
+                num_slices=0,  # 0 = device auto-picks the slice count for this timeline/L1 budget.
+            )
+            out, out_len = self._conv1d_run(
+                x_in,
+                weight=weight,
+                bias=bias,
+                batch=batch,
+                input_length=seq,
+                in_channels=in_channels,
+                out_channels=out_channels,
+                kernel_size=kernel_size,
+                stride=stride,
+                padding=padding,
+                groups=groups,
+                dilation=dilation,
+                fused_post_activation=fused_post_activation,
+                deallocate_input=rm_buf is not None,
+                shard_layout=shard_layout,
+                timeline_chunked=True,
+                # DRAM width-sliced output is interleaved (same as the old multi-chunk concat result).
+                keep_sharded_output=False,
+                slice_config=slice_config,
             )
             return self._conv1d_trim_timeline(out, out_len, real_seq=real_seq, batch=batch, out_channels=out_channels)
 
