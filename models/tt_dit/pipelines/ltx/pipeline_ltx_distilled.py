@@ -1028,6 +1028,17 @@ class LTXDistilledPipeline(LTXPipeline):
             if n_encoded:
                 timings.append(("Image encode", time.time() - t0))
                 logger.info(f"Image encode ({n_encoded} frame(s)): {time.time() - t0:.1f}s")
+            # Keyframe worker: the trace bakes a fixed anchor count, so a job with fewer non-frame-0
+            # keyframes pads up to it with duplicates of its last anchor (same frame + latent). A
+            # duplicate anchor only reinforces its own keyframe, so it stays inert while matching shape.
+            _baked = len(self._kf_trace_anchors())
+            if _baked:
+
+                def _pad_anchors(conds):
+                    nz = [c for c in conds if c[0] != 0]
+                    return conds + [nz[-1]] * (_baked - len(nz)) if 0 < len(nz) < _baked else conds
+
+                s1_conds, full_conds = _pad_anchors(s1_conds), _pad_anchors(full_conds)
             s1_image_conds, full_image_conds = s1_conds, full_conds
 
         t0 = time.time()
