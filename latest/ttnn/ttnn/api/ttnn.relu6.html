@@ -311,7 +311,7 @@
 <dd>
 <p>Applies relu6 to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise.</p>
 <div class="math notranslate nohighlight">
-\[\mathrm{{output\_tensor}}_i = \min(\max(\mathrm{{input\_tensor}}_i, 0), 6)\]</div>
+\[\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i)\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -345,7 +345,7 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16, UINT8</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, FLOAT32</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
