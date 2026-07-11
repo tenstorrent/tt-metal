@@ -27,26 +27,27 @@ def profile_realtime_program(
 
     profile_records = []
 
-    def collect(record):
-        if profile_records and not collect_all:
-            return
+    def collect_records(batch):
+        for record in batch.records:
+            if profile_records and not collect_all:
+                return
 
-        start_timestamp = int(record.start_timestamp)
-        end_timestamp = int(record.end_timestamp)
-        frequency = float(record.frequency)
-        if frequency <= 0 or end_timestamp <= start_timestamp:
-            return
+            start_timestamp = int(record.start_timestamp)
+            end_timestamp = int(record.end_timestamp)
+            frequency = float(record.frequency)
+            if frequency <= 0 or end_timestamp <= start_timestamp:
+                continue
 
-        profile_records.append(
-            {
-                "runtime_id": int(record.runtime_id),
-                "chip_id": int(record.chip_id),
-                "duration_ns": (end_timestamp - start_timestamp) / frequency,
-                "kernel_sources": tuple(str(source) for source in record.kernel_sources),
-            }
-        )
+            profile_records.append(
+                {
+                    "runtime_id": int(record.runtime_id),
+                    "chip_id": int(record.chip_id),
+                    "duration_ns": (end_timestamp - start_timestamp) / frequency,
+                    "kernel_sources": tuple(str(source) for source in record.kernel_sources),
+                }
+            )
 
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
 
     try:
         result = run_fn()
