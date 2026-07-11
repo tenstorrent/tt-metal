@@ -178,6 +178,19 @@ block-conv 196→18 ops (27.7→8.3ms, FLOPs eff 1.58→7.5%). PaddedSlice/Slice
 Most ops show ``in0:dram_interleaved`` because activations live in DRAM between ops (read→shard→compute→
 write-back); convs show ``block/height_sharded`` (they receive the sharded tensor).
 
+### EXP-6 ❌ DEAD END — L1-chaining resblock convs (untilize/I2S bucket)
+**Goal:** kill the ~43% (I2S 26.9% + untilize 16.3%). The per-conv pattern at big stages is
+``conv → ShardedToInterleaved(87µs) → UntilizeWithUnpadding(1019µs) → InterleavedToSharded(815µs) → next conv``:
+each conv emits **interleaved TILE**, so the next conv untilizes (TILE→RM, a full DRAM read+write) and reshards.
+**What was tried:** (a) `keep_sharded_output=True` to hand conv1→conv2 sharded in L1; (b) `row_major_output=True`
+on conv1/conv2 so the chain stays RM (no untilize); (c) sharded leaky/add. **All no-ops or worse.**
+**Root cause (probed):** `ttnn.conv1d` with these sharded configs **returns interleaved TILE regardless of
+`keep_sharded_output`/`row_major_output`** — and whether `output_layout=ROW_MAJOR` is honored is *shape-dependent*
+(RM at k=11/d=5, TILE at k=3/d=1, same T/C). So the conv output layout/sharding isn't controllable at the model
+level. Sharded `add` also broke PCC (0.956) due to shard-spec/shape mismatch. Cracking this needs a **ttnn-level
+fix** (reliable sharded or RM conv output) or a full sharded-pipeline rewrite with matched shard specs across
+every op — beyond safe model tuning. Reverted; exp5 (99.9ms) stands as the current best. Probe scripts in scratchpad.
+
 ### Remaining top buckets (exp3) — next candidates, higher risk
 - **Conv2d block_sharded 22.4%** = conv_transpose upsampling at **1.58% FLOPs eff**. Biggest single bucket;
   inherent to skinny low-channel transposed convs. Needs a different upsample formulation / shard tuning.
