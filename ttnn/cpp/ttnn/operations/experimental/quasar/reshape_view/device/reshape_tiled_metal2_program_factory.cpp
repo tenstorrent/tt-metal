@@ -107,7 +107,14 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledMetalV2ProgramFactory::
     // reader_cb_len (=1): reader/writer ping-pong one entry at a time.
     spec.dataflow_buffers = {
         DataflowBufferSpec{
-            .unique_id = RT_MAP_DFB, .entry_size = mapping_page_size_bytes, .num_entries = reader_cb_len},
+            .unique_id = RT_MAP_DFB,
+            .entry_size = mapping_page_size_bytes,
+            .num_entries = reader_cb_len,
+            // The mapping DFB carries raw uint32 page-map rows. Every DFB needs a valid data_format_metadata
+            // (finalize_single_dfb_config calls tile_size on it -> DataFormat::Invalid throws "Invalid data
+            // format"). Use Int32 (bit-identical to the uint32 indices, 4B) — Quasar has Int32 on the device
+            // side but NOT UInt32, so Int32 is the portable choice.
+            .data_format_metadata = tt::DataFormat::Int32},
         DataflowBufferSpec{
             .unique_id = RT_INPUT_DFB,
             .entry_size = input_tile_size_bytes,
