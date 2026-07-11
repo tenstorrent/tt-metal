@@ -127,6 +127,11 @@ Final commands and artifacts:
 - the resulting rereview in `stage_review_autofix.md` returned `clean-pass` with
   no remaining stage-01 work.
 
+Autofix implementation and evidence checkpoint:
+`a6e369a353ba9d6c3a99fbef2512e6f694228fa5`. This SHA contains only
+functional-decoder stage-owned changes; no push was performed. This work-log
+provenance update is a stage-owned follow-up commit.
+
 ## Hardware recovery record
 
 - Failing command: `GEMMA4_LONG_PREFILL=196577 ... test_long_nonaligned_prefill_capacity[5-full_attention]`.
