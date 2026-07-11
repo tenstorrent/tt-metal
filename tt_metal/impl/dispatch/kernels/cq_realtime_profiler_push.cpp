@@ -23,6 +23,7 @@
 // Real-time profiler page size - must match host-side
 // RealtimeProfilerRuntimeSizes::page_size (which is also RT_PROFILER_ENTRY_SIZE).
 constexpr uint32_t realtime_profiler_page_size = RT_PROFILER_ENTRY_SIZE;  // 64 bytes
+static_assert(realtime_profiler_page_size <= NOC_MAX_BURST_SIZE);
 
 // Compile-time defines set by host:
 // RING_BUFFER_ADDR  - L1 address of the shared ring buffer
