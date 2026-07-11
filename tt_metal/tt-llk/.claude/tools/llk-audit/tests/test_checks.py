@@ -138,8 +138,10 @@ def test_mmio_sync_regfile_only_orders_gpr():
 
 
 @case
-def test_cfg_word_overlap_namespace_partition():
-    # THCON:56 and MAIN:56 must NOT be reported as a shared word.
+def test_cfg_word_overlap_config_vs_threadconfig_not_aliased():
+    # A Config write (cfg[] / here THCON via get_cfg_pointer) and a ThreadConfig
+    # write (SETC16) at the SAME index are in different hardware arrays and must
+    # NOT be reported as a shared word (BackendConfiguration.md).
     Fp = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
     Fm = "tt_llk_wormhole_b0/llk_lib/llk_math_reduce.h"
     facts = [
@@ -168,7 +170,55 @@ def test_cfg_word_overlap_namespace_partition():
     shared = [
         f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
     ]
-    assert shared == [], f"THCON/MAIN 56 alias must not be flagged: {shared}"
+    assert (
+        shared == []
+    ), f"Config/ThreadConfig index-56 alias must not be flagged: {shared}"
+
+
+@case
+def test_cfg_word_overlap_setc16_does_not_contaminate_config_word():
+    # The word-0 regression: an ALU field (Config, cfg_reg_rmw) shared by two
+    # threads is a real finding; a SETC16 (ThreadConfig) write at the SAME index
+    # must neither create a false pairing nor pollute the Config finding.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    Fm = "tt_llk_wormhole_b0/llk_lib/llk_math_common.h"
+    Fc = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("u", Fu, 810, 830),
+        fn("m", Fm, 50, 70),
+        fn("c", Fc, 250, 300),
+        call(
+            Fu,
+            820,
+            "cfg_reg_rmw_tensix",
+            "cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32>",
+            func="u",
+        ),
+        call(
+            Fm,
+            55,
+            "cfg_reg_rmw_tensix",
+            "cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32>",
+            func="m",
+        ),
+        macro(
+            Fc,
+            256,
+            "TTI_SETC16",
+            "TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, x)",
+            func="c",
+        ),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {
+        "ALU_FORMAT_SPEC_REG_SrcA_val_ADDR32": 0,
+        "CFG_STATE_ID_StateID_ADDR32": 0,
+    }
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared) == 1 and shared[0].kind == "shared_word@CONFIG:0", shared
+    assert all("CFG_STATE_ID" not in e for e in shared[0].evidence), shared[0].evidence
 
 
 @case

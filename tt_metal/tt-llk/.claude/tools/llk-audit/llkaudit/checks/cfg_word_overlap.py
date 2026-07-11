@@ -2,14 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """
 cfg-word-overlap checker — differently-named fields that share the SAME 32-bit
-CONFIG word, written by more than one Tensix thread.
+config word, written by more than one Tensix thread.
 
-Recall: resolve every CONFIG write (MMIO cfg[]=, ordered WRCFG/REG2FLOP/SETC16,
-and cfg_reg_rmw_tensix<FIELD>) to its 32-bit word via cfg_defines.h, attribute
-the writing thread by file, and report words written by >= 2 distinct threads.
-That set is the cross-thread shared-word candidate list; whether a given pair
-actually races (masking disjoint bits, semaphore/mutex ordering) is the LLM's
-call.
+Recall: resolve every config write to its 32-bit word via cfg_defines.h,
+attribute the writing thread by file, and report words written by >= 2 distinct
+threads. Whether a given pair actually races (masking disjoint bits,
+semaphore/mutex ordering) is the LLM's call.
+
+Register FILE separation (per tt-isa-docs BackendConfiguration.md): the hardware
+has TWO separate arrays, both indexed from 0, so their ADDR32 numbers alias and
+must NOT be merged:
+  * Config[2][...]     — thread-agnostic (ALU, THCON, PACK, ...), written by
+                         WRCFG / RMWCIB / REG2FLOP / cfg_reg_rmw_tensix / RISCV sw.
+  * ThreadConfig[3][.] — thread-specific (CFG_STATE_ID, ADDR_MOD, FP16A_FORCE,
+                         DEST_TARGET_REG_CFG_MATH_Offset, ...), written ONLY by SETC16.
+So the namespace is decided by the WRITE INSTRUCTION: SETC16 -> "THREAD", every
+other config write -> "CONFIG". (THCON is a sub-range of Config, NOT its own file.)
 """
 from __future__ import annotations
 
@@ -32,14 +40,14 @@ class CfgWordOverlap(Check):
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
-        # (namespace, word) -> list of writer dicts. Namespace separates the
-        # THCON register file from the main config file (same index != same word).
+        # (namespace, word) -> list of writer dicts. Namespace separates the two
+        # hardware arrays (Config vs ThreadConfig); see the module docstring.
         writers: dict[tuple, list[dict]] = defaultdict(list)
         unresolved: list[Finding] = []
 
-        def add(word, field, fact, how):
+        def add(ns, word, field, fact, how):
             thr = registry.thread_of(fact["file"])
-            writers[(registry.word_namespace(field), word)].append(
+            writers[(ns, word)].append(
                 {
                     "thread": thr,
                     "field": field,
@@ -50,13 +58,14 @@ class CfgWordOverlap(Check):
                 }
             )
 
+        # RISCV sw and every RMW/flop write target Config (not ThreadConfig).
         for pw in fb.family("pointer_write"):
             kind, _ = registry.classify_write(pw)
             if kind not in registry.CFG_WRITE_KINDS:
                 continue
             word, field = registry.resolve_word(pw.get("index_text", ""), fb.addr32)
             if word is not None:
-                add(word, field, pw, f"mmio:{kind}")
+                add("CONFIG", word, field, pw, f"mmio:{kind}")
             elif field:
                 unresolved.append(self._unresolved(pw, field))
         for c in fb.family("call"):
@@ -64,6 +73,7 @@ class CfgWordOverlap(Check):
             # the direct RMW helpers cfg_rmw/cfg_rmw_gpr (field in arg0). The
             # latter often take a runtime address variable -> UNRESOLVED (still
             # surfaced, since an unresolved cfg RMW may touch a shared word).
+            # All of these write Config (RMWCIB / software RMW), never ThreadConfig.
             src = None
             if "cfg_reg_rmw_tensix" in c.get("text", ""):
                 src = c.get("text", "")
@@ -72,14 +82,16 @@ class CfgWordOverlap(Check):
             if src is not None:
                 word, field = registry.resolve_word(src, fb.addr32)
                 if word is not None:
-                    add(word, field, c, c.get("name") or "cfg_reg_rmw_tensix")
+                    add("CONFIG", word, field, c, c.get("name") or "cfg_reg_rmw_tensix")
                 else:
                     unresolved.append(self._unresolved(c, field or src or "?"))
         for m in fb.family("macro"):
             if registry.classify_macro(m.get("name", "")) == "ordered_write":
                 word, field = registry.resolve_word(m.get("text", ""), fb.addr32)
+                # SETC16 targets ThreadConfig; all other ordered writes target Config.
+                ns = "THREAD" if "SETC16" in m.get("name", "").upper() else "CONFIG"
                 if word is not None:
-                    add(word, field, m, f"instr:{m.get('name','')}")
+                    add(ns, word, field, m, f"instr:{m.get('name','')}")
                 elif field:
                     unresolved.append(self._unresolved(m, field))
 
@@ -104,7 +116,7 @@ class CfgWordOverlap(Check):
                     kind=f"shared_word@{ns}:{word}",
                     hint="CROSS_THREAD_SHARED_WORD",
                     detail=(
-                        f"{ns} CONFIG word {word} written by threads "
+                        f"{ns} word {word} written by threads "
                         f"{sorted(threads)} via fields {fields}"
                     ),
                     evidence=ev,
