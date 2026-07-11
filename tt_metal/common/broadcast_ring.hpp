@@ -173,7 +173,7 @@ public:
             // overwritten before we finish copying them, so we drop them now and spend the copies on records
             // we can actually keep
             const auto max_lag = [this](uint64_t want, uint64_t cap) {
-                const uint64_t margin = std::min<uint64_t>(std::max<uint64_t>(skip_margin_, want), cap >> 1);
+                const uint64_t margin = std::min<uint64_t>(skip_margin_, cap >> 1);
                 return std::max<uint64_t>(want, cap - margin);
             };
             // running max of how far the writer advances while we copy a batch, plus 25% headroom; decays

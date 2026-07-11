@@ -202,6 +202,73 @@ TEST(BroadcastRing, ReadersLagAndDropIndependently) {
     EXPECT_EQ(slow_batch.back(), 6u);
 }
 
+TEST(BroadcastRing, DrainingBacklogDropsOnlyCapacityOverflow) {
+    constexpr uint32_t kCapacity = 64;
+
+    {
+        BroadcastRing<uint32_t> ring(kCapacity);
+        auto small_reader = ring.make_reader();
+        auto full_reader = ring.make_reader();
+        uint32_t items[kCapacity];
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            items[i] = i;
+        }
+        ring.writer().publish_batch(items);
+
+        uint32_t small_out[8] = {};
+        std::vector<uint32_t> got;
+        while (true) {
+            auto batch = small_reader.read_batch(small_out);
+            if (batch.empty()) {
+                break;
+            }
+            got.insert(got.end(), batch.begin(), batch.end());
+        }
+        EXPECT_EQ(small_reader.dropped(), 0u);
+        ASSERT_EQ(got.size(), static_cast<size_t>(kCapacity));
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            EXPECT_EQ(got[i], i) << "small buffer, index " << i;
+        }
+
+        uint32_t full_out[kCapacity] = {};
+        auto batch = full_reader.read_batch(full_out);
+        EXPECT_EQ(full_reader.dropped(), 0u);
+        ASSERT_EQ(batch.size(), static_cast<size_t>(kCapacity));
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            EXPECT_EQ(batch[i], i) << "full buffer, index " << i;
+        }
+    }
+
+    {
+        constexpr uint32_t kTotal = kCapacity + kCapacity / 2;
+        constexpr uint32_t kBatch = kTotal / 2;
+        BroadcastRing<uint32_t> ring(kCapacity);
+        auto reader = ring.make_reader();
+        for (uint32_t base : {0u, kBatch}) {
+            uint32_t items[kBatch];
+            for (uint32_t i = 0; i < kBatch; ++i) {
+                items[i] = base + i;
+            }
+            ring.writer().publish_batch(items);
+        }
+
+        uint32_t out[8] = {};
+        std::vector<uint32_t> got;
+        while (true) {
+            auto batch = reader.read_batch(out);
+            if (batch.empty()) {
+                break;
+            }
+            got.insert(got.end(), batch.begin(), batch.end());
+        }
+        EXPECT_EQ(reader.dropped(), kTotal - kCapacity);
+        ASSERT_EQ(got.size(), static_cast<size_t>(kCapacity));
+        for (uint32_t i = 0; i < kCapacity; ++i) {
+            EXPECT_EQ(got[i], (kTotal - kCapacity) + i) << "at index " << i;
+        }
+    }
+}
+
 TEST(BroadcastRing, WaitWakesOnPublishThenWake) {
     BroadcastRing<uint32_t> ring(4);
     auto reader = ring.make_reader();
@@ -629,14 +696,29 @@ TEST(BroadcastRing, ConcurrentReaderChurnUnderLiveWriter) {
         long_done.store(true, std::memory_order_release);
     });
 
+    std::atomic<bool> churn_fields_ok{true};
+    std::atomic<bool> churn_ordered{true};
     std::thread churn_thread([&]() {
         std::array<ProgramRealtimeRecord, kReadBatchSize> out;
         ready.count_down();
         start.wait();
         while (!long_done.load(std::memory_order_acquire)) {
             auto reader = ring.make_reader();
+            uint32_t last_seq = 0;
+            bool has_last = false;
             for (int reads = 0; reads < 3; ++reads) {
-                (void)reader.read_batch(std::span<ProgramRealtimeRecord>(out));
+                auto batch = reader.read_batch(std::span<ProgramRealtimeRecord>(out));
+                for (const auto& r : batch) {
+                    if (!seq_record_ok(r)) {
+                        churn_fields_ok.store(false, std::memory_order_relaxed);
+                    }
+                    const uint32_t seq = r.runtime_id - 1;
+                    if (has_last && seq <= last_seq) {
+                        churn_ordered.store(false, std::memory_order_relaxed);
+                    }
+                    last_seq = seq;
+                    has_last = true;
+                }
             }
         }
     });
@@ -679,6 +761,8 @@ TEST(BroadcastRing, ConcurrentReaderChurnUnderLiveWriter) {
     }
     EXPECT_EQ(long_reader.dropped(), 0u);
     EXPECT_GE(long_result.size(), kLongReaderTarget);
+    EXPECT_TRUE(churn_fields_ok.load()) << "a churned reader saw a torn/stale record";
+    EXPECT_TRUE(churn_ordered.load()) << "a churned reader saw out-of-order / duplicate delivery";
 }
 
 TEST(BroadcastRing, ConcurrentLockedSlotIntegrity) {
