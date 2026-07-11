@@ -12,7 +12,7 @@ Sweep timing vs `demo.py`:
 - Untimed warmups match the demo (text=1, speech=2).
 - **1 timed iter** per task (demo uses 2 timed iters for T2ST/S2ST).
 - No vocoder `post_warmup_fn` in the sweep (demo prewarms vocoder convs after speech warmups).
-- At mel **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a throwaway mesh device and the timed session skips speech-encoder prewarm; T2ST does not.
+- At mel **≥ 1024**, **S2TT / S2ST / ASR** warmups run on a throwaway mesh device; the timed session skips speech-encoder dummy prewarm. T2ST does not use split warmups.
 
 Metrics follow the TT model catalog (Whisper / LLM / Qwen3-TTS style):
 
