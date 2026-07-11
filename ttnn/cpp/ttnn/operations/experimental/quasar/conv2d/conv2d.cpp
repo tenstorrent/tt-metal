@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -478,11 +479,54 @@ Result conv2d_L1(
     if (force_conv_no_spill) {
         opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
         conv_config.full_inner_dim = true;
+
+        // The no-spill path grows act_block_w from one filter row to the full K (filter_h*filter_w*Cin).
+        // The ACT and ACT_TILIZED CBs are sized act_block_h * act_block_w tiles, so a large per-core output
+        // height (act_block_h, e.g. the stem's 112 tiles) would push a CB's Quasar DFB TRISC ring extent
+        // (capacity * entry_size, in 16-byte units) past the uint16_t limit (65536 units = 1 MB). Cap
+        // act_block_h (more, smaller M-blocks: num_blocks_act_h grows) so the largest activation CB ring
+        // stays under the limit. This splits only the OUTPUT-HEIGHT (M) axis; the reduction dim
+        // (K / act_block_w / num_blocks_act_w) is untouched, so num_blocks_act_w stays 1 and NO
+        // matmul-partials accumulate is reintroduced.
+        const uint32_t act_in_units_per_tile =
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_post_tm.dtype())) / 16u;
+        const uint32_t act_tilized_units_per_tile =
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype)) / 16u;
+        const uint32_t act_db = conv_config.enable_act_double_buffer ? 2u : 1u;
+        // Worst-case ring units per act_block_h tile-row = act_block_w(full-K) * max(ACT CB, ACT_TILIZED CB).
+        // ACT uses the input data format and may be double-buffered; ACT_TILIZED uses the output data format.
+        const uint32_t act_db_units = act_db * act_in_units_per_tile;
+        const uint32_t worst_units_per_h =
+            full_inner_dim_k_ntiles *
+            (act_db_units > act_tilized_units_per_tile ? act_db_units : act_tilized_units_per_tile);
+        constexpr uint32_t kDfbRingUnitCap = 65535u;  // strictly below the 65536 uint16_t DFB ring limit
+        const uint32_t per_core_h_ntiles = opt_conv_op_parallel_config.per_core_out_matrix_height_ntile;
+        const uint32_t max_act_block_h =
+            worst_units_per_h == 0 ? per_core_h_ntiles : (kDfbRingUnitCap / worst_units_per_h);
+        const uint32_t hi = max_act_block_h < per_core_h_ntiles ? max_act_block_h : per_core_h_ntiles;
+        // Keep act_block_h a multiple of the (already-valid) out_subblock height AND a divisor of the per-core
+        // output height, so the compute subblocking stays valid (factory asserts act_block_h % out_subblock_h
+        // == 0) and no partial M-block is produced. out_subblock_h divides the per-core height, so it is
+        // always a valid fallback.
+        const uint32_t osh = opt_conv_op_block_config.out_subblock_h_ntiles;
+        uint32_t capped_act_block_h = osh;
+        for (uint32_t h = (hi / osh) * osh; h >= osh; h -= osh) {
+            if (per_core_h_ntiles % h == 0) {
+                capped_act_block_h = h;
+                break;
+            }
+        }
+        opt_conv_op_block_config.act_block_h_ntiles = capped_act_block_h;
+
         log_debug(
             tt::LogOp,
-            "conv2d Quasar: forcing no-spill full-inner-dim path (act_block_w_ntiles={} K-tiles, "
-            "num_blocks_act_w=1) to avoid the broken matmul-partials K-accumulate.",
-            full_inner_dim_k_ntiles);
+            "conv2d Quasar: no-spill full-inner-dim path (act_block_w_ntiles={} K-tiles, num_blocks_act_w=1) to "
+            "avoid the broken matmul-partials K-accumulate; capped act_block_h_ntiles={} (per-core height {} "
+            "tiles, num_blocks_act_h={}) to keep every activation CB DFB ring under the uint16_t limit.",
+            full_inner_dim_k_ntiles,
+            capped_act_block_h,
+            per_core_h_ntiles,
+            per_core_h_ntiles / capped_act_block_h);
     }
 
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
