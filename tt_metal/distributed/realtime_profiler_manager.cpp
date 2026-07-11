@@ -1093,6 +1093,10 @@ void RealtimeProfilerManager::on_callback_registered(
     auto consumer = std::make_unique<Consumer>(ring_->make_reader(), callback, handle);
     Consumer* raw = consumer.get();
     std::lock_guard<std::mutex> lock(consumers_mutex_);
+    const auto caller = std::this_thread::get_id();
+    const bool from_callback_thread =
+        std::ranges::any_of(consumers_, [caller](const auto& kv) { return kv.second->thread.get_id() == caller; });
+    TT_FATAL(!from_callback_thread, "A real-time profiler callback must not register callbacks");
     consumers_.emplace(handle, std::move(consumer));
     raw->thread = std::thread([this, raw]() { run_consumer(*raw); });
 }
