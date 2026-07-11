@@ -17,6 +17,8 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
 #include "ttnn/operations/experimental/padded_slice/device/padded_slice_utils.hpp"
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -24,9 +26,9 @@ using namespace ttnn::operations::experimental::detail;
 
 namespace ttnn::prim::qsr {
 
-namespace {
-constexpr uint32_t cb_input_index = 0;
+using namespace tt::tt_metal::experimental;
 
+namespace {
 SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const Tensor& input_tensor,
     const Tensor& output_tensor,
@@ -204,162 +206,160 @@ SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 }
 }  // namespace
 
-SliceWriteTiledShardedInputProgramFactory::cached_program_t SliceWriteTiledShardedInputProgramFactory::create(
+namespace {
+const TensorParamName SWT_IN{"slice_write_tiled_in"};
+const TensorParamName SWT_OUT{"slice_write_tiled_out"};
+const DFBSpecName SWT_IN_DFB{"slice_write_tiled_in_dfb"};
+const KernelSpecName SWT_READER{"slice_write_tiled_reader"};
+const KernelSpecName SWT_WRITER{"slice_write_tiled_writer"};
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts SliceWriteTiledShardedInputProgramFactory::create_program_artifacts(
     const SliceWriteParams& operation_attributes, const SliceWriteInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& input = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& output_tensor_start = operation_attributes.slice_start;
     const auto& output_tensor_end = operation_attributes.slice_end;
 
-    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const auto& input_padded_shape = input.padded_shape();
-
-    auto input_shape = input.logical_shape();
-    auto output_shape = output.logical_shape();
-    auto actual_input_shape = input_shape;
-    for (int index = 0; index < input_shape.rank(); index++) {
-        actual_input_shape[index] = output_tensor_end[index] - output_tensor_start[index];
-    }
+    const auto output_shape = output.logical_shape();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
+    const uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);
-    TT_FATAL(input.dtype() == output.dtype(), "Input & output should have the same dtype");
-    TT_FATAL(output_tensor_start[-1] == 0, "Slice write expects output start for the last dimension to be 0");
+    TT_FATAL(input.dtype() == output.dtype(), "slice_write input & output must have the same dtype");
+    TT_FATAL(input_cb_data_format == output_cb_data_format, "slice_write input/output data formats must match");
+    TT_FATAL(output_tensor_start[-1] == 0, "slice_write expects output start for the last dimension to be 0");
     TT_FATAL(
         output_tensor_start[-2] % TILE_HEIGHT == 0,
-        "Slice write expects output start for the second last dimension to be a multiple of tile height");
-
+        "slice_write expects output start for the second-last dim to be a multiple of tile height");
     TT_FATAL(
         input_padded_shape[-2] % TILE_HEIGHT == 0,
-        "Slice write expects input shape for the second last dimension to be a multiple of tile height");
-
-    TT_FATAL(
-        input.layout() == Layout::TILE,
-        "Slice write expects input tensor to be in TILE layout, got {}",
-        input.layout());
-    TT_FATAL(
-        output.layout() == Layout::TILE,
-        "Slice write expects output tensor to be in TILE layout, got {}",
-        output.layout());
-
-    TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
+        "slice_write expects input second-last dim to be a multiple of tile height");
+    TT_FATAL(input.layout() == Layout::TILE, "slice_write (tiled) expects TILE input, got {}", input.layout());
+    TT_FATAL(output.layout() == Layout::TILE, "slice_write (tiled) expects TILE output, got {}", output.layout());
+    TT_FATAL(input.shard_spec().has_value(), "slice_write input must be sharded");
 
     auto shard_spec = input.shard_spec().value();
-    auto input_cores = shard_spec.grid;
-    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
-    log_debug(tt::LogOp, "Input cores = {}", input_cores);
-    log_debug(tt::LogOp, "Input shard spec = {}", shard_spec);
-
+    CoreRangeSet input_cores = shard_spec.grid;
+    const bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     TT_FATAL(
         shard_spec.shape[0] % TILE_HEIGHT == 0,
-        "Slice write needs tiled inputs, where the shard height {} is a multiple of tile height {}",
+        "slice_write (tiled): shard height {} must be a multiple of tile height {}",
         shard_spec.shape[0],
         TILE_HEIGHT);
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
+    const uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_WIDTH;
+    const uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input);
+    const uint32_t num_dims = static_cast<uint32_t>(input.logical_shape().rank());
 
-    const uint32_t src0_cb_index = tt::CBIndex::c_0;
-
-    uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
-    uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_HEIGHT;
-
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input);
-
+    // The width-unpadding path (skip padding-channel tiles) is not yet ported to the Metal-2 quasar writer.
+    // The resnet stem does not hit it (channel tiles fill the output width exactly). Guard it explicitly.
     TT_FATAL(
-        input_cb_data_format == output_cb_data_format,
-        "Input & output should have the same data format, {} , {}",
-        input_cb_data_format,
-        output_cb_data_format);
+        !(num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > static_cast<uint32_t>(output_shape[-1])),
+        "Quasar tiled slice_write: width-unpadding (UNPAD_INPUT_WIDTH) path not yet ported.");
 
-    auto cb_input_tuple = tt::tt_metal::create_cb(
-        cb_input_index,
-        program,
-        input_cores,
-        input_single_tile_size,
-        num_tiles_height_per_core * num_tiles_channel_per_core,
-        input_cb_data_format,
-        input.buffer());
+    std::vector<CoreCoord> iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, 0};
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
-    std::map<std::string, std::string> writer_defines;
-    if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
-        writer_defines["UNPAD_INPUT_WIDTH"] = "1";
-    }
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-        input_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    // ---- ProgramSpec ----
+    ProgramSpec spec;
+    spec.name = "slice_write_tiled";
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = SWT_IN, .spec = input.tensor_spec()},
+        TensorParameter{.unique_id = SWT_OUT, .spec = output.tensor_spec()},
+    };
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
-        "slice_write_writer_interleaved.cpp",
-        input_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, writer_defines));
+    // INPUT DFB borrowed onto the resident tiled sharded shard (reader produces, writer drains to dst).
+    DataflowBufferSpec in_dfb{
+        .unique_id = SWT_IN_DFB,
+        .entry_size = input_single_tile_size,
+        .num_entries = num_tiles_height_per_core * num_tiles_channel_per_core,
+        .data_format_metadata = input_cb_data_format,
+    };
+    in_dfb.borrowed_from = SWT_IN;
+    spec.dataflow_buffers.push_back(in_dfb);
 
-    const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
+    // Reader: mark the resident tiled input shard available (no data fetch).
+    KernelSpec reader{
+        .unique_id = SWT_READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/slice_write/device/kernels/dataflow/"
+            "slice_write_reader_sharded.cpp"};
+    reader.dfb_bindings = {ProducerOf(SWT_IN_DFB, "in0")};
+    reader.runtime_arg_schema = {.runtime_arg_names = {"num_sticks"}};
+    reader.hw_config = DataMovementHardwareConfig{
+        .role = DataMovementRoleHint::READER,
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}};
 
-    auto all_runtime_args = get_slice_write_runtime_args_tiled_sharded_input(
+    // Writer: drain the input DFB -> interleaved output, writing each TILE at start_id + the padded-tile-dim walk.
+    KernelSpec writer{
+        .unique_id = SWT_WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/slice_write/device/kernels/dataflow/"
+            "slice_write_writer_interleaved.cpp"};
+    writer.dfb_bindings = {ConsumerOf(SWT_IN_DFB, "in0")};
+    writer.tensor_bindings = {TensorBinding{.tensor_parameter_name = SWT_OUT, .accessor_name = "dst"}};
+    writer.runtime_arg_schema = {
+        .runtime_arg_names = {
+            "dst_byte_offset",
+            "output_stick_size",
+            "input_stick_size",
+            "stick_size_offset",
+            "num_dims",
+            "start_id",
+            "num_sticks_per_core",
+            "num_sticks_per_core_read",
+            "num_read_per_barrier"}};
+    writer.advanced_options.num_runtime_varargs = 3 * num_dims;
+    writer.hw_config = DataMovementHardwareConfig{
+        .role = DataMovementRoleHint::WRITER,
+        .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}};
+
+    spec.kernels = {reader, writer};
+    spec.work_units = {WorkUnitSpec{.name = "main", .kernels = {SWT_READER, SWT_WRITER}, .target_nodes = input_cores}};
+
+    // ---- Per-core runtime args ----
+    auto per_core = get_slice_write_runtime_args_tiled_sharded_input(
         input, output, output_tensor_start, output_tensor_end, iter_cores);
+    const uint32_t out_addr = output.buffer()->address();
 
-    uint32_t i = 0;
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_run{.kernel = SWT_READER};
+    KernelRunArgs writer_run{.kernel = SWT_WRITER};
+    uint32_t idx = 0;
     for (const auto& core : iter_cores) {
-        tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
-        i++;
+        const auto& r = per_core[idx].first;   // {num_tiles_this_core}
+        const auto& w = per_core[idx].second;  // 9 scalars + 3*num_dims tile-dim vals + 1 padding tail
+        reader_run.runtime_arg_values.push_back(
+            KernelRunArgs::NodeRuntimeArgs{.node = core, .args = {{"num_sticks", r[0]}}});
+        // tiled: w[0] is the raw output base addr (no width offset); the per-core offset is carried by start_id.
+        const uint32_t dst_byte_offset = w[0] - out_addr;
+        writer_run.runtime_arg_values.push_back(KernelRunArgs::NodeRuntimeArgs{
+            .node = core,
+            .args = {
+                {"dst_byte_offset", dst_byte_offset},
+                {"output_stick_size", w[1]},
+                {"input_stick_size", w[2]},
+                {"stick_size_offset", w[3]},
+                {"num_dims", w[4]},
+                {"start_id", w[5]},
+                {"num_sticks_per_core", w[6]},
+                {"num_sticks_per_core_read", w[7]},
+                {"num_read_per_barrier", w[8]}}});
+        // Vararg tail: [num_input_tiles_per_dim, num_output_tiles_per_dim, id_per_dim] (3*num_dims). The tiled
+        // helper appends one more value (padding tiles) used only by the UNPAD path — excluded here (guarded off).
+        writer_run.advanced_options.runtime_varargs[core] =
+            std::vector<uint32_t>(w.begin() + 9, w.begin() + 9 + 3 * num_dims);
+        idx++;
     }
+    run_args.kernel_run_args.push_back(reader_run);
+    run_args.kernel_run_args.push_back(writer_run);
+    run_args.tensor_args.emplace(SWT_IN, TensorArgument{input.mesh_tensor()});
+    run_args.tensor_args.emplace(SWT_OUT, TensorArgument{output.mesh_tensor()});
 
-    return cached_program_t(
-        std::move(program),
-        shared_variables_t{
-            .iter_cores = iter_cores,
-            .unary_reader_kernel_id = unary_reader_kernel_id,
-            .unary_writer_kernel_id = unary_writer_kernel_id,
-            .output_tensor_start = output_tensor_start,
-            .output_tensor_end = output_tensor_end,
-            .cb_input_tuple = cb_input_tuple});
-}
-
-void SliceWriteTiledShardedInputProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SliceWriteParams& /*operation_attributes*/,
-    const SliceWriteInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto& src_tensor = tensor_args.input;
-    const auto& dst_tensor = tensor_return_value;
-
-    UpdateDynamicCircularBufferAddress(
-        cached_program.program, std::get<1>(cached_program.shared_variables.cb_input_tuple), *src_tensor.buffer());
-
-    auto all_runtime_args = get_slice_write_runtime_args_tiled_sharded_input(
-        src_tensor,
-        dst_tensor,
-        cached_program.shared_variables.output_tensor_start,
-        cached_program.shared_variables.output_tensor_end,
-        cached_program.shared_variables.iter_cores);
-
-    uint32_t i = 0;
-    for (const auto& core : cached_program.shared_variables.iter_cores) {
-        tt::tt_metal::SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_reader_kernel_id,
-            core,
-            all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(
-            cached_program.program,
-            cached_program.shared_variables.unary_writer_kernel_id,
-            core,
-            all_runtime_args[i].second);
-        i++;
-    }
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr
