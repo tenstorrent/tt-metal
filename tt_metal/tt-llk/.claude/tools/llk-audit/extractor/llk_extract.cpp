@@ -129,11 +129,15 @@ std::string srcText(const State &S, SourceRange R)
     return Lexer::getSourceText(CharSourceRange::getTokenRange(R), *S.SM, *S.LO).str();
 }
 
-// ---- Preprocessor pass: recover function-like macro invocations -------------
-// TTI_*/TT_*/SEM*/... are macros; their names and argument text are gone by the
-// time the AST exists. We record every FUNCTION-LIKE macro expansion (object-
-// like macros are bare constants — register-address names etc. — which show up
-// as pointer_write index text already, so we skip them to avoid noise).
+// ---- Preprocessor pass: recover macro invocations the AST loses -------------
+// TTI_*/TT_*/SEM*/... are function-like macros; their names+args are gone by the
+// time the AST exists. We record every FUNCTION-LIKE macro expansion. Most
+// object-like macros are bare constants (register-address names) that already
+// show up as pointer_write index text, so they are skipped as noise — EXCEPT the
+// `*_RMW` composite aliases used by `cfg_rmw(FIELD_RMW, ...)`: `FIELD_RMW`
+// expands to `FIELD_ADDR32, FIELD_SHAMT, FIELD_MASK` BEFORE the AST, so the field
+// name is otherwise lost (the AST sees only the expanded numeric args). Capturing
+// the `*_RMW` expansion by name lets the Python side resolve the target word.
 class MacroPass : public PPCallbacks
 {
     State &S;
@@ -146,12 +150,17 @@ public:
     void MacroExpands(const Token &NameTok, const MacroDefinition &MD, SourceRange Range, const MacroArgs *) override
     {
         const MacroInfo *MI = MD.getMacroInfo();
-        if (!MI || !MI->isFunctionLike())
+        if (!MI)
         {
             return;
         }
         const IdentifierInfo *II = NameTok.getIdentifierInfo();
         if (!II)
+        {
+            return;
+        }
+        const bool wanted = MI->isFunctionLike() || II->getName().ends_with("_RMW");
+        if (!wanted)
         {
             return;
         }

@@ -82,19 +82,32 @@ class CfgWordOverlap(Check):
                 src = c.get("text", "")
             elif registry.write_call_kind(c.get("name", "")):  # cfg_rmw / cfg_rmw_gpr
                 src = c.get("arg0", "")
-            if src is not None:
+            # Only act on a non-empty source token. A cfg_rmw(FIELD_RMW, ...) call
+            # has arg0 == "" here because FIELD_RMW is an object-macro that expands
+            # before the AST; that write is recovered from the *_RMW macro fact
+            # below, so skip the empty case rather than emit noise.
+            if src:
                 word, field = registry.resolve_word(src, fb.addr32)
                 if word is not None:
                     add("CONFIG", word, field, c, c.get("name") or "cfg_reg_rmw_tensix")
                 else:
-                    unresolved.append(self._unresolved(c, field or src or "?"))
+                    unresolved.append(self._unresolved(c, field or src))
         for m in fb.family("macro"):
-            if registry.classify_macro(m.get("name", "")) == "ordered_write":
+            name = m.get("name", "")
+            if registry.classify_macro(name) == "ordered_write":
                 word, field = registry.resolve_word(m.get("text", ""), fb.addr32)
                 # SETC16 targets ThreadConfig; all other ordered writes target Config.
-                ns = "THREAD" if "SETC16" in m.get("name", "").upper() else "CONFIG"
+                ns = "THREAD" if "SETC16" in name.upper() else "CONFIG"
                 if word is not None:
-                    add(ns, word, field, m, f"instr:{m.get('name','')}")
+                    add(ns, word, field, m, f"instr:{name}")
+                elif field:
+                    unresolved.append(self._unresolved(m, field))
+            elif name.endswith("_RMW"):
+                # cfg_rmw(FIELD_RMW, ...) — the composite alias captured at PP level.
+                # It is a software RMW of Config (never ThreadConfig).
+                word, field = registry.resolve_word(name, fb.addr32)
+                if word is not None:
+                    add("CONFIG", word, field, m, f"cfg_rmw:{name}")
                 elif field:
                     unresolved.append(self._unresolved(m, field))
 

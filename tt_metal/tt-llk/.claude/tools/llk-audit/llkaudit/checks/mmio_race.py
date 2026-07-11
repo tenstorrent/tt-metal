@@ -27,10 +27,13 @@ class MmioRace(Check):
     blind_spots = (
         "Interprocedural ordering: a write whose guard/consumer lives in a CALLER "
         "shows as NO_LOCAL_ORDERING — the LLM must follow the call graph. "
-        "Quasar AutoTTSync ordering is not modeled. Writes hidden inside SFPU "
-        "files that fail to parse are absent (see parse_errors). A TRISC_CFG "
-        "(C13) stall only orders instructions its BLOCK mask holds; the tool "
-        "checks the C13 condition but not that the block mask covers the consumer."
+        "Writes hidden inside SFPU files that fail to parse are absent (see "
+        "parse_errors). A TRISC_CFG (C13) stall only orders instructions its "
+        "BLOCK mask holds; the tool checks the C13 condition but not that the "
+        "block mask covers the consumer. On Quasar, writes are marked "
+        "AUTOTTSYNC_ORDERED (TTSync HW-orders the write->consume direction); this "
+        "does NOT cover an MMIO *read* that depends on a multi-cycle instruction "
+        "result (needs wait_*_idle), nor the EN_SUBDIVIDED cross-unpacker corner."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
@@ -80,6 +83,13 @@ class MmioRace(Check):
                         consumer_after = p["line"]
 
             hint = "LOCALLY_ORDERED" if local_ordering else "NO_LOCAL_ORDERING"
+            # Quasar: the per-RISC TTSync (AutoTTSync) HW-orders every RISC MMIO
+            # CFG/GPR write against the consuming Tensix instruction at ISSUE
+            # (Confluence "Every Conceivable TTSync Detail", page 1340276980), so
+            # the manual STALLWAIT(TRISC_CFG)/REG2FLOP discipline WH/BH need is not
+            # required. An unguarded write is therefore NOT a race candidate here.
+            if fb.arch == "quasar" and hint == "NO_LOCAL_ORDERING":
+                hint = "AUTOTTSYNC_ORDERED"
             ev = []
             if guard:
                 ev.append(f'{w["file"].split("/")[-1]}:{guard[1]}: guard {guard[0]}')
