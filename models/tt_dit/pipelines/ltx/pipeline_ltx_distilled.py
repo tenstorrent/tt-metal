@@ -286,6 +286,17 @@ class LTXDistilledPipeline(LTXPipeline):
             self._prealloc_trace_io("s1", num_frames=num_frames, height=height // 2, width=width // 2)
             self._prealloc_trace_io("s2", num_frames=num_frames, height=height, width=width)
 
+        # Keyframe worker: capture the s1/s2 traces at the append-token sequence length by feeding dummy
+        # conditioning at the configured anchor latents. Zeros compile the same pin/append kernels the
+        # real gen records; only the captured shape (anchor count) matters. Empty on a base worker.
+        kf_anchors = self._kf_trace_anchors()
+
+        def _kf_conds(h, w):
+            if not kf_anchors:
+                return None
+            _, lh, lw = latent_grid(num_frames, h, w)
+            return [(a, torch.zeros(1, self.in_channels, 1, lh, lw), 1.0) for a in kf_anchors]
+
         # Warm the encoder before any capture so its connector workspace isn't in a trace's
         # activation region (zeroed on replay). dynamic_load reloads per request → warms last.
         if self._traced and not self.dynamic_load:
@@ -311,6 +322,7 @@ class LTXDistilledPipeline(LTXPipeline):
                     width=s1_w,
                     sigma_values=s1_sigmas,
                     seed=0,
+                    image_conds=_kf_conds(s1_h, s1_w),
                     traced=capture_traced,
                     trace_key="s1",
                 )
@@ -348,6 +360,7 @@ class LTXDistilledPipeline(LTXPipeline):
                         seed=0,
                         initial_video_latent=dummy_v_init,
                         initial_audio_latent=dummy_a_init,
+                        image_conds=_kf_conds(height, width),
                         traced=capture_traced,
                         trace_key="s2",
                     )
@@ -496,6 +509,19 @@ class LTXDistilledPipeline(LTXPipeline):
         state._tt_video_pad_mask.update(v_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
         state._tt_audio_pad_mask.update(a_mask, False, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
 
+    @staticmethod
+    def _kf_trace_anchors() -> list[int]:
+        """Latent-frame indices to bake as append-token anchor blocks into the trace
+        (``LTX_KF_TRACE_ANCHORS``, comma-separated). A ttnn trace captures one sequence length, so a
+        keyframe worker fixes its anchor set here and every keyframe gen replays that shape. Empty
+        (unset, or append-token off) keeps the base no-anchor trace. Frame 0 pins in-place, never an
+        anchor. Gated on LTX_KF_APPEND_TOKEN so prealloc and the denoise agree on whether anchors
+        extend the sequence."""
+        if os.environ.get("LTX_KF_APPEND_TOKEN", "0") not in ("1", "true", "True"):
+            return []
+        raw = os.environ.get("LTX_KF_TRACE_ANCHORS", "").strip()
+        return [int(x) for x in raw.split(",") if x.strip()] if raw else []
+
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
         """Allocate a stage's persistent trace inputs (constants, latent buffers, masks) up front,
         before any capture. A ttnn trace bakes absolute tensor addresses; activations allocated
@@ -504,7 +530,12 @@ class LTXDistilledPipeline(LTXPipeline):
         for both stages first keeps them below both traces' activations. (The prompt is built
         separately in _denoise.)"""
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
-        video_N_real = latent_frames * latent_h * latent_w
+        hw = latent_h * latent_w
+        video_N_grid = latent_frames * hw
+        # A keyframe trace reserves one hw anchor block per configured keyframe (see _kf_trace_anchors);
+        # the grid length stays the decode/strip length, and video_N_real carries the appended anchors.
+        anchor_frames = [a for a in self._kf_trace_anchors() if 0 < a < latent_frames]
+        video_N_real = video_N_grid + len(anchor_frames) * hw
         video_N = self._sp_pad_len(video_N_real)
         als = AudioLatentShape.from_video_pixel_shape(
             VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
@@ -514,8 +545,8 @@ class LTXDistilledPipeline(LTXPipeline):
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         state = self._trace_state.setdefault(trace_key, LTXTransformerState())
-        # Trace prealloc reserves the non-append (base grid) shape; append-token interior keyframes are
-        # eager-only for now, so grid == real and no anchors are baked here.
+        # Reserves the base grid shape by default; with LTX_KF_TRACE_ANCHORS the append-token anchor
+        # blocks are baked here so a keyframe worker's trace matches the extended gen sequence.
         self._prepare_stage_statics(
             state,
             latent_frames=latent_frames,
@@ -523,11 +554,11 @@ class LTXDistilledPipeline(LTXPipeline):
             latent_w=latent_w,
             video_N=video_N,
             video_N_real=video_N_real,
-            video_N_grid=video_N_real,
+            video_N_grid=video_N_grid,
             audio_N=audio_N,
             audio_N_real=audio_N_real,
             sp_axis=sp_axis,
-            anchor_frames=[],
+            anchor_frames=anchor_frames,
         )
         # Reserve the latent buffers before capture so the trace bakes their addresses.
         if state.tt_video_lat is None:
