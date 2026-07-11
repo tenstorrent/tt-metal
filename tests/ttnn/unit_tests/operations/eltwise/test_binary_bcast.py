@@ -1579,11 +1579,6 @@ def test_binary_sharded_bcast_scalar_value(
     dtype_pt, dtype_tt, scalar, a_shape, shard_type, shard_size, core_range, device
 ):
     torch.manual_seed(0)
-    tile = select_tile(dtype_tt)
-    tile_height = tile.tile_shape[0]
-    shard_size[0] = (
-        shard_size[0] * tile_height
-    ) // 32  # Shard size is sized for tile height of 32. Adjust for actual tile height.
     sharded_config = ttnn.create_sharded_memory_config(
         shard_size,
         core_grid=core_range,
@@ -1605,7 +1600,6 @@ def test_binary_sharded_bcast_scalar_value(
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=a_config,
-            tile=tile,
         )
 
         out_pt = torch.add(a_pt, scalar)
