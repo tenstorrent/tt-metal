@@ -34,12 +34,17 @@ Verdict: clean-pass
   replacing their allocations, and requires bitwise-identical results. The
   final watcher rerun covers both batch-32 layer kinds.
 - Final-revision provenance is now adequate. The manifest's runtime and test
-  SHA-256 values exactly match the delivered files. The final standard suite
-  postdates the current test file and reports 17 passed with only the six
+  SHA-256 values exactly match the delivered files
+  (`315990f7e060a464d935efadf0dd50a8b035e187947ec320d08e4a15479e7a85`
+  and `45b5053b59e5a2ac7c1a56e1cfd1aac31989588cdfcc513b47e97a0581d09c45`).
+  The repository hook changed only the import order in the runtime file, and
+  the complete standard suite was rerun afterward: 17 passed with only the six
   explicitly environment-gated long/performance cases skipped. The final
-  watcher run postdates that suite. The profiler evidence predates test-only
-  remediation, but the measured runtime source hash is unchanged and matches
-  the manifest.
+  watcher and profiler runs predate that import-only formatting delta, but the
+  measured runtime logic is unchanged. The oversized sliding-prefill profiler
+  console was losslessly gzip-packaged; `gzip -t` passes and the decompressed
+  log still contains both signposts, the selected passing node, and the final
+  one-pass summary.
 - The historical triage artifact is no longer empty and accurately records why
   the tool could not attach, the NOC0 signature, bounded reset/list recovery,
   and successful 1x1 mesh smoke. The runtime fallback audit now includes all
@@ -63,10 +68,11 @@ Verdict: clean-pass
   dynamic monkeypatch/interposition audit. The existing evidence is sufficient
   because the inspected runtime call graph contains none of the forbidden host
   conversion APIs and the measured windows show only device operations.
-- The long-run console logs do not embed their source hashes. The runtime file
-  predates those runs, its current hash matches the evidence manifest, and the
-  later complete standard suite ties the current test source to a passing run,
-  so this is not a stale-artifact blocker.
+- The long, watcher, and profiler console logs do not embed their source hashes.
+  The only subsequent runtime delta is independently visible as import
+  reordering, its current hash matches the evidence manifest, and the complete
+  post-hook standard suite ties the reordered runtime and current test source
+  to a passing run, so this is not a stale-artifact blocker.
 
 ## Anomaly Ledger
 
