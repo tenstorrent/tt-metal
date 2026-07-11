@@ -13,9 +13,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from llkaudit.checks.cb_sync import CbSync
 from llkaudit.checks.cfg_word_overlap import CfgWordOverlap
 from llkaudit.checks.mailbox_sync import MailboxSync
 from llkaudit.checks.mmio_race import MmioRace
+from llkaudit.checks.noc_sync import NocSync
 from llkaudit.checks.reconfig_stall import ReconfigStall
 from llkaudit.checks.semaphore_handshake import SemaphoreHandshake
 from llkaudit.checks.srcreg_bank import SrcRegBank
@@ -1055,6 +1057,77 @@ def test_cli_empty_checks_is_hard_error():
                 assert e.code != 0
     finally:
         os.remove(path)
+
+
+# --- cb-sync / noc-sync (kernel tier — deterministic, fed a KERNEL fact base) ---
+
+
+@case
+def test_cb_sync_reserve_push_imbalance():
+    K = "ttnn/cpp/.../writer_kernel.cpp"
+    # balanced reserve/push -> no finding; a reserve with no push -> imbalance.
+    balanced = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "cb_reserve_back", func="kernel_main", arg0="cb_out0"),
+        call(K, 20, "cb_push_back", func="kernel_main", arg0="cb_out0"),
+    ]
+    assert CbSync().run(FactBase("wormhole", balanced)) == []
+    leaked = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "cb_reserve_back", func="kernel_main", arg0="cb_out0"),
+        call(K, 20, "cb_reserve_back", func="kernel_main", arg0="cb_out0"),
+        call(K, 30, "cb_push_back", func="kernel_main", arg0="cb_out0"),
+    ]
+    out = CbSync().run(FactBase("wormhole", leaked))
+    assert len(out) == 1 and out[0].hint == "CB_RESERVE_PUSH_IMBALANCE", out
+    assert "cb_out0" in out[0].detail
+
+
+@case
+def test_cb_sync_wait_pop_imbalance_and_per_cb():
+    K = "ttnn/cpp/.../reader_kernel.cpp"
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        # cb_in0: wait without pop -> imbalance
+        call(K, 10, "cb_wait_front", func="kernel_main", arg0="cb_in0"),
+        # cb_in1: balanced -> no finding (per-CB grouping)
+        call(K, 40, "cb_wait_front", func="kernel_main", arg0="cb_in1"),
+        call(K, 50, "cb_pop_front", func="kernel_main", arg0="cb_in1"),
+    ]
+    out = CbSync().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "CB_WAIT_POP_IMBALANCE", out
+    assert "cb_in0" in out[0].kind
+
+
+@case
+def test_noc_sync_signal_without_flush():
+    K = "ttnn/cpp/.../writer_kernel.cpp"
+    # flush before the signal -> ok; signal with no preceding flush -> flagged.
+    ok = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_write_barrier", func="kernel_main"),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem_addr"),
+    ]
+    assert NocSync().run(FactBase("wormhole", ok)) == []
+    bad = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem_addr"),
+        call(K, 30, "noc_async_write_barrier", func="kernel_main"),  # AFTER — too late
+    ]
+    out = NocSync().run(FactBase("wormhole", bad))
+    assert len(out) == 1 and out[0].hint == "NOC_SIGNAL_NO_FLUSH", out
+
+
+@case
+def test_cb_noc_empty_over_tt_llk():
+    # No cb_*/noc_* calls in a tt-llk fact base -> both trivially empty.
+    F = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
+    facts = [
+        fn("_llk_unpack_A_", F, 0, 50),
+        macro(F, 10, "TTI_UNPACR", "TTI_UNPACR(0)", func="_llk_unpack_A_"),
+    ]
+    assert CbSync().run(FactBase("wormhole", facts)) == []
+    assert NocSync().run(FactBase("wormhole", facts)) == []
 
 
 def main():

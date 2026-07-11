@@ -42,6 +42,13 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall (walks every write; models unit re-arm) | `NO_UNIT_DRAIN` / `THCON_ONLY` / `DRAIN_REARMED` |
 | `srcreg-bank` | SrcA/SrcB data-valid handshake control points; raw `SETDVALID` on Blackhole (ISA-unsupported) | `RAW_SETDVALID_BH` / `DVALID_SET` / `DVALID_CLEAR` |
 | `mailbox-sync` | in-tree RISC↔RISC mailbox FIFO endpoints + writer↔reader pairing by directed channel | `PAIRED_CHANNEL` / `UNPAIRED_ENDPOINT` / `UNRESOLVED_ENDPOINT` |
+| `cb-sync` † | circular-buffer reserve/push & wait/pop credit balance per CB (within a function) | `CB_RESERVE_PUSH_IMBALANCE` / `CB_WAIT_POP_IMBALANCE` |
+| `noc-sync` † | NoC credit signal (`noc_semaphore_inc/set/mcast`) with no preceding write flush/barrier | `NOC_SIGNAL_NO_FLUSH` |
+
+† `cb-sync` / `noc-sync` are committed and deterministic, but their surface is
+JIT-compiled kernels OUTSIDE tt-llk — they only emit findings when fed a **kernel
+fact base** (the on-request JIT capture; see *kernel tier* below). Over the tt-llk
+fact base they are trivially empty (there are no cb/noc sites there).
 
 Every finding is a **recall bucket, not a verdict**, and every check declares its
 `blind_spots` in the output. `srcreg-bank` and `mailbox-sync` are deliberately
@@ -68,26 +75,23 @@ evidence line (so a shared word whose partner writer is in a changed file still
 surfaces). The whole tree is still parsed for cross-file context; only output is
 scoped. Use it for a PR-scoped audit.
 
-### Why these six (and not the other three audits)
-Scoped by evidence — a checker ships only where deterministic recall adds value
-over the skill's own grep on a real tt-llk surface:
-- **dataflow-cb-sync / noc-sync** (and the **kernel-layer mailbox** surface) — 0
-  CB/NoC sites in the tt-llk compute lib; the surface is the JIT-compiled kernels
-  in `tt_metal/hw/inc/api` + `ttnn`/`models`, which have no static compile database
-  the in-tree parse can reach. Reachable only via the **opt-in kernel tier**
-  (`cb-sync + noc-sync + mailbox-sync`), which is **NOT built** and is authored
-  **on request**, off-main, when a user asks for kernel-tier recall — see the
-  *Full-audit kernel tier* runbook in `race-audit-all`. `run.sh --full-jit` today
-  only *runs* it if built; it never builds it, and degrades honestly (naming the
-  uncovered classes) when absent. Meanwhile each class's skill still LLM-audits
-  the kernel surface via its ttnn-widened grep.
-- **instruction-latency** — its surface is the SFPU files, which don't parse under
-  clang (GCC vector extensions), so the AST recall the tool depends on is
-  unavailable; and the verdict needs an out-of-tree version-pinned `sfpi-gcc`
-  latency table → stays fully LLM-driven.
-- **srcreg-bank** and **mailbox-sync** — narrow recallers that DO add value in
-  tree (a clean control-point/endpoint inventory + one mechanical ISA flag) while
-  leaving the semantic verdict to the skill; see the note under *Checks* above.
+### Coverage: 8 of 9 classes have a committed checker
+Only `instruction-latency` has no committed checker (its surface is the SFPU files
+that don't parse under clang, and its verdict needs an out-of-tree version-pinned
+`sfpi-gcc` table → stays fully LLM-driven). The split of the other 8 by *where
+their surface lives*:
+- **In tt-llk (findings on a plain run):** `mmio-race`, `cfg-word-overlap`,
+  `semaphore-handshake`, `reconfig-stall`, `srcreg-bank`, `mailbox-sync`.
+  `srcreg-bank`/`mailbox-sync` are narrow recallers (control-point/endpoint
+  inventory + the one mechanical ISA flag); their kernel-layer surface stays with
+  the skills' ttnn-widened grep.
+- **In JIT-compiled kernels outside tt-llk (`cb-sync` / `noc-sync`):** the checkers
+  are committed and deterministic, but need a **kernel fact base** to yield
+  findings. Producing that (the JIT capture) is the only fragile, off-main,
+  **on-request** step — the checkers themselves are permanent and cost nothing to
+  keep. `run.sh --full-jit` *runs* the capture if built; it never builds it, and
+  degrades honestly when absent (each class's skill still LLM-audits the kernel
+  surface meanwhile). See the *Full-audit kernel tier* runbook in `race-audit-all`.
 
 ## Build & run
 
@@ -124,6 +128,8 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new semaphore/mutex wrapper → `SEMAPHORE_CALLS`
 - new dvalid op / renamed SETDVALID/CLEARDVALID → `SRCREG_DVALID_OPS`
 - new mailbox primitive → `MAILBOX_FIFO_CALLS`
+- new/renamed CB credit call → `CB_CALLS`
+- new NoC semaphore/flush call → `NOC_SIGNAL_CALLS` / `NOC_WAIT_CALLS` / `NOC_FLUSH_CALLS`
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
 
@@ -175,6 +181,10 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
 - `mailbox-sync` (WH/BH) pairs the `MATH→UNPACK` dst_index channel (cmath write ↔
   cunpack read → `PAIRED_CHANNEL`) and marks the thread-agnostic `ckernel_debug.h`
   halt/unhalt endpoints `UNRESOLVED_ENDPOINT`; Quasar has no in-tree FIFO → 0.
+- `cb-sync` / `noc-sync` are **unit-validated only** (synthetic fact bases:
+  reserve/push & wait/pop imbalance, signal-without-preceding-flush) — they report
+  0 over tt-llk (no cb/noc sites) and are end-to-end validated on real kernels only
+  once the JIT capture (kernel fact base) is built.
 - **Quasar**: all 122 `cfg_rmw` writes resolve and are each single-thread-owned
   (12 PACK-only, 7 UNPACK-only words) → 0 cross-thread shared words, matching the
   skill's per-engine-ownership conclusion; mmio-race's 169 unguarded writes are
