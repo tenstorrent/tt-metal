@@ -65,17 +65,21 @@ void for_each_worker_core(const CoreRangeSet& worker_cores, Func func) {
 }
 
 std::optional<std::string> smc_runtime_telemetry_unavailable_reason(tt::umd::TTDevice& tt_device) {
-    auto* firmware_info_provider = tt_device.get_firmware_info_provider();
-    if (firmware_info_provider == nullptr) {
-        return "Firmware info provider is unavailable";
+    // get_firmware_info_provider() THROWS (does not return null) when the device has no firmware info
+    // provider -- e.g. simulators -- so treat any failure as "unavailable" and let the fixture skip
+    // cleanly rather than error out in SetUp().
+    try {
+        auto* firmware_info_provider = tt_device.get_firmware_info_provider();
+        if (!firmware_info_provider->get_runtime_telemetry_buffer_size().has_value()) {
+            return "SMC runtime telemetry buffer is unavailable";
+        }
+        if (!firmware_info_provider->get_runtime_telemetry_buffer_address().has_value()) {
+            return "SMC runtime telemetry buffer address is unavailable or invalid";
+        }
+        return std::nullopt;
+    } catch (const std::exception& e) {
+        return std::string("Firmware info provider is unavailable: ") + e.what();
     }
-    if (!firmware_info_provider->get_runtime_telemetry_buffer_size().has_value()) {
-        return "SMC runtime telemetry buffer is unavailable";
-    }
-    if (!firmware_info_provider->get_runtime_telemetry_buffer_address().has_value()) {
-        return "SMC runtime telemetry buffer address is unavailable or invalid";
-    }
-    return std::nullopt;
 }
 
 }  // namespace
