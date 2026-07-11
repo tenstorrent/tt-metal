@@ -67,9 +67,11 @@ that is the **only** on-request, off-main, fragile step.
 > **What is durable vs on-request (the clean split):**
 > - **DURABLE (committed, in the tool):** the `cb-sync` / `noc-sync` / `mailbox-sync`
 >   checkers themselves — plain Python over a fact base, unit-tested, no JIT hook.
->   Over the tt-llk fact base they are trivially empty (no cb/noc sites there);
->   fed a kernel fact base they emit real candidates. Building/keeping these costs
->   nothing and adds no fragility to main.
+>   Over the tt-llk fact base **cb-sync / noc-sync are trivially empty** (no cb/noc
+>   sites there) while **mailbox-sync yields its small in-tree surface** (the
+>   MATH→UNPACK dst_index pair + debug endpoints); fed a kernel fact base all three
+>   emit real candidates over the outside-tt-llk kernels. Building/keeping these
+>   costs nothing and adds no fragility to main.
 > - **ON-REQUEST (fresh each sweep, off-main):** the **JIT capture** — hook the
 >   compiler the JIT invokes, run a workload so the kernels compile, harvest a
 >   `compile_commands.json`, and parse the kernel TUs into a fact base. THIS is the
@@ -149,7 +151,7 @@ A naive "run them + concatenate" can catch *less* than the audits alone (summari
    | `reconfig-stall`: per-thread drain present (e.g. `STALLWAIT(STALL_CFG, PACK)`) | (drains *this* thread's unit only) | does another **thread** write the same word? → hand to `cfg-word-overlap`; a per-thread drain never excludes a cross-thread writer |
    | `semaphore-handshake`: semaphore protocol SAFE | (verifies counting, not payload) | which config words/dest/src rely on this semaphore for mutual exclusion? → confirm each such write is actually inside the ordered window |
    | `mailbox-sync`: mailbox handshake SAFE | "the memory the mailbox value refers to is ready, and all threads reach the mailbox handshake equally (including hand-written mailbox_write in ttnn/models kernels)" | the referenced memory (L1 tile, dest offset) is ordered-ready — a plain `fence` does NOT order a mailbox write against a prior store to a different region (a no-op on WH; on BH it drains the store queue but not to *processed*), so cross with `mmio-race`/memory-ordering AND hand the "is the CB page ready?" half to `dataflow-cb-sync`; and the call-count symmetry holds on every branch (same control-flow that `semaphore-handshake` balance depends on) |
-   | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering; the address `mailbox-sync` broadcasts derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
+   | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering; the address `mailbox-sync` sends (over its directed tile-address channel) derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
    | `mmio-race`: MMIO-vs-MOP write SAFE | "a `mop_sync()`/`tensix_sync()` drains it" | the drain provably covers the consumer at the site (right primitive, every path, cross-call window). ALSO: is the drain heavier than needed (OVER-SYNC) or unnecessary (REDUNDANT)? → perf finding, never suppresses the race verdict |
    | `srcreg-bank-sync`: SrcA/SrcB bank handoff SAFE | "the FPU op waits for `AllowedClient`, and Dst/LReg is ordered" | bank-flip is lockstep on both sides; the Dst/LReg half rides `MATH_PACK`/`mutex::SFPU` → hand that half to `semaphore-handshake`; single-thread ownership of the bank state holds |
    | `noc-sync`: cross-core credit SAFE | "the remote write is flushed before the credit, and the wait count matches the fan-out" | the `noc_async_write_barrier`/`writes_flushed` sits before the `noc_semaphore_inc`; cross with `dataflow-cb-sync` when the same buffer is also a CB page |

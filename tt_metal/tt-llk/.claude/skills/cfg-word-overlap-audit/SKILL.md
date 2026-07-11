@@ -26,8 +26,12 @@ the thread):
     # candidates: out/audit.<arch>.json -> .checks["cfg-word-overlap"].findings
 
 `CROSS_THREAD_SHARED_WORD` = a 32-bit word ≥2 threads write — a **candidate**, not
-a race: you must still verify bit-disjoint masking (RMWCIB is byte-atomic),
-semaphore/mutex ordering, and value-invariance. `UNRESOLVED` = a field that didn't
+a race. The tool PRE-COMPUTES the bit-disjoint-masking check into the finding's
+`safety` field (`SAFE_BY_MASKING` = all cross-thread writers are byte-atomic RMW
+on disjoint bits; `POTENTIAL_CLOBBER` = a full-word/non-atomic/overlapping writer;
+`UNKNOWN` = a mask didn't resolve) — READ `.findings[].safety` rather than redoing
+the mask analysis; you still verify semaphore/mutex ordering and value-invariance.
+`UNRESOLVED` = a field that didn't
 resolve to an ADDR32 (resolve it by hand). `INTRA_THREAD_CLOBBER` = a full-word
 write to a multi-field word where the same thread masked-writes a sibling field
 elsewhere (pattern 3) — a candidate (an intentional whole-word set is benign).

@@ -90,11 +90,12 @@ The three Tensix threads coordinate through **8 hardware semaphores** (`Semaphor
 ## Method
 1. **Enumerate** every site, tagged by thread via filename (`*unpack*`/`cunpack`=T0, `*math*`/`cmath`=T1, `*pack*`/`cpack`=T2):
    ```bash
-   cd tt_metal/tt-llk
+   # in-tree ops — from the repo root
    grep -rInE "t6_semaphore_(post|get|wait_on_max|wait_on_zero|init)|semaphore_(post|get)\(|TTI_SEM(POST|GET|WAIT|INIT)|t6_mutex_(acquire|release)|TTI_ATGETM|TTI_ATRELM" \
-     tt_llk_* --include=*.h | grep -v /tests/
-   # init sites (incl. above tt-llk — kernels/firmware do some SEMINIT):
-   grep -rInE "SEMINIT|t6_semaphore_init" tt_metal/hw tt_metal/tt-llk --include=*.h
+     tt_metal/tt-llk/tt_llk_* --include=*.h | grep -v /tests/
+   # init sites, incl. ABOVE tt-llk (kernels/firmware do some SEMINIT — e.g.
+   # brisc.cc initialize_tensix_semaphores()); ALSO from the repo root:
+   grep -rInE "SEMINIT|t6_semaphore_init|initialize_tensix_semaphores" tt_metal/hw tt_metal/tt-llk ttnn/cpp models --include=*.h --include=*.cc --include=*.cpp
    ```
 2. **Per semaphore**, list every (thread, op, condition, file:line). Classify ops: `SEMINIT`(Max,Value) / `SEMPOST`(producer) / `SEMGET`(consumer) / `SEMWAIT`(max|zero) / RISC-MMIO post|get.
 3. **Run the rules**: init present + correct Max/Value (#1) → balance over all branches (#2) → directions (#3) → MMIO ordering (#4) → mutex balance (#5) → deadlock graph (#6).

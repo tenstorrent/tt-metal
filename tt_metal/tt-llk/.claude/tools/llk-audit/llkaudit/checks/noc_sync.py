@@ -4,8 +4,10 @@
 noc-sync checker — NoC credit SIGNAL issued without a preceding write-flush.
 
 The classic cross-core race: a producer writes data to a remote L1 with
-`noc_async_write*`, then signals the consumer via `noc_semaphore_inc/set` — but
-the signal must not overtake the data. It is safe only if a NoC write flush/
+`noc_async_write*`, then posts a remote credit — `noc_semaphore_inc` /
+`inc_multicast` / `set_remote` / `set_multicast` (NOT the LOCAL `noc_semaphore_set`
+reset) — but the signal must not overtake the data. It is safe only if a NoC
+write flush/
 barrier (`noc_async_write_barrier` / `noc_async_writes_flushed`) drains the write
 BEFORE the signal. This surface lives in JIT-compiled kernels OUTSIDE tt-llk, so
 the checker is committed and deterministic but only yields findings when fed a
@@ -35,8 +37,14 @@ class NocSync(Check):
         "Cross-core / cross-kernel signal↔wait pairing (does a consumer actually "
         "wait on this semaphore?) and multicast fan-out (inc count == number of "
         "destinations) are NOT decided here — the /noc-sync skill owns them. "
-        "File-scope signals outside any function are not attributed. Requires a "
-        "KERNEL fact base (the on-request capture); empty over tt-llk."
+        "File-scope signals outside any function are not attributed. A flush at "
+        "the TOP of a loop precedes a later same-iteration signal textually but "
+        "drains the PRIOR iteration's write, not this one's — the byte-offset "
+        "heuristic can't see that (LLM must widen). A credit posted via "
+        "noc_inline_dw_write (a direct dword write to a remote semaphore) is NOT "
+        "recognized as a signal (it is also used for non-credit register writes, "
+        "so including it would over-flag). Requires a KERNEL fact base (the "
+        "on-request capture); empty over tt-llk."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
@@ -55,7 +63,7 @@ class NocSync(Check):
                 findings.append(
                     Finding(
                         file=c["file"],
-                        line=c["line"],
+                        line=c.get("line", 0),
                         function=fn.name,
                         kind=f"noc_signal:{op}",
                         hint="NOC_SIGNAL_NO_FLUSH",

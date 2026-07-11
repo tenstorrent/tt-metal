@@ -58,7 +58,7 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
    canonical-tt-llk-only search misses:
    ```bash
    # from the repo root
-   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|SrcA?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" \
+   grep -rInE "SETDVALID|CLEARDVALID|CLEARSRC|set_dvalid|clear_src|Src[AB]?Bank|unpack.*bank|MOV[AB]2D|MOVD2[AB]|TTI_UNPACR|get_valid" \
         tt_metal/tt-llk/tt_llk_* tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp 2>/dev/null | grep -v /tests/
    ```
 2. Per unpack→math op, pair the unpacker's fill/flip with the FPU's consume/flip; trace the bank pointer on both sides across the tile loop. Confirm lockstep, valid/clear ordering, and single-thread ownership.
@@ -72,7 +72,19 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 - **Risk only on an experimental/unused path or value-invariant** → LATENT — say so.
 
 ## Architecture note
-WH/BH share the bank model; BH adds per-bank implied data format (`ImpliedSrcAFmt/BFmt`) written by the unpacker — verify the implied-format and the data land in the same bank the FPU will read. **On BH a raw `SETDVALID` is ISA-unsupported** (it corrupts `ImpliedSrcBFmt` to an unpredictable value); the supported form is `UNPACR_NOP(...,SET_DVALID,...)`. Flag a raw `TTI_SETDVALID` on BH, and check the implied-format disable bit for the move that **reads** a Src bank: `DISABLE_IMPLIED_SRCA_FMT_Base` for **MOVA2D** (SrcA→Dest — reads SrcA), `DISABLE_IMPLIED_SRCB_FMT_Base` for **MOVB2D** (SrcB→Dest — reads SrcB). **MOVD2A / MOVD2B go the OTHER direction** (Dest→SrcA / Dest→SrcB — they *write* the Src bank, not read it), so they don't consume the src implied format — treat them as Src *writers* racing dvalid/bank state on the fill side, not as readers. (`ckernel_ops.h`: MOVA2D `// Dest=…, SrcA=…` = SrcA read; the `D2A` name = Dest-to-SrcA.) Quasar's unpack→dest path has its own semaphores (`UNPACK_TO_DEST` / the QSR semaphore map) plus HW AutoTTSync — confirm the model before extending verdicts.
+WH/BH share the bank model; BH adds per-bank implied data format (`ImpliedSrcAFmt/BFmt`) written by the unpacker — verify the implied-format and the data land in the same bank the FPU will read. **On BH a raw `SETDVALID` is ISA-unsupported** (it corrupts `ImpliedSrcBFmt` to an unpredictable value); the supported form is `UNPACR_NOP(...,SET_DVALID,...)`. Flag a raw `TTI_SETDVALID` on BH, and check the implied-format disable bit
+`DISABLE_IMPLIED_SRC?_FMT_Base` on the moves that touch that Src bank — grouped by
+**BANK, not by data direction**: **SRCA** for `MOVA2D` (SrcA→Dest) **and** `MOVD2A`
+(Dest→SrcA); **SRCB** for `MOVB2D` and `MOVD2B`. The moves differ in DATA direction
+(`A2D`/`B2D` read the bank into Dest; `D2A`/`D2B` *write* the bank from Dest — a
+bank-fill racing dvalid/bank state), but per the live ISA (`MOVD2A.md`) they BOTH
+interact with `ImpliedSrcA/BFmt` on Blackhole — the ISA in fact *recommends* setting
+`DISABLE_IMPLIED_SRC?_FMT_Base` for the `D2A`/`D2B` moves (its interaction with the
+implied format is ill-specified when the bank is invalid) — so do **not** assume the
+Dst→Src moves skip the implied-format check. (Direction grounded in the ISA
+`MOVD2A.md`/`MOVA2D.md` titles + the `D2A`/`A2D` mnemonic; `ckernel_ops.h` settles
+only existence/encoding — its MOV macros carry no direction comment and share a
+parameter list.) Quasar's unpack→dest path has its own semaphores (`UNPACK_TO_DEST` / the QSR semaphore map) plus HW AutoTTSync — confirm the model before extending verdicts.
 
 **Do NOT dismiss a Quasar-specific data lane by analogy to the WH/BH 2-bank SrcA/SrcB model.** Quasar adds a third unpacker / `SrcS` lane (`llk_srcs.h`, `UNPACKER2`): audit its dvalid lifecycle in full — both the **set** (producer, e.g. `UNPACR2`) **and** the **clear/consume** (consumer, e.g. `PACR1`) — and whether the lane's interlock fences (e.g. `*_SRCS_RDY` stall conditions) are actually *invoked*. A fence that is **defined but never used** is itself a finding (the lane is unprotected — safe only while it stays unwired/test-only), not grounds to call the lane SAFE. "It's a separate lane, so it doesn't participate in the SrcA/SrcB handshake" is a hypothesis to verify against the QSR ISA/Confluence and to trace in code — never a closure by analogy.
 

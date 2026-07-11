@@ -34,8 +34,10 @@ partner is likely in the compute-API/kernel tier, OR a real imbalance);
 compute-API sites (`hw/inc/api`) and, crucially, the hand-written
 `ckernel::mailbox_write(...)` in `ttnn/`/`models/` kernels (one-to-one directed
 channels AND fan-outs; the CB tile-address/value broadcast is just one pattern).
-That surface is **not** covered by `run.sh --full-jit` today (its kernel tier is
-cb-sync/noc-sync only) — it is audited by THIS skill via the widened grep in the
+That surface is **not** covered by `run.sh --full-jit` today because the kernel
+tier (cb-sync / noc-sync / **mailbox-sync**) is **not built** — mailbox IS part of
+that tier, it just awaits the on-request capture. Meanwhile it is audited by THIS
+skill via the widened grep in the
 Method below, so **you must run that grep** (it reaches `ttnn`/`models`), not rely
 on the tool. Pairing here is a static same-channel match, NOT a
 balance/symmetry/overflow/ordering verdict. It never clears a site; you decide.
@@ -80,7 +82,7 @@ Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unp
    # from the repo root
    grep -rInE '\bmailbox_(write|read|not_empty)\(' \
         tt_metal/tt-llk tt_metal/hw/inc/api ttnn models 2>/dev/null \
-     | grep -vE 'record_mailbox|clear_mailbox|debug_mailbox|mailbox_base\[|inline |//'
+     | grep -vE 'record_mailbox|clear_mailbox|debug_mailbox|mailbox_base\[|inline |^[[:space:]]*//'
    ```
 2. Per site, decode the channel via the convention (writer's `dest` id + issuing thread → directed FIFO; reader's `src` id + issuing thread → same FIFO). Pair writes with reads. Each `mailbox_write` is its OWN one-to-one directed channel — a fan-out (write to Math AND Pack) is several independent channels, not one broadcast; check each.
 3. Run checks 1–5. For balance/symmetry, read the enclosing function and confirm all threads reach it equally (watch `if constexpr`/runtime branches and the `UNPACK/MATH/PACK` split).

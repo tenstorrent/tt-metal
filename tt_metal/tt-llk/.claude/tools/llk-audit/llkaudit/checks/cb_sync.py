@@ -35,10 +35,12 @@ class CbSync(Check):
         "NOT decided here. The data-before-credit ordering (a NoC write flush/"
         "barrier before cb_push_back) is NOT checked — that is noc-sync's join. "
         "Capacity (pages reserved <= CB depth / num_pages), single-producer/"
-        "single-consumer, the page COUNT argument (reserve n vs push n), remote/"
-        "sharded CBs, and branch-conditional reserve/push (which can show a false "
-        "imbalance) are all deferred. Requires a KERNEL fact base (the on-request "
-        "capture); empty over tt-llk."
+        "single-consumer, the page COUNT argument (reserve n vs push n), and "
+        "branch-conditional reserve/push (which can show a false imbalance) are "
+        "deferred. The remote/sharded CB family IS balance-checked (remote_cb_* in "
+        "CB_CALLS; its push is the fused remote_cb_push_back_and_write_pages) — but "
+        "its data-before-credit ordering is noc-sync's job. Requires a KERNEL fact "
+        "base (the on-request capture); empty over tt-llk."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
@@ -94,7 +96,7 @@ class CbSync(Check):
             findings.append(
                 Finding(
                     file=file,
-                    line=anchor["line"],
+                    line=anchor.get("line", 0),
                     function=func,
                     kind=f"{hint.lower()}@{cbid}",
                     hint=hint,

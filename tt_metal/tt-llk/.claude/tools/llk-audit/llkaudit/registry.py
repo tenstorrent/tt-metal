@@ -544,6 +544,12 @@ CB_CALLS = {
     "cb_push_back": "push",  # producer: commit (hand a credit to the consumer)
     "cb_wait_front": "wait",  # consumer: wait for pages
     "cb_pop_front": "pop",  # consumer: release the pages
+    # Remote/sharded CB family (asymmetric names — the push is fused with the
+    # page write). Balance still pairs reserve<->push / wait<->pop by count.
+    "remote_cb_reserve_back": "reserve",
+    "remote_cb_push_back_and_write_pages": "push",
+    "remote_cb_wait_front": "wait",
+    "remote_cb_pop_front": "pop",
 }
 
 
@@ -552,9 +558,15 @@ def cb_op(callee: str):
 
 
 # --- noc-sync (kernel tier): NoC semaphore + write-flush primitives ------------
+# Remote CREDIT signals — a NoC write that posts a credit (the data-before-credit
+# target). NOTE: plain `noc_semaphore_set` is DELIBERATELY EXCLUDED — it is a
+# LOCAL store `(*sem_addr)=val` (reset/init of a local semaphore), NOT a remote
+# signal, so flagging it would fire NOC_SIGNAL_NO_FLUSH on every local reset.
+# `noc_semaphore_set_remote` is the remote (4-byte-write) form and IS a signal.
 NOC_SIGNAL_CALLS = {
     "noc_semaphore_inc": "inc",
-    "noc_semaphore_set": "set",
+    "noc_semaphore_inc_multicast": "mcast",
+    "noc_semaphore_set_remote": "set",
     "noc_semaphore_set_multicast": "mcast",
     "noc_semaphore_set_multicast_loopback_src": "mcast",
 }
@@ -564,6 +576,7 @@ NOC_FLUSH_CALLS = (
     "noc_async_write_barrier",
     "noc_async_writes_flushed",
     "noc_async_write_barrier_with_trid",
+    "noc_async_write_flushed_with_trid",
 )
 
 
