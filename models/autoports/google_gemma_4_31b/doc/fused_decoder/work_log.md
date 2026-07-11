@@ -182,3 +182,6 @@ implementation or either decoder test.
 The live optimized-decoder files and optimized-only `context_contract.json`
 additions remain unrelated dirty state and are excluded from the fused-stage
 checkpoint. No reset, recovery, or `$autofix` rerun was needed.
+
+Live-worktree revalidation commit SHA:
+`9d92ca0246e53c7d433833491487e84d793f4685`. No push was performed.
