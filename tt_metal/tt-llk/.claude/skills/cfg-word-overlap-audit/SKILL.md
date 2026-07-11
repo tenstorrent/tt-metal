@@ -22,6 +22,7 @@ cfg write to its 32-bit word via cfg_defines.h, per register file, and attribute
 the thread):
 
     cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks cfg-word-overlap
+    # PR-scoped: add --changed [BASE] (default main) to report only words touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["cfg-word-overlap"].findings
 
 `CROSS_THREAD_SHARED_WORD` = a 32-bit word ≥2 threads write — a **candidate**, not

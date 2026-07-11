@@ -22,6 +22,7 @@ reconfig/uninit/config-writer functions and checks each for a unit-draining stal
 before its first config write):
 
     cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks reconfig-stall
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["reconfig-stall"].findings
 
 `NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a

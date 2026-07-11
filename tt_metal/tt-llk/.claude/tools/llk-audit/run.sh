@@ -29,12 +29,17 @@ if [ ! -x "$EXTRACT" ] || [ "$HERE/extractor/llk_extract.cpp" -nt "$EXTRACT" ]; 
   fi
 fi
 
-ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [out_dir]}"; shift || true
+ARCH="${1:?usage: run.sh <wormhole|blackhole|quasar> [--checks a,b] [--changed [BASE]] [out_dir]}"; shift || true
 CHECKS="all"
 OUT="$HERE/out"
+CHANGED=0
+CHANGED_BASE="main"
 while [ $# -gt 0 ]; do
   case "$1" in
     --checks) CHECKS="$2"; shift 2;;
+    --changed) CHANGED=1; shift
+               # optional non-flag next token is the diff base (default: main)
+               if [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then CHANGED_BASE="$1"; shift; fi;;
     *) OUT="$1"; shift;;
   esac
 done
@@ -86,9 +91,27 @@ for h in "${HEADERS[@]}"; do
 done
 [ "$FAIL" -eq 0 ] || echo "($FAIL header(s) failed to parse — see $OUT/parse.log; expected for SFPU-heavy files)" >&2
 
+# Diff-scoped mode: collect the changed LLK headers (committed vs BASE + working
+# tree) so the CLI can filter findings to those touching a changed file. The
+# whole tree is still parsed above (cross-file context); only OUTPUT is scoped.
+CHANGED_ARG=()
+if [ "$CHANGED" -eq 1 ]; then
+  mapfile -t CHG < <(
+    { git -C "$METAL_DIR" diff --name-only "$CHANGED_BASE"...HEAD 2>/dev/null
+      git -C "$METAL_DIR" diff --name-only 2>/dev/null
+      git -C "$METAL_DIR" diff --name-only --cached 2>/dev/null
+    } | grep -E "tt_metal/tt-llk/$LLK/.*\.h$" | sort -u)
+  echo "Diff-scoped vs '$CHANGED_BASE': ${#CHG[@]} changed $LLK header(s)." >&2
+  if [ "${#CHG[@]}" -gt 0 ]; then
+    CHANGED_ARG=(--changed-files "$(IFS=,; echo "${CHG[*]}")")
+  else
+    CHANGED_ARG=(--changed-files "__none__")  # scope to nothing -> empty findings
+  fi
+fi
+
 AUDIT="$OUT/audit.$ARCH.json"
 PYTHONPATH="$HERE" python3 -m llkaudit.cli --arch "$ARCH" --facts "$FACTS" \
-  --checks "$CHECKS" --metal-root "$METAL_DIR" > "$AUDIT"
+  --checks "$CHECKS" --metal-root "$METAL_DIR" "${CHANGED_ARG[@]}" > "$AUDIT"
 
 # Summary.
 PYTHONPATH="$HERE" python3 - "$AUDIT" "$FACTS" <<'PY'

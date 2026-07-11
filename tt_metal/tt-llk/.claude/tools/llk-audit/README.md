@@ -37,12 +37,27 @@ in `registry.py`; you rarely touch a checker and never the C++.**
 | Check | What it recalls | Hints |
 |---|---|---|
 | `mmio-race` | RISC MMIO cfg/GPR write vs. consuming Tensix instruction/MOP; is an applicable ordering primitive local? | `LOCALLY_ORDERED` / `NO_LOCAL_ORDERING` |
-| `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads | `CROSS_THREAD_SHARED_WORD` / `UNRESOLVED` |
+| `cfg-word-overlap` | fields sharing one 32-bit CONFIG word (per register file) written by ≥2 threads; intra-thread full-word clobber | `CROSS_THREAD_SHARED_WORD` / `INTRA_THREAD_CLOBBER` / `UNRESOLVED` |
 | `semaphore-handshake` | mutex acquire/release imbalance; semaphore wait with no in-tree init | `MUTEX_IMBALANCE` / `WAIT_WITHOUT_INIT` |
 | `reconfig-stall` | reconfig/uninit config write missing a unit-draining stall | `NO_UNIT_DRAIN` / `THCON_ONLY` |
 
 Every finding is a **recall bucket, not a verdict**, and every check declares its
 `blind_spots` in the output.
+
+**cfg-word `safety` annotation.** A `CROSS_THREAD_SHARED_WORD` finding is *always*
+emitted (multi-thread access to a word is worth seeing even when race-safe — it
+can be an ownership smell), with a `safety` sub-annotation, never a filter:
+`SAFE_BY_MASKING` (all cross-thread writers are byte-atomic masked RMW on disjoint
+bits — provably not a data race), `POTENTIAL_CLOBBER` (a full-word write, a
+non-atomic software `cfg_rmw`, or overlapping bits — the LLM must check
+value-invariance/ordering), or `UNKNOWN` (a field mask wasn't in cfg_defines).
+The per-thread bit masks are in the detail so you can judge ownership.
+
+**Diff-scoped mode.** `./run.sh <arch> --changed [BASE]` (BASE defaults to `main`)
+reports only findings that TOUCH a changed LLK header — the anchor file *or* any
+evidence line (so a shared word whose partner writer is in a changed file still
+surfaces). The whole tree is still parsed for cross-file context; only output is
+scoped. Use it for a PR-scoped audit.
 
 ### Why these four (and not the other nine audits)
 Scoped by evidence — a checker ships only where AST recall is exhaustive on a
@@ -59,7 +74,8 @@ real tt-llk pattern:
 ## Build & run
 
 ```bash
-./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [out_dir]
+./run.sh wormhole                  # or blackhole | quasar   [--checks a,b] [--changed [BASE]] [out_dir]
+                                   #   --changed scopes output to files changed vs BASE (default main)
                                    #   auto-builds the C++ extractor on first run
                                    #   (or if stale); needs Clang/LLVM >= 18 dev libs.
 extractor/build.sh                 # optional: build the extractor manually

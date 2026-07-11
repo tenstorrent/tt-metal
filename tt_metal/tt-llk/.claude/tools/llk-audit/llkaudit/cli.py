@@ -37,6 +37,24 @@ def _find_metal_root(start: str) -> str | None:
         d = parent
 
 
+def scope_to_changed(findings: list, changed_files: list) -> list:
+    """Diff-scoped filter: keep only findings that TOUCH a changed file — either
+    the anchor file, or any evidence line (so a cross-thread shared word whose
+    partner writer is in a changed file surfaces even when anchored elsewhere).
+    The fact base is still built over the whole tree; only OUTPUT is scoped.
+    Empty `changed_files` = no scoping (return all)."""
+    if not changed_files:
+        return findings
+    base = {os.path.basename(c) for c in changed_files}
+
+    def touches(fd: dict) -> bool:
+        if os.path.basename(fd.get("file", "")) in base:
+            return True
+        return any(cb in ev for ev in fd.get("evidence", []) for cb in base)
+
+    return [f for f in findings if touches(f)]
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="llkaudit")
     ap.add_argument("--arch", required=True)
@@ -54,6 +72,13 @@ def main(argv=None) -> int:
         "--metal-root",
         default=None,
         help="repo root for cfg_defines.h (auto-detected if omitted)",
+    )
+    ap.add_argument(
+        "--changed-files",
+        default="",
+        help="comma-separated file paths (diff-scoped mode). When set, only "
+        "findings that touch one of these files (anchor OR any evidence line) "
+        "are reported. run.sh --changed populates this from git.",
     )
     ap.add_argument("--list", action="store_true", help="list checks and exit")
     args = ap.parse_args(argv)
@@ -80,21 +105,26 @@ def main(argv=None) -> int:
             if c not in ALL:
                 ap.error(f"unknown check '{c}'. Available: {', '.join(ALL)}")
 
+    changed = [c.strip() for c in args.changed_files.split(",") if c.strip()]
+
     out = {
         "tool": "llk-audit",
         "arch": args.arch,
         "authority": "advisory",
         "parse_errors": fb.parse_errors,
+        "scoped_to_changed": bool(changed),
         "checks": {},
     }
+    if changed:
+        out["changed_files"] = sorted(changed_base)
     for name in selected:
         chk = ALL[name]()
-        findings = chk.run(fb)
+        findings = scope_to_changed([f.to_dict() for f in chk.run(fb)], changed)
         out["checks"][name] = {
             "description": chk.description,
             "blind_spots": chk.blind_spots,
             "count": len(findings),
-            "findings": [f.to_dict() for f in findings],
+            "findings": findings,
         }
     json.dump(out, sys.stdout, indent=2)
     sys.stdout.write("\n")

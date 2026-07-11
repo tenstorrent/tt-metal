@@ -22,6 +22,8 @@ Before manual analysis, get the deterministic candidate list from the recall too
 wrapper-hidden ones a grep misses):
 
     cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks mmio-race
+    # For a PR/branch-scoped audit, add --changed [BASE] (BASE defaults to main):
+    #   ./run.sh <arch> --checks mmio-race --changed        # only findings touching files changed vs main
     # candidates: out/audit.<arch>.json -> .checks["mmio-race"].findings
 
 Treat `findings[]` as your **pre-enumerated worklist** so you never re-do the
