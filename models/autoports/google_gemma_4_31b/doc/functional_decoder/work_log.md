@@ -147,6 +147,10 @@ tests, and measured artifacts are unchanged. This report/work-log update is a
 stage-owned documentation checkpoint; later-stage and unrelated dirty files
 were excluded and no push was performed.
 
+Second-resume review checkpoint:
+`b85ee83fe96a01b53fbc631b83712255892f34ab`. This work-log-only SHA record is
+the final stage-owned provenance follow-up.
+
 ## Hardware recovery record
 
 - Failing command: `GEMMA4_LONG_PREFILL=196577 ... test_long_nonaligned_prefill_capacity[5-full_attention]`.
