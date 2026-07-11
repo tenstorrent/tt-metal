@@ -27,10 +27,14 @@ the thread):
 `CROSS_THREAD_SHARED_WORD` = a 32-bit word ≥2 threads write — a **candidate**, not
 a race: you must still verify bit-disjoint masking (RMWCIB is byte-atomic),
 semaphore/mutex ordering, and value-invariance. `UNRESOLVED` = a field that didn't
-resolve to an ADDR32 (resolve it by hand). Note the tool partitions THCON from the
-main config file by name prefix and only partially models intra-thread full-word
-clobber — **widen for those** and for any field the ADDR32 regex missed. The tool
-never clears a word; you decide. If unbuilt, proceed manually.
+resolve to an ADDR32 (resolve it by hand). `INTRA_THREAD_CLOBBER` = a full-word
+write to a multi-field word where the same thread masked-writes a sibling field
+elsewhere (pattern 3) — a candidate (an intentional whole-word set is benign).
+The tool separates `Config` vs `ThreadConfig` by the write instruction (`SETC16`
+→ `ThreadConfig`; every other write → `Config`; THCON is a sub-range of `Config`,
+not its own file) — **widen for** the multi-bank SETC16-aliasing nuances below
+and any field the ADDR32 regex missed. The tool never clears a word; you decide.
+If unbuilt, proceed manually.
 
 ## The bug class (precise)
 The three Tensix threads (T0=unpack, T1=math, T2=pack) do **not** share GPR files, but they all write the shared **backend `Config` register file** (`Config[2][...]` at `TENSIX_CFG_BASE`). LLK addresses it by *named field* (`<REG>_ADDR32` word index + `_MASK`/`_SHAMT`). Two **differently-named** fields can occupy the **same 32-bit word** — invisible from the names alone, visible only when you resolve `_ADDR32` to a number. If different threads write the same word, you can lose one thread's field. The classic example: `STACC_RELU_*` (packer) and `ALU_ACC_CTRL_Zero_Flag_disabled_*` (math/unpack) share a word; a packer full-word write zeroes the math field.
