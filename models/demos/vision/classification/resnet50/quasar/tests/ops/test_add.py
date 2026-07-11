@@ -97,3 +97,77 @@ def test_resnet50_residual_add(mesh_device, height, channels):
     assert tuple(got.shape) == (1, 1, height, channels), got.shape
     # elementwise add + relu in bf16: nearly exact -> 0.99.
     assert_with_pcc(golden, got, pcc=0.99)
+
+
+def _largest_divisor_leq(n, cap):
+    """Largest divisor of n that is <= cap (>= 1)."""
+    for d in range(min(n, cap), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "height, channels",
+    [
+        pytest.param(196, 1024, id="layer3_14x14_1024c_block"),
+        pytest.param(49, 2048, id="layer4_7x7_2048c_block"),
+    ],
+)
+def test_resnet50_residual_add_block_sharded(mesh_device, height, channels):
+    """
+    BLOCK_SHARDED residual add coverage for layer3/layer4.
+
+    On Quasar the model block-shards layer3 (14x14x1024) and layer4 (7x7x2048): their bottleneck
+    convs run with height_sharding=False + reshard_if_not_optimal=is_quasar(), so the conv3 output
+    (`out`) fed to `add_` is BLOCK_SHARDED, and `ds_out` is forced to `out.memory_config()` before
+    the add. `test_resnet50_residual_add` above only exercises HEIGHT_SHARDED, so this covers the
+    actual layer3/layer4 operand layout. binary_ng's matches_metal_v2_slice accepts HEIGHT- or
+    BLOCK-sharded L1, so both must take the Metal-2 path (block operand specs match here).
+    """
+    device = mesh_device
+    torch.manual_seed(0)
+
+    compute_grid = device.compute_with_storage_grid_size()
+
+    # Block-shard: split height across grid rows (gy) and channels across grid cols (gx), tile-aligned.
+    # Grid-adaptive: pick the largest divisor of the tile counts that fits the device grid so the shard
+    # shape stays exact and tile-aligned on both the full Quasar grid and the small emulator / craq-sim.
+    tile = 32
+    height_tiles = math.ceil(height / tile)
+    width_tiles = channels // tile
+    gy = _largest_divisor_leq(height_tiles, compute_grid.y)
+    gx = _largest_divisor_leq(width_tiles, compute_grid.x)
+    shard_height = (height_tiles // gy) * tile
+    shard_width = (width_tiles // gx) * tile
+
+    core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+
+    mem_config = ttnn.create_sharded_memory_config(
+        shape=(1, 1, shard_height, shard_width),
+        core_grid=core_range,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    a_torch = torch.randn((1, 1, height, channels), dtype=torch.bfloat16)
+    b_torch = torch.randn((1, 1, height, channels), dtype=torch.bfloat16)
+
+    # golden: RELU(a + b)  -- fused activation the op applies
+    golden = torch.relu(a_torch.float() + b_torch.float())
+
+    a = ttnn.from_torch(a_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device, mem_config)
+    b = ttnn.from_torch(b_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT).to(device, mem_config)
+
+    # --- the exact residual add (in-place, fused RELU) ---
+    out = ttnn.experimental.quasar.add_(
+        a,
+        b,
+        activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)],
+    )
+
+    got = ttnn.to_torch(out).float()
+    assert tuple(got.shape) == (1, 1, height, channels), got.shape
+    assert_with_pcc(golden, got, pcc=0.99)
