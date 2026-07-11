@@ -132,6 +132,21 @@ Autofix implementation and evidence checkpoint:
 functional-decoder stage-owned changes; no push was performed. This work-log
 provenance update is a stage-owned follow-up commit.
 
+## Second resume audit
+
+After the fused-decoder stage committed and optimized-decoder work began, the
+multigoal runner reactivated this goal. Read-only comparison confirmed that
+`tt/functional_decoder.py`, `tests/test_functional_decoder.py`, and every
+functional evidence hash remain identical to checkpoint `5fa49e9fa25`. The
+live shared context-contract diff only appends optimized-decoder metadata and
+does not alter any functional capability field.
+
+The fresh independent review in `stage_review_resume2.md` returned
+`clean-pass`. No TT hardware rerun was warranted because the implementation,
+tests, and measured artifacts are unchanged. This report/work-log update is a
+stage-owned documentation checkpoint; later-stage and unrelated dirty files
+were excluded and no push was performed.
+
 ## Hardware recovery record
 
 - Failing command: `GEMMA4_LONG_PREFILL=196577 ... test_long_nonaligned_prefill_capacity[5-full_attention]`.
