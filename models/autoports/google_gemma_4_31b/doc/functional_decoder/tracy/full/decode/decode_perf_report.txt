@@ -14,7 +14,7 @@ ID   Total %  Bound  OP Code                                  Device   Device Ti
 169    0.0 %         InterleavedToShardedDeviceOperation            0         1 μs                   56                                                       BF16 => BF16
 170    0.4 %         LayerNormDeviceOperation                       0         7 μs          5 μs     56                                                 BF16, BF16 => BF16
 171    0.1 %         ShardedToInterleavedDeviceOperation            0         2 μs          1 μs     56                                                       BF16 => BF16
-172   18.6 %   DRAM  MatmulDeviceOperation 32 x 5376 x 20480        0       546 μs          4 μs    107  406 GB/s  79.3 %  12.9 TFLOPs    4.4 %  HiFi2 BF16 x BF16 => BF16
+172   18.5 %   DRAM  MatmulDeviceOperation 32 x 5376 x 20480        0       545 μs          4 μs    107  407 GB/s  79.5 %  12.9 TFLOPs    4.4 %  HiFi2 BF16 x BF16 => BF16
 173    0.2 %         CopyDeviceOperation                            0         5 μs          1 μs    110                                                       BF16 => BF16
 174    1.0 %         NLPCreateQKVHeadsDecodeDeviceOperation         0        28 μs          1 μs      1                                                       BF16 => BF16
 175    0.1 %         ShardedToInterleavedDeviceOperation            0         1 μs          2 μs      1                                                       BF16 => BF16
@@ -22,7 +22,7 @@ ID   Total %  Bound  OP Code                                  Device   Device Ti
 177    0.1 %         ShardedToInterleavedDeviceOperation            0         1 μs          2 μs      1                                                       BF16 => BF16
 178    0.1 %         ShardedToInterleavedDeviceOperation            0         1 μs          1 μs      1                                                       BF16 => BF16
 179    0.4 %         LayerNormDeviceOperation                       0         9 μs          1 μs      1                                                 BF16, BF16 => BF16
-180    0.3 %         LayerNormDeviceOperation                       0         7 μs          1 μs      1                                                       BF16 => BF16
+180    0.3 %         LayerNormDeviceOperation                       0         7 μs          2 μs      1                                                       BF16 => BF16
 181    0.2 %         EmbeddingsDeviceOperation                      0         4 μs          2 μs      1                                               UINT32, BF16 => BF16
 182    0.2 %         EmbeddingsDeviceOperation                      0         4 μs          1 μs      1                                               UINT32, BF16 => BF16
 183    0.6 %         RotaryEmbeddingDeviceOperation                 0        16 μs          2 μs      1                                                 BF16, BF16 => BF16
@@ -31,12 +31,12 @@ ID   Total %  Bound  OP Code                                  Device   Device Ti
 186    0.1 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs      1                                                       BF16 => BF16
 187    0.3 %         PagedUpdateCacheDeviceOperation                0         8 μs          2 μs      1                                                 BF16, BF16 => BF16
 188    0.3 %         PagedUpdateCacheDeviceOperation                0         8 μs          1 μs      1                                                 BF16, BF16 => BF16
-189    0.8 %         SdpaDecodeDeviceOperation                      0        21 μs          2 μs     32                                                 BF16, BF16 => BF16
-190    0.1 %         InterleavedToShardedDeviceOperation            0         1 μs          2 μs      1                                                       BF16 => BF16
+189    0.8 %         SdpaDecodeDeviceOperation                      0        21 μs          3 μs     32                                                 BF16, BF16 => BF16
+190    0.1 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs      1                                                       BF16 => BF16
 191    0.2 %         NLPConcatHeadsDecodeDeviceOperation            0         4 μs          1 μs     32                                                       BF16 => BF16
 192    0.2 %         ShardedToInterleavedDeviceOperation            0         4 μs          1 μs     32                                                       BF16 => BF16
 193    0.2 %         SliceDeviceOperation                           0         6 μs          1 μs    110                                                       BF16 => BF16
-194   14.6 %   DRAM  MatmulDeviceOperation 32 x 16384 x 5376        0       432 μs          1 μs     84  411 GB/s  80.2 %  13.0 TFLOPs    5.6 %  HiFi2 BF16 x BF16 => BF16
+194   14.6 %   DRAM  MatmulDeviceOperation 32 x 16384 x 5376        0       433 μs          1 μs     84  410 GB/s  80.2 %  13.0 TFLOPs    5.6 %  HiFi2 BF16 x BF16 => BF16
 195    0.1 %         InterleavedToShardedDeviceOperation            0         1 μs          1 μs     56                                                       BF16 => BF16
 196    0.3 %         LayerNormDeviceOperation                       0         7 μs          1 μs     56                                                 BF16, BF16 => BF16
 197    0.1 %         ShardedToInterleavedDeviceOperation            0         2 μs          1 μs     56                                                       BF16 => BF16
@@ -44,9 +44,9 @@ ID   Total %  Bound  OP Code                                  Device   Device Ti
 199    0.1 %         InterleavedToShardedDeviceOperation            0         2 μs          1 μs     56                                                       BF16 => BF16
 200    0.3 %         LayerNormDeviceOperation                       0         7 μs          1 μs     56                                                 BF16, BF16 => BF16
 201    0.1 %         ShardedToInterleavedDeviceOperation            0         2 μs          1 μs     56                                                       BF16 => BF16
-202   19.3 %   DRAM  MatmulDeviceOperation 32 x 5376 x 21504        0       572 μs          1 μs     96  407 GB/s  79.5 %  12.9 TFLOPs    4.9 %  HiFi2 BF16 x BF16 => BF16
-203    0.3 %         UnaryDeviceOperation                           0         7 μs          1 μs    110                                                       BF16 => BF16
-204   19.3 %   DRAM  MatmulDeviceOperation 32 x 5376 x 21504        0       572 μs          1 μs     96  407 GB/s  79.5 %  12.9 TFLOPs    4.9 %  HiFi2 BF16 x BF16 => BF16
+202   19.3 %   DRAM  MatmulDeviceOperation 32 x 5376 x 21504        0       571 μs          1 μs     96  408 GB/s  79.7 %  13.0 TFLOPs    4.9 %  HiFi2 BF16 x BF16 => BF16
+203    0.3 %         UnaryDeviceOperation                           0         8 μs          1 μs    110                                                       BF16 => BF16
+204   19.3 %   DRAM  MatmulDeviceOperation 32 x 5376 x 21504        0       573 μs          1 μs     96  407 GB/s  79.5 %  12.9 TFLOPs    4.9 %  HiFi2 BF16 x BF16 => BF16
 205    0.4 %         BinaryNgDeviceOperation                        0        12 μs          1 μs    110                                                 BF16, BF16 => BF16
 206   19.0 %   DRAM  MatmulDeviceOperation 32 x 21504 x 5376        0       562 μs          0 μs     84  414 GB/s  80.9 %  13.2 TFLOPs    5.7 %  HiFi2 BF16 x BF16 => BF16
 207    0.1 %         InterleavedToShardedDeviceOperation            0         2 μs          1 μs     56                                                       BF16 => BF16
@@ -55,4 +55,4 @@ ID   Total %  Bound  OP Code                                  Device   Device Ti
 210    0.2 %         BinaryNgDeviceOperation                        0         4 μs          1 μs    110                                                 BF16, BF16 => BF16
 211    0.2 %         BinaryNgDeviceOperation                        0         4 μs          1 μs    110                                                       BF16 => BF16
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-     100.0 %         43 device ops, 0 host ops, 0 signposts               2,913 μs         51 μs         377 GB/s  73.6 %
+     100.0 %         43 device ops, 0 host ops, 0 signposts               2,911 μs         51 μs         377 GB/s  73.7 %

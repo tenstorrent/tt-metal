@@ -151,21 +151,26 @@ class FunctionalDecoder(LightweightModule):
         num_kv_heads = config.num_key_value_heads
         block_size = effective_block_size(k_cache, config.head_dim, num_kv_heads)
         modulo = {"cache_position_modulo": config.cache_position_modulo} if config.cache_position_modulo else {}
-        k_fill, v_fill = k, v
-        if config.cache_position_modulo is not None:
-            fill_len = ((min(valid_seq_len, k.shape[-2]) + block_size - 1) // block_size) * block_size
-            if fill_len < k.shape[-2]:
-                k_fill = ttnn.slice(k, [0, 0, 0, 0], [1, k.shape[1], fill_len, k.shape[3]])
-                v_fill = ttnn.slice(v, [0, 0, 0, 0], [1, v.shape[1], fill_len, v.shape[3]])
-        ttnn.experimental.paged_fill_cache(
-            k_cache, k_fill, page_table, batch_idx=user_id, block_size=block_size, **modulo
-        )
-        ttnn.experimental.paged_fill_cache(
-            v_cache, v_fill, page_table, batch_idx=user_id, block_size=block_size, **modulo
-        )
-        if k_fill is not k:
-            k_fill.deallocate(True)
-            v_fill.deallocate(True)
+        if config.cache_position_modulo is not None and valid_seq_len < k.shape[-2]:
+            self._fill_bounded_sliding_cache_exact(
+                k_cache,
+                v_cache,
+                k,
+                v,
+                page_table,
+                user_id=user_id,
+                valid_seq_len=valid_seq_len,
+                block_size=block_size,
+                num_kv_heads=num_kv_heads,
+                cache_position_modulo=config.cache_position_modulo,
+            )
+        else:
+            ttnn.experimental.paged_fill_cache(
+                k_cache, k, page_table, batch_idx=user_id, block_size=block_size, **modulo
+            )
+            ttnn.experimental.paged_fill_cache(
+                v_cache, v, page_table, batch_idx=user_id, block_size=block_size, **modulo
+            )
 
         seq_len = q.shape[-2]
         if seq_len > PREFILL_SDPA_MAX_SEQ and config.is_sliding:
@@ -191,6 +196,111 @@ class FunctionalDecoder(LightweightModule):
         output = ttnn.linear(concatenated, weights.o_proj)
         concatenated.deallocate(True)
         return output
+
+    def _fill_bounded_sliding_cache_exact(
+        self,
+        k_cache,
+        v_cache,
+        k,
+        v,
+        page_table,
+        *,
+        user_id,
+        valid_seq_len,
+        block_size,
+        num_kv_heads,
+        cache_position_modulo,
+    ):
+        """Fill only logical K/V rows so padded lanes cannot wrap over live cache slots."""
+        bulk_len = (valid_seq_len // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        if bulk_len:
+            k_bulk = ttnn.slice(k, [0, 0, 0, 0], [1, k.shape[1], bulk_len, k.shape[3]])
+            v_bulk = ttnn.slice(v, [0, 0, 0, 0], [1, v.shape[1], bulk_len, v.shape[3]])
+            ttnn.experimental.paged_fill_cache(
+                k_cache,
+                k_bulk,
+                page_table,
+                batch_idx=user_id,
+                block_size=block_size,
+                cache_position_modulo=cache_position_modulo,
+            )
+            ttnn.experimental.paged_fill_cache(
+                v_cache,
+                v_bulk,
+                page_table,
+                batch_idx=user_id,
+                block_size=block_size,
+                cache_position_modulo=cache_position_modulo,
+            )
+
+        tail_len = valid_seq_len - bulk_len
+        if not tail_len:
+            return
+
+        k_tail = ttnn.slice(k, [0, 0, bulk_len, 0], [1, k.shape[1], valid_seq_len, k.shape[3]])
+        v_tail = ttnn.slice(v, [0, 0, bulk_len, 0], [1, v.shape[1], valid_seq_len, v.shape[3]])
+        k_tail_users = ttnn.permute(k_tail, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        v_tail_users = ttnn.permute(v_tail, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
+        single_token_mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                one_core,
+                [ttnn.TILE_SIZE, k.shape[3]],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        positions = ttnn.arange(
+            bulk_len,
+            valid_seq_len,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+        )
+        user_page_table = ttnn.slice(
+            page_table,
+            [user_id, 0],
+            [user_id + 1, page_table.shape[1]],
+        )
+        for tail_idx in range(tail_len):
+            k_token = ttnn.slice(
+                k_tail_users,
+                [0, tail_idx, 0, 0],
+                [1, tail_idx + 1, num_kv_heads, k.shape[3]],
+            )
+            v_token = ttnn.slice(
+                v_tail_users,
+                [0, tail_idx, 0, 0],
+                [1, tail_idx + 1, num_kv_heads, v.shape[3]],
+            )
+            k_token_sharded = ttnn.to_memory_config(k_token, single_token_mem)
+            v_token_sharded = ttnn.to_memory_config(v_token, single_token_mem)
+            position = ttnn.slice(positions, [tail_idx], [tail_idx + 1])
+            ttnn.experimental.paged_update_cache(
+                k_cache,
+                k_token_sharded,
+                update_idxs_tensor=position,
+                page_table=user_page_table,
+                block_size=block_size,
+                num_kv_heads=num_kv_heads,
+                cache_position_modulo=cache_position_modulo,
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache,
+                v_token_sharded,
+                update_idxs_tensor=position,
+                page_table=user_page_table,
+                block_size=block_size,
+                num_kv_heads=num_kv_heads,
+                cache_position_modulo=cache_position_modulo,
+            )
+            for tensor in (k_token_sharded, v_token_sharded):
+                tensor.deallocate(True)
+
+        for tensor in (k_tail_users, v_tail_users, positions):
+            tensor.deallocate(True)
 
     def _streaming_full_prefill_attention(self, hidden_states, *, rope_mats, page_table, kv_cache, user_id):
         """Execute advertised-context full attention without 32-bit tensor overflow."""

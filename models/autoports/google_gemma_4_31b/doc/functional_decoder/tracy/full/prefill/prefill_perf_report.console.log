@@ -6,9 +6,4 @@ Using operations after 'PERF_PREFILL'.
 Using operations until 'PERF_PREFILL_END'.
 Detected data from 1 devices. Merging device data...
 Writing CSV output to models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/prefill_perf_report.csv
-Overall DRAM roofline (modeled ops): 51.6% (264 GB/s)
-Warning: Unclassified operation 'RotaryEmbeddingDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
-Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
-Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
-Writing CSV stacked report to models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/prefill_perf_report_stacked.csv
-Plotting PNG stacked report to models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/prefill_perf_report_stacked.png
+Overall DRAM roofline (modeled ops): 51.5% (264 GB/s)

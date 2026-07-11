@@ -1,7 +1,7 @@
 # google/gemma-4-31B functional decoder
 
-Status: complete pending independent stage review. Scope is the single-device
-functional decoder only.
+Status: complete; independent stage rereview returned `clean-pass`. Scope is the
+single-device functional decoder only.
 
 ## Contract
 
@@ -49,27 +49,35 @@ the cached `google/gemma-4-31B` checkpoint and real target shapes.
 | batch-32 paged decode | sliding/full | position 32 | 0.999416 / 0.999480 |
 | advertised prefill oracle | sliding | seq 262144, final 1024-token HF window | 0.998786 |
 | advertised prefill oracle | full | seq 262144, HF prefix control through 2049 | 0.999089 |
-| populated-cache traced decode parity | sliding/full | position 262143 | 0.998715 / 0.996611 |
+| distinct-token traced decode vs HF | sliding/full | 262143 history, position 262143 | 0.999406 / 0.998875 |
+| changed-input traced decode vs HF | sliding/full | random and 1023->1024 wrap | min 0.998948 |
+| sliding padded-cache ownership | sliding | seq 1025/1057 then distinct decode | min decode 0.997702; min K/V 0.999885 |
 
 The real-weight traced decode tests replay twice and require bitwise-identical
 outputs. Page tables are a provably non-identity one-block rotation, including
-separate physical ranges for each batch user. Advertised-context tests prefill
-the cache, then trace and replay decode at absolute position 262143. Full and
-sliding prefill both pass at 262144 and the near-context non-divisible length
+separate physical ranges for each batch user. Advertised-context decode prefills
+exactly 262143 history tokens, then changes a stable captured allocation to a
+distinct final token and replays at absolute position 262143. A reduced
+one-query oracle reproduces the official HF layer math and was first validated
+against stock HF at near-1.0 PCC for both layer kinds. Random changed positions
+and the 1023->1024 transition prove traced position buffers are consumed. Full
+and sliding prefill also pass at 262144 and the near-context non-divisible length
 262113.
 
 Main evidence:
 
-- `logs/final_revision_standard_suite.log`: 17 passed, 6 explicitly gated
+- `logs/final_autofix_standard_suite.log`: 25 passed, 8 explicitly gated
   long/performance tests skipped.
 - `logs/prefill_boundaries_real.log`: real-weight tile/page/window boundaries.
 - `logs/batch32_prefill_decode_real.log`: real-weight batch-32 prefill/decode.
-- `logs/final_long_pcc_populated_decode_262144_{sliding,full}.log`: exact-limit
-  PCC plus populated-cache traced replay.
+- `logs/autofix_exact_context_decode_262144_{sliding,full}.log`: genuine
+  262143-token history, distinct final token, direct HF-vs-TTNN traced decode.
+- `logs/autofix_focused_suite.log`: reduced-oracle validation, sliding cache
+  ownership after non-aligned prefill, and changed-input trace controls.
 - `logs/prefill_near_context_262113_{sliding,full}.log`.
 - `logs/decode_context_262144_{sliding,full}.log`.
-- `logs/final_watcher_batch32_stable_trace.log` and
-  `watcher_batch32_stable_final/generated/watcher/watcher.log`.
+- `logs/autofix_watcher_trace_mutation.log` and
+  `watcher_autofix_trace_mutation/generated/watcher/watcher.log`.
 
 ## Performance
 
@@ -79,8 +87,8 @@ of a complete captured layer at position 32. The totals below sum the filtered
 
 | Kind | Warmed prefill | Traced warmed decode |
 |---|---:|---:|
-| sliding | 3.533 ms | 2.578 ms |
-| full | 4.248 ms | 2.913 ms |
+| sliding | 3.521 ms | 2.577 ms |
+| full | 4.254 ms | 2.911 ms |
 
 Each `tracy/<kind>/<mode>/` directory contains the canonical raw ops CSV,
 filtered report CSV, human-readable report table, and command console log.
@@ -94,8 +102,8 @@ Signposts are `PERF_PREFILL` / `PERF_PREFILL_END` and `PERF_DECODE` /
 helper. The signposted Tracy windows contain TTNN device operations only;
 conversion and PCC checks are outside the measured pass.
 
-The final separate `TT_METAL_WATCHER=10` run passed traced batch-32 decode for
-both real-weight layer kinds. Its watcher log contains normal
+The final separate `TT_METAL_WATCHER=10` run passed random and wrap-boundary
+changed-input traced decode for both real-weight layer kinds. Its watcher log contains normal
 attach/check/detach records and no fatal exception, assert, invalid NOC,
 overflow, or sanitizer finding.
 
@@ -108,14 +116,14 @@ export LD_LIBRARY_PATH=$PWD/build/lib:${LD_LIBRARY_PATH:-}
 export MPLCONFIGDIR=/tmp/mpl
 pytest -q models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py -s
 GEMMA4_LONG_PREFILL=262144 pytest -q models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py -k long_nonaligned -s
-TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=$PWD/models/autoports/google_gemma_4_31b/doc/functional_decoder/watcher_batch32_stable_final pytest -q models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py -k batch_32_paged_decode_pcc -s
+GEMMA4_LONG_DECODE=262144 pytest -q models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py -k exact_context_distinct_traced_decode -s
+TT_METAL_WATCHER=10 TT_METAL_LOGS_PATH=$PWD/models/autoports/google_gemma_4_31b/doc/functional_decoder/watcher_autofix_trace_mutation pytest -q models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py -k changed_trace_buffers_random_and_boundaries -s
 ```
 
 Profiler commands use `GEMMA4_PERF=1 python -m tracy -r -p -v
 --output-folder <artifact-dir> -m pytest <single test node> -s`, followed by
 `tt-perf-report` with the matching signposts. Exact console provenance is in
-`logs/perf_*.log` (the oversized sliding-prefill log is committed as
-`logs/perf_prefill_sliding.log.gz`) and
+`logs/perf_*_autofix.log` and
 `tracy/*/*/*_perf_report.console.log`.
 
 ## Limitations

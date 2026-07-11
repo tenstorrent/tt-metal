@@ -37,8 +37,9 @@ Starting commit: `bc899b5b2f217dbe83a10b7800fdc1e37c35b136`
    long-kernel stall. The advertised context passed in 393.27 s cold and the
    near-context 262113 rerun passed in 94.53 s with compiled programs.
 
-Ordinary focused experiments identified and verified each issue; no unresolved
-hard bug remained that required `$autofix`.
+At the original checkpoint, ordinary focused experiments appeared to close the
+known issues. The resumed review and later `$autofix` section below supersede
+that conclusion.
 
 ## Commands and results
 
@@ -47,10 +48,12 @@ hard bug remained that required `$autofix`.
   ordinary invocation.
 - Batch-32 follow-up: `logs/batch32_prefill_decode_real.log`; four real-weight
   sliding/full prefill/decode cases passed at PCC 0.999309--0.999480.
-- Real-weight context commands set `GEMMA4_LONG_PREFILL` to 262144 and 262113
+- Historical real-weight context commands set `GEMMA4_LONG_PREFILL` to 262144 and 262113
   for each representative layer. Exact-limit prefill PCC was 0.998786 sliding
   and 0.999089 full; after that prefill, traced decode replay at position
-  262143 matched the prefill final token at 0.998715 and 0.996611.
+  262143 matched the prefill final token at 0.998715 and 0.996611. The resumed
+  review rejected those self-parity values as decode acceptance evidence; the
+  replacement direct HF evidence is recorded below.
 - Advertised-position empty-history construction smokes also passed, but the
   context capability claim is based on the populated-cache runs above.
 - Final watcher command and clean batch-32 traced result:
@@ -78,11 +81,51 @@ The initial independent review in `stage_review.md` returned
   recovery instead of being empty.
 
 The delivered runtime source hash is
-`315990f7e060a464d935efadf0dd50a8b035e187947ec320d08e4a15479e7a85`;
+`2f8a26cbdd8ebb46c8ba478080c963cd288c7936854a7023227ad58d69a144f2`;
 the final test source hash is
-`45b5053b59e5a2ac7c1a56e1cfd1aac31989588cdfcc513b47e97a0581d09c45`.
-Only tests, evidence documentation, and an isort-only import reordering changed
-after the four profiler runs; functional runtime logic did not.
+`2fd1278ecd6703a62ba6292fa67644c1c7d3e7bc97b4d7877c1b3d9584d2d6be`.
+The four profiler runs were regenerated against these final sources.
+
+## Resume review and autofix
+
+The resumed independent review in `stage_review_resume.md` found that the old
+maximum-context decode evidence repeated an already-prefilled final token and
+compared TTNN prefill to TTNN decode. Fresh `AUTODEBUG.md` inspection also found
+that padding lanes in non-aligned sliding prefill could wrap and overwrite live
+circular-cache entries.
+
+The runtime now bulk-fills only complete valid tiles and writes the valid tail
+sequentially with device-side paged cache updates. Real-weight seq 1025 and 1057
+tests pass a distinct next-token HF-vs-TTNN decode at PCC 0.997702 and 0.999330;
+selected K/V ownership checks have minimum PCC 0.999885. Stable traced token and
+position allocations are changed between replays at logged random positions and
+the 1023->1024 transition; all eight direct decode comparisons exceed 0.998948,
+the stale-input controls are materially worse, and repeated replay is bitwise
+deterministic.
+
+The replacement maximum-context test prefills exactly 262143 periodic real-weight
+history tokens and replays a distinct final token at position 262143. The reduced
+one-query HF oracle was first validated against stock HF at PCC 0.99999997 and
+0.99999999. Direct final-position PCC is 0.999406 sliding and 0.998875 full, with
+the wrong-position controls worse. Exact logs print total context, history,
+position, period, logical/physical page, PCC, and RMSE controls.
+
+Final commands and artifacts:
+
+- ordinary suite: `pytest -q .../test_functional_decoder.py -s`; 25 passed and
+  8 long/performance gates skipped, in `logs/final_autofix_standard_suite.log`;
+- exact decode: `GEMMA4_LONG_DECODE=262144 pytest -q ... -k
+  'exact_context_distinct_traced_decode and <layer kind>' -s`, in
+  `logs/autofix_exact_context_decode_262144_{sliding,full}.log`;
+- watcher: `TT_METAL_WATCHER=10` with the changed-trace selector, 4 passed and a
+  clean 1987-line watcher log under `watcher_autofix_trace_mutation/`;
+- final-source Tracy captures: `logs/perf_*_autofix.log`; report totals are
+  3.521/4.254 ms prefill and 2.577/2.911 ms traced decode for sliding/full.
+- first autofix rereview found the canonical text reports had CSV-export
+  diagnostics instead of tables; all four were regenerated from the canonical
+  raw ops CSVs with matching signposts, `--no-summary`, and `--no-advice`.
+- the resulting rereview in `stage_review_autofix.md` returned `clean-pass` with
+  no remaining stage-01 work.
 
 ## Hardware recovery record
 
@@ -96,9 +139,10 @@ after the four profiler runs; functional runtime logic did not.
 
 ## Stage review and checkpoint
 
-The initial review returned `more-work-needed`; all findings were fixed. The
-fresh rereview in `stage_review_rereview.md` returned `clean-pass`, and its
-post-hook provenance follow-up kept that verdict.
+The initial review returned `more-work-needed`; its then-known findings were
+fixed. The then-current rereview in `stage_review_rereview.md` returned
+`clean-pass`, but the resumed independent review later found the evidence defect
+documented below.
 
 Implementation and evidence checkpoint:
 `dac92a78dbca5d4b2d3e85b1007b00064b1ccc42`. This work-log/review provenance

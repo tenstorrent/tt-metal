@@ -5,6 +5,7 @@
   "largest_prefill_context_tested": 262144,
   "largest_decode_context_tested": 262144,
   "largest_populated_decode_context_tested": 262144,
+  "decode_history_tokens_tested": 262143,
   "largest_decode_absolute_position_tested": 262143,
   "largest_non_aligned_prefill_tested": 262113,
   "capability_reduction": null,
@@ -26,8 +27,10 @@
     }
   },
   "evidence": {
-    "advertised_prefill_and_populated_decode_sliding": "functional_decoder/logs/final_long_pcc_populated_decode_262144_sliding.log",
-    "advertised_prefill_and_populated_decode_full": "functional_decoder/logs/final_long_pcc_populated_decode_262144_full.log",
+    "advertised_prefill_sliding": "functional_decoder/logs/final_long_pcc_populated_decode_262144_sliding.log",
+    "advertised_prefill_full": "functional_decoder/logs/final_long_pcc_populated_decode_262144_full.log",
+    "advertised_distinct_decode_sliding": "functional_decoder/logs/autofix_exact_context_decode_262144_sliding.log",
+    "advertised_distinct_decode_full": "functional_decoder/logs/autofix_exact_context_decode_262144_full.log",
     "near_context_sliding": "functional_decoder/logs/prefill_near_context_262113_sliding.log",
     "near_context_full": "functional_decoder/logs/prefill_near_context_262113_full.log",
     "advertised_decode_sliding": "functional_decoder/logs/decode_context_262144_sliding.log",

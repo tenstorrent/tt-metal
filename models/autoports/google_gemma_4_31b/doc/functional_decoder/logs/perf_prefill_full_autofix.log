@@ -1,0 +1,113 @@
+2026-07-11 08:13:11.330 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill
+2026-07-11 08:13:11.332 | INFO     | __main__:main:395 - Using port 8086
+2026-07-11 08:13:11.332 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-07-11 08:13:11.337 | INFO     | tracy:run_report_setup:112 - Capture command: ('/localdev/odjuricic/tt-metal/build/tools/profiler/bin/tracy-capture -o models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-07-11 08:13:11.349 | INFO     | __main__:main:413 - Test process started
+2026-07-11 08:13:12.673 | INFO     | __main__:main:189 - Setting profiler artifacts folder to models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill
+2026-07-11 08:13:12.997 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/odjuricic/.cache/ttnn,model_cache_path=/home/odjuricic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.6.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/odjuricic/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, cov-7.0.0, anyio-4.14.1, github-actions-annotate-failures-0.3.0, split-0.11.0, benchmark-5.2.3, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_warmed_performance[prefill-5-full_attention] 2026-07-11 08:13:17.439 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-07-11 08:13:17.439 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-07-11 08:13:17.439 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-07-11 08:13:17.439 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-07-11 08:13:17.441 | info     |             UMD | Established firmware bundle version: 19.9.0 (topology_discovery.cpp:569)
+2026-07-11 08:13:17.441 | info     |             UMD | Firmware bundle version 19.9.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-07-11 08:13:17.441 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-07-11 08:13:17.483 | info     |             UMD | Opening local chip ids/PCIe ids: {0}/[0] and remote chip ids {} (cluster.cpp:168)
+2026-07-11 08:13:17.483 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-07-11 08:13:17.483 | info     |             UMD | KMD version: 2.4.1 (cluster.cpp:145)
+2026-07-11 08:13:17.483 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-07-11 08:13:17.484 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-07-11 08:13:17.545 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-07-11 08:13:17.749 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-07-11 08:13:17.749 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-07-11 08:13:17.750 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-07-11 08:13:17.750 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-07-11 08:13:17.750 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2342)
+2026-07-11 08:13:17.750 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {0:1} (topology_mapper_utils.cpp:2350)
+2026-07-11 08:13:17.812 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-07-11 08:13:17.874 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_143238002115104_memory' (shm_resource_tracker.cpp:282)
+2026-07-11 08:13:18.449 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349927 GHz, device_time_at_sync=9461312641685 cycles (realtime_profiler_manager.cpp:1127)
+2026-07-11 08:13:20.721 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-07-11 08:13:20.725 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+PASSED2026-07-11 08:13:21.722 | info     |           Metal | Device kernel duration perf summary (device=0): count=54, min=3251ns, avg=158028.7ns, max=599496ns (profiler_analysis.cpp:675)
+2026-07-11 08:13:21.722 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=59700ns, range=[0..597000), underflow(<0ns)=0, overflow(>=597000ns)=4) (profiler_analysis.cpp:718)
+2026-07-11 08:13:21.722 | info     |           Metal |   [           0 ..        59700) |########################################|       28 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [       59700 ..       119400) |#################                       |       12 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      119400 ..       179100) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      179100 ..       238800) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      238800 ..       298500) |###                                     |        2 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      298500 ..       358200) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      358200 ..       417900) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      417900 ..       477600) |######                                  |        4 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      477600 ..       537300) |                                        |        0 (profiler_analysis.cpp:723)
+2026-07-11 08:13:21.722 | info     |           Metal |   [      537300 ..       597000) |######                                  |        4 (profiler_analysis.cpp:723)
+
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+models/tt_transformers/tt/common.py:28
+  /localdev/odjuricic/tt-metal/models/tt_transformers/tt/common.py:28: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.14/migration/
+    class ImageMedia(BaseModel):
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /localdev/odjuricic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.09s call     models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_warmed_performance[prefill-5-full_attention]
+1.27s setup    models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_warmed_performance[prefill-5-full_attention]
+1.17s teardown models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_warmed_performance[prefill-5-full_attention]
+=========================== short test summary info ============================
+PASSED models/autoports/google_gemma_4_31b/tests/test_functional_decoder.py::test_warmed_performance[prefill-5-full_attention]
+======================== 1 passed, 3 warnings in 5.89s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+2026-07-11 08:13:24.081 | info     |    BuildKernels | JIT cache stats: 107/107 hits (100.0%) [107 cached, 10 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-07-11 08:13:24.081 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-07-11 08:13:24.090 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-07-11 08:13:24.090 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-07-11 08:13:24.256 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-07-11 08:13:24.256 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-07-11 08:13:24.256 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)
+
+Timer resolution: 9 ns
+
+Frames: 2
+Time span: 11.55 s
+Zones: 64,183
+Elapsed time: 11.41 s
+Saving trace... done!
+Trace size 632.36 KB (18.99% ratio)
+2026-07-11 08:13:24.471 | INFO     | __main__:main:452 - Copying /localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/odjuricic/tt-metal/build/profiler/build_wasm/traces/-s_2026_07_11_08_13_24.tracy
+2026-07-11 08:13:24.472 | WARNING  | __main__:main:457 - Could not copy /localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/odjuricic/tt-metal/build/profiler/build_wasm/traces/-s_2026_07_11_08_13_24.tracy: [Errno 2] No such file or directory: '/localdev/odjuricic/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-07-11 08:13:24.472 | INFO     | __main__:main:464 - embed.tracy -> traces/-s_2026_07_11_08_13_24.tracy
+2026-07-11 08:13:24.472 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-07-11 08:13:24.472 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-07-11 08:13:24.472 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-07-11 08:13:24.553 | INFO     | tracy:generate_report:162 - Host side ops time report generated at models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/.logs/tracy_ops_times.csv
+2026-07-11 08:13:24.562 | INFO     | tracy:generate_report:173 - Host side ops data report generated at models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/.logs/tracy_ops_data.csv
+2026-07-11 08:13:24.562 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:345 - Importing ops logs
+/localdev/odjuricic/tt-metal/tools/tracy/process_ops_logs.py:450: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-07-11 08:13:24.728 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-07-11 08:13:24.728 | INFO     | tracy.process_ops_logs:append_device_data:1009 - Appending device data
+2026-07-11 08:13:24.895 | INFO     | tracy.process_ops_logs:generate_reports:1342 - OPs' perf analysis is finished! Generating reports ...
+2026-07-11 08:13:24.895 | INFO     | tracy.process_ops_logs:generate_reports:1360 - Copying runtime artifacts
+2026-07-11 08:13:24.916 | INFO     | tracy.process_ops_logs:generate_reports:1369 - Generating OPs CSV
+2026-07-11 08:13:24.958 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /localdev/odjuricic/tt-metal/models/autoports/google_gemma_4_31b/doc/functional_decoder/tracy/full/prefill/reports/2026_07_11_08_13_24/ops_perf_results_2026_07_11_08_13_24.csv

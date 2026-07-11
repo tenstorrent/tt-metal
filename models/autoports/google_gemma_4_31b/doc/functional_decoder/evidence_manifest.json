@@ -1,25 +1,27 @@
 {
   "runtime_source": {
     "path": "tt/functional_decoder.py",
-    "sha256": "315990f7e060a464d935efadf0dd50a8b035e187947ec320d08e4a15479e7a85"
+    "sha256": "2f8a26cbdd8ebb46c8ba478080c963cd288c7936854a7023227ad58d69a144f2"
   },
   "test_source": {
     "path": "tests/test_functional_decoder.py",
-    "sha256": "45b5053b59e5a2ac7c1a56e1cfd1aac31989588cdfcc513b47e97a0581d09c45"
+    "sha256": "2fd1278ecd6703a62ba6292fa67644c1c7d3e7bc97b4d7877c1b3d9584d2d6be"
   },
-  "final_standard_suite": "logs/final_revision_standard_suite.log",
-  "advertised_context_populated_decode": {
-    "sliding": "logs/final_long_pcc_populated_decode_262144_sliding.log",
-    "full": "logs/final_long_pcc_populated_decode_262144_full.log"
+  "final_standard_suite": "logs/final_autofix_standard_suite.log",
+  "advertised_context_distinct_decode": {
+    "sliding": "logs/autofix_exact_context_decode_262144_sliding.log",
+    "full": "logs/autofix_exact_context_decode_262144_full.log"
   },
-  "watcher_batch32_trace": {
-    "console": "logs/final_watcher_batch32_stable_trace.log",
-    "watcher": "watcher_batch32_stable_final/generated/watcher/watcher.log"
+  "changed_input_trace_controls": "logs/autofix_focused_suite.log",
+  "sliding_padding_cache_ownership": "logs/final_autofix_standard_suite.log",
+  "watcher_changed_input_trace": {
+    "console": "logs/autofix_watcher_trace_mutation.log",
+    "watcher": "watcher_autofix_trace_mutation/generated/watcher/watcher.log"
   },
   "performance_reports": {
-    "sliding_prefill_csv_sha256": "89417210105b924ae95791cd68147350823085d0d82aa6e131beb97145771cee",
-    "sliding_decode_csv_sha256": "94e5fb55794d8fa94b977d566b67f3da73b52590347b14314d35008e612973ad",
-    "full_prefill_csv_sha256": "94b2b8fda2f39f7c7e47ccb1da44d8670687a72f9d50651dbec5fd6fe2e8e0ec",
-    "full_decode_csv_sha256": "e14f3c4bbd170a834f3df8ba47172a957df92f3ce7eda87407dc92c8058285fa"
+    "sliding_prefill_csv_sha256": "1fac0c0d17b3698d3fd1bd512ca7f8a4a2bb62a61111b96a3e4858ac17c8d817",
+    "sliding_decode_csv_sha256": "ba74bc83f4ca6115fd76d6cfd10271460608fe523fcbd4d1ed381f981e8b28e6",
+    "full_prefill_csv_sha256": "b98818926d2bdd7c689bfdf0b8a9b3177a9ad8569112c5444e9711fc8df11a9f",
+    "full_decode_csv_sha256": "8e32648d316e9e8f86a4069328a2c001e0a9ffe12d15ce9a9f75386cff303829"
   }
 }
