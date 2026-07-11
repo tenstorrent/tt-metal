@@ -238,6 +238,12 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat y = _sfpu_exp_fp32_accurate_(frac * LN2);
     y = sfpi::setexp(y, sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int);
 
+    // setexp applies the 2**k magnitude by writing the 8-bit exponent field, which wraps
+    // instead of saturating, so a huge exponent silently wraps to a finite value rather
+    // than overflowing. Clamp to inf explicitly (matches _sfpu_pow2_f32_accurate_hilo_).
+    v_if(s >= 128.0f) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
+
     // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
     v_if(base == 0.f && pow < 0.f) {
         y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
