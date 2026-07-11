@@ -508,11 +508,11 @@ void kernel_main() {
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
                     dst_w[w] = src_w[w];
                 }
-#if ENABLE_DEBUG_PRINT == 1
-                // Sample scratch row 0 (the reduced result) so unpack correctness is separable from
-                // routing: for input c->c+1, a correct reduce gives ch0..7 = 1..8 and ch60..63 = 61..64;
-                // a partial-face (3x3) unpack leak would show values != c+1 (often inflated).
-                {
+                // DEBUG (compute-vs-read locator): dump the scratch row-0 (reduced result) the reader sees,
+                // limited to the first few global sticks to avoid flooding/crashing the dprint server.
+                // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
+                // out-copy/assembly; constant/garbage (e.g. 2.0) => compute-side or a fixed/stale read.
+                if (global_stick < 4u) {
                     volatile tt_l1_ptr uint16_t* rp = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_row0_addr);
                     DPRINT(
                         "SCRATCH2OUT rdr={} gstick={} rdptr={} npages={} row0[0..7]: ",
@@ -529,7 +529,6 @@ void kernel_main() {
                     }
                     DPRINT("\n");
                 }
-#endif
             }
             scratch_cb.pop_front(scratch_npages);
 #endif  // !OUTPUT_TILED

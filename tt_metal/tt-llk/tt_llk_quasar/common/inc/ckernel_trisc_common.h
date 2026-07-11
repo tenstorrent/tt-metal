@@ -174,17 +174,6 @@ inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const bu
         WATCHER_RING_BUFFER_PUSH((std::uint32_t)buf_desc.f.l1_addr_16B);
     }
 #endif
-    // DEBUG (DPRINT locator): dump every configured descriptor's operand id + dims just before the
-    // validate assert, so we can name WHICH CB programs the invalid (non-pow2 y / z not in {1,4}) tile on
-    // the emulator (no ring buffer). Enable with TT_METAL_DPRINT_CORES on the compute core. Remove after.
-#if defined(KERNEL_BUILD)
-    DPRINT(
-        "QSR_BD id={} x={} y={} z={}\n",
-        (std::uint32_t)buf_desc_id,
-        (std::uint32_t)buf_desc.f.x_dim,
-        (std::uint32_t)buf_desc.f.y_dim,
-        (std::uint32_t)buf_desc.f.z_dim);
-#endif
     validate_buffer_desc(buf_desc);
     for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
     {

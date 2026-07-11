@@ -409,14 +409,6 @@ void kernel_main() {
                 // Reserve/push the WHOLE scratch CB (one full-tile write) so the single-tile scratch
                 // serializes per stick: stick N+1 can't reserve until the DM reader pops stick N's whole
                 // tile, so the full-tile pack never overlaps a still-unread tile.
-                // DEBUG (capacity-underflow locator): compare the reserve count (scratch_npages) to the CB's
-                // configured entry count -- reserve_back asserts buf_capacity >= num_entries. Remove after.
-                PACK(DPRINT(
-                    "SCRATCH_RSV cb={} npages={} nent={} esz={}\n",
-                    (uint32_t)curr_scratch_cb_id,
-                    (uint32_t)scratch_npages,
-                    (uint32_t)curr_scratch_cb.get_total_num_entries(),
-                    (uint32_t)curr_scratch_cb.get_entry_size()));
                 curr_scratch_cb.reserve_back(scratch_npages);
 #if DEBUG_PRINT == 1
                 // Which scratch CB and where does compute pack THIS stick? Compare wptr to the reader's
