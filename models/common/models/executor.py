@@ -87,6 +87,29 @@ def _next_supported_prefill_batch_size(batch_size: int, max_batch_size: int) -> 
     return max_batch_size if batch_size <= max_batch_size else None
 
 
+def _select_prefill_sample_logits(tt_logits, last_token_idx, num_cached_tokens=0):
+    """Select the real last-token row from a single-user prefill logits tile."""
+    last_relative = (last_token_idx - num_cached_tokens) % 32
+    return ttnn.slice(
+        tt_logits,
+        (0, 0, last_relative, 0),
+        (1, 1, last_relative + 1, tt_logits.shape[-1]),
+    )
+
+
+def _pad_prefill_sample_logits_for_sampler(tt_logits, sampler):
+    """Pad prefill logits to the sampler's fixed tile batch contract."""
+    target_batch = getattr(getattr(sampler, "config", None), "max_batch_size", tt_logits.shape[2])
+    current_batch = tt_logits.shape[2]
+    if current_batch >= target_batch:
+        return tt_logits
+    return ttnn.pad(
+        tt_logits,
+        [(0, 0), (0, 0), (0, target_batch - current_batch), (0, 0)],
+        value=0.0,
+    )
+
+
 def _batched_prefill_plan(batch_size, prefill_seq_lens, num_cached_per_user, max_batch_size, max_prefill_chunk_size):
     """Return padded batch size for TTTv1-style batched prefill, or None."""
     if batch_size <= 1:
@@ -182,13 +205,14 @@ def _build_decode_topk_param_tensors(mesh_device, sampling_params, batch_size, a
     """
     from models.common.sampling import format_sampling_params
 
-    # format_sampling_params asserts the batch is a multiple of 32. Keep the padded length for
-    # ttnn.sampling: decode tensors are tile-padded to 32 rows even when the logical batch is 1.
+    # format_sampling_params asserts the formatting length is a multiple of 32,
+    # but ttnn.sampling validates k/p/temp against the logits logical user
+    # count. Format at the padded contract, then pass only the real rows.
     fmt_len = ((batch_size + 31) // 32) * 32
     fmt = format_sampling_params(sampling_params, fmt_len)
-    k = list(fmt.top_k)
-    p = list(fmt.top_p)
-    temp = list(fmt.temperature)
+    k = list(fmt.top_k)[:batch_size]
+    p = list(fmt.top_p)[:batch_size]
+    temp = list(fmt.temperature)[:batch_size]
 
     if allow_force_argmax and all(kk == 1 for kk in k) and all(pp == 0 for pp in p) and all(tt == 1 for tt in temp):
         return None
@@ -387,6 +411,7 @@ class EagerLLMExecutor:
         logits,
         sampling_params,
         tt_out_tok=None,
+        force_topk=False,
     ):
         """Run ``model.sampling`` on device, choosing the path that matches PERF.md.
 
@@ -404,7 +429,11 @@ class EagerLLMExecutor:
         tensors are referenced during trace warmup, capture and replay (greedy decode
         keeps them constant, so no per-step update is needed).
         """
-        kpt = self._get_decode_sampling_kpt(sampling_params)
+        kpt = self._get_decode_sampling_kpt(
+            sampling_params,
+            int(logits.shape[2]),
+            force_topk=force_topk,
+        )
         if kpt is None:
             return self.model.sampling.decode_forward(logits, tt_out_tok=tt_out_tok)
         k_tt, p_tt, temp_tt = kpt
@@ -416,18 +445,23 @@ class EagerLLMExecutor:
             tt_out_tok=tt_out_tok,
         )
 
-    def _get_decode_sampling_kpt(self, sampling_params):
+    def _get_decode_sampling_kpt(self, sampling_params, batch_size=None, force_topk=False):
         """Lazily build + cache (k, p, temp) device tensors, or None for force-argmax."""
-        if getattr(self, "_decode_sampling_kpt_built", False):
-            return self._decode_sampling_kpt
-        self._decode_sampling_kpt = _build_decode_topk_param_tensors(
+        batch_size = int(batch_size or self.model.sampling.config.max_batch_size)
+        cache = getattr(self, "_decode_sampling_kpt_by_batch", None)
+        if cache is None:
+            cache = {}
+            self._decode_sampling_kpt_by_batch = cache
+        cache_key = (batch_size, bool(force_topk))
+        if cache_key in cache:
+            return cache[cache_key]
+        cache[cache_key] = _build_decode_topk_param_tensors(
             self.mesh_device,
             sampling_params,
-            self.model.sampling.config.max_batch_size,
-            allow_force_argmax=self.model.sampling.config.allow_force_argmax,
+            batch_size,
+            allow_force_argmax=self.model.sampling.config.allow_force_argmax and not force_topk,
         )
-        self._decode_sampling_kpt_built = True
-        return self._decode_sampling_kpt
+        return cache[cache_key]
 
     def _assert_kv_cache_identity(self, kv_cache):
         """Verify kv_cache passed to forward is the same object bound at allocation."""
@@ -842,7 +876,18 @@ class EagerLLMExecutor:
             )
 
             if sampling_on_device:
-                tt_toks, _ = self._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+                logits = _select_prefill_sample_logits(
+                    logits,
+                    last_token_idx,
+                    num_cached_tokens,
+                )
+                logits = _pad_prefill_sample_logits_for_sampler(logits, self.model.sampling)
+                tt_toks, _ = self._sampling_decode_forward(
+                    logits,
+                    sampling_params,
+                    tt_out_tok=None,
+                    force_topk=True,
+                )
                 prefill_results.append(
                     {
                         "idx": idx,
@@ -924,7 +969,12 @@ class EagerLLMExecutor:
         )
 
         if sampling_params is not None and getattr(self.model, "sampling", None) is not None:
-            tt_toks, _ = self._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+            tt_toks, _ = self._sampling_decode_forward(
+                logits,
+                sampling_params,
+                tt_out_tok=None,
+                force_topk=True,
+            )
             tt_toks_host = tt_toks.cpu(blocking=False)
             ttnn.synchronize_device(self.mesh_device)
             sampled = _process_output_decode_tokens(tt_toks_host, batch_size, self.cluster_shape)
@@ -1431,6 +1481,7 @@ class TracedLLMExecutor:
         # todo)) remove unnecessary sampling_params?
         sampling_params: SamplingParams | None = None,
         start_pos: torch.Tensor | None = None,  # [batch_size], int64
+        enable_trace: bool = True,
     ) -> torch.Tensor:  # [batch_size, 1, vocab_size], float32
         """Traced prefill: lazy capture on first call per seq_len, replay after.
 
@@ -1442,10 +1493,23 @@ class TracedLLMExecutor:
             empty_slots: List of user IDs to prefill.
             sampling_params: Sampling parameters (not used in prefill).
             start_pos: Starting position for prefix caching, shape [batch_size].
+            enable_trace: If False, run the eager prefill path without capturing or
+                replaying a prefill trace.
 
         Returns:
             Logits tensor, shape [batch_size, 1, vocab_size].
         """
+        if not enable_trace:
+            return self._eager.prefill_forward(
+                tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                empty_slots=empty_slots,
+                sampling_params=sampling_params,
+                start_pos=start_pos,
+            )
+
         # Boundary assertions
         assert tokens.dim() == 2, f"tokens must be [batch_size, seq_len], got {tokens.dim()}D"
         assert page_table.dim() == 2, f"page_table must be [batch_size, max_blocks], got {page_table.dim()}D"
@@ -1539,7 +1603,15 @@ class TracedLLMExecutor:
                     last_token_idx=last_token_idx,
                     prefill_seq_len=prefill_seq_len,
                 )
-                logits = self.model.post_process_prefill_output(logits, last_token_idx)
+                if sampling_on_device:
+                    logits = self.model.post_process_batched_prefill_output(
+                        logits,
+                        [last_token_idx - num_cached_tokens],
+                        1,
+                        prefill_seq_len,
+                    )
+                else:
+                    logits = self.model.post_process_prefill_output(logits, last_token_idx)
             else:
                 logits = self._eager._prefill_single_user(
                     prefill_ids,
@@ -1550,7 +1622,19 @@ class TracedLLMExecutor:
                 )
 
             if sampling_on_device:
-                tt_toks, _ = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+                if not can_trace:
+                    logits = _select_prefill_sample_logits(
+                        logits,
+                        last_token_idx,
+                        num_cached_tokens,
+                    )
+                logits = _pad_prefill_sample_logits_for_sampler(logits, self.model.sampling)
+                tt_toks, _ = self._eager._sampling_decode_forward(
+                    logits,
+                    sampling_params,
+                    tt_out_tok=None,
+                    force_topk=True,
+                )
                 prefill_results.append(
                     {
                         "idx": idx,
@@ -1627,7 +1711,13 @@ class TracedLLMExecutor:
         )
 
         if sampling_params is not None and getattr(self.model, "sampling", None) is not None:
-            tt_toks, _ = self._eager._sampling_decode_forward(logits, sampling_params, tt_out_tok=None)
+            logits = _pad_prefill_sample_logits_for_sampler(logits, self.model.sampling)
+            tt_toks, _ = self._eager._sampling_decode_forward(
+                logits,
+                sampling_params,
+                tt_out_tok=None,
+                force_topk=True,
+            )
             tt_toks_host = tt_toks.cpu(blocking=False)
             ttnn.synchronize_device(self.mesh_device)
             sampled = _process_output_decode_tokens(tt_toks_host, batch_size, self.cluster_shape)
@@ -1748,6 +1838,7 @@ class TracedLLMExecutor:
         read_from_device: bool = True,
         sampling_params: SamplingParams | None = None,
         reset_batch: bool = False,
+        enable_trace: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Traced decode: lazy capture on first call, replay after.
 
@@ -1759,12 +1850,25 @@ class TracedLLMExecutor:
             read_from_device: Whether to return host tensors.
             sampling_params: Sampling parameters for on-device sampling.
             reset_batch: Refresh all trace inputs before replay.
+            enable_trace: If False, run the eager decode path without capturing or
+                replaying a decode trace.
 
         Returns:
             (logits_or_tokens, log_probs) tuple.
             If sampling_params is None: logits [batch_size, 1, vocab_size], None
             If sampling_params provided: tokens [batch_size], None
         """
+        if not enable_trace:
+            return self._eager.decode_forward(
+                tokens,
+                start_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                read_from_device=read_from_device,
+                sampling_params=sampling_params,
+                reset_batch=reset_batch,
+            )
+
         # Boundary assertions
         assert tokens.dim() == 1, f"tokens must be [batch_size], got {tokens.dim()}D"
         assert start_pos.dim() == 1, f"start_pos must be [batch_size], got {start_pos.dim()}D"
@@ -1846,6 +1950,11 @@ class TracedLLMExecutor:
             and hasattr(self.model, "increment_positions")
         )
 
+    @staticmethod
+    def _copy_sampled_tokens_to_decode_input(tt_toks, tt_tokens) -> None:
+        sampled_tokens = ttnn.reshape(tt_toks, tt_tokens.shape)
+        ttnn.copy(input_a=sampled_tokens, input_b=tt_tokens)
+
     def _prealloc_sampling_buffers(self, sampling_params) -> None:
         """Materialise the *persistent* on-device sampling buffers before ANY trace is captured.
 
@@ -1907,13 +2016,13 @@ class TracedLLMExecutor:
                 wu_toks, _ = self._eager._sampling_decode_forward(
                     wu_logits,
                     sampling_params,
-                    tt_out_tok=wu_tokens if use_device_decode_feedback else None,
+                    tt_out_tok=None,
                 )
                 if use_device_decode_feedback:
+                    self._copy_sampled_tokens_to_decode_input(wu_toks, wu_tokens)
                     self.model.increment_positions(wu_current_pos, wu_rot_mat_idxs)
             ttnn.synchronize_device(self.mesh_device)
-            if not use_device_decode_feedback:
-                cleanup_ttnn_value(wu_toks)
+            cleanup_ttnn_value(wu_toks)
             copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs)
             ttnn.synchronize_device(self.mesh_device)
             logger.info("Compiled on-device sampling")
@@ -1934,13 +2043,13 @@ class TracedLLMExecutor:
 
             if sampling_on_device and self.model.sampling is not None:
                 use_device_decode_feedback = self._use_device_decode_feedback(sampling_on_device)
-                tt_out_tok = tt_tokens if use_device_decode_feedback else None
                 tt_toks, tt_log_probs = self._eager._sampling_decode_forward(
                     logits,
                     sampling_params,
-                    tt_out_tok=tt_out_tok,
+                    tt_out_tok=None,
                 )
                 if use_device_decode_feedback:
+                    self._copy_sampled_tokens_to_decode_input(tt_toks, tt_tokens)
                     self.model.increment_positions(tt_current_pos, tt_rot_mat_idxs)
                 output = (tt_toks, tt_log_probs)
             else:
@@ -2460,9 +2569,13 @@ def _process_output_decode(tt_out, B, vocab_size, num_devices, cluster_shape):
 
 def _process_output_decode_tokens(tt_out, B, cluster_shape):
     """Device→host for decode when sampling on device. Returns token ids [B]."""
-    padded_batch_size = 32
-    tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
-    return _concat_host_output(tt_out, cluster_shape)[0, 0, :B, 0]
+    torch_out = _concat_host_output(tt_out, cluster_shape)
+    if torch_out.ndim >= 4:
+        if torch_out.shape[2] >= B:
+            return torch_out[0, 0, :B, 0]
+        if torch_out.shape[3] >= B:
+            return torch_out[0, 0, 0, :B]
+    return torch_out.reshape(-1)[:B]
 
 
 def _get_batched_prefill_page_table(page_table, kv_cache, prefill_seq_len, empty_slots, padded_batch):

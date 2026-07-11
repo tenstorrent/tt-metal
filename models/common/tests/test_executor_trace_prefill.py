@@ -4,6 +4,54 @@
 from models.common.models import executor as executor_module
 
 
+class _FakeTTTensor:
+    def __init__(self, shape):
+        self.shape = shape
+
+
+def test_prefill_sample_logits_pad_matches_sampler_batch(monkeypatch):
+    logits = _FakeTTTensor((1, 1, 1, 128))
+
+    class Sampler:
+        class config:
+            max_batch_size = 32
+
+    pad_calls = []
+
+    def fake_pad(tensor, padding, value):
+        pad_calls.append((tensor, padding, value))
+        return _FakeTTTensor((1, 1, 32, 128))
+
+    monkeypatch.setattr(executor_module.ttnn, "pad", fake_pad)
+
+    padded = executor_module._pad_prefill_sample_logits_for_sampler(logits, Sampler())
+
+    assert padded.shape == (1, 1, 32, 128)
+    assert pad_calls == [
+        (
+            logits,
+            [(0, 0), (0, 0), (0, 31), (0, 0)],
+            0.0,
+        )
+    ]
+
+
+def test_prefill_sample_logits_pad_noop_when_already_full_batch(monkeypatch):
+    logits = _FakeTTTensor((1, 1, 32, 128))
+
+    class Sampler:
+        class config:
+            max_batch_size = 32
+
+    monkeypatch.setattr(
+        executor_module.ttnn,
+        "pad",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected pad")),
+    )
+
+    assert executor_module._pad_prefill_sample_logits_for_sampler(logits, Sampler()) is logits
+
+
 def test_easy_trace_prefill_replay_copies_only_mutable_inputs(monkeypatch):
     engine = executor_module.TracedLLMExecutor.__new__(executor_module.TracedLLMExecutor)
     engine.mesh_device = "mesh"

@@ -103,6 +103,7 @@ class EagerLlamaExecutor:
         empty_slots=None,
         sampling_params=None,
         start_pos=None,
+        enable_trace=True,
     ):
         return self._engine.prefill_forward(
             tokens,
@@ -126,6 +127,7 @@ class EagerLlamaExecutor:
         read_from_device=True,
         sampling_params=None,
         reset_batch=False,
+        enable_trace=True,
     ):
         return self._engine.decode_forward(
             tokens,
@@ -240,6 +242,7 @@ class TracedLlamaExecutor:
         empty_slots=None,
         sampling_params=None,
         start_pos=None,
+        enable_trace=True,
     ):
         return self._engine.prefill_forward(
             tokens,
@@ -249,6 +252,7 @@ class TracedLlamaExecutor:
             empty_slots=empty_slots,
             sampling_params=sampling_params,
             start_pos=start_pos,
+            enable_trace=enable_trace,
         )
 
     def decode_forward(
@@ -260,6 +264,7 @@ class TracedLlamaExecutor:
         read_from_device=True,
         sampling_params=None,
         reset_batch=False,
+        enable_trace=True,
     ):
         return self._engine.decode_forward(
             tokens,
@@ -269,6 +274,7 @@ class TracedLlamaExecutor:
             read_from_device=read_from_device,
             sampling_params=sampling_params,
             reset_batch=reset_batch,
+            enable_trace=enable_trace,
         )
 
     def cleanup(self):

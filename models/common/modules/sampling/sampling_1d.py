@@ -369,7 +369,8 @@ class Sampling1D(LightweightModule):
         x_bf16 = self._mask_invalid_vocab_logits(x_bf16)
 
         # Strategy-dispatched top-k
-        topk_values, topk_indices = self._topk(x_bf16)
+        active_batch = int(x_bf16.shape[2])
+        topk_values, topk_indices = self._topk(x_bf16, active_batch)
 
         # Convert indices to int32
         topk_indices_int32 = ttnn.typecast(topk_indices, dtype=ttnn.int32, sub_core_grids=cfg.sub_core_grids)
@@ -377,14 +378,19 @@ class Sampling1D(LightweightModule):
         topk_values, topk_indices_int32 = self._prepare_topk_memory(topk_values, topk_indices_int32)
 
         # Add device offsets for global vocabulary indices
+        index_offsets, sliced_offsets = self._slice_user_rows(
+            self._index_offsets, int(topk_indices_int32.shape[2]), cfg.sampling_memory_config
+        )
         topk_global_indices = ttnn.add(
-            self._index_offsets,
+            index_offsets,
             topk_indices_int32,
             dtype=ttnn.int32,
             memory_config=cfg.sampling_memory_config,
             sub_core_grids=cfg.sub_core_grids,
         )
         ttnn.deallocate(topk_indices_int32)
+        if sliced_offsets:
+            ttnn.deallocate(index_offsets)
 
         # Use distinct names so we can free the interleaved intermediate after untilize
         topk_global_indices_interleaved = ttnn.to_memory_config(topk_global_indices, ttnn.DRAM_MEMORY_CONFIG)
@@ -508,13 +514,30 @@ class Sampling1D(LightweightModule):
             sub_core_grids=cfg.sub_core_grids,
         )
 
+    def _slice_user_rows(self, tensor, active_batch, memory_config):
+        if int(tensor.shape[2]) == active_batch:
+            return tensor, False
+        return (
+            ttnn.slice(
+                tensor,
+                [0, 0, 0, 0],
+                [tensor.shape[0], tensor.shape[1], active_batch, tensor.shape[3]],
+                memory_config=memory_config,
+                sub_core_grids=self.config.sub_core_grids,
+            ),
+            True,
+        )
+
     # -- Top-k strategies (bound at init, no if-else in forward) --------------
 
-    def _topk_single_device(self, x_bf16):
+    def _topk_single_device(self, x_bf16, active_batch):
         """Split vocab in half → two topk → concat. Port of tt_sampling.py:346-371."""
         cfg = self.config
         x_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
-        indices_list = ttnn.split(self._local_indices, self._local_indices.shape[-1] // 2, dim=3)
+        local_indices, sliced_indices = self._slice_user_rows(
+            self._local_indices, active_batch, self._local_indices.memory_config()
+        )
+        indices_list = ttnn.split(local_indices, local_indices.shape[-1] // 2, dim=3)
 
         values_parts = []
         indices_parts = []
@@ -537,10 +560,12 @@ class Sampling1D(LightweightModule):
         for v, i in zip(values_parts, indices_parts):
             ttnn.deallocate(v)
             ttnn.deallocate(i)
+        if sliced_indices:
+            ttnn.deallocate(local_indices)
 
         return gathered_values, gathered_indices
 
-    def _topk_multi_device(self, x_bf16):
+    def _topk_multi_device(self, x_bf16, active_batch):
         """Local topk → all_gather across devices. Port of tt_sampling.py:372-421."""
         cfg = self.config
         cluster_shape = cfg.mesh_device.shape
@@ -557,13 +582,18 @@ class Sampling1D(LightweightModule):
                 sub_core_grids=cfg.sub_core_grids,
             )
 
+        local_indices, sliced_indices = self._slice_user_rows(
+            self._local_indices, active_batch, self._local_indices.memory_config()
+        )
         topk_values, topk_indices = ttnn.topk(
             x_bf16,
             k=cfg.max_top_k,
             dim=-1,
             sub_core_grids=cfg.sub_core_grid_topk,
-            indices_tensor=self._local_indices,
+            indices_tensor=local_indices,
         )
+        if sliced_indices:
+            ttnn.deallocate(local_indices)
 
         # For 1D meshes use cluster_axis=None
         sampling_cluster_axis = None if 1 in cluster_shape else 0

@@ -1453,7 +1453,6 @@ def build_llama3_transformer_1d_config(
             return None
 
         use_galaxy_force_argmax = is_galaxy_cluster and num_devices >= 8
-        allow_force_argmax = use_galaxy_force_argmax or num_devices < 8
         return Sampling1DConfig(
             vocab_size=padded_vocab_size,
             valid_vocab_size=vocab_size,
@@ -1461,10 +1460,9 @@ def build_llama3_transformer_1d_config(
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
             pad_to_power_of_2=pad_logits_to_power_of_2,
-            # Match TTTv1's measured sampling CCL policy: N150/N300 keep the
-            # default 1-link force-argmax path, Galaxy uses its 4-link recipe,
-            # and T3K stays on top-k because the Galaxy argmax gather regresses there.
-            allow_force_argmax=allow_force_argmax,
+            # Decode uses force-argmax for greedy rows; prefill can still force
+            # the top-k path at the executor call site when a platform needs it.
+            allow_force_argmax=True,
             num_argmax_gather_links=4 if use_galaxy_force_argmax else 1,
             ag_topology=ttnn.Topology.Ring if use_galaxy_force_argmax else ttnn.Topology.Linear,
             argmax_num_workers_per_link=2,

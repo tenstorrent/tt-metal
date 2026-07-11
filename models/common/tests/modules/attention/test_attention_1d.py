@@ -827,6 +827,65 @@ def test_attention_1d_resolve_validates_token_budget_edge_case(expect_error):
         _resolve_attention1d_config(config_fail)
 
 
+def test_attention_1d_resolve_allows_vllm_paged_kv_context_over_static_budget():
+    """vLLM paged KV uses max_seq_len as per-request context, not static KV size."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=32,
+        n_kv_heads=8,
+        head_dim=128,
+        max_batch_size=8,
+        max_seq_len=128 * 1024,
+        use_vllm_paged_kv_cache=True,
+        paged_attention_config=PagedAttentionConfig(
+            block_size=32,
+            max_num_blocks=(128 * 1024) // 32 + 8,
+        ),
+    )
+
+    try:
+        _resolve_attention1d_config(config)
+    except (ValueError, AssertionError) as e:
+        assert "Total token budget exceeded" not in str(e), f"Unexpected static token budget error: {e}"
+        assert "Paged KV token budget exceeded" not in str(e), f"Unexpected paged token budget error: {e}"
+
+
+def test_attention_1d_resolve_validates_vllm_paged_kv_physical_budget(expect_error):
+    """vLLM paged KV still rejects page pools larger than the per-lane DRAM budget."""
+    mock_source = MagicMock()
+    mock_source.shape = (4096, 1536)
+
+    mock_wqkv = MagicMock(spec=LazyWeight)
+    mock_wqkv.source = mock_source
+    mock_wqkv.device = None
+
+    config = Attention1DConfig(
+        wqkv=mock_wqkv,
+        wo=MagicMock(spec=LazyWeight),
+        n_heads=32,
+        n_kv_heads=8,
+        head_dim=128,
+        max_batch_size=8,
+        max_seq_len=128 * 1024,
+        use_vllm_paged_kv_cache=True,
+        paged_attention_config=PagedAttentionConfig(
+            block_size=32,
+            max_num_blocks=(128 * 1024) // 32 + 9,
+        ),
+    )
+
+    with expect_error(ValueError, "Paged KV token budget exceeded"):
+        _resolve_attention1d_config(config)
+
+
 def test_attention_1d_resolve_kv_cache_tensor_passthrough():
     """Test that _resolve_attention1d_config passes through raw ttnn.Tensor KV cache entries."""
     mock_source = MagicMock()
