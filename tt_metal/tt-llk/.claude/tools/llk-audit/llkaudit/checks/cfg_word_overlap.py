@@ -113,6 +113,25 @@ class CfgWordOverlap(Check):
                 elif field:
                     unresolved.append(self._unresolved(m, field))
 
+        # De-duplicate per write-site. cfg_reg_rmw_tensix<FIELD_RMW> is captured
+        # BOTH as a call (how=cfg_reg_rmw_tensix, atomic RMWCIB) and as the
+        # FIELD_RMW object-macro (how=cfg_rmw:..., added for Quasar). Collapse
+        # them per (file,line,field), preferring the call/instr entry so the true
+        # atomicity is known. On Quasar, cfg_rmw(FIELD_RMW,...) has no
+        # cfg_reg_rmw_tensix call, so only the macro entry exists and it survives
+        # (correctly treated as a non-atomic software RMW).
+        for key in list(writers):
+            seen: dict = {}
+            for w in writers[key]:
+                k = (w["file"], w["line"], w["field"])
+                prev = seen.get(k)
+                if prev is None or (
+                    prev["how"].startswith("cfg_rmw:")
+                    and not w["how"].startswith("cfg_rmw:")
+                ):
+                    seen[k] = w
+            writers[key] = list(seen.values())
+
         findings: list[Finding] = []
         for (ns, word), ws in sorted(writers.items()):
             threads = {w["thread"] for w in ws if w["thread"] != "UNKNOWN"}
@@ -124,6 +143,8 @@ class CfgWordOverlap(Check):
                 for w in ws
             ]
             fields = sorted({w["field"] for w in ws})
+            safety, bits = self._safety(ws, fb.addr32)
+            bits_str = ", ".join(f"{t}=0x{m:x}" for t, m in sorted(bits.items()))
             # anchor the finding at the first writer
             first = min(ws, key=lambda w: (w["file"], w["line"]))
             findings.append(
@@ -132,12 +153,16 @@ class CfgWordOverlap(Check):
                     line=first["line"],
                     function=first["function"],
                     kind=f"shared_word@{ns}:{word}",
+                    # The cross-thread ACCESS is always reported (multi-thread use
+                    # of a word is itself worth seeing, even when race-safe);
+                    # safety is a SUB-annotation, not a filter.
                     hint="CROSS_THREAD_SHARED_WORD",
                     detail=(
-                        f"{ns} word {word} written by threads "
-                        f"{sorted(threads)} via fields {fields}"
+                        f"{ns} word {word} written by threads {sorted(threads)} "
+                        f"via fields {fields}; per-thread bits {{{bits_str}}}"
                     ),
                     evidence=ev,
+                    safety=safety,
                 )
             )
 
@@ -156,6 +181,49 @@ class CfgWordOverlap(Check):
     def _is_masked(how: str) -> bool:
         h = how.lower()
         return "cfg_reg_rmw_tensix" in h or "cfg_rmw" in h or "rmwcib" in h
+
+    @staticmethod
+    def _safety(ws, defines):
+        """Race-safety ANNOTATION for a cross-thread shared word (never a filter).
+        Returns (label, {thread: combined_bitmask}).
+          SAFE_BY_MASKING   – every cross-thread writer is a byte-atomic masked
+                              RMW (cfg_reg_rmw_tensix/RMWCIB) and the per-thread
+                              bit masks are pairwise disjoint (RMWCIB is byte-
+                              atomic, so disjoint bits compose safely).
+          POTENTIAL_CLOBBER – a full-word write, a non-atomic software cfg_rmw,
+                              or overlapping bits across threads.
+          UNKNOWN           – a writer's field mask isn't in cfg_defines.
+        The word is reported as CROSS_THREAD_SHARED_WORD regardless of the label;
+        SAFE_BY_MASKING still surfaces the multi-thread access (a possible
+        ownership smell) — the label just says it isn't a data race."""
+        per_thread: dict = {}
+        unresolved = False
+        all_atomic = True
+        for w in ws:
+            if w["thread"] == "UNKNOWN":
+                continue
+            if registry.write_is_full_word(w["how"]):
+                m, all_atomic = 0xFFFFFFFF, False
+            else:
+                m = registry.field_bitmask(w["field"], defines)
+                if m is None:
+                    unresolved, m = True, 0
+                if not registry.write_is_atomic_masked(w["how"]):
+                    all_atomic = False
+            per_thread[w["thread"]] = per_thread.get(w["thread"], 0) | m
+        masks = list(per_thread.values())
+        disjoint = all(
+            (masks[i] & masks[j]) == 0
+            for i in range(len(masks))
+            for j in range(i + 1, len(masks))
+        )
+        if unresolved:
+            label = "UNKNOWN"
+        elif all_atomic and disjoint:
+            label = "SAFE_BY_MASKING"
+        else:
+            label = "POTENTIAL_CLOBBER"
+        return label, per_thread
 
     def _intra_thread_clobber(self, writers) -> list[Finding]:
         """Pattern 3: a full-word write (cfg[]=/WRCFG_32b) to a multi-field Config

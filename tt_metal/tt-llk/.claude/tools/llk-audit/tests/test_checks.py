@@ -623,6 +623,93 @@ def test_cfg_word_intra_thread_full_word_clobber():
     assert not any(f.hint == "INTRA_THREAD_CLOBBER" for f in CfgWordOverlap().run(fb2))
 
 
+@case
+def test_cfg_word_safety_annotation_kept_finding():
+    # Cross-thread word is ALWAYS reported; `safety` is a sub-annotation.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"  # UNPACK
+    Fp = "tt_llk_wormhole_b0/common/inc/cpack_common.h"  # PACK
+
+    def run(fa_mask, fb_mask, pack_full_word=False):
+        facts = [
+            fn("u", Fu, 10, 20),
+            fn("p", Fp, 30, 40),
+            call(
+                Fu, 12, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FA_ADDR32>", func="u"
+            ),
+        ]
+        if pack_full_word:
+            facts.append(pw(Fp, 32, "get_cfg_pointer", "FB_ADDR32", func="p"))
+        else:
+            facts.append(
+                call(
+                    Fp,
+                    32,
+                    "cfg_reg_rmw_tensix",
+                    "cfg_reg_rmw_tensix<FB_ADDR32>",
+                    func="p",
+                )
+            )
+        fb = FactBase("wormhole", facts)
+        fb.addr32 = {
+            "FA_ADDR32": 5,
+            "FB_ADDR32": 5,
+            "FA_MASK": fa_mask,
+            "FB_MASK": fb_mask,
+        }
+        return [
+            f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+        ]
+
+    # disjoint bits, both atomic RMWCIB -> SAFE_BY_MASKING, still reported
+    out = run(0x1, 0x3C)
+    assert len(out) == 1 and out[0].safety == "SAFE_BY_MASKING", out
+    # overlapping bits -> POTENTIAL_CLOBBER (still reported)
+    out = run(0x3, 0x1)
+    assert len(out) == 1 and out[0].safety == "POTENTIAL_CLOBBER", out
+    # a full-word writer -> POTENTIAL_CLOBBER even if masks look disjoint
+    out = run(0x1, 0xFFFFFFFF, pack_full_word=True)
+    assert len(out) == 1 and out[0].safety == "POTENTIAL_CLOBBER", out
+
+
+@case
+def test_cfg_word_dedup_double_captured_rmw():
+    # cfg_reg_rmw_tensix<FA_RMW> is captured as BOTH a call and the FA_RMW macro
+    # at the same site; dedup -> one atomic writer, so a disjoint pair stays SAFE.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"
+    Fp = "tt_llk_wormhole_b0/common/inc/cpack_common.h"
+    facts = [
+        fn("u", Fu, 10, 20),
+        fn("p", Fp, 30, 40),
+        call(Fu, 12, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FA_RMW>", func="u"),
+        macro(Fu, 12, "FA_RMW", "FA_RMW", func="u"),  # duplicate capture of same write
+        call(Fp, 32, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FB_RMW>", func="p"),
+        macro(Fp, 32, "FB_RMW", "FB_RMW", func="p"),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"FA_ADDR32": 5, "FB_ADDR32": 5, "FA_MASK": 0x1, "FB_MASK": 0x2}
+    out = [f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"]
+    assert len(out) == 1 and out[0].safety == "SAFE_BY_MASKING", out
+    assert len(out[0].evidence) == 2, out[0].evidence  # not double-listed
+
+
+@case
+def test_diff_scope_filter():
+    from llkaudit.cli import scope_to_changed
+
+    findings = [
+        {"file": "/x/cpack_common.h", "evidence": ["cunpack_common.h:5 [UNPACK] F"]},
+        {"file": "/x/llk_math_reduce.h", "evidence": ["llk_math_reduce.h:9 [MATH] G"]},
+    ]
+    # no changed files -> unfiltered
+    assert len(scope_to_changed(findings, [])) == 2
+    # scope to cunpack: keeps the cpack finding (evidence touches cunpack), drops math
+    out = scope_to_changed(findings, ["/repo/.../cunpack_common.h"])
+    assert len(out) == 1 and out[0]["file"].endswith("cpack_common.h"), out
+    # scope to the math file: anchor match
+    out = scope_to_changed(findings, ["/repo/.../llk_math_reduce.h"])
+    assert len(out) == 1 and out[0]["file"].endswith("llk_math_reduce.h"), out
+
+
 def main():
     failed = 0
     for c in CASES:

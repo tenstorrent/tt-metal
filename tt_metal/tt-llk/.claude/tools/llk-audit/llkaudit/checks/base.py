@@ -31,9 +31,17 @@ class Finding:
     hint: str  # recall bucket — NEVER a verdict
     detail: str  # one-line human explanation
     evidence: list = field(default_factory=list)  # related facts (file:line: what)
+    #: optional SUB-annotation on a finding (never replaces the hint / never
+    #: clears it). e.g. cfg-word attaches safety="SAFE_BY_MASKING" to a still-
+    #: reported CROSS_THREAD_SHARED_WORD so the access is visible AND the
+    #: race-safety is known. "" when a check doesn't annotate.
+    safety: str = ""
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if not d.get("safety"):
+            d.pop("safety", None)  # keep output clean for checks that don't annotate
+        return d
 
 
 class Check:

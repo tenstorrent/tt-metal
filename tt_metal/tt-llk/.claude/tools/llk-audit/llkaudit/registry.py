@@ -300,21 +300,56 @@ CFG_DEFINES_REL = {
     "quasar": "tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h",
 }
 
-_DEFINE_RE = re.compile(r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(\d+)\s*$")
+# NAME -> integer literal (decimal OR hex). Captures _ADDR32 (decimal word
+# index), _SHAMT (decimal), and _MASK (hex, pre-positioned 32-bit field mask).
+_DEFINE_RE = re.compile(
+    r"^\s*#define\s+([A-Za-z_][A-Za-z0-9_]*)\s+(0[xX][0-9a-fA-F]+|\d+)\s*$"
+)
 
 
 def load_addr32(cfg_defines_path: str) -> dict:
-    """Parse `#define NAME <int>` lines from a cfg_defines.h into {name: int}."""
+    """Parse `#define NAME <int|hex>` lines from a cfg_defines.h into {name: int}.
+    Includes the *_ADDR32 word indices (used by resolve_word) and the *_MASK
+    field masks (used by field_bitmask for the masking annotation)."""
     out = {}
     try:
         with open(cfg_defines_path) as fh:
             for ln in fh:
                 m = _DEFINE_RE.match(ln)
                 if m:
-                    out[m.group(1)] = int(m.group(2))
+                    out[m.group(1)] = int(m.group(2), 0)  # base 0 -> auto dec/hex
     except OSError:
         pass
     return out
+
+
+def field_bitmask(field_token: str, defines: dict):
+    """The pre-positioned 32-bit mask of the bits a field occupies, from its
+    sibling *_MASK define. `field_token` is the *_ADDR32 token (e.g.
+    STACC_RELU_ApplyRelu_ADDR32). Returns int mask, or None if unresolved."""
+    if not field_token:
+        return None
+    base = field_token[:-7] if field_token.endswith("_ADDR32") else field_token
+    return defines.get(base + "_MASK")
+
+
+# Full-word writes (cfg[]= / WRCFG_32b) touch all 32 bits.
+_FULL_WORD_MASK = 0xFFFFFFFF
+
+
+def write_is_atomic_masked(how: str) -> bool:
+    """True if the write is a byte-atomic masked RMW (cfg_reg_rmw_tensix / RMWCIB,
+    which lower to TT_RMWCIB) — the only mechanism that both preserves sibling
+    bits AND is atomic across threads. A full-word write clobbers siblings; a
+    software cfg_rmw preserves them but is NOT atomic across threads (needs a
+    mutex); REG2FLOP writes bytes without a preserving RMW."""
+    h = how.lower()
+    return "cfg_reg_rmw_tensix" in h or "rmwcib" in h
+
+
+def write_is_full_word(how: str) -> bool:
+    h = how.upper()
+    return "CFG32" in h or "CFG_PTR" in h or "MMIO_PTR" in h or "WRCFG" in h
 
 
 _WORD_OFFSET_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*_ADDR32)\s*(?:\+\s*(\d+))?")

@@ -20,6 +20,7 @@ user_invocable: true
 Get the deterministic candidate list before manual analysis:
 
     cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole> --checks semaphore-handshake
+    # PR-scoped: add --changed [BASE] (default main) to report only findings touching a changed file.
     # candidates: out/audit.<arch>.json -> .checks["semaphore-handshake"].findings
 
 `MUTEX_IMBALANCE` = a function whose acquire/release counts differ (wrapper defs

@@ -31,6 +31,7 @@ shared fact base (which is also what makes the JOIN a lookup rather than a
 schema reconciliation):
 
     cd .claude/tools/llk-audit && ./run.sh <wormhole|blackhole>
+    # PR-scoped sweep: add --changed [BASE] (default main) to scope every check to files changed vs BASE.
     # out/audit.<arch>.json -> .checks[{mmio-race, cfg-word-overlap,
     #                                    semaphore-handshake, reconfig-stall}]
 
