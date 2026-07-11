@@ -336,14 +336,10 @@ def resolve_word(text: str, addr32: dict):
     return None, None
 
 
-def word_namespace(field: str) -> str:
-    """The CONFIG register FILE a field lives in. Two writes alias the same
-    physical word only within the same namespace: THCON registers are a
-    separate file (addressed relative to THCON_CFGREG_BASE_ADDR32), so their
-    ADDR32 index collides numerically with the main TENSIX config file but is
-    NOT the same word. Prefix-based; the only collision that matters in practice
-    is THCON vs the main file."""
-    return "THCON" if field.startswith("THCON") else "MAIN"
+# NOTE: the register-FILE separation (Config vs ThreadConfig) is decided by the
+# WRITE INSTRUCTION, not the field-name prefix — see cfg_word_overlap.py. THCON
+# is a sub-range of the Config array (per tt-isa-docs BackendConfiguration.md),
+# NOT a separate file, so a field-name/THCON split would be wrong.
 
 
 # --- reconfig-stall -----------------------------------------------------------
