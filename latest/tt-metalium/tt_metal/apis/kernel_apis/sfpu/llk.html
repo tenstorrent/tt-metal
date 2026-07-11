@@ -325,10 +325,6 @@ may change with future architectures.</p>
 <blockquote>
 <div>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst0</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst1</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConst0p8373</span></code></p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">vConstNeg1</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstTileId</span></code>, counts by two through the vector elements: [0, 2, 4..62]</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm0</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm0</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">vConstFloatPrgm1</span></code>, <code class="docutils literal notranslate"><span class="pre">vConstIntPrgm1</span></code></p></li>
@@ -336,6 +332,10 @@ may change with future architectures.</p>
 </ul>
 </div>
 </blockquote>
+<p>Note: previously the vector constants <code class="docutils literal notranslate"><span class="pre">1.0f</span></code>, <code class="docutils literal notranslate"><span class="pre">0.0f</span></code>, <code class="docutils literal notranslate"><span class="pre">-1.0f</span></code>
+and <code class="docutils literal notranslate"><span class="pre">0.8373f</span></code> were also available as named constants. Just use the
+floating literals (possibly converted to <code class="docutils literal notranslate"><span class="pre">vFloat</span></code>), the compiler
+knows what to do.</p>
 </section>
 <section id="user-visible-objects">
 <h4>User Visible Objects<a class="headerlink" href="#user-visible-objects" title="Permalink to this heading"></a>
