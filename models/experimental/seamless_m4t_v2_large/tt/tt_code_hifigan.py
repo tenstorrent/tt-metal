@@ -61,6 +61,43 @@ def _vocoder_conv1d_dram_slice_enabled() -> bool:
     return os.environ.get("SEAMLESS_VOCODER_CONV1D_DRAM_SLICE", "1") != "0"
 
 
+def _vocoder_resblock_l1_enabled() -> bool:
+    """Keep HiFi-GAN resblock convs resident in L1: run each conv single-shot with HEIGHT sharding (no
+    DRAM width-slicing) so ``conv1 -> conv2`` hand off sharded in L1 instead of round-tripping DRAM
+    (kills the ``InterleavedToSharded``/``ShardedToInterleaved`` churn and moves long convs off the
+    inefficient block-sharded auto path). Measured to fit BH L1 for every vocoder stage at B=1
+    (up to 409600x16). Set ``SEAMLESS_VOCODER_RESBLOCK_L1=0`` to fall back to the DRAM width-slice path."""
+    return os.environ.get("SEAMLESS_VOCODER_RESBLOCK_L1", "1") != "0"
+
+
+# Element budget (batch*timeline*in_channels) under which a single-shot HEIGHT-sharded conv1d fits BH
+# L1 without slicing. Every B=1 vocoder stage sits at <= 6.55M elems; above the budget we fall back to
+# the DRAM width-slice path. Override via ``SEAMLESS_VOCODER_L1_SINGLESHOT_ELEMS``.
+_VOCODER_L1_SINGLESHOT_ELEMS = int(os.environ.get("SEAMLESS_VOCODER_L1_SINGLESHOT_ELEMS", str(8 * 1024 * 1024)))
+
+
+def _vocoder_fits_l1_singleshot(timeline: int, in_channels: int, batch: int = 1) -> bool:
+    """Whether one HEIGHT-sharded conv1d over this activation fits BH L1 single-shot (no slicing)."""
+    return int(batch) * int(timeline) * int(in_channels) <= _VOCODER_L1_SINGLESHOT_ELEMS
+
+
+def _resolve_resblock_shard_layout(
+    *, in_channels: int, kernel_size: int, input_length: int, batch: int = 1
+) -> Optional[ttnn.TensorMemoryLayout]:
+    """HEIGHT sharding for a resblock conv. With L1-resident mode, keep HEIGHT on long timelines too
+    (single-shot, no auto-slice) while K fits and the activation fits L1; otherwise defer to the generic
+    resolver (which caps HEIGHT at ``_HEIGHT_SHARD_MAX_TLEN`` and lets the device auto-pick)."""
+    if (
+        _vocoder_resblock_l1_enabled()
+        and int(in_channels) * int(kernel_size) <= _HEIGHT_SHARD_K_MAX
+        and _vocoder_fits_l1_singleshot(input_length, in_channels, batch)
+    ):
+        return ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    return _resolve_conv_shard_layout(
+        _RESBLOCK_SHARD, in_channels=in_channels, kernel_size=kernel_size, input_length=input_length
+    )
+
+
 def _vocoder_conv1d_max_interior() -> int:
     raw = os.environ.get("SEAMLESS_VOCODER_CONV1D_MAX_INTERIOR")
     if raw is not None:
@@ -1123,8 +1160,16 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 accept_sharded_input=accept_sharded_input,
             )
 
-        # Below this length one conv1d fits BH l1_small (double-buffer off). Only chunk above it.
-        if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
+        # One conv1d fits BH L1 single-shot either when the timeline is short, or (L1-resident mode) when
+        # it is HEIGHT-sharded and the activation fits the L1 element budget — no DRAM slicing, and the
+        # sharded output can be handed straight to the next conv (``keep_sharded_output``).
+        run_single_shot_l1 = (
+            _vocoder_resblock_l1_enabled()
+            and shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+            and int(stride) == 1
+            and _vocoder_fits_l1_singleshot(seq, in_channels, batch)
+        )
+        if seq <= _HIFIGAN_MAX_CONV1D_TLEN or run_single_shot_l1:
             out, out_len = self._conv1d_run(
                 x_in,
                 weight=weight,
@@ -1408,6 +1453,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
         weight = layer["weight"]
         bias = layer["bias"]
 
+        # ``conv_transpose2d`` needs NHWC ([B,T,1,C]); the [B,T,C]->[B,T,1,C] reshape is a free view on
+        # ROW_MAJOR but a full relayout on TILE (~2.7ms/stage, the ReshapeView bucket in the perf report).
+        # Untilize once here (~0.17ms) so the reshape is free and the conv gets its natural RM input.
+        if x_nlc.get_layout() != ttnn.ROW_MAJOR_LAYOUT and not ttnn.is_sharded(x_nlc):
+            x_rm = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_nlc)
+            x_nlc = x_rm
+
         real_len = int(input_length)
         work_len = _vocoder_timeline_bucket(real_len)
         x_work = x_nlc
@@ -1547,11 +1600,11 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 groups=1,
                 dilation=int(c1p["dilation"]),
                 fused_post_activation=_fused_leaky_relu(self.leaky_slope),
-                shard_layout=_resolve_conv_shard_layout(
-                    _RESBLOCK_SHARD,
+                shard_layout=_resolve_resblock_shard_layout(
                     in_channels=channels,
                     kernel_size=int(c1p["kernel_size"]),
                     input_length=tlen,
+                    batch=batch,
                 ),
                 keep_sharded_output=True,
             )
@@ -1568,11 +1621,11 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 padding=int(c2p["padding"]),
                 groups=1,
                 dilation=int(c2p["dilation"]),
-                shard_layout=_resolve_conv_shard_layout(
-                    _RESBLOCK_SHARD,
+                shard_layout=_resolve_resblock_shard_layout(
                     in_channels=channels,
                     kernel_size=int(c2p["kernel_size"]),
                     input_length=tlen,
+                    batch=batch,
                 ),
                 accept_sharded_input=True,
             )

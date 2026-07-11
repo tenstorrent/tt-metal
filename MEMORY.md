@@ -113,11 +113,45 @@ This mirrors what the conv-transpose upsample path already does with `Conv2dDRAM
 - Warm forward median: **648 ms → 448 ms (~31% faster)**, min 642 → 444 ms.
 - Isolation test: sliced conv1d bit-accurate (PCC 0.9999+) on long low-channel shapes.
 
-### Ideas not yet done (next candidates, higher risk)
-- **Keep resblock activations sharded across consecutive convs** to cut `InterleavedToSharded` (~13%) and the
-  conv-internal Untilize/Tilize. Bigger restructure; watch PCC margin (only ~0.008 above gate).
-- `_VOCODER_CONV1D_MAX_INTERIOR=49152` is an L1 hard cap (65536 OOMs even at low channels) — not the lever.
-- HiFi2 vs HiFi4: measured ~1% total gain only (vocoder is DM-bound, not math-bound) and costs PCC margin — not worth it.
+### EXP-2 ✅ DONE — L1-resident resblock convs (single-shot HEIGHT, keep sharded)
+**Idea:** every per-stage conv FITS BH L1 single-shot with HEIGHT sharding (measured to 409600x16 — the
+`_HIFIGAN_MAX_CONV1D_TLEN=4096` cap is far too conservative; the real limiter was conv working set, not
+activation size — activations are ~120KB/core spread over 110 cores). So run resblock convs single-shot
+HEIGHT (no DRAM width-slice), `conv1` keeps output sharded, `conv2` accepts it → hand off in L1 instead of
+round-tripping DRAM. Also moves long convs off the inefficient block-sharded auto path (FLOPs eff 2.5%→~25%).
+
+**Change (`tt_code_hifigan.py`):** `_vocoder_resblock_l1_enabled()` (default on, `SEAMLESS_VOCODER_RESBLOCK_L1=0`
+to disable) + `_VOCODER_L1_SINGLESHOT_ELEMS` budget (8M elems; all B=1 stages ≤6.55M) + `_vocoder_fits_l1_singleshot`
++ `_resolve_resblock_shard_layout` (returns HEIGHT on long timelines when it fits, else generic resolver).
+`_conv1d` runs single-shot when `shard==HEIGHT and stride==1 and fits L1` (not just seq≤4096). `_resblock`
+uses the new resolver. Falls back to DRAM width-slice above the budget (B>1, huge timelines).
+**Result:** PCC 0.99827 (unchanged), device time 141.0→134.5ms, height-sharded conv weighted FLOPs 20.9→24.7%.
+
+### EXP-3 ✅ DONE — Free the conv_transpose input reshape (RM instead of TILE)
+**Idea:** `conv_transpose2d` needs NHWC `[B,T,1,C]`; that reshape is a FREE view on ROW_MAJOR but a full
+relayout on TILE (**2.76ms vs 0.01ms**, microbenchmarked). `h` reached the transpose in TILE (conv1d always
+returns TILE — it ignores `output_layout=ROW_MAJOR`). Untilize once (TILE→RM, **0.17ms**) so the reshape is free.
+**Change:** `to_layout(ROW_MAJOR)` at the top of `_conv_transpose1d_nlc` (before the pad/reshape).
+**Result:** PCC 0.99827 (unchanged). ReshapeView 7,658µs(8 ops)→11µs(3). PaddedSlice 7,459→3,761µs (transpose
+now reads RM). Device time 134.5→**123.6ms**.
+
+### Cumulative results (device time, from `tt-perf-report`, unit_seq=1024)
+- exp0 baseline (manual chunk loop): **286.2 ms**
+- exp1 (+DRAM width-slice, EXP-1): 141.0 ms
+- exp2 (+L1 resblock, EXP-2): 134.5 ms
+- exp3 (+transpose reshape, EXP-3): **123.6 ms**  → **−57% device**, **−36% wall-clock** (638→408 ms).
+- PCC held at 0.99827 (gate 0.99) throughout; multi-shape (useq 128/512/1000) all pass unchanged.
+- useq=64 PCC 0.975 is a PRE-EXISTING short-seq accuracy bug (bit-identical with all flags off) — not ours.
+
+### Remaining top buckets (exp3) — next candidates, higher risk
+- **Conv2d block_sharded 22.4%** = conv_transpose upsampling at **1.58% FLOPs eff**. Biggest single bucket;
+  inherent to skinny low-channel transposed convs. Needs a different upsample formulation / shard tuning.
+- **InterleavedToSharded 21.7% (94 ops)** — dominated by the conv_transpose + per-stage input sharding, NOT
+  the resblocks (those now chain in L1). Hard to cut without restructuring the transpose.
+- **UntilizeWithUnpadding 13.2% (19 ops, ~860µs each)** on the biggest tensors.
+- Small layout churn in the embedding/expansion front-door (permute/repeat/concat/tilize, ids ~159-212) — each
+  <150µs, ~1-2ms total; low priority vs the transpose.
+- `_VOCODER_CONV1D_MAX_INTERIOR=49152` L1 cap and HiFi2 (DM-bound, ~1% gain) remain non-levers.
 
 ---
 

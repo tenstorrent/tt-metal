@@ -50,8 +50,9 @@ with mesh_default_device(dev):
             ttnn.deallocate(l)
         return statistics.median(ts), min(ts)
 
-    flag = os.environ.get("SEAMLESS_VOCODER_CONV1D_DRAM_SLICE", "1")
+    slice_flag = os.environ.get("SEAMLESS_VOCODER_CONV1D_DRAM_SLICE", "1")
+    l1_flag = os.environ.get("SEAMLESS_VOCODER_RESBLOCK_L1", "1")
     med, mn = timeit()
-    print(f"RESULT dram_slice={flag}: median={med*1000:.1f}ms min={mn*1000:.1f}ms")
+    print(f"RESULT dram_slice={slice_flag} resblock_l1={l1_flag}: median={med*1000:.1f}ms min={mn*1000:.1f}ms")
 
 ttnn.close_mesh_device(dev)
