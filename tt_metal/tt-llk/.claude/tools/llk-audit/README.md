@@ -48,8 +48,10 @@ Every finding is a **recall bucket, not a verdict**, and every check declares it
 **narrow recallers**: `srcreg-bank` enumerates the dvalid control points and
 flags the one mechanical ISA pattern (raw `SETDVALID` on BH) but does NOT model
 the bank-flip lockstep verdict; `mailbox-sync` covers only the tiny IN-TREE
-mailbox surface (the CB tile-address/value broadcast is kernel-tier) and pairs
-statically — balance/symmetry/overflow/ordering stay with the skill.
+mailbox surface (all mailbox use outside tt-llk — the compute API plus the
+hand-written `mailbox_write` in ttnn/models kernels, one-to-one channels and
+fan-outs alike — is out-of-tree, audited by the skill's ttnn-widened grep) and
+pairs statically — balance/symmetry/overflow/ordering stay with the skill.
 
 **cfg-word `safety` annotation.** A `CROSS_THREAD_SHARED_WORD` finding is *always*
 emitted (multi-thread access to a word is worth seeing even when race-safe — it

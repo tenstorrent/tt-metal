@@ -3,13 +3,21 @@
 """
 mailbox-sync (lite) checker — in-tree RISC<->RISC mailbox FIFO endpoints.
 
-Mailboxes are directed point-to-point FIFOs between the baby-RISCV cores. A
-misuse deadlocks (blocking read on a never-written FIFO / writer stalled on a
-full one) or loses ordering. The functional mailbox surface INSIDE tt-llk is
-tiny — the T1->T0 dst_index hand-off (cmath writes, cunpack reads) plus the
-debug halt/unhalt handshake; the large surface (the CB tile-address/value
-broadcast) lives in the compute API / kernels, OUTSIDE the headers this tool
-parses (that is the kernel/JIT tier — run.sh --full-jit).
+Mailboxes are directed point-to-point FIFOs between the baby-RISCV cores — each
+`mailbox_write(dest)` is ONE one-to-one channel; a fan-out (write to Math AND
+Pack) is several independent channels, NOT a single "broadcast". A misuse
+deadlocks (blocking read on a never-written FIFO / writer stalled on a full one)
+or loses ordering. The functional mailbox surface INSIDE tt-llk is tiny — the
+T1->T0 dst_index hand-off (cmath writes, cunpack reads) plus the debug
+halt/unhalt handshake. The LARGE surface lives OUTSIDE the headers this tool
+parses: the compute-API sites (hw/inc/api) and the hand-written
+`ckernel::mailbox_write(...)` in ttnn/models KERNELS (one-to-one messages and
+fan-outs alike; the CB tile-address/value broadcast is just one pattern). That
+kernel surface is NOT covered by run.sh --full-jit today (its kernel tier is
+cb-sync/noc-sync only) — it is audited by the /mailbox-sync-audit skill's widened
+grep (which reaches ttnn/models). A future kernel-tier `mailbox-sync` extension
+could recall it deterministically, covering every directed channel (not just the
+broadcast).
 
 So this is a pure AUGMENTOR over the in-tree surface: it enumerates every FIFO
 endpoint, decodes its directed channel (source_thread -> dest_thread) via the
@@ -39,9 +47,11 @@ class MailboxSync(Check):
     name = "mailbox-sync"
     description = "In-tree RISC<->RISC mailbox FIFO endpoints + pairing status"
     blind_spots = (
-        "Only the IN-TREE mailbox surface is seen; the CB tile-address/value "
-        "broadcast (tt_metal/hw/inc/api dataflow/compute) and user kernels are "
-        "OUT of scope (kernel/JIT tier). Pairing is a static same-channel match "
+        "Only the IN-TREE (tt-llk) mailbox surface is seen; ALL mailbox use "
+        "outside tt-llk is out of scope here — the compute-API sites "
+        "(tt_metal/hw/inc/api) and the hand-written mailbox_write in ttnn/models "
+        "KERNELS (one-to-one channels and fan-outs). Pairing is a static "
+        "same-channel match "
         "only — it does NOT verify push/pop BALANCE over a complete iteration, "
         "call-count symmetry across control-flow branches (the deadlock trap), "
         "FIFO overflow (depth-4), or the ordering caveat (a mailbox write does "

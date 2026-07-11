@@ -47,9 +47,11 @@ latency table), and **dataflow-cb-sync** / **noc-sync** (their surface is the
 JIT-compiled kernels OUTSIDE tt-llk — reachable only via the opt-in kernel tier,
 see *Full-audit kernel tier* below). `srcreg-bank` recalls only the dvalid
 control points + the raw-`SETDVALID`-on-BH flag (not the bank-flip lockstep
-verdict), and `mailbox-sync` covers only the IN-TREE mailbox surface (the CB
-broadcast is kernel-tier) — so both still need heavy LLM widening per their
-`blind_spots`. The tool is **advisory**: it never clears a class, and its silence
+verdict), and `mailbox-sync` recalls only the IN-TREE mailbox surface — ALL
+mailbox use outside tt-llk (the compute API and the hand-written `mailbox_write`
+in ttnn/models kernels, one-to-one channels and fan-outs alike) is NOT tool-
+recalled and is covered by the `mailbox-sync` skill's ttnn-widened grep, so both
+still need heavy LLM widening per their `blind_spots`. The tool is **advisory**: it never clears a class, and its silence
 is "no new *known-pattern* instance," not "no bug".
 
 ## Full-audit kernel tier (opt-in, JIT-dependent) — the cb-sync / noc-sync runbook
@@ -121,7 +123,7 @@ A naive "run them + concatenate" can catch *less* than the audits alone (summari
    | `mmio-race`: MMIO config write SAFE | "a semaphore / STALLWAIT(TRISC_CFG) orders it before the consumer" | `semaphore-handshake` shows that semaphore is balanced+init'd AND the MMIO store is sequenced relative to the post; or the stall's condition actually covers the consumer |
    | `reconfig-stall`: per-thread drain present (e.g. `STALLWAIT(STALL_CFG, PACK)`) | (drains *this* thread's unit only) | does another **thread** write the same word? → hand to `cfg-word-overlap`; a per-thread drain never excludes a cross-thread writer |
    | `semaphore-handshake`: semaphore protocol SAFE | (verifies counting, not payload) | which config words/dest/src rely on this semaphore for mutual exclusion? → confirm each such write is actually inside the ordered window |
-   | `mailbox-sync`: mailbox handshake SAFE | "the memory the mailbox value refers to is ready, and all threads reach the broadcast equally" | the referenced memory (L1 tile, dest offset) is ordered-ready — a plain `fence` does NOT order a mailbox write against a prior store to a different region (a no-op on WH; on BH it drains the store queue but not to *processed*), so cross with `mmio-race`/memory-ordering AND hand the "is the CB page ready?" half to `dataflow-cb-sync`; and the call-count symmetry holds on every branch (same control-flow that `semaphore-handshake` balance depends on) |
+   | `mailbox-sync`: mailbox handshake SAFE | "the memory the mailbox value refers to is ready, and all threads reach the mailbox handshake equally (including hand-written mailbox_write in ttnn/models kernels)" | the referenced memory (L1 tile, dest offset) is ordered-ready — a plain `fence` does NOT order a mailbox write against a prior store to a different region (a no-op on WH; on BH it drains the store queue but not to *processed*), so cross with `mmio-race`/memory-ordering AND hand the "is the CB page ready?" half to `dataflow-cb-sync`; and the call-count symmetry holds on every branch (same control-flow that `semaphore-handshake` balance depends on) |
    | `dataflow-cb-sync`: CB credit SAFE | "the page write is ordered before the credit, and reserve/wait gates the access" | the data-before-credit barrier (NOC flush before `cb_push_back`) is present → cross with `mmio-race`/NOC ordering; the address `mailbox-sync` broadcasts derives from `fifo_rd_ptr` gated by this `cb_wait_front`; and `tile_regs_*` interleaving is `semaphore-handshake`'s `MATH_PACK` |
    | `mmio-race`: MMIO-vs-MOP write SAFE | "a `mop_sync()`/`tensix_sync()` drains it" | the drain provably covers the consumer at the site (right primitive, every path, cross-call window). ALSO: is the drain heavier than needed (OVER-SYNC) or unnecessary (REDUNDANT)? → perf finding, never suppresses the race verdict |
    | `srcreg-bank-sync`: SrcA/SrcB bank handoff SAFE | "the FPU op waits for `AllowedClient`, and Dst/LReg is ordered" | bank-flip is lockstep on both sides; the Dst/LReg half rides `MATH_PACK`/`mutex::SFPU` → hand that half to `semaphore-handshake`; single-thread ownership of the bank state holds |
