@@ -268,6 +268,58 @@ def test_indexer_score_ring4_fused_runtime_kv_len():
         _close_ring4_ccl(parent, submesh, stall_group)
 
 
+@pytest.mark.parametrize("case_id, heads", QB_CASES, ids=QB_IDS)
+def test_indexer_score_ring4_fused_program_cache_reuse(case_id, heads):
+    """Two dispatches with IDENTICAL tensor shapes but a DIFFERENT chunk_start / kv_len, on the SAME device
+    (so the 2nd hits the cached program). chunk_start_idx / kv_len are HASH-EXCLUDED (one program is reused
+    across chunked-prefill chunks / decode steps), so the descriptor factory MUST re-apply them in
+    override_runtime_arguments; if it doesn't, the 2nd dispatch scores with the 1st's frozen causal offset /
+    valid length -> wrong logits (regression guard for the fused-op program-cache stale-scalar bug: every
+    other fused test dispatches cold, so only a same-device 2nd call with a new chunk_start exercises the hit).
+    Block-cyclic, two consecutive prefill chunks: chunk@0 then chunk@CHUNK_GLOBAL over one shared cache."""
+    t_alloc = 4 * CHUNK_GLOBAL  # room for both chunks' causal windows (global block == CHUNK_GLOBAL)
+    submesh, parent, ccl_semaphores, subdevice_id, stall_group = _open_ring4_ccl()
+    try:
+        q_g, k_nat, w_g = _global_inputs(heads, CHUNK_GLOBAL, t_alloc, seed=42)
+        k_bc = _to_slab(k_nat, RING, CHUNK_GLOBAL)  # block-cyclic physical layout
+        shard = ttnn.ShardTensorToMesh(submesh, dim=2)
+        q_dev = ttnn.from_torch(q_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+        w_dev = ttnn.from_torch(w_g, device=submesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=shard)
+        k_local = _shard_k(submesh, k_bc)
+        k_gathered = _persistent_buffer(submesh, torch.zeros_like(k_bc))
+
+        def _score(chunk_start, kv_len):  # identical shapes each call -> 2nd is a program-cache hit
+            out = ttnn.experimental.indexer_score_dsa_fused(
+                q_dev,
+                k_gathered,
+                w_dev,
+                k_local,
+                ccl_semaphores,
+                cluster_axis=SP_AXIS,
+                topology=ttnn.Topology.Linear,
+                num_links=1,
+                ag_sub_device_id=subdevice_id,
+                chunk_start_idx=chunk_start,
+                block_cyclic_sp_axis=SP_AXIS,
+                block_cyclic_chunk_local=QB_SQ,
+                kv_len=kv_len,
+                program_config=glx_config(heads),
+            )
+            ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+            return ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=2))
+
+        # chunk@0 (cache miss / build) then chunk@CHUNK_GLOBAL (cache HIT -- must re-apply chunk_start + kv_len).
+        out0 = _score(chunk_start=0, kv_len=CHUNK_GLOBAL)
+        out1 = _score(chunk_start=CHUNK_GLOBAL, kv_len=2 * CHUNK_GLOBAL)
+        ref0 = _per_sp_ref(q_g, k_nat[:, :, :CHUNK_GLOBAL, :], w_g, RING, 0)
+        ref1 = _per_sp_ref(q_g, k_nat[:, :, : 2 * CHUNK_GLOBAL, :], w_g, RING, CHUNK_GLOBAL)
+        assert_indexer_match(out0[:, :, :, :CHUNK_GLOBAL], ref0, CHUNK_GLOBAL, CHUNK_GLOBAL, check_neg=True)
+        assert_indexer_match(out1[:, :, :, : 2 * CHUNK_GLOBAL], ref1, CHUNK_GLOBAL, 2 * CHUNK_GLOBAL, check_neg=True)
+        logger.info(f"ring4 fused program-cache reuse (heads={heads}): 2nd chunk_start re-applied on cache hit")
+    finally:
+        _close_ring4_ccl(parent, submesh, stall_group)
+
+
 def test_indexer_score_ring4_fused_rejects_head_streaming(expect_error):
     """The fused path requires all heads resident (head_group_size 0 or Hi); a streaming config
     (0 < head_group_size < Hi) must be rejected at validate, not silently mis-scheduled. The rejection is

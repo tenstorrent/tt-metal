@@ -643,10 +643,43 @@ void IndexerScoreFusedMeshWorkloadFactory::override_runtime_arguments(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
-    // Buffer addresses (q/k/w/out + the AG's gathered buffer) auto-patch via the descriptor bindings. The
-    // per-device chunk_start is baked per-coord at build; a program-cache hit with a NEW chunk_start would be
-    // stale (Step B tests dispatch cold -> always a miss -> correct). Scalar re-patch is a later follow-up.
+    // Buffer addresses (q/k/w/out/k_local + the AG's gathered buffer) auto-patch via the descriptor's
+    // BufferBinding fast path.
     descriptor_adapter_t::apply_descriptor(cached, args, tensors, out);
+
+    // The per-dispatch scalars chunk_start_idx / kv_len / cache_batch_idx are HASH-EXCLUDED (see
+    // compute_program_hash: one cached program is reused across chunked-prefill chunks and decode steps that
+    // differ only in these), so on a program-cache HIT the WorkloadDescriptor fast path above leaves them
+    // frozen at the FIRST dispatch's values -- a stale causal offset (chunk_start_tiles/straddle) and valid
+    // length (kv_len_tiles), which silently corrupts every chunk after the first (the classic Program-model
+    // factory re-applies them in its own override; the descriptor fast path does not). Re-derive them per
+    // coord by rebuilding the descriptor -- pure host construction, no device-resource allocation (the ring
+    // semaphores + gathered buffer are passed in, not allocated here) -- and copy ONLY the scalar slots back.
+    // Buffers stay owned by the fast path above; the schedule + band-visit permutation are geometry-only
+    // (independent of chunk_start/kv_len), so they are stable across dispatches and need no re-patch.
+    using tt::tt_metal::GetRuntimeArgs;
+    const auto patch_scalars = [](tt::tt_metal::Program& program,
+                                  const ProgramDescriptor& desc,
+                                  uint32_t kernel_idx,
+                                  std::initializer_list<uint32_t> slots) {
+        for (const auto& [core, src] : desc.kernels[kernel_idx].runtime_args) {
+            auto& dst = GetRuntimeArgs(program, kernel_idx, core);
+            for (uint32_t s : slots) {
+                dst[s] = src[s];
+            }
+        }
+    };
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        const auto desc = build_fused_program_descriptor(args, tensors, out, range.start_coord());
+        // kernel_idx: reader=0, writer=1, compute=2 (AG worker kernels 3.. carry no per-dispatch scalars).
+        // Slots are literals (matching the file-local rt_arg static_assert: reader_k_batch_offset==25,
+        // reader_kv_len_tiles==26) -- rt_arg is in an anonymous namespace not visible here.
+        patch_scalars(program, desc, 0, {25u, 26u});  // reader: k_batch_page_offset, kv_len_tiles
+        // compute: kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles (slots [6, perm_base)).
+        patch_scalars(program, desc, 2, {6u, 7u, 8u, 9u});
+        // writer: same four scalars after out-addr(0) + schedule(1..6) (slots [7, perm_base)).
+        patch_scalars(program, desc, 1, {7u, 8u, 9u, 10u});
+    }
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::program
