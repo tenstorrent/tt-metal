@@ -28,8 +28,8 @@ Target cell dispatched: `...[blackhole-bh_glx-line-no_trace_no_check-k512-q128-8
 - [x] q128 k512  → **SDPA FW median 4.74ms / mean 4.91ms** (n=32, job 215546-39, JIT 173/175 warm, PASSED). vs 4.85ms baseline = within ±2.3% = **NO WIN** (>5% gate not met). Env-file dispatch: broker param is `env:` (not `env_file`), `opt/env_sdpa.yaml`.
 - [x] q256 k512  → **SDPA FW median 5.335ms / mean 5.359ms** (n=32, tight 5.30–5.55, job 220638-41, JIT 170/175 warm, PASSED). vs 4.85ms baseline = **+10% SLOWER = NO WIN**. Trend now clear: q128 4.74 < baseline(q192) 4.85 < q256 5.34 ⇒ **smaller q is better; q256 direction is dead**.
 - [x] q64  k512  → **SDPA FW median 7.866ms / mean 7.886ms** (n=32, tight 7.79–7.98, job 220953-43, JIT 170/175 warm, PASSED). vs 4.85ms baseline = **+62% SLOWER = DEAD**. Small-q direction REFUTED: q64 over-chunks (dispatch overhead dominates). U-shape confirmed → **q128 is the minimum** (7.87 q64 ≫ 4.74 q128 < 4.85 base < 5.34 q256). Small-q reorder abandoned.
-- [~] q128 k256   (q=128 held at best, sweep k axis — job 221355-47, env=opt/env_sdpa.yaml, node-id `[blackhole-bh_glx-line-no_trace_no_check-k256-q128-8rpx4up-ltx_s2]`)
-- [ ] q128 k128
+- [x] q128 k256  → **SDPA FW median 4.981ms / mean 5.158ms** (n=32, bimodal 16@~4.75 + 16@~5.1–6.0, job 221355-47, JIT 170/175 warm, PASSED). vs 4.85ms baseline = **+2.7% SLOWER = NO WIN**. k-axis now clear at q128: k512 4.74 < base 4.85 < k256 4.98 ⇒ **larger key-chunk better; smaller-k dead**. (q128,k512)=4.74 remains the global min (−2.3%, <5% gate).
+- [~] q128 k128   (close the k-axis lower bound — job 221731-49, env=opt/env_sdpa.yaml, node-id `[blackhole-bh_glx-line-no_trace_no_check-k128-q128-8rpx4up-ltx_s2]`; predicted worse than k256 per U-shape)
 - [ ] q256 k256   (deprioritized — q256 measured +10% worse at k512)
 - [ ] q256 k128   (deprioritized — q256 direction dead)
 → record SDPA FW per config; fastest vs 4.85ms baseline is the win. If any config beats baseline by >5%, wire it into the LTX ring SDPA call (attention_ltx.py) + PCC-gate + block WARM_FWD_MS.
