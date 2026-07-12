@@ -327,17 +327,13 @@ Tensor deg2rad(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
     constexpr float DEG_TO_RAD = 0.017453292519943295f;
-    return ttnn::multiply(
+    return operations::unary::detail::unary_impl(
         input_tensor,
-        DEG_TO_RAD,
-        std::optional(input_tensor.dtype()),
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, DEG_TO_RAD)},
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
         sub_core_grids);
 }
 
@@ -346,17 +342,13 @@ Tensor rad2deg(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    using namespace operations::unary;
     constexpr float RAD_TO_DEG = 57.29577951308232f;
-    return ttnn::multiply(
+    return operations::unary::detail::unary_impl(
         input_tensor,
-        RAD_TO_DEG,
-        std::optional(input_tensor.dtype()),
+        {EltwiseUnaryWithParam(UnaryOpType::MUL_UNARY_SFPU, RAD_TO_DEG)},
         memory_config,
         optional_output_tensor,
-        {},
-        {},
-        {},
-        std::nullopt,
         sub_core_grids);
 }
 
