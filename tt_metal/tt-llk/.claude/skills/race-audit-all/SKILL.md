@@ -56,6 +56,34 @@ exists — so both still need heavy LLM widening per their `blind_spots`. The to
 is **advisory**: it never clears a class, and its silence is "no new
 *known-pattern* instance," not "no bug".
 
+**Tool-drift contract — detect a stale registry, surface it, offer the fix (do NOT silently edit).**
+The deterministic tier is only as complete as `llkaudit/registry.py`'s name→meaning
+tables. When the codebase adds a sync-relevant API the registry doesn't yet know —
+a new `CircularBuffer`/`Noc` method, a `noc_async_*`/`noc_semaphore_*` variant, a
+new cfg-write helper or `TTI_*` cfg instruction, a new mailbox call — the checkers
+**under-recall silently**: fewer findings, no error, exit 0. A stale registry does
+not look broken; it looks *clean*. So during any audit (especially a full sweep)
+treat these as **tool-drift tells** and act on them:
+- an `unresolved` bucket rising sharply (cfg-word `UNRESOLVED`, mailbox
+  `UNRESOLVED_ENDPOINT`, a call the classifier couldn't key);
+- the kernel-tier coverage ledger listing a call/receiver shape the registry
+  didn't classify;
+- **the LLM tier finding a real sync site the deterministic worklist omitted** —
+  the cleanest signal a name table is stale.
+
+On any such observation, **name the stale entry** (which `registry.py` table +
+which checker under-recalls, and the concrete API missed), tell the user the
+deterministic tier is drifting, and **offer to add it**. Apply the enhancement
+**only if the user allows** — never silently. The fix is almost always a one-line
+`registry.py` table entry (the single declarative edit point) plus a hermetic test
+in `tests/test_checks.py`; rarely a checker change; **never** the C++ extractor
+unless a genuinely new fact family is needed. Ground the new entry against the
+authoritative header (e.g. `circular_buffer.h`, `noc.h`, `dataflow_api.h`,
+`ckernel_ops.h`) per the source ladder, keep the ground-truth counts fresh, and
+follow the commit-twice pre-commit discipline. Then re-run recall so the sweep
+reflects the widened tables. This keeps the tool a living superset of the codebase
+instead of decaying into a false all-clear as the APIs move.
+
 ## Full-audit kernel tier (opt-in) — the on-request JIT CAPTURE for cb-sync / noc-sync / mailbox-sync
 The `cb-sync`, `noc-sync`, and `mailbox-sync` **checkers are committed and
 deterministic** — but their kernel surface lives in **JIT-compiled kernels OUTSIDE
