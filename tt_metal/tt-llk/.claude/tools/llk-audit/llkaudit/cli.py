@@ -135,12 +135,27 @@ def main(argv=None) -> int:
 
     changed = [c.strip() for c in args.changed_files.split(",") if c.strip()]
 
-    # Degradation guard: cfg-word-overlap silently loses its CROSS_THREAD_SHARED_WORD
-    # detection (emits only UNRESOLVED, exit 0) when the cfg_defines header can't be
-    # read (addr32 empty) — a false all-clear for a class the arch DOES support. The
-    # arch has a CFG_DEFINES_REL entry, so an empty addr32 means the header/root was
-    # not found, not that the arch lacks defines. Warn loudly AND mark the envelope;
-    # this is the one input-degradation path that was not surfaced like the others.
+    # Input-degradation guards — surface each as a stderr WARNING and an envelope
+    # `degraded` entry so a degraded run can never read as a clean audit (the
+    # false-all-clear the augmentor must refuse). run.sh/bootstrap.sh pre-guard the
+    # empty case before invoking the CLI, but the CLI is a documented standalone
+    # entry point (`python -m llkaudit.cli --facts ...`), so it carries the guard too.
+    degraded: list = []
+    # (1) Empty fact base — 0 facts parsed from --facts (empty/failed extraction):
+    # every check would report count 0 with parse_errors 0, indistinguishable from a
+    # genuinely clean audit.
+    if not fb.facts:
+        print(
+            "llk-audit: WARNING empty fact base — 0 facts parsed from --facts. Every "
+            "check will report 0; this is NOT a clean audit (nothing was analyzed).",
+            file=sys.stderr,
+        )
+        degraded.append(
+            "empty fact base: 0 facts parsed — nothing analyzed, not a clean audit"
+        )
+    # (2) cfg-word-overlap loses its CROSS_THREAD_SHARED_WORD detection (only
+    # UNRESOLVED, exit 0) when the cfg_defines header can't be read (addr32 empty)
+    # though the arch HAS a CFG_DEFINES_REL entry (header/root not found).
     cfgword_degraded = "cfg-word-overlap" in selected and bool(rel) and not fb.addr32
     if cfgword_degraded:
         print(
@@ -149,6 +164,10 @@ def main(argv=None) -> int:
             f"detection is OFF (only UNRESOLVED emitted). This is NOT a clean "
             f"'no shared words' result — check --metal-root / the header path.",
             file=sys.stderr,
+        )
+        degraded.append(
+            f"cfg-word-overlap: cfg_defines ({rel}) unreadable — field masks "
+            "unresolved, CROSS_THREAD_SHARED_WORD detection OFF"
         )
 
     out = {
@@ -159,11 +178,8 @@ def main(argv=None) -> int:
         "scoped_to_changed": bool(changed),
         "checks": {},
     }
-    if cfgword_degraded:
-        out["degraded"] = [
-            f"cfg-word-overlap: cfg_defines ({rel}) unreadable — field masks "
-            "unresolved, CROSS_THREAD_SHARED_WORD detection OFF"
-        ]
+    if degraded:
+        out["degraded"] = degraded
     if changed:
         out["changed_files"] = sorted({os.path.basename(c) for c in changed})
     for name in selected:

@@ -1086,6 +1086,38 @@ def test_cli_empty_checks_is_hard_error():
         os.remove(path)
 
 
+@case
+def test_cli_empty_fact_base_marks_degraded():
+    # The CLI is a documented standalone entry point; run on an empty / failed facts
+    # file it must NOT read as a clean audit — the envelope is marked `degraded`.
+    import io
+    import json as _json
+    import os
+    import tempfile
+    from contextlib import redirect_stdout
+
+    from llkaudit import cli
+
+    fd, path = tempfile.mkstemp(suffix=".jsonl")
+    os.close(fd)
+    with open(path, "w") as f:
+        f.write('{"arch":"wormhole","parse_errors":0,"facts":[]}')
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cli.main(
+                ["--arch", "wormhole", "--facts", path, "--checks", "mmio-race"]
+            )
+        out = _json.loads(buf.getvalue())
+        assert rc == 0  # still emits the envelope (contract) — but marked degraded
+        assert "degraded" in out and any(
+            "empty fact base" in d for d in out["degraded"]
+        ), out
+        assert out["checks"]["mmio-race"]["count"] == 0
+    finally:
+        os.remove(path)
+
+
 # --- cb-sync / noc-sync (kernel tier — deterministic, fed a KERNEL fact base) ---
 
 

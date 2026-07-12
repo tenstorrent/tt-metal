@@ -4,11 +4,12 @@
 # llk-audit kernel tier (opt-in, on-request)
 
 The `cb-sync`, `noc-sync` and `mailbox-sync` checkers live in the committed tool
-and are unit-tested — but the code they audit (circular-buffer / NoC / mailbox
-handshakes) lives in **JIT-compiled kernels outside tt-llk** (ttnn ops, the
-compute API, models), not in the tt-llk headers. So over the tt-llk tree they
-correctly find nothing. This module builds the **kernel fact base** those
-already-committed checkers then run over.
+and are unit-tested — but most of the code they audit (circular-buffer / NoC /
+mailbox handshakes) lives in **JIT-compiled kernels outside tt-llk** (ttnn ops, the
+compute API, models), not in the tt-llk headers. Over the tt-llk tree `cb-sync` and
+`noc-sync` correctly find nothing (zero in-tree surface); `mailbox-sync` yields its
+small in-tree surface on a plain run but its large kernel surface only here. This
+module builds the **kernel fact base** those already-committed checkers then run over.
 
 **The split that matters:** the *checkers* are durable and in `main`. Only the
 *capture* — turning a live JIT build into a fact base — is fragile (it tracks
