@@ -270,6 +270,37 @@ void kernel_main() {
                 UNPACK(WATCHER_RING_BUFFER_PUSH(0xC0FFEE12u));
                 UNPACK(WATCHER_RING_BUFFER_PUSH((uint32_t)chunk));
                 curr_in_cb.wait_front(1);
+                // DEBUG (b-vs-c localizer, remove after): dump the reduce INPUT (in_cb, row-major:
+                // row r channel c at [r*in_ntiles_c*32 + c]) the reduce is about to consume, first stick/chunk.
+                // For a const-per-channel input: real rows [0,window_size_hw) must equal the per-channel
+                // constant, and pad rows [window_size_hw,32) must be bf16 -inf. If pad != -inf -> (c) tail
+                // fill/init; if real rows wrong / channels displaced -> (c) data placement; if all correct yet
+                // the reduce OUTPUT is wrong (per SCRATCH2OUT) -> (b) metal-API read index / (a) primitive.
+                if (tilize_stick_counter == 0 && chunk == 0) {
+                    volatile tt_l1_ptr uint16_t* rp =
+                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(curr_in_cb.get_read_ptr());
+                    constexpr uint32_t rs = in_ntiles_c * TILE_WIDTH;  // row stride in elems (row-major channels)
+                    UNPACK(DPRINT(
+                        "REDIN real r0[{} {} {} {}] rLast[{} {} {} {}]\n",
+                        bf16_t(rp[0]),
+                        bf16_t(rp[1]),
+                        bf16_t(rp[2]),
+                        bf16_t(rp[3]),
+                        bf16_t(rp[(window_size_hw - 1) * rs + 0]),
+                        bf16_t(rp[(window_size_hw - 1) * rs + 1]),
+                        bf16_t(rp[(window_size_hw - 1) * rs + 2]),
+                        bf16_t(rp[(window_size_hw - 1) * rs + 3])));
+                    UNPACK(DPRINT(
+                        "REDIN pad rWS[{} {} {} {}] r15[{} {} {} {}]\n",
+                        bf16_t(rp[window_size_hw * rs + 0]),
+                        bf16_t(rp[window_size_hw * rs + 1]),
+                        bf16_t(rp[window_size_hw * rs + 2]),
+                        bf16_t(rp[window_size_hw * rs + 3]),
+                        bf16_t(rp[15 * rs + 0]),
+                        bf16_t(rp[15 * rs + 1]),
+                        bf16_t(rp[15 * rs + 2]),
+                        bf16_t(rp[15 * rs + 3])));
+                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,

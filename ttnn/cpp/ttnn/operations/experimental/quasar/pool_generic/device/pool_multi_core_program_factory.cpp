@@ -1326,9 +1326,16 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
+    // QSR: fp32_dest_acc_en=true is a KNOWN-BROKEN config for the tilizeA_B reduce on Quasar (ISSUE #48504;
+    // the LLK test QuasarComputeUnpackTilizeA_B in test_untilize_tilize.cpp:1210 disables the fp32 case with a
+    // TODO). The pool reduce ALWAYS goes through tilizeA_B, so any path that would enable fp32 dest-acc here
+    // (notably avg-pool large-kernel: default_fp32_acc = is_avg_pool && is_large_kernel) would hit the broken
+    // primitive. Force it OFF until #48504 is fixed — bf16 dest accumulate is the safe fallback vs a wrong
+    // result. (MAX pool already defaults false; this pins the avg-pool/large-kernel path too.)
+    const bool fp32_dest_acc_en = false;  // was: get_fp32_dest_acc_en(device_compute_kernel_config)
     ComputeHardwareConfig compute_hw{
         .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+        .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
         .math_approx_mode = false,
     };

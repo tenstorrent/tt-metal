@@ -702,7 +702,29 @@ void kernel_main() {
                                 (uint32_t)curr_out_cb.get_total_num_entries(),
                                 (uint32_t)curr_out_cb.get_entry_size(),
                                 (uint32_t)out_subblock_num_tiles));
+#ifdef ARCH_QUASAR
+                            // QSR matmul-pack DST addressing fix. The Quasar SEQUENTIAL pack
+                            // (pack_tile_block -> llk_pack_block -> get_output_tile_index<out_of_order=false>)
+                            // computes l1_tile_index = tc_slots[tc_idx].wr_entry_idx + wr_entry_ptr, where
+                            // wr_entry_idx advances per push_back (llk_push_tiles) AND wr_entry_ptr is a
+                            // monotonic per-pack counter that reserve_back/push_back never reset. Those two
+                            // DOUBLE-advance the DST address, so across the no-spill multi-height-block matmul
+                            // (in0_num_blocks_h > 1) the pack drifts ~2x and walks off the OUT/partials tile
+                            // boundary -> PACR0_TILE_INC OOB (ERROR_TRISC1). WH/BH don't hit this because their
+                            // pack recomputes the L1 addr from the CB fifo_wr_ptr each pack. Mirror the WORKING
+                            // Quasar tilize pack: out_of_order with a RELATIVE tile index (0..osnt-1). That path
+                            // (get_output_tile_index<out_of_order=true>) uses ONLY wr_entry_idx + the explicit
+                            // index and never touches wr_entry_ptr, so it single-advances and stays tile-aligned
+                            // -- the portable "reset write ptr after push_back" sequential semantics. Each
+                            // subblock reserve_back(osnt)/push_back(osnt) advances wr_entry_idx by osnt, so the
+                            // relative 0..osnt-1 lands in the correct sequential OUT/partials slot for every
+                            // (height-block, subblock), identical to the pre-Quasar pack_tile_block behavior.
+                            for (uint32_t t = 0; t < out_subblock_num_tiles; ++t) {
+                                pack_tile<true /*out_of_order_output*/>(start_dst_index + t, curr_matmul_out_cb, t);
+                            }
+#else
                             pack_tile_block(start_dst_index, curr_matmul_out_cb, out_subblock_num_tiles);
+#endif
 
                             tile_regs_release();
                             curr_out_cb.push_back(out_subblock_num_tiles);
@@ -821,7 +843,18 @@ void kernel_main() {
                         cb_untilize_mode_out.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
                         for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+#ifdef ARCH_QUASAR
+                            // Same Quasar sequential-pack double-advance fix as the matmul pack: the default
+                            // pack_tile (out_of_order=false) uses get_output_tile_index<false> =
+                            // wr_entry_idx (advances per push_back) + monotonic wr_entry_ptr, which DOUBLE-
+                            // advances the DST across this multi-subblock / multi-height-block bias->OUT pack
+                            // (fuse_bias, partials aliases OUT) and walks off the tile boundary. Use
+                            // out_of_order with the RELATIVE tile index i (single-advance via wr_entry_idx),
+                            // mirroring the working tilize. WH/BH keep the sequential pack (fifo_wr_ptr path).
+                            pack_tile<true /*out_of_order_output*/>(i, untilize_mode_out_cb_id, i);
+#else
                             pack_tile(i, untilize_mode_out_cb_id);
+#endif
                         }
                         tile_regs_release();
                         cb_untilize_mode_out.push_back(out_subblock_num_tiles);
