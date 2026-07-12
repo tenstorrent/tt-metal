@@ -576,6 +576,7 @@ class TTSeamlessM4Tv2Encoder:
         out_mem: ttnn.MemoryConfig,
         memory_config: ttnn.MemoryConfig,
         compute_kernel_config,
+        keep_sharded_output: bool = False,
     ) -> ttnn.Tensor:
         if ttnn.is_sharded(x) and x.memory_config() == in0_mem:
             x_bs = x
@@ -599,9 +600,17 @@ class TTSeamlessM4Tv2Encoder:
         )
         if owns_x_bs:
             ttnn.deallocate(x_bs)
+        # Keep the block-sharded output in L1 for a chained downstream matmul (e.g. fc1->fc2):
+        # its layout matches the next linear's in0, so the next call skips the S2I+I2S round-trip.
+        if keep_sharded_output:
+            return out_bs
         out = ttnn.sharded_to_interleaved(out_bs, memory_config, output_dtype=ttnn.bfloat16)
         ttnn.deallocate(out_bs)
-        if len(x.shape) >= 3:
+        if len(x.shape) == 4:
+            # 4D block-sharded input (a kept-sharded upstream matmul output, [1, 1, m, k]):
+            # collapse to [batch, seq, n] using the row dim, not the unit dims 0/1.
+            out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[2]), n))
+        elif len(x.shape) == 3:
             out = ttnn.reshape(out, (int(x.shape[0]), int(x.shape[1]), n))
         return out
 
@@ -751,6 +760,7 @@ class TTSeamlessM4Tv2Encoder:
         *,
         activation: Optional[str] = None,
         memory_config: Optional[ttnn.MemoryConfig] = None,
+        keep_sharded_output: bool = False,
     ) -> ttnn.Tensor:
         """Regular (non-DRAM-sharded) linear for TP>1 path.
 
@@ -809,6 +819,7 @@ class TTSeamlessM4Tv2Encoder:
                 out_mem=out_mem,
                 memory_config=memory_config,
                 compute_kernel_config=self._chunked_tp_linear_compute_cfg(),
+                keep_sharded_output=keep_sharded_output,
             )
 
         # Untuned-shape fallback: block-sharded LN input is not valid here — convert to interleaved.
@@ -1099,7 +1110,11 @@ class TTSeamlessM4Tv2Encoder:
             )
             if tp > 1:
                 # TP FFN: column-parallel fc1 (output = ffn_dim//tp), row-parallel fc2 (output = H).
-                ff = self._linear_tp(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias, activation="relu")
+                # Keep fc1's block-sharded output in L1 — fc1's out layout matches fc2's in0, so fc2
+                # consumes it directly and skips the S2I->DRAM->I2S round-trip between the two matmuls.
+                ff = self._linear_tp(
+                    normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias, activation="relu", keep_sharded_output=True
+                )
                 ttnn.deallocate(normed)
                 ff = self._linear_tp(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
                 ff = encoder_all_reduce_sum_replicate(
