@@ -250,9 +250,30 @@ characterization of the last no-edit axis, below the closed ~7.9s floor** — a 
 to a 4x8-TP param (source edit); null confirms dispatch-bound across parallelism strategy. No source edit (mesh `-k`
 swap), PCC-gated (video path, do_pcc=True), WARM_FWD_MS. ⚠️ 2x4 kernels were NEVER built (E2E warmed only 4x8) ⇒
 COLD-compile risk; if it times out that IS the receipt (2x4 needs prewarm), broker auto-recovers.
-- [~] **M0 — 2x4 SP baseline (`2x4sp1tp0`, video/stage_2/ckpt_fast) — IN FLIGHT job 020534-109** (2026-07-12 02:05Z).
-  Same-mesh SP control for the M1 TP A/B; also confirms 2x4 compiles in the cron budget. WARM_FWD_MS + video PCC gate.
-- [ ] M1 — 2x4 TP (`2x4sp0tp1`) same harness → A/B vs M0. If TP≪SP (dispatch-bound broken by the pattern change), escalate to a 4x8-TP source-param probe; if null, parallelism axis CLOSED.
+- [x] **M0 — 2x4 SP baseline — INFRA-DEAD (2x4 mesh won't init fabric; reproducible across a reset).** BOTH the
+  initial **020534-109** AND my re-run **020931-113** faulted identically at `mesh_device` setup: `Fabric Router Sync:
+  Timeout after 10000 ms on Device 1` (chan e0-4/e0-5 stuck at STARTED, remote eth handshake never completes),
+  `distributed.py:671`, `1 error in ~18s`. A broker glx_reset (020752-111) + fabric-check exit-0 (021047-114) ran
+  BETWEEN the two runs ⇒ the fault **reproduces on a freshly-reset+health-verified device** ⇒ NOT the transient
+  4x8 eth-core-27-25 flake (which auto-recovered so re-runs passed, cf. F0 002052-79); it is specific to the **2x4
+  sub-mesh's fabric bring-up on this box.** The block forward NEVER ran (no WARM_FWD_MS, no PCC) ⇒ not a parallelism
+  verdict. Did NOT thrash a 3rd run. No source edit (mesh `-k`) ⇒ nothing to revert.
+- [x] **M1 — 2x4 TP — DEAD by dependency (same fabric-broken 2x4 mesh).** The parametrize (test:108-115) exposes TP
+  (`tp1`) ONLY on the 2x4 mesh; M1 uses the identical mesh that just failed fabric init twice ⇒ will hit the same wall.
+  ⇒ **BATCH M CLOSED — infra-blocked:** the SP-vs-TP axis is un-measurable via the no-edit harness on this box. TP@prod
+  would need a source-added 4x8-TP parametrize row + unverified model support = warm-authoring, not a cron one-shot.
+
+## Batch N — S1 (stage_1) quant (I3, promoted from dead-by-composition to a MEASUREMENT per Batch L precedent)
+Batch I closed I3 (S1 + `all_bf8_lofi`) "dead-by-composition (no run)". S1 proved a DIFFERENT regime than S2 (I1
+Line-topology crossover) ⇒ not a foregone re-run; and Batch L overturned a dead-by-composition call by measuring ⇒
+measured it. Same F0/I0 block harness, `-k 'video and stage_1 and ring_bh_4x8sp1tp0 and ckpt_fast'`, `LTX_QUANT=all_bf8_lofi`.
+- [x] **S1 + `all_bf8_lofi` — NULL @ PASSING PCC.** Job **021338-117** (re-verified from raw log): test:870 `quantizing
+  block`, test:887 `WARM_FWD_MS=12.35 num_links=param iters=3`, assert_quality:48 `PCC = 99.9315 %`, test:923 `PASSED
+  block PCC: video (1, 9690, 4096)`, 1 passed/39 desel in 23.72s, 32 chips healthy. **12.35ms vs I0 baseline 12.73 =
+  −0.38ms = −3.0% NULL** (sub 5% gate), PCC 99.93% PASS. Mildly larger relative move than S2's H0 −1.1% (likely block-FW
+  noise — S1's smaller absolute ms makes fixed-ms jitter a larger %); same verdict. No source edit (env A/B) ⇒ nothing
+  to revert. **⇒ no quant preset clears the 5% gate at passing quality on EITHER denoise stage; both confirmed
+  collective/dispatch-bound.** Batch N CLOSED (S1 stacked/fp32acc presets = dead-by-composition, same as the S2 finding).
 
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
