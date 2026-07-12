@@ -150,6 +150,9 @@ class HunyuanTtMoEParallel(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
         )  # per-device [epd, 1]
+        # Pre-slice once: local_ids is static, so re-slicing inside the per-forward
+        # expert loop would be a pure repeated cost.
+        self.local_ids_experts = [self.local_ids[el] for el in range(self.experts_per_dev)]
 
         # Gate + shared MLP run replicated (input is replicated). Gate signature is
         # positional: (device, num_experts, moe_topk, state_dict, weight_key, ...).
@@ -202,11 +205,12 @@ class HunyuanTtMoEParallel(LightweightModule):
         gu = l1_sharded_linear(x, wgu, compute_kernel_config=self.compute_kernel_config)
         x1, x2 = ttnn.chunk(gu, 2, dim=-1)
         ttnn.deallocate(gu)
-        act = ttnn.silu(x2)
-        h = ttnn.multiply(x1, act)
+        # SwiGLU x1 * silu(x2), with SiLU folded into the multiply's LHS activation
+        # (one fused BinaryNg instead of a separate silu Unary + multiply). SILU must
+        # apply to x2 (the up half); multiply(x2, x1, a_acts=[SILU]) == x1 * silu(x2).
+        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        ttnn.deallocate(act)
         out = l1_sharded_linear(h, wdn, compute_kernel_config=self.compute_kernel_config)
         ttnn.deallocate(h)
         return out
@@ -250,7 +254,7 @@ class HunyuanTtMoEParallel(LightweightModule):
 
         partial = None
         for el in range(self.experts_per_dev):
-            gid = self.local_ids[el]  # [1] — global id of this device's el-th expert
+            gid = self.local_ids_experts[el]  # [1] — global id of this device's el-th expert
             sel = ttnn.eq(topk_idx, gid)  # [B,S,k] (broadcast scalar differs per device)
             contrib = ttnn.multiply(sel, topk_w)
             ttnn.deallocate(sel)
@@ -258,16 +262,16 @@ class HunyuanTtMoEParallel(LightweightModule):
             ttnn.deallocate(contrib)
 
             oe = self._expert(x, el)
-            weighted = ttnn.multiply(oe, w_e)  # [B,S,H]
+            if partial is None:
+                partial = ttnn.multiply(oe, w_e)  # [B,S,H]
+            else:
+                # addcmul(partial, oe, w_e) = partial + oe * w_e, fused in one op
+                # instead of a separate multiply + add.
+                tmp = ttnn.addcmul(partial, oe, w_e)
+                ttnn.deallocate(partial)
+                partial = tmp
             ttnn.deallocate(oe)
             ttnn.deallocate(w_e)
-            if partial is None:
-                partial = weighted
-            else:
-                tmp = ttnn.add(partial, weighted)
-                ttnn.deallocate(partial)
-                ttnn.deallocate(weighted)
-                partial = tmp
 
         ttnn.deallocate(topk_w)
         ttnn.deallocate(topk_idx)
