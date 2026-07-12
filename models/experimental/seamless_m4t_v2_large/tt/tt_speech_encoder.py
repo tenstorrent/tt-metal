@@ -1407,21 +1407,43 @@ class TTSeamlessM4Tv2SpeechEncoder:
         s_mid = ttnn.add(s_mid, win, memory_config=memory_config)
         ttnn.deallocate(win)
 
+        # Softmax is invariant to a per-row constant added across the WHOLE row. The rel bias is a
+        # per-row constant on each side of the band (c_left left of it, c_right right of it), so subtract
+        # the LARGER side's constant from the entire row: that (widest) region's bias becomes 0 — its
+        # scores pass through with no broadcast-add — while the window and the smaller side carry the
+        # adjusted bias. Softmax-exact (not bit-exact); gate on PCC.
+        left_w = kw0
+        right_w = seq_len - kw1
+        drop_right = right_w >= left_w
+        drop_const = c_right if drop_right else c_left
+        if kw0 > 0 or kw1 < seq_len:
+            s_mid = ttnn.subtract(s_mid, drop_const, memory_config=memory_config)  # width-1 broadcast
+
         pieces: list[ttnn.Tensor] = []
         if kw0 > 0:
             s_left = ttnn.slice(
                 scores, [0, 0, 0, 0], [batch, num_heads, qc, kw0], [1, 1, 1, 1], memory_config=memory_config
             )
-            s_left = ttnn.add(s_left, c_left, memory_config=memory_config)  # width-1 broadcast
-            pieces.append(s_left)
-        ttnn.deallocate(c_left)
+            if not drop_right:  # left is the dropped (larger) region → bias 0, pass through unchanged
+                pieces.append(s_left)
+            else:
+                bias_left = ttnn.subtract(c_left, c_right, memory_config=memory_config)  # per-row const
+                s_left = ttnn.add(s_left, bias_left, memory_config=memory_config)  # width-1 broadcast
+                ttnn.deallocate(bias_left)
+                pieces.append(s_left)
         pieces.append(s_mid)
         if kw1 < seq_len:
             s_right = ttnn.slice(
                 scores, [0, 0, 0, kw1], [batch, num_heads, qc, seq_len], [1, 1, 1, 1], memory_config=memory_config
             )
-            s_right = ttnn.add(s_right, c_right, memory_config=memory_config)  # width-1 broadcast
-            pieces.append(s_right)
+            if drop_right:  # right is the dropped (larger) region → bias 0, pass through unchanged
+                pieces.append(s_right)
+            else:
+                bias_right = ttnn.subtract(c_right, c_left, memory_config=memory_config)  # per-row const
+                s_right = ttnn.add(s_right, bias_right, memory_config=memory_config)  # width-1 broadcast
+                ttnn.deallocate(bias_right)
+                pieces.append(s_right)
+        ttnn.deallocate(c_left)
         ttnn.deallocate(c_right)
         ttnn.deallocate(scores)
         if len(pieces) == 1:
