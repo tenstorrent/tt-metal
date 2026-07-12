@@ -42,7 +42,12 @@ class SrcRegBank(Check):
         "Blackhole DISABLE_IMPLIED_SRCA/ B_FMT_Base bit on the consuming MOV is "
         "not verified. Quasar's third unpacker / SrcS lane (llk_srcs.h, UNPACR2/"
         "PACR1, *_SRCS_RDY interlocks) is not modeled. Dst/LReg shared-once "
-        "overwrite (rides MATH_PACK / mutex::SFPU) is out of scope here."
+        "overwrite (rides MATH_PACK / mutex::SFPU) is out of scope here. "
+        "IMPORTANT: the SET side is recalled ONLY as a RAW SETDVALID; the SUPPORTED "
+        "set path — UNPACR_NOP(...,SET_DVALID,...) — is DELIBERATELY excluded (so it "
+        "is never mis-flagged as the raw anti-pattern), so on correct code the SET "
+        "control points are largely absent from the worklist — the LLM must find the "
+        "UNPACR_NOP set sites itself when pairing set↔clear."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:

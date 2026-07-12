@@ -52,6 +52,18 @@ def thread_of(path: str) -> str:
     return "UNKNOWN"
 
 
+def thread_of_fact(fact: dict) -> str:
+    """Thread for a write fact: the FILE's thread, else (token-less file) fall back
+    to the FUNCTION name. Quasar common/lib headers (ckernel_trisc_common.h,
+    llk_srcs.h, ...) carry no unpack/math/pack token so their config writers resolve
+    UNKNOWN by file alone and drop out of the cross-thread / intra-thread-clobber
+    analysis — but the WRITING FUNCTION usually does carry it (_set_packer_dest_
+    registers_<PACK1>, _llk_pack_srcs_config_). WH/BH files resolve by path, so the
+    fallback only ever fires for a token-less file and never changes their result."""
+    t = thread_of(fact.get("file", ""))
+    return t if t != "UNKNOWN" else thread_of(fact.get("function", "") or "")
+
+
 # --- CONFIG/GPR MMIO write provenance ----------------------------------------
 # A pointer_write fact carries provenance (how its base pointer was produced).
 # Map the producer name -> the register space written. These are the UNSAFE
@@ -112,8 +124,23 @@ GPR_WRITE_KINDS = {"regfile_gpr"}
 # --- Tensix instruction / primitive macros -----------------------------------
 # Consumers must be genuine instruction macros; require a TTI_/TT_ prefix so that
 # address macros (TENSIX_MOP_CFG_BASE) are never mistaken for a MOP run.
+INSTR_PREFIXES = ("TTI_", "TT_")  # a genuine Tensix instruction macro
+
+
 def _instr(name: str) -> bool:
-    return name.startswith("TTI_") or name.startswith("TT_")
+    return name.startswith(INSTR_PREFIXES)
+
+
+def is_thread_config_write(macro_name: str) -> bool:
+    """SETC16 targets the per-thread ThreadConfig array (namespace THREAD), not the
+    shared Config space — the one ordered-write macro that is NOT Config-namespace."""
+    return "SETC16" in (macro_name or "").upper()
+
+
+def is_gpr_source_write(macro_name: str) -> bool:
+    """SETDMAREG writes a GPR source VALUE, not a sampled cfg word — so it is
+    excluded from the cfg-word shared-word map (centralized here, not in the check)."""
+    return "SETDMAREG" in (macro_name or "").upper()
 
 
 # Ordered in-stream cfg/GPR writes (SAFE — Tensix instructions through the config
@@ -573,6 +600,10 @@ CB_CALLS = {
     "remote_cb_push_back_and_write_pages": "push",
     "remote_cb_wait_front": "wait",
     "remote_cb_pop_front": "pop",
+    # Thin CB-op wrappers seen in ttnn kernels (SDPA). Curated — non-canonical
+    # wrappers are a known partial (see cb_sync blind_spots); add here as found.
+    "cb_push_back_hold_wr_ptr": "push",
+    "cb_wait_fronts": "wait",
 }
 # Modern ttnn kernels use the OBJECT/METHOD API: `CircularBuffer cb(id);
 # cb.reserve_back(n)`. The callee is the METHOD name (no cb_ prefix) and the CB

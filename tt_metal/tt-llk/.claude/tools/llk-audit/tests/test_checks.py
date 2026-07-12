@@ -1568,6 +1568,87 @@ def test_cfg_word_unresolved_cowriter_widens():
     ] == []
 
 
+@case
+def test_thread_of_fact_function_name_fallback():
+    # A token-less file (Quasar common/lib header) falls back to the writing
+    # function name — so #49192-class clobbers there are no longer dropped UNKNOWN.
+    from llkaudit import registry
+
+    assert (
+        registry.thread_of_fact(
+            {
+                "file": "tt_llk_quasar/common/inc/ckernel_trisc_common.h",
+                "function": "_set_packer_dest_registers_<PACK1>",
+            }
+        )
+        == "PACK"
+    )
+    # A file WITH a thread token wins over the function name (WH/BH unaffected).
+    assert (
+        registry.thread_of_fact(
+            {"file": "tt_llk_wormhole_b0/common/inc/cunpack_common.h", "function": "z"}
+        )
+        == "UNPACK"
+    )
+    # Token-less file AND token-less function -> still UNKNOWN.
+    assert (
+        registry.thread_of_fact({"file": "x/generic.h", "function": "helper"})
+        == "UNKNOWN"
+    )
+
+
+@case
+def test_cb_sync_recognizes_known_wrapper():
+    from llkaudit import registry
+
+    assert (
+        registry.cb_classify({"name": "cb_push_back_hold_wr_ptr", "arg0": "cb0"})[0]
+        == "push"
+    )
+    assert registry.cb_classify({"name": "cb_wait_fronts", "arg0": "cb0"})[0] == "wait"
+
+
+@case
+def test_cli_changed_file_with_no_facts_marks_degraded():
+    # A diff-scoped run whose changed file contributed no facts must be marked
+    # degraded — a 0-finding result for it is not "race-free".
+    import io
+    import json as _json
+    import os
+    import tempfile
+    from contextlib import redirect_stdout
+
+    from llkaudit import cli
+
+    fd, path = tempfile.mkstemp(suffix=".jsonl")
+    os.close(fd)
+    with open(path, "w") as f:
+        f.write(
+            '{"arch":"wormhole","parse_errors":0,"facts":[{"family":"function",'
+            '"name":"g","file":"fileA.h","off":0,"end_off":9,"line":0}]}'
+        )
+    try:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cli.main(
+                [
+                    "--arch",
+                    "wormhole",
+                    "--facts",
+                    path,
+                    "--checks",
+                    "mmio-race",
+                    "--changed-files",
+                    "fileB.h",
+                ]
+            )
+        out = _json.loads(buf.getvalue())
+        assert rc == 0
+        assert "degraded" in out and any("fileB.h" in d for d in out["degraded"]), out
+    finally:
+        os.remove(path)
+
+
 def main():
     failed = 0
     for c in CASES:

@@ -74,7 +74,7 @@ class SemaphoreHandshake(Check):
                 findings.append(
                     Finding(
                         file=file,
-                        line=anchor["line"],
+                        line=anchor.get("line", 0),
                         function=fn,
                         kind="mutex_imbalance",
                         hint="MUTEX_IMBALANCE",
@@ -128,7 +128,7 @@ class SemaphoreHandshake(Check):
             findings.append(
                 Finding(
                     file=f["file"],
-                    line=f["line"],
+                    line=f.get("line", 0),
                     function=f.get("function", "?"),
                     kind="wait_without_init",
                     hint="WAIT_WITHOUT_INIT",

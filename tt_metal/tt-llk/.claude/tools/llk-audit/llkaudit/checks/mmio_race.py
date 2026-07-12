@@ -88,9 +88,9 @@ class MmioRace(Check):
                     # consumer is seen, stop crediting guards.
                     if applicable and not local_ordering and consumer_after is None:
                         local_ordering = True
-                        guard = (p.get("name") or "", p["line"])
+                        guard = (p.get("name") or "", p.get("line", 0))
                     if registry.is_consumer(role) and consumer_after is None:
-                        consumer_after = p["line"]
+                        consumer_after = p.get("line", 0)
 
             hint = "LOCALLY_ORDERED" if local_ordering else "NO_LOCAL_ORDERING"
             # Quasar: the per-RISC TTSync (AutoTTSync) HW-orders every RISC MMIO
@@ -113,7 +113,7 @@ class MmioRace(Check):
             findings.append(
                 Finding(
                     file=w["file"],
-                    line=w["line"],
+                    line=w.get("line", 0),
                     function=w.get("function", "<file-scope>"),
                     kind=kind,
                     hint=hint,

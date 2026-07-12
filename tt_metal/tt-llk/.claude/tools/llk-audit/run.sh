@@ -108,7 +108,14 @@ case "$ARCH" in
 esac
 
 # sfpi-gcc version whose system-header dirs we add (single source of truth).
-GCC_VER="${SFPI_GCC_VER:-15.1.0}"
+# Discover the sfpi gcc version (highest by version, like build.sh's `sort -V` and
+# capture.py's _sfpi_gcc_ver) rather than hardcode it — a moved pin otherwise makes
+# clang silently miss the STL/builtin -isystem dirs. Override with SFPI_GCC_VER.
+GCC_VER="${SFPI_GCC_VER:-}"
+if [ -z "$GCC_VER" ]; then
+  GCC_VER="$(ls "$SFPI/compiler/lib/gcc/riscv-tt-elf" 2>/dev/null | sort -V | tail -1 || true)"
+fi
+[ -n "$GCC_VER" ] || { echo "llk-audit: no sfpi gcc version under $SFPI/compiler/lib/gcc/riscv-tt-elf (set SFPI_GCC_VER)" >&2; exit 1; }
 # -ferror-limit=0: never stop after N errors (clang default ~20), which would
 # truncate a partially-parsing header mid-TU and silently drop every fact after the
 # cutoff — a partial false-all-clear. Matches kernel_tier/capture.py.
@@ -213,6 +220,11 @@ if [ "$FULLJIT" -eq 1 ]; then
     echo "kernel-tier module present — running capture + kernel checks ..." >&2
     if ! "$KERNEL_TIER_DIR/bootstrap.sh" "$ARCH" "$OUT" >&2; then
       echo "kernel-tier run FAILED — cb-sync / noc-sync / mailbox-sync NOT covered this run." >&2
+      # Propagate the failure to the EXIT CODE. bootstrap.sh refuses an empty/failed
+      # capture (exit non-zero); if run.sh swallowed that and exited 0, a caller doing
+      # `run.sh --full-jit && ...` would read cb/noc/mailbox as covered — a false
+      # all-clear at the exit-code level. Match every other failure path (exit 1).
+      exit 1
     fi
   else
     echo "kernel-tier module is MISSING (no kernel_tier/), so cb-sync / noc-sync /" >&2

@@ -14,7 +14,10 @@ The fact-base input is the concatenated per-file JSON the extractor prints
     degraded? (list of input-degradation notes — empty fact base / unreadable
                cfg_defines; present ONLY when the run is degraded, so a degraded
                result can never read as a clean audit),
-    checks: { <name>: { description, blind_spots, count, findings: [...] } } }
+    checks: { <name>: { description, blind_spots, count,
+      findings: [ { file, line, function, kind, hint, detail, evidence,
+                    safety? (a sub-annotation like SAFE_BY_MASKING /
+                    UNRESOLVED_COWRITER / LOW_CONFIDENCE — never a pass/fail) } ] } } }
 
 A successful run exits 0 (augmentor, never a gate — it does not fail on findings).
 Argument errors (unknown check, unreadable --facts, bad --arch) exit 2 via
@@ -172,6 +175,24 @@ def main(argv=None) -> int:
             f"cfg-word-overlap: cfg_defines ({rel}) unreadable — field masks "
             "unresolved, CROSS_THREAD_SHARED_WORD detection OFF"
         )
+    # (3) Diff-scoped run whose changed file(s) contributed NO facts. The fact base
+    # is built over the whole tree and only OUTPUT is scoped, so a clean 0-finding
+    # result can mean the changed file was never analyzed (a .cpp/test/build file, or
+    # a header the extractor emitted nothing for) — NOT that it is race-free.
+    if changed:
+        fact_files = {os.path.basename(f.get("file", "")) for f in fb.facts}
+        missing = sorted({os.path.basename(c) for c in changed} - fact_files)
+        if missing:
+            print(
+                "llk-audit: WARNING changed file(s) contributed NO facts: "
+                f"{', '.join(missing)} — either not parsed or with no modeled "
+                "construct; a 0-finding result for them is NOT 'race-free'.",
+                file=sys.stderr,
+            )
+            degraded.append(
+                "diff-scoped: changed file(s) with 0 facts (verify they parsed): "
+                + ", ".join(missing)
+            )
 
     out = {
         "tool": "llk-audit",
