@@ -209,8 +209,30 @@ and ckpt_fast'`, num_links=2, warm ltxrt caches, env_sdpa.yaml). Converts reason
   at passing quality.** Combined with A/B (SDPA chunk/fidelity dead), F (topology/links flat), H (bf8 null), I (S1 same):
   every no-edit block-harness axis on both dominant buckets is measured — the block is collective/dispatch-bound.
 
+## Batch K — VAE-decode QUANT (the ONE compute-bound bucket; A1 proved decode is compute-bound, opposite regime from the dispatch-bound denoise where quant was null)
+Every prior quant sweep (H/J) hit the DISPATCH-bound denoise block → null. VAE decode is the one bucket A1 measured
+COMPUTE-bound (traced 551.88 ≈ untraced 552.08ms → dispatch already hidden by async CQ) ⇒ a compute-precision lever
+(bf8 conv weights) has a real mechanism to cut the 552ms here. Harness = `prof_vae_ltx.py::test_prof_vae_ltx_trace`
+(plain, in-budget ~552ms/decode, NOT full pipeline). `LTXVideoDecoder` exposes a single `dtype` param (vae_ltx.py:646)
+threaded to all conv weight uploads (:193 `from_torch(dtype=self.dtype)`); `_build_tt_decoder` didn't pass it.
+- [x] **bf8 (bfloat8_b) conv weights via one-line dtype flip — DEAD: un-runnable (SEGFAULT at weight upload).** Job
+  **013750-99** (2026-07-12 01:39Z, re-verified from raw log): env `LTX_VAE_BFP8=1`, test-only 1-line scaffold passing
+  `dtype=ttnn.bfloat8_b` to the decoder ctor. **`Fatal Python error: Segmentation fault`** at `from_torch(dtype=bfloat8_b)`
+  (`vae_ltx.py:193 _prepare_torch_state`), crashing on the **1st of 86 weight tensors** (6s in, log:85) — NO TT_FATAL,
+  a hard segfault. bfloat8_b is a TILE block-float format; the conv weight-upload path uploads without a TILE layout ⇒
+  the naive dtype flip can't produce a valid bfp8 conv weight. 57.6s, exit-0 (pipe tail masks the crash), **device
+  recovered clean (health-gate OK, 32 chips, no reset)**. Mirrors Batch B's exp-kernel SIGABRT: structural incompat found
+  fast + cheap. Scaffold **REVERTED** (crashed, no win; finding is the receipt).
+  → **VAE-quant is NOT a cron one-shot.** A real bfp8-VAE probe needs per-conv TILE-layout + verifying each conv3d/upsample
+  op accepts bfp8 weights (blast radius across the decode graph) = **WARM-AUTHORING**, joining the parked lot (W-mask
+  in-kernel fold C, subblock tune G). No env-only VAE-quant cell exists.
+→ **BATCH K CLOSED — the compute-bound VAE bucket resists the cheap quant lever:** naive bf8 flip segfaults at upload;
+  proper bfp8-VAE is warm-authoring. The only env-only VAE cells left (W-mask skip, depth-to-space) are already closed
+  (load-bearing / tracy-timeout). VAE-quant parked for a warm session alongside C/G.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
 - **S1 (stage_1) video block, first-ever receipts (jobs 010823-91/011036-93/011213-95):** baseline 12.73ms (Ring), num_links=1 12.71ms (0% = pure dispatch floor), Line 11.46ms (−10% crossover, char-only — fabric topology is a device-init constant, whole-run Line net-worse). 4× seq (S1→S2) = only 1.33× block time ⇒ dispatch-bound confirmed across scale.
 - **all_bf8_lofi_sdpa_lofi @ prod-4x8 video block: FAILS PCC 98.57% < 98.80% (job 012439-97).** Stacking SDPA-LoFi on the bf8 base drops PCC 1.32pts below gate; speed truncated (moot — dead on quality). Quant axis fully measured: all_bf8_lofi is the sweet spot, further quant breaks the gate.
+- **VAE-decode bf8 quant (job 013750-99): un-runnable — SEGFAULT at bf8 conv-weight upload (`from_torch(bfloat8_b)`, vae_ltx.py:193, 1st of 86 tensors).** The one COMPUTE-bound bucket (A1: traced≈untraced 552ms) resists the cheap quant flip; bfloat8_b needs TILE layout the upload path doesn't give. Proper bfp8-VAE = warm-authoring (parked w/ C W-mask fold + G subblock tune). Device recovered clean.
