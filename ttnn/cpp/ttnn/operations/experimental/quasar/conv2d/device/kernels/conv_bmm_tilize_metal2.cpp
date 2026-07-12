@@ -554,6 +554,20 @@ void kernel_main() {
                     // buf_desc[tilized] and the buf_desc theory is wrong. If TZHWCFG is ABSENT, the build is
                     // stale (rebuild). Remove after diagnosis.
                     PACK(DPRINT("TZHWCFG applied cb={}\n", (uint32_t)tilized_in0_cb_id));
+                    // DEBUG (buf_desc source probe): llk_pack_hw_configure programs buf_desc[i].l1_addr from
+                    // get_local_dfb_interface(i).tc_slots[0].base_addr, but get_write_ptr() (TILIZEPACK showed
+                    // 91552) reads tc_slots[tc_idx]. If tc0base != 91552 (e.g. == out's 215692) or tcidx != 0,
+                    // then hw_configure programs the WRONG base into buf_desc[tilized] -> tilize writes at that
+                    // base -> OOB. This prints the exact slot state the fix depends on. Remove after diagnosis.
+                    PACK(([&] {
+                        LocalDFBInterface& _ti = get_local_dfb_interface(tilized_in0_cb_id);
+                        DPRINT(
+                            "TZBD tc0base={} tcidx={} ntcs={} activebase={}\n",
+                            (uint32_t)_ti.tc_slots[0].base_addr,
+                            (uint32_t)_ti.tc_idx,
+                            (uint32_t)_ti.num_tcs_to_rr,
+                            (uint32_t)_ti.tc_slots[_ti.tc_idx].base_addr);
+                    }()));
 #endif
 
                     // DEBUG (tilize-pack OOB locator): mirrors MMPACK (~line 636, at the matmul pack). Prints
