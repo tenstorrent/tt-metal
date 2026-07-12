@@ -23,7 +23,9 @@
 //                   variable that produced it) — the registry maps that name to
 //                   a write kind (cfg32/cfg16/regfile_gpr/...)
 //   calls           every call: callee name, callee source text (so template
-//                   args like cfg_reg_rmw_tensix<FIELD> survive), first arg text
+//                   args like cfg_reg_rmw_tensix<FIELD> survive), first arg text,
+//                   arg count, and for a member call the receiver expr + its type
+//                   (recv/recv_type — the object/method CB/NoC/Semaphore API)
 //   macros          macro expansions: every FUNCTION-LIKE macro, PLUS the
 //                   object-like instruction macros (TTI_NOP/TTI_SFPNOP/...) and
 //                   *_RMW field aliases (see MacroPass) — name + full text (args
@@ -138,9 +140,10 @@ std::string srcText(const State &S, SourceRange R)
 }
 
 // ---- Preprocessor pass: recover macro invocations the AST loses -------------
-// TTI_*/TT_*/SEM*/... are function-like macros; their names+args are gone by the
-// time the AST exists. We record every FUNCTION-LIKE macro expansion. Most
-// object-like macros are bare constants (register-address names) that already
+// TTI_*/TT_*/SEM*/... macros' names+args are gone by the time the AST exists. We
+// record every FUNCTION-LIKE macro expansion AND the object-like INSTRUCTION macros
+// (TTI_NOP/TTI_SFPNOP/... — argless but real instructions; see `instrLike` below).
+// Other object-like macros are bare constants (register-address names) that already
 // show up as pointer_write index text, so they are skipped as noise — EXCEPT the
 // `*_RMW` composite aliases used by `cfg_rmw(FIELD_RMW, ...)`: `FIELD_RMW`
 // expands to `FIELD_ADDR32, FIELD_SHAMT, FIELD_MASK` BEFORE the AST, so the field

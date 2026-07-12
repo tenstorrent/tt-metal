@@ -135,6 +135,22 @@ def main(argv=None) -> int:
 
     changed = [c.strip() for c in args.changed_files.split(",") if c.strip()]
 
+    # Degradation guard: cfg-word-overlap silently loses its CROSS_THREAD_SHARED_WORD
+    # detection (emits only UNRESOLVED, exit 0) when the cfg_defines header can't be
+    # read (addr32 empty) — a false all-clear for a class the arch DOES support. The
+    # arch has a CFG_DEFINES_REL entry, so an empty addr32 means the header/root was
+    # not found, not that the arch lacks defines. Warn loudly AND mark the envelope;
+    # this is the one input-degradation path that was not surfaced like the others.
+    cfgword_degraded = "cfg-word-overlap" in selected and bool(rel) and not fb.addr32
+    if cfgword_degraded:
+        print(
+            f"llk-audit: WARNING cfg-word-overlap DEGRADED — could not load cfg "
+            f"defines ({rel}); field masks unresolved, so CROSS_THREAD_SHARED_WORD "
+            f"detection is OFF (only UNRESOLVED emitted). This is NOT a clean "
+            f"'no shared words' result — check --metal-root / the header path.",
+            file=sys.stderr,
+        )
+
     out = {
         "tool": "llk-audit",
         "arch": args.arch,
@@ -143,6 +159,11 @@ def main(argv=None) -> int:
         "scoped_to_changed": bool(changed),
         "checks": {},
     }
+    if cfgword_degraded:
+        out["degraded"] = [
+            f"cfg-word-overlap: cfg_defines ({rel}) unreadable — field masks "
+            "unresolved, CROSS_THREAD_SHARED_WORD detection OFF"
+        ]
     if changed:
         out["changed_files"] = sorted({os.path.basename(c) for c in changed})
     for name in selected:

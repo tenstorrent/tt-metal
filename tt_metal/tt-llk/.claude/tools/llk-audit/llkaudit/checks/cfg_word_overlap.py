@@ -7,7 +7,9 @@ config word, written by more than one Tensix thread.
 Recall: resolve every config write to its 32-bit word via cfg_defines.h,
 attribute the writing thread by file, and report words written by >= 2 distinct
 threads. The tool ANNOTATES masking safety (SAFE_BY_MASKING / POTENTIAL_CLOBBER /
-UNKNOWN — see _safety); semaphore/mutex ordering and value-invariance remain the
+UNKNOWN — see _safety; plus UNRESOLVED_COWRITER for a 1-known-thread word with an
+unattributable co-writer, a low-confidence widen); semaphore/mutex ordering and
+value-invariance remain the
 LLM's call.
 
 Register FILE separation (per tt-isa-docs BackendConfiguration.md): the hardware
@@ -34,7 +36,8 @@ class CfgWordOverlap(Check):
     description = "Fields sharing one 32-bit CONFIG word written by >=2 threads"
     blind_spots = (
         "Disjoint-bit masking IS annotated by the tool (safety = SAFE_BY_MASKING / "
-        "POTENTIAL_CLOBBER / UNKNOWN — do not redo it); what stays deferred is "
+        "POTENTIAL_CLOBBER / UNKNOWN / UNRESOLVED_COWRITER — do not redo it); what "
+        "stays deferred is "
         "semaphore/mutex ordering and value-invariance — the LLM's call. Writes "
         "whose field name does not resolve to an "
         "ADDR32 in cfg_defines.h are listed as 'unresolved'. Intra-thread "
@@ -232,6 +235,10 @@ class CfgWordOverlap(Check):
           POTENTIAL_CLOBBER – a full-word write, a non-atomic software cfg_rmw,
                               or overlapping bits across threads.
           UNKNOWN           – a writer's field mask isn't in cfg_defines.
+        A 4th value, UNRESOLVED_COWRITER, is set by run() (NOT here) for a word with
+        exactly one KNOWN thread plus an unattributable co-writer — a low-confidence
+        widen (the co-writer's thread couldn't be resolved, so a cross-thread share
+        can be neither confirmed nor dismissed).
         The word is reported as CROSS_THREAD_SHARED_WORD regardless of the label;
         SAFE_BY_MASKING still surfaces the multi-thread access (a possible
         ownership smell) — the label just says it isn't a data race."""

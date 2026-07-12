@@ -1491,6 +1491,51 @@ def test_noc_sync_atomic_multicast_and_relay_unicast():
     assert NocSync().run(FactBase("wormhole", ru_flushed)) == []
 
 
+@case
+def test_cfg_word_unresolved_cowriter_widens():
+    # One KNOWN thread (UNPACK) + an unattributable co-writer (llk_io.h -> UNKNOWN
+    # thread) writing the SAME Config word -> surfaced as CROSS_THREAD_SHARED_WORD
+    # with safety=UNRESOLVED_COWRITER (low-confidence widen), NOT dropped.
+    Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"  # UNPACK
+    Fx = "tt_llk_wormhole_b0/llk_lib/llk_io.h"  # UNKNOWN thread
+    facts = [
+        fn("u", Fu, 800, 820),
+        fn("x", Fx, 40, 60),
+        call(
+            Fu,
+            810,
+            "cfg_reg_rmw_tensix",
+            "cfg_reg_rmw_tensix<FIELD_A_ADDR32>",
+            func="u",
+        ),
+        call(
+            Fx, 50, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FIELD_B_ADDR32>", func="x"
+        ),
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"FIELD_A_ADDR32": 5, "FIELD_B_ADDR32": 5}  # same word
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared) == 1 and shared[0].safety == "UNRESOLVED_COWRITER", shared
+    # Control: BOTH writers in UNKNOWN-thread files -> 0 known threads -> not surfaced.
+    facts2 = [
+        fn("x", Fx, 40, 60),
+        fn("y", Fx, 70, 90),
+        call(
+            Fx, 50, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FIELD_A_ADDR32>", func="x"
+        ),
+        call(
+            Fx, 80, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FIELD_B_ADDR32>", func="y"
+        ),
+    ]
+    fb2 = FactBase("wormhole", facts2)
+    fb2.addr32 = {"FIELD_A_ADDR32": 5, "FIELD_B_ADDR32": 5}
+    assert [
+        f for f in CfgWordOverlap().run(fb2) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ] == []
+
+
 def main():
     failed = 0
     for c in CASES:
