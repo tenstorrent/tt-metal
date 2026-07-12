@@ -56,6 +56,17 @@ is run — so both still need heavy LLM widening per their `blind_spots`. The to
 is **advisory**: it never clears a class, and its silence is "no new
 *known-pattern* instance," not "no bug".
 
+**Coverage caveat — attend to `parse_errors` (a per-run partial-coverage signal).**
+The envelope's `parse_errors` is `>0` on a normal run: the SFPU-heavy files that use
+`sfpi::` types don't fully parse (expected — see `out/parse.log`), so writes in those
+files are ABSENT from the fact base. That is a *known, expected* partial-coverage
+bound, NOT a clean full-coverage guarantee — treat any class whose real surface is
+SFPU-side as tool-under-covered there and widen manually. **But before trusting a
+low/zero finding count, scan `out/parse.log` for a header that should NOT fail (a
+NON-SFPU file):** an unexpected parse failure there is a silent coverage hole (that
+class's writes in that file were never analyzed → its "0" is meaningless). This is
+the consuming-side half of the never-false-all-clear contract.
+
 **Tool-drift contract — detect a stale registry, surface it, offer the fix (do NOT silently edit).**
 The deterministic tier is only as complete as `llkaudit/registry.py`'s name→meaning
 tables. When the codebase adds a sync-relevant API the registry doesn't yet know —

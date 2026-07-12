@@ -144,7 +144,11 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
    `NO_LOCAL_ORDERING`.
 3. **SFPU stubbed.** `sfpi.h`/`sfpi_classes.h` are stubbed so headers that merely
    include them parse; files that structurally use `sfpi::` types fail to parse
-   and are counted in `parse_errors` / logged to `out/parse.log`.
+   and are counted in `parse_errors` / logged to `out/parse.log`. So `parse_errors
+   > 0` is normal (the expected SFPU files) and marks PARTIAL coverage, not a clean
+   full-coverage run — writes in unparsed files are absent. Before trusting a low
+   finding count, check `out/parse.log` for a NON-SFPU header that failed
+   unexpectedly: that is a silent coverage hole for that class, not "no bug".
 4. **cfg-word-overlap** partitions `Config` vs `ThreadConfig` by the write
    instruction (`SETC16` → `ThreadConfig`, every other write → `Config`; THCON is
    a sub-range of `Config`, not its own file);
