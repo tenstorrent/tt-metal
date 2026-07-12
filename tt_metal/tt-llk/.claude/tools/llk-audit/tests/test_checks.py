@@ -2031,6 +2031,66 @@ def test_cfg_word_drift_producer_surfaces_unresolved():
     assert CfgWordOverlap().run(FactBase("wormhole", data)) == []
 
 
+@case
+def test_cfg_word_explicit_mask_operand_overrides_field_mask():
+    # cfg_reg_rmw_tensix<FIELD_B_ADDR32, 0, 0xffffffff> writes the WHOLE word — the
+    # explicit 3rd operand (0xffffffff), NOT the narrow field _MASK, is the true mask.
+    # Thread A masks a disjoint field; thread B uses the full-word operand -> the word
+    # is POTENTIAL_CLOBBER. (Field-only masking would call 0x0F vs 0xF0 disjoint = SAFE
+    # — the exact under-report the fix closes.)
+    Fa = "tt_llk_wormhole_b0/llk_lib/llk_math_x.h"  # MATH
+    Fb = "tt_llk_wormhole_b0/llk_lib/llk_pack_x.h"  # PACK
+    base = [
+        fn("_llk_math_", Fa, 0, 50),
+        fn("_llk_pack_", Fb, 0, 50),
+        call(
+            Fa,
+            10,
+            "cfg_reg_rmw_tensix",
+            text="cfg_reg_rmw_tensix<FIELD_A_RMW>",
+            func="_llk_math_",
+        ),
+    ]
+    defines = {
+        "FIELD_A_ADDR32": 5,
+        "FIELD_A_MASK": 0x0F,
+        "FIELD_B_ADDR32": 5,
+        "FIELD_B_MASK": 0xF0,
+    }
+    explicit = base + [
+        call(
+            Fb,
+            10,
+            "cfg_reg_rmw_tensix",
+            text="cfg_reg_rmw_tensix<FIELD_B_ADDR32, 0, 0xffffffff>",
+            func="_llk_pack_",
+        )
+    ]
+    fb = FactBase("wormhole", explicit)
+    fb.addr32 = dict(defines)
+    shared = [
+        f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared) == 1 and shared[0].safety == "POTENTIAL_CLOBBER", shared
+    # Control: thread B via the NARROW field mask (composite <FIELD_B_RMW>) instead ->
+    # 0x0F vs 0xF0 disjoint -> SAFE_BY_MASKING (proves the flip is due to the operand).
+    composite = base + [
+        call(
+            Fb,
+            10,
+            "cfg_reg_rmw_tensix",
+            text="cfg_reg_rmw_tensix<FIELD_B_RMW>",
+            func="_llk_pack_",
+        )
+    ]
+    fb2 = FactBase("wormhole", composite)
+    fb2.addr32 = dict(defines)
+    shared2 = [
+        f for f in CfgWordOverlap().run(fb2) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared2) == 1 and shared2[0].safety == "SAFE_BY_MASKING", shared2
+
+
 def main():
     failed = 0
     for c in CASES:

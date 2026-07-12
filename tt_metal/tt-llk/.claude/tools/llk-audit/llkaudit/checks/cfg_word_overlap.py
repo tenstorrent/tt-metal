@@ -55,13 +55,16 @@ class CfgWordOverlap(Check):
         "(word-granular model). "
         "Config has two banks selected by CFG_STATE_ID; the tool does not model "
         "StateID, so it may over-approximate (flag a word when the threads use "
-        "different banks). Two known under-reports (LLM must widen): (a) a "
+        "different banks). Under-reports the LLM must widen: (a) a "
         "RUNTIME/loop index offset — cfg[FIELD_ADDR32 + i] — resolves the BASE "
-        "word only; sibling words base+1.. are not enumerated; (b) the masking "
-        "annotation derives a writer's bitmask from the field's own _MASK, NOT "
-        "the literal 3rd MASK operand of cfg_reg_rmw_tensix<ADDR32,SHAMT,MASK> — "
-        "a wider mask can under-report bits and mis-label SAFE_BY_MASKING (the "
-        "CROSS_THREAD_SHARED_WORD finding is still emitted regardless). (c) a "
+        "word only (surfaced UNRESOLVED); sibling words base+1.. are not "
+        "enumerated; (b) the masking annotation uses the EXPLICIT 3rd MASK operand "
+        "of cfg_reg_rmw_tensix<ADDR32,SHAMT,MASK> when RESOLVABLE (a literal or a "
+        "*_MASK define — so a wider-than-field mask, incl. a 0xffffffff full-word "
+        "RMW, is now counted), but a RUNTIME-VARIABLE operand mask still falls back "
+        "to the field's _MASK proxy (its true width is unknowable), so a variable "
+        "mask wider than its field can still under-report SAFE_BY_MASKING (the "
+        "CROSS_THREAD_SHARED_WORD finding is emitted regardless). (c) a "
         "config write RECORDED into a MOP/replay buffer (e.g. a WRCFG baked into a "
         "replay buffer) is seen as an ordinary in-place write, but its effect is "
         "DEFERRED to replay time (possibly looped / in another function) — the LLM "
@@ -89,6 +92,9 @@ class CfgWordOverlap(Check):
                     "line": fact.get("line", 0),
                     "function": fact.get("function", "?"),
                     "how": how,
+                    # callee text — lets _safety read the EXPLICIT mask operand of
+                    # cfg_reg_rmw_tensix<ADDR32,SHAMT,MASK> (see resolve_write_mask).
+                    "text": fact.get("text", ""),
                 }
             )
 
@@ -298,7 +304,11 @@ class CfgWordOverlap(Check):
             if registry.write_is_full_word(w["how"]):
                 m, all_atomic, full_word_present = 0xFFFFFFFF, False, True
             else:
-                m = registry.field_bitmask(w["field"], defines)
+                # Use the write's ACTUAL mask: the explicit 3rd operand of
+                # cfg_reg_rmw_tensix<ADDR32,SHAMT,MASK> when present (may be wider than
+                # the field's _MASK — a literal 0xffffffff clobbers the word), else the
+                # field's canonical _MASK. A runtime-variable mask -> None -> UNKNOWN.
+                m = registry.resolve_write_mask(w["field"], w.get("text", ""), defines)
                 if m is None:
                     unresolved, m = True, 0
                 if not registry.write_is_atomic_masked(w["how"]):
@@ -310,18 +320,22 @@ class CfgWordOverlap(Check):
             for i in range(len(masks))
             for j in range(i + 1, len(masks))
         )
-        # A full-word writer definitely clobbers the whole word, so it is
-        # POTENTIAL_CLOBBER regardless of whether some OTHER writer's mask was
-        # unresolved — the full-word fact is stronger than the missing mask, and
-        # downgrading to UNKNOWN would hide a certain clobber behind a weaker label.
-        if full_word_present:
+        # A PROVEN/likely clobber wins over an unknown: a full-word write, a
+        # non-atomic RMW, or overlapping RESOLVED masks is POTENTIAL_CLOBBER even if
+        # some OTHER writer's mask is unresolved (a missing field define, or a
+        # runtime-variable operand mask). Checking `unresolved` FIRST would let a
+        # single unknown mask DOWNGRADE a clobber the other writers already prove to
+        # the weaker UNKNOWN — hiding a real hazard. (Unresolved writers contribute 0
+        # to per_thread, so `disjoint` is computed over the resolved masks only.)
+        if full_word_present or not all_atomic or not disjoint:
             label = "POTENTIAL_CLOBBER"
         elif unresolved:
+            # resolved writers are disjoint + atomic, but a writer's mask is unknown
+            # (field absent from cfg_defines, or a runtime-variable operand) — SAFE
+            # cannot be confirmed.
             label = "UNKNOWN"
-        elif all_atomic and disjoint:
-            label = "SAFE_BY_MASKING"
         else:
-            label = "POTENTIAL_CLOBBER"
+            label = "SAFE_BY_MASKING"
         return label, per_thread
 
     def _intra_thread_clobber(self, writers) -> list[Finding]:
