@@ -88,12 +88,19 @@ warm) ⇒ no tracy, no CSV, immune to the tracy multi-word `-k` bug (exact brack
 mesh param exposes both `ring_bh_4x8sp1tp0` (Topology.Ring) AND `line_bh_4x8sp1tp0` (Topology.Line) ⇒ a CLEAN
 CCL-topology A/B on the fused all-gather-matmul (num_links=2 HW-cap holds for both). Fidelity axis already probed
 (all_bf8 weights −0.04s null); matmul program-config (grid/subblock) is source-computed ⇒ warm-authoring, not cron.
-- [~] **F0 — video-block warm-FW baseline @ ring_bh_4x8** (job **001703-77**, 00:17Z). Establishes the warm VIDEO
-  per-block FW (all prior block runs were `av`→SKIP; the 44.77ms number was AV single-blocking). Substrate for F1's
-  topology A/B. Extract `WARM_FWD_MS=` + confirm `PASSED block PCC`. NEXT lap: read log, tick `[x]`, dispatch F1.
-- [ ] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line)** vs F0 Ring. Node-id
-  `test_ltx_transformer_block[NOTSET-ckpt_fast-pcc-video-stage_2-line_bh_4x8sp1tp0]`, same env/iters. Clean no-edit
-  CCL-topology A/B: does Linear all-gather beat Ring for the fused matmul at block scale? >5% FW delta = a win to wire in.
+**⚠️ HARNESS GOTCHA (F0 job 001703-77 died 0-collect, root-caused): SELECT BY `-k`, NOT the exact bracket node-id.**
+The first id slot is the ARCH — `blackhole` when collected UNDER the broker (device present), but `NOTSET` when
+collected OFF-device (my local collect-only had no device fixture). So an off-device-derived bracket id
+(`[NOTSET-...]`) NEVER matches under the broker (`[blackhole-...]`) ⇒ 0 items. This is plain pytest (NOT tracy), so a
+single-quoted `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and ckpt_fast'` survives the broker shell intact (the tracy
+`" ".join`/2nd-shell bug that broke Batch A's spaced `-k` does NOT apply here) and is arch-slot-agnostic. Use `-k`.
+- [~] **F0 — video-block warm-FW baseline @ ring_bh_4x8** (job **002052-79**, 00:20Z; supersedes 001703-77 which used
+  the off-device `[NOTSET-...]` bracket → 0-collect). `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and ckpt_fast'`.
+  Establishes the warm VIDEO per-block FW (all prior block runs were `av`→SKIP; the 44.77ms number was AV single-blocking).
+  Substrate for F1's topology A/B. Extract `WARM_FWD_MS=` + confirm `PASSED block PCC`. NEXT lap: read log, tick `[x]`, dispatch F1.
+- [ ] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line)** vs F0 Ring. Select
+  `-k 'video and stage_2 and line_bh_4x8sp1tp0 and ckpt_fast'`, same env/iters. Clean no-edit CCL-topology A/B: does
+  Linear all-gather beat Ring for the fused matmul at block scale? >5% FW delta = a win to wire into the CCL config.
 
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
