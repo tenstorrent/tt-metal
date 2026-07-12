@@ -159,6 +159,36 @@ overhead-bound question Batch F reopened (num_links=1 → +16% only).
   at ~16.88ms.** The only remaining in-repo lever is the source-computed matmul grid/subblock (Batch G,
   warm-authoring) — and even a fully-free CCL bucket floors at the ~7.9s no-finetune wall.
 
+## Batch I — STAGE-1 block characterization (the 2nd denoise stage, 2.9s = 35% of E2E, NEVER block-profiled)
+The whole session characterized only `stage_2` (N=38760). `stage_1` (N=9690, 4× smaller seq, id line 122) is the SAME
+`test_ltx_transformer_block` re-pointed by a one-word `-k` swap (`stage_2`→`stage_1`) — no-edit, PCC-gated, WARM_FWD_MS,
+cron-in-budget, warm ltxrt caches (E2E 185309-15 populated both stages). Enumerate the same no-edit axes Batch F/H swept for S2.
+- [x] **I0 — S1 video-block warm-FW baseline @ ring_bh_4x8 = WARM_FWD_MS 12.73 (PCC 99.994%, gate 0.988).** Job **010823-91**
+  (`-k 'video and stage_1 and ring_bh_4x8sp1tp0 and ckpt_fast'`, LTX_PROFILE_ITERS=4, env_sdpa.yaml, JIT 402/423 warm, 1
+  passed/39 desel, 32 chips healthy). **First-ever S1 per-block receipt.** vs S2 F0 16.88ms: a **4× larger seq yields only
+  1.33× the block time** ⇒ block dominated by a fixed ~12.7ms/block collective/dispatch floor, not seq-proportional compute —
+  the dispatch-bound thesis (H0 −1.1%, F2 +16%) now confirmed across a 4× seq range.
+- [x] **I2 — S1 num_links=1 @ ring_bh_4x8 = WARM_FWD_MS 12.71 (PCC 99.994%) → 0% (dispatch-bound floor).** Job **011036-93**
+  (`LTX_NUM_LINKS=1`, else identical). vs I0 num_links=2 12.73ms = **Δ −0.02ms ≈ 0%** — the 2nd link makes NO difference at S1
+  (contrast S2's +16%/Δ2.70ms). S1's small tensors leave ample single-link BW headroom ⇒ **S1 is PURELY dispatch/collective-
+  latency-bound, ZERO link-BW sensitivity.** Sharpest evidence yet: the ~12.7ms floor is fixed setup+dispatch, not BW.
+- [x] **I1 — S1 Line topology (line_bh_4x8sp1tp0) = WARM_FWD_MS 11.46 (PCC 99.994%) → TOPOLOGY CROSSOVER (char-only, not
+  shippable).** Job **011213-95**. **Line 11.46 < Ring 12.73 = −10%** at S1 — INVERTS S2's F1 result (Line 20.97 > Ring 16.88 =
+  +24%). Corrects F1's "Ring wins decisively" (that was S2-only). Physically consistent: at S1's small tensors the Ring's
+  multi-hop collective-SETUP latency dominates and Linear's lower fixed setup wins (matches I2's zero BW sensitivity).
+  **NOT a shippable lever:** (1) fabric topology is a DEVICE-INIT constant — one `FabricConfig::FABRIC_1D_RING` per process
+  (`fabric_firmware_initializer.cpp`), and the pipeline builds ONE shared `CCLManager` (`pipeline_ltx.py:597`) used for both
+  stages ⇒ can't run S1-Linear + S2-Ring in one reservation; (2) whole-run Line is net-WORSE (S2 +4.09ms/block ≫ S1 −1.27ms/block)
+  ⇒ Ring-for-all (prod) stays optimal.
+- [x] **I3 — S1 LTX_QUANT weight/act quant — DEAD by composition (no run).** H0 measured quant −1.1% null on the S2 dispatch-
+  bound block; S1 is EVEN MORE dispatch-bound (I2: zero BW sensitivity) ⇒ a compute lever moves it even less. Would confirm null
+  + add PCC risk. Not worth a reservation (mirrors H1/H2 dead-by-composition).
+→ **BATCH I CLOSED — the SECOND denoise stage (S1, 35% of E2E) is now block-profiled + no-edit-swept for the first time:**
+  baseline 12.73ms, num_links-insensitive (pure dispatch floor), Line-topology crossover (char-only, not shippable). Both
+  denoise stages now have per-block receipts; the block is collective/dispatch-latency-bound at BOTH scales, MORE so at S1.
+  **No no-edit lever moves either stage.** Reinforces: only cutting the NUMBER of blocks/steps (out-of-repo step-distill) helps.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
+- **S1 (stage_1) video block, first-ever receipts (jobs 010823-91/011036-93/011213-95):** baseline 12.73ms (Ring), num_links=1 12.71ms (0% = pure dispatch floor), Line 11.46ms (−10% crossover, char-only — fabric topology is a device-init constant, whole-run Line net-worse). 4× seq (S1→S2) = only 1.33× block time ⇒ dispatch-bound confirmed across scale.
