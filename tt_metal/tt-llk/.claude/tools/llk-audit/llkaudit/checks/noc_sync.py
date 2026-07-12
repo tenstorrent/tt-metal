@@ -37,9 +37,13 @@ class NocSync(Check):
     name = "noc-sync"
     description = "NoC credit signal missing a preceding write-flush (kernel tier)"
     blind_spots = (
-        "Only checks that SOME flush precedes the signal in the SAME function — it "
-        "does NOT verify the flush covers the specific buffer/transaction the "
-        "signal credits, nor a flush supplied by a CALLER (shows as a candidate). "
+        "Checks that a suitable flush precedes the signal in the SAME function — an "
+        "ACK barrier for an atomic credit (inc), any write flush for a write credit "
+        "(set/mcast) — but does NOT verify the flush covers the specific buffer/"
+        "transaction the signal credits, nor a flush supplied by a CALLER (shows as "
+        "a candidate). It also does not model same-VC transit ordering, which can "
+        "make even a missing flush safe for a write credit (the /noc-sync skill's "
+        "#48480 caveat) — so a set/mcast candidate may be a false positive there. "
         "Cross-core / cross-kernel signal↔wait pairing (does a consumer actually "
         "wait on this semaphore?) and multicast fan-out (inc count == number of "
         "destinations) are NOT decided here — the /noc-sync skill owns them. "
@@ -66,14 +70,28 @@ class NocSync(Check):
         for (_file, func), calls in sorted(byfn.items()):
             calls.sort(key=lambda c: c["off"])
             # noc_op_of is fact-aware: free-function signals/flushes AND the
-            # Noc-method write-flush (noc.async_write_barrier()).
+            # Noc-method write-flush (noc.async_write_barrier()). Distinguish the
+            # ACK barrier (data LANDED) from a bare writes_flushed (data LEFT).
+            barrier_offs = [
+                c["off"] for c in calls if registry.noc_flush_kind(c) == "barrier"
+            ]
             flush_offs = [c["off"] for c in calls if registry.noc_op_of(c) == "flush"]
             for c in calls:
                 op = registry.noc_op_of(c)
                 if op not in ("inc", "set", "mcast"):
                     continue
-                if any(fo < c["off"] for fo in flush_offs):
-                    continue  # a write flush precedes this signal — ok (candidate-safe)
+                # An ATOMIC credit (inc) needs the ack BARRIER — a bare writes_flushed
+                # does not order write->atomic even same-VC (#48478). A write-based
+                # credit (set/multicast) is ordered by ANY preceding write flush.
+                if op == "inc":
+                    clearing, need = barrier_offs, "noc_async_write_barrier"
+                else:
+                    clearing, need = (
+                        flush_offs,
+                        "noc_async_write_barrier/writes_flushed",
+                    )
+                if any(fo < c["off"] for fo in clearing):
+                    continue  # a suitable flush precedes this signal — candidate-safe
                 findings.append(
                     Finding(
                         file=c["file"],
@@ -81,9 +99,13 @@ class NocSync(Check):
                         function=func,
                         kind=f"noc_signal:{op}",
                         hint="NOC_SIGNAL_NO_FLUSH",
-                        detail=f"{c.get('name','')} with no preceding "
-                        f"noc_async_write_barrier/writes_flushed in {func} "
-                        "(data-before-credit: signal may overtake the write)",
+                        detail=f"{c.get('name','')} with no preceding {need} in {func} "
+                        "(data-before-credit: signal may overtake the write"
+                        + (
+                            "; atomic credit needs the ACK barrier, not just a flush)"
+                            if op == "inc"
+                            else ")"
+                        ),
                         evidence=[self._ev(c, c.get("name", ""))],
                     )
                 )

@@ -42,14 +42,26 @@ _CMD_RE = re.compile(r"g\+\+ compile cmd:\s*(.*\S)\s*$")
 
 
 def _sfpi_gcc_ver(sfpi_root: str) -> str:
-    """Discover the sfpi gcc version dir (e.g. 15.1.0), rather than hardcode it."""
+    """Discover the sfpi gcc version dir (e.g. 15.1.0) — never hardcoded. Picks the
+    highest by NUMERIC version (matching extractor/build.sh's `sort -V`), not lexical
+    order (`sorted(['9.5.0','15.1.0'])[-1]` would wrongly give 9.5.0). Fails loudly
+    if none is found rather than guessing a path that silently produces wrong facts."""
     base = os.path.join(sfpi_root, "compiler", "lib", "gcc", "riscv-tt-elf")
     vers = [
         os.path.basename(d)
         for d in glob.glob(os.path.join(base, "*"))
         if os.path.isdir(d)
     ]
-    return sorted(vers)[-1] if vers else "15.1.0"
+    if not vers:
+        raise RuntimeError(
+            f"no sfpi gcc version dir under {base} — is runtime/sfpi present and "
+            "matching the pin in tt_metal/sfpi-version?"
+        )
+
+    def _key(v: str):
+        return tuple(int(p) if p.isdigit() else 0 for p in v.split("."))
+
+    return max(vers, key=_key)
 
 
 def _clang_base(sfpi_root: str) -> list:

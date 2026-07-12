@@ -634,6 +634,31 @@ def test_cfg_word_intra_thread_full_word_clobber():
 
 
 @case
+def test_cfg_word_reg2flop_sibling_is_clobber_victim():
+    # A full-word cfg[]= of field A + a NON-RMW field-scoped TTI_REG2FLOP of sibling
+    # B in the SAME word/thread: the REG2FLOP set is a clobber victim just like a
+    # masked RMW (the victim bucket is any resolved-field non-full-word write, not
+    # only the RMW helpers — cpack_common.h writes THCON_SEC0_REG1 both ways).
+    F = "tt_llk_wormhole_b0/common/inc/cpack_common.h"  # PACK thread
+    facts = [
+        fn("f", F, 100, 300),
+        pw(F, 110, "get_cfg_pointer", "FIELD_A_ADDR32", func="f"),  # full-word cfg[]=
+        macro(
+            F,
+            200,
+            "TTI_REG2FLOP",
+            "TTI_REG2FLOP(1,0,0,0, FIELD_B_ADDR32 - THCON_CFGREG_BASE_ADDR32, OUT)",
+            func="f",
+        ),  # field-scoped sibling, NOT an RMW helper
+    ]
+    fb = FactBase("wormhole", facts)
+    fb.addr32 = {"FIELD_A_ADDR32": 9, "FIELD_B_ADDR32": 9}  # same word
+    clob = [x for x in CfgWordOverlap().run(fb) if x.hint == "INTRA_THREAD_CLOBBER"]
+    assert len(clob) == 1 and clob[0].kind == "clobber@CONFIG:9", clob
+    assert "FIELD_B" in clob[0].detail, clob[0].detail
+
+
+@case
 def test_cfg_word_safety_annotation_kept_finding():
     # Cross-thread word is ALWAYS reported; `safety` is a sub-annotation.
     Fu = "tt_llk_wormhole_b0/common/inc/cunpack_common.h"  # UNPACK
@@ -1184,11 +1209,26 @@ def test_noc_sync_remote_signals_and_local_set():
         call(K, 20, "noc_semaphore_set", func="kernel_main", arg0="sem"),
     ]
     assert NocSync().run(FactBase("wormhole", facts)) == []
-    # noc_async_write_flushed_with_trid counts as a flush -> a signal after it is ok
+    # a bare FLUSHED (not an ack barrier) does NOT clear an ATOMIC inc (#48478:
+    # no write->atomic ordering even same-VC) -> still flagged.
     facts = [
         fn("kernel_main", K, 0, 100),
         call(K, 10, "noc_async_write_flushed_with_trid", func="kernel_main"),
         call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", facts))[0].hint == "NOC_SIGNAL_NO_FLUSH"
+    # a write BARRIER before the atomic inc DOES clear it (data landed).
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_write_barrier", func="kernel_main"),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", facts)) == []
+    # a WRITE credit (set_remote) IS ordered by a bare flushed (it is a write).
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_writes_flushed", func="kernel_main"),
+        call(K, 20, "noc_semaphore_set_remote", func="kernel_main", arg0="sem"),
     ]
     assert NocSync().run(FactBase("wormhole", facts)) == []
 

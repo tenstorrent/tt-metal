@@ -107,14 +107,14 @@ case "$ARCH" in
 esac
 
 # sfpi-gcc version whose system-header dirs we add (single source of truth).
-CLANG_VER="${SFPI_GCC_VER:-15.1.0}"
+GCC_VER="${SFPI_GCC_VER:-15.1.0}"
 FLAGS=(-x c++-header --target=$TGT -D__INT32_TYPE__=long
   -DENV_LLK_INFRA -D$DEF -DTENSIX_FIRMWARE -DCOMPILE_FOR_TRISC -std=c++17 -nostdinc++ -nostdinc
   -DLLK_TRISC_UNPACK -DLLK_TRISC_MATH -DLLK_TRISC_PACK -DENABLE_LLK_ASSERT -DRUNTIME_FORMATS $BOOT
-  -isystem "$SFPI/compiler/lib/gcc/riscv-tt-elf/$CLANG_VER/include/"
+  -isystem "$SFPI/compiler/lib/gcc/riscv-tt-elf/$GCC_VER/include/"
   -isystem "$SFPI/compiler/riscv-tt-elf/include"
-  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/$CLANG_VER"
-  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/$CLANG_VER/riscv-tt-elf"
+  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/$GCC_VER"
+  -isystem "$SFPI/compiler/riscv-tt-elf/include/c++/$GCC_VER/riscv-tt-elf"
   -isystem "$SFPI/include"
   -I"$SHIM"
   -I"$LLK_ROOT/common" -I"$LLK_ROOT/$LLK/common/inc" -I"$LLK_ROOT/$LLK/common/inc/sfpu"

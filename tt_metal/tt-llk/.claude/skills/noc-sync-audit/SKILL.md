@@ -52,8 +52,8 @@ Cores coordinate across the NoC with **NoC semaphores** (L1 counters bumped by r
 3. Run checks 1–5; for multicast, resolve the receiver count from the grid.
 
 ## Verdict
-- **Data flushed before credit, balanced wait/inc with correct direction, multicast count matches, reuse gated by completion** → SAFE.
-- **Credit reachable before the data write is flushed** → DATA RACE — fix = add the missing `noc_async_write_barrier`/`writes_flushed` before the inc/set.
+- **Data flushed before credit (ack barrier when the credit is atomic), balanced wait/inc with correct direction, multicast count matches, reuse gated by completion** → SAFE.
+- **Credit reachable before the data write is flushed** → DATA RACE — fix = add the missing flush before the credit. For a **write credit** (`set`/multicast) either `noc_async_write_barrier` or `noc_async_writes_flushed` suffices; for an **atomic credit** (`noc_semaphore_inc` / remote `up`) it must be the **ack `noc_async_write_barrier`** (a bare `writes_flushed` doesn't order write→atomic even same-VC; #48478). (The `noc-sync` checker enforces this split: an `inc` candidate is cleared only by a preceding barrier, a `set`/`mcast` by any flush.)
 - **Wait/inc imbalance or wrong fan-out count on a reachable path** → DEADLOCK or early-release.
 - **Buffer reused before transaction completion** → CORRUPTION — gate reuse with a barrier.
 - **Risk only in a specific op's kernel set** → LATENT/author-level — name the kernel.

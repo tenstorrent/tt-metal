@@ -6,7 +6,9 @@ Check base class + the uniform Finding envelope.
 Every checker is an AUGMENTOR: it emits recall *candidates* over KNOWN patterns,
 never a merge verdict. That contract is encoded here structurally:
 
-  * A Finding has a `hint` (a recall bucket) and NO safe/pass/fail field.
+  * A Finding has a `hint` (a recall bucket) and NO verdict field. (The optional
+    `safety` field is a SUB-annotation, e.g. SAFE_BY_MASKING — explicitly not a
+    pass/fail and never a clearance.)
   * Every Check must declare `blind_spots` — the patterns it structurally cannot
     see — which is echoed into the output so the LLM/human knows what to hunt
     beyond the tool.
