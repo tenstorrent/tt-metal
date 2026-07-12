@@ -1385,6 +1385,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(q_bh)
         q_scores = ttnn.reshape(q_scores_bh, (batch, num_heads, qc, vocab))
         ttnn.deallocate(q_scores_bh)
+        # Match ``scores`` dtype so every region add/subtract below stays in that precision (f32 on the
+        # long-audio path). ``q_scores`` is tiny ([B,H,Qc,vocab], vocab≈73), so the cast is cheap.
+        if q_scores.dtype != scores.dtype:
+            q_scores_cast = ttnn.typecast(q_scores, scores.dtype, memory_config=memory_config)
+            ttnn.deallocate(q_scores)
+            q_scores = q_scores_cast
 
         # Extract the two clamp columns BEFORE the gather. ``ttnn.gather`` can clobber/alias its input
         # buffer in some DRAM states — reading ``c_left``/``c_right`` from ``q_scores`` after the gather
@@ -1524,6 +1530,17 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(o)
         return attn_out
 
+    def _f32_softmax_query_chunk(self, seq_len: int) -> int:
+        """Query-block size for the f32 QK/softmax path.
+
+        At the longest audio (S≈4096) the f32 matmul/typecast working set is largest, so the block is
+        kept smaller on TP>1 (which also carries a persistent L1 buffer); single-device and shorter
+        seq can take a larger block.
+        """
+        if seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
+            return 128 if self._tp > 1 else 256
+        return 256
+
     def _chunked_relative_attention_matmul_f32_softmax(
         self,
         q: ttnn.Tensor,
@@ -1536,13 +1553,28 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads: int,
         seq_len: int,
     ) -> ttnn.Tensor:
-        """Query-block attention with float32 QK/softmax (mid-range sequence path)."""
+        """Query-block attention with float32 QK/softmax — used across the whole chunked range.
+
+        The QK matmul, relative-bias add and mask add are all done in float32; scores stay f32 until
+        the softmax. Doing this in bf16 (the old S≥3072 path) loses enough precision over the 24
+        conformer layers that the text-decoder cross-attention over 513 encoder keys amplifies it into
+        ASR word errors (teacher-forced WER 0.37 → 0.02 at mel 4096).
+        """
         head_dim = int(q.shape[-1])
         dist_w = attn_module.distance_embedding.weight
         left_max = int(attn_module.left_max_position_embeddings)
         right_max = int(attn_module.right_max_position_embeddings)
         mc = self._mc_act(seq_len=seq_len)
-        query_chunk = 256 if seq_len < _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD else _ATTN_QUERY_CHUNK
+        query_chunk = self._f32_softmax_query_chunk(seq_len)
+        # The numeric-stable softmax CB is width-bound (S wide); in f32 at S≈4096 it overflows L1
+        # against a persistent TP>1 L1 buffer. Where that happens, run the softmax on a bf16 copy of
+        # the (f32-accurate) scores instead — the f32 QK/bias/mask above is the precision win, so a
+        # plain bf16 softmax there still clears the ASR WER. Single-device (whole L1) and shorter seq
+        # keep the full-f32 softmax.
+        f32_softmax_fits = not (self._tp > 1 and seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD)
+        # Band-window the relative-position gather only for the longest audio (where it dominated
+        # device time); mid-range keeps the full-S fused gather it was validated with.
+        use_windowed_rel = seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD
         k_f32 = ttnn.typecast(k, ttnn.float32)
         ttnn.deallocate(k)
         out_blocks: list[ttnn.Tensor] = []
@@ -1550,22 +1582,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             q1 = min(q0 + query_chunk, seq_len)
             qc = q1 - q0
             q_blk = ttnn.slice(q, [0, 0, q0, 0], [batch, num_heads, q1, head_dim], [1, 1, 1, 1], memory_config=mc)
-            idx_blk = self._relative_block_position_index_device(
-                q0, q1, seq_len, left_max=left_max, right_max=right_max
-            )
-            rel_blk = self._relative_logits_fused(
-                q_blk,
-                idx_dev=idx_blk,
-                distance_weight=dist_w,
-                batch=batch,
-                num_heads=num_heads,
-                q_rows=qc,
-                seq_len=seq_len,
-                memory_config=mc,
-                compute_kernel_config=self._linear_compute_cfg,
-            )
             q_f32 = ttnn.typecast(q_blk, ttnn.float32)
-            ttnn.deallocate(q_blk)
             scores_f32 = ttnn.matmul(
                 q_f32,
                 k_f32,
@@ -1573,10 +1590,46 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 compute_kernel_config=self._attn_compute_cfg,
             )
             ttnn.deallocate(q_f32)
-            rel_f32 = ttnn.typecast(rel_blk, ttnn.float32)
-            ttnn.deallocate(rel_blk)
-            scores_f32 = ttnn.add(scores_f32, rel_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(rel_f32)
+            if use_windowed_rel:
+                # Long audio (S≥3072): band-windowed relative-position bias added straight onto the f32
+                # scores (softmax-exact vs the full-S gather, ~13x cheaper — the banding perf win, now
+                # in the f32 path). q_scores is cast to the f32 scores dtype inside the helper.
+                scores_f32 = self._add_windowed_relative_logits(
+                    scores_f32,
+                    q_blk,
+                    distance_weight=dist_w,
+                    batch=batch,
+                    num_heads=num_heads,
+                    q0=q0,
+                    q1=q1,
+                    seq_len=seq_len,
+                    left_max=left_max,
+                    right_max=right_max,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self._linear_compute_cfg,
+                )
+                ttnn.deallocate(q_blk)
+            else:
+                # Mid-range (S<3072): full-S fused gather (byte-identical to the validated path).
+                idx_blk = self._relative_block_position_index_device(
+                    q0, q1, seq_len, left_max=left_max, right_max=right_max
+                )
+                rel_blk = self._relative_logits_fused(
+                    q_blk,
+                    idx_dev=idx_blk,
+                    distance_weight=dist_w,
+                    batch=batch,
+                    num_heads=num_heads,
+                    q_rows=qc,
+                    seq_len=seq_len,
+                    memory_config=mc,
+                    compute_kernel_config=self._linear_compute_cfg,
+                )
+                ttnn.deallocate(q_blk)
+                rel_f32 = ttnn.typecast(rel_blk, ttnn.float32)
+                ttnn.deallocate(rel_blk)
+                scores_f32 = ttnn.add(scores_f32, rel_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(rel_f32)
             if attention_mask_4d is not None:
                 mask_blk = ttnn.slice(
                     attention_mask_4d,
@@ -1589,10 +1642,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 ttnn.deallocate(mask_blk)
                 scores_f32 = ttnn.add(scores_f32, mask_f32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(mask_f32)
-            probs_f32 = ttnn.softmax(scores_f32, dim=-1, numeric_stable=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(scores_f32)
-            probs = ttnn.typecast(probs_f32, ttnn.bfloat16)
-            ttnn.deallocate(probs_f32)
+            if f32_softmax_fits:
+                probs_f32 = ttnn.softmax(scores_f32, dim=-1, numeric_stable=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(scores_f32)
+                probs = ttnn.typecast(probs_f32, ttnn.bfloat16)
+                ttnn.deallocate(probs_f32)
+            else:
+                # Softmax on a bf16 copy of the (f32-accurate) scores with a plain bf16 softmax — same
+                # CBs as the old bf16 path, so it fits L1 in every device config (incl. the tight
+                # legacy speech-encoder params). The precision win is the f32 QK/bias/mask above; an
+                # fp32-accumulating compute config here would enlarge the CBs and re-clash L1 on TP.
+                scores_bf16 = ttnn.typecast(scores_f32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(scores_f32)
+                probs = ttnn.softmax(scores_bf16, dim=-1, numeric_stable=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(scores_bf16)
             out_blk = ttnn.matmul(
                 probs,
                 v,
@@ -1621,12 +1684,15 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads: int,
         seq_len: int,
     ) -> ttnn.Tensor:
-        """Query-block conformer relative attention for long mel seq (> ``_ATTN_QUERY_CHUNK_THRESHOLD``)."""
-        if seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
-            impl = self._chunked_relative_attention_matmul
-        else:
-            impl = self._chunked_relative_attention_matmul_f32_softmax
-        return impl(
+        """Query-block conformer relative attention for long mel seq (> ``_ATTN_QUERY_CHUNK_THRESHOLD``).
+
+        The f32 QK/softmax path is used across the whole chunked range. The old bf16 matmul+softmax
+        path (gated at S≥3072) was faster — it band-windows the relative-position gather — but its
+        bf16 scores are too imprecise at S≈4096: the error compounds over 24 conformer layers and the
+        text-decoder cross-attention over 513 encoder keys amplifies it into ASR word errors (WER 0.37
+        vs 0.02 for f32). The bf16 path is kept for reference / future re-precisioning.
+        """
+        return self._chunked_relative_attention_matmul_f32_softmax(
             q,
             k,
             v,
@@ -2358,12 +2424,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads = self._num_local_heads
         for slen in seq_lens:
             idx_full = self._relative_position_index_device(slen, left_max=left_max, right_max=right_max)
+            query_chunk = self._f32_softmax_query_chunk(slen)
             if slen <= _ATTN_QUERY_CHUNK_THRESHOLD:
                 self._relative_gather_index_4d(idx_full, batch=batch, num_heads=num_heads, q_rows=slen, seq_len=slen)
             elif slen >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
-                # Matmul chunked path uses the band-windowed logits — warm window indices.
-                for q0 in range(0, slen, _ATTN_QUERY_CHUNK):
-                    q1 = min(q0 + _ATTN_QUERY_CHUNK, slen)
+                # Long audio: f32 path band-windows the gather — warm the window indices.
+                for q0 in range(0, slen, query_chunk):
+                    q1 = min(q0 + query_chunk, slen)
                     kw0, kw1 = self._relative_window_bounds(q0, q1, slen, left_max=left_max, right_max=right_max)
                     idx_win = self._relative_window_index_device(
                         q0, q1, kw0, kw1, left_max=left_max, right_max=right_max
@@ -2372,9 +2439,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
                         idx_win, batch=batch, num_heads=num_heads, q_rows=q1 - q0, seq_len=kw1 - kw0
                     )
             else:
-                # f32-softmax chunked path still uses the full-S fused gather.
-                for q0 in range(0, slen, _ATTN_QUERY_CHUNK):
-                    q1 = min(q0 + _ATTN_QUERY_CHUNK, slen)
+                # Mid-range: f32 path uses the full-S fused gather, one block per query chunk.
+                for q0 in range(0, slen, query_chunk):
+                    q1 = min(q0 + query_chunk, slen)
                     qc = q1 - q0
                     idx_blk = self._relative_block_position_index_device(
                         q0, q1, slen, left_max=left_max, right_max=right_max
