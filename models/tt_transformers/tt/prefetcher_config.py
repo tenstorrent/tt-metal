@@ -29,16 +29,37 @@ class TensorPrefetcherReceiverLayout:
     right_columns: int
 
 
+def _materialize_profile(profile_set: Mapping, receivers_per_bank: int) -> Optional[Mapping]:
+    """Select an ordered per-bank subset from one maximal receiver placement."""
+    selection = profile_set.get("selections", {}).get(receivers_per_bank)
+    banks = profile_set.get("banks")
+    if selection is None or banks is None:
+        return None
+
+    bank_slot_indices = selection.get("bank_slot_indices")
+    if bank_slot_indices is None or len(bank_slot_indices) != len(banks):
+        return None
+
+    selected_banks = []
+    for bank_slots, selected_indices in zip(banks, bank_slot_indices):
+        if len(selected_indices) != receivers_per_bank or len(set(selected_indices)) != receivers_per_bank:
+            return None
+        if any(not 0 <= index < len(bank_slots) for index in selected_indices):
+            return None
+        selected_banks.append([bank_slots[index] for index in selected_indices])
+    return {"name": selection["name"], "banks": selected_banks}
+
+
 def _profile_for(
     tensor_config: Mapping, num_dram_banks: int, receivers_per_bank: int
 ) -> Tuple[Optional[Mapping], Optional[int]]:
     profiles = tensor_config["profiles"]
-    exact_profiles = profiles.get(num_dram_banks, {})
-    if receivers_per_bank in exact_profiles:
-        return exact_profiles[receivers_per_bank], num_dram_banks
+    exact_profile = _materialize_profile(profiles.get(num_dram_banks, {}), receivers_per_bank)
+    if exact_profile is not None:
+        return exact_profile, num_dram_banks
 
     fallback_bank_count = tensor_config["fallback_profile_dram_banks"]
-    return profiles.get(fallback_bank_count, {}).get(receivers_per_bank), fallback_bank_count
+    return _materialize_profile(profiles.get(fallback_bank_count, {}), receivers_per_bank), fallback_bank_count
 
 
 def _source_bank_indices(num_dram_banks: int, profile_bank_count: int) -> Tuple[int, ...]:

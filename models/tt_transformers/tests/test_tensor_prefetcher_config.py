@@ -41,6 +41,27 @@ _RING32_RECEIVERS = (
     (8, 8),
 )
 
+_RING8_RECEIVERS = ((1, 0), (0, 1), (0, 2), (0, 4), (8, 5), (7, 6), (7, 7), (6, 8))
+
+_RING16_RECEIVERS = (
+    (1, 0),
+    (2, 0),
+    (0, 1),
+    (3, 1),
+    (0, 2),
+    (1, 2),
+    (0, 4),
+    (4, 4),
+    (8, 5),
+    (9, 5),
+    (2, 6),
+    (7, 6),
+    (7, 7),
+    (10, 7),
+    (6, 8),
+    (8, 8),
+)
+
 
 def _anchors(num_dram_banks, right_start):
     left_banks = num_dram_banks // 2
@@ -54,7 +75,7 @@ def _anchors(num_dram_banks, right_start):
 def test_tensor_prefetcher_receiver_profiles_are_complete(receivers_per_bank):
     layout = allocate_tensor_prefetcher_receiver_layout(
         (11, 10),
-        _anchors(8, right_start=7),
+        _anchors(8, right_start=6),
         num_dram_banks=8,
         receivers_per_bank=receivers_per_bank,
     )
@@ -70,13 +91,33 @@ def test_tensor_prefetcher_receiver_profiles_are_complete(receivers_per_bank):
 def test_tensor_prefetcher_ring32_profile_matches_verified_placement():
     layout = allocate_tensor_prefetcher_receiver_layout(
         (11, 10),
-        _anchors(8, right_start=7),
+        _anchors(8, right_start=6),
         num_dram_banks=8,
         receivers_per_bank=4,
     )
 
     assert layout is not None
     assert layout.receiver_coords == _RING32_RECEIVERS
+
+
+def test_tensor_prefetcher_lower_count_profiles_are_optimized_nested_subsets():
+    layouts = {
+        receivers_per_bank: allocate_tensor_prefetcher_receiver_layout(
+            (11, 10),
+            _anchors(8, right_start=6),
+            num_dram_banks=8,
+            receivers_per_bank=receivers_per_bank,
+        )
+        for receivers_per_bank in (1, 2, 4, 8)
+    }
+
+    assert layouts[1].receiver_coords == _RING8_RECEIVERS
+    assert layouts[2].receiver_coords == _RING16_RECEIVERS
+    for lower_count, higher_count in ((1, 2), (2, 4), (4, 8)):
+        for bank in range(8):
+            lower = layouts[lower_count].receiver_coords[bank * lower_count : (bank + 1) * lower_count]
+            higher = layouts[higher_count].receiver_coords[bank * higher_count : (bank + 1) * higher_count]
+            assert set(lower) < set(higher)
 
 
 @pytest.mark.parametrize(
@@ -127,14 +168,17 @@ def test_tensor_prefetcher_receiver_layout_uses_ambiguous_column_before_opposite
         "fallback": {"spill_rows": [0], "side_order": ["preferred", "opposite"]},
         "profiles": {
             3: {
-                1: {
-                    "name": "ambiguous_fallback",
-                    "banks": [
-                        [["left", 0, 0]],
-                        [["right", 0, 0]],
-                        [["right", 0, 0]],
-                    ],
-                }
+                "banks": [
+                    [["left", 0, 0]],
+                    [["right", 0, 0]],
+                    [["right", 0, 0]],
+                ],
+                "selections": {
+                    1: {
+                        "name": "ambiguous_fallback",
+                        "bank_slot_indices": [[0], [0], [0]],
+                    }
+                },
             }
         },
     }
@@ -187,7 +231,7 @@ def test_tensor_prefetcher_receiver_layout_remaps_dram_harvest_by_side():
 
     assert layout is not None
     assert layout.used_fallback
-    assert layout.receiver_coords == ((0, 0), (0, 1), (0, 2), (6, 5), (2, 6), (0, 7), (0, 8))
+    assert layout.receiver_coords == ((1, 0), (0, 1), (0, 2), (8, 5), (7, 6), (7, 7), (6, 8))
     assert layout.ring_cols == 7
     assert layout.ring_rows == 1
 
