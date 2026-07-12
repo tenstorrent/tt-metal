@@ -130,6 +130,11 @@ def _apply_token_constraint(
     return ttnn.add(logits, mask_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
+def _embeds_to_host_2d(inputs_embeds: ttnn.Tensor) -> torch.Tensor:
+    """[1, 1, S, H] device tensor → [S, H] float32 on host."""
+    return ttnn.to_torch(inputs_embeds).to(torch.float32).squeeze(0).squeeze(0)
+
+
 def _host_2d_to_embeds(embeds_2d: torch.Tensor, device, dtype: torch.dtype = torch.bfloat16) -> ttnn.Tensor:
     """[S, H] or [1, H] host → [1, 1, S, H] on device."""
     if embeds_2d.dim() == 1:
@@ -254,21 +259,9 @@ class TTVibeVoiceGenerator:
         self._sf_noise: Optional[ttnn.Tensor] = None
         self._sf_t_tensors: Optional[list] = None
         self._sf_audio_out: Optional[ttnn.Tensor] = None
-        self._sf_token_out: Optional[ttnn.Tensor] = None  # valid-token-masked greedy argmax, folded into the frame
-
-        # Optional fixed-shape acoustic-encode chunk trace (on with --trace / VV_TRACE_SEGMENT,
-        # or VV_TRACE_ENCODE=1).  Non-final streaming chunks are [1,1,1,3200] → [1,1,1,vae_dim]
-        # with in-place conv caches — one capture, replayed per chunk.  Final chunks stay eager
-        # (different right-pad graph; only once per voice).
-        self._trace_encode = self._trace_segment or os.environ.get("VV_TRACE_ENCODE", "0") == "1"
-        self._enc_tid = None
-        self._enc_tid_final = None
-        self._enc_in: Optional[ttnn.Tensor] = None
-        self._enc_out: Optional[ttnn.Tensor] = None
-        self._enc_out_final: Optional[ttnn.Tensor] = None
+        self._sf_logits_out: Optional[ttnn.Tensor] = None
 
     _SF_WARMUP = 2
-    _ENC_WARMUP = 2
 
     def _token_label(self, token_id: int) -> str:
         labels = {
@@ -338,95 +331,18 @@ class TTVibeVoiceGenerator:
             return out.unsqueeze(0)
         return out
 
-    def _release_encode_trace(self) -> None:
-        """Free voice-clone encode traces after prefill (decode may need the region)."""
-        if self._enc_tid is not None:
-            ttnn.release_trace(self.device, self._enc_tid)
-            self._enc_tid = None
-        if self._enc_tid_final is not None:
-            ttnn.release_trace(self.device, self._enc_tid_final)
-            self._enc_tid_final = None
+    def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
+        """Encode audio → [T_enc, vae_dim] float32 on host (with fix-std sampling).
 
-    def _reset_encoder_cache(self) -> None:
-        """Reset acoustic-encoder streaming caches.  In-place when a live encode trace needs stable addresses."""
-        enc = self.acoustic_tok._encoder_tt
-        if self._trace_encode and self._enc_tid is not None:
-            enc.reset_cache_inplace()
-        else:
-            enc.reset_cache()
-
-    def _write_encode_input(self, chunk_wav: torch.Tensor) -> None:
-        """Host 1-D chunk → persistent ``_enc_in`` [1,1,1,chunk] (no reallocation)."""
-        host = chunk_wav.to(torch.bfloat16).view(1, 1, 1, -1)
-        ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
-            self._enc_in,
-        )
-
-    def _ensure_encode_trace(self) -> None:
-        """Capture non-final and final fixed-shape encode graphs once on dummy input.
-
-        Capturing mid-voice with real audio poisons the first voice.  Eager final-chunk
-        encode allocates (right-pad) under a live non-final trace — unsafe — so the
-        final graph is captured too.  Both paths are warmed up BEFORE any capture so
-        we never allocate eagerly while a trace is live.  Callers must
-        ``_release_encode_trace()`` before as_tensor/connector allocs.
-        """
-        if not self._trace_encode or self._enc_tid is not None:
-            return
-        chunk = self.acoustic_encode_chunk_samples
-        dev = self.device
-        enc = self.acoustic_tok
-        self._enc_in = ttnn.zeros(
-            [1, 1, 1, chunk],
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=dev,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        # Warm BOTH graphs before capturing either (no live trace yet → safe allocs).
-        for _ in range(self._ENC_WARMUP):
-            enc.encode(self._enc_in, use_cache=True, is_final_chunk=False)
-        enc._encoder_tt.reset_cache_inplace()
-        for _ in range(self._ENC_WARMUP):
-            enc.encode(self._enc_in, use_cache=True, is_final_chunk=True)
-        enc._encoder_tt.reset_cache_inplace()
-
-        tid = ttnn.begin_trace_capture(dev, cq_id=0)
-        self._enc_out = enc.encode(self._enc_in, use_cache=True, is_final_chunk=False)
-        ttnn.end_trace_capture(dev, tid, cq_id=0)
-        self._enc_tid = tid
-        enc._encoder_tt.reset_cache_inplace()
-
-        tid_f = ttnn.begin_trace_capture(dev, cq_id=0)
-        self._enc_out_final = enc.encode(self._enc_in, use_cache=True, is_final_chunk=True)
-        ttnn.end_trace_capture(dev, tid_f, cq_id=0)
-        self._enc_tid_final = tid_f
-        enc._encoder_tt.reset_cache_inplace()
-        _vv_debug("encode_chunk: captured non-final + final streaming encode traces (dummy)")
-
-    def _encode_chunk_traced(self, chunk_wav: torch.Tensor, is_final: bool) -> ttnn.Tensor:
-        """One streaming encode chunk via captured trace (fixed shape 3200)."""
-        self._ensure_encode_trace()
-        self._write_encode_input(chunk_wav)
-        if is_final:
-            ttnn.execute_trace(self.device, self._enc_tid_final, cq_id=0, blocking=True)
-            return self._enc_out_final
-        ttnn.execute_trace(self.device, self._enc_tid, cq_id=0, blocking=True)
-        return self._enc_out
-
-    def _encode_acoustic_latents_host(self, wav_1d: torch.Tensor) -> Optional[torch.Tensor]:
-        """Encode audio → [T_enc, vae_dim] float32 on host (no device alloc of the full latent).
-
-        Used while an encode trace may be live — avoids ``as_tensor`` of the concatenated
-        latents under an active trace (allocator corruption).  Caller uploads after release.
+        Long voice prompts are encoded in streaming chunks (one latent frame per chunk)
+        so conv L1 circular buffers stay within device limits.
         """
         wav = self._trim_trailing_zeros(wav_1d)
         total_samples = wav.numel()
         chunk = self.acoustic_encode_chunk_samples
 
         if total_samples == 0:
-            return None
+            return torch.zeros(0, 0)
 
         if total_samples <= chunk:
             self.acoustic_tok._encoder_tt.reset_cache()
@@ -437,50 +353,29 @@ class TTVibeVoiceGenerator:
             )
             lat = self._latents_from_encode_output(lat_tt)
         else:
-            self._reset_encoder_cache()
-            frames_host: List[torch.Tensor] = []
+            self.acoustic_tok._encoder_tt.reset_cache()
+            frames: List[torch.Tensor] = []
             pos = 0
             while pos < total_samples:
                 n = min(chunk, total_samples - pos)
                 chunk_wav = wav[pos : pos + n]
                 is_final = pos + n >= total_samples
                 if chunk_wav.numel() < chunk:
+                    # conv2d caches prepared weights per input width; keep chunks fixed-size.
                     chunk_wav = torch.nn.functional.pad(chunk_wav, (0, chunk - chunk_wav.numel()))
-                if self._trace_encode:
-                    lat_chunk = self._encode_chunk_traced(chunk_wav, is_final=is_final)
-                else:
-                    lat_chunk = self.acoustic_tok.encode(
-                        self._audio_row_to_tt(chunk_wav),
-                        use_cache=True,
-                        is_final_chunk=is_final,
-                    )
-                frames_host.append(self._latents_from_encode_output(lat_chunk)[-1:])
+                lat_tt = self.acoustic_tok.encode(
+                    self._audio_row_to_tt(chunk_wav),
+                    use_cache=True,
+                    is_final_chunk=is_final,
+                )
+                out = self._latents_from_encode_output(lat_tt)
+                frames.append(out[-1:])
                 pos += n
-            lat = torch.cat(frames_host, dim=0)
+            lat = torch.cat(frames, dim=0)
 
         if self.acoustic_fix_std:
             lat = lat + self.acoustic_fix_std * torch.randn_like(lat)
         return lat
-
-    def _encode_acoustic_latents_tt(self, wav_1d: torch.Tensor) -> Optional[ttnn.Tensor]:
-        """Encode audio → [1, 1, T_enc, vae_dim] on device (with fix-std sampling)."""
-        lat = self._encode_acoustic_latents_host(wav_1d)
-        if lat is None:
-            return None
-        return ttnn.as_tensor(
-            lat.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    def _encode_acoustic_latents(self, wav_1d: torch.Tensor) -> torch.Tensor:
-        """Encode audio → [T_enc, vae_dim] float32 on host (compat wrapper)."""
-        lat_tt = self._encode_acoustic_latents_tt(wav_1d)
-        if lat_tt is None:
-            return torch.zeros(0, 0)
-        return self._latents_from_encode_output(lat_tt)
 
     def _compute_scale_bias(self, latents_list: List[torch.Tensor], speech_masks: torch.Tensor):
         """Match reference: scale=1/std(masked), bias=-mean(masked) on stacked latents."""
@@ -494,44 +389,27 @@ class TTVibeVoiceGenerator:
         flat = torch.cat(parts, dim=0).flatten()
         return (1.0 / flat.std()).item(), (-flat.mean()).item()
 
-    def _process_speech_prefill_tt(
+    def _process_speech_prefill(
         self,
         speech_tensors: torch.Tensor,
         speech_masks: torch.Tensor,
-    ) -> ttnn.Tensor:
-        """Acoustic encode → scale/bias → connector, all on device.
-
-        Returns speech_embeds [1, 1, N_slots, hidden] (TILE).  Uses checkpoint
-        scale/bias when present (demo path); only falls back to a host mean/std if unset.
-        Encode-chunk trace (if enabled) is captured on dummy input, replayed for all
-        voices, then released BEFORE any as_tensor/connector allocs.
-        """
+    ) -> torch.Tensor:
+        """Return speech_embeds [N_slots, hidden] for scatter into prefill (host float32)."""
         scale = self.speech_scaling_factor
         bias = self.speech_bias_factor
-
-        if self._trace_encode:
-            self._ensure_encode_trace()
-
-        # Encode all voices to host first (trace replays only; no large device allocs).
-        latents_host: List[Optional[torch.Tensor]] = []
+        latents_per_row = []
         for i in range(speech_tensors.shape[0]):
-            latents_host.append(self._encode_acoustic_latents_host(speech_tensors[i]))
-
-        # Safe to allocate again once the encode trace is gone.
-        self._release_encode_trace()
+            latents_per_row.append(self._encode_acoustic_latents(speech_tensors[i]))
 
         if scale is None or bias is None:
-            host_lats = [lat if lat is not None else torch.zeros(0, 0) for lat in latents_host]
-            scale, bias = self._compute_scale_bias(host_lats, speech_masks)
+            scale, bias = self._compute_scale_bias(latents_per_row, speech_masks)
             self.speech_scaling_factor = scale
             self.speech_bias_factor = bias
 
-        speech_embeds_parts: List[ttnn.Tensor] = []
-        for i, lat in enumerate(latents_host):
+        speech_embeds_parts = []
+        for i in range(speech_tensors.shape[0]):
             n = int(speech_masks[i].sum().item())
-            if n <= 0 or lat is None:
-                continue
-            feats = (lat[:n] + bias) * scale
+            feats = (latents_per_row[i][:n] + bias) * scale
             feats_tt = ttnn.as_tensor(
                 feats.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
                 device=self.device,
@@ -540,38 +418,15 @@ class TTVibeVoiceGenerator:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             conn_out = self.acoustic_conn(feats_tt)
-            hidden = conn_out.shape[3]
-            if conn_out.shape[2] != n:
-                conn_rm = ttnn.to_layout(conn_out, ttnn.ROW_MAJOR_LAYOUT)
-                conn_out = ttnn.slice(conn_rm, [0, 0, 0, 0], [1, 1, n, hidden], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                conn_out = ttnn.to_layout(conn_out, ttnn.TILE_LAYOUT)
-            speech_embeds_parts.append(conn_out)
+            conn_torch = ttnn.to_torch(conn_out).to(torch.float32)
+            if conn_torch.dim() == 4:
+                conn_torch = conn_torch.squeeze(0).squeeze(0)
+            elif conn_torch.dim() == 3:
+                conn_torch = conn_torch.squeeze(0)
+            conn_torch = conn_torch[:n]
+            speech_embeds_parts.append(conn_torch)
 
-        if not speech_embeds_parts:
-            hidden = self.lm.cfg.hidden_size
-            return ttnn.zeros(
-                [1, 1, 1, hidden],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        if len(speech_embeds_parts) == 1:
-            return speech_embeds_parts[0]
-        return ttnn.concat(speech_embeds_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    def _process_speech_prefill(
-        self,
-        speech_tensors: torch.Tensor,
-        speech_masks: torch.Tensor,
-    ) -> torch.Tensor:
-        """Return speech_embeds [N_slots, hidden] float32 on host (PCC-test compat)."""
-        speech_tt = self._process_speech_prefill_tt(speech_tensors, speech_masks)
-        n_slots = int(speech_masks.sum().item())
-        out = ttnn.to_torch(speech_tt).to(torch.float32).squeeze(0).squeeze(0)
-        if out.dim() == 1:
-            out = out.unsqueeze(0)
-        return out[:n_slots] if n_slots > 0 else out[:0]
+        return torch.cat(speech_embeds_parts, dim=0)
 
     def _build_prefill_embeds(
         self,
@@ -581,12 +436,7 @@ class TTVibeVoiceGenerator:
         speech_input_mask: Optional[torch.Tensor],
         prefill_speech_embeds: Optional[torch.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Text embeds with speech-slot embeds scattered in (reference forward prefill).
-
-        Speech encode/scale/connector AND the slot scatter run on device: the masked speech
-        rows are spliced into the text prefill via slice+concat (see _scatter_speech_embeds_tt),
-        so the full [S, H] prefill never round-trips to host.
-        """
+        """Text embeds with speech slots scattered (reference forward prefill)."""
         if self._ref_lm is not None:
             cpu_embeds = self._ref_lm.build_prefill_embeds(input_ids, speech_input_mask, prefill_speech_embeds)
             return ttnn.as_tensor(
@@ -601,81 +451,17 @@ class TTVibeVoiceGenerator:
         if speech_input_mask is None:
             return inputs_embeds
 
+        embed_2d = _embeds_to_host_2d(inputs_embeds)
         if prefill_speech_embeds is not None:
-            speech_2d = prefill_speech_embeds.to(torch.float32)
-            if speech_2d.dim() == 1:
-                speech_2d = speech_2d.unsqueeze(0)
-            speech_tt = ttnn.as_tensor(
-                speech_2d.unsqueeze(0).unsqueeze(0),
-                device=self.device,
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            speech_embeds = prefill_speech_embeds.to(torch.float32)
         elif speech_tensors is not None and speech_masks is not None:
-            speech_tt = self._process_speech_prefill_tt(speech_tensors, speech_masks)
+            speech_embeds = self._process_speech_prefill(speech_tensors, speech_masks)
         else:
             return inputs_embeds
-
-        return self._scatter_speech_embeds_tt(inputs_embeds, speech_tt, speech_input_mask)
-
-    def _scatter_speech_embeds_tt(
-        self,
-        inputs_embeds: ttnn.Tensor,
-        speech_tt: ttnn.Tensor,
-        speech_input_mask: torch.Tensor,
-    ) -> ttnn.Tensor:
-        """Splice speech-slot embeds into the text prefill on device (no host round-trip).
-
-        ``speech_input_mask`` marks the (per-voice, contiguous) speech slots; ``speech_tt``
-        holds the slot embeds in mask order.  The prefill is rebuilt as an interleaved
-        slice+concat of text runs (from ``inputs_embeds``) and speech runs (from
-        ``speech_tt``) in ROW_MAJOR — pure copies, so the fp32 result is bit-identical to the
-        old host index-assign, but the [S, H] prefill never leaves the device (was an 81 MB
-        D2H + 81 MB H2D at 13k prefill, ~400 MB each at 64k).
-        """
-        H = inputs_embeds.shape[-1]
-        S = inputs_embeds.shape[2]
-        mask = speech_input_mask[0].to(torch.bool).tolist()[:S]
-
-        # Contiguous [start, end) speech runs (usually one per voice).
-        runs: List[Tuple[int, int]] = []
-        i = 0
-        while i < len(mask):
-            if mask[i]:
-                j = i + 1
-                while j < len(mask) and mask[j]:
-                    j += 1
-                runs.append((i, j))
-                i = j
-            else:
-                i += 1
-        if not runs:
-            return inputs_embeds
-
-        # Match the old host scatter exactly: fp32 text + fp32 speech, values only copied.
-        emb_rm = ttnn.to_layout(ttnn.typecast(inputs_embeds, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)
-        sp_rm = ttnn.to_layout(ttnn.typecast(speech_tt, ttnn.float32), ttnn.ROW_MAJOR_LAYOUT)
-
-        pieces: List[ttnn.Tensor] = []
-        pos = 0
-        slot = 0
-        for start, end in runs:
-            if start > pos:
-                pieces.append(
-                    ttnn.slice(emb_rm, [0, 0, pos, 0], [1, 1, start, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                )
-            ln = end - start
-            pieces.append(
-                ttnn.slice(sp_rm, [0, 0, slot, 0], [1, 1, slot + ln, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            )
-            pos = end
-            slot += ln
-        if pos < S:
-            pieces.append(ttnn.slice(emb_rm, [0, 0, pos, 0], [1, 1, S, H], memory_config=ttnn.DRAM_MEMORY_CONFIG))
-
-        out = pieces[0] if len(pieces) == 1 else ttnn.concat(pieces, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        mask = speech_input_mask[0].cpu().bool()
+        n_slots = int(mask.sum().item())
+        embed_2d[mask[: embed_2d.shape[0]]] = speech_embeds[:n_slots].to(embed_2d.dtype)
+        return _host_2d_to_embeds(embed_2d, self.device, dtype=torch.float32)
 
     def _run_speech_diffusion(
         self,
@@ -773,9 +559,7 @@ class TTVibeVoiceGenerator:
 
     def _run_segment_frame_traced(self, seg_frame_idx, step_hidden, start_pos, noise_2x, kv_pos, kv_neg):
         """One speech-diffusion frame as ONE device-driven trace (Option 1, llama shape), replayed
-        for the WHOLE segment.  Returns (audio_chunk, next_token_idx) — the valid-token-masked
-        greedy argmax is folded INTO the captured frame, so the caller's only per-frame host work is
-        two D2H reads (audio + token) with no eager op dispatch between frames.  Frame graph:
+        for the WHOLE segment.  Returns (audio_chunk, logits).  Frame graph:
             cond_pos = condition(hidden_buf);  neg_hidden = LM_dev_rope(neg_embed @ neg_pos, kv_neg)
             latent = DPM_loop(cond_pos, condition(neg_hidden), noise);  fused, audio = post(latent)
             logits, new_hidden = LM_dev_rope(fused @ pos_pos, kv_pos);  copy(new_hidden -> hidden_buf)
@@ -849,15 +633,7 @@ class TTVibeVoiceGenerator:
             ttnn.copy(input_a=new_hidden, input_b=self._sf_hidden_buf)  # loop-carry on device
             ttnn.plus_one(self._sf_pos_pos)
             ttnn.plus_one(self._sf_neg_pos)
-            # Fold the valid-token constraint + greedy argmax into the captured frame (bit-identical
-            # to the eager add+argmax): the frame emits the next token index directly, so the host
-            # per-frame path is just the audio + token D2H reads, with no eager op dispatch between
-            # replays.  The mask is built once (cached) during the eager warmup frames, before capture.
-            masked = ttnn.add(
-                logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            tok = ttnn.argmax(masked, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            return audio, tok
+            return audio, logits
 
         if self._sf_tid is None:
             # First frame-0 after a (re)capture: warmup (eager, compiles + allocates conv caches),
@@ -866,7 +642,7 @@ class TTVibeVoiceGenerator:
             for _ in range(self._SF_WARMUP):
                 _frame()
             tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            self._sf_audio_out, self._sf_token_out = _frame()
+            self._sf_audio_out, self._sf_logits_out = _frame()
             ttnn.end_trace_capture(dev, tid, cq_id=0)
             self._sf_tid = tid
             # RESET: rewind positions, re-seed hidden + speech_start embed, and zero the (now
@@ -876,12 +652,12 @@ class TTVibeVoiceGenerator:
             self._sf_zero_conv()
             ttnn.execute_trace(dev, tid, cq_id=0, blocking=False)
             _vv_debug("segment_frame: captured + reset")
-            return self._sf_audio_out, self._sf_token_out
+            return self._sf_audio_out, self._sf_logits_out
 
         if seg_frame_idx == 0:
             self._sf_zero_conv()  # subsequent-segment reset (positions/hidden already rewound above)
         ttnn.execute_trace(dev, self._sf_tid, cq_id=0, blocking=False)
-        return self._sf_audio_out, self._sf_token_out
+        return self._sf_audio_out, self._sf_logits_out
 
     def _post_diffusion_embeds(self, speech_latent: ttnn.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Diffusion latent → (fused next-step embed, current audio chunk)."""
@@ -1084,9 +860,8 @@ class TTVibeVoiceGenerator:
         # prefill + all generated tokens; negative cache is reset per speech segment
         # (reused buffer), so it only needs to span one segment ≤ max_steps.
         if self._ref_lm is None:
-            _kv_dtype = ttnn.float32 if os.environ.get("VV_FP32_KV") == "1" else ttnn.bfloat16
-            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8, dtype=_kv_dtype)
-            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8, dtype=_kv_dtype)
+            kv_cache_pos = self.lm.alloc_kv_cache(prefill_len + max_steps + 8)
+            kv_cache_neg = self.lm.alloc_kv_cache(max_steps + 8)
         else:
             kv_cache_pos = create_kv_cache(cfg.num_hidden_layers)
             kv_cache_neg = create_kv_cache(cfg.num_hidden_layers)
@@ -1099,11 +874,25 @@ class TTVibeVoiceGenerator:
         neg_pos, neg_start_hidden = self._reset_neg_cache(kv_cache_neg)
         neg_prev_diffusion_token: Optional[int] = None  # delayed token for negative CFG
 
-        generated_tokens: List[int] = []  # appended per step; sequences rebuilt once at the end (avoids O(S^2) cat)
+        sequences = input_ids.clone()
         # On-device streaming: each diffusion step decodes its audio chunk via the
         # acoustic decoder's causal cache; we accumulate the chunks to form the
         # final waveform (identical structure to the reference streaming decode).
         audio_chunks: List[torch.Tensor] = []
+        # Optional disk-streaming (VV_STREAM_AUDIO=<path>): append each frame's fp32 samples to a raw
+        # file (flushed → survives SIGKILL) instead of accumulating in host RAM.  Bounds host memory
+        # on very long renders AND preserves partial audio if the process dies mid-run.  Numerically
+        # identical (storage only).  Read back at the end (happy path) or offline from the .f32 file.
+        _stream_path = os.environ.get("VV_STREAM_AUDIO", "")
+        _stream_fh = open(_stream_path, "wb") if _stream_path else None
+
+        def _emit_audio(chunk_1d: torch.Tensor) -> None:
+            if _stream_fh is not None:
+                chunk_1d.contiguous().numpy().tofile(_stream_fh)
+                _stream_fh.flush()
+            else:
+                audio_chunks.append(chunk_1d)
+
         pending_embeds: Optional[ttnn.Tensor] = None
 
         # Fresh tokenizer streaming caches for this generation.
@@ -1142,7 +931,10 @@ class TTVibeVoiceGenerator:
         _t_decode_start = time.perf_counter()
         for step in range(max_steps):
             current_token = next_token
-            generated_tokens.append(current_token)
+            sequences = torch.cat(
+                [sequences, torch.tensor([[current_token]], dtype=torch.long)],
+                dim=-1,
+            )
             _vv_debug(f"step {step + 1}/{max_steps}: emit {self._token_label(current_token)}")
 
             if self._trace_segment and forced_tokens is None and current_token == self.speech_diffusion_id:
@@ -1159,15 +951,17 @@ class TTVibeVoiceGenerator:
                 noise_2x = diffusion_noise[diffusion_frames - 1] if diffusion_noise is not None else None
                 start_pos = prefill_len + step
                 with prof.section("segment_frame"):
-                    audio_chunk, tok_tt = self._run_segment_frame_traced(
+                    audio_chunk, logits = self._run_segment_frame_traced(
                         seg_frame_idx, step_hidden, start_pos, noise_2x, kv_cache_pos, kv_cache_neg
                     )
                 neg_prev_diffusion_token = current_token
-                audio_chunks.append(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))  # syncs frame
+                _emit_audio(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))  # syncs frame
+                with prof.section("token_constraint"):
+                    logits = ttnn.add(
+                        logits, self._token_constraint_mask(logits.shape[-1]), memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
                 with prof.section("argmax"):
-                    # token_constraint + argmax are folded INTO the captured frame (bit-identical),
-                    # so this is just the token D2H — no eager op dispatch between replays.
-                    next_token = int(ttnn.to_torch(tok_tt).reshape(-1)[-1].item())
+                    next_token = _greedy_argmax(logits, use_fp32=use_fp32_argmax)  # syncs frame (D2H)
                 if _sf_replay:
                     _steady_decode_s += time.perf_counter() - _frame_t0
                     _steady_decode_frames += 1
@@ -1200,11 +994,13 @@ class TTVibeVoiceGenerator:
                 with prof.section("post_diffusion (decode+sem_enc+conn)"):
                     pending_embeds, audio_chunk = self._post_diffusion_embeds(speech_latent)
                 with prof.section("audio_chunk -> host"):
-                    if isinstance(audio_chunk, torch.Tensor):
-                        audio_chunks.append(audio_chunk.to(torch.float32).reshape(-1))
-                    else:
-                        audio_chunks.append(ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1))
-                chunk_samples = audio_chunks[-1].numel()
+                    _chunk = (
+                        audio_chunk.to(torch.float32).reshape(-1)
+                        if isinstance(audio_chunk, torch.Tensor)
+                        else ttnn.to_torch(audio_chunk).to(torch.float32).reshape(-1)
+                    )
+                    _emit_audio(_chunk)
+                chunk_samples = _chunk.numel()
                 _vv_debug(
                     f"  diffusion frame {diffusion_frames}: audio_chunk={chunk_samples} samples "
                     f"({chunk_samples / 24000:.3f}s)"
@@ -1258,15 +1054,16 @@ class TTVibeVoiceGenerator:
         # The per-step streaming decode already produced each frame's audio chunk
         # (with full causal context via the decoder cache); concatenate for the
         # final waveform — no separate batch decode needed.
-        if audio_chunks:
+        if _stream_fh is not None:
+            _stream_fh.flush()
+            _stream_fh.close()
+            import numpy as _np
+
+            speech_waveform = torch.from_numpy(_np.fromfile(_stream_path, dtype=_np.float32).copy())
+        elif audio_chunks:
             speech_waveform = torch.cat(audio_chunks, dim=0)
         else:
             speech_waveform = torch.zeros(0)
-
-        if generated_tokens:
-            sequences = torch.cat([input_ids, torch.tensor([generated_tokens], dtype=torch.long)], dim=-1)
-        else:
-            sequences = input_ids.clone()
 
         ar_tokens = sequences.shape[1] - input_ids.shape[1]
         _vv_debug(
