@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    FILL_CONSTANT,
     IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
@@ -91,8 +92,8 @@ SFPU_COMP_EXTRA_FORMATS = input_output_formats(
     same=True,
 )
 
-# Extra (integer) formats only Fill sweeps. calculate_fill's int path (_calculate_fill_int_)
-# only supports Int32/Int16/Int8/UInt8 — no UInt16, unlike the comp family above.
+# Extra (integer) formats only Fill sweeps. calculate_fill's int path only supports
+# Int32/Int16/Int8/UInt8 — no UInt16, unlike the comp family above.
 SFPU_FILL_EXTRA_FORMATS = input_output_formats(
     [
         DataFormat.Int32,
@@ -803,6 +804,9 @@ def test_eltwise_unary_sfpu_quasar(
                 if is_typecast
                 else TYPECAST_FORMATS()
             ),
+            # fill_value_quasar() in the shared C++ source references the non-dependent
+            # global FILL_CONSTANT, so every build that includes it must define it.
+            FILL_CONSTANT(),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

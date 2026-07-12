@@ -953,6 +953,21 @@ class HOST_IS_STREAM_CONSUMER(RuntimeParameter):
 
 
 @dataclass
+class FILL_CONSTANT(TemplateParameter):
+    """Compile-time fill value for the Quasar Fill SFPU op.
+
+    Emits a single literal that ``fill_value_quasar<FMT>()`` (sfpu_operations_quasar.h)
+    casts to ``std::uint32_t`` or ``float`` depending on the fill target's format, so one
+    value covers both the integer and float fill paths.
+    """
+
+    value: float = 5.0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr double FILL_CONSTANT = {self.value};"
+
+
+@dataclass
 class TYPECAST_FORMATS(TemplateParameter):
     """Compile-time config for the SFPU typecast test kernel.
 
