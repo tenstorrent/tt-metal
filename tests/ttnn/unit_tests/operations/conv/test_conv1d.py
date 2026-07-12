@@ -889,6 +889,8 @@ def run_conv1d_route(
     packer_l1_acc=False,
     pcc=0.99,
     config_tensors_in_dram=False,
+    fused_activation=None,
+    golden_activation=None,
     dilation=1,
 ):
     """Run ttnn.conv1d and check it against the torch golden.
@@ -911,6 +913,8 @@ def run_conv1d_route(
         dilation=dilation,
         groups=groups,
     )
+    if golden_activation is not None:
+        golden = golden_activation(golden)
 
     input_tt = ttnn.from_torch(
         torch_input_ncl.permute(0, 2, 1),  # NLC for conv1d
@@ -926,6 +930,7 @@ def run_conv1d_route(
         shard_layout=shard_layout,  # None == auto-shard
         deallocate_activation=False,
         config_tensors_in_dram=config_tensors_in_dram,
+        activation=fused_activation,
     )
     if act_block_h is not None:
         conv_config.act_block_h_override = act_block_h
@@ -999,6 +1004,36 @@ def test_conv1d_depthwise_dilation(device):
         groups=channels,
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         input_in_dram=False,
+        pcc=0.995,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize(
+    "fused_activation,golden_activation",
+    [
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), torch.nn.functional.silu),
+        (ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU), torch.nn.functional.relu),
+    ],
+    ids=["silu", "relu"],
+)
+@pytest.mark.parametrize("channels,kernel_size", [(512, 4), (1280, 7)], ids=["coalesced", "non_coalesced"])
+def test_conv1d_depthwise_fused_activation(device, fused_activation, golden_activation, channels, kernel_size):
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=kernel_size + 3,
+        kernel_size=kernel_size,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        input_in_dram=False,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fused_activation=fused_activation,
+        golden_activation=golden_activation,
         pcc=0.995,
     )
 
