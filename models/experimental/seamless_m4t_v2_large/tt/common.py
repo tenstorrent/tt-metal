@@ -1226,13 +1226,22 @@ def all_reduce_sum_replicate(
     return acc
 
 
-# TP encoder: large prefill activations in DRAM avoid L1 clashes with block-sharded matmul CBs.
+# TP encoder L1 microbatch: full residual / AR stay in L1 up to this many token rows.
+# Above it, residuals live in DRAM and linears process ``SEAMLESS_TP_BS_CHUNK_M``-sized
+# L1 row chunks (default = this value). Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder
+# attention remains full-S (bidirectional — not Devstral causal chunked prefill).
+ENCODER_L1_MICROBATCH_ROWS = MATMUL_1D_SEQ_THRESHOLD
+# Decoder / shared all-reduce helper: spill L1→DRAM at this many rows (unchanged policy).
 ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256
 
 
 def encoder_tp_activation_memory_config(token_rows: int) -> ttnn.MemoryConfig:
-    """Activation buffer type for encoder TP prefill (interleaved BSH)."""
-    if token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
+    """Activation buffer type for encoder TP prefill (interleaved BSH).
+
+    L1 when ``token_rows <= ENCODER_L1_MICROBATCH_ROWS``; DRAM otherwise so long-seq
+    residuals do not fight block-sharded matmul CBs / FFN mid tensors.
+    """
+    if token_rows > ENCODER_L1_MICROBATCH_ROWS:
         return ttnn.DRAM_MEMORY_CONFIG
     return ttnn.L1_MEMORY_CONFIG
 
@@ -1261,7 +1270,7 @@ def encoder_all_reduce_sum_replicate(
     token_rows = 1
     for d in x_shape[:-1]:
         token_rows *= int(d)
-    if mc.buffer_type == ttnn.BufferType.L1 and token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
+    if mc.buffer_type == ttnn.BufferType.L1 and token_rows > ENCODER_L1_MICROBATCH_ROWS:
         mc = ttnn.DRAM_MEMORY_CONFIG
 
     result = ttnn.all_reduce(

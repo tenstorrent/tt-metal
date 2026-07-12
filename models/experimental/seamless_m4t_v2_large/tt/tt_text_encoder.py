@@ -13,6 +13,7 @@ import ttnn
 
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     TILE,
+    ENCODER_L1_MICROBATCH_ROWS,
     build_ln_sharded_config,
     encoder_all_reduce_sum_replicate,
     encoder_tp_activation_memory_config,
@@ -38,6 +39,11 @@ class TTSeamlessM4Tv2Encoder:
 
     Prefill matmuls use L1 width-sharded activations + DRAM width-sharded BFP8 weights
     (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``).
+
+    Long-seq policy (``ENCODER_L1_MICROBATCH_ROWS`` = 128): when ``token_rows`` fits the
+    microbatch, residuals / AR stay in L1. Above that, residuals live in DRAM and TP
+    linears run ``SEAMLESS_TP_BS_CHUNK_M``-sized L1 row chunks (default 128). Self-attn
+    stays full-sequence (bidirectional); only pointwise ops are row-chunked.
     """
 
     def __init__(
@@ -97,11 +103,15 @@ class TTSeamlessM4Tv2Encoder:
 
     @staticmethod
     def _tp_bs_chunk_rows() -> int:
-        """Row chunk size for long-seq TP block-sharded matmul (``SEAMLESS_TP_BS_CHUNK_M``, default 2048)."""
+        """L1 row-chunk size for TP block-sharded matmul (``SEAMLESS_TP_BS_CHUNK_M``).
+
+        Defaults to ``ENCODER_L1_MICROBATCH_ROWS`` (128) so long-seq prefill streams
+        fixed-M L1 microbatches instead of sharding the full sequence.
+        """
         try:
-            return int(os.environ.get("SEAMLESS_TP_BS_CHUNK_M", "2048"))
+            return int(os.environ.get("SEAMLESS_TP_BS_CHUNK_M", str(ENCODER_L1_MICROBATCH_ROWS)))
         except ValueError:
-            return 2048
+            return ENCODER_L1_MICROBATCH_ROWS
 
     def _chunked_tp_linear_compute_cfg(self) -> ttnn.DeviceComputeKernelConfig:
         # Multiple LoFi block-sharded matmul chunks compound bf16 noise; HiFi2 matches TP=1 chunked path PCC.
@@ -510,12 +520,15 @@ class TTSeamlessM4Tv2Encoder:
             x_inter = x
             if ttnn.is_sharded(x):
                 x_inter = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat16)
+            ln_mc = (
+                getattr(self, "_activation_mc", None) or getattr(self, "_long_seq_mc", None) or ttnn.L1_MEMORY_CONFIG
+            )
             normed = ttnn.layer_norm(
                 x_inter,
                 weight=weight,
                 bias=bias,
                 epsilon=self.layer_norm_eps,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=ln_mc,
                 compute_kernel_config=self._layernorm_compute_cfg,
             )
             if x_inter is not x:
@@ -743,8 +756,9 @@ class TTSeamlessM4Tv2Encoder:
         ``encoder_all_reduce_sum_replicate`` after row-parallel layers.
 
         Uses ``encoder_tp_block_sharded_matmul`` when shapes are tuned; long-seq
-        (``m > SEAMLESS_TP_BS_CHUNK_M``) runs the same kernel on row chunks. Otherwise
-        falls back to tuned 1D interleaved ``ttnn.linear``.
+        (``m > SEAMLESS_TP_BS_CHUNK_M``, default 128) runs the same kernel on L1 row
+        chunks while the concatenated result lands in ``memory_config`` (DRAM above the
+        microbatch). Otherwise falls back to tuned 1D interleaved ``ttnn.linear``.
         """
         if memory_config is None:
             memory_config = getattr(self, "_activation_mc", ttnn.L1_MEMORY_CONFIG)
@@ -839,6 +853,12 @@ class TTSeamlessM4Tv2Encoder:
         tp = self._tp
         num_local_heads = num_heads // tp  # = num_heads when tp == 1
         local_hidden = hidden_size // tp  # per-device head output dim when tp > 1
+        # Full-S Q/K/V stay with the residual policy: L1 inside the microbatch, DRAM above
+        # so SDPA tensors do not fight the L1 row-chunk matmul CBs.
+        if tp > 1:
+            attn_mc = getattr(self, "_activation_mc", ttnn.L1_MEMORY_CONFIG)
+        else:
+            attn_mc = getattr(self, "_long_seq_mc", None) or ttnn.L1_MEMORY_CONFIG
 
         if tp > 1:
             # TP path: column-parallel QKV (output dim = 3 * hidden_size // tp per device).
@@ -870,7 +890,7 @@ class TTSeamlessM4Tv2Encoder:
             num_heads=num_local_heads,
             num_kv_heads=num_local_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=attn_mc,
         )
         # ``reshape`` can be a view; keep base ``qkv`` alive until heads are materialized.
         if tp > 1:
@@ -886,13 +906,13 @@ class TTSeamlessM4Tv2Encoder:
             scale=1.0 / math.sqrt(head_dim),
             program_config=sdpa_cfg,
             compute_kernel_config=self._sdpa_compute_cfg,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=attn_mc,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        merged_4d = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=attn_mc)
         ttnn.deallocate(attn_out)
 
         if tp > 1:
@@ -1000,13 +1020,17 @@ class TTSeamlessM4Tv2Encoder:
         n_tiles = hidden_size // 32
         ffn_dim = 8 * hidden_size
         token_rows = batch * seq
+        chunk_m = self._tp_bs_chunk_rows()
         if tp > 1:
             self._activation_mc = encoder_tp_activation_memory_config(token_rows)
-
-        if tp > 1:
+            if hidden.memory_config().buffer_type != self._activation_mc.buffer_type:
+                hidden_prev = hidden
+                hidden = ttnn.to_memory_config(hidden, self._activation_mc)
+                ttnn.deallocate(hidden_prev)
             sharded_hidden_mem = self._activation_mc
             self._long_seq_mc = None
-            long_seq = False
+            # Interleaved residual for any S > TILE; L1 ≤ microbatch, DRAM above.
+            long_seq = token_rows > TILE
         else:
             qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1])
             # The L1 WIDTH-sharded activation layout used by the DRAM-sharded matmul kernel only
@@ -1014,7 +1038,7 @@ class TTSeamlessM4Tv2Encoder:
             # the chunked path in ``_linear`` runs the matmul kernel ``ceil(m_actual / TILE)`` times and
             # produces interleaved output, so keep the per-layer hidden state interleaved.
             long_seq = token_rows > TILE
-            long_seq_use_dram = long_seq and token_rows >= 256
+            long_seq_use_dram = long_seq and token_rows > ENCODER_L1_MICROBATCH_ROWS
             if long_seq:
                 sharded_hidden_mem = ttnn.DRAM_MEMORY_CONFIG if long_seq_use_dram else ttnn.L1_MEMORY_CONFIG
             else:
@@ -1022,7 +1046,8 @@ class TTSeamlessM4Tv2Encoder:
                 sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
             self._long_seq_mc = sharded_hidden_mem if long_seq else None
 
-        tp_fused_ln = self._tp_bs_ln and tp > 1 and m_tiles > 1
+        # Fuse LN→matmul only when M fits one L1 microbatch chunk (chunked linear would S2I a full-M shard).
+        tp_fused_ln = self._tp_bs_ln and tp > 1 and m_tiles > 1 and token_rows <= chunk_m
         qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1]) if tp > 1 else None
         fc1_n = int(parameters.layers[0].ffn.fc1.weight.shape[-1]) if tp > 1 else None
 
