@@ -94,11 +94,12 @@ collected OFF-device (my local collect-only had no device fixture). So an off-de
 (`[NOTSET-...]`) NEVER matches under the broker (`[blackhole-...]`) ⇒ 0 items. This is plain pytest (NOT tracy), so a
 single-quoted `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and ckpt_fast'` survives the broker shell intact (the tracy
 `" ".join`/2nd-shell bug that broke Batch A's spaced `-k` does NOT apply here) and is arch-slot-agnostic. Use `-k`.
-- [~] **F0 — video-block warm-FW baseline @ ring_bh_4x8** (job **002052-79**, 00:20Z; supersedes 001703-77 which used
-  the off-device `[NOTSET-...]` bracket → 0-collect). `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and ckpt_fast'`.
-  Establishes the warm VIDEO per-block FW (all prior block runs were `av`→SKIP; the 44.77ms number was AV single-blocking).
-  Substrate for F1's topology A/B. Extract `WARM_FWD_MS=` + confirm `PASSED block PCC`. NEXT lap: read log, tick `[x]`, dispatch F1.
-- [ ] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line)** vs F0 Ring. Select
+- [x] **F0 — video-block warm-FW baseline @ ring_bh_4x8 = WARM_FWD_MS 16.88 (PCC 99.966%, gate 0.988).** First run
+  (job 002052-79) ERRORED on a transient eth-core-27-25 teardown fault (device auto-reset by broker); re-run **job
+  002717-83** on the reset device is CLEAN (1 passed, JIT 423/423 warm=zero cold-compile, clean UMD teardown) ⇒ the
+  fault was a device flake, not a harness bug. This is the warm VIDEO per-block FW (all prior block runs were `av`→SKIP;
+  the 44.77ms number was AV single-blocking). Substrate for F1's topology A/B. (supersedes 001703-77 0-collect bracket bug.)
+- [~] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line)** vs F0 Ring 16.88ms — job **002930-85** (00:29Z). Select
   `-k 'video and stage_2 and line_bh_4x8sp1tp0 and ckpt_fast'`, same env/iters. Clean no-edit CCL-topology A/B: does
   Linear all-gather beat Ring for the fused matmul at block scale? >5% FW delta = a win to wire into the CCL config.
 
