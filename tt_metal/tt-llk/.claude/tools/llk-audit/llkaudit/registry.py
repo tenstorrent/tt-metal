@@ -466,6 +466,41 @@ def field_bitmask(field_token: str, defines: dict):
     return defines.get(base + "_MASK")
 
 
+# The EXPLICIT-operand RMW form cfg_reg_rmw_tensix<ADDR32, SHAMT, MASK> carries the
+# written mask as its 3rd template operand — which can be WIDER than the anchor
+# field's canonical _MASK (e.g. `<Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>` is a
+# full-word clobber; `<..._Ystride_ADDR32, ..._SHAMT, ..._Ystride_MASK>` names a mask
+# define). The composite alias form cfg_reg_rmw_tensix<FIELD_RMW> has no comma and its
+# mask IS the field's _MASK. Matched off the callee text.
+_RMW_TEMPLATE_ARGS_RE = re.compile(r"cfg_reg_rmw_tensix\s*<([^>]*)>")
+
+
+def resolve_write_mask(field_token: str, text: str, defines: dict):
+    """The 32-bit mask a cfg RMW write actually modifies. For the EXPLICIT-operand
+    form cfg_reg_rmw_tensix<ADDR32, SHAMT, MASK> the 3rd operand is authoritative WHEN
+    RESOLVABLE — a literal (e.g. 0xffffffff, a full-word clobber the narrow field
+    _MASK would miss) or a *_MASK define (which can span more than the anchor field).
+    That is the bug the field-only mask under-reported. For a RUNTIME-VARIABLE operand
+    (e.g. hw_relu_mask) the width is unknowable, so KEEP the field's _MASK as a
+    best-effort proxy — same basis as the composite <FIELD_RMW> form and as before this
+    fix. (Returning None there would DISCARD the writer's bits and could erase an
+    overlap the other writers prove, downgrading a real clobber to UNKNOWN.) Returns
+    int, or None only when the field itself doesn't resolve (via field_bitmask)."""
+    m = _RMW_TEMPLATE_ARGS_RE.search(text or "")
+    if m and "," in m.group(1):
+        args = [a.strip() for a in m.group(1).split(",")]
+        if len(args) >= 3:
+            mask_op = args[2]
+            try:
+                return int(mask_op, 0)  # a literal (0xffffffff / 0 / 42)
+            except ValueError:
+                pass
+            if mask_op in defines:  # a resolvable *_MASK define (may be wider)
+                return defines[mask_op]
+            # a runtime variable -> unknowable width; fall through to the field _MASK
+    return field_bitmask(field_token, defines)
+
+
 def write_is_atomic_masked(how: str) -> bool:
     """True if the write is a byte-atomic masked RMW (cfg_reg_rmw_tensix / RMWCIB,
     which lower to TT_RMWCIB) — the only mechanism that both preserves sibling
