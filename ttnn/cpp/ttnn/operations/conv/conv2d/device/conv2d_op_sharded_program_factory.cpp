@@ -919,9 +919,15 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
-    if (fused_activation.has_value() && !pack_relu) {
-        compute_defines.merge(ttnn::operations::unary::utils::get_defines(
-            fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+    if (fused_activation.has_value()) {
+        if (is_conv_1d_depthwise_conv) {
+            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "0", output.dtype()));
+            pack_relu = false;
+        } else if (!pack_relu) {
+            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+        }
     }
     if (enable_split_reader) {
         compute_defines["SPLIT_READER"] = "1";
