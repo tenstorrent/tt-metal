@@ -548,6 +548,12 @@ void kernel_main() {
                     PACK((llk_pack_hw_configure(tilized_in0_cb_id)));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
                     PACK((llk_pack_dest_init()));
+                    // DEBUG (build-freshness + effectiveness probe): this line exists ONLY in the version with
+                    // the llk_pack_hw_configure fix above. If TZHWCFG prints, the build is fresh and the fix
+                    // ran -> if the fault persists at the OUT base, the tilize pack does NOT route through
+                    // buf_desc[tilized] and the buf_desc theory is wrong. If TZHWCFG is ABSENT, the build is
+                    // stale (rebuild). Remove after diagnosis.
+                    PACK(DPRINT("TZHWCFG applied cb={}\n", (uint32_t)tilized_in0_cb_id));
 #endif
 
                     // DEBUG (tilize-pack OOB locator): mirrors MMPACK (~line 636, at the matmul pack). Prints
