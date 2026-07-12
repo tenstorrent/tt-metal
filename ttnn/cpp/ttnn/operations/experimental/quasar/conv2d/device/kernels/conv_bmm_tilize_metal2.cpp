@@ -438,6 +438,25 @@ void kernel_main() {
         (uint32_t)in0_num_subblocks_read,
         (uint32_t)in0_block_num_tiles,
         (uint32_t)cb_tilized_in0.get_total_num_entries()));
+    // DEBUG (matmul-pack geometry): the matmul packs out_block_num_tiles (=obnt) tiles into OUT/partials per
+    // in0_block_h_i, across in0nbh iterations, out_subblock_num_tiles (=osnt) per pack. Intended pack extent
+    // per height-block = obnt; total = obnt*in0nbh must == OUT capacity (CBLAYOUT ocap/esz). If obnt > ocap/esz
+    // the matmul over-runs OUT. The fault at out_base+11636 is NOT tile-aligned (esz=128 -> 90*128+116), so also
+    // check osnt*esz and the per-subblock stride. Remove after diagnosis.
+    PACK(DPRINT(
+        "MMGEO obnt={} osnt={} osh={} osw={} in0ns={} in1ns={} in1bw={} in0nbw={} in0nbh={} fb={} pcuo={} pl1a={}\n",
+        (uint32_t)out_block_num_tiles,
+        (uint32_t)out_subblock_num_tiles,
+        (uint32_t)out_subblock_h,
+        (uint32_t)out_subblock_w,
+        (uint32_t)in0_num_subblocks,
+        (uint32_t)in1_num_subblocks,
+        (uint32_t)in1_block_w,
+        (uint32_t)in0_num_blocks_w,
+        (uint32_t)in0_num_blocks_h,
+        (uint32_t)fuse_bias,
+        (uint32_t)partials_cb_uses_output,
+        (uint32_t)packer_l1_acc));
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
