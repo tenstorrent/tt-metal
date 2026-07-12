@@ -435,6 +435,21 @@ A2) isolating is_fsdp. Drift-immune (Batch P): BOTH cells in ONE reservation. WA
   (param selection only) ⇒ nothing to revert. **Batch T CLOSED — the S1×collective-pattern matrix is now complete; every
   runtime/env-selectable no-edit axis on both stages has a receipt.**
 
+## Batch U — CCL-matmul math-fidelity at bf16 (`all_lofi`): the one quant-preset cell Batch H never ran
+Batch H measured `all_bf8_lofi` (bf8 weights+acts **AND** LoFi matmul math-fidelity, −1.1% null) and concluded the
+dominant 56% CCL-matmul is "not compute-bound." But that run CONFLATES two levers: the bf8 dtype (halves the collective's
+transferred bytes) and the LoFi fidelity (halves matmul math phases). `QuantConfig.all_lofi` (quant_config.py:100-115) is a
+DISTINCT registered preset — bf16 weights+acts, LoFi math-fidelity on all 7 linears + SDPA, **no dtype change** — and was
+NEVER run (grep: only `all_bf8_lofi*` variants exist). It isolates matmul math-fidelity from the bf8 BW confound: a clean
+probe of "is the dominant matmul compute-bound at native bf16." Same F0/H0 block harness, env-only (`LTX_QUANT=all_lofi`),
+PCC-gated vs 0.988 oracle, cron-in-budget (~50s). Promoted from dead-by-composition to a MEASUREMENT per the Batch L/N/P
+precedent (measure-don't-reason). Predicted null (≤ the −1.1% `all_bf8_lofi` already banked, since it drops the bf8 BW win),
+but the number closes the last unmeasured quant-preset cell with a receipt instead of a compositional argument.
+- [~] **`all_lofi` (bf16 weights, LoFi matmul+SDPA fidelity, no bf8) — job 120504-11 (2026-07-12 12:05Z, dispatched).**
+  F0 S2 video-block harness, `LTX_QUANT=all_lofi LTX_PROFILE_ITERS=4`, `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and
+  ckpt_fast'`, num_links=param=2, env opt/env_sdpa.yaml, timeout 250s. Emits WARM_FWD_MS (vs F0 16.88ms) + video PCC.
+  Next lap: re-verify from raw log, record number, tick `[x]`.
+
 ## DONE (measured, with the number)
 
 ## DONE (measured, with the number)
