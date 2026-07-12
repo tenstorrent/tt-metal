@@ -25,6 +25,14 @@ bool is_valid_device_conv_weights(
     uint32_t out_channels,
     const std::optional<DataType>& expected_dtype);
 
+bool is_valid_device_depthwise_conv1d_weights(
+    const ttnn::Tensor& weight_tensor,
+    uint32_t expected_kernel_taps,
+    uint32_t expected_tap_height,
+    uint32_t out_channels,
+    uint32_t padded_out_channels,
+    const std::optional<DataType>& expected_dtype);
+
 bool is_valid_device_conv_bias(
     const ttnn::Tensor& bias_tensor, uint32_t out_channels, const std::optional<DataType>& expected_dtype);
 
@@ -144,6 +152,7 @@ struct Conv2dWeightsBiasPrepConfig {
         bool full_inner_dim_ = false,
         bool enable_activation_reuse_ = false,
         bool coalesce_1d_depthwise_kw_reads_ = false,
+        bool use_depthwise_weight_plan_shape_ = false,
         std::array<uint32_t, 2> stride_ = {1, 1}) :
         input_channels_alignment(input_channels_alignment_),
         weights_bias_dtype(weights_bias_dtype_),
@@ -160,6 +169,7 @@ struct Conv2dWeightsBiasPrepConfig {
         full_inner_dim(full_inner_dim_),
         enable_activation_reuse(enable_activation_reuse_),
         coalesce_1d_depthwise_kw_reads(coalesce_1d_depthwise_kw_reads_),
+        use_depthwise_weight_plan_shape(use_depthwise_weight_plan_shape_),
         stride(stride_),
         interleaved_mm_conv(interleaved_mm_conv),
         out_channels(out_channels_) {}
@@ -183,6 +193,7 @@ struct Conv2dWeightsBiasPrepConfig {
     const bool full_inner_dim;
     const bool enable_activation_reuse;
     const bool coalesce_1d_depthwise_kw_reads;
+    const bool use_depthwise_weight_plan_shape;
 
     // Kernel stride folding parameter
     const std::array<uint32_t, 2> stride;
@@ -207,6 +218,7 @@ struct Conv2dWeightsBiasPrepConfig {
         "full_inner_dim",
         "enable_activation_reuse",
         "coalesce_1d_depthwise_kw_reads",
+        "use_depthwise_weight_plan_shape",
         "stride",
         "interleaved_mm_conv",
         "out_channels");
@@ -227,6 +239,7 @@ struct Conv2dWeightsBiasPrepConfig {
             std::cref(this->full_inner_dim),
             std::cref(this->enable_activation_reuse),
             std::cref(this->coalesce_1d_depthwise_kw_reads),
+            std::cref(this->use_depthwise_weight_plan_shape),
             std::cref(this->stride),
             std::cref(this->interleaved_mm_conv),
             std::cref(this->out_channels));

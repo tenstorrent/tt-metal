@@ -7,6 +7,7 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
+
 import ttnn
 from models.demos.blackhole.qwen36.tt.gdn.state import init_recurrent_state, split_fused_conv_state
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
@@ -74,6 +75,9 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         q_weight_taps=w.q_weight_taps,
         k_weight_taps=w.k_weight_taps,
         v_weight_taps=w.v_weight_taps,
+        q_native_weight_cache=w.q_native_weight_cache,
+        k_native_weight_cache=w.k_native_weight_cache,
+        v_native_weight_cache=w.v_native_weight_cache,
         q_bias_dev=w.q_bias_dev,
         k_bias_dev=w.k_bias_dev,
         v_bias_dev=w.v_bias_dev,
