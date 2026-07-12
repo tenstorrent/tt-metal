@@ -128,8 +128,8 @@ Open `registry.py` — it is organized by concept with an `EDIT HERE` banner:
 - new semaphore/mutex wrapper → `SEMAPHORE_CALLS`
 - new dvalid op / renamed SETDVALID/CLEARDVALID → `SRCREG_DVALID_OPS`
 - new mailbox primitive → `MAILBOX_FIFO_CALLS`
-- new/renamed CB credit call → `CB_CALLS`
-- new NoC semaphore/flush call → `NOC_SIGNAL_CALLS` / `NOC_WAIT_CALLS` / `NOC_FLUSH_CALLS`
+- new/renamed CB credit call → `CB_CALLS` (free function) / `CB_METHOD_CALLS` (object/method form, e.g. `cb.reserve_back()`; gated on the `_CB_RECV_TYPES` receiver type)
+- new NoC semaphore/flush call → `NOC_SIGNAL_CALLS` / `NOC_WAIT_CALLS` / `NOC_FLUSH_CALLS` (free function) / `NOC_METHOD_FLUSH` (Noc-method flush)
 
 Then `python3 tests/test_checks.py` to confirm nothing regressed.
 

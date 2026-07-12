@@ -40,6 +40,7 @@
 
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/ExprCXX.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Frontend/CompilerInstance.h"
@@ -86,6 +87,8 @@ struct Fact
     std::string producer;       // pointer_write: init-callee name / var name / cast text
     std::string indexText;      // pointer_write: subscript index expression
     std::string arg0;           // call: first argument source text
+    std::string recv;           // call: member-call receiver expr text (e.g. "cb_buf")
+    std::string recvType;       // call: member-call receiver TYPE name (e.g. "CircularBuffer")
 };
 
 struct State
@@ -359,6 +362,27 @@ public:
         {
             f.arg0 = srcText(S, CE->getArg(0)->getSourceRange());
         }
+        // Object/method-style API (modern ttnn kernels): cb_buf.reserve_back(1),
+        // noc.async_read(...). The callee name is the METHOD ("reserve_back"), so
+        // also capture the RECEIVER expr text (for per-object grouping — the CB id
+        // is the receiver, not arg0) and the receiver TYPE (to disambiguate a CB
+        // method from an unrelated same-named method like std::vector::push_back).
+        if (const auto *MCE = dyn_cast<CXXMemberCallExpr>(CE))
+        {
+            if (const Expr *Obj = MCE->getImplicitObjectArgument())
+            {
+                f.recv = srcText(S, Obj->getSourceRange());
+            }
+            QualType objTy = MCE->getObjectType();
+            if (const CXXRecordDecl *RD = objTy->getAsCXXRecordDecl())
+            {
+                f.recvType = RD->getNameAsString();
+            }
+            else if (!objTy.isNull())
+            {
+                f.recvType = objTy.getUnqualifiedType().getAsString();
+            }
+        }
         S.facts.push_back(std::move(f));
         return true;
     }
@@ -439,6 +463,14 @@ public:
             if (f.family == "call" && !f.arg0.empty())
             {
                 o["arg0"] = f.arg0;
+            }
+            if (f.family == "call" && !f.recv.empty())
+            {
+                o["recv"] = f.recv;
+            }
+            if (f.family == "call" && !f.recvType.empty())
+            {
+                o["recv_type"] = f.recvType;
             }
             arr.push_back(std::move(o));
         }

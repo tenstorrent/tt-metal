@@ -61,7 +61,7 @@ def macro(file, off, name, text, func=""):
     }
 
 
-def call(file, off, name, text=None, func="", arg0=""):
+def call(file, off, name, text=None, func="", arg0="", recv="", recv_type=""):
     return {
         "family": "call",
         "file": file,
@@ -71,6 +71,8 @@ def call(file, off, name, text=None, func="", arg0=""):
         "name": name,
         "text": text or (name + "()"),
         "arg0": arg0,
+        "recv": recv,
+        "recv_type": recv_type,
     }
 
 
@@ -1207,6 +1209,105 @@ def test_cb_sync_remote_cb_family():
     ]
     out = CbSync().run(FactBase("wormhole", facts))
     assert len(out) == 1 and out[0].hint == "CB_RESERVE_PUSH_IMBALANCE", out
+
+
+# --- object/method CB/NoC API (modern ttnn kernels) -----------------------
+
+
+@case
+def test_cb_sync_method_api_grouped_by_receiver():
+    # cb_obj.reserve_back()/push_back() on a CircularBuffer: cb id is the RECEIVER,
+    # not arg0 (the count). An imbalance per receiver is flagged; a std::vector
+    # push_back must NOT be mistaken for a CB push.
+    K = "ttnn/cpp/x/reader.cpp"
+    facts = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K,
+            10,
+            "reserve_back",
+            func="kernel_main",
+            arg0="1",
+            recv="cb_in0",
+            recv_type="CircularBuffer",
+        ),
+        call(
+            K,
+            20,
+            "reserve_back",
+            func="kernel_main",
+            arg0="1",
+            recv="cb_in0",
+            recv_type="CircularBuffer",
+        ),
+        call(
+            K,
+            30,
+            "push_back",
+            func="kernel_main",
+            arg0="1",
+            recv="cb_in0",
+            recv_type="CircularBuffer",
+        ),
+        # a std::vector push_back — different receiver type, must be ignored
+        call(
+            K,
+            40,
+            "push_back",
+            func="kernel_main",
+            arg0="x",
+            recv="vec",
+            recv_type="vector<int>",
+        ),
+        # a DIFFERENT cb, balanced -> no finding for it (per-receiver grouping)
+        call(
+            K,
+            50,
+            "wait_front",
+            func="kernel_main",
+            arg0="1",
+            recv="cb_out",
+            recv_type="CircularBuffer",
+        ),
+        call(
+            K,
+            60,
+            "pop_front",
+            func="kernel_main",
+            arg0="1",
+            recv="cb_out",
+            recv_type="CircularBuffer",
+        ),
+    ]
+    out = CbSync().run(FactBase("wormhole", facts))
+    assert len(out) == 1 and out[0].hint == "CB_RESERVE_PUSH_IMBALANCE", out
+    assert "cb_in0" in out[0].kind, out[0].kind  # grouped by the receiver object
+
+
+@case
+def test_noc_sync_method_write_flush_recognized():
+    # A Noc-method write-flush (noc.async_write_barrier()) before a free-function
+    # noc_semaphore_inc signal must be recognized -> not flagged.
+    K = "ttnn/cpp/x/writer.cpp"
+    ok = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K,
+            10,
+            "async_write_barrier",
+            func="kernel_main",
+            recv="noc",
+            recv_type="Noc",
+        ),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", ok)) == []
+    # no flush before the signal -> flagged
+    bad = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", bad))[0].hint == "NOC_SIGNAL_NO_FLUSH"
 
 
 def main():

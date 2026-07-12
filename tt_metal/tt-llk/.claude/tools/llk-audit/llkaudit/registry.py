@@ -551,10 +551,37 @@ CB_CALLS = {
     "remote_cb_wait_front": "wait",
     "remote_cb_pop_front": "pop",
 }
+# Modern ttnn kernels use the OBJECT/METHOD API: `CircularBuffer cb(id);
+# cb.reserve_back(n)`. The callee is the METHOD name (no cb_ prefix) and the CB
+# identity is the RECEIVER object, not arg0 (which is the page count). Gate on the
+# receiver TYPE so `push_back` on a std::vector is NOT mistaken for a CB push.
+CB_METHOD_CALLS = {
+    "reserve_back": "reserve",
+    "push_back": "push",
+    "wait_front": "wait",
+    "pop_front": "pop",
+}
+_CB_RECV_TYPES = ("CircularBuffer", "CBInterface")
 
 
 def cb_op(callee: str):
     return CB_CALLS.get(callee)
+
+
+def _is_cb_receiver(recv_type: str) -> bool:
+    return any(t in (recv_type or "") for t in _CB_RECV_TYPES)
+
+
+def cb_classify(fact: dict):
+    """Return (op, cb_id_key) for a CB flow-control call, or (None, None).
+    Free function `cb_reserve_back(cb, n)` -> cb id is arg0; method
+    `cb_obj.reserve_back(n)` on a CircularBuffer -> cb id is the RECEIVER object."""
+    name = fact.get("name", "")
+    if name in CB_CALLS:
+        return CB_CALLS[name], (fact.get("arg0", "") or "?").strip() or "?"
+    if name in CB_METHOD_CALLS and _is_cb_receiver(fact.get("recv_type", "")):
+        return CB_METHOD_CALLS[name], (fact.get("recv", "") or "?").strip() or "?"
+    return None, None
 
 
 # --- noc-sync (kernel tier): NoC semaphore + write-flush primitives ------------
@@ -587,6 +614,31 @@ def noc_op(callee: str):
     if callee in NOC_WAIT_CALLS:
         return "wait"
     if callee in NOC_FLUSH_CALLS:
+        return "flush"
+    return None
+
+
+# The WRITE-flush methods on the `Noc` accessor object (noc.async_write_barrier()).
+# Semaphore SIGNALS stay FREE functions (noc_semaphore_inc, in dataflow_api.h), so
+# NOC_SIGNAL_CALLS already covers them; only the flush moved to a method. Read
+# barriers are excluded — they drain reads, not the writes a credit refers to.
+NOC_METHOD_FLUSH = (
+    "async_write_barrier",
+    "async_writes_flushed",
+    "async_write_barrier_with_trid",
+    "async_write_flushed_with_trid",
+)
+_NOC_RECV_TYPES = ("Noc",)
+
+
+def noc_op_of(fact: dict):
+    """Fact-aware noc_op: free-function form OR the Noc-method write-flush."""
+    op = noc_op(fact.get("name", ""))
+    if op:
+        return op
+    if fact.get("name", "") in NOC_METHOD_FLUSH and any(
+        t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
+    ):
         return "flush"
     return None
 
