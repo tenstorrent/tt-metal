@@ -219,6 +219,16 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
+    // Quasar: the packer (PACR0 face-stepping) requires a pack-target L1 base to be at least FACE (512 B)
+    // aligned. The default L1_ALIGNMENT is 16 B, so a plain L1 tensor (e.g. a conv/matmul sharded output) can
+    // land face-misaligned and the packer walks off the tile/face grid -> PACR0_TILE_INC OOB. Over-align L1
+    // *allocations* to a face on Quasar so any pack target is safe. This is the ALLOCATOR config ONLY:
+    // dispatch reads hal.get_alignment(L1) directly (dispatch_mem_map.cpp:44) for its message-offset math, so
+    // it is untouched here (bumping the shared HAL value instead overflowed that offset count). NoC rd/wr
+    // alignment stays at the HAL value. Other arches keep the HAL L1 alignment unchanged.
+    const uint32_t hal_l1_alignment = hal.get_alignment(HalMemType::L1);
+    const uint32_t quasar_l1_alloc_alignment =
+        (hal.get_arch() == tt::ARCH::QUASAR && hal_l1_alignment < 512u) ? 512u : hal_l1_alignment;
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),
          .dram_bank_size = soc_desc.dram_view_size,
@@ -229,14 +239,14 @@ AllocatorConfig L1BankingAllocator::generate_config(
              static_cast<uint32_t>(align(worker_l1_unreserved_start, hal.get_alignment(HalMemType::DRAM))),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
-         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = align(l1_small_size, quasar_l1_alloc_alignment),
          .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = cluster.get_worker_logical_to_virtual_x(device_id),
          .worker_log_to_virtual_routing_y = cluster.get_worker_logical_to_virtual_y(device_id),
          .l1_bank_remap = std::move(l1_bank_remap),
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .l1_alignment = hal.get_alignment(HalMemType::L1),
+         .l1_alignment = quasar_l1_alloc_alignment,
          .disable_interleaved = false});
     TT_FATAL(
         config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,
