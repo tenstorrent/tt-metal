@@ -136,14 +136,15 @@ def main(argv=None) -> int:
     with open(facts_path, "w") as merged:
         for cmd in uniq:
             cwd, src, incs, defs = _parse_cmd(cmd)
+            short = cmd[:60]  # single label width — the two skip ledgers can't drift
             if not src or not cwd or not os.path.isdir(cwd):
-                ledger.append((cmd[:60], "SKIP-noparse", 0, 0))
+                ledger.append((short, "SKIP-noparse", 0, 0))
                 continue
             # The src may be relative to cwd; if it no longer exists on disk (a
             # stale log vs a cleared cache) the extractor would emit empty output
             # with a non-zero exit — catch it here as a NAMED skip, not a clean ok.
             if not os.path.isfile(os.path.join(cwd, src)):
-                ledger.append((cmd[:60], "SKIP-nosrc", 0, 0))
+                ledger.append((short, "SKIP-nosrc", 0, 0))
                 continue
             label = (
                 os.path.relpath(cwd, os.path.join(args.repo_root))

@@ -45,14 +45,14 @@ tool ships committed deterministic checkers for **8 of the 9** classes — all b
 `instruction-latency` (its surface is the SFPU files clang can't parse + its
 verdict needs the out-of-tree pinned `sfpi-gcc` latency table → fully LLM-driven).
 Of the 8, **`cb-sync` / `noc-sync`** only produce findings when fed a **kernel
-fact base** (the on-request JIT capture — see *Full-audit kernel tier* below);
-over the tt-llk fact base they are trivially empty, and their kernel surface stays
-LLM-driven (each skill's ttnn-widened grep) until the capture is built.
+fact base** (the committed kernel tier's capture — see *Full-audit kernel tier*
+below); over the tt-llk fact base they are trivially empty, and without a capture
+run their kernel surface stays LLM-driven (each skill's ttnn-widened grep).
 `srcreg-bank` recalls only the dvalid control points + the raw-`SETDVALID`-on-BH
 flag (not the bank-flip lockstep verdict), and `mailbox-sync` recalls only the
 IN-TREE mailbox surface — mailbox use in ttnn/models kernels (one-to-one channels
-and fan-outs) is covered by the skill's ttnn-widened grep until the kernel capture
-exists — so both still need heavy LLM widening per their `blind_spots`. The tool
+and fan-outs) is covered by the skill's ttnn-widened grep unless a kernel capture
+is run — so both still need heavy LLM widening per their `blind_spots`. The tool
 is **advisory**: it never clears a class, and its silence is "no new
 *known-pattern* instance," not "no bug".
 
@@ -90,81 +90,72 @@ follow the commit-twice pre-commit discipline. Then re-run recall so the sweep
 reflects the widened tables. This keeps the tool a living superset of the codebase
 instead of decaying into a false all-clear as the APIs move.
 
-## Full-audit kernel tier (opt-in) — the on-request JIT CAPTURE for cb-sync / noc-sync / mailbox-sync
+## Full-audit kernel tier (opt-in) — the committed JIT capture for cb-sync / noc-sync / mailbox-sync
 The `cb-sync`, `noc-sync`, and `mailbox-sync` **checkers are committed and
 deterministic** — but their kernel surface lives in **JIT-compiled kernels OUTSIDE
 tt-llk** (`ttnn/`, `models/`, `tt_metal/hw/inc/api`), which have no static compile
 database the in-tree fixed-flags parse can reach. So the checkers are always
-present; what's missing is a **kernel fact base** for them to run over. Producing
-that is the **only** on-request, off-main, fragile step.
+present; what's missing at rest is a **kernel fact base** for them to run over.
+The `kernel_tier/` module (committed in-tree) produces that fact base; the only
+runtime-dependent step is the capture RUN itself.
 
-> **What is durable vs on-request (the clean split):**
+> **What is durable vs runtime-dependent (the clean split):**
 > - **DURABLE (committed, in the tool):** the `cb-sync` / `noc-sync` / `mailbox-sync`
->   checkers themselves — plain Python over a fact base, unit-tested, no JIT hook.
+>   checkers themselves — plain Python over a fact base, unit-tested, no JIT hook —
+>   AND `kernel_tier/{capture.py,bootstrap.sh,MANIFEST}`, the capture pipeline.
 >   Over the tt-llk fact base **cb-sync / noc-sync are trivially empty** (no cb/noc
 >   sites there) while **mailbox-sync yields its small in-tree surface** (the
 >   MATH→UNPACK dst_index pair + debug endpoints); fed a kernel fact base all three
->   emit real candidates over the outside-tt-llk kernels. Building/keeping these
->   costs nothing and adds no fragility to main.
-> - **ON-REQUEST (fresh each sweep, off-main):** the **JIT capture** — hook the
->   compiler the JIT invokes, run a workload so the kernels compile, harvest a
->   `compile_commands.json`, and parse the kernel TUs into a fact base. THIS is the
->   fragile, runtime-dependent part (coupled to `jit_build`, GCC→clang translation
->   drift, coverage = variants exercised), which is why it is NOT baked into main
->   and is re-done fresh each time.
+>   emit real candidates over the outside-tt-llk kernels.
+> - **RUNTIME-DEPENDENT (each sweep):** the capture RUN — producing a build log
+>   that carries the JIT compile commands, then translating each RISC-V-GCC command
+>   to clang. This needs a build log or a live runtime, and the GCC→clang
+>   translation is the fragile part — isolated in `capture.py` with an honest
+>   coverage ledger (untranslatable TUs are listed, never silently dropped). No
+>   `ccwrap` / compiler-wrapper and no `jit_build` patch: capture is just a log scrape.
 
-**CURRENT STATE:** the capture is **not built** — `run.sh --full-jit` has the
-gate+dispatcher (probe + a call to `kernel_tier/bootstrap.sh`), but there is no
-`bootstrap.sh` / capture shim yet, so it runs the in-tree audit and degrades
-honestly. `run.sh` never builds the capture automatically; it is authored on
-request per the runbook below.
+**CURRENT STATE:** the module is **committed and in-tree**. `run.sh
+--kernel-tier-status` prints **`available`**, and `run.sh --full-jit` runs the
+in-tree audit **and then** `kernel_tier/bootstrap.sh`. It never captures silently:
+bootstrap needs either a pre-captured log (`LLK_KT_LOG`) or permission to run a
+workload (`LLK_KT_WORKLOAD` [+ `LLK_KT_CLEAR_CACHE=1`], which needs a device/sim).
 
 **When to offer it — gate on BOTH conditions:**
 1. **Mode:** the user asked for a **full / exhaustive** sweep (NOT a diff/PR-scoped
    `--changed` run). A diff/PR run **never** prompts — the fast path stays clean.
-2. **Capability:** probe whether the capture is set up:
+2. **Runtime:** the capture needs a build log or a device/sim. If neither is
+   available, do **NOT** silently improvise. Proceed with the in-tree sweep and
+   **tell the user precisely what that means for cb-sync / noc-sync / mailbox: they
+   are NOT tool-recalled *over kernels* this run, but they are STILL AUDITED —
+   LLM-driven via each skill's (ttnn-widened) grep + reasoning + ISA docs. "Not
+   tool-recalled" ≠ "left out."** The only thing forgone is the extra deterministic
+   candidate list (grep-fidelity recall, so macro-wrapped/aliased calls and
+   cross-kernel pairing may be missed — state that as the coverage bound).
 
-       cd .claude/tools/llk-audit && ./run.sh --kernel-tier-status   # -> "available" | "unavailable"
+**Cost honesty before running it:** capturing by running a workload needs a
+**runtime** (hw/sim), runs a workload build (minutes, and `LLK_KT_CLEAR_CACHE=1`
+forces op-kernel recompilation), and gives **periodic-sweep-grade** coverage that
+is **complete only over the kernel variants actually exercised** (a clean result
+must never read as "all kernels covered").
 
-   Today this prints **`unavailable`** (capture not built). When unavailable, do
-   **NOT** silently improvise a capture. Proceed with the in-tree sweep and **tell
-   the user precisely what that means for cb-sync / noc-sync / mailbox: they are
-   NOT tool-recalled *over kernels*, but they are STILL AUDITED — LLM-driven via
-   each skill's (ttnn-widened) grep + reasoning + ISA docs. "Not tool-recalled" ≠
-   "left out."** The only thing forgone is the extra deterministic candidate list
-   (grep-fidelity recall, so macro-wrapped/aliased calls and cross-kernel pairing
-   may be missed — state that as the coverage bound). Then ask whether they want
-   the capture **built** (the runbook below) or to proceed without it.
+**How to run the capture** (the module is already committed — you only RUN it):
+1. **Get a build log** carrying the JIT compile commands — either
+   `TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 <workload> > build.log 2>&1` captured on
+   hardware once (then audit offline), or let bootstrap run the workload for you.
+2. **Run the tier:** `LLK_KT_LOG=build.log ./run.sh <arch> --full-jit` (log path),
+   or `LLK_KT_CLEAR_CACHE=1 LLK_KT_WORKLOAD='<cmd>' ./run.sh <arch> --full-jit`
+   (run-a-workload path). bootstrap → `capture.py` (scrape → GCC→clang translate →
+   `llk_extract` per kernel → merged fact base) → cb/noc/mailbox over it.
+3. **Coverage is emitted automatically:** `kernel_coverage.<arch>.txt` lists every
+   TU as parsed / `EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*` (no silent caps); an empty
+   fact base makes bootstrap exit non-zero rather than emit a false all-clear.
+4. **Merge:** merge/dedup the kernel-tier candidates with the in-tree findings.
 
-**If the user asks to build the capture + run it** (be cost-honest first): it
-requires a **runtime** (hw/sim) to JIT the kernels, runs a workload build
-(minutes), gives **periodic-sweep-grade** coverage that is **complete only over
-the kernel variants actually exercised** (a clean result must never read as "all
-kernels covered"), and is off-main.
-
-**The on-request capture runbook** (the checkers already exist — this only builds
-+ runs the capture):
-1. **Check out a scratch workspace** off latest `main` (throwaway; main untouched).
-2. **Build the capture** under `.claude/tools/llk-audit/kernel_tier/`: a
-   compiler-wrapper shim (`ccwrap`, logs argv + forwards), a `bootstrap.sh`, and a
-   `MANIFEST` marker (its presence flips the probe to `available`); widen the
-   extractor `--path-filter` beyond `tt_llk_` to reach the kernels. (No checkers
-   to write — `cb-sync`/`noc-sync`/`mailbox-sync` are already committed.)
-3. **Capture:** run a workload build under the wrapper → `compile_commands.json`
-   for the exercised kernels; translate the RISC-V-GCC commands to clang and parse
-   the kernel TUs into a kernel fact base.
-4. **Audit + merge:** run cb-sync / noc-sync / mailbox-sync over the captured
-   kernel fact base; merge/dedup their candidates with the in-tree findings.
-5. **Report coverage:** which kernel variants were captured, which files failed to
-   parse — as an explicit ledger (no silent caps).
-6. **Restore** the original branch; discard the scratch workspace.
-
-The checkers and the capture tooling all live **inside tt-llk**
-(`.claude/tools/llk-audit/`); the scratch workspace is only where the capture
-*runs*, with zero permanent footprint outside tt-llk. Whatever the kernel tier
-surfaces is **candidates** (augmentor) — the data-before-credit ordering,
-cross-kernel producer↔consumer pairing, and mailbox call-count-symmetry/ordering
-**verdicts stay with the sub-audit skills**.
+Everything lives **inside tt-llk** (`.claude/tools/llk-audit/`), so there is zero
+permanent footprint outside tt-llk. Whatever the kernel tier surfaces is
+**candidates** (augmentor) — the data-before-credit ordering, cross-kernel
+producer↔consumer pairing, and mailbox call-count-symmetry/ordering **verdicts
+stay with the sub-audit skills**.
 
 ## The monotonic contract (non-negotiable — this is what makes the sweep a true superset)
 A naive "run them + concatenate" can catch *less* than the audits alone (summarization loss, dedup collapse, over-resolution). To prevent that, the JOIN is **additive-only**:

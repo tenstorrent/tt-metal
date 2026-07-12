@@ -63,7 +63,7 @@ than emit a false "0 findings" all-clear.
 ## Requirements
 
 - The `extractor/llk_extract` binary built (`extractor/build.sh`).
-- sfpi matching the repo pin (`tt_metal/sfpi-version.sh`) at `runtime/sfpi`
+- sfpi matching the repo pin (`tt_metal/sfpi-version`) at `runtime/sfpi`
   (the GCC→clang `-isystem` paths and `sfpi::clamp/min/max` come from it).
 - A runtime (WH/BH device or sim) only when bootstrap *runs* a workload (path B);
   path A needs only the log.

@@ -101,13 +101,25 @@ class FactBase:
     @classmethod
     def from_concatenated_json(cls, arch: str, text: str) -> "FactBase":
         """Parse a stream of pretty/among-line-concatenated JSON objects. A single
-        malformed object (e.g. a diagnostic line leaked onto stdout) or a
-        truncated trailing object (extractor killed mid-emit) is counted as a
-        parse error and skipped — it must NOT throw away every other object's
-        facts, since the tool's contract is to always produce a result."""
+        malformed object (e.g. a diagnostic line leaked onto stdout), a stray
+        close-brace, leading non-JSON, or a truncated trailing object (extractor
+        killed mid-emit) is counted as a parse error and skipped — it must NOT throw
+        away every other object's facts, since the tool's contract is to always
+        produce a result. Anything OUTSIDE an object (depth 0, not in a string) is
+        skipped, so inter-object garbage and a lone `}` can never desync the scan."""
         objs, buf, depth, in_str, esc = [], [], 0, False, False
         stream_errors = 0
+        saw_garbage = False  # non-space text seen between objects (counted once/run)
         for ch in text:
+            # At object depth 0 we are between objects: ignore everything until the
+            # next opening brace. This drops leading/stray text and prevents a lone
+            # `}` from driving depth negative and silently eating every later object.
+            if depth == 0 and not in_str and ch != "{":
+                saw_garbage = saw_garbage or not ch.isspace()
+                continue
+            if saw_garbage:  # one error per contiguous inter-object garbage run
+                stream_errors += 1
+                saw_garbage = False
             buf.append(ch)
             if in_str:
                 if esc:
@@ -129,8 +141,9 @@ class FactBase:
                     except json.JSONDecodeError:
                         stream_errors += 1
                     buf = []
-        # A non-empty, non-whitespace remainder means the stream ended mid-object.
-        if depth != 0 or any(not c.isspace() for c in "".join(buf)):
+        # A non-empty, non-whitespace remainder means the stream ended mid-object;
+        # trailing inter-object garbage (saw_garbage) is likewise a counted miss.
+        if depth != 0 or any(not c.isspace() for c in "".join(buf)) or saw_garbage:
             stream_errors += 1
         fb = cls.from_objects(arch, objs)
         fb.parse_errors += stream_errors
