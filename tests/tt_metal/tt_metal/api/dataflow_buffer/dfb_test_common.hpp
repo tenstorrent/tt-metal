@@ -209,7 +209,7 @@ constexpr uint32_t dfb_default_num_entries(uint32_t num_p, uint32_t num_c) {
 
 // ---- cross-category program drivers ----
 
-void run_single_dfb_program(
+inline void run_single_dfb_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     experimental::dfb::DataflowBufferConfig& dfb_config,
     DFBPorCType producer_type,
