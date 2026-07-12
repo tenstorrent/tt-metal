@@ -95,19 +95,20 @@
 <div class="wrap">
   <header>
     <p class="eyebrow">TT-Metal · Sparse MLA · autonomous session</p>
-    <h1>qr-ring sparse-MLA: gates cleared, transport diff measured on hardware</h1>
-    <p class="sub">Followed the plan's own de-risking order — Phase&nbsp;0 quality gate → Phase&nbsp;1 merge math → measure — before touching the hang-prone fabric collective. Three verified results; the multi-week fused-op core is spec'd, not built.</p>
+    <h1>qr-ring sparse-MLA: Q-gather built, validated, and measured on hardware</h1>
+    <p class="sub">The device op now exports the softmax stats needed to keep the KV cache stationary and ring the queries — <b>no custom fabric collective</b>. Per-shard partials flash-merge across the SP ring. Accuracy verified on the LoudBox (sp=2/4/8); compute and transport both flat in context length.</p>
     <div class="meta">
       <span>box <b>LoudBox · 8× Blackhole p150b</b></span>
-      <span>ring <b>SP=4 (native 2×4)</b></span>
+      <span>ring <b>SP=2/4 (native 2×4)</b></span>
       <span>branch <b>skrstic/qr-ring-sparse-mla-wip</b></span>
+      <span>op <b>ttnn.transformer.sparse_sdpa_stats</b></span>
     </div>
   </header>
 
   <div class="tiles">
-    <div class="tile pass"><div class="k">G1 · quality</div><div class="v">PASS</div><div class="d">top-k=2048 kill-switch — pre-validated by shipping prod KV-gather</div></div>
-    <div class="tile pass"><div class="k">G2 · merge math</div><div class="v">1.0000</div><div class="d">host online-softmax merge PCC vs full-T golden (fp32, sp 2/4/8)</div></div>
-    <div class="tile teal"><div class="k">transport crossover</div><div class="v">~130–160K</div><div class="d">measured KV-gather O(T) vs qr flat — matches plan's ~118K</div></div>
+    <div class="tile pass"><div class="k">device (O,m,l) export</div><div class="v">BUILT</div><div class="d">sparse_sdpa_stats; O byte-identical, +0.013ms overhead, 16/16 existing tests still pass</div></div>
+    <div class="tile pass"><div class="k">Q-gather accuracy</div><div class="v">≥0.99</div><div class="d">on-device SP ring: sharded KV + gathered Q + flash-merge == golden (sp 2/4/8)</div></div>
+    <div class="tile teal"><div class="k">flat in T</div><div class="v">compute + xport</div><div class="d">compute 0.126→0.128ms (T=2K→131K); KV-gather O(T) eliminated</div></div>
   </div>
 
   <section>
@@ -181,8 +182,8 @@
         <p>Faithful G1 needs the 671B DeepSeek checkpoint (out of window); random weights spuriously fail. Synthetic mechanism check clears the bar in the trained/peaked regime and correctly fails on uniform. <b>Authoritative:</b> prod KV-gather already ships top-k=2048 — the scheme's numerical basis is established. Not a blocker.</p></div>
       <div class="gate"><div class="h"><span class="id">G2</span><span class="t">host flash-merge numerics</span><span class="pill p">pass</span></div>
         <p>Per-shard <span class="num">(O,m,l)</span> partials merged with raw-max online softmax reproduce the full-T golden: <span class="num">fp32 = 1.000000</span>, bf16 = 0.99998, and the zero-hit-shard identity partial <span class="num">(O=0,m=−∞,l=0)</span> merges at <span class="num">1.0</span> — across sp = 2/4/8. Reduce formula + hang-safety identity proven before any fabric.</p></div>
-      <div class="gate amber"><div class="h"><span class="id">G3</span><span class="t">zero-hit liveness (fabric)</span><span class="pill d">deferred</span></div>
-        <p>The hang-safety gate — needs the fabric collective on device. The <b>math</b> of the identity partial is already proven (G2); the on-device liveness under program-cache reuse is the supervised Phase-3 item.</p></div>
+      <div class="gate amber"><div class="h"><span class="id">G3</span><span class="t">zero-hit / empty-shard row</span><span class="pill d">open</span></div>
+        <p>Not needed with no fabric collective (no hop-count deadlock class). But the op still requires ≥1 valid key per row, so a query whose top-k all miss a shard needs an identity partial emitted in-kernel — the one remaining op-hardening item before the model wiring.</p></div>
       <div class="gate amber"><div class="h"><span class="id">G4</span><span class="t">Galaxy break-even</span><span class="pill d">partial</span></div>
         <p>Transport crossover measured on SP=4 (~150K). Full SP=8×TP=4 Galaxy timing + indexer-included break-even remain — this box tops out at 8 chips.</p></div>
     </div>
@@ -195,11 +196,11 @@
 
   <section>
     <h2><span class="n">04</span> Where it stands</h2>
-    <div class="phase done"><span class="pn">0·1</span><div class="pc"><b>Done + verified.</b> G1 quality gate, G2 host merge math (+ empty-shard identity), measured transport diff. All runnable, committed on the WIP branch.</div></div>
-    <div class="phase"><span class="pn">1</span><div class="pc"><b>Keystone — spec'd, not built.</b> Device partial <code>(O,m,l)</code> export mode in <code>sparse_sdpa</code>. The lift: convert the op's single-Tensor return to a 3-tensor return + kernel export of the pre-normalize <code>out_cur</code>/<code>max_cur</code>/<code>sum_cur</code> + writer drain (~10-min rebuild per iter). Precise spec in the findings doc; validate against the proven G2 partials.</div></div>
-    <div class="phase"><span class="pn">2</span><div class="pc"><b>Shard-local scoring</b> + adapt the 8-device test to stationary sharded KV + gathered Q with a temporary host merge. Blocked on the keystone.</div></div>
-    <div class="phase risk"><span class="pn">3</span><div class="pc"><b>Fabric flash-merge collective + hang safety.</b> The multi-week, hang-prone core — needs supervision (not an unattended job). Reuse ring-joint transport + LSE combine; unconditional identity partial; all-core cache-hit re-patch.</div></div>
-    <div class="phase opt"><span class="pn">4</span><div class="pc"><b>qr-latent wire-shrink + in-kernel wkv_b2 fold + indexer ring-fuse.</b> Perf-completing transport optimizations on the proven ring.</div></div>
+    <div class="phase done"><span class="pn">0·1</span><div class="pc"><b>Done + verified.</b> G1 quality gate, G2 merge math (+ empty-shard identity), measured transport diff.</div></div>
+    <div class="phase done"><span class="pn">K</span><div class="pc"><b>Keystone BUILT + verified.</b> <code>ttnn.transformer.sparse_sdpa_stats</code> exports (O, m, l): O byte-identical to the shipping op (16/16 existing tests pass), m/l via a non-destructive snapshot of the flash max/sum. Single-chip merge == golden, sp=2/4/8.</div></div>
+    <div class="phase done"><span class="pn">Q</span><div class="pc"><b>On-device Q-gather works.</b> Stationary sharded KV + replicated Q + per-shard <code>sparse_sdpa_stats</code> + host flash-merge, PCC≥0.99 on a real SP=2/4 ring — <b>no custom fabric collective</b> (the merge composes from the exported stats).</div></div>
+    <div class="phase"><span class="pn">→</span><div class="pc"><b>Model wiring (mla.py).</b> Swap the KVPE all-gather for stationary sharded KV + per-shard compacted indices + the stat op + an on-device eltwise merge (the host merge here proves the math). Per-shard indices must be compacted (sentinels a contiguous tail); empty-row (zero local hit) handling is the one remaining op hardening item.</div></div>
+    <div class="phase opt"><span class="pn">opt</span><div class="pc"><b>Perf-completing:</b> fuse the merge into a reduce-scatter collective (vs host/eltwise), qr-latent wire-shrink, in-kernel wkv_b2 fold, indexer ring-fuse.</div></div>
   </section>
 
   <footer>
