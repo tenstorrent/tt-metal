@@ -17,7 +17,6 @@ Device forward:
 """
 
 import math
-import os
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -268,10 +267,6 @@ def _rotate_half_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
 
 def _apply_rope_ttnn(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
     """Apply RoPE in float32 (matches reference fp32 RoPE numerics)."""
-    if os.environ.get("VV_BF16_ROPE") == "1":
-        # Diagnostic: round cos/sin to bf16 precision to mimic the traced path's bf16 RoPE table.
-        cos = ttnn.typecast(ttnn.typecast(cos, ttnn.bfloat16), ttnn.float32)
-        sin = ttnn.typecast(ttnn.typecast(sin, ttnn.bfloat16), ttnn.float32)
     x_f32 = ttnn.typecast(x, ttnn.float32)
     rotated = ttnn.add(
         ttnn.mul(x_f32, cos, memory_config=ttnn.DRAM_MEMORY_CONFIG),
@@ -333,8 +328,6 @@ def _k_chunk_from_cache_seq(cache_seq: int) -> int:
 
 def _fused_sdpa_decode_safe(valid_len: int, k_chunk: int) -> bool:
     """Return True when ``scaled_dot_product_attention_decode`` is safe on Blackhole."""
-    if os.environ.get("VV_FP32_DECODE") == "1":
-        return False  # force the fp32 manual GQA decode path (long-context correctness experiment)
     if k_chunk >= 512:
         return True
     n_chunks = valid_len // k_chunk
