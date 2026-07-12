@@ -1554,7 +1554,9 @@ def test_cfg_word_unresolved_cowriter_widens():
         f for f in CfgWordOverlap().run(fb) if f.hint == "CROSS_THREAD_SHARED_WORD"
     ]
     assert len(shared) == 1 and shared[0].safety == "UNRESOLVED_COWRITER", shared
-    # Control: BOTH writers in UNKNOWN-thread files -> 0 known threads -> not surfaced.
+    # TWO unattributable co-writers (both UNKNOWN thread, token-less file AND function)
+    # to the same word -> also WIDENED (a possible cross-thread share the tool can't
+    # confirm) with safety=UNRESOLVED_COWRITER, NOT dropped.
     facts2 = [
         fn("x", Fx, 40, 60),
         fn("y", Fx, 70, 90),
@@ -1567,8 +1569,21 @@ def test_cfg_word_unresolved_cowriter_widens():
     ]
     fb2 = FactBase("wormhole", facts2)
     fb2.addr32 = {"FIELD_A_ADDR32": 5, "FIELD_B_ADDR32": 5}
-    assert [
+    shared2 = [
         f for f in CfgWordOverlap().run(fb2) if f.hint == "CROSS_THREAD_SHARED_WORD"
+    ]
+    assert len(shared2) == 1 and shared2[0].safety == "UNRESOLVED_COWRITER", shared2
+    # Real negative control: a SINGLE writer to the word is not a shared word.
+    facts3 = [
+        fn("x", Fx, 40, 60),
+        call(
+            Fx, 50, "cfg_reg_rmw_tensix", "cfg_reg_rmw_tensix<FIELD_A_ADDR32>", func="x"
+        ),
+    ]
+    fb3 = FactBase("wormhole", facts3)
+    fb3.addr32 = {"FIELD_A_ADDR32": 5}
+    assert [
+        f for f in CfgWordOverlap().run(fb3) if f.hint == "CROSS_THREAD_SHARED_WORD"
     ] == []
 
 
@@ -1679,6 +1694,17 @@ def test_stallwait_operand_quasar_4operand():
     assert r.condition_drains_unit(
         r.stallwait_wait_operand(qp), r.DRAIN_UNIT_TOKENS["PACK"]
     )
+
+
+@case
+def test_cfgshiftmask_is_ordered_config_write():
+    # Quasar TTI_CFGSHIFTMASK(CfgRegAddr, ...) is a config RMW write — classify_macro
+    # must treat it as an ordered_write (so cfg-word folds it into the shared-word
+    # map and reconfig-stall requires a drain before it).
+    from llkaudit import registry
+
+    assert registry.classify_macro("TTI_CFGSHIFTMASK") == "ordered_write"
+    assert "CFGSHIFTMASK" in registry.RECONFIG_WRITE_MACRO_SUBSTR
 
 
 def main():

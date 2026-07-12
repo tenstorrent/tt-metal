@@ -152,6 +152,7 @@ ORDERED_WRITE_MACRO_SUBSTR = (
     "RMWCIB",
     "SETADC",
     "SETDMAREG",
+    "CFGSHIFTMASK",  # Quasar: TTI_CFGSHIFTMASK(CfgRegAddr, ...) — a config RMW write
 )
 # Calls that are ordered cfg writes.
 ORDERED_WRITE_CALLS = ("cfg_reg_rmw_tensix",)  # substring match on callee text
@@ -517,7 +518,14 @@ DRAIN_UNIT_TOKENS = {
 # a reconfig must drain the unit before). Deliberately EXCLUDES SETDMAREG, which
 # writes a GPR (a source value for a later REG2FLOP), not a sampled config reg —
 # so it must not be mistaken for "the reconfig write".
-RECONFIG_WRITE_MACRO_SUBSTR = ("REG2FLOP", "WRCFG", "SETC16", "RMWCIB", "SETADC")
+RECONFIG_WRITE_MACRO_SUBSTR = (
+    "REG2FLOP",
+    "WRCFG",
+    "SETC16",
+    "RMWCIB",
+    "SETADC",
+    "CFGSHIFTMASK",
+)
 
 # Latched (not sampled) registers where a THCON-only order is correct and adding
 # a unit drain was reverted as over-sync. Substring match on the field name.

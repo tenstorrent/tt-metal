@@ -113,7 +113,7 @@ esac
 # clang silently miss the STL/builtin -isystem dirs. Override with SFPI_GCC_VER.
 GCC_VER="${SFPI_GCC_VER:-}"
 if [ -z "$GCC_VER" ]; then
-  GCC_VER="$(ls "$SFPI/compiler/lib/gcc/riscv-tt-elf" 2>/dev/null | sort -V | tail -1 || true)"
+  GCC_VER="$(find "$SFPI/compiler/lib/gcc/riscv-tt-elf" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort -V | tail -1 || true)"
 fi
 [ -n "$GCC_VER" ] || { echo "llk-audit: no sfpi gcc version under $SFPI/compiler/lib/gcc/riscv-tt-elf (set SFPI_GCC_VER)" >&2; exit 1; }
 # -ferror-limit=0: never stop after N errors (clang default ~20), which would

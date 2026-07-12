@@ -204,12 +204,14 @@ class CfgWordOverlap(Check):
                 continue
             threads = {w["thread"] for w in ws if w["thread"] != "UNKNOWN"}
             has_unknown = any(w["thread"] == "UNKNOWN" for w in ws)
-            # >=2 known threads -> a real cross-thread share. Exactly 1 known + an
-            # unattributable co-writer -> WIDEN (emit-low-confidence): a possible
-            # cross-thread share the tool can't confirm, surfaced not dropped (a
-            # recall tool must not narrow away an unresolved co-writer). Neither ->
-            # skip.
-            if len(threads) < 2 and not (len(threads) == 1 and has_unknown):
+            # >=2 known threads -> a real cross-thread share. Otherwise, if there are
+            # >=2 writers to the word and ANY is unattributable (UNKNOWN thread) ->
+            # WIDEN (emit-low-confidence): a possible cross-thread share the tool
+            # can't confirm — covers both "1 known + unknown co-writer" AND ">=2
+            # unknown co-writers" (a recall tool must not narrow away an unresolved
+            # co-writer). A single writer, or >=2 writers all on ONE known thread, is
+            # intra-thread (clobber's job), not a cross-thread share -> skip.
+            if not (len(threads) >= 2 or (has_unknown and len(ws) >= 2)):
                 continue
             ev = [self._w_ev(w) for w in ws]
             fields = sorted({w["field"] for w in ws})
