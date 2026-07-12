@@ -495,7 +495,11 @@ class LLVCModel:
 
         out = torch.cat(outputs, dim=2)[:, :, :original_len]
         avg_time = float(sum(times) / max(1, len(times)))
-        rtf = (chunk_len / cfg.sample_rate) / max(avg_time, 1e-9)
+        # Standard RTF = processing_time / audio_duration (lower is faster; the
+        # bounty target is RTF < 0.3), so it drops as larger chunks amortise
+        # the fixed per-chunk dispatch overhead.
+        chunk_audio_s = chunk_len / cfg.sample_rate
+        rtf = avg_time / max(chunk_audio_s, 1e-9)
         e2e_latency_ms = ((2 * L + chunk_len) / cfg.sample_rate + avg_time) * 1000.0
         return out, rtf, e2e_latency_ms
 
