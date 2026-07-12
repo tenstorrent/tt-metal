@@ -428,6 +428,20 @@ void kernel_main() {
         (uint32_t)(cb_matmul_partials.get_total_num_entries() * cb_matmul_partials.get_entry_size()),
         (uint32_t)cb_out.get_write_ptr(),
         (uint32_t)(cb_out.get_total_num_entries() * cb_out.get_entry_size())));
+    // DEBUG (pack tile GEOMETRY — the decisive read; MMPACK never flushes at the fault). Print the pack
+    // face_r_dim/num_faces the host generated for the tilize target (ACT_TILIZED, the WORKING reference),
+    // MATMUL_PARTIALS, and OUT. The physical per-tile pack stride = f(frdim, nf): a symmetric 32x32 tile is
+    // frdim=16/nf=4 -> stride 128 units (=esz). arch-lookup proved the residual sub-tile misalignment can only
+    // come from the borrowed OUT/partials BD geometry disagreeing with the 2048B entry. If partials/out frdim
+    // or nf differ from the (working) tilize's -> host-side Tile-spec fix. Remove after diagnosis.
+    PACK(DPRINT(
+        "PACKGEO tilized[frdim={} nf={}] part[frdim={} nf={}] out[frdim={} nf={}]\n",
+        (uint32_t)get_output_face_r_dim(tilized_in0_cb_id),
+        (uint32_t)get_output_num_faces(tilized_in0_cb_id),
+        (uint32_t)get_output_face_r_dim(matmul_partials_cb),
+        (uint32_t)get_output_num_faces(matmul_partials_cb),
+        (uint32_t)get_output_face_r_dim(out_cb_id),
+        (uint32_t)get_output_num_faces(out_cb_id)));
     // DEBUG (tilize geometry): the height-sharded tilize packs (inbw * nsub) tiles into ACT_TILIZED across
     // nsub reserve/push iterations. If (inbw * nsub) > tpages the tilize over-runs ACT_TILIZED (count OOB);
     // static analysis says they are equal (inbw=act_block_w_ntiles, nsub=act_block_h_ntiles,
