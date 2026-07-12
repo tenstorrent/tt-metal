@@ -645,11 +645,8 @@ class TtLlamaAttention(LightweightModule):
 
         # Q, K Rotary Embeddings
         if self.model_config.get("USE_PREFETCHER", False):
-            # Fused decode rotary requires cos/sin tensors in TILE layout.
-            rot_cos = ttnn.to_layout(rot_mats[0], ttnn.TILE_LAYOUT)
-            rot_sin = ttnn.to_layout(rot_mats[1], ttnn.TILE_LAYOUT)
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
-                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_cos, rot_sin, self.transformation_mats["decode"]
+                q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
             )  # [1, 8, 8, 128], [1, 8, 8, 128]
         else:
             # No-prefetcher decode still requires HEIGHT_SHARDED cos/sin for RoPE.

@@ -1627,15 +1627,6 @@ class TtQwenModelArgs(TtModelArgs):
         # Support input on device
         if torch.is_tensor(x):  # Input on host -> Use torch
             x = x.transpose(0, 1).unsqueeze(1)  # [seq_len, 1, batch, dim]
-            # Pad hidden dim for ring input memcfg (1280/col -> 1536/col for RING_SIZE=24).
-            if (
-                input_mem_cfg is self.model_config.get("SHARDED_ATTN_INPUT_RING_MEMCFG")
-                and x.shape[-1] == self.dim
-                and self.dim_padded_24_cores > self.dim
-            ):
-                zeros = torch.zeros(1, seq_len, x.shape[2], self.dim_padded_24_cores)
-                zeros[:, :, :, : self.dim] = x
-                x = zeros
             # Pad small batches to 32
             if batch < 32:
                 zeros = torch.zeros(1, seq_len, 32, x.shape[-1])
