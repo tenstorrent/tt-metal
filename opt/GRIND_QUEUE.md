@@ -200,10 +200,17 @@ and ckpt_fast'`, num_links=2, warm ltxrt caches, env_sdpa.yaml). Converts reason
   so the test:887 INFO line scrolled off; MOOT (dead on quality, and per the dispatch-bound thesis — H0 bf8 −1.1% null,
   Batch B SDPA-LoFi null — it wouldn't be meaningfully faster). Confirms H's prediction WITH a receipt: SDPA-LoFi adds pure
   quality risk to a null-speed base. No source edit (env A/B) ⇒ nothing to revert.
-- [x] **`all_bf8_lofi_sdpa_lofi_fp32acc` — DEAD by composition (no run).** = above + fp32 SDPA accumulate. fp32acc only ADDS
-  accumulation cost (slower, never faster) on top of a base that already FAILS PCC 98.57% — fp32acc slightly HELPS PCC but
-  cannot recover 1.32 pts of bf8+LoFi error to clear 98.80% while also being slower than the null bf8 base. Measuring would
-  confirm still-slow + still-borderline. Not worth a reservation.
+- [x] **`all_bf8_lofi_sdpa_lofi_fp32acc` — NOW MEASURED (job 015415-106, 2026-07-12 01:55Z): PCC 99.93% PASS, WARM_FWD_MS
+  16.06 = −4.9% vs F0 16.88 (SUB-GATE, no shippable win).** CORRECTS the prior "dead-by-composition / fp32acc can't recover
+  1.32 pts" reasoning: **fp32-dest-acc DOES recover the SDPA-LoFi PCC** — 98.57% FAIL (Batch J, no fp32acc) → 99.93% PASS
+  (+1.36 pts, > all_bf8_lofi's 99.89%), exactly the preset's designed purpose (full-precision softmax max/sum under LoFi
+  packed-dest). But SPEED is no win: −4.9% is under the >5% act-gate, and the −0.63ms increment vs all_bf8_lofi 16.69
+  CONTRADICTS the physics (Batch B isolated SDPA-LoFi null −1.4%; fp32acc ADDS accumulation cost ⇒ increment should be
+  null-or-slower) ⇒ favorable block-FW run-to-run noise, not a compute reduction. Face-value E2E ≈ −0.82ms/block × 144
+  S2-fwd ≈ −0.12s = polish below the ~7.9s floor; replication can only push the median toward null (further from the gate)
+  ⇒ not worth another reservation. (First two dispatches 014854-101/015114-103 died at the transient eth-core-27-25
+  mesh-open flake — lever-irrelevant, device opens before quant applies; 3rd re-run clean on the recovered device.) No
+  source edit (env A/B) ⇒ nothing to revert.
 → **BATCH J CLOSED — quant axis now fully MEASURED, not reasoned:** `all_bf8_lofi` is the sweet spot (passes 99.89%, −1.1%
   null speed); pushing further to SDPA-LoFi breaks the gate (98.57% FAIL). **No quant preset moves the dispatch-bound block
   at passing quality.** Combined with A/B (SDPA chunk/fidelity dead), F (topology/links flat), H (bf8 null), I (S1 same):
@@ -236,3 +243,4 @@ threaded to all conv weight uploads (:193 `from_torch(dtype=self.dtype)`); `_bui
 - **S1 (stage_1) video block, first-ever receipts (jobs 010823-91/011036-93/011213-95):** baseline 12.73ms (Ring), num_links=1 12.71ms (0% = pure dispatch floor), Line 11.46ms (−10% crossover, char-only — fabric topology is a device-init constant, whole-run Line net-worse). 4× seq (S1→S2) = only 1.33× block time ⇒ dispatch-bound confirmed across scale.
 - **all_bf8_lofi_sdpa_lofi @ prod-4x8 video block: FAILS PCC 98.57% < 98.80% (job 012439-97).** Stacking SDPA-LoFi on the bf8 base drops PCC 1.32pts below gate; speed truncated (moot — dead on quality). Quant axis fully measured: all_bf8_lofi is the sweet spot, further quant breaks the gate.
 - **VAE-decode bf8 quant (job 013750-99): un-runnable — SEGFAULT at bf8 conv-weight upload (`from_torch(bfloat8_b)`, vae_ltx.py:193, 1st of 86 tensors).** The one COMPUTE-bound bucket (A1: traced≈untraced 552ms) resists the cheap quant flip; bfloat8_b needs TILE layout the upload path doesn't give. Proper bfp8-VAE = warm-authoring (parked w/ C W-mask fold + G subblock tune). Device recovered clean.
+- **`all_bf8_lofi_sdpa_lofi_fp32acc` @ prod-4x8 video block (job 015415-106): PCC 99.93% PASS, WARM_FWD_MS 16.06 = −4.9% vs F0 16.88 (SUB-GATE, no win).** Closes the block-quant preset space 4/4 measured. Key finding: **fp32-dest-acc RECOVERS the SDPA-LoFi PCC** Batch J lost (98.57% FAIL → 99.93% PASS), correcting J's "can't recover" reasoning — but speed is null-with-favorable-noise (under 5% gate; increment vs all_bf8_lofi contradicts the isolated-SDPA physics). No preset clears the gate at passing quality ⇒ denoise block stays dispatch-bound.
