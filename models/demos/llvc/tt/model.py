@@ -77,6 +77,19 @@ class LLVCModel:
         k = conv_weight.shape[-1]
         return [_to_device(conv_weight[:, :, j], device=self.device, dtype=self.dtype) for j in range(k)]
 
+    def _depthwise_taps(self, conv_weight: torch.Tensor) -> list[ttnn.Tensor]:
+        """Split a depthwise ``[C, 1, K]`` conv weight into ``K`` per-channel vectors ``[1, 1, C]``."""
+        k = conv_weight.shape[-1]
+        return [
+            _to_device(conv_weight[:, 0, j].reshape(1, 1, -1), device=self.device, dtype=self.dtype)
+            for j in range(k)
+        ]
+
+    def _depthwise_bias(self, bias: Optional[torch.Tensor]) -> Optional[ttnn.Tensor]:
+        if bias is None:
+            return None
+        return _to_device(bias.reshape(1, 1, -1), device=self.device, dtype=self.dtype)
+
     def _tap_biases(self, bias: Optional[torch.Tensor], kernel: int) -> Optional[list[ttnn.Tensor]]:
         # Conv bias is added once, not per-tap; fold it onto the first tap only.
         if bias is None:
@@ -127,9 +140,9 @@ class LLVCModel:
             ln2 = layers[4]
             self.enc_layers.append(
                 {
-                    "dw_weight": self._host_conv_weight(depthwise.weight.detach().float()),
-                    "dw_bias": self._host_conv_bias(
-                        depthwise.bias.detach().float() if depthwise.bias is not None else None, cfg.enc_dim
+                    "dw_taps": self._depthwise_taps(depthwise.weight.detach().float()),
+                    "dw_bias": self._depthwise_bias(
+                        depthwise.bias.detach().float() if depthwise.bias is not None else None
                     ),
                     "dilation": 2**i,
                     "buf_len": (depthwise.kernel_size[0] - 1) * (2**i),
@@ -258,18 +271,13 @@ class LLVCModel:
             dcc_in = ops.concat_time(ctx, x)  # [B, buf_len + T, C]
             state.enc_ctx[i] = ops.slice_time(dcc_in, dcc_in.shape[1] - layer["buf_len"], dcc_in.shape[1])
 
-            # depthwise dilated conv (padding=0 consumes the prepended context)
-            dw = self._run_conv1d(
-                f"enc_dw_{i}",
+            # depthwise dilated conv (padding=0 consumes the prepended context).
+            # Expressed as a shifted per-channel MAC: ttnn.conv1d cannot find a
+            # valid shard/slice config for these depthwise layers.
+            dw = ops.depthwise_causal_conv1d(
                 dcc_in,
-                layer["dw_weight"],
+                layer["dw_taps"],
                 layer["dw_bias"],
-                in_channels=cfg.enc_dim,
-                out_channels=cfg.enc_dim,
-                kernel_size=3,
-                stride=1,
-                padding=0,
-                groups=cfg.enc_dim,
                 dilation=layer["dilation"],
             )
             h = ops.layernorm_channels(dw, layer["ln1_w"], layer["ln1_b"])

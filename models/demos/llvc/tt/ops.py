@@ -266,6 +266,39 @@ def mac_causal_conv1d(
     return out, new_ctx
 
 
+def depthwise_causal_conv1d(
+    x_btc: ttnn.Tensor,
+    weight_taps: list[ttnn.Tensor],
+    bias: Optional[ttnn.Tensor],
+    *,
+    dilation: int,
+) -> ttnn.Tensor:
+    """Depthwise (groups==channels) causal conv1d via shifted per-channel MAC.
+
+    ``x_btc`` already has the causal context prepended (``padding=0`` semantics),
+    so with kernel ``K`` and ``dilation`` the output length is
+    ``T_out = T_in - (K-1)*dilation``. ``weight_taps[j]`` is the per-channel tap
+    vector ``[1, 1, C]`` and ``bias`` (added once) is ``[1, 1, C]`` or ``None``.
+
+    ``ttnn.conv1d`` cannot find a valid shard/slice config for these depthwise
+    layers, so we express the conv directly: ``y[t] = b + sum_j x[t+j*d] * w_j``.
+    This mirrors the reference exactly and stays in TILE layout.
+    """
+    x_tile = as_tile(x_btc)
+    b, t_in, c = x_tile.shape
+    kernel = len(weight_taps)
+    t_out = t_in - (kernel - 1) * dilation
+    out = None
+    for j in range(kernel):
+        offset = j * dilation
+        window = ttnn.slice(x_tile, [0, offset, 0], [b, offset + t_out, c])
+        term = ttnn.mul(window, weight_taps[j])
+        out = term if out is None else ttnn.add(out, term)
+    if bias is not None:
+        out = ttnn.add(out, bias)
+    return out
+
+
 def sinusoidal_position_encoding(length: int, d_model: int, *, device, dtype: ttnn.DataType) -> ttnn.Tensor:
     """Positional encoding matching the reference (speechbrain layout)."""
     position = torch.arange(length, dtype=torch.float32).unsqueeze(1)
