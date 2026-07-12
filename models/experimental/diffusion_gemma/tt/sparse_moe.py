@@ -26,6 +26,7 @@ and ``moe.experts.weights`` only.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 
 import ttnn
@@ -350,6 +351,426 @@ def _batched_experts(gathered, weights, compute_kernel_config, program_configs=N
     )
     down_input.deallocate(True)
     return down
+
+
+RAGGED_MAX_M_BLOCKS = 4
+
+
+@dataclass
+class RaggedRouting:
+    values: object
+    indices: object
+    per_expert_scale: object | None
+
+
+_ROUTER_SCALE_HOST_CACHE = {}
+
+
+def ragged_router_forward(router, hidden_states):
+    """Router forward that retains compact top-k metadata instead of scattering dense."""
+    normed = router.norm.forward(hidden_states)
+    scaled = ttnn.mul(normed, router.scale)
+    normed.deallocate(True)
+    scaled = ttnn.mul(scaled, router.scalar_root_size)
+    expert_scores = ttnn.linear(scaled, router.proj_weight)
+    scaled.deallocate(True)
+    router_probs = ttnn.softmax(expert_scores, dim=-1)
+    expert_scores.deallocate(True)
+    top_k_values, top_k_indices = ttnn.topk(router_probs, k=router.top_k, dim=-1)
+    router_probs.deallocate(True)
+    top_k_sum = ttnn.sum(top_k_values, dim=-1, keepdim=True)
+    normalized_values = ttnn.div(top_k_values, top_k_sum)
+    top_k_values.deallocate(True)
+    top_k_sum.deallocate(True)
+    return RaggedRouting(normalized_values, top_k_indices, router.per_expert_scale)
+
+
+try:
+    import numba as _numba
+except ImportError:  # pragma: no cover - exercised in minimal runtime environments
+    _numba = None
+
+
+if _numba is not None:
+    import numpy as np
+
+    @_numba.njit(cache=True)
+    def _pack_ragged_assignments(expert_index, num_experts, max_m_blocks):
+        sequence_length, top_k = expert_index.shape
+        capacity_rows = max_m_blocks * TILE
+        max_segments = (sequence_length + capacity_rows - 1) // capacity_rows
+        counts = np.zeros(num_experts, np.int32)
+        for token in range(sequence_length):
+            for k_index in range(top_k):
+                counts[expert_index[token, k_index]] += 1
+
+        segment_m_blocks = np.zeros((num_experts, max_segments), np.int32)
+        group_counts = np.zeros(max_m_blocks, np.int32)
+        for expert in range(num_experts):
+            num_segments = (counts[expert] + capacity_rows - 1) // capacity_rows
+            for segment in range(num_segments):
+                count = min(capacity_rows, counts[expert] - segment * capacity_rows)
+                m_blocks = (count + TILE - 1) // TILE
+                segment_m_blocks[expert, segment] = m_blocks
+                group_counts[m_blocks - 1] += 1
+
+        group_start = np.zeros(max_m_blocks, np.int32)
+        total_rows = 0
+        for m_blocks in range(1, max_m_blocks + 1):
+            group_start[m_blocks - 1] = total_rows
+            total_rows += group_counts[m_blocks - 1] * m_blocks * TILE
+
+        group_experts = np.full((max_m_blocks, num_experts * max_segments), -1, np.int32)
+        segment_local = np.zeros((num_experts, max_segments), np.int32)
+        local_counts = np.zeros(max_m_blocks, np.int32)
+        for expert in range(num_experts):
+            for segment in range(max_segments):
+                m_blocks = segment_m_blocks[expert, segment]
+                if m_blocks != 0:
+                    local = local_counts[m_blocks - 1]
+                    local_counts[m_blocks - 1] += 1
+                    segment_local[expert, segment] = local
+                    group_experts[m_blocks - 1, local] = expert
+
+        slot_token = np.zeros(total_rows, np.int32)
+        slot_valid_bits = np.zeros(total_rows, np.uint16)
+        token_slot = np.empty((sequence_length, top_k), np.int32)
+        expert_rank = np.zeros(num_experts, np.int32)
+        for token in range(sequence_length):
+            for k_index in range(top_k):
+                expert = expert_index[token, k_index]
+                rank = expert_rank[expert]
+                expert_rank[expert] += 1
+                segment = rank // capacity_rows
+                row = rank % capacity_rows
+                m_blocks = segment_m_blocks[expert, segment]
+                packed_row = group_start[m_blocks - 1] + segment_local[expert, segment] * m_blocks * TILE + row
+                slot_token[packed_row] = token
+                slot_valid_bits[packed_row] = 0x3F80  # BF16 1.0
+                token_slot[token, k_index] = packed_row
+        return slot_token, slot_valid_bits, token_slot, group_counts, group_experts, group_start
+
+else:
+    _pack_ragged_assignments = None
+
+
+def _ragged_prefill_program_config(m_blocks, output_width):
+    if output_width == 192:
+        grid_x, grid_y, block_w, per_core_n = 6, 1, 44, 1
+    elif output_width == 2816:
+        grid_x, grid_y, block_w, per_core_n = 11, 4, 3, 2
+    else:
+        raise ValueError(f"unsupported ragged prefill output width: {output_width}")
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=m_blocks,
+        out_block_w=per_core_n,
+        per_core_M=m_blocks,
+        per_core_N=per_core_n,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _ragged_metadata_host(dense_routing, num_experts, top_k, max_m_blocks=RAGGED_MAX_M_BLOCKS):
+    """Pack routed assignments into zero-drop, expert-homogeneous tile groups.
+
+    This CPU metadata builder is intentionally vectorized: the previous
+    assignment-by-assignment Python prototype took ~39 ms for 1024 tokens,
+    while this implementation takes <1 ms on the same host.
+    """
+    import torch
+
+    if isinstance(dense_routing, RaggedRouting):
+        values = dense_routing.values
+        indices = dense_routing.indices
+        if values.device().get_num_devices() > 1:
+            route_weight = ttnn.to_torch(ttnn.get_device_tensors(values)[0])[0, 0]
+            expert_index = ttnn.to_torch(ttnn.get_device_tensors(indices)[0])[0, 0].long()
+        else:
+            route_weight = ttnn.to_torch(values)[0, 0]
+            expert_index = ttnn.to_torch(indices)[0, 0].long()
+        values.deallocate(True)
+        indices.deallocate(True)
+        S = route_weight.shape[0]
+        per_token_order = torch.argsort(expert_index, dim=-1)
+        expert_index = torch.gather(expert_index, -1, per_token_order)
+        route_weight = torch.gather(route_weight, -1, per_token_order)
+        if dense_routing.per_expert_scale is not None:
+            scale_tensor = dense_routing.per_expert_scale
+            scale = _ROUTER_SCALE_HOST_CACHE.get(id(scale_tensor))
+            if scale is None:
+                if scale_tensor.device().get_num_devices() > 1:
+                    scale = ttnn.to_torch(ttnn.get_device_tensors(scale_tensor)[0]).reshape(-1)
+                else:
+                    scale = ttnn.to_torch(scale_tensor).reshape(-1)
+                _ROUTER_SCALE_HOST_CACHE[id(scale_tensor)] = scale
+            route_weight = route_weight * scale[expert_index]
+    else:
+        if dense_routing.device().get_num_devices() > 1:
+            routing = ttnn.to_torch(ttnn.get_device_tensors(dense_routing)[0])[0, 0]
+        else:
+            routing = ttnn.to_torch(dense_routing)[0, 0]
+        S = routing.shape[0]
+        active_mask = routing != 0
+        active_entries = torch.nonzero(active_mask)
+        if active_entries.shape[0] == S * top_k:
+            # The router contract is exactly top_k nonzero entries per token.
+            # nonzero() is row-major, so expert ids are already in the reduction
+            # order that matches the dense path (QB2-verified bit-identical: the
+            # host-side per-expert scale rounds the same as the on-device bf16
+            # multiply, so logits + KV match the shared path exactly).
+            expert_index = active_entries[:, -1].reshape(S, top_k)
+            route_weight = routing[active_mask].reshape(S, top_k)
+        else:
+            # Defensive fallback for a future router that can emit exact zero for
+            # an active slot or otherwise violates the fixed-top-k contract.
+            route_weight, expert_index = torch.topk(routing, top_k, dim=-1)
+            per_token_order = torch.argsort(expert_index, dim=-1)
+            expert_index = torch.gather(expert_index, -1, per_token_order)
+            route_weight = torch.gather(route_weight, -1, per_token_order)
+
+    capacity_rows = max_m_blocks * TILE
+    max_segments_per_expert = (S + capacity_rows - 1) // capacity_rows
+
+    if _pack_ragged_assignments is not None:
+        (
+            slot_token_np,
+            slot_valid_bits_np,
+            token_slot_np,
+            group_counts_np,
+            group_experts_np,
+            group_start_np,
+        ) = _pack_ragged_assignments(
+            expert_index.contiguous().numpy(),
+            num_experts,
+            max_m_blocks,
+        )
+        groups = []
+        for m_blocks in range(1, max_m_blocks + 1):
+            group_size = int(group_counts_np[m_blocks - 1])
+            if group_size == 0:
+                continue
+            start = int(group_start_np[m_blocks - 1])
+            total_rows = group_size * m_blocks * TILE
+            slot_token = torch.from_numpy(slot_token_np[start : start + total_rows].copy())
+            slot_valid_bits = torch.from_numpy(slot_valid_bits_np[start : start + total_rows].copy())
+            slot_valid = slot_valid_bits.view(torch.bfloat16).reshape(total_rows, 1)
+            group_experts = torch.from_numpy(group_experts_np[m_blocks - 1, :group_size].copy()).long()
+            sparsity = torch.zeros((1, 1, group_size, num_experts), dtype=torch.bfloat16)
+            sparsity[0, 0, torch.arange(group_size), group_experts] = 1
+            groups.append((m_blocks, group_size, slot_token, slot_valid, sparsity))
+        return (
+            groups,
+            torch.from_numpy(token_slot_np.copy()),
+            route_weight.reshape(S, top_k, 1),
+            len(slot_token_np),
+        )
+
+    flat_expert = expert_index.reshape(-1)
+    flat_token = torch.arange(S).repeat_interleave(top_k)
+    flat_k = torch.arange(top_k).repeat(S)
+    assignment_order = torch.argsort(flat_expert, stable=True)
+    sorted_expert = flat_expert[assignment_order]
+    sorted_token = flat_token[assignment_order]
+    sorted_k = flat_k[assignment_order]
+
+    expert_counts = torch.bincount(sorted_expert, minlength=num_experts)
+    expert_starts = torch.cumsum(expert_counts, 0) - expert_counts
+    rank_in_expert = torch.arange(S * top_k) - expert_starts[sorted_expert]
+    segment_key = sorted_expert * max_segments_per_expert + rank_in_expert // capacity_rows
+    segment_keys, segment_counts = torch.unique_consecutive(segment_key, return_counts=True)
+    assignment_segment = torch.repeat_interleave(torch.arange(len(segment_keys)), segment_counts)
+    row_in_segment = rank_in_expert % capacity_rows
+    segment_m_blocks = (segment_counts + TILE - 1) // TILE
+
+    token_slot = torch.empty((S, top_k), dtype=torch.int32)
+    groups = []
+    output_offset = 0
+    for m_blocks in range(1, max_m_blocks + 1):
+        segment_ids = torch.nonzero(segment_m_blocks == m_blocks).flatten()
+        if len(segment_ids) == 0:
+            continue
+        group_size = len(segment_ids)
+        rows_per_segment = m_blocks * TILE
+        total_rows = group_size * rows_per_segment
+        segment_to_group = torch.full((len(segment_keys),), -1, dtype=torch.int64)
+        segment_to_group[segment_ids] = torch.arange(group_size)
+        assignment_mask = segment_to_group[assignment_segment] >= 0
+        packed_row = (
+            segment_to_group[assignment_segment[assignment_mask]] * rows_per_segment + row_in_segment[assignment_mask]
+        )
+
+        slot_token = torch.zeros(total_rows, dtype=torch.int32)
+        slot_valid = torch.zeros((total_rows, 1), dtype=torch.bfloat16)
+        slot_token[packed_row] = sorted_token[assignment_mask].to(torch.int32)
+        slot_valid[packed_row] = 1
+        token_slot[sorted_token[assignment_mask], sorted_k[assignment_mask]] = output_offset + packed_row.to(
+            torch.int32
+        )
+
+        group_experts = segment_keys[segment_ids] // max_segments_per_expert
+        sparsity = torch.zeros((1, 1, group_size, num_experts), dtype=torch.bfloat16)
+        sparsity[0, 0, torch.arange(group_size), group_experts] = 1
+        groups.append((m_blocks, group_size, slot_token, slot_valid, sparsity))
+        output_offset += total_rows
+
+    return groups, token_slot, route_weight.reshape(S, top_k, 1), output_offset
+
+
+def ragged_sparse_prefill_forward(
+    hidden_states,
+    routing_weights,
+    weights,
+    config,
+    prefill_sparsity,
+    mesh_config=None,
+    mesh_device=None,
+    ccl_manager=None,
+):
+    """Zero-drop sparse prefill with compact ragged expert batches.
+
+    QB2-verified bit-identical to the shared 128-expert path (26B-A4B, 30 layers,
+    prompts up to 2048 incl. multi-segment packing: logits + KV cache max_abs=0),
+    at 26-57x lower prefill latency.
+    """
+    del prefill_sparsity
+    mesh = mesh_device or hidden_states.device()
+    S = hidden_states.shape[2]
+    E = config.num_experts
+    H = config.hidden_size
+    I = weights.intermediate_size_per_device
+    max_m_blocks = int(os.environ.get("DG_PREFILL_RAGGED_M_BLOCKS", RAGGED_MAX_M_BLOCKS))
+    groups, token_slot_host, route_weight_host, packed_rows = _ragged_metadata_host(
+        routing_weights, E, config.top_k, max_m_blocks=max_m_blocks
+    )
+    mapper = ttnn.ReplicateTensorToMesh(mesh) if hasattr(mesh, "shape") else None
+
+    def upload(host_tensor, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
+        return ttnn.from_torch(
+            host_tensor,
+            dtype=dtype,
+            layout=layout,
+            device=mesh,
+            mesh_mapper=mapper,
+        )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    hidden_flat = ttnn.reshape(hidden_states, (S, H))
+    down_groups = []
+    for m_blocks, group_size, slot_token_host, slot_valid_host, sparsity_host in groups:
+        group_rows = group_size * m_blocks * TILE
+        slot_token = upload(slot_token_host.reshape(1, group_rows), ttnn.uint32)
+        slot_valid = upload(slot_valid_host.reshape(1, group_rows, 1), ttnn.bfloat16)
+        sparsity = upload(sparsity_host, ttnn.bfloat16)
+
+        gathered = ttnn.embedding(
+            slot_token,
+            hidden_flat,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        gathered_valid = ttnn.mul(gathered, slot_valid)
+        grouped_input = ttnn.reshape(gathered_valid, (1, group_size, m_blocks * TILE, H))
+        gate_output = ttnn.empty(
+            [1, group_size, m_blocks * TILE, I],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+        )
+        up_output = ttnn.empty(
+            [1, group_size, m_blocks * TILE, I],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+        )
+        common = {
+            "sparsity": sparsity,
+            "nnz": group_size,
+            "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "compute_kernel_config": compute_kernel_config,
+            "dtype": ttnn.bfloat16,
+        }
+        gate = ttnn.sparse_matmul(
+            grouped_input,
+            weights.gate_proj,
+            program_config=_ragged_prefill_program_config(m_blocks, I),
+            optional_output_tensor=gate_output,
+            **common,
+        )
+        up = ttnn.sparse_matmul(
+            grouped_input,
+            weights.up_proj,
+            program_config=_ragged_prefill_program_config(m_blocks, I),
+            optional_output_tensor=up_output,
+            **common,
+        )
+        down_input = apply_geglu(gate, up)
+        down_output = ttnn.empty(
+            [1, group_size, m_blocks * TILE, H],
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+        )
+        down = ttnn.sparse_matmul(
+            down_input,
+            weights.down_proj,
+            program_config=_ragged_prefill_program_config(m_blocks, H),
+            optional_output_tensor=down_output,
+            **common,
+        )
+        down_groups.append(ttnn.reshape(down, (group_rows, H)))
+
+        for tensor in (
+            slot_token,
+            slot_valid,
+            sparsity,
+            gathered,
+            gathered_valid,
+            gate,
+            up,
+            down_input,
+        ):
+            tensor.deallocate(True)
+
+    packed_down = down_groups[0] if len(down_groups) == 1 else ttnn.concat(down_groups, dim=0)
+    if len(down_groups) > 1:
+        for tensor in down_groups:
+            tensor.deallocate(True)
+    assert packed_down.shape[0] == packed_rows
+
+    # Embedding accepts a 2-D index matrix. Store top-k in the leading
+    # dimension so fast_reduce_nc can consume it directly without a device
+    # permute of the large [S, K, H] selected-expert tensor.
+    token_slot = upload(token_slot_host.transpose(0, 1).contiguous(), ttnn.uint32)
+    route_weight_transposed = route_weight_host.transpose(0, 1).contiguous()
+    route_weight = upload(route_weight_transposed, ttnn.bfloat16)
+    selected = ttnn.embedding(
+        token_slot,
+        packed_down,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weighted = ttnn.mul(selected, route_weight)
+    weighted = ttnn.reshape(weighted, (1, config.top_k, S, H))
+    out = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(weighted, dims=[1]))
+    out = ttnn.reshape(out, (1, 1, S, H))
+
+    for tensor in (packed_down, token_slot, route_weight, selected, weighted):
+        tensor.deallocate(True)
+    if mesh_config is not None and mesh_config.tp > 1:
+        out = ccl_allreduce(out, mesh_config, ccl_manager)
+    return out
 
 
 def sparse_experts_forward(

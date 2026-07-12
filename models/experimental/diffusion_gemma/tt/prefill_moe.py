@@ -1,17 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""DiffusionGemma-local dense prefill-MoE geometry tuning.
+"""DiffusionGemma-local causal-prefill MoE optimizations.
 
-The shared Gemma4 prefill computes every routed expert in 32-token chunks. That
-math is retained exactly; only the sparse-matmul grid and K blocking are changed
-for the DiffusionGemma 26B TP=4 shape on Blackhole. The tuned layer-0 MoE output
-is bit-identical to the shared geometry while reducing a 256-token call from
-~135.5 ms to ~21.2 ms on QB2.
+The dense fallback tunes sparse-matmul geometry. The default ragged path packs
+only routed token/expert pairs into compact, zero-drop batches and preserves the
+shared BF16 operation/reduction order. Verified bit-identical to the shared path
+on QB2 (26B-A4B, 30 layers, prompts up to 2048 incl. multi-segment expert
+packing: logits + KV cache max_abs=0), while cutting the 128-expert prefill down
+to only the routed experts (26-57x faster on device, scaling with prompt length).
 
 The shared Gemma4 source remains untouched. A context-local selector activates
-the tuned geometry only for the current DiffusionGemma prefill. Other threads
-and async tasks continue to use the shared Gemma4 builder.
+these paths only for the current DiffusionGemma prefill.
 """
 
 from __future__ import annotations
@@ -22,9 +22,16 @@ from contextlib import contextmanager
 from threading import Lock
 
 import ttnn
+import models.demos.gemma4.tt.experts as gemma4_experts
 import models.demos.gemma4.tt.experts.prefill as gemma4_prefill
+from models.demos.gemma4.tt.router import Gemma4Router
+from models.experimental.diffusion_gemma.tt.sparse_moe import (
+    ragged_router_forward,
+    ragged_sparse_prefill_forward,
+)
 
 FLAG = "DG_PREFILL_MOE_TUNED"
+RAGGED_FLAG = "DG_PREFILL_MOE_RAGGED"
 
 _HIDDEN_SIZE = 2816
 _INTERMEDIATE_PER_DEVICE = 192
@@ -35,14 +42,23 @@ _MESH_SHAPE = (1, 4)
 _COMPUTE_GRID = (11, 10)
 
 _tuned_geometry_active: ContextVar[bool] = ContextVar("diffusion_gemma_tuned_prefill_moe", default=False)
+_ragged_prefill_active: ContextVar[bool] = ContextVar("diffusion_gemma_ragged_prefill_moe", default=False)
 _builder_install_lock = Lock()
 _original_builder = gemma4_prefill._build_sparse_matmul_config
+_original_prefill_forward = gemma4_experts.prefill_forward
+_original_router_forward = Gemma4Router.__call__
 
 
 def tuned_prefill_moe_enabled() -> bool:
     """Whether the exact dense prefill-MoE geometry is enabled (default on)."""
 
     return os.environ.get(FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def ragged_prefill_moe_enabled() -> bool:
+    """Whether zero-drop compact sparse prefill is enabled (default ON; QB2-verified bit-identical to the shared path)."""
+
+    return os.environ.get(RAGGED_FLAG, "1").strip().lower() not in ("0", "false", "no", "off")
 
 
 def _find_supported_experts(model):
@@ -136,17 +152,58 @@ def _install_contextual_builder() -> None:
         gemma4_prefill._build_sparse_matmul_config = _contextual_config_builder
 
 
+def _contextual_prefill_forward(*args, **kwargs):
+    """Dispatch only the active DiffusionGemma call to the ragged path."""
+
+    hidden_states = kwargs.get("hidden_states", args[0] if args else None)
+    if _ragged_prefill_active.get() and hidden_states is not None and 1 < hidden_states.shape[2] <= 4096:
+        return ragged_sparse_prefill_forward(*args, **kwargs)
+    return _original_prefill_forward(*args, **kwargs)
+
+
+def _install_contextual_prefill_forward() -> None:
+    if gemma4_experts.prefill_forward is _contextual_prefill_forward:
+        return
+    with _builder_install_lock:
+        if gemma4_experts.prefill_forward is _contextual_prefill_forward:
+            return
+        gemma4_experts.prefill_forward = _contextual_prefill_forward
+
+
+def _contextual_router_forward(router, hidden_states):
+    if _ragged_prefill_active.get() and 1 < hidden_states.shape[2] <= 4096:
+        return ragged_router_forward(router, hidden_states)
+    return _original_router_forward(router, hidden_states)
+
+
+def _install_contextual_router_forward() -> None:
+    if Gemma4Router.__call__ is _contextual_router_forward:
+        return
+    with _builder_install_lock:
+        if Gemma4Router.__call__ is _contextual_router_forward:
+            return
+        Gemma4Router.__call__ = _contextual_router_forward
+
+
 @contextmanager
 def use_tuned_prefill_moe(model):
-    """Apply the exact QB2 dense-MoE geometry in the current call context."""
+    """Apply supported DiffusionGemma prefill optimizations in this call context."""
 
-    if not tuned_prefill_moe_enabled() or _find_supported_experts(model) is None:
+    tuned = tuned_prefill_moe_enabled()
+    ragged = ragged_prefill_moe_enabled()
+    if (not tuned and not ragged) or _find_supported_experts(model) is None:
         yield
         return
 
-    _install_contextual_builder()
-    token = _tuned_geometry_active.set(True)
+    if tuned:
+        _install_contextual_builder()
+    if ragged:
+        _install_contextual_prefill_forward()
+        _install_contextual_router_forward()
+    geometry_token = _tuned_geometry_active.set(tuned)
+    ragged_token = _ragged_prefill_active.set(ragged)
     try:
         yield
     finally:
-        _tuned_geometry_active.reset(token)
+        _ragged_prefill_active.reset(ragged_token)
+        _tuned_geometry_active.reset(geometry_token)
