@@ -1,0 +1,191 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""
+kernel_tier/capture.py — turn a tt-metal JIT build log into a KERNEL fact base.
+
+This is the on-request kernel-tier capture. tt-metal, run with
+`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`, logs the full `g++ compile cmd: <cmd>`
+for every JIT-compiled kernel. We scrape those, translate each RISC-V-GCC command
+to a clang invocation `llk_extract` can parse (drop the sfpi-gcc-only flags, add
+clang's --target + the sfpi -isystem paths + the SFPU shim, keep the kernel's own
+-I/-D), run the extractor per kernel (from the kernel's build dir so its relative
+includes + generated kernel_includes.hpp resolve), and merge into ONE fact base
+the committed cb-sync / noc-sync / mailbox-sync checkers run over.
+
+Fragility is localized here (per recall-tool-review-lessons): the GCC->clang
+translation. Kernels that don't parse are COUNTED and LISTED (a coverage hole is
+reported, never silently dropped). Recall is complete only over the kernel
+variants the workload actually exercised — stated in the ledger.
+
+Usage:
+  python3 capture.py --arch wormhole --log build.log --out OUTDIR \
+                     --repo-root /path/to/tt-metal
+"""
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+EXTRACT = os.path.join(HERE, "..", "extractor", "llk_extract")
+SHIM = os.path.join(HERE, "..", "out", "sfpi_shim")
+
+# The one line tt-metal emits per kernel compile (build.cpp), e.g.
+#   ... g++ compile cmd: cd <dir> && <gpp> <flags> -c -o obj src -MF dep <defines>
+_CMD_RE = re.compile(r"g\+\+ compile cmd:\s*(.*\S)\s*$")
+
+
+def _sfpi_gcc_ver(sfpi_root: str) -> str:
+    """Discover the sfpi gcc version dir (e.g. 15.1.0), rather than hardcode it."""
+    base = os.path.join(sfpi_root, "compiler", "lib", "gcc", "riscv-tt-elf")
+    vers = [
+        os.path.basename(d)
+        for d in glob.glob(os.path.join(base, "*"))
+        if os.path.isdir(d)
+    ]
+    return sorted(vers)[-1] if vers else "15.1.0"
+
+
+def _clang_base(sfpi_root: str) -> list:
+    """The validated GCC->clang translation base (see llk-audit README / memory)."""
+    ver = _sfpi_gcc_ver(sfpi_root)
+    c = os.path.join(sfpi_root, "compiler")
+    return [
+        "-x",
+        "c++",
+        "--target=riscv32-unknown-elf",
+        "-D__INT32_TYPE__=long",
+        "-std=c++17",
+        "-nostdinc++",
+        "-nostdinc",
+        "-w",
+        "-Wno-missing-template-arg-list-after-template-kw",
+        "-ferror-limit=0",
+        "-isystem",
+        os.path.join(c, "lib", "gcc", "riscv-tt-elf", ver, "include"),
+        "-isystem",
+        os.path.join(c, "riscv-tt-elf", "include"),
+        "-isystem",
+        os.path.join(c, "riscv-tt-elf", "include", "c++", ver),
+        "-isystem",
+        os.path.join(c, "riscv-tt-elf", "include", "c++", ver, "riscv-tt-elf"),
+        "-isystem",
+        os.path.join(sfpi_root, "include"),
+        "-I",
+        SHIM,
+    ]
+
+
+def _parse_cmd(cmd: str):
+    """From a `cd <dir> && <gpp> ...` command, return (cwd, src, [-I..], [-D..])."""
+    cwd = None
+    m = re.match(r"cd\s+(\S+)\s*&&\s*(.*)", cmd)
+    if m:
+        cwd, cmd = m.group(1), m.group(2)
+    toks = shlex.split(cmd)[1:]  # drop the compiler (argv0)
+    incs = [t for t in toks if t.startswith("-I")]
+    defs = [t for t in toks if t.startswith("-D")]
+    srcs = [t for t in toks if t.endswith((".cc", ".cpp"))]  # the .o is not .cc
+    return cwd, (srcs[0] if srcs else None), incs, defs
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(prog="kernel_tier.capture")
+    ap.add_argument(
+        "--arch", required=True, choices=("wormhole", "blackhole", "quasar")
+    )
+    ap.add_argument("--log", required=True, help="tt-metal build log (compile cmds)")
+    ap.add_argument("--out", required=True, help="output dir")
+    ap.add_argument("--repo-root", required=True)
+    ap.add_argument(
+        "--sfpi", default=None, help="sfpi root (default <repo>/runtime/sfpi)"
+    )
+    args = ap.parse_args(argv)
+
+    sfpi = args.sfpi or os.path.join(args.repo_root, "runtime", "sfpi")
+    os.makedirs(SHIM, exist_ok=True)
+    for stub in ("sfpi.h", "sfpi_classes.h"):
+        open(os.path.join(SHIM, stub), "a").close()
+    base = _clang_base(sfpi)
+    # path-filter = the repo root, so we keep every in-repo kernel/API fact and
+    # drop sfpi/system headers.
+    pf = os.path.abspath(args.repo_root)
+
+    cmds = []
+    with open(args.log, errors="replace") as fh:
+        for ln in fh:
+            m = _CMD_RE.search(ln)
+            if m:
+                cmds.append(m.group(1))
+    # dedup identical commands (a kernel re-logged across cores/reconfigure)
+    seen, uniq = set(), []
+    for c in cmds:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+
+    os.makedirs(args.out, exist_ok=True)
+    facts_path = os.path.join(args.out, f"facts.kernel.{args.arch}.jsonl")
+    ledger = []  # (label, status, facts, parse_errors)
+    with open(facts_path, "w") as merged:
+        for cmd in uniq:
+            cwd, src, incs, defs = _parse_cmd(cmd)
+            if not src or not cwd or not os.path.isdir(cwd):
+                ledger.append((cmd[:60], "SKIP-noparse", 0, 0))
+                continue
+            label = (
+                os.path.relpath(cwd, os.path.join(args.repo_root))
+                if os.path.isabs(cwd)
+                else cwd
+            )
+            inv = [
+                EXTRACT,
+                f"--arch={args.arch}",
+                f"--path-filter={pf}",
+                src,
+                "--",
+                "clang++",
+                *base,
+                *incs,
+                *defs,
+            ]
+            try:
+                r = subprocess.run(
+                    inv, cwd=cwd, capture_output=True, text=True, timeout=180
+                )
+            except (OSError, subprocess.TimeoutExpired) as e:
+                ledger.append((label, f"EXEC-FAIL:{type(e).__name__}", 0, 0))
+                continue
+            out = r.stdout.strip()
+            try:
+                obj = json.loads(out) if out else {}
+            except json.JSONDecodeError:
+                ledger.append((label, "PARSE-FAIL", 0, 0))
+                continue
+            pe = obj.get("parse_errors", 0)
+            nf = len(obj.get("facts", []))
+            merged.write(out + "\n")
+            ledger.append((label, "ok" if pe == 0 else "ok(parse_errors)", nf, pe))
+
+    # coverage ledger — never a silent cap
+    led_path = os.path.join(args.out, f"kernel_coverage.{args.arch}.txt")
+    ok = sum(1 for _, s, _, _ in ledger if s.startswith("ok"))
+    with open(led_path, "w") as lf:
+        lf.write(f"kernel-tier capture ({args.arch}): {ok}/{len(ledger)} TUs parsed\n")
+        lf.write("(recall is complete ONLY over these workload-exercised variants)\n\n")
+        for label, status, nf, pe in ledger:
+            lf.write(f"  [{status:16}] facts={nf:4} parse_errors={pe:3}  {label}\n")
+    print(f"kernel-tier: {ok}/{len(ledger)} TUs parsed -> {facts_path}")
+    print(f"coverage ledger -> {led_path}")
+    print(facts_path)  # last line = the fact-base path (bootstrap consumes it)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
