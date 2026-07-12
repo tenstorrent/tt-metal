@@ -642,6 +642,9 @@ NOC_METHOD_SIGNAL_MCAST = (
     "relay_multicast",
     "inc_multicast",
 )
+# Object-method write credits that are NOT multicast: relay_unicast lowers to
+# noc_semaphore_set_remote (a 4-byte remote WRITE) — the object twin of set_remote.
+NOC_METHOD_SIGNAL_WRITE = ("relay_unicast",)
 _NOC_SIGNAL_RECV_TYPES = ("Semaphore",)
 
 
@@ -651,7 +654,7 @@ def _is_noc_signal_receiver(recv_type: str) -> bool:
 
 def noc_op_of(fact: dict):
     """Fact-aware noc_op: free-function form, the Noc-method write-flush, OR the
-    Semaphore-object credit signals (mcast / remote `up`)."""
+    Semaphore-object credit signals (mcast / write / remote `up`)."""
     op = noc_op(fact.get("name", ""))
     if op:
         return op
@@ -663,12 +666,38 @@ def noc_op_of(fact: dict):
     if _is_noc_signal_receiver(fact.get("recv_type", "")):
         if name in NOC_METHOD_SIGNAL_MCAST:
             return "mcast"
+        if name in NOC_METHOD_SIGNAL_WRITE:
+            return "set"
         # `up` is a remote signal only in its NoC-carrying overload (argc>=2);
         # argc==-1 (unknown, pre-argc fact base) is treated as NOT a signal to
         # avoid false NOC_SIGNAL_NO_FLUSH on the local up(value) form.
         if name == "up" and fact.get("argc", -1) >= 2:
             return "inc"
     return None
+
+
+# Which credit signals are ATOMIC increments (need the ack barrier, not just a
+# flush — #48478) vs write-based (any flush orders them). `inc_multicast` /
+# `noc_semaphore_inc_multicast` lower to a multicast ATOMIC increment, so they are
+# atomic despite the "mcast" op label; set/set_multicast/relay_* are writes.
+NOC_ATOMIC_SIGNALS = (
+    "noc_semaphore_inc",
+    "noc_semaphore_inc_multicast",
+    "inc_multicast",  # Semaphore-object form
+)
+
+
+def noc_signal_is_atomic(fact: dict) -> bool:
+    """True if this credit signal is an atomic increment (needs a write BARRIER)."""
+    name = fact.get("name", "")
+    if name in NOC_ATOMIC_SIGNALS:
+        return True
+    # remote Semaphore::up(noc, x, y, v) is an atomic increment
+    return (
+        name == "up"
+        and _is_noc_signal_receiver(fact.get("recv_type", ""))
+        and fact.get("argc", -1) >= 2
+    )
 
 
 # Of the flushes, only the *barrier* forms wait for the remote ACK (data LANDED);

@@ -96,12 +96,13 @@ SFPI="$LLK_ROOT/tests/sfpi"
 # (an explicit coverage gap — see parse.log / parse_errors in the output).
 SHIM="$OUT/sfpi_shim"; mkdir -p "$SHIM"; : > "$SHIM/sfpi.h"; : > "$SHIM/sfpi_classes.h"
 
+TGT=riscv32-unknown-elf  # same clang target triple for every arch
 case "$ARCH" in
-  wormhole)  DEF=ARCH_WORMHOLE; LLK=tt_llk_wormhole_b0; TGT=riscv32-unknown-elf; BOOT="-DLLK_BOOT_MODE_BRISC"
+  wormhole)  DEF=ARCH_WORMHOLE; LLK=tt_llk_wormhole_b0; BOOT="-DLLK_BOOT_MODE_BRISC"
              ARCHINC=("-I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/wormhole" "-I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines" "-I$METAL_DIR/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api");;
-  blackhole) DEF=ARCH_BLACKHOLE; LLK=tt_llk_blackhole; TGT=riscv32-unknown-elf; BOOT="-DLLK_BOOT_MODE_BRISC"
+  blackhole) DEF=ARCH_BLACKHOLE; LLK=tt_llk_blackhole; BOOT="-DLLK_BOOT_MODE_BRISC"
              ARCHINC=("-I$METAL_DIR/tt_metal/hw/inc/internal/tt-1xx/blackhole" "-I$METAL_DIR/tt_metal/hw/ckernels/blackhole/metal/llk_api");;
-  quasar)    DEF=ARCH_QUASAR; LLK=tt_llk_quasar; TGT=riscv32-unknown-elf; BOOT="-DLLK_BOOT_MODE_TRISC -DLLK_TRISC_ISOLATE_SFPU"
+  quasar)    DEF=ARCH_QUASAR; LLK=tt_llk_quasar; BOOT="-DLLK_BOOT_MODE_TRISC -DLLK_TRISC_ISOLATE_SFPU"
              ARCHINC=("-I$METAL_DIR/tt_metal/hw/inc/internal/tt-2xx/quasar" "-I$METAL_DIR/tt_metal/hw/ckernels/quasar/metal/llk_api");;
   *) echo "unknown arch $ARCH" >&2; exit 1;;
 esac
@@ -138,8 +139,12 @@ done
 # a broken toolchain. Refuse to emit a false all-clear (0 findings, exit 0);
 # exit non-zero like the build-failure path so the calling skill falls back to
 # its manual method. (Some SFPU-heavy failures are expected; ALL failing is not.)
-if [ ! -s "$FACTS" ]; then
-  echo "llk-audit: fact base is EMPTY ($FAIL/${#HEADERS[@]} headers failed to parse)." >&2
+# Gate on a real EXTRACTED FACT, not byte-size: the extractor writes a
+# `{"facts":[],...}` envelope per header even on a failed parse, so an all-fail run
+# still yields a non-empty file — `-s` alone would let that emit 0 findings/exit 0
+# (a false all-clear). `"family"` appears in every real fact and in no empty envelope.
+if [ ! -s "$FACTS" ] || ! grep -q '"family"' "$FACTS"; then
+  echo "llk-audit: NO facts extracted ($FAIL/${#HEADERS[@]} headers failed to parse)." >&2
   echo "           This is a broken run, NOT a clean audit — refusing a false" >&2
   echo "           all-clear. Check the toolchain / SFPI include paths ($OUT/parse.log)." >&2
   exit 1
