@@ -27,7 +27,9 @@ inline void _llk_unpack_mul_reduce_scalar_switch_to_reduce_()
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
     semaphore_post(semaphore::UNPACK_SYNC);
-    TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
-    TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    // WH UNPACR_NOP takes (block_selection, NoOp); UNP_ZEROSRC_SET_DVALID both zeroes the source
+    // and sets DVALID in one op (BH encodes the same via separate Set_Dvalid + Unpack_Pop fields).
+    TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID);
+    TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_ZEROSRC_SET_DVALID);
     t6_semaphore_get(semaphore::UNPACK_SYNC);
 }
