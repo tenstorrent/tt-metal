@@ -41,6 +41,8 @@ uint32_t get_input_channels_alignment(
     bool is_mm_conv,
     const std::optional<MemoryConfig>& input_memory_config);
 
+TensorMemoryLayout get_effective_input_shard_layout(const ttnn::Tensor& input_tensor, const Conv2dConfig& conv_config);
+
 CoreCoord get_output_compute_grid_size(
     const CoreCoord& device_compute_grid_size,
     const Conv2dConfig& conv_config,
@@ -99,7 +101,9 @@ sliding_window::ParallelConfig determine_output_parallel_config(
     const CoreCoord& compute_grid_size,
     uint32_t out_channels,
     tt::tt_metal::ShardOrientation block_shard_orientation,
-    bool is_mm_conv);
+    bool is_mm_conv,
+    bool require_input_channel_partition,
+    const std::optional<CoreRangeSet>& explicit_output_grid_override = std::nullopt);
 
 std::tuple<uint32_t, uint32_t> calculate_output_image_size(
     std::array<uint32_t, 2> input_image_size,
@@ -186,13 +190,15 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     std::optional<uint32_t> act_block_h_override = std::nullopt,
     bool enable_channels_padding = true,
     bool is_shard_height_tile_multiple = true,
-    bool is_shard_width_tile_multiple = true);
+    bool is_shard_width_tile_multiple = true,
+    bool require_tile_aligned_channels = false);
 
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(
     MeshDevice* device, DataType input_dtype, DataType weight_dtype);
 
 struct core_count_and_size {
     uint32_t core_count{};
+    uint32_t channel_core_count{};
     uint32_t halo_input_size{};
     uint32_t halo_output_size{};
     uint32_t conv_op_size{};
@@ -246,7 +252,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     const std::array<uint32_t, 4>& padding,
     uint32_t groups,
     bool enable_bias,
-    const DeviceComputeKernelConfig& compute_config);
+    const DeviceComputeKernelConfig& compute_config,
+    bool supports_block_sharded_1d_depthwise);
 
 ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape);
 
@@ -261,7 +268,8 @@ shard_or_reshard_tensor_if_required(
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv,
-    bool auto_shard);
+    bool auto_shard,
+    bool require_tile_aligned_channels);
 
 bool auto_enable_kernel_folding(
     const ttnn::MemoryConfig& input_memory_config,
