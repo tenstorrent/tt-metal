@@ -726,10 +726,11 @@ def noc_op_of(fact: dict):
     return None
 
 
-# Which credit signals are ATOMIC increments (need the ack barrier, not just a
-# flush — #48478) vs write-based (any flush orders them). `inc_multicast` /
+# Which credit signals are ATOMIC increments vs write-based. `inc_multicast` /
 # `noc_semaphore_inc_multicast` lower to a multicast ATOMIC increment, so they are
-# atomic despite the "mcast" op label; set/set_multicast/relay_* are writes.
+# atomic despite the "mcast" op label; set/set_multicast/relay_* are writes. The
+# checker CLEARS an atomic credit only on a preceding ack BARRIER (the conservative
+# choice — see NOC_WRITE_BARRIERS); it clears a write credit on any flush.
 NOC_ATOMIC_SIGNALS = (
     "noc_semaphore_inc",
     "noc_semaphore_inc_multicast",
@@ -738,7 +739,8 @@ NOC_ATOMIC_SIGNALS = (
 
 
 def noc_signal_is_atomic(fact: dict) -> bool:
-    """True if this credit signal is an atomic increment (needs a write BARRIER)."""
+    """True if this credit signal is an atomic increment (a remote atomic, not a
+    plain write)."""
     name = fact.get("name", "")
     if name in NOC_ATOMIC_SIGNALS:
         return True
@@ -750,12 +752,22 @@ def noc_signal_is_atomic(fact: dict) -> bool:
     )
 
 
-# Of the flushes, only the *barrier* forms wait for the remote ACK (data LANDED);
-# the *flushed* forms only drain the initiator's outgoing queue (data has LEFT).
-# An ATOMIC credit (noc_semaphore_inc / remote `up`) has no write->atomic ordering
-# even on the same VC (#48478), so it needs the ack BARRIER — a bare `writes_flushed`
-# does NOT make it safe. A write-based credit (set / multicast) is a write, so any
-# write flush orders it. See the /noc-sync skill's data-before-signal note.
+# The two write-completion primitives differ in what they WAIT FOR (see the
+# dataflow-API headers under tt_metal/hw/inc/api/dataflow/): a *barrier* waits for
+# the remote ACK (the data has LANDED at the destination); a *flushed* only drains
+# the initiator's outgoing queue (the write has DEPARTED, not yet landed).
+#
+# The checker CLEARS an atomic credit only on a preceding barrier. This is the
+# CONSERVATIVE recall choice, NOT a claim that a flush can never be enough: for a
+# same-NoC/same-VC UNICAST credit to the same destination, in-issue-order delivery
+# (per the ISA "<arch>/NoC/Ordering.md" doc) means a `writes_flushed` before the
+# credit DOES land the payload first — so a flushed atomic is often benign. But the
+# ack barrier is genuinely required for a MULTICAST credit, or writes crossing
+# separate command-buffer FIFOs (not order-preserving even same-VC on some archs),
+# or a different NoC/VC — which the tool can't distinguish. So it keeps flagging a
+# flush-but-no-barrier atomic (never miss a real race) and TAGS it low-confidence
+# (see noc_sync) rather than clearing it. Verdict = the /noc-sync skill + the
+# NoC Ordering doc.
 NOC_WRITE_BARRIERS = (
     "noc_async_write_barrier",
     "noc_async_write_barrier_with_trid",
