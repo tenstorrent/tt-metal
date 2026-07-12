@@ -399,6 +399,13 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
 
     // Create reduction dataflow kernel
     auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
+    if (operation_attributes.fp32_dest_acc) {
+        // Accumulate the ring partials in the fp32 dest register so the sum is independent of the
+        // (timing-dependent) order in which partials arrive over the ETH ring -> deterministic output.
+        // dst_full_sync_en keeps the fp32 dest capacity at 8 tiles (reduction.cpp uses max_dst_tiles=8).
+        reduction_kernel_config.fp32_dest_acc_en = true;
+        reduction_kernel_config.dst_full_sync_en = true;
+    }
     reduction_kernel_config.compile_args = {
         reduction_cb_index,  // reduction_cb_index
         out_cb_index,        // out_cb_index
