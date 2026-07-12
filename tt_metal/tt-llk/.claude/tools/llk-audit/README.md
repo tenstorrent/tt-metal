@@ -172,6 +172,11 @@ Then `python3 tests/test_checks.py` to confirm nothing regressed.
   `THCON_SEC0_REG3_Base_address` writes→`NO_LOCAL_ORDERING`.
 - `cfg-word-overlap` finds the known shared MAIN words (ALU-format words 0/1/2 incl.
   STACC_RELU on WH; 1/2 on BH) and suppresses the THCON/main same-index false alias.
+  It surfaces (as `UNRESOLVED`, never a silent drop) two coverage-gap classes: a
+  RUNTIME/loop index offset `cfg[FIELD_ADDR32 + i]` (base word recorded, span beyond
+  it flagged unknown) and a producer whose name looks like a cfg accessor but is not
+  recognized (signature-drift guard). CROSS_THREAD / INTRA_THREAD detection is
+  unchanged by these — they only widen the LLM-must-verify (`UNRESOLVED`) list.
 - `reconfig-stall` flags `set_packer_strides` etc. and correctly allowlists the
   latched `program_packer_destination` (`L1_Dest_addr`); exercises `THCON_ONLY` on BH.
 - `semaphore-handshake` sees all ops (17 post / 20 get / 4 init / balanced mutexes
