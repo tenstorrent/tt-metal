@@ -7,9 +7,11 @@ The classic cross-core race: a producer writes data to a remote L1 with
 `noc_async_write*`, then posts a remote credit — `noc_semaphore_inc` /
 `inc_multicast` / `set_remote` / `set_multicast` (NOT the LOCAL `noc_semaphore_set`
 reset) — but the signal must not overtake the data. It is safe only if a NoC
-write flush/
-barrier (`noc_async_write_barrier` / `noc_async_writes_flushed`) drains the write
-BEFORE the signal. This surface lives in JIT-compiled kernels OUTSIDE tt-llk, so
+write flush/barrier (`noc_async_write_barrier` / `noc_async_writes_flushed`)
+drains the write BEFORE the signal — recognized in BOTH the free-function form and
+the modern `Noc`-method form (`noc.async_write_barrier()`) via registry.noc_op_of;
+semaphore signals stay free functions. This surface lives in JIT-compiled kernels
+OUTSIDE tt-llk, so
 the checker is committed and deterministic but only yields findings when fed a
 KERNEL fact base (the on-request capture — see run.sh --full-jit); empty over
 tt-llk.
@@ -51,11 +53,11 @@ class NocSync(Check):
         findings: list[Finding] = []
         for fn in fb.functions:
             calls = fb.facts_in(fn, ("call",))
-            flush_offs = [
-                c["off"] for c in calls if registry.noc_op(c.get("name", "")) == "flush"
-            ]
+            # noc_op_of is fact-aware: free-function signals/flushes AND the
+            # Noc-method write-flush (noc.async_write_barrier()).
+            flush_offs = [c["off"] for c in calls if registry.noc_op_of(c) == "flush"]
             for c in calls:
-                op = registry.noc_op(c.get("name", ""))
+                op = registry.noc_op_of(c)
                 if op not in ("inc", "set", "mcast"):
                     continue
                 if any(fo < c["off"] for fo in flush_offs):

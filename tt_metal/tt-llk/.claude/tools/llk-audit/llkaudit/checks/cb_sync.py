@@ -5,7 +5,10 @@ cb-sync checker — circular-buffer producer/consumer credit balance.
 
 CB flow control: a producer `cb_reserve_back(cb, n)` claims space and
 `cb_push_back(cb, n)` commits it (hands the consumer a credit); a consumer
-`cb_wait_front(cb, n)` waits and `cb_pop_front(cb, n)` releases. The CB surface
+`cb_wait_front(cb, n)` waits and `cb_pop_front(cb, n)` releases. Modern ttnn
+kernels use the OBJECT form (`CircularBuffer cb(id); cb.reserve_back(n)`) — both
+are handled via registry.cb_classify (method form is grouped by the RECEIVER
+object and gated on the CircularBuffer type). The CB surface
 lives in JIT-compiled kernels OUTSIDE tt-llk, so this checker is committed and
 deterministic but only yields findings when fed a KERNEL fact base (the
 on-request capture — see run.sh --full-jit / the race-audit-all runbook); over
@@ -48,10 +51,11 @@ class CbSync(Check):
         # literal index, a CBIndex enum, or a variable) — grouped by its text.
         groups: dict = defaultdict(lambda: defaultdict(list))
         for c in fb.family("call"):
-            op = registry.cb_op(c.get("name", ""))
+            # cb_classify handles BOTH the free-function API (cb id = arg0) and the
+            # object/method API (cb id = the receiver object), gated on the CB type.
+            op, cbid = registry.cb_classify(c)
             if not op:
                 continue
-            cbid = (c.get("arg0", "") or "?").strip() or "?"
             groups[(c["file"], c.get("function", "?"))][cbid].append((op, c))
 
         findings: list[Finding] = []
