@@ -426,10 +426,14 @@ BW-sensitivity vs S2's F2 +16%), so the MAGNITUDE of the FSDP penalty at S1 is g
 dispatch-bound thesis. No-edit: block harness, mesh param `wh_4x8sp1tp0` (is_fsdp=True, test:113) vs `ring_bh_4x8sp1tp0`
 (is_fsdp=False prod, :114) on stage_1 (:122), `LTX_NUM_LINKS=2` (:510) forces both to 2 links (wh default 4 is BH-illegal,
 A2) isolating is_fsdp. Drift-immune (Batch P): BOTH cells in ONE reservation. WARM_FWD_MS (no tracy), video PCC-gated.
-- [~] **T0 — S1 is_fsdp A/B (job 093451-9, 2026-07-12 09:34Z, IN FLIGHT).** `-k 'video and stage_1 and ckpt_fast and
-  (wh_4x8sp1tp0 or ring_bh_4x8sp1tp0)'`, LTX_NUM_LINKS=2, LTX_PROFILE_ITERS=4, env_sdpa.yaml, timeout 290/250. Predicted
-  null/slower (FSDP adds per-layer weight all-gathers on the even-more-dispatch-bound S1) — but measure-don't-reason
-  (J/L/N/P overturned 4 dead-by-composition calls). Result + receipt next lap.
+- [x] **T0 — S1 is_fsdp A/B (job 093451-9, resolved 2026-07-12 10:00Z): FSDP is +23.5% SLOWER on S1 = NULL/DEAD lever; prod is_fsdp=False optimal.**
+  Drift-immune same-reservation A/B, both cells PASS: is_fsdp=True (wh_4x8sp1tp0) **WARM_FWD_MS 14.37** vs prod is_fsdp=False
+  (ring_bh_4x8sp1tp0) **11.64**, PCC identical 99.9937%. Self-verified the A/B is clean, not confounded: source (test:113-114)
+  = both Ring topology, sp1/tp0; the params differ in num_links (4 vs 2) too, but `LTX_NUM_LINKS=2` neutralizes it and the log
+  confirms **both printed `num_links=2`** ⇒ is_fsdp is the sole live variable. Mirrors S2 Q0 (+10.5%) at ~2× the magnitude —
+  confirms S1 is MORE dispatch-bound (I2 zero BW-sensitivity), so adding per-layer weight all-gathers hurts more. No source edit
+  (param selection only) ⇒ nothing to revert. **Batch T CLOSED — the S1×collective-pattern matrix is now complete; every
+  runtime/env-selectable no-edit axis on both stages has a receipt.**
 
 ## DONE (measured, with the number)
 
@@ -441,4 +445,5 @@ A2) isolating is_fsdp. Drift-immune (Batch P): BOTH cells in ONE reservation. WA
 - **VAE-decode bf8 quant (job 013750-99): un-runnable — SEGFAULT at bf8 conv-weight upload (`from_torch(bfloat8_b)`, vae_ltx.py:193, 1st of 86 tensors).** The one COMPUTE-bound bucket (A1: traced≈untraced 552ms) resists the cheap quant flip; bfloat8_b needs TILE layout the upload path doesn't give. Proper bfp8-VAE = warm-authoring (parked w/ C W-mask fold + G subblock tune). Device recovered clean.
 - **`all_bf8_lofi_sdpa_lofi_fp32acc` @ prod-4x8 video block (job 015415-106): PCC 99.93% PASS, WARM_FWD_MS 16.06 = −4.9% vs F0 16.88 (SUB-GATE, no win).** Closes the block-quant preset space 4/4 measured.
 - **FSDP weight-sharding @ prod-4x8 S2 video block (job 024854-127, drift-immune same-session A/B): is_fsdp=True 18.56ms vs prod is_fsdp=False 16.79ms = +10.5% SLOWER, PCC identical 99.9658%.** FSDP adds per-layer weight all-gathers ⇒ MORE collectives ⇒ slower on the dispatch-bound block. Prod is_fsdp=False optimal; last no-edit collective-pattern axis closed. Adding collectives HURTS as much as removing link/compute helped little ⇒ only cutting collective COUNT (fewer steps = out-of-repo distill) moves the wall. Key finding: **fp32-dest-acc RECOVERS the SDPA-LoFi PCC** Batch J lost (98.57% FAIL → 99.93% PASS), correcting J's "can't recover" reasoning — but speed is null-with-favorable-noise (under 5% gate; increment vs all_bf8_lofi contradicts the isolated-SDPA physics). No preset clears the gate at passing quality ⇒ denoise block stays dispatch-bound.
+- **S1 FSDP weight-sharding @ prod-4x8 S1 video block (job 093451-9, drift-immune same-reservation A/B): is_fsdp=True 14.37ms vs prod is_fsdp=False 11.64ms = +23.5% SLOWER, PCC identical 99.9937%.** The S1 mirror of Q0 (S2 +10.5%): FSDP's per-layer weight all-gathers cost ~2× more on S1 because S1 is more dispatch-bound (I2 zero link-BW-sensitivity vs S2's F2 +16%). Prod is_fsdp=False optimal on both stages. Closes the last empty cell in the S1×collective-pattern matrix ⇒ every runtime/env-selectable no-edit axis across S1/S2/VAE now has a receipt. (The one remaining hole-*looking* candidate, S1-SDPA-chunk, is structurally NOT a per-stage lever: SDPA chunk is a construction-time `SDPAProgramConfig` on the attention block — attention.py:45-46/transformer_block.py:43-44 — shared across both stages, already tuned on the dominant S2 bucket by Batch A; a per-stage chunk needs a source edit, not a no-edit run.)
 - **VAE-decode num_links @ prod-4x8 (job 042140-129, drift-immune same-reservation A/B): NP_LINKS=2 551.85ms vs NP_LINKS=1 643.11ms = +16.5% (2nd link saves 91ms).** The VAE halo/interconnect IS link-BW-sensitive (unlike S1 denoise's 0%, like S2's +16%), decomposing Batch O's data-movement-bound 552ms into halo-interconnect (link-sensitive, HW-capped at 2) + conv/permute (fidelity-insensitive). No win — num_links=2 is prod AND the BH HW cap (A2). Closes the last un-swept no-edit axis (VAE interconnect); every axis on both regimes now has a receipt.
