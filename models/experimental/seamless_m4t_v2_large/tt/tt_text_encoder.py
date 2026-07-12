@@ -87,12 +87,10 @@ class TTSeamlessM4Tv2Encoder:
             packer_l1_acc=True,
         )
 
-        # Sharded-LN program config + shard spec are shape-dependent; we build
-        # them once per (M_tiles, N_tiles) shape and cache the result.  Default
-        # ``LayerNormDefaultProgramConfig`` runs on a single core (~44 us per
-        # call x 49 calls = 22 % of device time); the sharded variant spreads
-        # the reduction across grid_x cores -- typically 8 cores at seq=32 --
-        # for a ~4-5x per-op speedup.
+        # Sharded-LN program config + shard spec are shape-dependent; built once per
+        # (M_tiles, N_tiles) and cached. Default ``LayerNormDefaultProgramConfig`` runs on one core
+        # (~44 us/call × 49 calls = 22 % of device time); the sharded variant spreads the reduction
+        # across grid_x cores (~8 at seq=32) for a ~4-5x per-op speedup.
         self._ln_sharded_cache: dict = {}
         self._tp_ln_fusion_cache: dict = {}
         self._sdpa_pc_cache: dict = {}
@@ -327,10 +325,9 @@ class TTSeamlessM4Tv2Encoder:
         """
         fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
         pc = self._dram_matmul_pc(m, k, n, fused_activation=fused_activation)
-        # Per-chunk matmul accumulates bf16 partials. The short-seq fast path runs a single matmul
-        # on TILE rows (per_core_M=1) at ``LoFi``; the chunked path issues ``ceil(m_actual/TILE)``
-        # matmuls and that LoFi noise compounds. ``HiFi2`` keeps PCC at parity with the short-seq
-        # path on Blackhole.
+        # Per-chunk matmul accumulates bf16 partials: the short-seq fast path runs one matmul on
+        # TILE rows (per_core_M=1) at ``LoFi``; the chunked path issues ``ceil(m_actual/TILE)`` and
+        # that LoFi noise compounds, so ``HiFi2`` keeps PCC at parity with the short-seq path on Blackhole.
         if not hasattr(self, "_chunked_linear_compute_cfg"):
             self._chunked_linear_compute_cfg = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
@@ -931,11 +928,10 @@ class TTSeamlessM4Tv2Encoder:
             )
             return proj
         else:
-            # ``ttnn.reshape`` returns a view onto ``merged_4d`` storage. For short-seq prefill the
-            # next matmul (DRAM-sharded fast path) consumes ``merged`` synchronously, so deallocating
-            # ``merged_4d`` early is safe. The long-seq chunked matmul makes multiple intermediate
-            # allocations before consuming ``merged``, which can overwrite the freed view; keep
-            # ``merged_4d`` alive until after the projection.
+            # ``ttnn.reshape`` returns a view onto ``merged_4d`` storage. Short-seq prefill's next
+            # matmul (DRAM-sharded fast path) consumes ``merged`` synchronously, so freeing
+            # ``merged_4d`` early is safe; the long-seq chunked matmul allocates intermediates before
+            # consuming ``merged`` and could overwrite the freed view, so keep ``merged_4d`` alive.
             merged = ttnn.reshape(merged_4d, (batch, seq_q, hidden_size))
             proj = self._linear(
                 merged,

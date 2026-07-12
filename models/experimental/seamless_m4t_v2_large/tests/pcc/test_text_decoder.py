@@ -149,7 +149,6 @@ def _run_decoder_prefill_decode_pcc(
     # Cache horizon: seed + decode steps, with headroom. init pads this to a 256 chunk internally.
     max_seq_len = max(64, logical_dec + decode_steps + 8)
 
-    # --- HF reference: incremental decode with use_cache=True ---
     # Prefill the LOGICAL seed against the tile-padded encoder (matches TT cross-attn cache K).
     p0 = next(decoder.parameters())
     enc_hidden = aligned.encoder_hidden_states.to(device=p0.device, dtype=p0.dtype)
@@ -195,7 +194,6 @@ def _run_decoder_prefill_decode_pcc(
         past = step_out.past_key_values
         tok = _greedy_last(step_out.last_hidden_state)
 
-    # --- TT path: prefill cache-fill, then teacher-forced decode loop ---
     params = create_text_decoder_parameters(decoder, device=mesh_device)
     tt_dec = TTSeamlessM4Tv2Decoder(
         mesh_device,

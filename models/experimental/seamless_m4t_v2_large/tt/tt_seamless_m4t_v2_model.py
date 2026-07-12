@@ -63,10 +63,6 @@ _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MIN = 1920
 _SPEECH_ENC_PREWARM_SKIP_DUMMY_ENCODE_MAX = 2560
 _SPEECH_ENC_PREWARM_JIT_PROXY_BUCKET = 3072
 
-# ---------------------------------------------------------------------------
-# Output dataclasses
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class SeamlessGenerateTimings:
@@ -303,11 +299,6 @@ def _tt_speech_enc_attn(sub_lens_tt: ttnn.Tensor, enc_seq: int, device: ttnn.Dev
     return mask_u32
 
 
-# ---------------------------------------------------------------------------
-# Host-only helpers (string operations on ``generation_config`` dictionaries)
-# ---------------------------------------------------------------------------
-
-
 def _ttnn_ids_from_list(rows: List[List[int]], device: ttnn.Device) -> ttnn.Tensor:
     """Build a small ``[B, S]`` uint32 ttnn tensor from a Python list of int rows."""
     bsz = len(rows)
@@ -490,11 +481,6 @@ def _t2u_attention_mask_uncached(real_len: int, padded_dec_seq: int, device: ttn
     return out_u32
 
 
-# ---------------------------------------------------------------------------
-# Main model class
-# ---------------------------------------------------------------------------
-
-
 class TTSeamlessM4Tv2Model:
     """TTNN port of HF ``SeamlessM4Tv2Model``. See module docstring for scope.
 
@@ -630,10 +616,6 @@ class TTSeamlessM4Tv2Model:
         self._decode_trace_kernels_warmed = False
         self._t2u_attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
-    # ------------------------------------------------------------------
-    # Speech-path conv prewarm (T2U + vocoder)
-    # ------------------------------------------------------------------
-
     def prewarm_t2u_conv1d_weights(self, *, char_len: int, padded_unit_seq: int) -> None:
         """Prepare T2U duration + decoder conv weights (host upload only, no forward)."""
         self.t2u.prewarm_conv1d_weights(char_len=int(char_len), padded_unit_seq=int(padded_unit_seq))
@@ -738,16 +720,9 @@ class TTSeamlessM4Tv2Model:
         if not preserve_vocoder:
             self.vocoder._conv1d_prepared_cache.clear()
             self.vocoder._matmul_pc_cache.clear()
-        # Evict large speech-encoder L1 attention-mask cache entries that would clash with the
-        # T2U encoder's static CB region (ending at ~869 KB).  For a seq_len N the two masks
-        # ([1,1,N,N] chunk + additive) together occupy ~4*N²/110 bytes of L1 per bank starting
-        # at DATA_BUFFER_SPACE_BASE (~220 KB).  The clash region begins around N ≥ 4096 (where
-        # the high-water mark reaches ~835 KB, inside the 869 KB CB limit).  Shorter sequences
-        # (≤ 2048 → ~375 KB peak) are safe and their cached entries are left intact so the next
-        # speech-encoder call can reuse them without rebuilding.
-        # The clash is only observed on single-device BH (num_devices == 1); multi-device
-        # configurations such as BH QB (num_devices == 4) have sufficient L1 headroom and do
-        # not require this eviction.
+        # Evict large speech-encoder L1 attn-mask cache entries (chunk [1,1,N,N] + additive) that clash
+        # with the T2U encoder's static CB region (~869 KB) at N >= 4096; shorter seqs are safe and kept
+        # for reuse. Only needed on single-device BH (num_devices == 1); BH QB (4 devices) has headroom.
         _L1_MASK_CLASH_SEQ_THRESHOLD = 4096
         _needs_eviction = self.device.get_num_devices() == 1
         if _needs_eviction:
@@ -828,10 +803,6 @@ class TTSeamlessM4Tv2Model:
         self._release_speech_generate_runtime()
         ttnn.synchronize_device(self.device)
         return wav_tt, lengths_tt
-
-    # ------------------------------------------------------------------
-    # Internal pieces
-    # ------------------------------------------------------------------
 
     def _lm_head(self, dec_out: ttnn.Tensor) -> ttnn.Tensor:
         return ttnn.linear(
@@ -1308,13 +1279,9 @@ class TTSeamlessM4Tv2Model:
         batch = int(input_features.shape[0])
         seq_in = int(input_features.shape[1])
 
-        # Bucket the mel-sequence length so the (shape-specialized) speech-encoder kernels are reused
-        # across calls whose real length only jitters (e.g. EOS-terminated audio that varies a few
-        # frames run-to-run). Without this, every distinct length triggers a full cold JIT recompile
-        # (~7-20 s); padding to a coarse grid makes nearby lengths share one compiled program (warm
-        # disk cache → ~1-2 s). Padded frames are masked (mask=0) so ``_subsampled_lens_dev`` (counts
-        # real 1s) and the output trim in ``_speech_encoder_trim_pad_and_cross_attn`` ignore them —
-        # the encoder output for the real frames is unchanged.
+        # Bucket the mel-sequence length so shape-specialized speech-encoder kernels are reused across
+        # run-to-run length jitter instead of cold-recompiling each distinct length (~7-20 s vs ~1-2 s
+        # warm). Padded frames are masked (mask=0) so length counting and output trim ignore them.
         real_mask = attention_mask if attention_mask is not None else ones_mask(batch, seq_in, self.device)
         bucketed = ((seq_in + _SPEECH_ENC_SEQ_BUCKET - 1) // _SPEECH_ENC_SEQ_BUCKET) * _SPEECH_ENC_SEQ_BUCKET
         owned_feats = bucketed != seq_in
@@ -2427,10 +2394,6 @@ class TTSeamlessM4Tv2Model:
         )
         return next_uint, next_id_int
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def generate(
         self,
         input_ids: Optional[ttnn.Tensor] = None,
@@ -2512,13 +2475,11 @@ class TTSeamlessM4Tv2Model:
                 if lang_map is None or tgt_lang not in lang_map:
                     raise ValueError(f"`tgt_lang={tgt_lang}` missing from generation_config.{key}.")
 
-        # ---- First encode ----
         if input_features is not None:
-            # Drop prior T2U/vocoder/decode-trace state so speech encode has L1 headroom, but do
-            # **not** ``clear_runtime_program_cache()`` here: wiping speech-encoder prep + the
-            # device program cache after ``prewarm_speech_encoder`` (or forcing a cold encode)
-            # collapses free-running S2TT/S2ST/ASR at mel 1024 into token loops. E2E teacher-forced
-            # gates prewarm then ``_encode_speech`` without that clear and stay accurate.
+            # Drop prior T2U/vocoder/decode-trace state for L1 headroom, but do **not**
+            # ``clear_runtime_program_cache()`` here: wiping speech-encoder prep + program cache after
+            # ``prewarm_speech_encoder`` (or a cold encode) collapses free-running S2TT/S2ST/ASR at mel
+            # 1024 into token loops. E2E teacher-forced gates run prewarm + ``_encode_speech`` and stay accurate.
             self.t2u.release_forward_trace()
             self.vocoder.release_forward_trace()
             self.release_generation_runtime()
@@ -2535,7 +2496,6 @@ class TTSeamlessM4Tv2Model:
 
         reuse_text_sequences = text_sequences is not None
 
-        # ---- Seed decoder sequence (skipped when reusing T2TT ``text_sequences``) ----
         seed_tt: Optional[ttnn.Tensor] = None
         if not reuse_text_sequences:
             # ``tgt_lang`` overrides ``decoder_input_ids`` (HF semantics in ``SeamlessM4Tv2Model.generate``).
@@ -2550,7 +2510,6 @@ class TTSeamlessM4Tv2Model:
             else:
                 raise ValueError("Provide `decoder_input_ids` or `tgt_lang` for TT generate.")
 
-        # ---- Greedy decode loop (device decode; one scalar readback per step for EOS) ----
         # Track token ids on host to avoid per-step ``ttnn.concat`` reallocations; materialize
         # ``sequences_tt`` once after the loop (or for T2U / return).
         if reuse_text_sequences:
@@ -2652,11 +2611,9 @@ class TTSeamlessM4Tv2Model:
                 else:
                     decode_steps_remaining = max_new_tokens - 1
 
-            # 2CQ event state — initialized once before the decode loop so the CQ0-done
-            # signal persists across iterations.  ``_2cq_op_event`` represents "CQ0 has
-            # finished the previous trace; CQ1 is safe to overwrite the decode buffers."
-            # After each execute_trace we record a fresh op_event so the next iteration
-            # waits for the correct execution boundary.
+            # 2CQ event state, initialized once before the loop so the CQ0-done signal persists across
+            # iterations. ``_2cq_op_event`` means "CQ0 finished the previous trace; CQ1 may overwrite the
+            # decode buffers"; a fresh op_event is recorded after each execute_trace.
             _2cq_op_event = None
             if use_decode_trace and use_2cq and not do_sample:
                 # CQ0 is idle after prefill; record the initial "done" event.
@@ -2835,7 +2792,6 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(gen_causal)
             ttnn.deallocate(gen_cross)
 
-        # ---- Text-only generation: return tokens ----
         if not generate_speech:
             self.release_text_decoder_decode_trace()
             ttnn.deallocate(enc_tt)
@@ -2858,7 +2814,6 @@ class TTSeamlessM4Tv2Model:
         self._clear_decode_and_t2u_programs(preserve_vocoder=True)
         ttnn.synchronize_device(self.device)
 
-        # ---- Speech generation: re-encode for speech modality (HF parity), then T2U + vocoder ----
         gc = self.generation_config
         pad_token_id = int(gc.pad_token_id)
         eos_id = int(getattr(gc, "eos_token_id", 3))
@@ -2872,11 +2827,9 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(sequences_tt)
             sequences_tt = _ttnn_ids_from_list([seq_host], self.device)
         attn_enc = kwargs_speech.get("attention_mask", attn_tt_text)
-        # Reuse the first-pass encoder output for the T2U decoder-hidden pass — HF parity
-        # (``text_generation_output.encoder_hidden_states[-1]``). The speech encoder is
-        # deterministic, so re-encoding the same features+mask just reproduces ``enc_tt`` bit for
-        # bit; skipping it saves a full speech-encoder forward (~8 s on the demo's S2ST). Only
-        # re-encode if the speech path was handed a *different* attention mask than the first pass.
+        # Reuse the first-pass encoder output for the T2U decoder-hidden pass (HF parity with
+        # ``encoder_hidden_states[-1]``). The speech encoder is deterministic, so re-encoding reproduces
+        # ``enc_tt`` bit-for-bit (~8 s wasted); only re-encode if handed a *different* attention mask.
         if input_features is not None and attn_enc is not attn_tt_text:
             ttnn.deallocate(enc_tt)
             if enc_attn_owned:
@@ -2896,12 +2849,9 @@ class TTSeamlessM4Tv2Model:
         if enc_attn_owned2:
             ttnn.deallocate(enc_attn_tt2)
 
-        # The text-decoder's final layer-norm returns an L1 interleaved tensor.  At long mel
-        # inputs (e.g. 4096 frames) the decode-trace cross-SDPA programs leave the L1 allocator's
-        # high-water mark near 833 KB; ``dec_hidden_padded`` is then allocated there — inside
-        # the T2U encoder's first-matmul static CB region (ends at ~869 KB) — causing a
-        # TT_THROW on CB validation.  Moving to DRAM here prevents the clash regardless of how
-        # high the preceding trace drove the L1 watermark.
+        # The text-decoder final layer-norm returns an L1 interleaved tensor. At long mel (e.g. 4096),
+        # the decode-trace cross-SDPA L1 high-water (~833 KB) puts it inside the T2U first-matmul static
+        # CB region (~869 KB) -> TT_THROW on CB validation; move to DRAM to avoid the clash.
         if dec_hidden_padded.memory_config().buffer_type == ttnn.BufferType.L1:
             _dec_hidden_dram = ttnn.to_memory_config(dec_hidden_padded, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(dec_hidden_padded)
@@ -2990,17 +2940,11 @@ class TTSeamlessM4Tv2Model:
                 (1, 1, 1),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        # Greedy unit ids. Untilize to ROW_MAJOR so ``ttnn.argmax`` takes the parallel *multicore*
-        # last-dim path instead of the single-core TILE path: the T2U argmax runs over the whole
-        # ``[B, unit_seq, vocab]`` at once and the single-core kernel serializes over ``unit_seq``
-        # (tens of ms for long speech — ~38x slower). The multicore kernel reduces the *physical*
-        # tile-padded width, so pad the vocab to a multiple of 32 with ``-1e9`` first; otherwise the
-        # garbage pad columns (10082 -> 10112) can win the argmax and corrupt unit ids. Verified
-        # bit-identical to the TILE argmax across tile-aligned and non-aligned ``unit_seq``.
-        #
-        # Untilize is also row-blocked (same ``_T2U_ARGMAX_ROW_BLOCK`` as argmax): a single untilize
-        # of full ``unit_seq × V`` is the dominant handoff datamove; per-block untilize+argmax keeps
-        # the same L1 CB bound and is bit-identical.
+        # Greedy unit ids. Untilize to ROW_MAJOR so ``ttnn.argmax`` uses the multicore last-dim path
+        # (the single-core TILE path serializes over ``unit_seq`` — ~38x slower for long speech). The
+        # multicore kernel reduces the *physical* tile-padded width, so pad vocab to a multiple of 32
+        # with ``-1e9`` first, else garbage pad columns win the argmax. Row-blocked (``_T2U_ARGMAX_ROW_BLOCK``)
+        # to bound the untilize L1 CB; verified bit-identical to the TILE argmax.
         v_t2u = int(t2u_logits_tt.shape[-1])
         v_t2u_pad = ((v_t2u + 31) // 32) * 32
         seq_rows = int(t2u_logits_tt.shape[-2])

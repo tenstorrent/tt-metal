@@ -116,11 +116,6 @@ def _demo_src_text() -> str:
     return " ".join(sents[:n]) if sents else _DEFAULT_SRC_TEXT
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _weights_dir() -> Path:
     env = os.environ.get("SEAMLESS_M4T_V2_WEIGHTS")
     if env:
@@ -499,11 +494,6 @@ def _process_jit_preflight(
     print("  Cold-start preflight: done.")
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-
 def main() -> None:
     weights_dir = _weights_dir()
     path = os.fspath(weights_dir)
@@ -517,7 +507,7 @@ def main() -> None:
     t2u_cfg = hf_model.t2u_model.config
     sample_rate = int(getattr(cfg, "sampling_rate", 16000))
 
-    # ---- Single English prompt drives T2TT/T2ST (optional sentence cap via env) ----
+    # Single English prompt drives T2TT/T2ST (optional sentence cap via env)
     src_text = _demo_src_text()
     if src_text != _DEFAULT_SRC_TEXT:
         print(f"  Text input segmented: using first {os.environ.get('SEAMLESS_DEMO_MAX_SENTENCES')} sentence(s)")
@@ -590,9 +580,6 @@ def main() -> None:
         f"{preamble_wav.size / sample_rate:.2f}s, mel_frames={mel_frames})"
     )
 
-    # =========================================================================
-    # 1. T2TT — Text-to-Text Translation (English → Hindi)
-    # =========================================================================
     _print_header(1, "Text-to-Text Translation", "T2TT", "eng", tgt_translate)
     print(f"  Input text  ({src_lang}): {src_text}")
     with _isolated_task_session(**session_kw) as (device, tt_model):
@@ -617,9 +604,6 @@ def main() -> None:
         ttnn.deallocate(t2tt_out.sequences)
     print(f"  Output text ({tgt_translate}): {t2tt_text}")
 
-    # =========================================================================
-    # 2. T2ST — Text-to-Speech Translation (English text → Hindi speech)
-    # =========================================================================
     _print_header(2, "Text-to-Speech Translation", "T2ST", "eng", tgt_translate)
     print(f"  Input text  ({src_lang}): {src_text}")
     with _isolated_task_session(**session_kw) as (device, tt_model):
@@ -660,9 +644,6 @@ def main() -> None:
     )
     print(f"  Saved to: {T2ST_WAV}")
 
-    # =========================================================================
-    # 3. S2TT — Speech-to-Text Translation (English speech → Hindi text)
-    # =========================================================================
     _print_header(3, "Speech-to-Text Translation", "S2TT", speech_src_lang, tgt_s2tt)
     print(f"  Input audio ({speech_src_lang}): {preamble_path} ({sample_rate} Hz)")
     with _isolated_task_session(**session_kw) as (device, tt_model):
@@ -689,9 +670,6 @@ def main() -> None:
         ttnn.deallocate(s2tt_out.sequences)
     print(f"  Output text ({tgt_s2tt}): {s2tt_text}")
 
-    # =========================================================================
-    # 4. S2ST — Speech-to-Speech Translation (English speech → Spanish speech)
-    # =========================================================================
     _print_header(4, "Speech-to-Speech Translation", "S2ST", speech_src_lang, tgt_speech_other)
     print(f"  Input audio ({speech_src_lang}): {preamble_path} ({sample_rate} Hz)")
     with _isolated_task_session(**session_kw) as (device, tt_model):
@@ -727,9 +705,6 @@ def main() -> None:
     print(f"  Output audio ({tgt_speech_other}, {sample_rate} Hz, {s2st_n_samples} samples)")
     print(f"  Saved to: {S2ST_WAV}")
 
-    # =========================================================================
-    # 5. ASR — Automatic Speech Recognition (English speech → English text)
-    # =========================================================================
     _print_header(5, "Automatic Speech Recognition", "ASR", speech_src_lang, tgt_asr)
     print(f"  Input audio ({speech_src_lang}): {preamble_path} ({sample_rate} Hz)")
     print("  Note: ASR transcribes the WAV (speech→text), not any intermediate text string.")

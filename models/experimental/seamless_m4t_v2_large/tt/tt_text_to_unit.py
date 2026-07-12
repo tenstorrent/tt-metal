@@ -478,12 +478,10 @@ def _linear_dram_chunked(
     elif len(x_inter.shape) != 2:
         x_inter = ttnn.reshape(x_inter, (m_actual, k))
 
-    # Move x_inter to DRAM if it is in L1 so that any L1 interleaved chunk sliced from it
-    # can be freed before the matmul program is dispatched.  The DRAM-sharded matmul
-    # (MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig) places the width-sharded
-    # activation on DRAM-channel cores, not on the compute cores.  Leaving x_inter (or
-    # chunk) on compute cores when the program is dispatched triggers
-    # validate_circular_buffer_region to report a clash with the static CB region.
+    # Move x_inter to DRAM if in L1 so sliced L1 chunks free before matmul dispatch. The DRAM-sharded
+    # matmul (MatmulMultiCoreReuseMultiCastDRAMSharded) puts the width-sharded activation on
+    # DRAM-channel cores, not compute cores; an L1 buffer left on compute cores at dispatch trips
+    # validate_circular_buffer_region (clash with the static CB region).
     if x_inter.memory_config().buffer_type == ttnn.BufferType.L1:
         _x_inter_dram = ttnn.to_memory_config(x_inter, ttnn.DRAM_MEMORY_CONFIG)
         if x_inter_from_sharded:
@@ -502,12 +500,10 @@ def _linear_dram_chunked(
         if chunk_rows < m:
             chunk = _pad_token_rows(chunk, chunk_rows, m)
         chunk_sharded = ensure_l1_width_sharded_activation(device, chunk, m, k, n)
-        # Free the interleaved chunk before dispatching the matmul.  The width-sharded copy
-        # (chunk_sharded) lives on the DRAM-channel cores used by MatmulMultiCoreReuseMultiCastDRAMSharded;
-        # the interleaved chunk lives on the compute cores.  Holding the interleaved buffer alive while
-        # the matmul program is compiled/dispatched causes validate_circular_buffer_region to see a
-        # dynamic L1 allocation on the compute cores that falls below the program's CB region end,
-        # raising "Statically allocated circular buffers clash with L1 buffers".
+        # Free the interleaved chunk before dispatch: chunk_sharded lives on the DRAM-channel cores
+        # used by MatmulMultiCoreReuseMultiCastDRAMSharded, the interleaved chunk on compute cores.
+        # Holding it alive during compile/dispatch makes validate_circular_buffer_region see a dynamic
+        # L1 alloc below the program's CB region end ("Statically allocated circular buffers clash with L1 buffers").
         if chunk_sharded is not chunk and chunk is not x_inter:
             ttnn.deallocate(chunk)
             chunk = None
@@ -2784,11 +2780,10 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
 
         char_w = int(char_input_ids.shape[1])
         char_seq_total = int(sum(cc_list))
-        # Set _long_seq_mc early so _layer_norm inside _duration_predictor uses DRAM output
-        # when char_len > TILE.  The final update at line ~2810 will refine this with unit_seq
-        # once duration counts are known; this early assignment prevents the first forward()
-        # call from using None (L1 layer-norm) which can land at the L1 address that clashes
-        # with the conv1d program's CB region.
+        # Set _long_seq_mc early so _layer_norm in _duration_predictor uses DRAM output when
+        # char_len > TILE (refined later once unit_seq duration counts are known). Prevents the first
+        # forward() using None (L1 layer-norm), which can land at an L1 address that clashes with the
+        # conv1d program's CB region.
         if not full_trace_prebuf:
             self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if char_seq_total > TILE else None
         if full_trace_prebuf:

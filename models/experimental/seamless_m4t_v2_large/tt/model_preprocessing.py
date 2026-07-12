@@ -361,9 +361,6 @@ def _fused_kv_pair(
     }
 
 
-# ---------------------------------------------------------------------------
-# Tensor-parallel (TP) weight-sharding helpers
-# ---------------------------------------------------------------------------
 # These helpers distribute weight matrices across ``tp`` devices using
 # ``ShardTensorToMesh(device, dim=0)``.  Each device receives a different
 # row-slice so all devices participate in the matrix multiply; a subsequent
@@ -374,7 +371,6 @@ def _fused_kv_pair(
 #   row-parallel:    input dim split  → each device: [in//tp, out]
 #
 # For TP == 1, these helpers fall back to the existing single-device helpers.
-# ---------------------------------------------------------------------------
 
 
 def _tp_col_parallel_pair(

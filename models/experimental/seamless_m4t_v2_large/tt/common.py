@@ -1234,14 +1234,13 @@ def all_reduce_sum_replicate(
 # Encoder single-chip (tp==1) residual L1/DRAM threshold; full residual stays in L1 up to this many
 # token rows. Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder attention is full-S (bidirectional).
 ENCODER_L1_MICROBATCH_ROWS = MATMUL_1D_SEQ_THRESHOLD
-# TP block-sharded matmul row-chunk size: the linear runs SINGLE-SHOT up to this many token rows,
-# and row-chunks above it. Set to 2048 (not the 4096 design-max): a single-shot block-sharded matmul
-# at M=4096 makes per-core circular buffers so large they clash with the resident interleaved
-# activation on BH-QB L1 in the full-model demo (matmul TT_THROW "static circular buffers clash with
-# L1 buffers" at seq 4096 — isolated PCC passes, but the demo's co-resident decode KV/trace tips it
-# over). Chunking 4096 into 2×2048 halves the per-core CB footprint and clears the clash — the same
-# reason the decoder prefill uses ``_DECODER_PREFILL_BS_CHUNK_M = 2048``. 2048 is still large enough to
-# keep block-sharded FLOPs efficiency; only the 4096 ceiling pays the extra chunk + concat.
+# TP block-sharded matmul row-chunk size: SINGLE-SHOT up to this many token rows, row-chunks above.
+# 2048 (not the 4096 design-max): single-shot BS matmul at M=4096 makes per-core CBs large enough to
+# clash with the resident interleaved activation on BH-QB L1 in the full-model demo (matmul TT_THROW
+# "static circular buffers clash with L1 buffers" at seq 4096 — isolated PCC passes, but co-resident
+# decode KV/trace tips it over). Chunking 4096→2×2048 halves the per-core CB footprint and clears the
+# clash (same reason decoder prefill uses ``_DECODER_PREFILL_BS_CHUNK_M = 2048``); 2048 still keeps
+# block-sharded FLOP efficiency, only the 4096 ceiling pays the extra chunk + concat.
 ENCODER_TP_BS_CHUNK_DEFAULT = 2048
 # Decoder / shared all-reduce helper: spill L1→DRAM at this many rows.
 ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256

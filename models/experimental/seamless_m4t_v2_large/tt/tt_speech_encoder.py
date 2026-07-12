@@ -32,7 +32,6 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     get_tp,
 )
 
-
 # Match ``torch.finfo(torch.bfloat16).min`` used by HF attention masking.
 _BF16_ATTN_MASK_MIN = float(torch.finfo(torch.bfloat16).min)
 
@@ -613,12 +612,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
     ) -> ttnn.Tensor:
         ch = self.hidden_size if channel_size is None else channel_size
         n_tiles = ch // 32
-        # Long-audio: bypass the sharded LN path. The block-sharded LN keeps ~150 KB/core of
-        # persistent L1 across the rest of the conformer layer, which collides with conv1d
-        # kernel CB allocations at seq > _LONG_AUDIO_RES_DRAM_THRESHOLD (Blackhole L1 is 1.5 MB).
-        # Plain ``ttnn.layer_norm`` runs on DRAM and adds no persistent L1 pressure.
-        # ``residual_input_tensor`` is forwarded to ``ttnn.layer_norm`` in this path — the fused
-        # add+LN kernel saves one DRAM add dispatch per call.
+        # Long-audio (seq > _LONG_AUDIO_RES_DRAM_THRESHOLD): bypass sharded LN — its ~150 KB/core
+        # persistent L1 across the conformer layer collides with conv1d kernel CBs (Blackhole L1 is
+        # 1.5 MB). Plain DRAM ``ttnn.layer_norm`` adds no persistent L1, and forwarding
+        # ``residual_input_tensor`` fuses add+LN (saves one DRAM add dispatch per call).
         if use_sharded and seq_len >= _LONG_AUDIO_RES_DRAM_THRESHOLD:
             x_in = x
             if ttnn.is_sharded(x):
@@ -1413,11 +1410,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
         s_mid = ttnn.add(s_mid, win, memory_config=memory_config)
         ttnn.deallocate(win)
 
-        # Softmax is invariant to a per-row constant added across the WHOLE row. The rel bias is a
-        # per-row constant on each side of the band (c_left left of it, c_right right of it), so subtract
-        # the LARGER side's constant from the entire row: that (widest) region's bias becomes 0 — its
-        # scores pass through with no broadcast-add — while the window and the smaller side carry the
-        # adjusted bias. Softmax-exact (not bit-exact); gate on PCC.
+        # Softmax is invariant to a per-row constant across the whole row. The rel bias is a per-row
+        # constant on each side of the band (c_left/c_right), so subtract the LARGER side's from the
+        # whole row: its (widest) region passes through bias-free while the window and smaller side
+        # carry the adjusted bias. Softmax-exact (not bit-exact); gate on PCC.
         left_w = kw0
         right_w = seq_len - kw1
         drop_right = right_w >= left_w
@@ -1567,10 +1563,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         mc = self._mc_act(seq_len=seq_len)
         query_chunk = self._f32_softmax_query_chunk(seq_len)
         # The numeric-stable softmax CB is width-bound (S wide); in f32 at S≈4096 it overflows L1
-        # against a persistent TP>1 L1 buffer. Where that happens, run the softmax on a bf16 copy of
-        # the (f32-accurate) scores instead — the f32 QK/bias/mask above is the precision win, so a
-        # plain bf16 softmax there still clears the ASR WER. Single-device (whole L1) and shorter seq
-        # keep the full-f32 softmax.
+        # against a persistent TP>1 L1 buffer. There, run the softmax on a bf16 copy of the
+        # (f32-accurate) scores — the f32 QK/bias/mask above is the precision win, so a bf16 softmax
+        # still clears the ASR WER. Single-device (whole L1) and shorter seq keep the full-f32 softmax.
         f32_softmax_fits = not (self._tp > 1 and seq_len >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD)
         # Band-window the relative-position gather only for the longest audio (where it dominated
         # device time); mid-range keeps the full-S fused gather it was validated with.
@@ -2646,10 +2641,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
             batch=batch,
             seq_len=int(h.shape[1]),
             # Final output LN, post-adapter (seq ≈ input/8). The block-sharded path's persistent L1 CB
-            # clashes once the post-adapter seq exceeds ~512 (input ≳4096). Sharded vs interleaved LN
-            # differ at ~1e-7 (NOT bit-identical), so keep sharded up to the clash boundary — leaving
-            # the demo / ≤3584-input decode path untouched — and switch to (clash-free) interleaved
-            # only beyond, where there's no prior baseline to preserve.
+            # clashes once post-adapter seq exceeds ~512 (input ≳4096); sharded vs interleaved differ
+            # at ~1e-7 (NOT bit-identical), so keep sharded up to the clash boundary (demo / ≤3584-input
+            # untouched) and switch to clash-free interleaved only beyond, where no baseline exists.
             use_sharded=(int(h.shape[1]) <= 512),
         )
 

@@ -70,10 +70,9 @@ DEFAULT_LOG = OUTPUT_DIR / "perf_sweep.txt"
 STORY_SOURCE = _REPO_ROOT / "models/tt_transformers/tests/tale-of-two-cities.txt.bz2"
 LONG_AUDIO_WAV = OUTPUT_DIR / "long_speech_input_librispeech.wav"
 PREAMBLE_LONG_AUDIO_WAV = OUTPUT_DIR / "long_speech_input_preamble.wav"
-# Non-repeating English source for speech sweeps: distinct LibriSpeech utterances (same dataset the
-# whisper demo uses). The old repeated-preamble loop gave short, degenerate references (~26 words at
-# 512 mel), making WER hypersensitive to a couple of near-tie token flips; concatenating distinct
-# utterances yields a long, varied translation so the WER denominator grows and smooths out.
+# Non-repeating English source for speech sweeps: distinct LibriSpeech utterances (whisper demo's dataset).
+# The old repeated-preamble loop gave short degenerate refs (~26 words @ 512 mel), making WER hypersensitive
+# to near-tie token flips; distinct utterances give a long varied ref so the WER denominator grows and smooths.
 LIBRISPEECH_DATASET = "hf-internal-testing/librispeech_asr_dummy"
 # S2ST WER refs: mel <= this use the preamble (its <1 s opening translates cleanly, so short refs
 # aren't degenerate); longer mel use LibriSpeech (coherent, non-repeating, long enough to be stable).
@@ -88,11 +87,10 @@ TGT_ASR = "eng"
 SEQ_LEN_MIN = 32
 SEQ_LEN_MAX = 4096
 
-# Multiple speech ``generate()`` calls in one device session (warmup + timed) leave decode-trace
-# state that collapses S2TT/S2ST/ASR on the timed run (token loops / garbage text). Observed on
-# P150 from mel 1024 upward and on BH-QB notably at 2048 mel. Warm on a throwaway device, then
-# time on a fresh session (same pattern as cold-start preflight). Timed session still runs
-# speech-encoder prewarm; ``generate()`` must not wipe that prep via ``clear_runtime_program_cache``.
+# Multiple speech ``generate()`` calls in one session (warmup + timed) leave decode-trace state that
+# collapses S2TT/S2ST/ASR on the timed run (token loops / garbage; P150 from mel 1024, BH-QB at 2048 mel).
+# Warm on a throwaway device, then time on a fresh session (as in cold-start preflight); its speech-encoder
+# prewarm must survive — ``generate()`` must not wipe it via ``clear_runtime_program_cache``.
 _SPEECH_SPLIT_WARMUP_MEL = 1024
 
 
@@ -102,11 +100,6 @@ def _weights_dir() -> Path:
     if env:
         return Path(env).expanduser().resolve()
     return ensure_seamless_m4t_v2_large_weights()
-
-
-# ---------------------------------------------------------------------------
-# Input preparation
-# ---------------------------------------------------------------------------
 
 
 def _normalize_story_text(raw: str) -> str:
@@ -226,10 +219,9 @@ def ensure_long_audio(
     return wav, dest
 
 
-# A Tale of Two Cities opens with this line; anchoring here skips the Project Gutenberg
-# header + title + CONTENTS/TOC boilerplate (degenerate for translation). ~30k chars is > 4096
-# tokens (~3.8 chars/token), so the sweep uses one CONSECUTIVE coherent span with NO repetition —
-# the old ``story[:4096]`` was the TOC boilerplate, looped, which produced degenerate translations.
+# "A Tale of Two Cities" opens with this line; anchoring here skips the Project Gutenberg header/title/TOC
+# boilerplate (degenerate for translation). ~30k chars > 4096 tokens (~3.8 chars/token), so the sweep uses one
+# consecutive coherent span with no repetition (the old ``story[:4096]`` was looped TOC boilerplate → degenerate).
 _STORY_PROSE_ANCHOR = "It was the best of times"
 _STORY_PROSE_MAX_CHARS = 30000
 
@@ -283,11 +275,6 @@ def sequence_lengths(min_len: int, max_len: int) -> list[int]:
         lengths.append(n)
         n *= 2
     return lengths
-
-
-# ---------------------------------------------------------------------------
-# Logging / formatting
-# ---------------------------------------------------------------------------
 
 
 class PerfLog:
@@ -404,11 +391,6 @@ def _seq_len_header(seq_len: int) -> list[str]:
         f"  Sequence length: {seq_len}",
         "=" * 78,
     ]
-
-
-# ---------------------------------------------------------------------------
-# Per-length benchmark
-# ---------------------------------------------------------------------------
 
 
 def _speech_throwaway_warmups(
@@ -688,11 +670,6 @@ def _run_five_tasks_at_seq_len(
         _task_failed("ASR", exc)
 
     return perf_tt, failed_tasks
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

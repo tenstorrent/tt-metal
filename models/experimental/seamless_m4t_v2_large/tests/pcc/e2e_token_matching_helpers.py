@@ -63,12 +63,11 @@ SPEECH_TOP5_THRESHOLD = 0.95
 # Short mel (≤64) is skipped entirely via ``maybe_skip_short_speech_input``.
 S2ST_MIN_TOKEN_REF_STEPS = 1
 
-# Below this many teacher-forced steps, the top-1 fraction is dominated by sampling granularity:
-# with n steps the only achievable values are k/n, so a single near-tie flip (TT picks HF's #2,
-# still within top-5) costs 1/n. e.g. n=3 → {0, 33, 67, 100}% only, so the 87% gate is unreachable
-# except at a perfect 100%. Below this floor we keep top-1 INFORMATIONAL (logged/recorded) and gate
-# on top-5 only (which still catches genuine divergence — a garbage encoder tanks top-5 too).
-# Longer points (e.g. the len1024 speech-encoder bug at 68 steps) keep the full top-1 gate.
+# Below this many teacher-forced steps, top-1 is dominated by sampling granularity: with n steps only
+# k/n values are achievable, so one near-tie flip (TT picks HF's #2, still in top-5) costs 1/n — e.g.
+# n=3 → {0, 33, 67, 100}% only, so the 87% gate is unreachable except at a perfect 100%. Below this floor
+# we keep top-1 INFORMATIONAL (logged/recorded) and gate on top-5 only (still catches divergence — a
+# garbage encoder tanks top-5). Longer points (e.g. the len1024 speech-encoder bug at 68 steps) keep top-1.
 MIN_TOP1_GATE_STEPS = 8
 
 
@@ -353,10 +352,6 @@ def run_speech_e2e_token_accuracy(
         finally:
             tt_model.release_generation_runtime()
 
-
-# ---------------------------------------------------------------------------
-# ISL sweep utilities (token-matching + logit-PCC sweeps)
-# ---------------------------------------------------------------------------
 
 SWEEP_EVAL_STEPS = 128
 SANITY_SWEEP_LENGTHS = (32, 64, 128)

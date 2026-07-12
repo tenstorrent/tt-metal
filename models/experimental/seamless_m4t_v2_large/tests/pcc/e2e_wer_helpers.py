@@ -69,19 +69,13 @@ from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import (
     warm_text_decoder_kv_cache_prefill,
 )
 
-# ---------------------------------------------------------------------------
-# WER thresholds and sweep lengths
-# ---------------------------------------------------------------------------
-
 # WER-sweep tasks: T2ST (text in), S2ST (speech in → speech out), ASR (speech in → text out).
 WER_SWEEP_TASKS = ("t2st", "s2st", "asr")
 
-# Target language per WER-sweep task. T2ST here targets SPANISH (not the token-matching suite's Hindi)
-# so the Whisper round-trip is a FAITHFUL metric across both speech-output tasks: whisper-large-v3
-# transcribes Spanish reliably, but amplifies perceptually-inaudible acoustic deltas on Hindi into huge
-# word divergence (proven: TT-vs-HF vocoder mel-PCC 0.994 on Hindi, yet whisper WER 1.77 vs Spanish 0.03).
-# S2ST (spa) and ASR (eng) are unchanged. This mapping is WER-sweep-local; the token-matching / PCC
-# suites keep using e2e_token_matching_helpers.TASK_TGT_LANG (T2ST=hin) via their own references.
+# Target language per WER-sweep task. T2ST targets SPANISH (not the token-matching suite's Hindi) so the
+# Whisper round-trip stays a FAITHFUL metric: whisper-large-v3 transcribes Spanish reliably but amplifies
+# inaudible Hindi acoustic deltas into huge word divergence (TT-vs-HF vocoder mel-PCC 0.994 on Hindi, yet
+# whisper WER 1.77 vs Spanish 0.03). WER-sweep-local; token-matching/PCC keep TASK_TGT_LANG (T2ST=hin); S2ST=spa, ASR=eng.
 WER_TASK_TGT_LANG = {"t2st": "spa", "s2st": "spa", "asr": "eng"}
 
 T2ST_TF_WER_THRESHOLD = 0.20
@@ -105,10 +99,6 @@ _TF_EOS_TOKEN_ID = 3
 _REF_DIR = Path(__file__).resolve().parent.parent / "teacher_forced_sweep_outputs" / "wer_references"
 
 _P150_WER_SCALE = 1.25
-
-# ---------------------------------------------------------------------------
-# In-process result store (pytest summary)
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -176,11 +166,6 @@ def print_wer_summary() -> None:
     print(f"Total: {passed}/{len(results)} passed\n")
 
 
-# ---------------------------------------------------------------------------
-# Reference paths and text metrics
-# ---------------------------------------------------------------------------
-
-
 def wer_refpt_path(task: str, seq_len: int) -> Path:
     return _REF_DIR / f"seamless_m4t_v2_{task}_len{seq_len}.refpt"
 
@@ -203,10 +188,6 @@ def compute_wer(reference_text: str, hypothesis_text: str) -> float:
         return 1.0
     return float(jiwer.wer(ref, hyp))
 
-
-# ---------------------------------------------------------------------------
-# Whisper transcription (round-trip WER on generated speech)
-# ---------------------------------------------------------------------------
 
 _WHISPER_CACHE: dict[str, Any] = {}
 
@@ -308,11 +289,6 @@ def load_wer_sweep_reference(path: Path) -> WerSweepReference:
     )
 
 
-# ---------------------------------------------------------------------------
-# Sweep helpers
-# ---------------------------------------------------------------------------
-
-
 def sweep_auto_ref_enabled() -> bool:
     return os.environ.get("SEAMLESS_SWEEP_AUTO_REF", "1") != "0"
 
@@ -407,11 +383,6 @@ def maybe_skip_short_speech_wer(task: str, ref_text: str, seq_len: int) -> None:
     maybe_skip_short_speech_input(task, seq_len)
 
 
-# ---------------------------------------------------------------------------
-# TT device run
-# ---------------------------------------------------------------------------
-
-
 def _tt_waveform_to_mono_np(waveform_tt: ttnn.Tensor, lengths_tt: ttnn.Tensor) -> "np.ndarray":
     """TT vocoder output ``[B, T, 1]`` → 1-D fp32 numpy, trimmed to the valid sample count."""
     arr = to_torch_replicated_first_shard(waveform_tt).float().reshape(-1).cpu().numpy()
@@ -486,11 +457,6 @@ def run_speech_output_whisper_wer(
         f"{log_label}: whisper WER {wer:.4f} > threshold {wer_threshold:.3f} "
         f"(hf_words={ref_words}, tt_words={tt_words}). TT whisper: {tt_text!r}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Teacher-forced WER (fidelity gate; no free-running cascade)
-# ---------------------------------------------------------------------------
 
 
 def _tt_encoder_for_task(mesh_device: ttnn.Device, tt_model: Any, ref: WerSweepReference):

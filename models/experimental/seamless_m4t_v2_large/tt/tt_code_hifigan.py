@@ -1093,10 +1093,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         accept_tile_input: bool = False,
         l1_full: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
-        # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
-        # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
-        # ``accept_tile_input`` opts a caller out of the defensive TILE->RM untilize when the TILE input
-        # comes from a previous conv (conv-derived NLC): ``ttnn.conv1d`` consumes interleaved TILE directly.
+        # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``) can
+        # hit "reshape between two shapes with different volumes" (host ROW_MAJOR weights are fine).
+        # ``accept_tile_input`` skips the defensive TILE->RM untilize for conv-derived TILE input, which ``ttnn.conv1d`` consumes interleaved directly.
         seq = int(input_length)
         x_in = x_nlc
         rm_buf: Optional[ttnn.Tensor] = None
@@ -1136,8 +1135,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         )
         # The single-shot HEIGHT-sharded L1 fit is an estimate; on a marginal overflow (op-slicing
         # "found_valid_config" or a CB/L1 clash) for the long-timeline path, keep ``x_in`` alive and fall
-        # back to the DRAM width-slice below, which handles any timeline. (S2ST @ 2048/4096: some resblock
-        # stages sit just past the true L1 limit and crashed here before the fallback existed.)
+        # back to the DRAM width-slice below, which handles any timeline (S2ST @ 2048/4096: some resblock stages sit just past the true L1 limit).
         single_can_fallback = run_single_shot_l1 and seq > _HIFIGAN_MAX_CONV1D_TLEN
         if seq <= _HIFIGAN_MAX_CONV1D_TLEN or run_single_shot_l1:
             try:
@@ -1654,8 +1652,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
             trace_no_profiler=trace_no_profiler,
         )
 
-    # ------------------------------------------------------------------------------- B == 1
-
     def _forward_one(
         self,
         input_ids: ttnn.Tensor,
@@ -1670,7 +1666,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         self._last_unit_seq = seq
         assert batch == 1, "_forward_one expects B == 1; use forward() for B > 1."
 
-        # ---------- embeddings (all on device) ----------
         # Tables uploaded ROW_MAJOR (``_vocoder_embedding_weight_row_major``); ``layout`` here is the *output* layout.
         # Unit emb stays TILE for duration LN/linear; expand gather + HiFi front-door use RM (below).
         ue = self.p.unit_embedding.weight
@@ -1683,7 +1678,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         sp_e = ttnn.embedding(ttnn.squeeze(speaker_id, 1), weight=sp, layout=ttnn.ROW_MAJOR_LAYOUT)
         lang_e = ttnn.embedding(ttnn.squeeze(lang_id, 1), weight=la, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        # ---------- duration prediction (device) ----------
         dp = self.p.dur_predictor
         e_unit = int(dp.conv1.in_channels)
         # Drop TILE padding on the time / channel axes so ``seq`` matches ``cumsum_*`` and
@@ -1700,7 +1694,6 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dur_bf = ttnn.maximum(r, 1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, T_units] bf16
         ttnn.deallocate(r)
 
-        # ---------- inclusive cumulative duration (device) ----------
         # Use float32 internally so integer comparisons are exact for any plausible t_audio.
         dur_f32 = ttnn.typecast(dur_bf, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         cumsum_inc = ttnn.cumsum(dur_f32, dim=-1, dtype=ttnn.float32)  # [B, T_units] inclusive
@@ -1734,11 +1727,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if not trace_no_profiler:
             ttnn.ReadDeviceProfiler(self.device)
 
-        # ---------- expansion via per-frame gather (device) ----------
-        # ``H`` in the old matmul path was a one-hot selection mask, so ``use @ H`` is exactly a
-        # gather: frame ``t`` copies the unit whose ``[cumsum_prev, cumsum_inc)`` interval contains
-        # it; padded frames (``t >= t_audio_real``) gather an all-zero row. This replaces the
-        # ``O(t_audio/32 * seq/32)`` tiny-matmul + slice + concat explosion with one reduce + gather.
+        # ``use @ H`` (H a one-hot mask) is exactly a gather: frame ``t`` copies the unit whose
+        # ``[cumsum_prev, cumsum_inc)`` interval contains it; padded frames (``t >= t_audio_real``) gather
+        # an all-zero row. Replaces the ``O(t_audio/32 * seq/32)`` tiny-matmul + slice + concat with one reduce + gather.
         frame_idx = self._cached_frame_idx_f32(t_audio)
         expanded_NLC = self._expand_unit_embeddings_gather(
             use,
@@ -1750,11 +1741,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
             frame_idx=frame_idx,
         )
 
-        # ---------- broadcast lang/spk and concat in NLC (device) ----------
-        # Build ``merged_NLC = [lang | unit | spk]`` directly in NLC (concat on the channel dim). lang/spk
-        # are RM ``[B, C]`` -> ``[B, 1, C]`` (free view) -> repeat over time; the gather output is already
-        # RM NLC. Concatenating on the channel dim avoids the two permutes (gather->BCT, merged->NLC) and
-        # the three TILE->RM untilizes the old channel-major path needed.
+        # Build ``merged_NLC = [lang | unit | spk]`` directly in NLC (concat on channel dim): lang/spk go
+        # RM ``[B, C]`` -> ``[B, 1, C]`` (free view) -> repeat over time, and the gather output is already
+        # RM NLC. This avoids the old channel-major path's two permutes (gather->BCT, merged->NLC) and three TILE->RM untilizes.
         lang_dim = int(lang_e.shape[-1])
         spk_dim = int(sp_e.shape[-1])
         lang_1LC = ttnn.reshape(lang_e, (batch, 1, lang_dim))
@@ -1774,16 +1763,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
         ttnn.deallocate(spk_NLC)
         ttnn.deallocate(use)
 
-        # ---------- HiFi-GAN (device) ----------
         wav = self._hifi_gan(merged_NLC, self.p.hifi_gan, batch=batch, tlen=t_audio)
 
-        # ---------- length (host formula, single int32 upload per row) ----------
         # Real (un-bucketed) length so the bucket-padded waveform tail is cropped out by consumers.
         lengths = self._output_lengths_dev(t_audio_real, batch=batch)
         ttnn.deallocate(cumsum_inc)
         return wav, lengths
-
-    # ------------------------------------------------------------------------------- B > 1
 
     def _forward_batched(
         self,
