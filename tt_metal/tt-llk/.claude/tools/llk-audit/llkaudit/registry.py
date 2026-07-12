@@ -350,9 +350,13 @@ def condition_drains_unit(operand: str, tokens) -> bool:
 
 
 def stallwait_wait_operand(text: str) -> str:
-    """The DRAIN condition of a STALLWAIT is its SECOND operand (wait_res); the
-    first (stall_res, e.g. STALL_UNPACK) names the block being held, not the unit
-    being drained. Return the text of the 2nd top-level argument (or "")."""
+    """The DRAIN condition of a STALLWAIT is its wait_res operand(s); the FIRST
+    operand (stall_res, e.g. STALL_UNPACK) names the block being held, not the unit
+    being drained. Return every top-level argument AFTER the first, joined — WH/BH
+    have a single wait_res (2-operand macro), but Quasar's macro is 4-operand
+    (`TTI_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0)`) and
+    splits the wait condition across the last three, so returning only operand 2
+    (which is often `0` on Quasar) would miss the real drain tokens."""
     lp = text.find("(")
     rp = text.rfind(")")
     if lp < 0 or rp <= lp:
@@ -372,7 +376,9 @@ def stallwait_wait_operand(text: str) -> str:
             args.append(inner[start:i])
             start = i + 1
     args.append(inner[start:])
-    return args[1].strip() if len(args) >= 2 else ""
+    # Join operands 2..N (all wait_res, skipping stall_res at index 0) so the token
+    # match sees the Quasar 4-operand condition (idx_2/idx_1/idx_0), not just one.
+    return " ".join(a.strip() for a in args[1:]) if len(args) >= 2 else ""
 
 
 # --- cfg-word-overlap: cfg_defines.h resolution -------------------------------
@@ -505,7 +511,7 @@ RECONFIG_FN_SUBSTR = (
 DRAIN_UNIT_TOKENS = {
     "UNPACK": ("UNPACK", "UNPACK0", "UNPACK1"),
     "MATH": ("MATH", "WAIT_SFPU"),
-    "PACK": ("PACK",),
+    "PACK": ("PACK", "PACK0", "PACK1"),  # PACK0/PACK1 are Quasar's per-packer tokens
 }
 # Config-write macros that write the UNIT-SAMPLED CONFIG register file (the ones
 # a reconfig must drain the unit before). Deliberately EXCLUDES SETDMAREG, which
@@ -753,21 +759,21 @@ def noc_signal_is_atomic(fact: dict) -> bool:
 
 
 # The two write-completion primitives differ in what they WAIT FOR (see the
-# dataflow-API headers under tt_metal/hw/inc/api/dataflow/): a *barrier* waits for
-# the remote ACK (the data has LANDED at the destination); a *flushed* only drains
-# the initiator's outgoing queue (the write has DEPARTED, not yet landed).
+# dataflow-API headers under tt_metal/hw/inc/api/dataflow/ and the data-movement doc
+# data_movement_doc/general/posted_writes.md): a *barrier* waits for the remote ACK
+# (the data has LANDED / been COMMITTED at the destination); a *flushed* only drains
+# the initiator's outgoing queue (the write has DEPARTED, not yet committed).
 #
-# The checker CLEARS an atomic credit only on a preceding barrier. This is the
-# CONSERVATIVE recall choice, NOT a claim that a flush can never be enough: for a
-# same-NoC/same-VC UNICAST credit to the same destination, in-issue-order delivery
-# (per the ISA "<arch>/NoC/Ordering.md" doc) means a `writes_flushed` before the
-# credit DOES land the payload first — so a flushed atomic is often benign. But the
-# ack barrier is genuinely required for a MULTICAST credit, or writes crossing
-# separate command-buffer FIFOs (not order-preserving even same-VC on some archs),
-# or a different NoC/VC — which the tool can't distinguish. So it keeps flagging a
-# flush-but-no-barrier atomic (never miss a real race) and TAGS it low-confidence
-# (see noc_sync) rather than clearing it. Verdict = the /noc-sync skill + the
-# NoC Ordering doc.
+# The checker CLEARS an atomic credit only on a preceding barrier — the CONSERVATIVE
+# choice, grounded in posted_writes.md: the data-before-credit race is the increment
+# observed before the write is COMMITTED, and writes_flushed does not guarantee
+# commit. Whether a same-NoC/VC UNICAST atomic is nonetheless safe with just a flush
+# (in-issue-order delivery landing the payload first) is a doc-grounded VERDICT —
+# the /noc-sync skill decides it against <arch>/NoC/Ordering.md + posted_writes.md,
+# the tool does NOT assume it. A MULTICAST credit, or writes crossing separate
+# command-buffer FIFOs / different NoCs / a different VC, definitely need the barrier.
+# So the tool keeps flagging a flush-but-no-barrier atomic (never miss a real race)
+# and TAGS it FLUSH_NOT_BARRIER for the skill to confirm, rather than clearing it.
 NOC_WRITE_BARRIERS = (
     "noc_async_write_barrier",
     "noc_async_write_barrier_with_trid",
