@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t ocb = dfb::out;
 
 #ifndef BCAST_OP_INIT
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(icb0, icb1, ocb);
+    init_bcast<BCAST_LLKOP, BCAST_DIM, icb0, icb1, ocb>();
 #else
     binary_op_init_common(icb0, icb1, ocb);
     BCAST_OP_INIT(icb0, icb1);

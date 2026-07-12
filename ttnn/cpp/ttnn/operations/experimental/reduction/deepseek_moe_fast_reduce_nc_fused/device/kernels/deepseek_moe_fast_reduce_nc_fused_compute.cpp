@@ -41,8 +41,12 @@ void kernel_main() {
     constexpr uint32_t num_input_tiles_iter = reduction_dim_size / input_granularity;
 
     // Full PACK + UNPACK + hw_configure init for ELWMUL + COL-broadcast
-    init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(
-        compute_input_cb_id_0, compute_input_cb_id_1, compute_output_cb_id);
+    init_bcast<
+        EltwiseBinaryType::ELWMUL,
+        BroadcastType::COL,
+        compute_input_cb_id_0,
+        compute_input_cb_id_1,
+        compute_output_cb_id>();
 
     // Override MATH init to enable acc_to_dest=1 (hardware accumulate mode)
     // This makes each mul_tiles_bcast_cols call do: dst0 += act * score  (MAC)

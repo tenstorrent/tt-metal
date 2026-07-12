@@ -52,7 +52,7 @@ void kernel_main() {
     matmul_block_init(cb_in0, cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
-    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::NONE>(cb_in2, cb_in1, cb_out1);
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::NONE, cb_in2, cb_in1, cb_out1>();
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
 
     add_bcast_rows_init_short(cb_in1, cb_in2);
