@@ -12,6 +12,7 @@ on:
       - "main"
     paths:
       - "tt_metal/tt-llk/.claude/tools/llk-audit/**"
+      - ".github/workflows/llk-audit-tool-tests.yaml"
 
 permissions:
   contents: read

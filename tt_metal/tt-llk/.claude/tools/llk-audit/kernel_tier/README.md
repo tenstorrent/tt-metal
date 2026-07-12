@@ -49,14 +49,25 @@ kernels emit no compile command, so without it the ledger may show 0 op kernels.
    clang's `--target=riscv32-unknown-elf` + the sfpi `-isystem` paths + an SFPU
    shim, keep the kernel's own `-I`/`-D`.
 3. Run `llk_extract` per kernel **from its cache build dir** (so relative includes
-   and the generated `kernel_includes.hpp` resolve) into one merged fact base,
-   scoped by `--path-filter` (default **`/kernels/`**) to the KERNEL surface. This
-   must NOT be the repo root: sfpi (STL) lives under `runtime/sfpi` and the
-   dataflow/LLK primitive **definitions** live under `hw/inc/api`, `hw/ckernels`,
-   `tt_llk_*` — all in-repo — so a repo-root filter floods the base with library
-   internals and the checkers flag the primitive *definitions* (e.g.
-   `Semaphore::inc_multicast`'s own body) as kernel races. `/kernels/` keeps the JIT
-   kernel dirs + ttnn/models kernel trees (it does not match `/ckernels/`).
+   and the generated `kernel_includes.hpp` resolve), then merge into one fact base
+   scoped to the KERNEL surface. This scope must NOT be the repo root: sfpi (STL)
+   lives under `runtime/sfpi` and the dataflow/LLK primitive **definitions** live
+   under `hw/inc/api`, `hw/ckernels`, `tt_llk_*` — all in-repo — so a repo-root
+   filter floods the base with library internals and the checkers flag the primitive
+   *definitions* (e.g. `Semaphore::inc_multicast`'s own body) as kernel races. The
+   scope is applied in **two stages** because no single `.contains()` substring can
+   both catch `models/.../unified_kernels/` **and** exclude the LLK `.../ckernels/`
+   defs (any substring loose enough for the former also matches the latter):
+   - a COARSE `--path-filter` (default **`kernels/`**) is passed to the extractor as
+     a cheap pre-scope (already excludes `hw/inc/api` + sfpi; it *does* admit
+     `hw/ckernels`);
+   - the PRECISE keep/drop (`capture.in_kernel_surface`: keep iff the path has
+     `/kernels/` **or** `_kernels/` and not `/ckernels/`) is applied in Python on the
+     emitted facts. `_kernels/` matches `unified_kernels/` but not `ckernels/` (no
+     underscore) nor `/kernels/` (no underscore-before), so the two keep-substrings
+     together cover the JIT/op kernel dirs + `<prefix>_kernels/` model trees while the
+     `ckernels/` defs are trimmed. Dropped-fact counts are reported per-TU in the
+     coverage ledger (`:drop=N`), never silently swallowed.
 4. `bootstrap.sh` runs `cb-sync,noc-sync,mailbox-sync` over the merged facts.
 
 ## Coverage is honest, not silent

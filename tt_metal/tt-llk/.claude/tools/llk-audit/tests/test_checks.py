@@ -8,6 +8,7 @@ false-positive fixes found during validation.
 
 Run:  python3 tests/test_checks.py     (from the llk-audit dir; prints PASS/FAIL)
 """
+
 import os
 import sys
 
@@ -17,6 +18,9 @@ from llkaudit.checks.cb_sync import CbSync
 from llkaudit.checks.cfg_word_overlap import CfgWordOverlap
 from llkaudit.checks.mailbox_sync import MailboxSync
 from llkaudit.checks.mmio_race import MmioRace
+from llkaudit.checks.noc_atomic_exit import NocAtomicExit
+from llkaudit.checks.noc_l1_invalidate import NocL1Invalidate
+from llkaudit.checks.noc_read_barrier import NocReadBarrier
 from llkaudit.checks.noc_sync import NocSync
 from llkaudit.checks.reconfig_stall import ReconfigStall
 from llkaudit.checks.semaphore_handshake import SemaphoreHandshake
@@ -1754,15 +1758,240 @@ def test_cfgshiftmask_is_ordered_config_write():
     assert "CFGSHIFTMASK" in registry.RECONFIG_WRITE_MACRO_SUBSTR
 
 
+@case
+def test_noc_sync_posted_flush_only():
+    from llkaudit import registry
+
+    K = "ttnn/cpp/x/writer_l1.cpp"
+    # noc_async_posted_writes_flushed is recognized as a flush, but classified
+    # "posted" (drains only the posted HW counter) — distinct from a real flush.
+    assert (
+        registry.noc_flush_kind(call(K, 0, "noc_async_posted_writes_flushed"))
+        == "posted"
+    )
+    assert (
+        registry.noc_flush_kind(
+            call(K, 0, "async_posted_writes_flushed", recv_type="Noc")
+        )
+        == "posted"
+    )
+    # A posted flush is a no-op for a NON-posted write/inc, so it must NOT clear a
+    # credit: the atomic inc is still flagged and TAGGED POSTED_FLUSH_ONLY (skill
+    # confirms the write's posted-ness), NOT silently cleared.
+    atomic = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_posted_writes_flushed", func="kernel_main"),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    r = NocSync().run(FactBase("wormhole", atomic))
+    assert len(r) == 1 and r[0].hint == "NOC_SIGNAL_NO_FLUSH", r
+    assert r[0].safety == "POSTED_FLUSH_ONLY", r
+    # Same for a WRITE credit (set_remote): a posted flush does not clear it either.
+    write = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_posted_writes_flushed", func="kernel_main"),
+        call(K, 20, "noc_semaphore_set_remote", func="kernel_main", arg0="sem"),
+    ]
+    rw = NocSync().run(FactBase("wormhole", write))
+    assert len(rw) == 1 and rw[0].safety == "POSTED_FLUSH_ONLY", rw
+    # REGRESSION: a real (non-posted) writes_flushed STILL clears a write credit — the
+    # posted variant must not have narrowed/widened what clears a write credit.
+    ok = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_writes_flushed", func="kernel_main"),
+        call(K, 20, "noc_semaphore_set_remote", func="kernel_main", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", ok)) == []
+    # When BOTH a posted flush and a real writes_flushed precede an atomic inc, the
+    # non-posted flushed wins the tag (FLUSH_NOT_BARRIER), not POSTED_FLUSH_ONLY.
+    both = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 5, "noc_async_posted_writes_flushed", func="kernel_main"),
+        call(K, 10, "noc_async_writes_flushed", func="kernel_main"),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+    ]
+    rb = NocSync().run(FactBase("wormhole", both))
+    assert len(rb) == 1 and rb[0].safety == "FLUSH_NOT_BARRIER", rb
+
+
+@case
+def test_kernel_surface_filter():
+    # capture.in_kernel_surface: JIT/op kernels + '<prefix>_kernels/' trees are KEPT;
+    # LLK 'ckernels/' primitive defs, hw/inc/api, sfpi STL, tt-llk are DROPPED. This
+    # is the fix that lets the kernel tier reach models/.../unified_kernels/ — which
+    # a plain '/kernels/' substring silently drops (no underscore-before match).
+    kt_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "kernel_tier"
+    )
+    sys.path.insert(0, kt_dir)
+    import capture
+
+    keep = [
+        "ttnn/cpp/ttnn/operations/ccl/reduce_to_root/device/kernels/root.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/r.cpp",
+        "models/demos/deepseek_v3_b1/unified_kernels/matmul_expert.hpp",
+        "tt_metal/kernels/dataflow/blank.cpp",
+    ]
+    drop = [
+        "tt_metal/hw/ckernels/wormhole_b0/metal/common/chlkc_unpack.h",
+        "tt_metal/hw/inc/api/dataflow/dataflow_api.h",
+        "runtime/sfpi/include/sfpi.h",
+        "tt_metal/tt-llk/tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h",
+    ]
+    for p in keep:
+        assert capture.in_kernel_surface(p), ("KEEP", p)
+    for p in drop:
+        assert not capture.in_kernel_surface(p), ("DROP", p)
+
+
+@case
+def test_noc_atomic_exit():
+    K = "ttnn/cpp/x/writer_fused.cpp"
+    # A remote atomic (Semaphore.up, argc>=2) is the last NoC op in kernel_main with
+    # no following noc_async_atomic_barrier -> in-flight atomic at exit -> flagged.
+    bad = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K, 10, "noc_async_write_barrier", func="kernel_main"
+        ),  # drains WRITES only
+        call(
+            K, 20, "up", func="kernel_main", recv="sem", recv_type="Semaphore", argc=4
+        ),
+    ]
+    r = NocAtomicExit().run(FactBase("wormhole", bad))
+    assert len(r) == 1 and r[0].hint == "NO_ATOMIC_BARRIER_AT_EXIT", r
+    # An atomic barrier AFTER the last atomic drains it -> cleared.
+    ok = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K, 20, "up", func="kernel_main", recv="sem", recv_type="Semaphore", argc=4
+        ),
+        call(K, 30, "async_atomic_barrier", func="kernel_main", recv_type="Noc"),
+    ]
+    assert NocAtomicExit().run(FactBase("wormhole", ok)) == []
+    # A WRITE barrier does NOT drain the atomic counter -> still flagged (regression:
+    # noc_async_write_barrier must not be mistaken for an atomic drain).
+    wb = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
+        call(K, 30, "noc_async_write_barrier", func="kernel_main"),  # wrong barrier
+    ]
+    assert NocAtomicExit().run(FactBase("wormhole", wb))[0].hint == (
+        "NO_ATOMIC_BARRIER_AT_EXIT"
+    )
+    # Only kernel_main is scoped — a helper ending in an atomic is not flagged.
+    helper = [
+        fn("send_signal", K, 0, 100),
+        call(K, 20, "noc_semaphore_inc", func="send_signal", arg0="sem"),
+    ]
+    assert NocAtomicExit().run(FactBase("wormhole", helper)) == []
+
+
+@case
+def test_noc_read_barrier():
+    K = "ttnn/cpp/x/reader.cpp"
+    # read then consume (cb_push_back) with NO read-barrier between -> flagged.
+    bad = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_read", func="kernel_main", arg0="src"),
+        call(K, 20, "cb_push_back", func="kernel_main", arg0="cb0"),
+        call(K, 30, "noc_async_read_barrier", func="kernel_main"),  # too late
+    ]
+    r = NocReadBarrier().run(FactBase("wormhole", bad))
+    assert len(r) == 1 and r[0].hint == "READ_CONSUMED_BEFORE_BARRIER", r
+    # #1's shape: read forwarded by tt_memmove before the (deferred) barrier.
+    memmove = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_read", func="kernel_main", arg0="pkt"),
+        call(K, 20, "tt_memmove", func="kernel_main", arg0="pkt"),
+        call(K, 40, "noc_async_read_barrier", func="kernel_main"),
+    ]
+    assert (
+        NocReadBarrier().run(FactBase("wormhole", memmove))[0].hint
+        == "READ_CONSUMED_BEFORE_BARRIER"
+    )
+    # Correct idiom: read; barrier; consume -> safe (consumer after the barrier).
+    ok = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_read", func="kernel_main", arg0="src"),
+        call(K, 20, "noc_async_read_barrier", func="kernel_main"),
+        call(K, 30, "cb_push_back", func="kernel_main", arg0="cb0"),
+    ]
+    assert NocReadBarrier().run(FactBase("wormhole", ok)) == []
+    # BATCH-then-drain: read; read; barrier; consume; consume -> safe (both consumers
+    # fall after each read's next barrier).
+    batch = [
+        fn("kernel_main", K, 0, 100),
+        call(K, 10, "noc_async_read", func="kernel_main", arg0="a"),
+        call(K, 15, "noc_async_read", func="kernel_main", arg0="b"),
+        call(K, 20, "noc_async_read_barrier", func="kernel_main"),
+        call(K, 30, "cb_push_back", func="kernel_main", arg0="cb0"),
+        call(K, 35, "cb_push_back", func="kernel_main", arg0="cb1"),
+    ]
+    assert NocReadBarrier().run(FactBase("wormhole", batch)) == []
+
+
+def pr_read(file, off, producer, func="", prov="call"):
+    # a pointer_read fact (volatile-pointer read inside a loop) as the extractor emits.
+    return {
+        "family": "pointer_read",
+        "file": file,
+        "off": off,
+        "line": off,
+        "function": func,
+        "op": "read",
+        "provenance_kind": prov,
+        "producer": producer,
+        "index_text": "",
+    }
+
+
+@case
+def test_noc_l1_invalidate():
+    K = "ttnn/cpp/x/writer_dispatch.cpp"
+    # BH: a hand-rolled semaphore poll (get_semaphore provenance) with NO
+    # invalidate_l1_cache -> stale-cache candidate.
+    bad = [
+        fn("kernel_main", K, 0, 100),
+        pr_read(K, 30, "get_semaphore", func="kernel_main"),
+    ]
+    r = NocL1Invalidate().run(FactBase("blackhole", bad))
+    assert len(r) == 1 and r[0].hint == "MISSING_L1_INVALIDATE", r
+    # BH: same poll but the function invalidates the L1 cache -> cleared.
+    ok = bad + [call(K, 40, "invalidate_l1_cache", func="kernel_main")]
+    assert NocL1Invalidate().run(FactBase("blackhole", ok)) == []
+    # WH: the write-through L1 read cache is BH-specific -> never flagged on WH.
+    assert NocL1Invalidate().run(FactBase("wormhole", bad)) == []
+    # BH: an LLK-style spin-wait — volatile poll whose provenance is NOT get_semaphore
+    # AND the function issues no NoC ops -> scoped OUT (a local status-reg poll, not a
+    # remote L1 flag), so NOT flagged. This is why the check is empty over tt-llk.
+    llk = [
+        fn("wait", K, 0, 100),
+        pr_read(K, 30, "get_cfg_pointer", func="wait"),
+    ]
+    assert NocL1Invalidate().run(FactBase("blackhole", llk)) == []
+    # BH: a non-semaphore poll but the function DOES issue NoC ops (dataflow kernel)
+    # -> in scope, flagged.
+    nocfn = [
+        fn("kernel_main", K, 0, 100),
+        pr_read(K, 30, "cast:route_info", func="kernel_main", prov="cast"),
+        call(K, 40, "noc_async_read", func="kernel_main", arg0="src"),
+    ]
+    assert (
+        NocL1Invalidate().run(FactBase("blackhole", nocfn))[0].hint
+        == "MISSING_L1_INVALIDATE"
+    )
+
+
 def main():
     failed = 0
     for c in CASES:
         try:
             c()
             print(f"PASS {c.__name__}")
-        except AssertionError as e:
-            failed += 1
-            print(f"FAIL {c.__name__}: {e}")
+        except Exception as e:  # not just AssertionError: a KeyError etc. in one
+            failed += 1  # case must not abort the loop and skip the rest / summary
+            print(f"FAIL {c.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(CASES)-failed}/{len(CASES)} passed")
     return 1 if failed else 0
 

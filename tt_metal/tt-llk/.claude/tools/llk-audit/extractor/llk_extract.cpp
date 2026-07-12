@@ -200,10 +200,45 @@ public:
     }
 };
 
+// Best-effort receiver TYPE from a CONSTRUCTOR-style receiver text, e.g.
+// "Semaphore<>(id)" / "Semaphore(id)" -> "Semaphore". Returns "" for a bare variable
+// ("cb_index") or anything not starting with a Capitalized identifier immediately
+// followed by '<' or '(' — deliberately tight so a dependent member call can only
+// pick up a receiver type when the receiver is literally a type construction (never
+// mislabels a variable), and the checkers' type gates (Semaphore/CircularBuffer/Noc)
+// stay the arbiter.
+static std::string recvTypeFromText(const std::string &t)
+{
+    size_t i = 0;
+    while (i < t.size() && (t[i] == ' ' || t[i] == '\t'))
+    {
+        ++i;
+    }
+    if (i >= t.size() || t[i] < 'A' || t[i] > 'Z')
+    {
+        return "";
+    }
+    size_t j = i;
+    while (j < t.size() && ((t[j] >= 'A' && t[j] <= 'Z') || (t[j] >= 'a' && t[j] <= 'z') || (t[j] >= '0' && t[j] <= '9') || t[j] == '_'))
+    {
+        ++j;
+    }
+    if (j < t.size() && (t[j] == '<' || t[j] == '('))
+    {
+        return t.substr(i, j - i);
+    }
+    return "";
+}
+
 // ---- AST pass: functions, pointer writes, calls -----------------------------
 class Visitor : public RecursiveASTVisitor<Visitor>
 {
     State &S;
+    // Lexical loop nesting depth. A volatile-pointer READ is only emitted (as a
+    // pointer_read fact) when inside a loop — the hand-rolled busy-poll pattern the
+    // noc-l1-invalidate check looks for. Gating on loops also keeps the fact count
+    // (and any tt-llk noise) far smaller than emitting every rvalue load.
+    int loopDepth = 0;
 
     // Trace a base pointer expression to the thing that produced it, so the
     // registry can decide what register space it points at. We report the raw
@@ -354,6 +389,42 @@ public:
     {
         const FunctionDecl *FD = CE->getDirectCallee();
         std::string callee     = FD && FD->getIdentifier() ? FD->getName().str() : "";
+        // Fallback when there is no resolved direct callee: a TEMPLATE / OVERLOADED /
+        // dependent call (getDirectCallee()==null) still has its written name in the
+        // AST. Without this, the kernel API — which is almost entirely templates /
+        // overloads (cb_push_back, cb_reserve_back, noc_async_read, noc_semaphore_inc,
+        // tt_memmove<...>) — is dropped to an EMPTY name, and every name-keyed checker
+        // silently misses it (a latent kernel-tier false-negative, esp. under any
+        // partial parse). Recover the free-function identifier from the callee expr;
+        // member-call methods keep flowing through the recv/recvType path below.
+        if (callee.empty())
+        {
+            const Expr *ce = CE->getCallee()->IgnoreParenImpCasts();
+            if (const auto *ULE = dyn_cast<UnresolvedLookupExpr>(ce))
+            {
+                callee = ULE->getName().getAsString();
+            }
+            else if (const auto *DRE = dyn_cast<DeclRefExpr>(ce))
+            {
+                callee = DRE->getNameInfo().getName().getAsString();
+            }
+            else if (const auto *DSDR = dyn_cast<DependentScopeDeclRefExpr>(ce))
+            {
+                callee = DSDR->getDeclName().getAsString();
+            }
+            // Dependent/unresolved MEMBER call (obj.method() where obj is template-
+            // typed): the modern ttnn object API (cb.push_back(), Semaphore<>(id).up())
+            // — without this the method name is dropped and cb-sync / noc-atomic-exit
+            // miss it. The receiver is recovered below.
+            else if (const auto *DSM = dyn_cast<CXXDependentScopeMemberExpr>(ce))
+            {
+                callee = DSM->getMember().getAsString();
+            }
+            else if (const auto *UME = dyn_cast<UnresolvedMemberExpr>(ce))
+            {
+                callee = UME->getMemberName().getAsString();
+            }
+        }
         // Keep the callee's written text too, so template args (e.g.
         // cfg_reg_rmw_tensix<FIELD>) survive for the registry to parse.
         Fact f;
@@ -404,6 +475,120 @@ public:
                 {
                     f.recvType = objTy.getUnqualifiedType().getAsString();
                 }
+            }
+        }
+        // Dependent/unresolved member call (not a CXXMemberCallExpr): recover the
+        // receiver text so per-object grouping + the receiver-type heuristic work.
+        if (f.recv.empty())
+        {
+            const Expr *ce2 = CE->getCallee()->IgnoreParenImpCasts();
+            if (const auto *DSM = dyn_cast<CXXDependentScopeMemberExpr>(ce2))
+            {
+                if (!DSM->isImplicitAccess())
+                {
+                    f.recv = srcText(S, DSM->getBase()->getSourceRange());
+                }
+            }
+            else if (const auto *UME = dyn_cast<UnresolvedMemberExpr>(ce2))
+            {
+                if (!UME->isImplicitAccess())
+                {
+                    f.recv = srcText(S, UME->getBase()->getSourceRange());
+                }
+            }
+        }
+        // When the receiver TYPE didn't resolve (dependent parse), recover it from a
+        // constructor-style receiver text ("Semaphore<>(id)" -> "Semaphore"). Tightly
+        // scoped (see recvTypeFromText) so a bare variable never gets a spurious type.
+        if (f.recvType.empty() && !f.recv.empty())
+        {
+            f.recvType = recvTypeFromText(f.recv);
+        }
+        S.facts.push_back(std::move(f));
+        return true;
+    }
+
+    // --- loop nesting: bump loopDepth around each loop body so a volatile-pointer
+    // read can tell whether it is a busy-poll (inside a loop) vs a one-shot load.
+    bool TraverseWhileStmt(WhileStmt *L)
+    {
+        ++loopDepth;
+        bool r = RecursiveASTVisitor::TraverseWhileStmt(L);
+        --loopDepth;
+        return r;
+    }
+
+    bool TraverseForStmt(ForStmt *L)
+    {
+        ++loopDepth;
+        bool r = RecursiveASTVisitor::TraverseForStmt(L);
+        --loopDepth;
+        return r;
+    }
+
+    bool TraverseDoStmt(DoStmt *L)
+    {
+        ++loopDepth;
+        bool r = RecursiveASTVisitor::TraverseDoStmt(L);
+        --loopDepth;
+        return r;
+    }
+
+    bool TraverseCXXForRangeStmt(CXXForRangeStmt *L)
+    {
+        ++loopDepth;
+        bool r = RecursiveASTVisitor::TraverseCXXForRangeStmt(L);
+        --loopDepth;
+        return r;
+    }
+
+    // A VOLATILE-pointer READ inside a loop: an rvalue load (LValueToRValue) through
+    // a `*ptr` / `ptr[i]` whose accessed type is volatile-qualified — the shape of a
+    // hand-rolled poll of a remotely-written L1 flag. Emitted as a pointer_read fact
+    // (with the same provenance the writes carry, so the checker can see get_semaphore
+    // etc.). NOT a write: the LHS of an assignment is not an LValueToRValue cast, so
+    // this never double-counts a store.
+    bool VisitImplicitCastExpr(ImplicitCastExpr *ICE)
+    {
+        if (ICE->getCastKind() != CK_LValueToRValue || loopDepth == 0)
+        {
+            return true;
+        }
+        const Expr *sub  = ICE->getSubExpr()->IgnoreParens();
+        const Expr *base = nullptr;
+        std::string indexText;
+        if (const auto *ASE = dyn_cast<ArraySubscriptExpr>(sub))
+        {
+            base      = ASE->getBase();
+            indexText = srcText(S, ASE->getIdx()->getSourceRange());
+        }
+        else if (const auto *UO = dyn_cast<UnaryOperator>(sub))
+        {
+            if (UO->getOpcode() == UO_Deref)
+            {
+                base = UO->getSubExpr();
+            }
+        }
+        if (!base || !sub->getType().isVolatileQualified())
+        {
+            return true; // not a volatile pointer deref/subscript read
+        }
+        Fact f;
+        if (!inScope(S, ICE->getExprLoc(), f.file, f.line, f.off))
+        {
+            return true;
+        }
+        f.family    = "pointer_read";
+        f.op        = "read";
+        f.indexText = indexText;
+        provenance(base, f.provenanceKind, f.producer);
+        if (f.producer.empty())
+        {
+            f.provenanceKind = "unresolved";
+            f.producer       = srcText(S, base->getSourceRange());
+            if (f.producer.empty())
+            {
+                f.producer = "<unresolved>";
             }
         }
         S.facts.push_back(std::move(f));
@@ -476,7 +661,7 @@ public:
             {
                 o["end_off"] = (std::int64_t)f.endOff;
             }
-            if (f.family == "pointer_write")
+            if (f.family == "pointer_write" || f.family == "pointer_read")
             {
                 o["op"]              = f.op;
                 o["provenance_kind"] = f.provenanceKind;
