@@ -119,6 +119,19 @@ class HunyuanTtTopKGate(LightweightModule):
         topk_weight, topk_index = ttnn.topk(gates_bf16, self.moe_topk, dim=-1)
         ttnn.deallocate(gates_bf16)
 
+        # Pad moe_topk up to the next full tile (32-wide) so every later
+        # ttnn.sum(..., dim=-1) on these tensors — the denom sum below, and once
+        # per expert in moe.py/moe_parallel.py's combine loop — sees an already
+        # tile-aligned width and skips its internal FillPad (fill_pad.cpp only
+        # fires when logical width != tile-rounded width). Weight padding is 0
+        # (inert in any sum); index padding is an out-of-range sentinel
+        # (num_experts, never a real expert id) so eq(topk_idx, gid) never
+        # matches a padded slot.
+        pad_amt = -self.moe_topk % 32
+        if pad_amt:
+            topk_weight = ttnn.pad(topk_weight, [(0, 0), (0, 0), (0, pad_amt)], value=0.0)
+            topk_index = ttnn.pad(topk_index, [(0, 0), (0, 0), (0, pad_amt)], value=float(self.num_experts))
+
         if self.norm_topk_prob:
             denom = ttnn.sum(topk_weight, dim=-1, keepdim=True)  # [B, S, 1]
             denom = ttnn.clip(denom, 1e-8, float("inf"))
