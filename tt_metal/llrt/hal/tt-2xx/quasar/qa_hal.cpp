@@ -416,16 +416,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
-    // Quasar packer (PACR0 face-stepping) requires the pack-target L1 base to be at least FACE-aligned
-    // (one 16x16 face = 512 B). The NOC only needs 16 B (NOC_L1_*_ALIGNMENT_BYTES, kept for read/write
-    // alignments below), but a buffer base that is 16 B-aligned yet NOT a face multiple makes the packer walk
-    // off the tile/face grid -> PACR0_TILE_INC OOB. Seen on conv2d: the borrowed OUTPUT/MATMUL_PARTIALS base
-    // landed at +192 B (not face-aligned) while all working CB pack bases were face-aligned; the matmul/bias
-    // pack then wrote off-grid. Over-align all L1 buffer *allocations* to a face so any pack target is safe;
-    // NOC read/write alignments (mem_read/write_alignments_[L1]) stay at 16 B below.
-    constexpr std::uint32_t QUASAR_L1_PACK_FACE_ALIGNMENT = 512;
-    this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] =
-        L1_ALIGNMENT > QUASAR_L1_PACK_FACE_ALIGNMENT ? L1_ALIGNMENT : QUASAR_L1_PACK_FACE_ALIGNMENT;
+    this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::DRAM)] = DRAM_ALIGNMENT;
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
 
