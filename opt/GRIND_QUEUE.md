@@ -99,9 +99,18 @@ single-quoted `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and ckpt_fast'` survi
   002717-83** on the reset device is CLEAN (1 passed, JIT 423/423 warm=zero cold-compile, clean UMD teardown) ⇒ the
   fault was a device flake, not a harness bug. This is the warm VIDEO per-block FW (all prior block runs were `av`→SKIP;
   the 44.77ms number was AV single-blocking). Substrate for F1's topology A/B. (supersedes 001703-77 0-collect bracket bug.)
-- [~] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line)** vs F0 Ring 16.88ms — job **002930-85** (00:29Z). Select
-  `-k 'video and stage_2 and line_bh_4x8sp1tp0 and ckpt_fast'`, same env/iters. Clean no-edit CCL-topology A/B: does
-  Linear all-gather beat Ring for the fused matmul at block scale? >5% FW delta = a win to wire into the CCL config.
+- [x] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line) = WARM_FWD_MS 20.97 (PCC 99.967%, gate 0.988) → DEAD.**
+  Job **002930-85** (re-verified from raw log): Line 20.97ms vs F0 Ring 16.88ms = **+24% SLOWER**. Ring wins decisively;
+  Linear all-gather is worse for the fused matmul at 4x8 block scale. No source edit (topology param A/B) ⇒ nothing to
+  revert. ⇒ **BOTH no-edit CCL-topology cells measured at prod 4x8; Ring stays. Batch F topology axis CLOSED.**
+- [~] **F2 — video-block warm-FW @ ring_bh_4x8 with `LTX_NUM_LINKS=1`** vs F0 Ring (num_links=2) 16.88ms — job
+  **003505-87** (00:35Z). `test_transformer_ltx.py:510` reads `LTX_NUM_LINKS` env ⇒ a no-edit link-count A/B on the
+  SAME prod ring mesh. num_links=2 is the BH HW cap (A2), so 1 can only be ≥slower — this is NOT a win-hunt but a
+  **characterization**: how link-BW-sensitive is the dominant fused CCL-matmul (56.3%)? Big 1→2 gap = link-BW-bound
+  (fabric headroom exists); small gap = matmul-compute-bound (confirms the honest floor is compute, not interconnect).
+  Same env_sdpa.yaml / LTX_PROFILE_ITERS=4 / timeout 260-200 / noise-strip. NEXT lap: read 003505-87 → WARM_FWD_MS +
+  PASSED block PCC → tick `[x]` with the link-BW verdict → the no-edit CCL config space (topology×links) is then fully
+  swept; re-profile the dominant op / generate the next batch (grid-subblock needs warm authoring, not cron).
 
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
