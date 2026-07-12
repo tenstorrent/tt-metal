@@ -613,6 +613,18 @@ class HfRotarySetup(LightweightModule):
         self.core_grid = (
             device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
         )
+        self.start_core = prefetcher.colocation_start_core if prefetcher is not None else ttnn.CoreCoord(0, 0)
+        num_decode_cores = min(self.batch_size_per_device_group, self.core_grid.x * self.core_grid.y)
+        self.batch_grid = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core,
+                num_decode_cores,
+                self.prefetcher.all_worker_cores_range_set,
+                row_wise=True,
+            )
+            if self.prefetcher is not None and ttnn.get_arch_name() == "blackhole"
+            else ttnn.num_cores_to_corerangeset(num_decode_cores, self.core_grid, row_wise=True)
+        )
 
         # Decode: ROW_MAJOR cache for embedding lookup (same numerics as prefill via get_rot_mats_hf).
         self.cos_matrix, self.sin_matrix = get_rot_mats_hf(
@@ -713,21 +725,17 @@ class HfRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1(padded to 32), head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1(padded to 32), head_dim]
 
-        batch_decode = self.batch_size_per_device_group
-        num_cores = min(batch_decode, self.core_grid.x * self.core_grid.y)
-        batch_grid = ttnn.num_cores_to_corerangeset(num_cores, self.core_grid, row_wise=True)
-
         mem_config = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, self.head_dim),
-            core_grid=batch_grid,
+            core_grid=self.batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
         )
 
-        if batch_decode % ttnn.TILE_SIZE != 0:
-            cos = cos[:, :batch_decode, :, :]
-            sin = sin[:, :batch_decode, :, :]
+        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size_per_device_group, :, :]
+            sin = sin[:, : self.batch_size_per_device_group, :, :]
 
         cos = ttnn.interleaved_to_sharded(cos, mem_config)
         sin = ttnn.interleaved_to_sharded(sin, mem_config)
@@ -778,7 +786,7 @@ class RotarySetup(LightweightModule):
             device.compute_with_storage_grid_size() if ttnn.get_arch_name() == "blackhole" else ttnn.CoreCoord(8, 8)
         )
 
-        self.start_core = ttnn.CoreCoord(1, 0)
+        self.start_core = prefetcher.colocation_start_core if prefetcher is not None else ttnn.CoreCoord(0, 0)
         # Generate the cos/sin matrices needed for ttnn.embedding op
         self.cos_matrix, self.sin_matrix = get_rot_mats(
             head_dim=head_dim,

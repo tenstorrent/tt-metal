@@ -14,14 +14,15 @@ from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.prefetcher import Prefetcher, is_tensor_prefetcher_supported, uses_tensor_prefetcher
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.tt_transformers.tt.tensor_prefetcher import TensorPrefetcher
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([False, "tensor_attention"]),
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -74,9 +75,15 @@ def test_attention_inference(
     llama90b_hf_rope_pcc = 0.97
     llama33_70b_mllama_rope_pcc = 0.9891
     num_tensors = 2
-    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
+    if use_prefetcher == "tensor_attention":
+        if batch_size != 32 or paged_attention or not is_tensor_prefetcher_supported(mesh_device):
+            pytest.skip("Tensor Prefetcher colocation coverage targets Blackhole batch-32 default attention")
+        prefetcher = TensorPrefetcher(mesh_device, num_tensors=num_tensors, num_layers=1)
+        prefetcher.colocate_attention_ops = True
+    else:
+        prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
 
-    if use_prefetcher:
+    if use_prefetcher and not uses_tensor_prefetcher(prefetcher):
         prefetcher.init(mode)
 
     model_args = ModelArgs(
@@ -161,7 +168,9 @@ def test_attention_inference(
         prefetcher=prefetcher,
     )
 
-    if prefetcher is not None and mode == Mode.DECODE:
+    if uses_tensor_prefetcher(prefetcher):
+        prefetcher.init(mode)
+    elif prefetcher is not None and mode == Mode.DECODE:
         prefetcher.prefetch()
         # Prefetcher global CB size must be set to the max tensor block size amongst all 5 matmul weights
         # 700 is an arbitrary value that is sufficient and avoids memory clobberring
@@ -196,7 +205,7 @@ def test_attention_inference(
             batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
-        if prefetcher is not None and mode == Mode.DECODE:
+        if prefetcher is not None and mode == Mode.DECODE and not uses_tensor_prefetcher(prefetcher):
             prefetcher.run()
 
         tt_attention_input = pt_attention_input.clone()
@@ -309,6 +318,9 @@ def test_attention_inference(
                 else:
                     logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
                     all_tests_pass = False
+
+    if uses_tensor_prefetcher(prefetcher):
+        prefetcher.teardown()
 
     if all_tests_pass:
         logger.info("Attention output Passed!")

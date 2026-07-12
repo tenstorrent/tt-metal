@@ -150,16 +150,27 @@ def make_prefetcher(
     return Prefetcher(mesh_device, num_tensors, num_layers, num_receiver_cores=num_receiver_cores)
 
 
-def colocating_prefetcher(prefetcher):
-    """Return ``prefetcher`` only when it co-locates ops on the worker grid, else ``None``.
+def _colocating_prefetcher(prefetcher, capability: str):
+    """Return a backend only when it supports the requested colocation capability."""
+    if prefetcher is None:
+        return None
+    enabled = getattr(prefetcher, capability, getattr(prefetcher, "colocate_ops", False))
+    return prefetcher if enabled else None
 
-    Backends that drive weights from a separate grid (DRAM-core) report
-    ``colocate_ops=False``; ops keyed off the returned value then fall back to their
-    default (non-prefetcher) placement. Single source for the "does this prefetcher
-    place ops on the worker grid" check that model.py / model_config.py / attention.py /
-    lm_head.py would otherwise each spell out inline.
-    """
-    return prefetcher if (prefetcher is not None and prefetcher.colocate_ops) else None
+
+def attention_colocating_prefetcher(prefetcher):
+    """Return a backend that colocates decode heads, RoPE, and SDPA."""
+    return _colocating_prefetcher(prefetcher, "colocate_attention_ops")
+
+
+def lm_head_colocating_prefetcher(prefetcher):
+    """Return a backend that executes the decode LM head on its receiver ring."""
+    return _colocating_prefetcher(prefetcher, "colocate_lm_head")
+
+
+def colocating_prefetcher(prefetcher):
+    """Compatibility alias for the original attention-colocation policy."""
+    return attention_colocating_prefetcher(prefetcher)
 
 
 def to_core_range_set(cores: List, return_list: bool = False) -> Union[ttnn.CoreRangeSet, List[ttnn.CoreRangeSet]]:
@@ -378,8 +389,12 @@ class Prefetcher(LightweightModule):
         self.enable_performance_mode: bool = True
         # The worker-core backend co-locates surrounding (non-GCB-matmul) ops — SDPA, create/concat
         # heads, lm_head, rope — on its reserved worker grid so the activation stays sharded there.
-        # The Tensor Prefetcher backend sets this False (those ops use the model's default placement).
+        # Keep the legacy aggregate flag while exposing the independently selectable capabilities
+        # used by the Tensor Prefetcher experiments.
         self.colocate_ops: bool = True
+        self.colocate_attention_ops: bool = True
+        self.colocate_lm_head: bool = True
+        self.colocation_start_core: ttnn.CoreCoord = ttnn.CoreCoord(1, 0)
         # The worker backend never streams weights (batched delivery only); the Tensor Prefetcher backend
         # overrides this. Defined here so model_config can read prefetcher.stream_in1 uniformly.
         self.stream_in1: bool = False

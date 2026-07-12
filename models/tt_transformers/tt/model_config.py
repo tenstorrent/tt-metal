@@ -45,7 +45,11 @@ from models.tt_transformers.tt.load_checkpoints import (
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
-from models.tt_transformers.tt.prefetcher import Prefetcher, colocating_prefetcher
+from models.tt_transformers.tt.prefetcher import (
+    Prefetcher,
+    attention_colocating_prefetcher,
+    lm_head_colocating_prefetcher,
+)
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
@@ -746,7 +750,7 @@ class ModelArgs:
                         )
                     lm_head_num_rows = 8
             self.lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
-            lm_head_prefetcher = colocating_prefetcher(self.prefetcher)
+            lm_head_prefetcher = lm_head_colocating_prefetcher(self.prefetcher)
             self.max_columns_per_device_lm_head = self.get_lm_head_max_columns_per_device(
                 self.lm_head_core_grid, lm_head_prefetcher
             )
@@ -1554,16 +1558,18 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         """Get the SDPA program config for decode mode."""
-        # Only a co-locating prefetcher (worker-core) pins SDPA onto its reserved worker grid;
-        # otherwise (DRAM-core or no prefetcher) use the default full (8, 8) grid.
-        if colocating_prefetcher(prefetcher) is not None:
+        # A backend with attention colocation pins SDPA to its worker region; otherwise use
+        # the default full (8, 8) grid.
+        if attention_colocating_prefetcher(prefetcher) is not None:
             sdpa_grid_size = (8, 8)
-            start_core = ttnn.CoreCoord(1, 0)
             num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
             return ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=sdpa_grid_size,
                 sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                    start_core, num_sdpa_cores, prefetcher.all_worker_cores_range_set, row_wise=True
+                    prefetcher.colocation_start_core,
+                    num_sdpa_cores,
+                    prefetcher.all_worker_cores_range_set,
+                    row_wise=True,
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
@@ -1763,9 +1769,8 @@ class ModelArgs:
     def get_attn_create_head_output_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
         """Get the memory config for create_qkv_heads output in attention."""
         if mode == Mode.DECODE:
-            # Only a co-locating prefetcher (worker-core) pins create-heads output onto its worker
-            # grid; otherwise (DRAM-core or no prefetcher) use the default placement.
-            if colocating_prefetcher(prefetcher) is not None:
+            # A backend with attention colocation pins create-heads output to its worker region.
+            if attention_colocating_prefetcher(prefetcher) is not None:
                 return ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
                     ttnn.BufferType.L1,
@@ -1797,14 +1802,12 @@ class ModelArgs:
     ):
         """Get the memory config for SDPA output in attention."""
         if mode == Mode.DECODE:
-            # Only a co-locating prefetcher (worker-core) pins the SDPA output onto its worker grid;
-            # otherwise (DRAM-core or no prefetcher) shard over the batch core range.
-            if colocating_prefetcher(prefetcher) is not None:
-                start_core = ttnn.CoreCoord(1, 0)
+            # A backend with attention colocation pins the SDPA output to its worker region.
+            if attention_colocating_prefetcher(prefetcher) is not None:
                 return ttnn.create_sharded_memory_config(
                     shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
                     core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                        start_core,
+                        prefetcher.colocation_start_core,
                         batch_size_per_device_group,
                         prefetcher.all_worker_cores_range_set,
                         row_wise=True,

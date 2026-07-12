@@ -14,13 +14,14 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
+from models.tt_transformers.tt.prefetcher import Prefetcher, is_tensor_prefetcher_supported
+from models.tt_transformers.tt.tensor_prefetcher import TensorPrefetcher
 
 
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
-    ([False]),
+    ([False, "tensor_lm_head"]),
 )
 @pytest.mark.parametrize(
     "seq_len",
@@ -43,9 +44,16 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
 def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    prefetcher = Prefetcher(mesh_device, num_tensors=0, num_layers=1) if use_prefetcher else None
+    if use_prefetcher == "tensor_lm_head":
+        if not is_tensor_prefetcher_supported(mesh_device):
+            pytest.skip("Tensor Prefetcher LM-head coverage requires Blackhole")
+        prefetcher = TensorPrefetcher(mesh_device, num_tensors=0, num_layers=1)
+        prefetcher.colocate_lm_head = True
+        prefetcher.mode = Mode.DECODE
+    else:
+        prefetcher = Prefetcher(mesh_device, num_tensors=0, num_layers=1) if use_prefetcher else None
 
-    if use_prefetcher:
+    if use_prefetcher and use_prefetcher != "tensor_lm_head":
         prefetcher.init(mode=Mode.DECODE)
 
     model_args = ModelArgs(
@@ -77,6 +85,11 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         max_columns_per_device=model_args.max_columns_per_device_lm_head,
         prefetcher=prefetcher,
     )
+    if use_prefetcher == "tensor_lm_head":
+        assert tt_model.use_lm_head_prefetcher
+        assert prefetcher.worker_sub_device_id is None
+        assert len(tt_model.split_sizes_ring_mm) == len(tt_model.output_weights_ring_mm)
+        assert max(tt_model.split_sizes_ring_mm) <= model_args.max_columns_per_device_lm_head
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
@@ -85,7 +98,9 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, use_prefetcher, res
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         dtype=ttnn.bfloat8_b,
-        memory_config=model_args.get_lm_head_input_mem_config(Mode.PREFILL, prefetcher),
+        memory_config=model_args.get_lm_head_input_mem_config(
+            Mode.DECODE if use_prefetcher == "tensor_lm_head" else Mode.PREFILL, prefetcher
+        ),
         layout=ttnn.TILE_LAYOUT,
     )
     tt_output = tt_model(tt_input)

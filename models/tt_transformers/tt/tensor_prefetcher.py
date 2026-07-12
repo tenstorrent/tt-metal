@@ -214,6 +214,9 @@ class TensorPrefetcher(LightweightModule):
         assert self.model_name != "", "HF_MODEL is not set. Tensor Prefetcher must be run with a model."
         self.dual_senders_per_bank: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_DUAL_SENDERS", "0") == "1"
         self.stream_in1: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1"
+        self.colocate_attention_ops: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_COLOCATE_ATTENTION_OPS", "0") == "1"
+        self.colocate_lm_head: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_COLOCATE_LM_HEAD", "0") == "1"
+        self.colocation_start_core: ttnn.CoreCoord = ttnn.CoreCoord(0, 0)
         self.uses_tensor_prefetcher: bool = True
 
         # Pick recv_per_bank only when both model geometry and runtime core allocation support it.
@@ -272,19 +275,22 @@ class TensorPrefetcher(LightweightModule):
         self.mode: Mode = Mode.PREFILL
         self._started: bool = False
         self._stopped: bool = False
-        # Surrounding (non-GCB-matmul) ops — SDPA, create/concat heads, lm_head, rope — are NOT
-        # co-located on the prefetcher's cores: the DRISC senders are off the worker grid and the
-        # receiver ring is sparse, so those ops use the model's default placement (the
-        # same the no-prefetcher path uses). The worker-core backend sets this True and reserves
-        # its worker grid for them. Config functions branch on this instead of the backend type.
+        # Preserve the original aggregate flag for compatibility. Attention/RoPE and LM-head
+        # colocation are independently opt-in because they have different placement and L1 risks.
         self.colocate_ops: bool = False
 
         logger.info(
             f"[TensorPrefetcher] model={self.model_name} banks={self.num_senders} "
             f"recv/bank={self.num_receiver_cores} ring={self.ring_size} "
             f"layout={self.receiver_layout_name} fallback={self.receiver_layout_used_fallback} "
-            f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
+            f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1} "
+            f"colocate_attention={self.colocate_attention_ops} colocate_lm_head={self.colocate_lm_head}"
         )
+        if self.colocate_lm_head:
+            logger.warning(
+                "[TensorPrefetcher] LM-head colocation is experimental: isolated PCC passes, but full-model "
+                "generation is not yet coherent."
+            )
 
     def insert_tensor(self, tensor: ttnn.Tensor, program_config=None) -> None:
         """Register one weight and its consuming decode program config for GCB sizing."""

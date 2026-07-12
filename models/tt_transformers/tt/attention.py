@@ -13,7 +13,7 @@ from models.common.utility_functions import nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
-from models.tt_transformers.tt.prefetcher import colocating_prefetcher, prefetcher_linear
+from models.tt_transformers.tt.prefetcher import attention_colocating_prefetcher, prefetcher_linear
 
 
 class Attention(LightweightModule):
@@ -769,7 +769,7 @@ class Attention(LightweightModule):
         )
 
         concat_heads_sub_core_grids = None
-        if colocating_prefetcher(self.prefetcher) is not None:
+        if attention_colocating_prefetcher(self.prefetcher) is not None:
             concat_heads_sub_core_grids = self.prefetcher.all_worker_cores_range_set
         attn_output_cat = ttnn.experimental.nlp_concat_heads_decode(
             attn_output_11BH,

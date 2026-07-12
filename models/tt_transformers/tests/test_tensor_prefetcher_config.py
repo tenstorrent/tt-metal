@@ -4,6 +4,8 @@
 
 import pytest
 
+import ttnn
+from models.tt_transformers.tt.prefetcher import attention_colocating_prefetcher, lm_head_colocating_prefetcher
 from models.tt_transformers.tt.prefetcher_config import allocate_tensor_prefetcher_receiver_layout
 
 _RING32_RECEIVERS = (
@@ -242,3 +244,44 @@ def test_tensor_prefetcher_receiver_layout_is_deterministic():
     second = allocate_tensor_prefetcher_receiver_layout(*args)
 
     assert first == second
+
+
+def test_prefetcher_colocation_capabilities_are_independent():
+    class PrefetcherCapabilities:
+        colocate_ops = False
+        colocate_attention_ops = True
+        colocate_lm_head = False
+
+    prefetcher = PrefetcherCapabilities()
+    assert attention_colocating_prefetcher(prefetcher) is prefetcher
+    assert lm_head_colocating_prefetcher(prefetcher) is None
+
+    prefetcher.colocate_attention_ops = False
+    prefetcher.colocate_lm_head = True
+    assert attention_colocating_prefetcher(prefetcher) is None
+    assert lm_head_colocating_prefetcher(prefetcher) is prefetcher
+
+
+@pytest.mark.parametrize("receivers_per_bank", [1, 2, 4, 8])
+@pytest.mark.parametrize("grid_x,right_starts", [(11, (6,)), (10, (6, 7))], ids=("unharvested", "shared_fallback"))
+def test_tensor_prefetcher_colocation_grids_fit_worker_grid(receivers_per_bank, grid_x, right_starts):
+    layout = allocate_tensor_prefetcher_receiver_layout(
+        (grid_x, 10),
+        _anchors(8, right_start=right_starts[0]),
+        num_dram_banks=8,
+        receivers_per_bank=receivers_per_bank,
+        device_right_starts=right_starts,
+    )
+
+    assert layout is not None
+    assert all(0 <= x < grid_x and 0 <= y < 10 for x, y in layout.receiver_coords)
+
+    worker_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, 9))])
+    for num_cores in (1, 32, 64):
+        selected_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(0, 0), num_cores, worker_grid, row_wise=True
+        )
+        assert selected_grid.num_cores() == num_cores
+        for core_range in selected_grid.ranges():
+            assert 0 <= core_range.start.x <= core_range.end.x < grid_x
+            assert 0 <= core_range.start.y <= core_range.end.y < 10
