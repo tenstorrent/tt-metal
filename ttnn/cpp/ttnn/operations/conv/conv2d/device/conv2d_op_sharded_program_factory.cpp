@@ -253,11 +253,20 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         out_block_h_ntiles,
         act_block_h_ntiles);
 
+    const uint32_t filter_h = static_cast<uint32_t>(sliding_window_config.window_hw.first);
+    const uint32_t filter_w = static_cast<uint32_t>(sliding_window_config.window_hw.second);
+    const bool is_conv_1d_depthwise_conv =
+        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
+    const bool uses_depthwise_weight_plan_shape = is_conv_1d_depthwise_conv && !sliding_window_config.is_transpose;
+
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_FATAL(b.layout() == Layout::TILE, "Conv weights should be in tiled layout");
     TT_FATAL(b.padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_FATAL(b.padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.padded_shape()[2];
+    TT_FATAL(
+        uses_depthwise_weight_plan_shape || b.padded_shape()[1] == 1,
+        "Non-depthwise and transposed convolution weight matrix shape is invalid");
+    uint32_t weight_matrix_height =
+        uses_depthwise_weight_plan_shape ? b.padded_shape()[1] * b.padded_shape()[2] : b.padded_shape()[2];
     uint32_t weight_matrix_width = b.padded_shape()[3];
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / tt::constants::TILE_WIDTH;
 
@@ -315,8 +324,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     const uint32_t conv_act_size_c = ashape_with_channels_padded[3];
-    const uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
-    const uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     const uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     const uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
@@ -329,8 +336,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         pad_w = 0;
     }
 
-    const bool is_conv_1d_depthwise_conv =
-        is_1d_depthwise_conv(groups, ashape[3], output_channels, filter_h, ashape[1], has_bias);
     const uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
         is_conv_1d_depthwise_conv,
@@ -380,16 +385,70 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     }
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
-    if (is_conv_1d_depthwise_conv && height_sharded) {
+    if (is_conv_1d_depthwise_conv) {
+        TT_FATAL(
+            height_sharded || block_sharded,
+            "1D depthwise convolution supports HEIGHT_SHARDED and BLOCK_SHARDED layouts only");
         const uint32_t expected_act_block_w_ntiles =
-            tt::round_up(
-                input_channels_padded * (coalesce_1d_depthwise_kw_reads ? filter_w : 1), tt::constants::TILE_WIDTH) /
+            tt::round_up(shard_shape[1] * (coalesce_1d_depthwise_kw_reads ? filter_w : 1), tt::constants::TILE_WIDTH) /
             tt::constants::TILE_WIDTH;
         TT_FATAL(
             act_block_w_ntiles == expected_act_block_w_ntiles,
             "1D depthwise activation block width mismatch. Got {} tiles, expected {} tiles",
             act_block_w_ntiles,
             expected_act_block_w_ntiles);
+        const uint32_t expected_kernel_taps = filter_h * filter_w;
+        const uint32_t expected_tap_height = act_block_h_ntiles * tt::constants::TILE_HEIGHT;
+        if (uses_depthwise_weight_plan_shape) {
+            TT_FATAL(
+                b.logical_shape()[1] == expected_kernel_taps && b.padded_shape()[1] == expected_kernel_taps &&
+                    b.logical_shape()[2] == expected_tap_height && b.padded_shape()[2] == expected_tap_height,
+                "1D depthwise weight plan must have {} taps with {} rows per tap; got logical/padded [{}, {}]/[{}, {}]",
+                expected_kernel_taps,
+                expected_tap_height,
+                b.logical_shape()[1],
+                b.logical_shape()[2],
+                b.padded_shape()[1],
+                b.padded_shape()[2]);
+        }
+        const uint32_t output_channel_partition_width =
+            output.shard_spec()->shape[1] * parallelization_config.num_cores_c_out;
+        TT_FATAL(
+            b.logical_shape()[3] == output_channels && b.padded_shape()[3] == output_channel_partition_width,
+            "1D depthwise weight channel shape must match the output plan. Weight logical/padded width: {}/{}, "
+            "output logical/partitioned width: {}/{}",
+            b.logical_shape()[3],
+            b.padded_shape()[3],
+            output_channels,
+            output_channel_partition_width);
+
+        if (block_sharded) {
+            const auto& output_shard_spec = output.shard_spec().value();
+            TT_FATAL(input_cores == output_cores, "1D depthwise BLOCK_SHARDED input/output grids must match");
+            TT_FATAL(
+                a.shard_spec()->orientation == output_shard_spec.orientation,
+                "1D depthwise BLOCK_SHARDED input/output shard orientations must match");
+            TT_FATAL(
+                parallelization_config.num_cores_c_in == parallelization_config.num_cores_c_out &&
+                    conv_act_c_blocks == out_conv_c_blocks,
+                "1D depthwise BLOCK_SHARDED input/output channel core counts must match");
+            TT_FATAL(
+                shard_shape[1] == output_shard_spec.shape[1] &&
+                    shard_shape[1] == act_block_w_ntiles * tt::constants::TILE_WIDTH &&
+                    shard_shape[1] == per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH,
+                "1D depthwise BLOCK_SHARDED local channel widths must match. Input shard: {}, output shard: {}, "
+                "activation block: {}, output block: {}",
+                shard_shape[1],
+                output_shard_spec.shape[1],
+                act_block_w_ntiles * tt::constants::TILE_WIDTH,
+                per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH);
+            TT_FATAL(
+                !coalesce_1d_depthwise_kw_reads,
+                "1D depthwise BLOCK_SHARDED convolution requires per-tap activation reads");
+            TT_FATAL(
+                conv_act_c_read_bytes == shard_shape[1] * a.element_size(),
+                "1D depthwise BLOCK_SHARDED reader must consume exactly one local channel shard");
+        }
     }
     // check is for 16-byte alignment
     TT_FATAL(
@@ -512,7 +571,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
     const uint32_t act_subblock_num_tiles = act_subblock_h_ntiles * act_block_w_ntiles;
 
-    const uint32_t in0_num_blocks_w = conv_act_c_blocks * num_blocks_act_w;
+    const uint32_t in0_num_blocks_w =
+        is_conv_1d_depthwise_conv ? num_blocks_act_w : conv_act_c_blocks * num_blocks_act_w;
 
     // weight
     tt::tt_metal::Buffer* weights_buffer = b.buffer();
@@ -541,6 +601,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         per_core_out_matrix_width_ntiles,
         weight_block_w_ntiles);
     uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
+    TT_FATAL(
+        !is_conv_1d_depthwise_conv || !block_sharded || num_blocks_weight_w_per_core == 1,
+        "1D depthwise BLOCK_SHARDED convolution requires one local output-channel weight block, got {}",
+        num_blocks_weight_w_per_core);
     if (height_sharded) {
         TT_FATAL(
             num_blocks_weight_w_per_core == num_blocks_weight_w,
@@ -782,21 +846,22 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
         "reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
 
-    if (!is_conv_1d_depthwise_conv && block_sharded) {
-        // Block sharded conv
-        reader_kernel =
-            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
-            "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
+    if (block_sharded) {
         writer_mcast_sender_kernel =
             "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
             "writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp";
         writer_mcast_receiver_kernel =
             "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
             "writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp";
-    } else if (is_conv_1d_depthwise_conv) {
-        // 1D Depthwise Conv (height sharded)
+    }
+
+    if (is_conv_1d_depthwise_conv) {
         compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
         reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
+    } else if (block_sharded) {
+        reader_kernel =
+            "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
+            "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
     } else {
         // Height sharded conv
         reader_kernel =
@@ -958,7 +1023,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).index,
         num_blocks_act_w,
         weight_block_num_tiles,
-        conv_act_c_blocks,
+        is_conv_1d_depthwise_conv ? 1U : conv_act_c_blocks,
         weight_block_h_ntiles,
         weight_block_w_ntiles,
         weight_matrix_width_ntiles,
@@ -970,7 +1035,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
         num_blocks_act_h_per_core,
         num_blocks_weight_w_per_core,
-        out_conv_c_blocks,
+        is_conv_1d_depthwise_conv ? 1U : out_conv_c_blocks,
         (uint32_t)has_bias,
         (uint32_t)enable_split_reader,
         (uint32_t)(enable_activation_reuse && height_sharded)};
@@ -1197,61 +1262,71 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
 
     // Setup reader runtime arguments
     if (block_sharded) {
-        const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
-        const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
-        std::vector<uint32_t> act_mcast_noc_y;
-        if (transpose_mcast) {
-            act_mcast_noc_y.reserve(in_num_cores_y);
-            for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+        if (is_conv_1d_depthwise_conv) {
+            for (const CoreRange& core_range : all_cores.ranges()) {
+                for (const CoreCoord& core : core_range) {
+                    const uint32_t config_page_id = transpose_mcast ? core.x : core.y;
+                    reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{config_page_id, 0});
+                }
             }
         } else {
-            // NOTE: using same var for x as well, this is intentional
-            act_mcast_noc_y.reserve(in_num_cores_x);
-            for (int32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
-                act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
-            }
-        }
-
-        const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
-        const CoreCoord out_bottom_right_core_physical = device->worker_core_from_logical_core(out_bottom_right_core);
-        const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
-
-        for (const CoreRange& core_range : all_cores.ranges()) {
-            for (const CoreCoord& core : core_range) {
-                const bool is_receiver_core = output_cores.contains(core);
-                const bool is_sender_core = input_cores.contains(core);
-                std::vector<uint32_t> reader_rt_args;
-                if (transpose_mcast) {
-                    CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
-                    CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
-
-                    reader_rt_args = setup_mcast_args(
-                        reader_is_noc_0,
-                        bottom_core_physical.x,
-                        top_left_core_physical.y,
-                        bottom_core_physical.x,
-                        bottom_core_physical.y);
-
-                    reader_rt_args.push_back(core.y);                  // act_mcast_sender_id
-                    reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
-                } else {
-                    CoreCoord core_physical = device->worker_core_from_logical_core(core);
-
-                    reader_rt_args = setup_mcast_args(
-                        reader_is_noc_0,
-                        top_left_core_physical.x,
-                        core_physical.y,
-                        out_bottom_right_core_physical.x,
-                        core_physical.y);
-                    reader_rt_args.push_back(core.x);           // act_mcast_sender_id
-                    reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
+            const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
+            const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
+            std::vector<uint32_t> act_mcast_noc_y;
+            if (transpose_mcast) {
+                act_mcast_noc_y.reserve(in_num_cores_y);
+                for (uint32_t core_idx_y = 0; core_idx_y < in_num_cores_y; ++core_idx_y) {
+                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
                 }
-                reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
-                reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
-                reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
-                reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
-                reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+            } else {
+                // NOTE: using same var for x as well, this is intentional
+                act_mcast_noc_y.reserve(in_num_cores_x);
+                for (int32_t core_idx_x = 0; core_idx_x < in_num_cores_x; ++core_idx_x) {
+                    act_mcast_noc_y.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+                }
+            }
+
+            const CoreCoord out_bottom_right_core = {(std::size_t)num_cores_x - 1, (std::size_t)num_cores_y - 1};
+            const CoreCoord out_bottom_right_core_physical =
+                device->worker_core_from_logical_core(out_bottom_right_core);
+            const bool reader_is_noc_0 = reader_noc == tt::tt_metal::NOC::NOC_0;
+
+            for (const CoreRange& core_range : all_cores.ranges()) {
+                for (const CoreCoord& core : core_range) {
+                    const bool is_receiver_core = output_cores.contains(core);
+                    const bool is_sender_core = input_cores.contains(core);
+                    std::vector<uint32_t> reader_rt_args;
+                    if (transpose_mcast) {
+                        CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
+                        CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
+
+                        reader_rt_args = setup_mcast_args(
+                            reader_is_noc_0,
+                            bottom_core_physical.x,
+                            top_left_core_physical.y,
+                            bottom_core_physical.x,
+                            bottom_core_physical.y);
+
+                        reader_rt_args.push_back(core.y);                  // act_mcast_sender_id
+                        reader_rt_args.push_back(bottom_core_physical.x);  // act_mcast_sender_noc_x
+                    } else {
+                        CoreCoord core_physical = device->worker_core_from_logical_core(core);
+
+                        reader_rt_args = setup_mcast_args(
+                            reader_is_noc_0,
+                            top_left_core_physical.x,
+                            core_physical.y,
+                            out_bottom_right_core_physical.x,
+                            core_physical.y);
+                        reader_rt_args.push_back(core.x);           // act_mcast_sender_id
+                        reader_rt_args.push_back(core_physical.y);  // act_mcast_sender_noc_x
+                    }
+                    reader_rt_args.push_back(static_cast<uint32_t>(is_receiver_core));  // is_receiver_core
+                    reader_rt_args.push_back(static_cast<uint32_t>(is_sender_core));    // is_receiver_core
+                    reader_rt_args.push_back(transpose_mcast ? core.x : core.y);        // dram config reader index
+                    reader_rt_args.insert(reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());
+                    reader_desc.runtime_args.emplace_back(core, std::move(reader_rt_args));
+                }
             }
         }
     } else {

@@ -8,6 +8,7 @@ constants, cached chunk masks). Behavior-preserving extraction of the original
 `Qwen36GatedDeltaNet.__init__` weight code — every dtype / layout / memory_config
 and every env-var read is preserved verbatim.
 """
+
 from dataclasses import dataclass
 
 import torch
@@ -44,6 +45,9 @@ class GDNWeights:
     q_weight_taps: list
     k_weight_taps: list
     v_weight_taps: list
+    q_native_weight_cache: dict
+    k_native_weight_cache: dict
+    v_native_weight_cache: dict
     q_bias_dev: object
     k_bias_dev: object
     v_bias_dev: object
@@ -231,6 +235,9 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
     q_weight_taps = _precompute_weight_taps(q_conv_weight)
     k_weight_taps = _precompute_weight_taps(k_conv_weight)
     v_weight_taps = _precompute_weight_taps(v_conv_weight)
+    q_native_weight_cache = {}
+    k_native_weight_cache = {}
+    v_native_weight_cache = {}
     q_bias_dev = _precompute_bias_dev(q_conv_bias)
     k_bias_dev = _precompute_bias_dev(k_conv_bias)
     v_bias_dev = _precompute_bias_dev(v_conv_bias)
@@ -285,6 +292,9 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         q_weight_taps=q_weight_taps,
         k_weight_taps=k_weight_taps,
         v_weight_taps=v_weight_taps,
+        q_native_weight_cache=q_native_weight_cache,
+        k_native_weight_cache=k_native_weight_cache,
+        v_native_weight_cache=v_native_weight_cache,
         q_bias_dev=q_bias_dev,
         k_bias_dev=k_bias_dev,
         v_bias_dev=v_bias_dev,
