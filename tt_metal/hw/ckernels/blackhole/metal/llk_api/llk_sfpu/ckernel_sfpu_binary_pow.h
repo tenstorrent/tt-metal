@@ -216,12 +216,14 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     sfpi::vFloat z_hi = pow_hi * exp_f32;
     sfpi::vFloat z_lo = pow_lo * exp_f32 + pow * (ln_m * vConst1Ln2);
 
-    // Knuth TwoSum (branch-free, exact regardless of the relative magnitudes of z_hi
-    // and z_lo) so k=round(z) sees the true integer part while the residual e keeps the
-    // dropped tail. Robust even when |z_lo| > |z_hi| (exponents/bases near 1).
+    // Dekker FastTwoSum so k=round(z) sees the true integer part while the residual e
+    // keeps the dropped tail. Exact under the precondition |z_hi| >= |z_lo| or z_hi == 0:
+    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
+    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0 then
+    // z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1 so
+    // |z_hi| >= |pow| > |z_lo|.
     sfpi::vFloat s = z_hi + z_lo;
-    sfpi::vFloat bb = s - z_hi;
-    sfpi::vFloat e = (z_hi - (s - bb)) + (z_lo - bb);
+    sfpi::vFloat e = z_lo - (s - z_hi);
     const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;  // -127, matches original clamp
     v_if(s < low_threshold) {
         s = low_threshold;

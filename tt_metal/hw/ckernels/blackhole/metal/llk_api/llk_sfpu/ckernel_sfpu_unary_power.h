@@ -179,13 +179,16 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
 // Computes 2**(z_hi + z_lo) where the argument is supplied as an unevaluated sum
 // (double-float). For pow(x,y): z = y*log2(x) can be O(100) with a tiny but
 // significant fractional tail. Rounding (z_hi + z_lo) into one fp32 before the
-// reduction discards that tail (the 20-27 ULP error). A Knuth TwoSum (branch-free,
-// exact regardless of the relative magnitudes of z_hi and z_lo) keeps the residual,
-// which is folded back into the reduced remainder r so no fractional bits are lost.
+// reduction discards that tail (the 20-27 ULP error). A Dekker FastTwoSum keeps the
+// residual, which is folded back into the reduced remainder r so no fractional bits
+// are lost. FastTwoSum is exact under the precondition |z_hi| >= |z_lo| or z_hi == 0,
+// which both pow callers satisfy: z_hi = pow*exponent(base) and z_lo carries the
+// fractional log2 term (|z_lo| < ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder).
+// When exponent(base) == 0 then z_hi == 0 exactly (the sum is already exact);
+// otherwise |exponent(base)| >= 1 so |z_hi| >= |pow| > |z_lo|.
 sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::vFloat z_lo) {
     sfpi::vFloat s = z_hi + z_lo;
-    sfpi::vFloat bb = s - z_hi;
-    sfpi::vFloat e = (z_hi - (s - bb)) + (z_lo - bb);
+    sfpi::vFloat e = z_lo - (s - z_hi);
 
     s = sfpi::max(s, -0x7e.ffff8p0f);
 

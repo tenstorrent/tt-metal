@@ -182,20 +182,20 @@ sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
 // Computes 2**(z_hi + z_lo) where the argument is supplied as an unevaluated sum
 // (double-float). This matters for pow(x,y): z = y*log2(x) can be O(100) with a
 // tiny but significant fractional tail. Rounding (z_hi + z_lo) into one fp32 before
-// the reduction discards that tail (the 20-27 ULP error). A Knuth TwoSum recovers
+// the reduction discards that tail (the 20-27 ULP error). A Dekker FastTwoSum recovers
 // the exact rounding residual, which is folded back into the reduced remainder so
 // no fractional bits are lost across the k = round(z) argument reduction.
 sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::vFloat z_lo) {
     // Full argument z = z_hi + z_lo. k must be the nearest integer to the TOTAL z, not
-    // just z_hi -- otherwise leftover integer bits in z_lo blow up the polynomial. But
-    // z = z_hi + z_lo rounded to one fp32 is exactly what loses the fractional tail, so
-    // we keep the tail explicitly via Knuth's TwoSum (branch-free, exact regardless of
-    // the relative magnitudes of z_hi and z_lo -- important because for exponents near
-    // 1 and bases near 1, |z_lo| can exceed |z_hi|, where the cheaper Dekker FastTwoSum
-    // would drop bits). s = round(z_hi+z_lo); e = the exact rounding error.
+    // just z_hi -- otherwise leftover integer bits in z_lo blow up the polynomial. We
+    // keep the tail explicitly via a Dekker FastTwoSum. FastTwoSum is exact under the
+    // precondition |z_hi| >= |z_lo| or z_hi == 0, which both pow callers satisfy:
+    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
+    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0
+    // then z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1
+    // so |z_hi| >= |pow| > |z_lo|. s = round(z_hi+z_lo); e = the exact rounding error.
     sfpi::vFloat s = z_hi + z_lo;
-    sfpi::vFloat bb = s - z_hi;
-    sfpi::vFloat e = (z_hi - (s - bb)) + (z_lo - bb);
+    sfpi::vFloat e = z_lo - (s - z_hi);
 
     s = sfpi::max(s, -0x7e.ffff8p0f);
 
