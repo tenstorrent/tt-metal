@@ -123,9 +123,10 @@ def conv1d(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Wrap ``ttnn.conv1d`` for a ROW_MAJOR ``[B, T, Cin]`` tensor.
 
-    ``activation`` (e.g. ``"relu"``) is fused into the conv, removing a separate
-    dispatch (see fused-ops PR #29236). Returns ``([B, Tout, Cout] ROW_MAJOR,
-    prepared_weight)``; store the prepared weight so program-cache/trace reuse it.
+    ``activation`` (e.g. ``"relu"``) is applied after the conv as a separate op.
+    (Conv-fused activation via ``UnaryWithParam`` is a Stage-2 optimization.)
+    Returns ``([B, Tout, Cout] ROW_MAJOR, prepared_weight)``; store the prepared
+    weight so program-cache/trace reuse it.
     """
     x_rm = as_row_major(x_btc)
     batch = x_rm.shape[0]
@@ -135,7 +136,6 @@ def conv1d(
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         deallocate_activation=False,
-        activation=activation,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=math_fidelity)
 
@@ -160,6 +160,11 @@ def conv1d(
         return_weights_and_bias=True,
     )
     out = ttnn.sharded_to_interleaved(out) if out.is_sharded() else out
+    if activation:
+        if activation == "relu":
+            out = ttnn.relu(out)
+        else:
+            raise ValueError(f"Unsupported conv activation: {activation}")
     out = as_row_major(out)
     out = ttnn.reshape(out, (batch, out_length, out_channels))
     return out, weight_dev
