@@ -18,6 +18,7 @@ one candidate per function, at the first offending write:
 Latched registers (L1_Dest_addr) are an expected THCON-only case: such a write
 is SKIPPED (not the whole function) so a later sampled write is still checked.
 """
+
 from __future__ import annotations
 
 from .. import registry
@@ -47,7 +48,12 @@ class ReconfigStall(Check):
         for fn in fb.functions:
             if not registry.is_reconfig_fn(fn.name):
                 continue
-            thr = registry.thread_of(fn.file)
+            # file's thread, else fall back to the function NAME (thread_of_fact) —
+            # consistent with cfg_word_overlap. A reconfig fn in a token-less file
+            # would otherwise resolve UNKNOWN -> empty DRAIN_UNIT_TOKENS -> a
+            # correctly-drained write falsely flagged NO_UNIT_DRAIN (latent today:
+            # all reconfig fns live in pack/unpack/math files).
+            thr = registry.thread_of_fact({"file": fn.file, "function": fn.name})
             drain_tokens = registry.DRAIN_UNIT_TOKENS.get(thr, ())
 
             facts = fb.facts_in(fn, ("macro", "call", "pointer_write"))

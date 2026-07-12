@@ -34,6 +34,7 @@ signal (`inc`/`set`/multicast) with NO write flush before it in the same functio
 blind_spots): which buffer the flush actually covers, cross-core/cross-kernel
 signal↔wait pairing, and multicast fan-out count vs destination count.
 """
+
 from __future__ import annotations
 
 from collections import defaultdict
@@ -58,6 +59,24 @@ class NocSync(Check):
         "no barrier) is flagged with safety=FLUSH_NOT_BARRIER — surfaced for the skill "
         "to confirm against the NoC Ordering + data-movement docs, NOT pre-cleared as "
         "safe (writes_flushed = departure, not commit). "
+        "A credit whose ONLY preceding flush is noc_async_posted_writes_flushed is "
+        "flagged safety=POSTED_FLUSH_ONLY: that flush drains only the posted-writes HW "
+        "counter, so it is a no-op (no ordering) when the credited write/inc was issued "
+        "non-posted — the tool cannot see a write's posted-ness (a constexpr/template "
+        "property), so the /noc-sync skill confirms it. NOTE this fires only when the "
+        "credit SIGNAL is visible in the kernel; a credit posted INSIDE a primitive "
+        "(e.g. remote_cb_push_back_and_write_pages, whose internal write+inc are not "
+        "kernel-level facts) is NOT surfaced — that posted/non-posted-flush pairing is "
+        "left to the LLM. "
+        "The checker models a NoC-WRITE-before-credit race: it treats a NoC "
+        "flush/barrier as what orders the data, so it CLEARS a signal that a barrier "
+        "precedes. It does NOT model the case where the credited data is a RISC L1 "
+        "*store* (a plain/volatile store, then a remote inc/up or mailbox push that a "
+        "consumer reads) — a different ordering domain (BabyRISC MemoryOrdering.md "
+        "'Cross-core signalling') where a NoC barrier/flush is IRRELEVANT and the fix "
+        "is load-back+consume, not a barrier. So a barrier-preceded signal that is "
+        "really guarding a RISC store is a false-clear here — the /noc-sync skill "
+        "must check whether the producer is a RISC store. "
         "Cross-core / cross-kernel signal↔wait pairing (does a consumer actually "
         "wait on this semaphore?) and multicast fan-out (inc count == number of "
         "destinations) are NOT decided here — the /noc-sync skill owns them. "
@@ -89,7 +108,19 @@ class NocSync(Check):
             barrier_offs = [
                 c["off"] for c in calls if registry.noc_flush_kind(c) == "barrier"
             ]
-            flush_offs = [c["off"] for c in calls if registry.noc_op_of(c) == "flush"]
+            # NON-posted departure-or-stronger flushes clear a WRITE credit. A
+            # posted-only flush (noc_flush_kind == "posted") is DELIBERATELY excluded:
+            # it drains the wrong HW counter and is a no-op for non-posted writes/incs,
+            # so it must never clear a credit — it is only tracked (posted_flush_offs)
+            # to TAG a would-be-flagged credit (POSTED_FLUSH_ONLY) for the skill.
+            flush_offs = [
+                c["off"]
+                for c in calls
+                if registry.noc_flush_kind(c) in ("barrier", "flushed")
+            ]
+            posted_flush_offs = [
+                c["off"] for c in calls if registry.noc_flush_kind(c) == "posted"
+            ]
             for c in calls:
                 op = registry.noc_op_of(c)
                 if op not in ("inc", "set", "mcast"):
@@ -119,6 +150,13 @@ class NocSync(Check):
                 safety = ""
                 if atomic and any(fo < c["off"] for fo in flush_offs):
                     safety = "FLUSH_NOT_BARRIER"
+                elif any(fo < c["off"] for fo in posted_flush_offs):
+                    # The ONLY preceding flush is a posted-writes flush — it drains the
+                    # posted counter, a no-op if the credited write/inc was issued
+                    # non-posted (the common default). Surface it so the skill confirms
+                    # the write's posted-ness (dataflow-API posted/non-posted counters);
+                    # do NOT treat the posted-flush as ordering (silent false-clear).
+                    safety = "POSTED_FLUSH_ONLY"
                 findings.append(
                     Finding(
                         file=c["file"],
@@ -129,13 +167,19 @@ class NocSync(Check):
                         detail=f"{c.get('name','')} with no preceding {need} in {func} "
                         "(data-before-credit: signal may overtake the write"
                         + (
-                            "; a writes_flushed precedes it (departure, not commit) — "
-                            "confirm vs NoC/Ordering.md + posted_writes.md, don't assume safe)"
-                            if safety
+                            "; only a POSTED-writes flush precedes it — a no-op if the "
+                            "write/inc is non-posted (wrong HW counter); confirm the "
+                            "write's posted-ness, don't assume ordered)"
+                            if safety == "POSTED_FLUSH_ONLY"
                             else (
-                                "; atomic credit needs the write COMMITTED (ack barrier))"
-                                if atomic
-                                else ")"
+                                "; a writes_flushed precedes it (departure, not commit) — "
+                                "confirm vs NoC/Ordering.md + posted_writes.md, don't assume safe)"
+                                if safety == "FLUSH_NOT_BARRIER"
+                                else (
+                                    "; atomic credit needs the write COMMITTED (ack barrier))"
+                                    if atomic
+                                    else ")"
+                                )
                             )
                         ),
                         evidence=[self._ev(c, c.get("name", ""))],

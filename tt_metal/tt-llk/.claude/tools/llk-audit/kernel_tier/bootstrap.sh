@@ -4,13 +4,13 @@
 #
 # kernel_tier/bootstrap.sh <arch> <out_dir>
 #
-# The on-request kernel tier for cb-sync / noc-sync / mailbox-sync over the
+# The on-request kernel tier for cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync over the
 # JIT-compiled kernel surface (OUTSIDE tt-llk). Invoked by `run.sh --full-jit`
 # when this module is present (kernel_tier/MANIFEST). It:
 #   1. obtains a tt-metal build log carrying `g++ compile cmd:` lines (either a
 #      pre-captured LLK_KT_LOG, or by RUNNING a workload with the capture env var),
 #   2. translates + extracts each kernel TU into a KERNEL fact base (capture.py),
-#   3. runs cb-sync / noc-sync / mailbox-sync over it,
+#   3. runs cb-sync / noc-sync / noc-atomic-exit / noc-read-barrier / mailbox-sync over it,
 #   4. writes out/audit.kernel.<arch>.json + a coverage ledger.
 #
 # Controls (env):
@@ -71,13 +71,14 @@ FACTS="$(PYTHONPATH="$TOOL" python3 "$HERE/capture.py" --arch "$ARCH" --log "$LO
 # all-errored kernel set would defeat a `-s` check and give a false all-clear.
 if [ ! -s "$FACTS" ] || ! grep -q '"family"' "$FACTS"; then
   echo "kernel-tier: no kernel facts extracted — no kernel TUs yielded facts (see the ledger)." >&2
-  echo "             Not emitting a false all-clear for cb/noc/mailbox." >&2
+  echo "             Not emitting a false all-clear for cb/noc/read/atomic/mailbox." >&2
   exit 1
 fi
 
 AUDIT="$OUT/audit.kernel.$ARCH.json"
 PYTHONPATH="$TOOL" python3 -m llkaudit.cli --arch "$ARCH" --facts "$FACTS" \
-  --checks cb-sync,noc-sync,mailbox-sync --metal-root "$REPO" > "$AUDIT"
+  --checks cb-sync,noc-sync,noc-atomic-exit,noc-read-barrier,noc-l1-invalidate,mailbox-sync \
+  --metal-root "$REPO" > "$AUDIT"
 
 echo "" >&2
 echo "=== kernel-tier findings ($ARCH) ===" >&2

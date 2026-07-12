@@ -6,7 +6,8 @@ instruction/MOP that consumes it.
 
 Recall of KNOWN patterns only. Per MMIO write it reports whether an *applicable*
 ordering primitive follows it within the enclosing function:
-  - STALLWAIT whose condition mentions TRISC_CFG (ISA C13) orders any cfg/GPR write
+  - STALLWAIT whose condition mentions the TRISC_CFG token (WH: C13; BH: 0x400;
+    QSR: index 21 — matched by NAME, not value) orders any cfg/GPR write
   - mop_sync / tensix_sync (RISC-blocking drains) order any write
   - sync_regfile_write orders GPR (regfile) writes only
 An ordered in-stream Tensix cfg write (REG2FLOP/WRCFG/SETC16) does NOT order a
@@ -16,6 +17,7 @@ Hints: LOCALLY_ORDERED | NO_LOCAL_ORDERING (the interprocedural triage queue) |
 AUTOTTSYNC_ORDERED (Quasar only — the per-RISC TTSync HW-orders the write, so an
 otherwise-unguarded write is not a race candidate there).
 """
+
 from __future__ import annotations
 
 from .. import registry
@@ -30,9 +32,10 @@ class MmioRace(Check):
         "Interprocedural ordering: a write whose guard/consumer lives in a CALLER "
         "shows as NO_LOCAL_ORDERING — the LLM must follow the call graph. "
         "Writes hidden inside SFPU files that fail to parse are absent (see "
-        "parse_errors). A TRISC_CFG (C13) stall only orders instructions its "
-        "BLOCK mask holds; the tool checks the C13 condition but not that the "
-        "block mask covers the consumer. On Quasar, writes are marked "
+        "parse_errors). A TRISC_CFG stall (WH: C13; BH: 0x400; QSR: index 21 — "
+        "matched by token name, not value) only orders instructions its BLOCK mask "
+        "holds; the tool checks the TRISC_CFG condition but not that the block mask "
+        "covers the consumer. On Quasar, writes are marked "
         "AUTOTTSYNC_ORDERED (TTSync HW-orders the write->consume direction); this "
         "does NOT cover an MMIO *read* that depends on a multi-cycle instruction "
         "result (needs wait_*_idle), nor the EN_SUBDIVIDED cross-unpacker corner. "

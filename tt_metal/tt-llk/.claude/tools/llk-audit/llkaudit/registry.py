@@ -690,6 +690,19 @@ NOC_FLUSH_CALLS = (
     "noc_async_write_barrier_with_trid",
     "noc_async_write_flushed_with_trid",
 )
+# The POSTED-writes flush is a SEPARATE, weaker primitive. NoC writes are tracked by
+# TWO independent HW counters — posted (NIU_MST_POSTED_WR_REQ_SENT) and non-posted
+# (NIU_MST_NONPOSTED_WR_REQ_SENT) — and `noc_async_posted_writes_flushed` polls ONLY
+# the posted counter. If the preceding write/inc was issued NON-posted (the common
+# default path, e.g. a remote_cb write/inc whose `posted` template arg is false), this
+# flush waits on a counter that was never incremented -> it returns immediately and
+# provides NO ordering. The tool cannot see a write's posted-ness (a constexpr/template
+# property), so a posted-flush is recognized as a flush but classified DISTINCTLY
+# ("posted"): it is NEVER placed in the clearing sets, and a credit whose only
+# preceding flush is a posted-flush is surfaced with safety=POSTED_FLUSH_ONLY for the
+# skill to confirm the write/credit posted-ness (a wrong-counter flush is a silent
+# false-clear otherwise). See the dataflow-API posted/non-posted counter split.
+NOC_POSTED_FLUSH_CALLS = ("noc_async_posted_writes_flushed",)
 
 
 def noc_op(callee: str):
@@ -698,7 +711,7 @@ def noc_op(callee: str):
         return NOC_SIGNAL_CALLS[callee]
     if callee in NOC_WAIT_CALLS:
         return "wait"
-    if callee in NOC_FLUSH_CALLS:
+    if callee in NOC_FLUSH_CALLS or callee in NOC_POSTED_FLUSH_CALLS:
         return "flush"
     return None
 
@@ -711,6 +724,8 @@ NOC_METHOD_FLUSH = (
     "async_write_barrier_with_trid",
     "async_write_flushed_with_trid",
 )
+# Object-method form of the posted-only flush (see NOC_POSTED_FLUSH_CALLS).
+NOC_METHOD_POSTED_FLUSH = ("async_posted_writes_flushed",)
 _NOC_RECV_TYPES = ("Noc",)
 
 # The modern object API also has credit-SIGNAL methods on the `Semaphore` object
@@ -744,7 +759,7 @@ def noc_op_of(fact: dict):
     if op:
         return op
     name = fact.get("name", "")
-    if name in NOC_METHOD_FLUSH and any(
+    if (name in NOC_METHOD_FLUSH or name in NOC_METHOD_POSTED_FLUSH) and any(
         t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
     ):
         return "flush"
@@ -812,11 +827,102 @@ NOC_WRITE_BARRIERS = (
 
 
 def noc_flush_kind(fact: dict):
-    """For a fact noc_op_of classifies as 'flush', return 'barrier' (waits for the
-    remote ack — data landed) or 'flushed' (initiator queue drained only)."""
+    """For a fact noc_op_of classifies as 'flush', return the flush strength:
+    'barrier' — waits for the remote ACK (data LANDED / committed at the dest)
+    'flushed' — initiator's NON-posted queue drained (write DEPARTED, not committed)
+    'posted'  — ONLY the posted-writes counter drained; a no-op for non-posted
+                writes/incs (a wrong-counter flush). Never clears a credit — see
+                NOC_POSTED_FLUSH_CALLS. Distinguished by name so the checker can tag
+                a posted-only-cleared credit rather than silently treat it as safe."""
     if noc_op_of(fact) != "flush":
         return None
-    return "barrier" if fact.get("name", "") in NOC_WRITE_BARRIERS else "flushed"
+    name = fact.get("name", "")
+    if name in NOC_WRITE_BARRIERS:
+        return "barrier"
+    if name in NOC_POSTED_FLUSH_CALLS or name in NOC_METHOD_POSTED_FLUSH:
+        return "posted"
+    return "flushed"
+
+
+# --- noc-atomic-exit: the ATOMIC-drain barrier + kernel-entry recognition ------
+# A non-posted NoC atomic (noc_semaphore_inc / remote Semaphore::up) is tracked by a
+# SEPARATE HW counter from writes (noc_nonposted_atomics_acked / NIU_MST_ATOMIC_RESP_
+# RECEIVED). A write barrier / writes_flushed does NOT drain it — ONLY these do. Used
+# by the noc-atomic-exit check: if a kernel entry issues an atomic and returns without
+# draining it, the atomic is in flight at exit — the post-kernel_main firmware epilogue
+# does NOT drain atomics in release/Watcher-off builds (it only ASSERTs idle under
+# DM_DEDICATED_NOC), so the kernel itself must, or the readiness signal is left pending
+# across program teardown / noc_init.
+NOC_ATOMIC_BARRIERS = ("noc_async_atomic_barrier",)
+NOC_METHOD_ATOMIC_BARRIER = ("async_atomic_barrier",)  # Noc-object method form
+
+
+def noc_is_atomic_barrier(fact: dict) -> bool:
+    """True if the call drains the non-posted ATOMIC counter (free-fn or Noc method)."""
+    name = fact.get("name", "")
+    if name in NOC_ATOMIC_BARRIERS:
+        return True
+    return name in NOC_METHOD_ATOMIC_BARRIER and any(
+        t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
+    )
+
+
+# A data-movement kernel's outermost entry body. The NOC-idle-at-exit contract applies
+# at the point this returns. (Compute kernels use MAIN/main and rarely issue raw NoC
+# atomics; scoped to kernel_main to avoid flagging helper functions whose caller drains.)
+KERNEL_ENTRY_NAMES = ("kernel_main",)
+
+
+def is_kernel_entry(fn_name: str) -> bool:
+    return (fn_name or "") in KERNEL_ENTRY_NAMES
+
+
+# --- noc-read-barrier: inbound READ drained before it is consumed --------------
+# An inbound async READ fills a local L1 buffer; its data is present only after a READ
+# barrier drains it (noc_async_read_barrier also invalidates the L1 cache on BH). The
+# barrier is a DIFFERENT primitive from the write flushes above and drains the read
+# counter, not the write counter. Consuming the buffer before the read barrier reads
+# stale/partial L1.
+NOC_METHOD_READ_BARRIER = ("async_read_barrier", "async_read_barrier_with_trid")
+
+
+def noc_is_read(fact: dict) -> bool:
+    """A free-fn `noc_async_read*` (any variant) or Noc-method `async_read`, EXCLUDING
+    the barrier/flush forms (noc_async_read_barrier / noc_async_reads_flushed)."""
+    n = fact.get("name", "")
+    if n.startswith("noc_async_read") and "barrier" not in n and "flush" not in n:
+        return True
+    return n == "async_read" and any(
+        t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
+    )
+
+
+def noc_is_read_barrier(fact: dict) -> bool:
+    """A read-drain barrier: free-fn noc_async_read_barrier[_with_trid] or the Noc
+    method form. (A bare noc_async_reads_flushed is NOT treated as the drain — it does
+    not invalidate the L1 cache, so the checker keeps flagging conservatively.)"""
+    n = fact.get("name", "")
+    if n.startswith("noc_async_read_barrier"):
+        return True
+    return n in NOC_METHOD_READ_BARRIER and any(
+        t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
+    )
+
+
+# Ops that CONSUME/forward the just-read buffer downstream: a CB push hands it to the
+# compute consumer; tt_memmove forwards it (its guaranteed-16B-aligned path is itself a
+# NoC write whose SOURCE is the read buffer). A plain noc_async_write is deliberately
+# NOT included — its source may be unrelated to the read (a miss documented in the
+# check's blind_spots) — to keep the recall from firing on every read+write kernel.
+READ_FORWARD_CALLS = ("tt_memmove",)
+
+
+def is_read_consumer(fact: dict) -> bool:
+    """True if the call consumes/forwards a just-read L1 buffer (CB push or tt_memmove)."""
+    if fact.get("name", "") in READ_FORWARD_CALLS:
+        return True
+    op, _ = cb_classify(fact)
+    return op == "push"
 
 
 def mailbox_thread_arg(arg0: str):

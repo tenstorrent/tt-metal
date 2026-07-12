@@ -21,6 +21,7 @@ Usage:
   python3 capture.py --arch wormhole --log build.log --out OUTDIR \
                      --repo-root /path/to/tt-metal
 """
+
 from __future__ import annotations
 
 import argparse
@@ -97,6 +98,34 @@ def _clang_base(sfpi_root: str) -> list:
     ]
 
 
+# The KERNEL surface is not a single substring: JIT/op kernels live under a
+# `.../kernels/...` segment, but some model kernel trees use a `<prefix>_kernels/`
+# segment (e.g. models/.../unified_kernels/). No single substring matches BOTH
+# `/kernels/` and `unified_kernels/` while still EXCLUDING the LLK primitive defs
+# under `/ckernels/` (any substring loose enough to catch `unified_kernels/` also
+# catches `ckernels/`). The C++ extractor filters by a single `.contains()` substring,
+# so we scope it COARSELY (KERNEL_COARSE_SUBSTR, admits all three) and apply the
+# PRECISE kernel-surface keep/drop here in Python — no extractor rebuild, and the
+# `ckernels/` primitive defs (which would make the checkers flag primitive DEFINITIONS
+# as kernel races) never reach the merged fact base. Both sets are overridable.
+KERNEL_COARSE_SUBSTR = "kernels/"  # passed to the extractor; a superset pre-scope
+KERNEL_SURFACE_KEEP = ("/kernels/", "_kernels/")  # a file is in-surface iff it has one
+KERNEL_SURFACE_DROP = ("/ckernels/",)  # ...and none of these (LLK/ckernel defs)
+
+
+def in_kernel_surface(path: str, keep=KERNEL_SURFACE_KEEP, drop=KERNEL_SURFACE_DROP):
+    """True iff `path` is a JIT/op KERNEL source (kept for the merged fact base).
+
+    Keep iff the path contains any KEEP substring AND no DROP substring. `_kernels/`
+    matches `unified_kernels/` but NOT `ckernels/` (no underscore) and NOT `/kernels/`
+    (no underscore before) — so the two KEEP substrings together cover the kernel
+    trees while the DROP guard is belt-and-suspenders against a path that nests both.
+    """
+    if any(d in path for d in drop):
+        return False
+    return any(k in path for k in keep)
+
+
 def _parse_cmd(cmd: str):
     """From a `cd <dir> && <gpp> ...` command, return (cwd, src, [-I..], [-D..])."""
     cwd = None
@@ -123,9 +152,11 @@ def main(argv=None) -> int:
     )
     ap.add_argument(
         "--path-filter",
-        default="/kernels/",
-        help="only emit facts whose file path contains this substring "
-        "(default '/kernels/' — the JIT KERNEL surface)",
+        default=KERNEL_COARSE_SUBSTR,
+        help="COARSE substring passed to the extractor to pre-scope facts "
+        f"(default '{KERNEL_COARSE_SUBSTR}'). The precise kernel-surface keep/drop "
+        "(KERNEL_SURFACE_KEEP/DROP) is applied here in Python on top of it — see "
+        "in_kernel_surface / kernel_tier/README.md.",
     )
     args = ap.parse_args(argv)
 
@@ -139,8 +170,10 @@ def main(argv=None) -> int:
     # DEFINITIONS live under hw/inc/api, hw/ckernels, tt_llk_* — all in-repo — so a
     # repo-root filter floods the base with library internals and the checkers then
     # flag the primitive DEFINITIONS (e.g. Semaphore::inc_multicast's own body) as
-    # kernel races. '/kernels/' keeps the JIT kernel dirs + ttnn/models kernel trees
-    # and drops those (it does not match '/ckernels/'). See kernel_tier/README.md.
+    # kernel races. The coarse extractor substring ('kernels/') keeps the JIT kernel
+    # dirs + ttnn/models kernel trees (incl. '<prefix>_kernels/') and already drops
+    # hw/inc/api + sfpi; it DOES admit hw/ckernels, which in_kernel_surface() trims
+    # below (see KERNEL_SURFACE_KEEP/DROP). See kernel_tier/README.md.
     pf = args.path_filter
 
     cmds = []
@@ -224,9 +257,27 @@ def main(argv=None) -> int:
                 ledger.append((label, "PARSE-FAIL", 0, 0))
                 continue
             pe = obj.get("parse_errors", 0)
-            nf = len(obj.get("facts", []))
-            merged.write(out + "\n")
-            ledger.append((label, "ok" if pe == 0 else "ok(parse_errors)", nf, pe))
+            # PRECISE kernel-surface trim: the coarse extractor filter admits the LLK
+            # `ckernels/` primitive defs; keep only true kernel-source facts so the
+            # checkers never flag a primitive DEFINITION as a kernel race. Re-serialize
+            # the (same-envelope) trimmed object; the dropped count is reported in the
+            # ledger, never silently swallowed.
+            all_facts = obj.get("facts", [])
+            kept = [f for f in all_facts if in_kernel_surface(f.get("file", ""))]
+            dropped = len(all_facts) - len(kept)
+            obj["facts"] = kept
+            nf = len(kept)
+            status = "ok" if pe == 0 else "ok(parse_errors)"
+            if dropped:
+                status += f":drop={dropped}"
+            # A TU that parsed cleanly but contributed NO kernel-surface facts (e.g. a
+            # pure-library TU) is still "ok" (counted as parsed — NOT a coverage hole),
+            # but we don't write its empty-fact envelope (it would only dilute the base).
+            if nf == 0:
+                ledger.append((label, status + ":nonkernel", 0, pe))
+                continue
+            merged.write(json.dumps(obj) + "\n")
+            ledger.append((label, status, nf, pe))
 
     # coverage ledger — never a silent cap
     led_path = os.path.join(args.out, f"kernel_coverage.{args.arch}.txt")
