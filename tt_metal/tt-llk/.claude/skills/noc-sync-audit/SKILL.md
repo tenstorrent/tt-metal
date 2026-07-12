@@ -36,9 +36,17 @@ Cores coordinate across the NoC with **NoC semaphores** (L1 counters bumped by r
 1. Enumerate (scope reaches beyond tt-llk):
    ```bash
    # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
-   grep -rInE '\bnoc_semaphore_(wait|set|inc|set_multicast|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|inline_dw_write)\b' \
+   grep -rInE '\bnoc_semaphore_(wait|set|inc|set_multicast|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|inline_dw_write)\b|\.(up|set_multicast|set_multicast_loopback_src|relay_multicast|inc_multicast|async_write_barrier|async_writes_flushed)[[:space:]]*\(' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
+   **Both API forms.** Modern ttnn kernels signal via the OBJECT form on a
+   `Semaphore` — remote `sem.up(noc, x, y, v)` / `sem.set_multicast(...)` /
+   `relay_multicast` / `inc_multicast` — and flush via the `Noc` object
+   (`noc.async_write_barrier()`); the deterministic tool recalls these via
+   `registry.noc_op_of`. The third alternation above catches them. Caveats: the
+   LOCAL `sem.up(value)` / `sem.set(value)` (no NoC arg) are NOT remote signals —
+   exclude them (the tool gates remote `up` on argc≥2); and `.up(` can match an
+   unrelated receiver, so keep only `Semaphore`-typed receivers.
    **Exhaustive run — in scope, no sampling.** The tt-llk header tree has ~0 NoC sites — that is *expected* (the primitives live one layer up) and is **NOT** a reason to report "no findings / out of layer." The sites are in `tt_metal/hw/inc/api/dataflow` + `ttnn/cpp` + `models`, which the grep above (and the frontmatter) target. Enumerate **all** matching kernels into the run's coverage ledger and fan out per kernel-family; do not sample.
 2. Per cross-core handshake, pair the signaller (write + inc/set) with the waiter (`noc_semaphore_wait` + read). Confirm a flush/barrier sits between the data write and the credit, and between the read and any buffer reuse.
 3. Run checks 1–5; for multicast, resolve the receiver count from the grid.

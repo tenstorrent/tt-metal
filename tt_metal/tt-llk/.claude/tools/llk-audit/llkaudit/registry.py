@@ -619,9 +619,7 @@ def noc_op(callee: str):
 
 
 # The WRITE-flush methods on the `Noc` accessor object (noc.async_write_barrier()).
-# Semaphore SIGNALS stay FREE functions (noc_semaphore_inc, in dataflow_api.h), so
-# NOC_SIGNAL_CALLS already covers them; only the flush moved to a method. Read
-# barriers are excluded — they drain reads, not the writes a credit refers to.
+# Read barriers are excluded — they drain reads, not the writes a credit refers to.
 NOC_METHOD_FLUSH = (
     "async_write_barrier",
     "async_writes_flushed",
@@ -630,16 +628,46 @@ NOC_METHOD_FLUSH = (
 )
 _NOC_RECV_TYPES = ("Noc",)
 
+# The modern object API also has credit-SIGNAL methods on the `Semaphore` object
+# (noc_semaphore.h) — the object-form parallel of NOC_SIGNAL_CALLS, NOT free
+# functions. The multicast forms are unambiguously remote signals. `up` is
+# OVERLOADED: `up(uint32_t value)` is a LOCAL increment (no NoC, needs no flush)
+# while `up(const Noc&, x, y, value, vc)` is the REMOTE signal — distinguished by
+# argument count (local=1, remote>=4), so `up` is a signal only when argc>=2.
+# `set(value)` is likewise a LOCAL set (excluded); the remote set is the multicast
+# form. Gated on the Semaphore receiver TYPE so an unrelated `.up()` can't match.
+NOC_METHOD_SIGNAL_MCAST = (
+    "set_multicast",
+    "set_multicast_loopback_src",
+    "relay_multicast",
+    "inc_multicast",
+)
+_NOC_SIGNAL_RECV_TYPES = ("Semaphore",)
+
+
+def _is_noc_signal_receiver(recv_type: str) -> bool:
+    return any(t in (recv_type or "") for t in _NOC_SIGNAL_RECV_TYPES)
+
 
 def noc_op_of(fact: dict):
-    """Fact-aware noc_op: free-function form OR the Noc-method write-flush."""
+    """Fact-aware noc_op: free-function form, the Noc-method write-flush, OR the
+    Semaphore-object credit signals (mcast / remote `up`)."""
     op = noc_op(fact.get("name", ""))
     if op:
         return op
-    if fact.get("name", "") in NOC_METHOD_FLUSH and any(
+    name = fact.get("name", "")
+    if name in NOC_METHOD_FLUSH and any(
         t in (fact.get("recv_type", "") or "") for t in _NOC_RECV_TYPES
     ):
         return "flush"
+    if _is_noc_signal_receiver(fact.get("recv_type", "")):
+        if name in NOC_METHOD_SIGNAL_MCAST:
+            return "mcast"
+        # `up` is a remote signal only in its NoC-carrying overload (argc>=2);
+        # argc==-1 (unknown, pre-argc fact base) is treated as NOT a signal to
+        # avoid false NOC_SIGNAL_NO_FLUSH on the local up(value) form.
+        if name == "up" and fact.get("argc", -1) >= 2:
+            return "inc"
     return None
 
 
