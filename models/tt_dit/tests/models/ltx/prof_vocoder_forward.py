@@ -15,7 +15,7 @@ from models.tt_dit.layers.audio_ops import Conv1dViaConv3d, ConvTranspose1dViaCo
 from models.tt_dit.models.audio_vae.vocoder_ltx import AMPBlock1, Vocoder
 from models.tt_dit.parallel.config import AudioTCParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.tests.models.ltx.test_audio_components_ltx import (
+from models.tt_dit.tests.models.ltx.test_audio_ltx import (
     _MAIN_VOCODER_CFG,
     _build_torch_stage_b,
     _diffusers_vocoder_state_to_tt,
