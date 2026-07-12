@@ -14,6 +14,7 @@ import ttnn
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     TILE,
     ENCODER_L1_MICROBATCH_ROWS,
+    ENCODER_TP_BS_CHUNK_DEFAULT,
     build_ln_sharded_config,
     encoder_all_reduce_sum_replicate,
     encoder_tp_activation_memory_config,
@@ -103,15 +104,17 @@ class TTSeamlessM4Tv2Encoder:
 
     @staticmethod
     def _tp_bs_chunk_rows() -> int:
-        """L1 row-chunk size for TP block-sharded matmul (``SEAMLESS_TP_BS_CHUNK_M``).
+        """Row-chunk size for TP block-sharded matmul (``SEAMLESS_TP_BS_CHUNK_M``).
 
-        Defaults to ``ENCODER_L1_MICROBATCH_ROWS`` (128) so long-seq prefill streams
-        fixed-M L1 microbatches instead of sharding the full sequence.
+        Defaults to ``ENCODER_TP_BS_CHUNK_DEFAULT`` (4096 = encoder design-max seq) so the TP
+        linear runs single-shot within the design envelope instead of shattering into small
+        fixed-M chunks. Decoupled from ``ENCODER_L1_MICROBATCH_ROWS`` (residual L1/DRAM policy):
+        chunking at 128 rows dropped block-sharded matmul FLOPs efficiency ~79% -> ~26%.
         """
         try:
-            return int(os.environ.get("SEAMLESS_TP_BS_CHUNK_M", str(ENCODER_L1_MICROBATCH_ROWS)))
+            return int(os.environ.get("SEAMLESS_TP_BS_CHUNK_M", str(ENCODER_TP_BS_CHUNK_DEFAULT)))
         except ValueError:
-            return ENCODER_L1_MICROBATCH_ROWS
+            return ENCODER_TP_BS_CHUNK_DEFAULT
 
     def _chunked_tp_linear_compute_cfg(self) -> ttnn.DeviceComputeKernelConfig:
         # Multiple LoFi block-sharded matmul chunks compound bf16 noise; HiFi2 matches TP=1 chunked path PCC.

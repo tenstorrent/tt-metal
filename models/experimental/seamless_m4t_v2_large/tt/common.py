@@ -1227,10 +1227,15 @@ def all_reduce_sum_replicate(
 
 
 # TP encoder L1 microbatch: full residual / AR stay in L1 up to this many token rows.
-# Above it, residuals live in DRAM and linears process ``SEAMLESS_TP_BS_CHUNK_M``-sized
-# L1 row chunks (default = this value). Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder
+# Above it, residuals live in DRAM. Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder
 # attention remains full-S (bidirectional — not Devstral causal chunked prefill).
 ENCODER_L1_MICROBATCH_ROWS = MATMUL_1D_SEQ_THRESHOLD
+# TP block-sharded matmul row-chunk default (``SEAMLESS_TP_BS_CHUNK_M``): run the linear
+# SINGLE-SHOT up to the encoder's design-max sequence (``max_position_embeddings`` = 4096),
+# which fits BH-QB L1 (measured). Longer sequences chunk at this size. Decoupled from
+# ``ENCODER_L1_MICROBATCH_ROWS`` (the residual L1/DRAM threshold): chunking the matmul at 128
+# rows tanks block-sharded FLOPs efficiency (~26% vs ~79% single-shot, +48 ms at seq=4096).
+ENCODER_TP_BS_CHUNK_DEFAULT = 4096
 # Decoder / shared all-reduce helper: spill L1→DRAM at this many rows (unchanged policy).
 ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256
 
