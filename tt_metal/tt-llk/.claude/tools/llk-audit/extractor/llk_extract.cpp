@@ -374,15 +374,20 @@ public:
             if (const Expr *Obj = MCE->getImplicitObjectArgument())
             {
                 f.recv = srcText(S, Obj->getSourceRange());
-            }
-            QualType objTy = MCE->getObjectType();
-            if (const CXXRecordDecl *RD = objTy->getAsCXXRecordDecl())
-            {
-                f.recvType = RD->getNameAsString();
-            }
-            else if (!objTy.isNull())
-            {
-                f.recvType = objTy.getUnqualifiedType().getAsString();
+                // getObjectType() computes getImplicitObjectArgument()->getType(),
+                // so it MUST stay inside this null guard: a null implicit object
+                // (the "FIXME: member pointers" fallback) would otherwise crash the
+                // extractor and drop every fact for the whole TU — a silent capture
+                // hole (false-all-clear). getAsCXXRecordDecl() is likewise gated.
+                QualType objTy = MCE->getObjectType();
+                if (const CXXRecordDecl *RD = objTy->getAsCXXRecordDecl())
+                {
+                    f.recvType = RD->getNameAsString();
+                }
+                else if (!objTy.isNull())
+                {
+                    f.recvType = objTy.getUnqualifiedType().getAsString();
+                }
             }
         }
         S.facts.push_back(std::move(f));

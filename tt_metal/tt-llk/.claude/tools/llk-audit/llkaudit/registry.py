@@ -564,10 +564,6 @@ CB_METHOD_CALLS = {
 _CB_RECV_TYPES = ("CircularBuffer", "CBInterface")
 
 
-def cb_op(callee: str):
-    return CB_CALLS.get(callee)
-
-
 def _is_cb_receiver(recv_type: str) -> bool:
     return any(t in (recv_type or "") for t in _CB_RECV_TYPES)
 

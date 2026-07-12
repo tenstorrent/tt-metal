@@ -26,6 +26,8 @@ signal↔wait pairing, and multicast fan-out count vs destination count.
 """
 from __future__ import annotations
 
+from collections import defaultdict
+
 from .. import registry
 from ..factbase import FactBase
 from .base import Check, Finding
@@ -53,8 +55,16 @@ class NocSync(Check):
 
     def run(self, fb: FactBase) -> list[Finding]:
         findings: list[Finding] = []
-        for fn in fb.functions:
-            calls = fb.facts_in(fn, ("call",))
+        # Group by the fact's recorded (innermost) `function` field — NOT by
+        # iterating fb.functions + facts_in(), which selects by offset range and so
+        # returns a call nested in a lambda for BOTH the lambda and the outer
+        # function (double emission, and a cross-scope false NO_FLUSH). cb_sync uses
+        # the same per-`function` grouping.
+        byfn: dict = defaultdict(list)
+        for c in fb.family("call"):
+            byfn[(c["file"], c.get("function", "?"))].append(c)
+        for (_file, func), calls in sorted(byfn.items()):
+            calls.sort(key=lambda c: c["off"])
             # noc_op_of is fact-aware: free-function signals/flushes AND the
             # Noc-method write-flush (noc.async_write_barrier()).
             flush_offs = [c["off"] for c in calls if registry.noc_op_of(c) == "flush"]
@@ -68,11 +78,11 @@ class NocSync(Check):
                     Finding(
                         file=c["file"],
                         line=c.get("line", 0),
-                        function=fn.name,
+                        function=func,
                         kind=f"noc_signal:{op}",
                         hint="NOC_SIGNAL_NO_FLUSH",
                         detail=f"{c.get('name','')} with no preceding "
-                        f"noc_async_write_barrier/writes_flushed in {fn.name} "
+                        f"noc_async_write_barrier/writes_flushed in {func} "
                         "(data-before-credit: signal may overtake the write)",
                         evidence=[self._ev(c, c.get("name", ""))],
                     )

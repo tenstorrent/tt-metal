@@ -34,14 +34,14 @@ partner is likely in the compute-API/kernel tier, OR a real imbalance);
 compute-API sites (`hw/inc/api`) and, crucially, the hand-written
 `ckernel::mailbox_write(...)` in `ttnn/`/`models/` kernels (one-to-one directed
 channels AND fan-outs; the CB tile-address/value broadcast is just one pattern).
-That surface is **not** covered by `run.sh --full-jit` today because the kernel
-tier (cb-sync / noc-sync / **mailbox-sync**) is **not built** — mailbox IS part of
-that tier, it just awaits the on-request capture. Meanwhile it is audited by THIS
-skill via the widened grep in the
-Method below, so **you must run that grep** (it reaches `ttnn`/`models`), not rely
-on the tool. Pairing here is a static same-channel match, NOT a
+That surface is covered by `run.sh --full-jit` only when the kernel tier is
+actually **run with a capture** (mailbox IS part of that committed tier — cb-sync /
+noc-sync / **mailbox-sync** — but it needs a build log or a device/sim to capture
+kernels). Without a capture run it is audited by THIS skill via the widened grep in
+the Method below, so **you must run that grep** (it reaches `ttnn`/`models`), not
+rely on the tool. Pairing here is a static same-channel match, NOT a
 balance/symmetry/overflow/ordering verdict. It never clears a site; you decide.
-If unbuilt, proceed manually.
+If no capture was run, proceed manually.
 
 ## The bug class (precise)
 Mailboxes are **point-to-point FIFOs between pairs of baby-RISCV cores** (T0/unpack, T1/math, T2/pack, B) — a sync path entirely separate from Tensix semaphores (`semaphore-handshake-audit`), config registers, and MMIO. A misused mailbox → **deadlock** (blocking read on an empty FIFO that never gets written, or a writer stalled forever on a full FIFO) or **stale/lost data** (ordering to *other* memory not enforced by default — see the fence note below).

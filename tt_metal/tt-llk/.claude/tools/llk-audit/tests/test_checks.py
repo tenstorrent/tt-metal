@@ -1382,6 +1382,36 @@ def test_noc_sync_object_api_signals_recognized():
     assert NocSync().run(FactBase("wormhole", other)) == []
 
 
+@case
+def test_noc_sync_nested_scope_not_double_counted():
+    # A signal recorded in an inner (lambda) function is attributed ONCE — by its
+    # recorded `function` field — not once per enclosing offset-range. The old
+    # fb.functions + facts_in(offset) approach emitted it for BOTH outer and lambda.
+    K = "ttnn/cpp/x/w.cpp"
+    facts = [
+        fn("outer", K, 0, 100),
+        fn("outer_lambda", K, 40, 60),  # nested range fully inside outer
+        call(K, 50, "noc_semaphore_inc", func="outer_lambda", arg0="sem"),
+    ]
+    r = NocSync().run(FactBase("wormhole", facts))
+    assert len(r) == 1 and r[0].function == "outer_lambda", r
+
+
+@case
+def test_factbase_stray_brace_does_not_eat_following_objects():
+    # A stray close-brace / leaked diagnostic between objects must be COUNTED and
+    # skipped, never desync the scan and silently drop every following object.
+    good = '{"facts": [], "parse_errors": 0}'
+    withfact = (
+        '{"facts": [{"family":"function","name":"f","file":"a.h",'
+        '"off":0,"end_off":9,"line":0}], "parse_errors": 0}'
+    )
+    text = "}\n" + good + "\nleaked diagnostic line\n" + withfact
+    fb = FactBase.from_concatenated_json("wormhole", text)
+    assert any(x.get("name") == "f" for x in fb.facts), fb.facts  # later obj survived
+    assert fb.parse_errors >= 1  # the garbage was counted, not silent
+
+
 def main():
     failed = 0
     for c in CASES:
