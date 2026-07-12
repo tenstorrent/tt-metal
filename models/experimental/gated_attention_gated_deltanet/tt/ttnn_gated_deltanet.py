@@ -296,6 +296,7 @@ def causal_conv1d_ttnn(
     conv_state=None,
     weight_taps=None,
     bias_dev=None,
+    native_weight_cache=None,
 ):
     """
     Depthwise causal conv1d + SiLU with conv state support.
@@ -310,6 +311,7 @@ def causal_conv1d_ttnn(
         conv_state: [B, kernel_size-1, D] previous state (ttnn tensor on device) or None
         weight_taps: optional list of K pre-sliced [1, 1, D] ttnn tensors on device
         bias_dev: optional pre-converted [1, 1, D] ttnn tensor on device
+        native_weight_cache: optional mutable one-plan cache for prepared native conv weights
 
     Returns:
         output: [B, T, D] (TILE_LAYOUT on device)
@@ -318,10 +320,8 @@ def causal_conv1d_ttnn(
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
     mc = memory_config
 
-    # Use FIR path when we have conv state, T is large, or D is large enough
-    # that the native ttnn.conv1d circular buffers would exceed per-core L1
-    # (D=4096 overflows by ~9 KB; D=2048 fits comfortably).
-    if conv_state is not None or T > max_conv_len or D > 2048:
+    # Stateful decoding, long sequences, and bias require the FIR implementation.
+    if conv_state is not None or T > max_conv_len or bias is not None or bias_dev is not None:
         return _causal_conv1d_fir(
             x,
             weight,
@@ -360,9 +360,11 @@ def causal_conv1d_ttnn(
         math_fidelity=ttnn.MathFidelity.LoFi,
     )
 
-    [out, out_length, _] = ttnn.conv1d(
+    native_plan = (weight, device, B, T, D, kernel_size, x_padded.dtype, x_padded.memory_config())
+    conv_weight = weight if native_weight_cache is None else native_weight_cache.get(native_plan, weight)
+    [out, out_length, [prepared_weight, _]] = ttnn.conv1d(
         input_tensor=x_padded,
-        weight_tensor=weight,
+        weight_tensor=conv_weight,
         in_channels=D,
         out_channels=D,
         device=device,
@@ -379,6 +381,11 @@ def causal_conv1d_ttnn(
         return_output_dim=True,
         return_weights_and_bias=True,
     )
+    if native_weight_cache is not None and native_plan not in native_weight_cache:
+        for cached_weight in native_weight_cache.values():
+            ttnn.deallocate(cached_weight)
+        native_weight_cache.clear()
+        native_weight_cache[native_plan] = prepared_weight
 
     out = ttnn.sharded_to_interleaved(out, memory_config=mc)
     out = ttnn.reshape(out, [B, T, D])
@@ -470,6 +477,9 @@ def gated_deltanet_forward_ttnn(
     # only the first valid_len positions are real. Zeros the padded positions out of the
     # recurrent scan and captures the conv state at the real boundary. None = no padding.
     valid_len=None,
+    q_native_weight_cache=None,
+    k_native_weight_cache=None,
+    v_native_weight_cache=None,
 ):
     """
     TTNN forward pass for the Gated DeltaNet layer.
@@ -695,6 +705,7 @@ def gated_deltanet_forward_ttnn(
                 conv_state=conv_state_q,
                 weight_taps=q_weight_taps,
                 bias_dev=q_bias_dev,
+                native_weight_cache=q_native_weight_cache,
             )
             k, new_conv_k = causal_conv1d_ttnn(
                 k,
@@ -706,6 +717,7 @@ def gated_deltanet_forward_ttnn(
                 conv_state=conv_state_k,
                 weight_taps=k_weight_taps,
                 bias_dev=k_bias_dev,
+                native_weight_cache=k_native_weight_cache,
             )
             v, new_conv_v = causal_conv1d_ttnn(
                 v,
@@ -717,6 +729,7 @@ def gated_deltanet_forward_ttnn(
                 conv_state=conv_state_v,
                 weight_taps=v_weight_taps,
                 bias_dev=v_bias_dev,
+                native_weight_cache=v_native_weight_cache,
             )
     else:
         q = ttnn.linear(hidden_states, q_proj_weight, memory_config=mc, compute_kernel_config=ckc)
@@ -734,6 +747,7 @@ def gated_deltanet_forward_ttnn(
             conv_state=conv_state_q,
             weight_taps=q_weight_taps,
             bias_dev=q_bias_dev,
+            native_weight_cache=q_native_weight_cache,
         )
         k, new_conv_k = causal_conv1d_ttnn(
             k,
@@ -745,6 +759,7 @@ def gated_deltanet_forward_ttnn(
             conv_state=conv_state_k,
             weight_taps=k_weight_taps,
             bias_dev=k_bias_dev,
+            native_weight_cache=k_native_weight_cache,
         )
         v, new_conv_v = causal_conv1d_ttnn(
             v,
@@ -756,6 +771,7 @@ def gated_deltanet_forward_ttnn(
             conv_state=conv_state_v,
             weight_taps=v_weight_taps,
             bias_dev=v_bias_dev,
+            native_weight_cache=v_native_weight_cache,
         )
 
     # 3. Reshape to multi-head
