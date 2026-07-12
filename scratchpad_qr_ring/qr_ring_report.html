@@ -167,12 +167,13 @@
       <tbody>
         <tr><td class="lbl">4,096</td><td>0.279</td><td>3.941</td><td>0.07×</td></tr>
         <tr><td class="lbl">16,384</td><td>0.547</td><td>3.941</td><td>0.14×</td></tr>
-        <tr><td class="lbl">65,536</td><td>1.653</td><td>3.941</td><td>0.42×</td></tr>
-        <tr><td class="lbl">131,072</td><td>3.112</td><td>3.941</td><td>0.79×</td></tr>
-        <tr class="hi"><td class="lbl">500,000 <span style="color:var(--muted)">*proj</span></td><td>11.87</td><td>3.941</td><td class="win">3.01×</td></tr>
+        <tr><td class="lbl">65,536</td><td>1.657</td><td>3.983</td><td>0.42×</td></tr>
+        <tr><td class="lbl">131,072</td><td>3.103</td><td>3.983</td><td>0.78×</td></tr>
+        <tr><td class="lbl">262,144</td><td>6.017</td><td>3.983</td><td class="win">1.51×</td></tr>
+        <tr class="hi"><td class="lbl">524,288</td><td>11.806</td><td>3.983</td><td class="win">2.96×</td></tr>
       </tbody>
     </table></div>
-    <div class="note"><b>Read it honestly.</b> KV doubles cleanly per doubling of T (0.28→0.55→1.65→3.11) — a textbook O(T) line; qr is flat at 3.94 ms. Crossover lands ~130–160K on SP=4, matching the plan's ~118K break-even. The 500K row is <b>extrapolated</b> from the measured KV slope. This is SP=4 (the LoudBox's clean fabric axis), not the SP=8×TP=4 Galaxy — the trend transfers, absolute Galaxy numbers scale up. qr's reduce is timed as a plain all-gather, not the fused flash-merge the real op needs (Phase&nbsp;3).</div>
+    <div class="note"><b>All rows measured on the box (no extrapolation).</b> KV doubles cleanly per doubling of T (3.10→6.02→11.81) — a textbook O(T) line; qr is flat at 3.98 ms. Crossover ~160K on SP=4; at <b>500K it is ~3× less transport per layer</b>. This is SP=4 (the LoudBox's clean fabric axis), not the SP=8×TP=4 Galaxy — on SP=8 the ring fraction (7/8 vs 3/4) widens the gap further, and qr's number here is a plain all-gather + reduce, conservative vs the fused op.</div>
   </section>
 
   <section>

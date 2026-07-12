@@ -100,7 +100,7 @@ def test_qr_ring_transport_diff(mesh_device):
 
     # Context-length sweep. KVPE is sharded on seq (dim 2) so each chip holds T/sp; the gather rebuilds full T.
     # T must be tile-aligned (32) and divisible by sp.
-    Ts = [4096, 16384, 65536, 131072]
+    Ts = [4096, 16384, 65536, 131072, 262144, 524288]
 
     kv_rows, q_ms, o_ms = [], None, None
 
