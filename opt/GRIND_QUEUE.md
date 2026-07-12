@@ -455,6 +455,30 @@ is genuinely 4/4 CLOSED** (the "6 presets" belief was the misread). No source ed
   the QuantConfig class has only the 4 measured presets; `all_lofi`/`all_weights_bf8` were a source-misread. No device data,
   nothing to revert. Batch U CLOSED; quant-preset axis 4/4 complete.
 
+## Batch V — `LTX_SDPA_RING_CHUNK` env override: the LAST un-enumerated env knob — DEAD (half-wired no-op for both prod stages, source-verified)
+Full source-level env-knob enumeration (2026-07-12 23:06Z lap: `grep os.environ models/tt_dit/`) surfaced ONE perf knob
+never referenced in any batch or broker log AND live in the MODEL source (not a test-only var): `LTX_SDPA_RING_CHUNK`
+(`attention_ltx.py:160`, comment "overrides the ring self-attn chunk for a sweep"). The other new-looking knob,
+`LTX_CCL_SEQ_SCALE`, is test-only in `test_ccl_allgather_scoped.py:32` = the 2x4-only/tracy harness Batch R already
+closed (fabric-DEAD + cold-timeout). So `LTX_SDPA_RING_CHUNK` was the only candidate for a genuinely-new no-edit cron cell
+on the 30% SDPA bucket — Batch A swept chunk via the ISOLATED `test_ring_joint_sdpa` op (node-id params), never this
+in-context block env hook.
+- [x] **`LTX_SDPA_RING_CHUNK` — DEAD: half-wired no-op for BOTH production denoise stages (bit-identical A/B by
+  construction, not dispatched).** Traced end-to-end: the override (`attention_ltx.py:160-163`) rewrites ONLY
+  `ring_sdpa_chunk_size` → `self.ring_sdpa_program_config` (:164), the **fallback** config. But the ring self-attn forward
+  (:512) selects `self._ring_pc_by_n.get(N, self.ring_sdpa_program_config)`, and `ring_sdpa_chunk_by_n` (:36-39) has
+  entries for BOTH prod N — S2 `(True,8,4,38912)=(192,512)`, S1 `(True,8,4,9728)=(96,256)` — so `.get(N, ...)` HITS the
+  per-N map and NEVER falls to the overridable config. ⇒ the env hook only fires on an N that MISSES the by_n map, which
+  neither S1 nor S2 produce. Mirrors Batch B's `LTX_QUANT`-no-op class: authored hook, read, but bypassed on the prod path.
+  Dispatching it would burn a reservation on a null-by-construction A/B (step-5 reservation-waste). The REAL S2 chunk it
+  half-reaches, `(192,512)`, is EXACTLY Batch A's isolated baseline (4.85ms) — and Batch A already measured the only
+  favorable direction from it, `(128,512)` 4.74ms = **−2.3% sub-gate on the isolated op** (~−0.7% of the dispatch-bound
+  block) — reachable only by a SOURCE EDIT to `ring_sdpa_chunk_by_n[38912]`, i.e. a predetermined-sub-gate edit into the
+  CLOSED SDPA-chunk axis = the north-star thrash. No device job, no source edit ⇒ nothing to revert. **Batch V CLOSED —
+  the env-knob enumeration is now source-exhaustive: every perf-relevant knob the model reads is either swept (NUM_LINKS
+  F2/I2 · QUANT H/J/N/P/U · NP_LINKS S0 · VAE/BWE/VOC_TRACE DONE) or a no-op/off-cron (SDPA_RING_CHUNK half-wired ·
+  CCL_SEQ_SCALE 2x4-tracy-dead). No cron-safe no-edit cell remains.**
+
 ## DONE (measured, with the number)
 
 ## DONE (measured, with the number)
