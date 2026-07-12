@@ -119,7 +119,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    device = ttnn.open_device(device_id=args.device_id)
+    # conv1d's halo step allocates config tensors in the L1-small region, so it
+    # must be non-zero; a trace region is reserved for Stage-2 trace capture.
+    device = ttnn.open_device(device_id=args.device_id, l1_small_size=32768, trace_region_size=23887872)
     device.enable_program_cache()
     try:
         run_demo(args, device=device)
