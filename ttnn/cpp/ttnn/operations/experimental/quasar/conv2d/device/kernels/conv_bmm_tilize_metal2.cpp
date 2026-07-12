@@ -411,6 +411,34 @@ void kernel_main() {
 #endif
     DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
 
+    // DEBUG (CB L1-layout locator): printed at kernel START — before any pack — so it FLUSHES before the
+    // PACR0_TILE_INC fault (mid-loop DPRINTs like ACTFILL/TILIZEPACK/MMPACK do not flush once the core
+    // faults). Prints base addr + byte capacity of the reader-dest ACT (in0), the tilize-pack target
+    // ACT_TILIZED (tilized_in0), MATMUL_PARTIALS, and OUT. Map the fault addr (e.g. 0x37600) to one of these
+    // ranges: if it lands at/after ACT_TILIZED's [base, base+cap) the tilize pack over-ran ACT_TILIZED; also
+    // check whether ACT's [base, base+cap) abuts/overlaps ACT_TILIZED (the reader's full-window fill would
+    // then stomp it, which the old 1/Kh fill never reached). Remove after diagnosis.
+    PACK(DPRINT(
+        "CBLAYOUT act={} acap={} tilized={} tcap={} part={} pcap={} out={} ocap={}\n",
+        (uint32_t)cb_in0.get_write_ptr(),
+        (uint32_t)(cb_in0.get_total_num_entries() * cb_in0.get_entry_size()),
+        (uint32_t)cb_tilized_in0.get_write_ptr(),
+        (uint32_t)(cb_tilized_in0.get_total_num_entries() * cb_tilized_in0.get_entry_size()),
+        (uint32_t)cb_matmul_partials.get_write_ptr(),
+        (uint32_t)(cb_matmul_partials.get_total_num_entries() * cb_matmul_partials.get_entry_size()),
+        (uint32_t)cb_out.get_write_ptr(),
+        (uint32_t)(cb_out.get_total_num_entries() * cb_out.get_entry_size())));
+    // DEBUG (tilize geometry): the height-sharded tilize packs (inbw * nsub) tiles into ACT_TILIZED across
+    // nsub reserve/push iterations. If (inbw * nsub) > tpages the tilize over-runs ACT_TILIZED (count OOB);
+    // static analysis says they are equal (inbw=act_block_w_ntiles, nsub=act_block_h_ntiles,
+    // tpages=act_block_h_ntiles*act_block_w_ntiles), so a mismatch here would be the smoking gun. Remove after.
+    PACK(DPRINT(
+        "TGEO inbw={} nsub={} in0bnt={} tpages={}\n",
+        (uint32_t)in0_block_w,
+        (uint32_t)in0_num_subblocks_read,
+        (uint32_t)in0_block_num_tiles,
+        (uint32_t)cb_tilized_in0.get_total_num_entries()));
+
     compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -482,6 +510,21 @@ void kernel_main() {
                     // ~/QuasarProgrammingQuirks.md quirk #1.
                     PACK((llk_pack_init(tilized_in0_cb_id)));
 #endif
+
+                    // DEBUG (tilize-pack OOB locator): mirrors MMPACK (~line 636, at the matmul pack). Prints
+                    // the tilize pack target (ACT_TILIZED) write ptr + capacity + tile geometry BEFORE the
+                    // tilize runs. If this line prints but MMPACK does not, the PACR0_TILE_INC OOB is the
+                    // TILIZE pack (ACT_TILIZED self-loop); if MMPACK also prints, the OOB is the matmul pack.
+                    // Compare (nsub*inbw) against nent to see if the tilize packs more tiles than ACT_TILIZED
+                    // holds. Remove after diagnosis.
+                    PACK(DPRINT(
+                        "TILIZEPACK cb={} wptr={} nent={} esz={} inbw={} nsub={}\n",
+                        (uint32_t)tilized_in0_cb_id,
+                        (uint32_t)cb_tilized_in0.get_write_ptr(),
+                        (uint32_t)cb_tilized_in0.get_total_num_entries(),
+                        (uint32_t)cb_tilized_in0.get_entry_size(),
+                        (uint32_t)in0_block_w,
+                        (uint32_t)in0_num_subblocks_read));
 
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(

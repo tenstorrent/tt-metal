@@ -16,6 +16,7 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
+#include "api/debug/dprint.h"  // DEBUG (act-fill overrun locator) — remove after diagnosis
 
 void kernel_main() {
     constexpr uint32_t dilation_h = get_arg(args::dilation_h);
@@ -166,6 +167,19 @@ void kernel_main() {
                     reader_idx,
                     act_l1_read_addr,
                     stride_h_bytes);
+
+                // DEBUG (act-fill overrun locator): after the full-window gather, print the ACT reservation
+                // start (wptr), the final write address (end), and the CB capacity. If (end - wptr) exceeds
+                // nent*esz the reader overran the ACT CB (the suspected root of the downstream pack OOB);
+                // if it is <= capacity the fill is in-bounds and the fault is compute/self-loop side.
+                // Remove after diagnosis.
+                DPRINT(
+                    "ACTFILL wptr={} end={} nent={} esz={} nt={}\n",
+                    (uint32_t)cb_act.get_write_ptr(),
+                    (uint32_t)l1_write_addr_act,
+                    (uint32_t)cb_act.get_total_num_entries(),
+                    (uint32_t)cb_act.get_entry_size(),
+                    (uint32_t)act_block_num_tiles);
 
                 cb_act.push_back(act_block_num_tiles);
             } else {
