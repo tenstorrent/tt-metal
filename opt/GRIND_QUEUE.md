@@ -381,6 +381,37 @@ data-movement lever) was never checked. A real gap in "VAE exhausted."
   warm-authoring lever either (1080p `_BLOCKINGS` is already swept-exact). Closes the last harness-inventory gap; the
   VAE decode data-movement bucket is tuned at 1080p, not fallback-degraded. No source edit ⇒ nothing to revert.
 
+## Batch S — VAE-decode num_links (the ONE untested interconnect cell on the ONE data-movement-bound bucket)
+Every prior CCL/num_links sweep (F2/I2) hit the DISPATCH-bound denoise block (S2 +16%, S1 0%). VAE decode is the
+opposite regime — Batch O proved it DATA-MOVEMENT-bound (LoFi fidelity −1.77% null → NOT matmul-compute-bound), but
+only tested compute (fidelity/bf8-weights); its INTERCONNECT config was never swept. The VAE conv3d halo uses
+`neighbor_pad_persistent_buffer(num_links=links)` where `links = min(upper_dims, ccl_manager.num_links)` (vae_ltx.py:252/261/309),
+and the prof harness plumbs `NP_LINKS` env → `CCLManager(num_links=int(os.environ.get("NP_LINKS","2")))` (prof_vae_ltx.py:67).
+So `NP_LINKS=1 vs 2` genuinely halves the halo link count on every halo'ing conv (upper_dims: H-halo=B·T≥2, W-halo=B·T·H≫2).
+Harness `test_prof_vae_ltx_trace` (prints `TRACED_DECODE_WALL_MS=`, iters=10, ~45s warm, NO PCC gate — num_links is
+bit-identical so this is a pure SPEED screen like the W-mask COST screen). num_links=2 is the BH HW cap (A2) ⇒ this can
+only measure how much the 2nd link SAVES (characterization, not a new win, mirrors F2/I2 on denoise). Drift-immune per
+Batch P: run BOTH NP_LINKS=2 (in-session baseline vs O's 551.91ms) and NP_LINKS=1 in ONE reservation. Answers: is the
+552ms VAE data-movement halo/interconnect-bound (big Δ ⇒ BW headroom a future overlap could bank) or dispatch-bound too
+(null ⇒ even the compute-bound bucket's data movement is latency-bound). ⚠️ NP_LINKS=1 neighbor_pad programs never warmed
+⇒ minor partial recompile; generous timeout.
+- [x] **S0 — NP_LINKS 2-vs-1: VAE halo IS interconnect-BW-sensitive (2nd link saves +16.5%) but num_links=2 already prod+HW-cap ⇒ NO win.**
+  Job **042140-129** (drift-immune same-reservation A/B, re-verified from raw log): NP_LINKS=2 **TRACED_DECODE_WALL_MS=551.85**
+  (in-session baseline ≈ O's 551.91, drift −0.06ms = CLEAN), NP_LINKS=1 **643.11** ⇒ **+91.26ms = +16.5% SLOWER**. Both
+  `1 passed`, warm (prewarm 8194 targets 4354/3639ms, no timeout), 32 chips healthy. **The VAE decode's halo/interconnect
+  IS link-BW-sensitive** — unlike S1 denoise (I2: num_links 0%, zero BW-sensitivity), the VAE looks like S2 (F2: +16%). This
+  DECOMPOSES Batch O's "data-movement-bound 552ms": a real ~91ms chunk is conv3d halo INTERCONNECT transfer (`neighbor_pad`),
+  not conv compute (O: LoFi fidelity −1.77% null) — the 2nd bucket besides S2 to show meaningful link sensitivity. **But NO
+  shippable win:** num_links=2 is BOTH prod (create_pipeline device_configs) AND the BH HW cap (A2 — a 3rd link is HW-illegal),
+  so prod ALREADY banks the 91ms; there's no headroom to add a link. Same verdict shape as F2/I2 (2nd link already at cap). No
+  source edit (env A/B) ⇒ nothing to revert.
+  → **BATCH S CLOSED — the last un-swept no-edit axis (VAE interconnect) is measured:** VAE's data-movement floor is part
+  halo-BW (link-sensitive, HW-capped at 2) + part conv/permute/dispatch (fidelity-insensitive, O). Every no-edit config axis
+  on BOTH regimes — dispatch-bound denoise (A/B/F/H/I/J/N/P/Q) AND data-movement-bound VAE (C/K/O/R/S) — is now swept with
+  receipts; no no-edit lever clears the 5% gate at passing quality. Floor stays ~7.9s; 6.0s = out-of-repo step-distill.
+
+## DONE (measured, with the number)
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
@@ -389,3 +420,4 @@ data-movement lever) was never checked. A real gap in "VAE exhausted."
 - **VAE-decode bf8 quant (job 013750-99): un-runnable — SEGFAULT at bf8 conv-weight upload (`from_torch(bfloat8_b)`, vae_ltx.py:193, 1st of 86 tensors).** The one COMPUTE-bound bucket (A1: traced≈untraced 552ms) resists the cheap quant flip; bfloat8_b needs TILE layout the upload path doesn't give. Proper bfp8-VAE = warm-authoring (parked w/ C W-mask fold + G subblock tune). Device recovered clean.
 - **`all_bf8_lofi_sdpa_lofi_fp32acc` @ prod-4x8 video block (job 015415-106): PCC 99.93% PASS, WARM_FWD_MS 16.06 = −4.9% vs F0 16.88 (SUB-GATE, no win).** Closes the block-quant preset space 4/4 measured.
 - **FSDP weight-sharding @ prod-4x8 S2 video block (job 024854-127, drift-immune same-session A/B): is_fsdp=True 18.56ms vs prod is_fsdp=False 16.79ms = +10.5% SLOWER, PCC identical 99.9658%.** FSDP adds per-layer weight all-gathers ⇒ MORE collectives ⇒ slower on the dispatch-bound block. Prod is_fsdp=False optimal; last no-edit collective-pattern axis closed. Adding collectives HURTS as much as removing link/compute helped little ⇒ only cutting collective COUNT (fewer steps = out-of-repo distill) moves the wall. Key finding: **fp32-dest-acc RECOVERS the SDPA-LoFi PCC** Batch J lost (98.57% FAIL → 99.93% PASS), correcting J's "can't recover" reasoning — but speed is null-with-favorable-noise (under 5% gate; increment vs all_bf8_lofi contradicts the isolated-SDPA physics). No preset clears the gate at passing quality ⇒ denoise block stays dispatch-bound.
+- **VAE-decode num_links @ prod-4x8 (job 042140-129, drift-immune same-reservation A/B): NP_LINKS=2 551.85ms vs NP_LINKS=1 643.11ms = +16.5% (2nd link saves 91ms).** The VAE halo/interconnect IS link-BW-sensitive (unlike S1 denoise's 0%, like S2's +16%), decomposing Batch O's data-movement-bound 552ms into halo-interconnect (link-sensitive, HW-capped at 2) + conv/permute (fidelity-insensitive). No win — num_links=2 is prod AND the BH HW cap (A2). Closes the last un-swept no-edit axis (VAE interconnect); every axis on both regimes now has a receipt.
