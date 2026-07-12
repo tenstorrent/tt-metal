@@ -328,8 +328,13 @@ class LLVCModel:
         cfg = self.config
         cs = cfg.dec_chunk_size
         B = m.shape[0]
+        orig_T = m.shape[1]
+        # Reference mod_pads the encoder-frame sequence up to a multiple of the
+        # chunk size, then crops the output back (streaming T is always aligned).
+        if orig_T % cs != 0:
+            m, _ = ops.pad_time_to_multiple(m, cs)
+            e, _ = ops.pad_time_to_multiple(e, cs)
         T = m.shape[1]
-        assert T % cs == 0, f"decoder expects T divisible by chunk_size={cs}, got {T}"
         num_windows = T // cs
 
         # memory (cross-attention keys/values)
@@ -361,6 +366,8 @@ class LLVCModel:
 
             # [B*nw, cs, D] -> [B, T, D]
             tgt = ttnn.reshape(ops.as_row_major(x), (B, T, cfg.dec_dim))
+        if T != orig_T:
+            tgt = ops.slice_time(tgt, 0, orig_T)
         return tgt
 
     def _mask_gen(self, x, state: LLVCState):
