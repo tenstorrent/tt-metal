@@ -104,9 +104,9 @@ class CfgWordOverlap(Check):
             # surfaced, since an unresolved cfg RMW may touch a shared word).
             # All of these write Config (RMWCIB / software RMW), never ThreadConfig.
             src = None
-            if "cfg_reg_rmw_tensix" in c.get("text", ""):
+            if registry.CFG_RMW_TEMPLATE_CALL in c.get("text", ""):
                 src = c.get("text", "")
-            elif c.get("name", "") in ("cfg_rmw", "cfg_rmw_gpr"):
+            elif c.get("name", "") in registry.CFG_RMW_ARG0_CALLS:
                 # ONLY the config-RMW helpers take a FIELD in arg0. Do NOT use the
                 # broader write_call_kind() (it also matches reg_write, a raw/GPR
                 # register write) — that could fold a non-config write into the
@@ -163,7 +163,14 @@ class CfgWordOverlap(Check):
         for key in list(writers):
             seen: dict = {}
             for w in writers[key]:
-                k = (w["file"], w["line"], w["field"])
+                # Key on (file, field), NOT line: the two captures of one
+                # cfg_reg_rmw_tensix<X_RMW> write (the `call` fact and the
+                # `cfg_rmw:X_RMW` macro fact) share a field but only share a line
+                # when the call is on ONE source line. Keying on line would let a
+                # LINE-WRAPPED call's two facts both survive, and the surviving
+                # non-atomic `cfg_rmw:` entry would flip the word SAFE->CLOBBER and
+                # double-list it. (file, field) collapses them regardless of wrap.
+                k = (w["file"], w["field"])
                 prev = seen.get(k)
                 if prev is None or (
                     prev["how"].startswith("cfg_rmw:")

@@ -89,7 +89,7 @@ struct Fact
     std::string name;           // function name / callee ident / macro name
     std::string text;           // macro full text / callee source text
     std::string op;             // pointer_write: assignment operator ("=", "|=", ...)
-    std::string provenanceKind; // pointer_write: "call" | "var" | "cast"
+    std::string provenanceKind; // pointer_write: "call" | "var" | "cast" | "unresolved"
     std::string producer;       // pointer_write: init-callee name / var name / cast text
     std::string indexText;      // pointer_write: subscript index expression
     std::string arg0;           // call: first argument source text
@@ -211,6 +211,8 @@ class Visitor : public RecursiveASTVisitor<Visitor>
     //   - initialized from a call    -> provenanceKind="call", producer=callee
     //   - a plain variable           -> provenanceKind="var",  producer=var name
     //   - a reinterpret/C-style cast -> provenanceKind="cast", producer=cast text
+    // (When none of these classify, the caller stamps provenanceKind="unresolved"
+    //  with the raw base text as producer — a visible, non-dropped write.)
     // Classify a call/cast producer expr. Returns true (setting kind+producer) if
     // E is a CallExpr or a reinterpret/C-style cast; false otherwise. Used on both
     // a base pointer expr and a variable's initializer (same rule, one place).

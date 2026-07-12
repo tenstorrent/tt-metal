@@ -129,6 +129,25 @@ ORDERED_WRITE_MACRO_SUBSTR = (
 # Calls that are ordered cfg writes.
 ORDERED_WRITE_CALLS = ("cfg_reg_rmw_tensix",)  # substring match on callee text
 
+# The config-RMW helper calls that take a FIELD (cfg_reg_rmw_tensix carries it in
+# the template text `<FIELD_RMW>`; cfg_rmw / cfg_rmw_gpr carry it in arg0). These
+# names were duplicated verbatim in cfg_word_overlap + reconfig_stall; centralized
+# here (the single name→meaning table) so a rename touches one place.
+CFG_RMW_TEMPLATE_CALL = "cfg_reg_rmw_tensix"  # matched as a substring of callee text
+CFG_RMW_ARG0_CALLS = (
+    "cfg_rmw",
+    "cfg_rmw_gpr",
+)  # matched on callee name (FIELD in arg0)
+
+
+def is_cfg_rmw_helper(fact: dict) -> bool:
+    """True if a call fact is a config-RMW helper (cfg_reg_rmw_tensix / cfg_rmw[_gpr])."""
+    return (
+        CFG_RMW_TEMPLATE_CALL in fact.get("text", "")
+        or fact.get("name", "") in CFG_RMW_ARG0_CALLS
+    )
+
+
 STALL_MACRO_SUBSTR = ("STALLWAIT",)
 TRISC_CFG_TOKEN = (
     "TRISC_CFG"  # the STALLWAIT condition (ISA C13) that orders a RISC cfg/GPR write

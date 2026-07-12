@@ -71,10 +71,7 @@ class ReconfigStall(Check):
                     # Gate on those two names ONLY (not write_call_kind, which also
                     # matches reg_write — a raw/GPR register write that needs no
                     # unit drain and must not get a spurious NO_UNIT_DRAIN).
-                    return bool(
-                        "cfg_reg_rmw_tensix" in f.get("text", "")
-                        or f.get("name", "") in ("cfg_rmw", "cfg_rmw_gpr")
-                    )
+                    return registry.is_cfg_rmw_helper(f)
                 return False
 
             # Instructions that RE-ARM this thread's unit (so a drain issued
