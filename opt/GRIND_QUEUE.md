@@ -417,6 +417,20 @@ Batch P: run BOTH NP_LINKS=2 (in-session baseline vs O's 551.91ms) and NP_LINKS=
   on BOTH regimes — dispatch-bound denoise (A/B/F/H/I/J/N/P/Q) AND data-movement-bound VAE (C/K/O/R/S) — is now swept with
   receipts; no no-edit lever clears the 5% gate at passing quality. Floor stays ~7.9s; 6.0s = out-of-repo step-distill.
 
+## Batch T — S1 FSDP weight-sharding A/B (the ONE empty cell in the S1×collective-pattern matrix)
+Batch Q measured is_fsdp on/off on **S2** (Q0: FSDP +10.5% slower — dispatch-bound block, more collectives hurt). The
+S1 axis-sweep mirrors S2's on every axis EXCEPT FSDP: I1 topology · I2 links · N quant · P fp32acc were run on S1, but
+is_fsdp was NEVER run there — the one empty cell in the S1×collective-pattern matrix (a HOLE, not a closed axis re-swept;
+same shape as Batches I/N that produced real first-time S1 receipts). S1 is MORE dispatch-bound than S2 (I2 zero
+BW-sensitivity vs S2's F2 +16%), so the MAGNITUDE of the FSDP penalty at S1 is genuinely unknown and sharpens the
+dispatch-bound thesis. No-edit: block harness, mesh param `wh_4x8sp1tp0` (is_fsdp=True, test:113) vs `ring_bh_4x8sp1tp0`
+(is_fsdp=False prod, :114) on stage_1 (:122), `LTX_NUM_LINKS=2` (:510) forces both to 2 links (wh default 4 is BH-illegal,
+A2) isolating is_fsdp. Drift-immune (Batch P): BOTH cells in ONE reservation. WARM_FWD_MS (no tracy), video PCC-gated.
+- [~] **T0 — S1 is_fsdp A/B (job 093451-9, 2026-07-12 09:34Z, IN FLIGHT).** `-k 'video and stage_1 and ckpt_fast and
+  (wh_4x8sp1tp0 or ring_bh_4x8sp1tp0)'`, LTX_NUM_LINKS=2, LTX_PROFILE_ITERS=4, env_sdpa.yaml, timeout 290/250. Predicted
+  null/slower (FSDP adds per-layer weight all-gathers on the even-more-dispatch-bound S1) — but measure-don't-reason
+  (J/L/N/P overturned 4 dead-by-composition calls). Result + receipt next lap.
+
 ## DONE (measured, with the number)
 
 ## DONE (measured, with the number)
