@@ -695,13 +695,21 @@ void kernel_main() {
                             // DEBUG (matmul-pack OOB locator): the pack faults with PACR0_TILE_INC at ~0x37d90.
                             // Print the target CB + its current write ptr + capacity so we can see whether the
                             // write address exceeds the CB extent (offset wrong / CB too small). Remove after.
+                            // The arch-lookup proved this is NOT a kernel-index bug: the residual sub-tile
+                            // misalignment (in-bounds, non-tile-aligned, differ-by-one-face) can only come from a
+                            // BD-tile-geometry vs entry-size mismatch on the borrowed OUT/MATMUL_PARTIALS DFB.
+                            // frdim/nf are the pack tile geometry that sets the physical per-tile stride: for a
+                            // symmetric 32x32 tile frdim=16, nf=4 -> stride=128 units (=esz). If frdim!=16 or
+                            // nf!=4 the stride != esz -> every tile step drifts by a sub-tile amount (root cause).
                             PACK(DPRINT(
-                                "MMPACK cb={} wptr={} nent={} esz={} nt={}\n",
+                                "MMPACK cb={} wptr={} nent={} esz={} nt={} frdim={} nf={}\n",
                                 (uint32_t)curr_matmul_out_cb,
                                 (uint32_t)curr_out_cb.get_write_ptr(),
                                 (uint32_t)curr_out_cb.get_total_num_entries(),
                                 (uint32_t)curr_out_cb.get_entry_size(),
-                                (uint32_t)out_subblock_num_tiles));
+                                (uint32_t)out_subblock_num_tiles,
+                                (uint32_t)get_output_face_r_dim(curr_matmul_out_cb),
+                                (uint32_t)get_output_num_faces(curr_matmul_out_cb)));
 #ifdef ARCH_QUASAR
                             // QSR matmul-pack DST addressing fix. The Quasar SEQUENTIAL pack
                             // (pack_tile_block -> llk_pack_block -> get_output_tile_index<out_of_order=false>)
