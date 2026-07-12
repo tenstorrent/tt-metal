@@ -237,6 +237,23 @@ threaded to all conv weight uploads (:193 `from_torch(dtype=self.dtype)`); `_bui
   proper bfp8-VAE is warm-authoring. The only env-only VAE cells left (W-mask skip, depth-to-space) are already closed
   (load-bearing / tracy-timeout). VAE-quant parked for a warm session alongside C/G.
 
+## Batch M — parallelism STRATEGY A/B (SP vs TP): the LAST unmeasured no-edit block axis
+Every prior block sweep (A/B/F/H/I/J) held parallelism fixed at **sp1tp0 (sequence-parallel)**. The block is
+collective/dispatch-bound (H0 bf8 −1.1% null · F2 num_links +16% · I2 zero BW-sensitivity) ⇒ the one structural lever
+compute/link/quant CANNOT touch is the **collective PATTERN itself**. TP (tp1) distributes along the head/feature dim
+instead of sequence ⇒ a different all-gather shape and potentially FEWER/SMALLER collectives — a real, testable
+dispatch-bound hypothesis. The ONLY mesh whose parametrize exposes both SP and TP is **2x4** (`test:108-115`):
+`2x4sp1tp0` (SP, is_fsdp=False, Linear) vs `2x4sp0tp1` (TP, is_fsdp=True, Linear). ⚠️ **Confounds (honest):** (1) 2x4 =
+8-chip NON-prod scale (prod is 4x8/32-chip; no `4x8sp0tp1` param exists ⇒ TP@prod would need a source-added param +
+unverified model support); (2) is_fsdp differs (SP non-FSDP vs TP FSDP) — inherent to the config defs. **Value ceiling:
+characterization of the last no-edit axis, below the closed ~7.9s floor** — a large TP<SP delta would justify escalating
+to a 4x8-TP param (source edit); null confirms dispatch-bound across parallelism strategy. No source edit (mesh `-k`
+swap), PCC-gated (video path, do_pcc=True), WARM_FWD_MS. ⚠️ 2x4 kernels were NEVER built (E2E warmed only 4x8) ⇒
+COLD-compile risk; if it times out that IS the receipt (2x4 needs prewarm), broker auto-recovers.
+- [~] **M0 — 2x4 SP baseline (`2x4sp1tp0`, video/stage_2/ckpt_fast) — IN FLIGHT job 020534-109** (2026-07-12 02:05Z).
+  Same-mesh SP control for the M1 TP A/B; also confirms 2x4 compiles in the cron budget. WARM_FWD_MS + video PCC gate.
+- [ ] M1 — 2x4 TP (`2x4sp0tp1`) same harness → A/B vs M0. If TP≪SP (dispatch-bound broken by the pattern change), escalate to a 4x8-TP source-param probe; if null, parallelism axis CLOSED.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
