@@ -888,6 +888,8 @@ def run_conv1d_route(
     fp32_accum=False,
     packer_l1_acc=False,
     pcc=0.99,
+    config_tensors_in_dram=False,
+    dilation=1,
 ):
     """Run ttnn.conv1d and check it against the torch golden.
 
@@ -906,6 +908,7 @@ def run_conv1d_route(
         bias=None,
         stride=stride,
         padding=padding,
+        dilation=dilation,
         groups=groups,
     )
 
@@ -922,6 +925,7 @@ def run_conv1d_route(
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,  # None == auto-shard
         deallocate_activation=False,
+        config_tensors_in_dram=config_tensors_in_dram,
     )
     if act_block_h is not None:
         conv_config.act_block_h_override = act_block_h
@@ -943,6 +947,7 @@ def run_conv1d_route(
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
+        dilation=dilation,
         groups=groups,
         conv_config=conv_config,
         compute_config=compute_config,
@@ -955,6 +960,47 @@ def run_conv1d_route(
     passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=pcc)
     assert passing, pcc_msg
     return out
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize("config_tensors_in_dram", [False, True])
+def test_conv1d_depthwise_reader_indices_storage(device, config_tensors_in_dram):
+    channels = 512
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=7,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        input_in_dram=False,
+        config_tensors_in_dram=config_tensors_in_dram,
+        pcc=0.995,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_dilation(device):
+    channels = 512
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=10,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        dilation=2,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        input_in_dram=False,
+        pcc=0.995,
+    )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
