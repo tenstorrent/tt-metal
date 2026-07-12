@@ -53,6 +53,7 @@ enum watcher_features_t {
     SanitizeNOCAlignmentL1Read,
     SanitizeNOCZeroL1Write,
     SanitizeNOCMailboxWrite,
+    SanitizeNOCMailboxWriteUncachedAlias,
     SanitizeNOCInlineWriteDram,
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
@@ -112,13 +113,16 @@ void RunTestOnCore(
         GTEST_SKIP();
     }
 
+    // Non-IDLE_ETH cores (TENSIX/ACTIVE_ETH, all archs) run under both fast and slow dispatch.
     // IDLE_ETH cores only support slow dispatch (FD not yet implemented for them).
-    // All other cores (TENSIX/ACTIVE_ETH, including Quasar) run under fast dispatch.
-    if (fixture->IsSlowDispatch() && !is_idle_eth_core) {
-        GTEST_SKIP() << "Slow Dispatch only runs IDLE_ETH core tests";
+    if (is_idle_eth_core && !fixture->IsSlowDispatch()) {
+        GTEST_SKIP() << "IDLE_ETH core tests only run under Slow Dispatch";
     }
     if (multi_dm_race && !is_quasar) {
         GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
+    }
+    if (feature == SanitizeNOCMailboxWriteUncachedAlias && (!is_quasar || is_eth_core)) {
+        GTEST_SKIP() << "Uncached mailbox alias only applies to Quasar DM cores";
     }
 
     // TENSIX cores use the Metal 2.0 variant; ETH cores stay on the legacy kernel/API.
@@ -328,6 +332,14 @@ void RunTestOnCore(
         case SanitizeNOCMailboxWrite:
             // This is illegal because we'd be writing to the mailbox memory
             buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX);
+            break;
+        case SanitizeNOCMailboxWriteUncachedAlias:
+            // Quasar-only (skipped at the top otherwise): the mailbox is aliased into the uncached L1
+            // window (upper 4 MB, same physical memory as the cached view). Target the alias so a NoC
+            // access landing in the mailbox through it is still flagged. Complements
+            // SanitizeNOCMailboxWrite, which covers the cached view.
+            buffer_addr = get_address_for_test(is_eth_core, HalL1MemAddrType::MAILBOX) +
+                          hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
             break;
         case SanitizeNOCInlineWriteDram: use_inline_dw_write = true; break;
         case SanitizeNOCLinkedTransaction: bad_linked_transaction = true; break;
@@ -559,6 +571,7 @@ void RunTestOnCore(
                 input_core_virtual_coords,
                 output_buffer_addr);
         } break;
+        case SanitizeNOCMailboxWriteUncachedAlias:
         case SanitizeNOCMailboxWrite: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to unicast read {} "
@@ -833,6 +846,15 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWrite) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMailboxWrite);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeNOCMailboxWriteUncachedAlias) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMailboxWriteUncachedAlias);
         },
         this->devices_[0]);
 }

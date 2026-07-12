@@ -197,6 +197,15 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write,
     if (write && (addr < MEM_MAP_READ_ONLY_END)) {
         return DebugSanitizeNocAddrMailbox;
     }
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // The read-only region is aliased into the uncached view; a write there hits the same reserved
+    // memory. Only local buffers use the alias (remote targets are physical, bounded above). Raw
+    // address kept for reporting.
+    if (is_local_buffer && write && addr >= MEM_L1_UNCACHED_BASE &&
+        addr < MEM_L1_UNCACHED_BASE + MEM_MAP_READ_ONLY_END) {
+        return DebugSanitizeNocAddrMailbox;
+    }
+#endif
 #endif
     return DebugSanitizeOK;
 }
@@ -278,6 +287,8 @@ inline uint16_t debug_valid_drisc_addr(uint64_t addr, uint64_t len, bool write) 
 // circular buffer stays within that buffer's allocated region.  Only runs on
 // BRISC/NCRISC where cb_addr_shift == 0 (addresses are in bytes).
 // Relies on unused CBs having fifo_size == 0 (cleared at kernel startup).
+// Effectively BH/WH-only: Quasar uses DFBs (separate g_dfb_interface) and never populates
+// cb_interface[], so every slot is fifo_size == 0 and this returns OK -- no alias handling needed.
 inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
     for (uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; i++) {
         LocalCBInterface& cb = get_local_cb_interface(i);
