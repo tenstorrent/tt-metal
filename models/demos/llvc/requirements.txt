@@ -1,0 +1,6 @@
+# Extra Python deps for the LLVC TTNN demo (on top of tt-metal's own env).
+# torch / ttnn are provided by the tt-metal environment.
+torchaudio
+librosa
+soundfile
+numpy
