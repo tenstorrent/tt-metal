@@ -88,7 +88,6 @@ def test_quasar_reallocate_sharded(mesh_device, height_tiles, width, layout, tid
 
     in_layout = tt_in.layout
     in_mem_config = tt_in.memory_config()
-    in_addr = tt_in.buffer().address()
 
     # On-path call signature: reallocate(tensor) with no memory_config (output keeps the input's config).
     # NOTE: move deallocates tt_in, so tt_in must not be used after this call.
@@ -100,12 +99,9 @@ def test_quasar_reallocate_sharded(mesh_device, height_tiles, width, layout, tid
     assert out.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
     assert out.memory_config() == in_mem_config
 
-    # The relocation typically lands at a new L1 address; only informational (no space -> same address is legal).
-    out_addr = out.buffer().address()
-    if out_addr == in_addr:
-        print(f"[reallocate] output reused input address {in_addr} (no free space to move)")
-
-    # Primary check: values are preserved exactly.
+    # Primary check: values are preserved exactly (reallocate is a pure L1 relocation).
+    # (Buffer-address change is not asserted — the Python Tensor has no simple address accessor, and
+    # "no free space -> same address" is legal anyway; value preservation is the real invariant.)
     got = ttnn.to_torch(out).to(torch.bfloat16)
     assert tuple(got.shape) == tuple(input_shape)
     assert_with_pcc(x, got, pcc=0.9999)
