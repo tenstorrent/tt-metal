@@ -532,16 +532,22 @@ void kernel_main() {
                         pack_reconfig_l1_acc(0);
                     }
 #ifdef ARCH_QUASAR
-                    // QSR quirk #1: tilize_in packs into tilized_in0_cb_id, but Quasar tilize_init omits
-                    // llk_pack_init (it's #ifdef ARCH_BLACKHOLE in tilize.h), and the pack_reconfig above only
-                    // sets FORMAT (not the BD) AND is skipped when packer_l1_acc=false. So the pack buffer
-                    // descriptor is still pointed at dfb::out (from compute_kernel_hw_startup) -> the tilize
-                    // pack writes tilized_in0's tiles at out's base -> OOB PACR0_TILE_INC / ERROR_TRISC1 @
-                    // 0x37d90 (this is the fault that fires BEFORE the matmul pack). Repoint the pack BD to the
-                    // tilize target CB. Covers both the main and split-reader tilize_in calls below (both
-                    // target tilized_in0_cb_id, nothing repoints the pack BD between them). See
-                    // ~/QuasarProgrammingQuirks.md quirk #1.
+                    // ROOT CAUSE (proven via MMBLK-absent + tile-index>obnt localization): on Quasar the plain
+                    // `tilize_init` (tilize.h:63-69) does ONLY unpack+math init and omits ALL pack config --
+                    // unlike the non-Quasar branch (:106-108), BH (:60-62), and the reduce variant
+                    // `tilizeA_B_reduce_init` (:118-120), which all call llk_pack_hw_configure(ocb) +
+                    // llk_pack_init(ocb). So the tilize's pack BUFFER DESCRIPTOR is never pointed at
+                    // tilized_in0 -- it keeps the stale dfb::out base from compute_kernel_hw_startup, and the
+                    // tilize packs tilized_in0's tiles into the OUT L1 region -> PACR0_TILE_INC / ERROR_TRISC1
+                    // OOB (fires BEFORE the matmul pack). A prior workaround called only llk_pack_init here
+                    // (sets the MOP buf_desc_id) but NOT llk_pack_hw_configure (which programs the BD BASE),
+                    // so the BD base stayed stale. Program BOTH, mirroring the reduce-variant Quasar branch.
+                    // Covers the main + split-reader tilize_in calls below (both target tilized_in0_cb_id;
+                    // nothing else repoints the pack BD between them). Proper fix belongs in tilize.h's Quasar
+                    // tilize_init. See ~/QuasarProgrammingQuirks.md quirk #1.
+                    PACK((llk_pack_hw_configure(tilized_in0_cb_id)));
                     PACK((llk_pack_init(tilized_in0_cb_id)));
+                    PACK((llk_pack_dest_init()));
 #endif
 
                     // DEBUG (tilize-pack OOB locator): mirrors MMPACK (~line 636, at the matmul pack). Prints
