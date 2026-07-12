@@ -6,10 +6,13 @@ noc-sync checker — NoC credit SIGNAL issued without a preceding write-flush.
 The classic cross-core race: a producer writes data to a remote L1 with
 `noc_async_write*`, then posts a remote credit — `noc_semaphore_inc` /
 `inc_multicast` / `set_remote` / `set_multicast` (NOT the LOCAL `noc_semaphore_set`
-reset) — but the signal must not overtake the data. It is safe only if a NoC
-write flush/barrier (`noc_async_write_barrier` / `noc_async_writes_flushed`)
-drains the write BEFORE the signal — recognized in BOTH the free-function form and
-the modern `Noc`-method form (`noc.async_write_barrier()`) via registry.noc_op_of.
+reset) — but the signal must not overtake the data. It is safe only if a NoC write
+flush precedes the signal: a WRITE credit (set/set_multicast/relay_*) is ordered by
+any flush (`noc_async_write_barrier` OR `noc_async_writes_flushed`), but an ATOMIC
+credit (inc/inc_multicast/remote up) needs the ack `noc_async_write_barrier`
+specifically — a bare writes_flushed does not order write→atomic even same-VC
+(#48478). Flushes are recognized in BOTH the free-function and the modern
+`Noc`-method form (`noc.async_write_barrier()`) via registry.noc_op_of/noc_flush_kind.
 Signals are recognized in both forms too: the free functions AND the `Semaphore`
 object methods (`sem.set_multicast(...)`, remote `sem.up(noc, x, y, v)`); the LOCAL
 `up(value)`/`set(value)` forms are excluded (no NoC, no flush needed). This surface
@@ -80,10 +83,13 @@ class NocSync(Check):
                 op = registry.noc_op_of(c)
                 if op not in ("inc", "set", "mcast"):
                     continue
-                # An ATOMIC credit (inc) needs the ack BARRIER — a bare writes_flushed
-                # does not order write->atomic even same-VC (#48478). A write-based
-                # credit (set/multicast) is ordered by ANY preceding write flush.
-                if op == "inc":
+                # An ATOMIC credit (inc / inc_multicast / remote up) needs the ack
+                # BARRIER — a bare writes_flushed does not order write->atomic even
+                # same-VC (#48478). A write-based credit (set / set_multicast /
+                # relay_*) is ordered by ANY preceding write flush. The op label
+                # (mcast) does not decide this — inc_multicast is atomic.
+                atomic = registry.noc_signal_is_atomic(c)
+                if atomic:
                     clearing, need = barrier_offs, "noc_async_write_barrier"
                 else:
                     clearing, need = (
@@ -103,7 +109,7 @@ class NocSync(Check):
                         "(data-before-credit: signal may overtake the write"
                         + (
                             "; atomic credit needs the ACK barrier, not just a flush)"
-                            if op == "inc"
+                            if atomic
                             else ")"
                         ),
                         evidence=[self._ev(c, c.get("name", ""))],

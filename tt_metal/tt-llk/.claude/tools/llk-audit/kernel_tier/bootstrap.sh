@@ -59,10 +59,15 @@ else
   }
 fi
 
+# `|| true`: under `set -euo pipefail` a capture.py crash would abort HERE (tail
+# still exits 0) before the friendly guard below can report the empty fact base.
 FACTS="$(PYTHONPATH="$TOOL" python3 "$HERE/capture.py" --arch "$ARCH" --log "$LOG" \
-          --out "$OUT" --repo-root "$REPO" | tail -1)"
-if [ ! -s "$FACTS" ]; then
-  echo "kernel-tier: empty kernel fact base — no kernel TUs parsed (see the ledger)." >&2
+          --out "$OUT" --repo-root "$REPO" | tail -1)" || true
+# Gate on a real EXTRACTED FACT, not byte-size: capture.py writes a non-empty
+# envelope even for a TU that parsed-with-errors but produced zero facts, so an
+# all-errored kernel set would defeat a `-s` check and give a false all-clear.
+if [ ! -s "$FACTS" ] || ! grep -q '"family"' "$FACTS"; then
+  echo "kernel-tier: no kernel facts extracted — no kernel TUs yielded facts (see the ledger)." >&2
   echo "             Not emitting a false all-clear for cb/noc/mailbox." >&2
   exit 1
 fi

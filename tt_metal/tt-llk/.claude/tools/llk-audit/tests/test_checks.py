@@ -1452,6 +1452,45 @@ def test_factbase_stray_brace_does_not_eat_following_objects():
     assert fb.parse_errors >= 1  # the garbage was counted, not silent
 
 
+@case
+def test_noc_sync_atomic_multicast_and_relay_unicast():
+    K = "ttnn/cpp/x/w.cpp"
+    # inc_multicast is an ATOMIC increment (despite the mcast op label) -> a bare
+    # writes_flushed does NOT clear it; only a write barrier does (#48478).
+    im_flushed = [
+        fn("k", K, 0, 100),
+        call(K, 10, "noc_async_writes_flushed", func="k"),
+        call(K, 20, "noc_semaphore_inc_multicast", func="k", arg0="sem"),
+    ]
+    assert (
+        NocSync().run(FactBase("wormhole", im_flushed))[0].hint == "NOC_SIGNAL_NO_FLUSH"
+    )
+    im_barrier = [
+        fn("k", K, 0, 100),
+        call(K, 10, "noc_async_write_barrier", func="k"),
+        call(K, 20, "noc_semaphore_inc_multicast", func="k", arg0="sem"),
+    ]
+    assert NocSync().run(FactBase("wormhole", im_barrier)) == []
+    # Semaphore.relay_unicast -> a WRITE credit (set_remote): flagged with no flush,
+    # cleared by a bare flushed (it is a write, ordered by any flush).
+    ru = [
+        fn("k", K, 0, 100),
+        call(
+            K, 20, "relay_unicast", func="k", recv="sem", recv_type="Semaphore", argc=2
+        ),
+    ]
+    r = NocSync().run(FactBase("wormhole", ru))
+    assert len(r) == 1 and r[0].kind == "noc_signal:set", r
+    ru_flushed = [
+        fn("k", K, 0, 100),
+        call(K, 10, "noc_async_writes_flushed", func="k"),
+        call(
+            K, 20, "relay_unicast", func="k", recv="sem", recv_type="Semaphore", argc=2
+        ),
+    ]
+    assert NocSync().run(FactBase("wormhole", ru_flushed)) == []
+
+
 def main():
     failed = 0
     for c in CASES:

@@ -60,11 +60,13 @@ using namespace clang;
 using namespace clang::tooling;
 
 static llvm::cl::OptionCategory ToolCat("llk-extract options");
+// Single source for the default (used in both the help text and cl::init below).
+#define DEFAULT_PATH_FILTER "tt_llk_"
 static llvm::cl::opt<std::string> PathFilter(
     "path-filter",
     llvm::cl::desc("Only emit facts whose file path contains this substring "
-                   "(default: tt_llk_)"),
-    llvm::cl::init("tt_llk_"),
+                   "(default: " DEFAULT_PATH_FILTER ")"),
+    llvm::cl::init(DEFAULT_PATH_FILTER),
     llvm::cl::cat(ToolCat));
 static llvm::cl::opt<std::string> ArchTag("arch", llvm::cl::desc("Architecture tag echoed into the JSON"), llvm::cl::init(""), llvm::cl::cat(ToolCat));
 
@@ -206,9 +208,11 @@ class Visitor : public RecursiveASTVisitor<Visitor>
     //   - initialized from a call    -> provenanceKind="call", producer=callee
     //   - a plain variable           -> provenanceKind="var",  producer=var name
     //   - a reinterpret/C-style cast -> provenanceKind="cast", producer=cast text
-    void provenance(const Expr *Base, std::string &kind, std::string &producer)
+    // Classify a call/cast producer expr. Returns true (setting kind+producer) if
+    // E is a CallExpr or a reinterpret/C-style cast; false otherwise. Used on both
+    // a base pointer expr and a variable's initializer (same rule, one place).
+    bool classifyProducer(const Expr *E, std::string &kind, std::string &producer)
     {
-        const Expr *E = Base->IgnoreParenImpCasts();
         if (const auto *CE = dyn_cast<CallExpr>(E))
         {
             kind = "call";
@@ -216,12 +220,22 @@ class Visitor : public RecursiveASTVisitor<Visitor>
             {
                 producer = FD->getNameAsString();
             }
-            return;
+            return true;
         }
         if (isa<CXXReinterpretCastExpr>(E) || isa<CStyleCastExpr>(E))
         {
             kind     = "cast";
             producer = srcText(S, E->getSourceRange());
+            return true;
+        }
+        return false;
+    }
+
+    void provenance(const Expr *Base, std::string &kind, std::string &producer)
+    {
+        const Expr *E = Base->IgnoreParenImpCasts();
+        if (classifyProducer(E, kind, producer))
+        {
             return;
         }
         if (const auto *DRE = dyn_cast<DeclRefExpr>(E))
@@ -231,20 +245,8 @@ class Visitor : public RecursiveASTVisitor<Visitor>
                 // Prefer the variable's initializer provenance (e.g. cfg = get_cfg_pointer()).
                 if (const Expr *Init = VD->getInit())
                 {
-                    const Expr *IE = Init->IgnoreParenImpCasts();
-                    if (const auto *ICE = dyn_cast<CallExpr>(IE))
+                    if (classifyProducer(Init->IgnoreParenImpCasts(), kind, producer))
                     {
-                        kind = "call";
-                        if (const FunctionDecl *FD = ICE->getDirectCallee())
-                        {
-                            producer = FD->getNameAsString();
-                        }
-                        return;
-                    }
-                    if (isa<CXXReinterpretCastExpr>(IE) || isa<CStyleCastExpr>(IE))
-                    {
-                        kind     = "cast";
-                        producer = srcText(S, IE->getSourceRange());
                         return;
                     }
                 }
@@ -469,19 +471,20 @@ public:
                 o["producer"]        = f.producer;
                 o["index_text"]      = f.indexText;
             }
-            if (f.family == "call" && !f.arg0.empty())
+            const bool isCall = f.family == "call";
+            if (isCall && !f.arg0.empty())
             {
                 o["arg0"] = f.arg0;
             }
-            if (f.family == "call" && f.argc >= 0)
+            if (isCall && f.argc >= 0)
             {
                 o["argc"] = f.argc;
             }
-            if (f.family == "call" && !f.recv.empty())
+            if (isCall && !f.recv.empty())
             {
                 o["recv"] = f.recv;
             }
-            if (f.family == "call" && !f.recvType.empty())
+            if (isCall && !f.recvType.empty())
             {
                 o["recv_type"] = f.recvType;
             }

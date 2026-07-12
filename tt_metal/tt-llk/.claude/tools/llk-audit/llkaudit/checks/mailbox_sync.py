@@ -13,11 +13,11 @@ halt/unhalt handshake. The LARGE surface lives OUTSIDE the headers this tool
 parses: the compute-API sites (hw/inc/api) and the hand-written
 `ckernel::mailbox_write(...)` in ttnn/models KERNELS (one-to-one messages and
 fan-outs alike; the CB tile-address/value broadcast is just one pattern). That
-kernel surface is NOT covered by run.sh --full-jit today (its kernel tier is
-cb-sync/noc-sync only) — it is audited by the /mailbox-sync-audit skill's widened
-grep (which reaches ttnn/models). A future kernel-tier `mailbox-sync` extension
-could recall it deterministically, covering every directed channel (not just the
-broadcast).
+kernel surface is covered by `run.sh --full-jit` when the kernel tier is run with a
+capture (bootstrap.sh runs `--checks cb-sync,noc-sync,mailbox-sync`); without a
+capture it is audited by the /mailbox-sync-audit skill's widened grep (which reaches
+ttnn/models). Either way this checker recalls every directed channel it sees in the
+fact base — not just the broadcast.
 
 So this is a pure AUGMENTOR over the in-tree surface: it enumerates every FIFO
 endpoint, decodes its directed channel (source_thread -> dest_thread) via the

@@ -16,6 +16,11 @@ import json
 from dataclasses import dataclass
 from typing import Iterable
 
+# Open-ended function extent: when a function fact has no usable end and no next
+# sibling to bound it, treat it as reaching "the rest of the file". Large enough to
+# contain any real offset; a named constant so contains()/facts_in() reads clearly.
+OPEN_ENDED_EXTENT = 1_000_000_000
+
 
 @dataclass
 class Function:
@@ -70,7 +75,7 @@ class FactBase:
                     fn.end_off = (
                         ordered[i + 1].begin_off - 1
                         if i + 1 < len(ordered)
-                        else fn.begin_off + 1_000_000_000
+                        else fn.begin_off + OPEN_ENDED_EXTENT
                     )
 
     # -- construction ---------------------------------------------------------

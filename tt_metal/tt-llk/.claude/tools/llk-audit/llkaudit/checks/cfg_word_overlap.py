@@ -179,7 +179,13 @@ class CfgWordOverlap(Check):
             if ns != "CONFIG":
                 continue
             threads = {w["thread"] for w in ws if w["thread"] != "UNKNOWN"}
-            if len(threads) < 2:
+            has_unknown = any(w["thread"] == "UNKNOWN" for w in ws)
+            # >=2 known threads -> a real cross-thread share. Exactly 1 known + an
+            # unattributable co-writer -> WIDEN (emit-low-confidence): a possible
+            # cross-thread share the tool can't confirm, surfaced not dropped (a
+            # recall tool must not narrow away an unresolved co-writer). Neither ->
+            # skip.
+            if len(threads) < 2 and not (len(threads) == 1 and has_unknown):
                 continue
             ev = [
                 f'{w["file"].split("/")[-1]}:{w["line"]} [{w["thread"]}] '
@@ -188,6 +194,8 @@ class CfgWordOverlap(Check):
             ]
             fields = sorted({w["field"] for w in ws})
             safety, bits = self._safety(ws, fb.addr32)
+            if len(threads) < 2:  # 1 known + unknown co-writer: low-confidence widen
+                safety = "UNRESOLVED_COWRITER"
             bits_str = ", ".join(f"{t}=0x{m:x}" for t, m in sorted(bits.items()))
             # anchor the finding at the first writer
             first = min(ws, key=lambda w: (w["file"], w["line"]))

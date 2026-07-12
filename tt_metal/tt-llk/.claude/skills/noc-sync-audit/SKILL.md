@@ -36,7 +36,7 @@ Cores coordinate across the NoC with **NoC semaphores** (L1 counters bumped by r
 1. Enumerate (scope reaches beyond tt-llk):
    ```bash
    # from the repo root (ttnn/ and models/ are siblings of tt_metal/, NOT under it)
-   grep -rInE '\bnoc_semaphore_(wait|set|inc|set_multicast|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|inline_dw_write)\b|\.(up|set_multicast|set_multicast_loopback_src|relay_multicast|inc_multicast|async_write_barrier|async_writes_flushed)[[:space:]]*\(' \
+   grep -rInE '\bnoc_semaphore_(wait|set|inc|set_multicast(_loopback_src)?|inc_multicast|set_remote)\b|\bnoc_(async_write_barrier|async_writes_flushed|async_write_flushed_with_trid|async_write_barrier_with_trid|inline_dw_write)\b|\.(up|set_multicast|set_multicast_loopback_src|relay_multicast|relay_unicast|inc_multicast|async_write_barrier|async_writes_flushed)[[:space:]]*\(' \
      tt_metal/hw/inc/api ttnn/cpp models --include=*.h --include=*.cpp | grep -v '/tests/'
    ```
    **Both API forms.** Modern ttnn kernels signal via the OBJECT form on a
