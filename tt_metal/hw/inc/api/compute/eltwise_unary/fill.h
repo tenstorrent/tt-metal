@@ -39,7 +39,7 @@ ALWI void fill_tile(uint32_t idst, float param0) {
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
         calculate_fill,
-        (DataFormat::Float32, SFPU_ITERATIONS),
+        (DataFormat::Float32, DST_ACCUM_MODE, SFPU_ITERATIONS),
         idst,
         VectorMode::RC,
         param0));
@@ -86,7 +86,13 @@ ALWI void fill_tile_int(uint32_t idst, uint32_t param0) {
             DATA_FORMAT == DataFormat::UInt8,
         "Unsupported data format for fill_tile_int on Quasar. Supported: Int32, Int16, Int8, UInt8");
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_fill, (DATA_FORMAT, SFPU_ITERATIONS), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_fill,
+        (DATA_FORMAT, DST_ACCUM_MODE, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC,
+        param0));
 #endif
 }
 
@@ -116,7 +122,13 @@ ALWI void fill_tile_bitcast(uint32_t idst, uint32_t param0) {
         param0));
 #else
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_fill_bitcast_, (SFPU_ITERATIONS), idst, VectorMode::RC, param0));
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _fill_store_,
+        (p_sfpu::sfpmem::DEFAULT, SFPU_ITERATIONS),
+        idst,
+        VectorMode::RC,
+        param0));
 #endif
 }
 /**
