@@ -43,7 +43,17 @@ class CfgWordOverlap(Check):
         "ADDR32 in cfg_defines.h are listed as 'unresolved'. Intra-thread "
         "full-word clobber (INTRA_THREAD_CLOBBER) is a candidate: a full-word "
         "write that intentionally sets the entire word (no separate masked "
-        "sibling) is benign, and a sibling written only out-of-tree is missed. "
+        "sibling) is benign, and a sibling written only out-of-tree is missed; "
+        "the full-word and masked-sibling writes are compared across the whole "
+        "THREAD (all functions/files — deliberately, since the real clobbers span "
+        "functions, e.g. #49192), so two writes on mutually-exclusive paths can be "
+        "a false candidate the LLM rules out. A cfg16 (half-word) write is treated "
+        "as a masked field write, NOT a full-word clobberer, so a cfg16 store that "
+        "zeroes a sibling in its 16-bit half is not recalled as INTRA_THREAD_CLOBBER "
+        "(word-granular model). The per-(file,field) dedup collapses one write's "
+        "call+macro double-capture but also merges two DISTINCT same-field writes "
+        "in one file into one entry (safe — same thread, stronger entry kept — but "
+        "the writer list/evidence undercounts). "
         "Config has two banks selected by CFG_STATE_ID; the tool does not model "
         "StateID, so it may over-approximate (flag a word when the threads use "
         "different banks). Two known under-reports (LLM must widen): (a) a "
@@ -66,13 +76,17 @@ class CfgWordOverlap(Check):
         unresolved: list[Finding] = []
 
         def add(ns, word, field, fact, how):
-            thr = registry.thread_of(fact["file"])
+            # thread_of_fact: file's thread, else fall back to the writing function
+            # name (Quasar common/lib headers are token-less; their pack/unpack/math
+            # functions still carry it) — so #49192-class cross-function clobbers in
+            # such files are no longer dropped as UNKNOWN. WH/BH resolve by file.
+            thr = registry.thread_of_fact(fact)
             writers[(ns, word)].append(
                 {
                     "thread": thr,
                     "field": field,
                     "file": fact["file"],
-                    "line": fact["line"],
+                    "line": fact.get("line", 0),
                     "function": fact.get("function", "?"),
                     "how": how,
                 }
@@ -125,7 +139,7 @@ class CfgWordOverlap(Check):
         for m in fb.family("macro"):
             name = m.get("name", "")
             if registry.classify_macro(name) == "ordered_write":
-                if "SETDMAREG" in name.upper():
+                if registry.is_gpr_source_write(name):
                     # SETDMAREG writes a GPR (a source value), NOT a sampled
                     # config word — reconfig-stall excludes it for the same
                     # reason. Skip so it can't be mis-attributed as a Config
@@ -133,7 +147,7 @@ class CfgWordOverlap(Check):
                     continue
                 word, field = registry.resolve_word(m.get("text", ""), fb.addr32)
                 # SETC16 targets ThreadConfig; all other ordered writes target Config.
-                ns = "THREAD" if "SETC16" in name.upper() else "CONFIG"
+                ns = "THREAD" if registry.is_thread_config_write(name) else "CONFIG"
                 if word is not None:
                     # A WRCFG_128b overwrites 4 consecutive words (base..base+3);
                     # enumerate them all so a sibling write to base+1..+3 is seen
@@ -204,11 +218,11 @@ class CfgWordOverlap(Check):
                 safety = "UNRESOLVED_COWRITER"
             bits_str = ", ".join(f"{t}=0x{m:x}" for t, m in sorted(bits.items()))
             # anchor the finding at the first writer
-            first = min(ws, key=lambda w: (w["file"], w["line"]))
+            first = min(ws, key=lambda w: (w["file"], w.get("line", 0)))
             findings.append(
                 Finding(
                     file=first["file"],
-                    line=first["line"],
+                    line=first.get("line", 0),
                     function=first["function"],
                     kind=f"shared_word@{ns}:{word}",
                     # The cross-thread ACCESS is always reported (multi-thread use
@@ -320,7 +334,7 @@ class CfgWordOverlap(Check):
                 out.append(
                     Finding(
                         file=anchor["file"],
-                        line=anchor["line"],
+                        line=anchor.get("line", 0),
                         function=anchor["function"],
                         kind=f"clobber@CONFIG:{word}",
                         hint="INTRA_THREAD_CLOBBER",
@@ -338,13 +352,13 @@ class CfgWordOverlap(Check):
 
     @staticmethod
     def _w_ev(w: dict, what: str = "") -> str:
-        base = f'{w["file"].split("/")[-1]}:{w["line"]} [{w["thread"]}] {w["field"]} ({w["how"]})'
+        base = f'{w["file"].split("/")[-1]}:{w.get("line", 0)} [{w["thread"]}] {w["field"]} ({w["how"]})'
         return f"{base} {what}" if what else base
 
     def _unresolved(self, fact: dict, field: str) -> Finding:
         return Finding(
             file=fact["file"],
-            line=fact["line"],
+            line=fact.get("line", 0),
             function=fact.get("function", "?"),
             kind="unresolved_field",
             hint="UNRESOLVED",

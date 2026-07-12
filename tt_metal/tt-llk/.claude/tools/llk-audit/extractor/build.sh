@@ -19,6 +19,15 @@ fi
 [ -n "${LLVM_CONFIG:-}" ] && [ -x "$LLVM_CONFIG" ] || {
   echo "llvm-config (>=18) not found; set LLVM_CONFIG" >&2; exit 1; }
 
+# Enforce the >=18 floor the header asserts: bare `llvm-config` (or an env override)
+# could point at 16/17, which compiles the starts_with/ends_with calls but was never
+# validated. Fail loudly rather than silently building against an untested toolchain.
+LLVM_MAJOR="$("$LLVM_CONFIG" --version | cut -d. -f1)"
+if [ -z "$LLVM_MAJOR" ] || [ "$LLVM_MAJOR" -lt 18 ]; then
+  echo "llk-audit: LLVM $($LLVM_CONFIG --version) is < 18 (need >=18); set LLVM_CONFIG" >&2
+  exit 1
+fi
+
 CXX="${CXX:-clang++}"
 LIBDIR="$($LLVM_CONFIG --libdir)"
 

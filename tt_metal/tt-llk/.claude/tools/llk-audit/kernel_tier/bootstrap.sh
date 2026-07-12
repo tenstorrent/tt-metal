@@ -44,6 +44,9 @@ else
   WORKLOAD="${LLK_KT_WORKLOAD:-$REPO/build/programming_examples/metal_example_eltwise_binary}"
   if [ "${LLK_KT_CLEAR_CACHE:-0}" = "1" ]; then
     echo "kernel-tier: clearing tt-metal kernel cache (force recompile+capture) ..." >&2
+    # Guard a set-but-EMPTY $HOME (set -u only catches UNSET): an empty $HOME makes
+    # the glob "/.cache/..." resolve at filesystem root. Refuse rather than rm there.
+    [ -n "$HOME" ] || { echo "kernel-tier: \$HOME is empty — refusing to clear cache" >&2; exit 1; }
     rm -rf "$HOME"/.cache/tt-metal-cache/* 2>/dev/null || true
   else
     echo "kernel-tier: NOT clearing the kernel cache — already-cached kernels emit" >&2

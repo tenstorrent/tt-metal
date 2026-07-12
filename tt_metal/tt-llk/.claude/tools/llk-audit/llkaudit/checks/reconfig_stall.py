@@ -62,9 +62,9 @@ class ReconfigStall(Check):
                     return kind in registry.CFG_WRITE_KINDS  # cfg[] MMIO (not GPR)
                 if f["family"] == "macro":
                     up = f.get("name", "").upper()
-                    return f.get("name", "").startswith(("TTI_", "TT_")) and any(
-                        s in up for s in registry.RECONFIG_WRITE_MACRO_SUBSTR
-                    )
+                    return f.get("name", "").startswith(
+                        registry.INSTR_PREFIXES
+                    ) and any(s in up for s in registry.RECONFIG_WRITE_MACRO_SUBSTR)
                 if f["family"] == "call":
                     # cfg_rmw / cfg_rmw_gpr — Quasar's dominant config-write idiom;
                     # without these a Quasar reconfig looks like it writes nothing.
@@ -141,7 +141,7 @@ class ReconfigStall(Check):
                 findings.append(
                     Finding(
                         file=fn.file,
-                        line=w["line"],
+                        line=w.get("line", 0),
                         function=fn.name,
                         kind="reconfig_stall",
                         hint=hint,

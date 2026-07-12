@@ -389,11 +389,18 @@ public:
                 // extractor and drop every fact for the whole TU — a silent capture
                 // hole (false-all-clear). getAsCXXRecordDecl() is likewise gated.
                 QualType objTy = MCE->getObjectType();
-                if (const CXXRecordDecl *RD = objTy->getAsCXXRecordDecl())
+                // Guard isNull() FIRST: objTy->getAsCXXRecordDecl() dereferences the
+                // QualType (operator-> = getTypePtr()), which asserts/segfaults on a
+                // null type. A null object type would otherwise crash the TU.
+                if (objTy.isNull())
+                {
+                    // leave recvType empty
+                }
+                else if (const CXXRecordDecl *RD = objTy->getAsCXXRecordDecl())
                 {
                     f.recvType = RD->getNameAsString();
                 }
-                else if (!objTy.isNull())
+                else
                 {
                     f.recvType = objTy.getUnqualifiedType().getAsString();
                 }

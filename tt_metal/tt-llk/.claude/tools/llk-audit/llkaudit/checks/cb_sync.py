@@ -42,8 +42,16 @@ class CbSync(Check):
         "branch-conditional reserve/push (which can show a false imbalance) are "
         "deferred. The remote/sharded CB family IS balance-checked (remote_cb_* in "
         "CB_CALLS; its push is the fused remote_cb_push_back_and_write_pages) — but "
-        "its data-before-credit ordering is noc-sync's job. Requires a KERNEL fact "
-        "base (the on-request capture); empty over tt-llk."
+        "its data-before-credit ordering is noc-sync's job. Three more false-"
+        "imbalance sources the LLM must resolve: (a) NON-CANONICAL CB-op wrappers — "
+        "only the names in registry.CB_CALLS/CB_METHOD_CALLS are recalled (a curated "
+        "few wrappers like cb_push_back_hold_wr_ptr are included; others are missed, "
+        "and a wrapper's own body may double-count); (b) a reserve/push split across "
+        "a NESTED scope (an op in an outer function paired inside a lambda groups "
+        "under two different `function` keys); (c) a CB reserved via the FREE API but "
+        "pushed via the OBJECT API (or vice versa) keys on arg0 vs the receiver, so "
+        "the two land in different cbid buckets. Requires a KERNEL fact base (the "
+        "on-request capture); empty over tt-llk."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
