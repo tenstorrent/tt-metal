@@ -128,6 +128,16 @@ void init_unary_sfpu_operation_quasar()
     }
 }
 
+/**
+ * @brief Map a runtime SFPU math format to a compile-time DataFormat and invoke `fn` with it.
+ *
+ * `fn` is invoked as `fn(std::integral_constant<DataFormat, FMT>{})`; recover the format inside
+ * it with `decltype(arg)::value`.
+ *
+ * @tparam Fn Generic callable accepting a `std::integral_constant<DataFormat, FMT>`.
+ * @param sfpu_format SFPU math format selecting the sfpmem mode / result encoding.
+ * @param fn Callable receiving the selected format as a compile-time constant.
+ */
 template <typename Fn>
 void dispatch_runtime_sfpu_format_quasar(DataFormat sfpu_format, Fn&& fn)
 {
@@ -163,16 +173,23 @@ void dispatch_runtime_sfpu_format_quasar(DataFormat sfpu_format, Fn&& fn)
     }
 }
 
+/**
+ * @brief The compile-time fill literal for a given SFPU format.
+ *
+ * @tparam FMT The fill target's compile-time `DataFormat`.
+ * @note Reads the non-dependent global `FILL_CONSTANT` (baked in by the `FILL_CONSTANT`
+ *       template parameter); every build including this header must define it.
+ */
 template <DataFormat FMT>
 consteval auto fill_value_quasar()
 {
     if constexpr (FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32)
     {
-        return 5.0f;
+        return static_cast<float>(FILL_CONSTANT);
     }
     else
     {
-        return std::uint32_t {5};
+        return static_cast<std::uint32_t>(FILL_CONSTANT);
     }
 }
 
@@ -318,14 +335,11 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
                 }
                 else
                 {
-                    constexpr bool IS_FLOAT  = FMT == DataFormat::Float16 || FMT == DataFormat::Float16_b || FMT == DataFormat::Float32;
-                    constexpr bool PROMOTE   = is_fp32_dest_acc_en && (FMT == DataFormat::Int8 || FMT == DataFormat::UInt8);
-                    constexpr DataFormat EFFECTIVE_FMT = IS_FLOAT ? DataFormat::Float32 : (PROMOTE ? DataFormat::Int32 : FMT);
                     SFPU_UNARY_CALL(
                         DST_SYNC,
                         is_fp32_dest_acc_en,
                         calculate_fill,
-                        (EFFECTIVE_FMT, ITERATIONS),
+                        (FMT, is_fp32_dest_acc_en, ITERATIONS),
                         dst_index,
                         VectorMode::RC,
                         fill_value_quasar<FMT>());

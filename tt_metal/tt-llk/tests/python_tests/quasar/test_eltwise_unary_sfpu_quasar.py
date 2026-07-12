@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
+    FILL_CONSTANT,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
@@ -916,6 +917,9 @@ def test_eltwise_unary_sfpu_quasar(
                 if is_typecast
                 else TYPECAST_FORMATS()
             ),
+            # fill_value_quasar() in the shared C++ source references the non-dependent
+            # global FILL_CONSTANT, so every build that includes it must define it.
+            FILL_CONSTANT(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
