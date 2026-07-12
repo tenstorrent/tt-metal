@@ -275,6 +275,23 @@ measured it. Same F0/I0 block harness, `-k 'video and stage_1 and ring_bh_4x8sp1
   to revert. **⇒ no quant preset clears the 5% gate at passing quality on EITHER denoise stage; both confirmed
   collective/dispatch-bound.** Batch N CLOSED (S1 stacked/fp32acc presets = dead-by-composition, same as the S2 finding).
 
+## Batch O — VAE conv math-FIDELITY (the last untested compute lever on the ONE compute-bound bucket)
+Every prior quant sweep hit the DISPATCH-bound denoise (H/J/N null). A1 measured VAE decode COMPUTE-bound
+(traced≈untraced 552ms). Batch K closed the weight-DTYPE sub-path (bf8 → SEGFAULT at TILE-less upload) but NOT the
+math-FIDELITY sub-path: `LTXCausalConv3d` builds a per-conv `compute_kernel_config` at HiFi2 (vae_ltx.py:146-154;
+HiFi4 only when Blackhole+dtype==float32, and the prof decoder defaults dtype=bfloat16 → HiFi2). Dropping to LoFi
+(2 passes → 1) is a pure-compute lever with a real mechanism on the one compute-bound bucket — env-gated 1-line scaffold
+(`LTX_VAE_LOFI` → `MathFidelity.LoFi`), no build_metal, cron-in-budget. Harness = `prof_vae_ltx.py::test_prof_vae_ltx_trace`
+(TRACED_DECODE_WALL_MS vs baseline 551.91ms, job 225635-65), env `opt/env_sdpa.yaml`. Speed-screen first (W-mask COST pattern):
+if <5% it's DEAD regardless of PCC.
+- [x] **conv LoFi (HiFi2→LoFi) — NULL: TRACED_DECODE_WALL_MS 542.17 vs 551.91 baseline = −9.74ms = −1.77% (<5% gate).**
+  Job **022644-119** (re-verified from raw log: `TRACED_DECODE_WALL_MS=542.17 ... iters=10`, `1 passed in 45.51s`, warm —
+  prewarm rebuilt the LoFi conv targets in 3548ms, no timeout, 32 chips healthy). **Cutting conv math-fidelity 2× barely
+  moves the 552ms ⇒ the VAE decode is NOT matmul-math-bound; the "compute-bound" of A1 is conv3d data-movement / halo /
+  reduction / dispatch, not multiply-accumulate precision.** No PCC A/B needed (dead on speed). Env-gated scaffold
+  REVERTED (no win; finding is the receipt). ⇒ **the compute-precision axis on VAE is now closed on BOTH sub-paths (weight
+  bf8 = segfault/warm-authoring K; math-fidelity LoFi = −1.77% null O).** No env-only VAE compute lever moves the decode.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
