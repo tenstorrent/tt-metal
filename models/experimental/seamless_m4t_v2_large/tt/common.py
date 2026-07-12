@@ -1165,6 +1165,30 @@ def _all_gather_num_links() -> int:
     return n if n >= 1 else 1
 
 
+def _encoder_all_reduce_num_links() -> int:
+    """Ethernet links for the encoder TP ``all_reduce`` (``SEAMLESS_ALL_REDUCE_NUM_LINKS``, default 2).
+
+    BH-QB (1x4) has 2 ethernet channels between adjacent chips; num_links=2 is the hardware max
+    (3+ raises "link index out of bounds"). Two links roughly halve the collective transfer time.
+    """
+    try:
+        n = int(os.environ.get("SEAMLESS_ALL_REDUCE_NUM_LINKS", "2"))
+    except ValueError:
+        return 2
+    return n if n >= 1 else 1
+
+
+def _encoder_all_reduce_topology() -> "ttnn.Topology":
+    """Topology for the encoder TP ``all_reduce`` (``SEAMLESS_ALL_REDUCE_TOPOLOGY``, default ring).
+
+    Ring beats Linear on the (1x4) mesh (collective bucket 16.6 -> 10.4 ms at 2 links). Set the env
+    to ``linear`` to fall back.
+    """
+    if os.environ.get("SEAMLESS_ALL_REDUCE_TOPOLOGY", "ring").strip().lower() == "linear":
+        return ttnn.Topology.Linear
+    return ttnn.Topology.Ring
+
+
 def _all_reduce_linear_no_dealloc(
     x: ttnn.Tensor,
     mesh_device: ttnn.Device,
@@ -1269,7 +1293,7 @@ def encoder_all_reduce_sum_replicate(
     cluster_axis: int = 1,
     memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
 ) -> ttnn.Tensor:
-    """Text encoder: sum row-parallel partials via ``ttnn.all_reduce`` (linear topology)."""
+    """Text encoder: sum row-parallel partials via ``ttnn.all_reduce`` (ring topology, 2 links)."""
     mc = memory_config
     x_shape = list(x.shape)
     token_rows = 1
@@ -1282,8 +1306,8 @@ def encoder_all_reduce_sum_replicate(
         x,
         cluster_axis=cluster_axis,
         memory_config=mc,
-        num_links=1,
-        topology=ttnn.Topology.Linear,
+        num_links=_encoder_all_reduce_num_links(),
+        topology=_encoder_all_reduce_topology(),
     )
     return result
 
