@@ -1670,6 +1670,53 @@ def test_cli_changed_file_with_no_facts_marks_degraded():
 
 
 @case
+def test_reconfig_partial_math_drain():
+    # A MATH reconfig fully clears only when BOTH engines (FPU=MATH, SFPU=WAIT_SFPU/
+    # SFPU1) are drained; draining only one -> PARTIAL_MATH_DRAIN (code-dependent,
+    # low-confidence) rather than a silent clear (false negative) or a hard flag.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"  # MATH thread
+    W = "cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>"
+
+    def run_with(stall_text):
+        facts = [
+            fn("_llk_math_reconfig_data_format_", F, 0, 100),
+            macro(
+                F,
+                10,
+                "TTI_STALLWAIT",
+                stall_text,
+                func="_llk_math_reconfig_data_format_",
+            ),
+            call(
+                F, 20, "cfg_reg_rmw_tensix", W, func="_llk_math_reconfig_data_format_"
+            ),
+        ]
+        return ReconfigStall().run(FactBase("wormhole", facts))
+
+    assert (
+        run_with(
+            "TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU)"
+        )
+        == []
+    )
+    assert (
+        run_with("TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1)")
+        == []
+    )  # SFPU1 spelling
+    r = run_with("TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH)")  # FPU only
+    assert len(r) == 1 and r[0].hint == "PARTIAL_MATH_DRAIN", r
+    r = run_with("TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::WAIT_SFPU)")  # SFPU only
+    assert len(r) == 1 and r[0].hint == "PARTIAL_MATH_DRAIN", r
+    # no stall at all -> the definite NO_UNIT_DRAIN, not the low-confidence partial
+    facts = [
+        fn("_llk_math_reconfig_data_format_", F, 0, 100),
+        call(F, 20, "cfg_reg_rmw_tensix", W, func="_llk_math_reconfig_data_format_"),
+    ]
+    r = ReconfigStall().run(FactBase("wormhole", facts))
+    assert len(r) == 1 and r[0].hint == "NO_UNIT_DRAIN", r
+
+
+@case
 def test_stallwait_operand_quasar_4operand():
     # Quasar's TTI_STALLWAIT is 4-operand: the wait condition spans the last three
     # operands (operand 2 is often 0). WH/BH are 2-operand. stallwait_wait_operand
