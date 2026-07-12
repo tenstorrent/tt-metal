@@ -606,6 +606,14 @@ void kernel_main() {
                     }
 #endif
 
+                    // DEBUG (tilize-survived marker): printed on the PACK thread AFTER both tilize_in calls
+                    // complete, BEFORE the matmul. Definitively separates "tilize faulted" (TZDONE absent)
+                    // from "survived tilize, faulted downstream" (TZDONE present). wptr = tilized DFB write
+                    // ptr after packing the block (wraps back near its base 91552 after a full ring). Remove
+                    // after diagnosis.
+                    PACK(DPRINT(
+                        "TZDONE h={} wptr={}\n", (uint32_t)in0_block_h_i, (uint32_t)cb_tilized_in0.get_write_ptr()));
+
                     reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
                     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
