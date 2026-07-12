@@ -24,18 +24,21 @@ using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 // Metal 2.0 resource names (ProgramSpec scope).
 const m2::KernelSpecName READER{"reader"};
 const m2::TensorParamName INPUT{"input"};
 const m2::TensorParamName OUTPUT{"output"};
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 ttnn::device_operation::ProgramArtifacts MoveShardedProgramFactory::create_program_artifacts(
     const MoveOperationAttributes& /*operation_attributes*/,
     const MoveTensorArgs& tensor_args,
     Tensor& tensor_return_value) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;  // resolve the file-local ids/helpers below
     using namespace tt::constants;
 
     const Tensor& input = tensor_args.input_tensor;
