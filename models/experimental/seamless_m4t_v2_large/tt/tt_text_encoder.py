@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import math
-import os
 from typing import Optional
 
 import ttnn
@@ -41,10 +40,11 @@ class TTSeamlessM4Tv2Encoder:
     Prefill matmuls use L1 width-sharded activations + DRAM width-sharded BFP8 weights
     (``MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig``).
 
-    Long-seq policy (``ENCODER_L1_MICROBATCH_ROWS`` = 128): when ``token_rows`` fits the
-    microbatch, residuals / AR stay in L1. Above that, residuals live in DRAM and TP
-    linears run ``SEAMLESS_TP_BS_CHUNK_M``-sized L1 row chunks (default 128). Self-attn
-    stays full-sequence (bidirectional); only pointwise ops are row-chunked.
+    TP (mesh ``(1, 4)``) long-seq policy: the block-sharded linears run single-shot up to the
+    encoder's design-max sequence (``ENCODER_TP_BS_CHUNK_DEFAULT`` = 4096), and the residual /
+    all-reduce / reshards stay L1-resident up to the same length (``ENCODER_L1_RESIDENT_DEFAULT``),
+    so consecutive fc1→fc2 matmuls hand off block-sharded in L1. Sequences beyond the design max
+    fall back to row-chunked linears with DRAM residuals. Self-attn is full-sequence (bidirectional).
     """
 
     def __init__(
@@ -65,8 +65,6 @@ class TTSeamlessM4Tv2Encoder:
         self.hidden_size = hidden_size
         self._tp = get_tp(device)
         self._cluster_axis = mesh_cluster_axis(device)
-        # Long-seq TP: block-sharded LN when enabled (``SEAMLESS_TP_BS_LN=0`` disables).
-        self._tp_bs_ln = os.environ.get("SEAMLESS_TP_BS_LN", "1") == "1"
         self._sdpa_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi3,
@@ -101,20 +99,6 @@ class TTSeamlessM4Tv2Encoder:
         self._dram_matmul_pc_cache: dict = {}
         self._width_shard_mem_cache: dict = {}
         self._chunked_tp_compute_cfg = None
-
-    @staticmethod
-    def _tp_bs_chunk_rows() -> int:
-        """Row-chunk size for TP block-sharded matmul (``SEAMLESS_TP_BS_CHUNK_M``).
-
-        Defaults to ``ENCODER_TP_BS_CHUNK_DEFAULT`` (4096 = encoder design-max seq) so the TP
-        linear runs single-shot within the design envelope instead of shattering into small
-        fixed-M chunks. Decoupled from ``ENCODER_L1_MICROBATCH_ROWS`` (residual L1/DRAM policy):
-        chunking at 128 rows dropped block-sharded matmul FLOPs efficiency ~79% -> ~26%.
-        """
-        try:
-            return int(os.environ.get("SEAMLESS_TP_BS_CHUNK_M", str(ENCODER_TP_BS_CHUNK_DEFAULT)))
-        except ValueError:
-            return ENCODER_TP_BS_CHUNK_DEFAULT
 
     def _chunked_tp_linear_compute_cfg(self) -> ttnn.DeviceComputeKernelConfig:
         # Multiple LoFi block-sharded matmul chunks compound bf16 noise; HiFi2 matches TP=1 chunked path PCC.
@@ -475,16 +459,15 @@ class TTSeamlessM4Tv2Encoder:
         """Sharded multicore LN. Set ``output_sharded=True`` to feed a matmul without an S2I.
 
         Short-seq (``m_tiles == 1``) uses WIDTH_SHARDED LN; long-seq uses BLOCK_SHARDED LN when
-        ``SEAMLESS_TP_BS_LN`` is on (default) and ``output_sharded`` feeds a block-sharded matmul.
-        When ``matmul_fusion_m`` / ``matmul_fusion_k`` are set, LN uses the same block-sharded
-        layout as ``encoder_tp_matmul_in0_memory_config`` so the downstream matmul skips S2I.
-        Set ``SEAMLESS_TP_BS_LN=0`` to use interleaved ``ttnn.layer_norm`` instead.
+        ``output_sharded`` feeds a block-sharded matmul. When ``matmul_fusion_m`` / ``matmul_fusion_k``
+        are set, LN uses the same block-sharded layout as ``encoder_tp_matmul_in0_memory_config`` so
+        the downstream matmul skips its S2I.
         """
         if m_tiles > 1:
             # Block-sharded long-seq LN (see method docstring): keep the LN sharded so the downstream
             # block-sharded matmul skips its interleaved->block reshard. Otherwise fall through to the
             # unsharded path below.
-            if self._tp_bs_ln and output_sharded:
+            if output_sharded:
                 fused_ln = None
                 if matmul_fusion_m is not None and matmul_fusion_k is not None and matmul_fusion_n is not None:
                     fused_ln = encoder_tp_matmul_in0_ln_config(
@@ -768,17 +751,18 @@ class TTSeamlessM4Tv2Encoder:
         Each device computes a local partial result; the caller applies
         ``encoder_all_reduce_sum_replicate`` after row-parallel layers.
 
-        Uses ``encoder_tp_block_sharded_matmul`` when shapes are tuned; long-seq
-        (``m > SEAMLESS_TP_BS_CHUNK_M``, default 128) runs the same kernel on L1 row
-        chunks while the concatenated result lands in ``memory_config`` (DRAM above the
-        microbatch). Otherwise falls back to tuned 1D interleaved ``ttnn.linear``.
+        Uses ``encoder_tp_block_sharded_matmul`` when shapes are tuned: single-shot up to the
+        design-max sequence (``m <= ENCODER_TP_BS_CHUNK_DEFAULT``), and row-chunked above it (the
+        concatenated result lands in ``memory_config``). ``keep_sharded_output`` returns the
+        block-sharded output for a chained downstream matmul (fc1→fc2). Otherwise falls back to
+        tuned 1D interleaved ``ttnn.linear``.
         """
         if memory_config is None:
             memory_config = getattr(self, "_activation_mc", ttnn.L1_MEMORY_CONFIG)
         k = int(weight.shape[-2])
         n = int(weight.shape[-1])
         m = self._linear_token_rows(x)
-        chunk_m = self._tp_bs_chunk_rows()
+        chunk_m = ENCODER_TP_BS_CHUNK_DEFAULT
         fused_activation = ttnn.UnaryOpType.RELU if activation == "relu" else None
 
         tuned_chunk = encoder_tp_block_sharded_matmul(self.device, chunk_m, k, n, fused_activation=fused_activation)
@@ -1034,7 +1018,7 @@ class TTSeamlessM4Tv2Encoder:
         n_tiles = hidden_size // 32
         ffn_dim = 8 * hidden_size
         token_rows = batch * seq
-        chunk_m = self._tp_bs_chunk_rows()
+        chunk_m = ENCODER_TP_BS_CHUNK_DEFAULT
         if tp > 1:
             self._activation_mc = encoder_tp_activation_memory_config(token_rows)
             if hidden.memory_config().buffer_type != self._activation_mc.buffer_type:
@@ -1060,8 +1044,8 @@ class TTSeamlessM4Tv2Encoder:
                 sharded_hidden_mem = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
             self._long_seq_mc = sharded_hidden_mem if long_seq else None
 
-        # Fuse LN→matmul only when M fits one L1 microbatch chunk (chunked linear would S2I a full-M shard).
-        tp_fused_ln = self._tp_bs_ln and tp > 1 and m_tiles > 1 and token_rows <= chunk_m
+        # Fuse LN→matmul only when M runs single-shot (a chunked linear would S2I a full-M shard).
+        tp_fused_ln = tp > 1 and m_tiles > 1 and token_rows <= chunk_m
         qkv_n = int(parameters.layers[0].self_attn.qkv.weight.shape[-1]) if tp > 1 else None
         fc1_n = int(parameters.layers[0].ffn.fc1.weight.shape[-1]) if tp > 1 else None
 

@@ -505,9 +505,9 @@ def encoder_tp_interleaved_matmul_program_config(
 # out_proj (256,1024) and ffn fc1 (1024,2048) are intentionally omitted: the sweep found their
 # 1D width-sharded configs already optimal (<=1.01x, and fc1 is HiFi2 FLOP-bound).
 #
-# Long-seq chunk size for decoder prefill BS matmul (mirrors text-encoder ``SEAMLESS_TP_BS_CHUNK_M``).
-# Above this M the decoder runs ``ceil(M / chunk)`` tuned chunk kernels instead of sharding full M
-# (full M=4096 clashes L1 CBs with the resident interleaved activation). Override via env.
+# Long-seq chunk size for decoder prefill BS matmul. Above this M the decoder runs
+# ``ceil(M / chunk)`` tuned chunk kernels instead of sharding full M (full M=4096 clashes L1 CBs
+# with the resident interleaved activation). Override via env.
 _DECODER_PREFILL_BS_CHUNK_M = 2048
 _DECODER_PREFILL_BS_IBW = {
     (1024, 768): 4,
@@ -1165,28 +1165,9 @@ def _all_gather_num_links() -> int:
     return n if n >= 1 else 1
 
 
-def _encoder_all_reduce_num_links() -> int:
-    """Ethernet links for the encoder TP ``all_reduce`` (``SEAMLESS_ALL_REDUCE_NUM_LINKS``, default 2).
-
-    BH-QB (1x4) has 2 ethernet channels between adjacent chips; num_links=2 is the hardware max
-    (3+ raises "link index out of bounds"). Two links roughly halve the collective transfer time.
-    """
-    try:
-        n = int(os.environ.get("SEAMLESS_ALL_REDUCE_NUM_LINKS", "2"))
-    except ValueError:
-        return 2
-    return n if n >= 1 else 1
-
-
-def _encoder_all_reduce_topology() -> "ttnn.Topology":
-    """Topology for the encoder TP ``all_reduce`` (``SEAMLESS_ALL_REDUCE_TOPOLOGY``, default ring).
-
-    Ring beats Linear on the (1x4) mesh (collective bucket 16.6 -> 10.4 ms at 2 links). Set the env
-    to ``linear`` to fall back.
-    """
-    if os.environ.get("SEAMLESS_ALL_REDUCE_TOPOLOGY", "ring").strip().lower() == "linear":
-        return ttnn.Topology.Linear
-    return ttnn.Topology.Ring
+# BH-QB (1x4) exposes 2 ethernet channels between adjacent chips -- the hardware max -- and a ring
+# topology beats linear across the 4-chip mesh for the encoder TP all-reduce.
+ENCODER_ALL_REDUCE_NUM_LINKS = 2
 
 
 def _all_reduce_linear_no_dealloc(
@@ -1250,44 +1231,28 @@ def all_reduce_sum_replicate(
     return acc
 
 
-# TP encoder L1 microbatch: full residual / AR stay in L1 up to this many token rows.
-# Above it, residuals live in DRAM. Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder
-# attention remains full-S (bidirectional — not Devstral causal chunked prefill).
+# Encoder single-chip (tp==1) residual L1/DRAM threshold; full residual stays in L1 up to this many
+# token rows. Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder attention is full-S (bidirectional).
 ENCODER_L1_MICROBATCH_ROWS = MATMUL_1D_SEQ_THRESHOLD
-# TP block-sharded matmul row-chunk default (``SEAMLESS_TP_BS_CHUNK_M``): run the linear
-# SINGLE-SHOT up to the encoder's design-max sequence (``max_position_embeddings`` = 4096),
-# which fits BH-QB L1 (measured). Longer sequences chunk at this size. Decoupled from
-# ``ENCODER_L1_MICROBATCH_ROWS`` (the residual L1/DRAM threshold): chunking the matmul at 128
-# rows tanks block-sharded FLOPs efficiency (~26% vs ~79% single-shot, +48 ms at seq=4096).
+# TP block-sharded matmul row-chunk size: the linear runs SINGLE-SHOT up to the encoder's design-max
+# sequence (``max_position_embeddings`` = 4096), which fits BH-QB L1; longer sequences chunk at this
+# size. Single-shot keeps block-sharded matmul FLOPs efficiency high vs shattering into small chunks.
 ENCODER_TP_BS_CHUNK_DEFAULT = 4096
-# Decoder / shared all-reduce helper: spill L1→DRAM at this many rows (unchanged policy).
+# Decoder / shared all-reduce helper: spill L1→DRAM at this many rows.
 ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256
 # Keep the encoder TP residual / all-reduce / matmul reshards L1-resident up to the design-max
-# sequence (``max_position_embeddings`` = 4096), which fits BH-QB L1 once the matmul runs single-shot
-# (measured: reshards go L1-local, -4.6 ms at seq=4096). Above it, spill to DRAM.
+# sequence; single-shot matmuls leave L1 headroom for it, so the reshards stay L1-local rather than
+# reading DRAM. Above it, spill to DRAM.
 ENCODER_L1_RESIDENT_DEFAULT = 4096
-
-
-def _encoder_l1_resident_max() -> int:
-    """Max token rows for which the encoder TP residual / all-reduce / reshards stay in L1.
-
-    Default ``ENCODER_L1_RESIDENT_DEFAULT`` (4096 = design-max seq); above it residuals live in DRAM
-    so they do not fight block-sharded matmul CBs. ``SEAMLESS_ENCODER_L1_RESIDENT_MAX`` overrides
-    (lower it if L1 is tight on a given mesh / batch).
-    """
-    try:
-        return int(os.environ.get("SEAMLESS_ENCODER_L1_RESIDENT_MAX", str(ENCODER_L1_RESIDENT_DEFAULT)))
-    except ValueError:
-        return ENCODER_L1_RESIDENT_DEFAULT
 
 
 def encoder_tp_activation_memory_config(token_rows: int) -> ttnn.MemoryConfig:
     """Activation buffer type for encoder TP prefill (interleaved BSH).
 
-    L1 when ``token_rows <= _encoder_l1_resident_max()``; DRAM otherwise so long-seq
+    L1 when ``token_rows <= ENCODER_L1_RESIDENT_DEFAULT``; DRAM otherwise so long-seq
     residuals do not fight block-sharded matmul CBs / FFN mid tensors.
     """
-    if token_rows > _encoder_l1_resident_max():
+    if token_rows > ENCODER_L1_RESIDENT_DEFAULT:
         return ttnn.DRAM_MEMORY_CONFIG
     return ttnn.L1_MEMORY_CONFIG
 
@@ -1316,15 +1281,15 @@ def encoder_all_reduce_sum_replicate(
     token_rows = 1
     for d in x_shape[:-1]:
         token_rows *= int(d)
-    if mc.buffer_type == ttnn.BufferType.L1 and token_rows > _encoder_l1_resident_max():
+    if mc.buffer_type == ttnn.BufferType.L1 and token_rows > ENCODER_L1_RESIDENT_DEFAULT:
         mc = ttnn.DRAM_MEMORY_CONFIG
 
     result = ttnn.all_reduce(
         x,
         cluster_axis=cluster_axis,
         memory_config=mc,
-        num_links=_encoder_all_reduce_num_links(),
-        topology=_encoder_all_reduce_topology(),
+        num_links=ENCODER_ALL_REDUCE_NUM_LINKS,
+        topology=ttnn.Topology.Ring,
     )
     return result
 

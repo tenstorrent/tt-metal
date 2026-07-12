@@ -4,9 +4,8 @@
 """Single-shot PCC test for the SeamlessM4Tv2 text encoder at sequence length 4096.
 
 Encoder design max = ``max_position_embeddings = 4096`` (HF NLLB-style sinusoidal positions).
-A single test at ``seq=4096`` exercises the L1 microbatch row-chunk path
-(``ENCODER_L1_MICROBATCH_ROWS`` / ``SEAMLESS_TP_BS_CHUNK_M``, default 128) and the long-seq
-activation-in-DRAM policy for sequences above that microbatch.
+A single test at ``seq=4096`` exercises the single-shot block-sharded TP linears and the
+L1-resident residual / all-reduce path at the design-max sequence.
 
 Inputs are derived from the real downloaded weights (no synthetic weights). If
 ``huggingface_hub`` is missing or the snapshot download fails the test is skipped — no fallback,
