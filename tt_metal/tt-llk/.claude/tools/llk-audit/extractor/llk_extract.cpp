@@ -24,8 +24,10 @@
 //                   a write kind (cfg32/cfg16/regfile_gpr/...)
 //   calls           every call: callee name, callee source text (so template
 //                   args like cfg_reg_rmw_tensix<FIELD> survive), first arg text
-//   macros          every FUNCTION-LIKE macro expansion: name + full text (args
-//                   included) — this is how the TTI_*/SEM*/... primitives, which
+//   macros          macro expansions: every FUNCTION-LIKE macro, PLUS the
+//                   object-like instruction macros (TTI_NOP/TTI_SFPNOP/...) and
+//                   *_RMW field aliases (see MacroPass) — name + full text (args
+//                   included). This is how the TTI_*/SEM*/... primitives, which
 //                   the AST erases, are recovered
 //
 // Each fact carries its enclosing function name and a file:line:offset. The

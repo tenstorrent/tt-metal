@@ -423,7 +423,11 @@ def resolve_word(text: str, addr32: dict):
         base = addr32.get(field)
         if base is None:
             return None, field
-        return base + (int(m.group(2), 0) if m.group(2) else 0), field
+        try:  # a malformed offset (e.g. leading-zero '+ 08') must not abort the
+            off = int(m.group(2), 0) if m.group(2) else 0  # whole audit (cli.py
+        except ValueError:  # doesn't wrap chk.run) — treat as unresolved instead.
+            return None, field
+        return base + off, field
     a = _RMW_ALIAS_RE.search(text or "")
     if a:
         field = a.group(1) + "_ADDR32"
@@ -665,6 +669,28 @@ def noc_op_of(fact: dict):
         if name == "up" and fact.get("argc", -1) >= 2:
             return "inc"
     return None
+
+
+# Of the flushes, only the *barrier* forms wait for the remote ACK (data LANDED);
+# the *flushed* forms only drain the initiator's outgoing queue (data has LEFT).
+# An ATOMIC credit (noc_semaphore_inc / remote `up`) has no write->atomic ordering
+# even on the same VC (#48478), so it needs the ack BARRIER — a bare `writes_flushed`
+# does NOT make it safe. A write-based credit (set / multicast) is a write, so any
+# write flush orders it. See the /noc-sync skill's data-before-signal note.
+NOC_WRITE_BARRIERS = (
+    "noc_async_write_barrier",
+    "noc_async_write_barrier_with_trid",
+    "async_write_barrier",  # Noc-object method form
+    "async_write_barrier_with_trid",
+)
+
+
+def noc_flush_kind(fact: dict):
+    """For a fact noc_op_of classifies as 'flush', return 'barrier' (waits for the
+    remote ack — data landed) or 'flushed' (initiator queue drained only)."""
+    if noc_op_of(fact) != "flush":
+        return None
+    return "barrier" if fact.get("name", "") in NOC_WRITE_BARRIERS else "flushed"
 
 
 def mailbox_thread_arg(arg0: str):

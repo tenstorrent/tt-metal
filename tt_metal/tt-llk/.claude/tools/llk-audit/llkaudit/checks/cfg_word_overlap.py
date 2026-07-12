@@ -214,11 +214,6 @@ class CfgWordOverlap(Check):
         return findings + unresolved
 
     @staticmethod
-    def _is_masked(how: str) -> bool:
-        h = how.lower()
-        return "cfg_reg_rmw_tensix" in h or "cfg_rmw" in h or "rmwcib" in h
-
-    @staticmethod
     def _safety(ws, defines):
         """Race-safety ANNOTATION for a cross-thread shared word (never a filter).
         Returns (label, {thread: combined_bitmask}).
@@ -271,11 +266,15 @@ class CfgWordOverlap(Check):
     def _intra_thread_clobber(self, writers) -> list[Finding]:
         """Pattern 3: a full-word write (cfg[]=/WRCFG_32b) to a multi-field Config
         word, where the SAME thread also sets a DIFFERENT field of that word via a
-        masked RMW elsewhere. The full-word write is built from only its own field
-        and writes 0 into the sibling the thread set separately — a deterministic
-        destructive overwrite (not a concurrency race; a mutex cannot fix it, a
-        masked RMW can). Candidate only: a full-word write that intentionally sets
-        the entire word is benign — the LLM confirms."""
+        field-scoped write elsewhere (a masked RMW, or a sized TTI_REG2FLOP /
+        TTI_SETADC / cfg16 set). The full-word write is built from only its own
+        field and writes 0 into the sibling the thread set separately — a
+        deterministic destructive overwrite (not a concurrency race; a mutex cannot
+        fix it, a masked RMW can). Candidate only: a full-word write that
+        intentionally sets the entire word is benign — the LLM confirms. The victim
+        bucket is any resolved-field non-full-word write (matching _safety), NOT
+        just the RMW helpers — a full-word write zeroes a REG2FLOP/SETADC/cfg16
+        sibling just the same."""
         out: list[Finding] = []
         for (ns, word), ws in sorted(writers.items()):
             if ns != "CONFIG":
@@ -286,7 +285,10 @@ class CfgWordOverlap(Check):
                     continue
                 if registry.write_is_full_word(w["how"]):
                     per_thread[w["thread"]]["full"].append(w)
-                elif self._is_masked(w["how"]):
+                elif w.get("field"):
+                    # any resolved-field, non-full-word write (masked RMW OR a
+                    # sized REG2FLOP/SETADC/cfg16 set) is a clobber victim — a
+                    # full-word write zeroes it regardless of how it was written.
                     per_thread[w["thread"]]["masked"].append(w)
             for thr, d in per_thread.items():
                 full_fields = {w["field"] for w in d["full"]}
@@ -308,7 +310,8 @@ class CfgWordOverlap(Check):
                             f"[{thr}] full-word write of {sorted(full_fields)} to word "
                             f"{word} may zero sibling field(s) "
                             f"{sorted({w['field'] for w in clobbered})} the same thread "
-                            f"sets via masked RMW"
+                            f"sets via a field-scoped write (masked RMW / REG2FLOP / "
+                            f"SETADC / cfg16)"
                         ),
                         evidence=ev,
                     )
