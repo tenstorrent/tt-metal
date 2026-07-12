@@ -128,5 +128,37 @@ subblock guess fails op-validation, cf. Batch B exp-kernel SIGABRT). Gate: video
 - [~] **G0 — get_matmul_config subblock tune (WARM-AUTHORING).** Scoped + source-mapped; not a cron lap-tail (shared
   util edit + possible build_metal + iterate loop). Parked alongside the W-mask in-kernel fold (Batch C) for a warm session.
 
+## Batch H — CCL-matmul weight/activation QUANT sweep (the dominant op, env-only, PCC-gated, cron-in-budget)
+`LTX_QUANT=<preset>` on the F0 block harness (`test_ltx_transformer_block -k 'video and stage_2 and
+ring_bh_4x8sp1tp0 and ckpt_fast'`, num_links=param=2, prod) applies a `QuantConfig` preset (weight typecast +
+compute config) to the block, emits `WARM_FWD_MS=` (vs F0 16.88ms) AND PCC-gates video vs the bf16 diffusers
+oracle (0.988). Read at test:864-870 — the block test READS `LTX_QUANT` (the SDPA test does NOT; Batch B's
+"LTX_QUANT no-op" applies only to `test_ring_joint_sdpa`). WARM_FWD_MS is logged at test:887 *before* the PCC
+assert at test:923, so timing lands even if PCC fails. Presets: `quant_config.py` factories `default` (baseline),
+`all_bf8_lofi`, `all_bf8_lofi_sdpa_lofi`, `all_bf8_lofi_sdpa_lofi_fp32acc`. Directly tests the compute-bound vs
+overhead-bound question Batch F reopened (num_links=1 → +16% only).
+- [x] **`all_bf8_lofi` (qkv/out/ffn weights+acts → bf8, LoFi; SDPA stays bf16) — NULL @ PASSING PCC.**
+  Job **010011-89** (re-verified from raw log: test:870 `quantizing block`, test:887 `WARM_FWD_MS=16.69
+  num_links=param iters=3`, assert_quality:48 `PCC = 99.8889 %`, test:923 `PASSED block PCC`, 1 passed/39 desel
+  in 50.03s, JIT 416/455 warm, exit 0, 32 chips healthy). **16.69ms vs F0 16.88ms = −0.19ms = −1.1% = NULL**
+  (<5% act gate). **PCC 99.89% PASSES 0.988** — this CORRECTS the old "all_bf8 PCC 0.876 FAIL" (that was a
+  coarser stage/pipeline path, NOT this prod-4x8 video-block harness). **Resolves the compute-vs-overhead
+  contradiction:** halving the dominant CCL-matmul's math precision (bf16→bf8/LoFi) moves the block only −1.1%,
+  and Batch F showed the 2nd link saves only 2.7ms (+16%) ⇒ the 56.3% fused all-gather/reduce-scatter matmul
+  bucket is **collective-latency / dispatch bound, NOT matmul-compute bound and NOT link-BW bound**. Neither
+  quant (compute) nor num_links (BW) unlocks it. No source edit (env A/B) ⇒ nothing to revert.
+- [x] **`all_bf8_lofi_sdpa_lofi` + `all_bf8_lofi_sdpa_lofi_fp32acc` — DEAD by composition (no run).** Both
+  stack SDPA LoFi onto the `all_bf8_lofi` base, which just measured −1.1% NULL. Batch B already measured SDPA
+  LoFi as null (4.673 vs 4.74ms = ~1.4%, SDPA is NOT fidelity-bound) ⇒ null-base + null-SDPA-fidelity composes
+  to null on speed, and can only DROP PCC (adds SDPA quality risk to an already-passing base). Measuring would
+  confirm null+worse-PCC — a receipt for an argument already closed by H0 + Batch B. Not worth a reservation.
+→ **BATCH H CLOSED — the weight/activation quant+fidelity axis on the dominant op is swept: NULL at passing
+  PCC.** Combined with Batch A (SDPA chunk U-shaped, base near-optimal), Batch B (SDPA fidelity/exp-kernel
+  dead), Batch F (topology Ring-optimal, num_links=2 HW-cap, both near-flat): **every no-edit block-harness axis
+  on both dominant buckets (CCL-matmul 56% + SDPA 30%) is measured, and the block is collective/dispatch-bound
+  at ~16.88ms.** The only remaining in-repo lever is the source-computed matmul grid/subblock (Batch G,
+  warm-authoring) — and even a fully-free CCL bucket floors at the ~7.9s no-finetune wall.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
+- **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
