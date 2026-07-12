@@ -308,10 +308,38 @@ ring_bh_4x8sp1tp0 and ckpt_fast'`, `LTX_QUANT=all_bf8_lofi_sdpa_lofi_fp32acc`, e
   fp32acc PCC-recovers to PASS but no shippable speed win. **Both denoise stages now confirmed: no quant preset clears the
   5% gate at passing quality ⇒ collective/dispatch-bound.** No source edit (env A/B) ⇒ nothing to revert. **Batch P CLOSED.**
 
+## Batch Q — FSDP weight-sharding A/B (the LAST untouched no-edit collective-PATTERN axis on prod 4x8)
+Every prior block sweep held **is_fsdp=False** (prod BH replicates weights, loads via dynamic_load). The mesh
+parametrize (test:113) exposes **`wh_4x8sp1tp0` = (4,8) Ring SP with is_fsdp=True** — same mesh/topology/SP as the prod
+`ring_bh_4x8sp1tp0`, differing ONLY in is_fsdp. is_fsdp=True sets `fsdp_mesh_axis = sequence_parallel.mesh_axis`
+(attention_ltx.py:85, transformer_ltx.py:153) ⇒ weights are FSDP-**sharded** along the SP axis and all-gathered per
+layer, changing the collective pattern of the dominant 56% CCL-matmul bucket. This is the structural/collective-pattern
+lever Batch M chased via 2x4 SP-vs-TP (fabric-DEAD) — but reachable on the **working 4x8 mesh**. wh's default num_links=4
+is BH-illegal (A2 HW-cap 2), but `LTX_NUM_LINKS=2` (test:510) overrides it ⇒ both configs run at 2 links, isolating
+is_fsdp. **Drift-immune (Batch-P lesson): select BOTH in one job** so baseline + lever share the reservation/session.
+Hypothesis: FSDP ADDS weight all-gathers ⇒ on a dispatch-bound block, likely null-or-slower — but measure, don't reason
+(J/L/P overturned three dead-by-composition calls). ⚠️ wh is_fsdp=True programs were NOT E2E-warmed (prod=is_fsdp=False)
+⇒ COLD-compile risk on the fsdp forward; generous timeout, and a timeout IS the receipt (fsdp needs prewarm). Value
+ceiling: char-only (is_fsdp=True is not the prod BH path) below the ~7.9s floor; a large FSDP<repl delta would justify escalation.
+- [x] **Q0 — is_fsdp A/B on prod 4x8 S2 video block — FSDP is +10.5% SLOWER = NULL/DEAD lever; prod is_fsdp=False optimal.**
+  Job **024854-127** (drift-immune same-session A/B, re-verified from raw log + collect-only exec order). Collection order
+  (pytest exec order, no randomizer) = **wh first, ring_bh second** ⇒ 1st WARM_FWD_MS=18.56 (wh, is_fsdp=True/FSDP), 2nd
+  WARM_FWD_MS=16.79 (ring_bh, is_fsdp=False/prod). **FSDP 18.56 vs prod 16.79 = +1.77ms = +10.5% SLOWER**, PCC IDENTICAL
+  99.9658% both (FSDP is numerically equivalent, only reschedules collectives). In-session baseline 16.79 ≈ F0 16.88 (0.5%,
+  no drift — cross-check clean). Wall-times corroborate: wh ran first with a ~42s cold compile (its FSDP programs were NOT
+  E2E-warmed — prod is is_fsdp=False), ring_bh ~32s warm. **FSDP weight-sharding ADDS per-layer weight all-gather collectives
+  ⇒ on the dispatch-bound block, MORE collectives = slower.** Confirms the dispatch-bound thesis from the opposite direction:
+  adding collectives HURTS (+10.5%), just as removing link/compute (F2/H0) barely helped — only cutting the NUMBER of
+  collectives (fewer steps/blocks = out-of-repo distill) moves the wall. No source edit (mesh `-k` + env A/B) ⇒ nothing to
+  revert. **⇒ BATCH Q CLOSED — the last no-edit collective-PATTERN axis (FSDP on/off) is measured: prod is_fsdp=False is
+  optimal; FSDP is a +10.5% regression.** All no-edit block-harness axes on both dominant buckets are now swept across
+  topology · links · quant(4/4) · fidelity · parallelism(SP fixed; TP infra-dead M) · FSDP — block is dispatch-bound.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
 - **S1 (stage_1) video block, first-ever receipts (jobs 010823-91/011036-93/011213-95):** baseline 12.73ms (Ring), num_links=1 12.71ms (0% = pure dispatch floor), Line 11.46ms (−10% crossover, char-only — fabric topology is a device-init constant, whole-run Line net-worse). 4× seq (S1→S2) = only 1.33× block time ⇒ dispatch-bound confirmed across scale.
 - **all_bf8_lofi_sdpa_lofi @ prod-4x8 video block: FAILS PCC 98.57% < 98.80% (job 012439-97).** Stacking SDPA-LoFi on the bf8 base drops PCC 1.32pts below gate; speed truncated (moot — dead on quality). Quant axis fully measured: all_bf8_lofi is the sweet spot, further quant breaks the gate.
 - **VAE-decode bf8 quant (job 013750-99): un-runnable — SEGFAULT at bf8 conv-weight upload (`from_torch(bfloat8_b)`, vae_ltx.py:193, 1st of 86 tensors).** The one COMPUTE-bound bucket (A1: traced≈untraced 552ms) resists the cheap quant flip; bfloat8_b needs TILE layout the upload path doesn't give. Proper bfp8-VAE = warm-authoring (parked w/ C W-mask fold + G subblock tune). Device recovered clean.
-- **`all_bf8_lofi_sdpa_lofi_fp32acc` @ prod-4x8 video block (job 015415-106): PCC 99.93% PASS, WARM_FWD_MS 16.06 = −4.9% vs F0 16.88 (SUB-GATE, no win).** Closes the block-quant preset space 4/4 measured. Key finding: **fp32-dest-acc RECOVERS the SDPA-LoFi PCC** Batch J lost (98.57% FAIL → 99.93% PASS), correcting J's "can't recover" reasoning — but speed is null-with-favorable-noise (under 5% gate; increment vs all_bf8_lofi contradicts the isolated-SDPA physics). No preset clears the gate at passing quality ⇒ denoise block stays dispatch-bound.
+- **`all_bf8_lofi_sdpa_lofi_fp32acc` @ prod-4x8 video block (job 015415-106): PCC 99.93% PASS, WARM_FWD_MS 16.06 = −4.9% vs F0 16.88 (SUB-GATE, no win).** Closes the block-quant preset space 4/4 measured.
+- **FSDP weight-sharding @ prod-4x8 S2 video block (job 024854-127, drift-immune same-session A/B): is_fsdp=True 18.56ms vs prod is_fsdp=False 16.79ms = +10.5% SLOWER, PCC identical 99.9658%.** FSDP adds per-layer weight all-gathers ⇒ MORE collectives ⇒ slower on the dispatch-bound block. Prod is_fsdp=False optimal; last no-edit collective-pattern axis closed. Adding collectives HURTS as much as removing link/compute helped little ⇒ only cutting collective COUNT (fewer steps = out-of-repo distill) moves the wall. Key finding: **fp32-dest-acc RECOVERS the SDPA-LoFi PCC** Batch J lost (98.57% FAIL → 99.93% PASS), correcting J's "can't recover" reasoning — but speed is null-with-favorable-noise (under 5% gate; increment vs all_bf8_lofi contradicts the isolated-SDPA physics). No preset clears the gate at passing quality ⇒ denoise block stays dispatch-bound.
