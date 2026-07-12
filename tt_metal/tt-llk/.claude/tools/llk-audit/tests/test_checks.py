@@ -1241,14 +1241,16 @@ def test_noc_sync_remote_signals_and_local_set():
         call(K, 20, "noc_semaphore_set", func="kernel_main", arg0="sem"),
     ]
     assert NocSync().run(FactBase("wormhole", facts)) == []
-    # a bare FLUSHED (not an ack barrier) does NOT clear an ATOMIC inc (#48478:
-    # no write->atomic ordering even same-VC) -> still flagged.
+    # a bare FLUSHED (not an ack barrier) does NOT clear an ATOMIC inc (conservative:
+    # departure != landing) -> still flagged, but TAGGED low-confidence since a flush
+    # is present (likely the same-NoC/VC-unicast-safe idiom).
     facts = [
         fn("kernel_main", K, 0, 100),
         call(K, 10, "noc_async_write_flushed_with_trid", func="kernel_main"),
         call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
     ]
-    assert NocSync().run(FactBase("wormhole", facts))[0].hint == "NOC_SIGNAL_NO_FLUSH"
+    r = NocSync().run(FactBase("wormhole", facts))
+    assert r[0].hint == "NOC_SIGNAL_NO_FLUSH" and r[0].safety == "FLUSH_NOT_BARRIER"
     # a write BARRIER before the atomic inc DOES clear it (data landed).
     facts = [
         fn("kernel_main", K, 0, 100),
@@ -1488,7 +1490,8 @@ def test_factbase_stray_brace_does_not_eat_following_objects():
 def test_noc_sync_atomic_multicast_and_relay_unicast():
     K = "ttnn/cpp/x/w.cpp"
     # inc_multicast is an ATOMIC increment (despite the mcast op label) -> a bare
-    # writes_flushed does NOT clear it; only a write barrier does (#48478).
+    # writes_flushed does NOT clear it (multicast genuinely needs the ack barrier —
+    # departure-order doesn't guarantee all receivers landed); only a barrier clears.
     im_flushed = [
         fn("k", K, 0, 100),
         call(K, 10, "noc_async_writes_flushed", func="k"),
