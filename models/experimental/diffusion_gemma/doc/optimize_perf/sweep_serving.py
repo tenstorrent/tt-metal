@@ -59,6 +59,8 @@ def default_configs():
     return [
         # Anchor first: reproduces the session-8 verified 58.29 @12 in THIS harness,
         # so the low-step points below inherit that trust. Then descend toward 100 t/s.
+        {"label": "traced_tuned_s20", "env": TRACED, "steps": 20, "blocks": 3},
+        {"label": "traced_tuned_s16", "env": TRACED, "steps": 16, "blocks": 3},
         {"label": "traced_tuned_s12", "env": TRACED, "steps": 12, "blocks": 3},
         {"label": "traced_tuned_s8", "env": TRACED, "steps": 8, "blocks": 3},
         {"label": "traced_tuned_s6", "env": TRACED, "steps": 6, "blocks": 3},

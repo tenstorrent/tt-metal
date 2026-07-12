@@ -140,6 +140,16 @@ def _apply_rope_chunked(
     if seq_len <= chunk_size and num_heads <= head_chunk_size:
         return apply_rope_dram(tensor, start_offset)
 
+    # Full-canvas RoPE in a single pass. ``apply_rope_dram`` is shape-agnostic, so
+    # applying it to the whole ``[1, H, C, hd]`` tensor is bit-identical to the
+    # per-(seq,head)-chunk path (verified torch.equal) while replacing ~H*(C/32)
+    # tiny slice/concat ops per call with one — a large trace-size + dispatch cut
+    # for the 256-token denoise canvas. Opt out with DG_ROPE_FULLCANVAS=0.
+    if os.environ.get("DG_ROPE_FULLCANVAS", "1").strip().lower() not in ("0", "false", "no", "off"):
+        out = apply_rope_dram(tensor, start_offset)
+        tensor.deallocate(True)
+        return out
+
     chunks = []
     for start in range(0, seq_len, chunk_size):
         end = min(start + chunk_size, seq_len)
@@ -173,6 +183,17 @@ def _apply_rope_chunked(
 def _sdpa_q_chunked(tt_q, tt_k, tt_v, *, attn_mask=None, head_dim, chunk_size: int = TILE_SIZE):
     q_seq_len = tt_q.shape[-2]
     k_seq_len = tt_k.shape[-2]
+    # Single fused-SDPA call over the full canvas instead of ceil(C/32) python-level
+    # q-slices + per-chunk SDPA + concat. The SDPA op still chunks internally via its
+    # program_config, so the result is bit-identical while cutting the per-step op
+    # count / dispatch. Opt out with DG_SDPA_FULLCANVAS=0.
+    if q_seq_len > chunk_size and os.environ.get("DG_SDPA_FULLCANVAS", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    ):
+        chunk_size = q_seq_len
     if q_seq_len <= chunk_size:
         program_config = _denoise_sdpa_program_config(head_dim, q_seq_len, k_seq_len)
         kwargs = {
