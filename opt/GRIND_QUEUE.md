@@ -59,16 +59,17 @@ fuse** — incl. cross-attn (attn2 = video-text cross ⇒ same video-dim ColPara
   · **a2v** `transformer_ltx.py:475-485` — residual=`video_1BND`, gate=`v_ca_gate`; writes VIDEO output. **Largest fold (video-seq N≈38760).**
   · **v2a** `:493-506` — residual=`audio_1BND`, gate=`a_ca_gate`; writes AUDIO output. (SP keeps video K/V sharded, passes `kv_logical_n`.)
   · **audio_attn2** `:441-444` — residual=`audio_1BND`, gate=`a_gate_ca`; writes AUDIO output (only under `cross_attention_adaln`).
-**GATE = block harness** `test_transformer_ltx.py::test_ltx_transformer_block -k "stage_2 and ring_bh_4x8sp1tp0 and av and ckpt_dev"`
-(self-contained randn `ckpt_dev` weights, warm ~45s, Python-only ⇒ NO C++ build). Feeds REAL randn audio (`:797-804`) and PCC-asserts
-the **VIDEO** output vs a diffusers torch ref (`:922`). ⇒ **a2v IS genuinely PCC-gated** (writes video). ⚠️ v2a + audio_attn2 write the
-AUDIO output — confirm the harness also asserts audio (`:922` shows only `tt_v_torch`) BEFORE trusting those two; else they need their own gate.
-Predicted ~0.008s aggregate (thrash-tier; sibling RMSNorm-QK fusion measured DEAD 45.08 vs 44.03) — but a2v folds a video-seq addcmul so its
-solo delta is unmeasured; on a device-bound pipeline (async CQ hides dispatch) the expected outcome is ≈DEAD, but MEASURE to close it.
-- [~] **a2v fold** — BASELINE in flight (job **235842-75**, 2026-07-11 23:58Z): clean-HEAD `stage_2 av ckpt_dev` WARM_FWD_MS + PCC-health.
-  NEXT lap: read baseline → apply the a2v edit ONLY (`:475-485`: add `addcmul_residual=video_1BND, addcmul_gate=v_ca_gate` to the call,
-  delete the standalone `:485` addcmul, assign the call result to `video_1BND`) → re-run the SAME harness → keep on WARM win + PCC pass, else revert + log DEAD.
-- [ ] v2a + audio_attn2 folds — deferred: verify audio-output PCC gating first (see ⚠️ above), then same pattern. Not a blind dispatch until the audio gate is confirmed.
+**GATE — CLAIM CORRECTED 2026-07-12 (prior map was wrong on TWO source facts; baseline 235842-75 SKIPPED proved it):** the
+`av`/`ckpt_dev` block harness is NEITHER runnable NOR PCC-gating on this box. (1) `av` weights are NOT self-contained randn —
+`elif has_audio:` @test:739 loads a REAL 22B safetensors (`dev`→`ltx-2.3-22b-dev.safetensors`, `fast`→`ltx-2.3-22b-distilled-1.1.safetensors`);
+this box has ONLY `sulphur_lora_fused_distil.safetensors` ⇒ `pytest.skip` @test:742 (`1 skipped, 39 deselected`). (2) `do_pcc =
+run_pcc and not has_audio` @test:715 ⇒ for `av`, do_pcc is FORCED False ⇒ the VIDEO PCC assert @test:918 NEVER fires (only
+audio-finiteness @test:924). a2v/v2a/audio_attn2 exist ONLY on the has_audio path ⇒ ALL THREE are structurally un-PCC-gatable in
+this suite on this box. Predicted ~0.008s aggregate (below the ~1ms WARM_FWD_MS noise; sibling RMSNorm-QK fusion already measured
+DEAD 45.08 vs 44.03) ⇒ not worth, and not possible, to measure here. Source map (fused primitive pre-built, sites `transformer_ltx.py`
+a2v `:475-485` / v2a `:493-506` / audio_attn2 `:441-444`) preserved IF a runnable+gated harness ever exists.
+- [x] **a2v fold — DEAD** (un-runnable: absent 22B ckpt; un-gatable: do_pcc forced False on av; below-noise ~0.008s). Baseline **235842-75** (2026-07-11 23:58Z) SKIPPED — re-verified from its log. No source edit made; nothing to revert.
+- [x] **v2a + audio_attn2 folds — DEAD (same root cause).** Both audio-path, same un-runnable + un-gatable + below-noise verdict as a2v. **Batch D CLOSED.**
 
 ## Batch E — step-distill characterization (the 6s path; needs the PREWARM path to complete an E2E)
 - [ ] Make a full-pipeline run actually COMPLETE: run the prewarm capture+compile, then submit the run TWICE (first warms the trace, second measures) OR raise the run-stage timeout via a 2-reservation split. Then measure 6+2 E2E speed + quality.
