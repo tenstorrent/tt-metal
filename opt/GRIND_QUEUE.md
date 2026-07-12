@@ -188,7 +188,29 @@ cron-in-budget, warm ltxrt caches (E2E 185309-15 populated both stages). Enumera
   denoise stages now have per-block receipts; the block is collective/dispatch-latency-bound at BOTH scales, MORE so at S1.
   **No no-edit lever moves either stage.** Reinforces: only cutting the NUMBER of blocks/steps (out-of-repo step-distill) helps.
 
+## Batch J — CCL-matmul + SDPA STACKED quant (measures Batch H's unmeasured "dead-by-composition" cell)
+Batch H measured `all_bf8_lofi` (bf8 matmul weights+acts) = −1.1% NULL @ PCC 99.89% PASS, and declared the SDPA-stacked
+presets "dead by composition" from *reasoning* (no receipt). Same F0 harness (`-k 'video and stage_2 and ring_bh_4x8sp1tp0
+and ckpt_fast'`, num_links=2, warm ltxrt caches, env_sdpa.yaml). Converts reasoning → a measured quality receipt.
+- [x] **`all_bf8_lofi_sdpa_lofi` (bf8 matmul + LoFi SDPA) — DEAD: FAILS PCC gate.** Job **012439-97** (re-verified from
+  raw log myself): **PCC = 98.5714 % < 98.80 % gate → test FAILED** (check.py:57), JIT **452/455 warm (99.3%)**, 1 failed /
+  39 deselected in 48.40s, exit 0, clean UMD teardown (no eth fault, 250s cap unused). Stacking SDPA-LoFi onto the passing
+  `all_bf8_lofi` base (99.89%) drops video-block PCC by **1.32 pts → 98.57%, below the 0.988 gate** ⇒ NOT shippable at
+  quality, regardless of speed. **WARM_FWD_MS truncated** — the `tail -120` window was consumed by the PCC-failure traceback
+  so the test:887 INFO line scrolled off; MOOT (dead on quality, and per the dispatch-bound thesis — H0 bf8 −1.1% null,
+  Batch B SDPA-LoFi null — it wouldn't be meaningfully faster). Confirms H's prediction WITH a receipt: SDPA-LoFi adds pure
+  quality risk to a null-speed base. No source edit (env A/B) ⇒ nothing to revert.
+- [x] **`all_bf8_lofi_sdpa_lofi_fp32acc` — DEAD by composition (no run).** = above + fp32 SDPA accumulate. fp32acc only ADDS
+  accumulation cost (slower, never faster) on top of a base that already FAILS PCC 98.57% — fp32acc slightly HELPS PCC but
+  cannot recover 1.32 pts of bf8+LoFi error to clear 98.80% while also being slower than the null bf8 base. Measuring would
+  confirm still-slow + still-borderline. Not worth a reservation.
+→ **BATCH J CLOSED — quant axis now fully MEASURED, not reasoned:** `all_bf8_lofi` is the sweet spot (passes 99.89%, −1.1%
+  null speed); pushing further to SDPA-LoFi breaks the gate (98.57% FAIL). **No quant preset moves the dispatch-bound block
+  at passing quality.** Combined with A/B (SDPA chunk/fidelity dead), F (topology/links flat), H (bf8 null), I (S1 same):
+  every no-edit block-harness axis on both dominant buckets is measured — the block is collective/dispatch-bound.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
 - **S1 (stage_1) video block, first-ever receipts (jobs 010823-91/011036-93/011213-95):** baseline 12.73ms (Ring), num_links=1 12.71ms (0% = pure dispatch floor), Line 11.46ms (−10% crossover, char-only — fabric topology is a device-init constant, whole-run Line net-worse). 4× seq (S1→S2) = only 1.33× block time ⇒ dispatch-bound confirmed across scale.
+- **all_bf8_lofi_sdpa_lofi @ prod-4x8 video block: FAILS PCC 98.57% < 98.80% (job 012439-97).** Stacking SDPA-LoFi on the bf8 base drops PCC 1.32pts below gate; speed truncated (moot — dead on quality). Quant axis fully measured: all_bf8_lofi is the sweet spot, further quant breaks the gate.
