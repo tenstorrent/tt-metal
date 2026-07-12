@@ -50,10 +50,7 @@ class CfgWordOverlap(Check):
         "a false candidate the LLM rules out. A cfg16 (half-word) write is treated "
         "as a masked field write, NOT a full-word clobberer, so a cfg16 store that "
         "zeroes a sibling in its 16-bit half is not recalled as INTRA_THREAD_CLOBBER "
-        "(word-granular model). The per-(file,field) dedup collapses one write's "
-        "call+macro double-capture but also merges two DISTINCT same-field writes "
-        "in one file into one entry (safe — same thread, stronger entry kept — but "
-        "the writer list/evidence undercounts). "
+        "(word-granular model). "
         "Config has two banks selected by CFG_STATE_ID; the tool does not model "
         "StateID, so it may over-approximate (flag a word when the threads use "
         "different banks). Two known under-reports (LLM must widen): (a) a "
@@ -177,14 +174,15 @@ class CfgWordOverlap(Check):
         for key in list(writers):
             seen: dict = {}
             for w in writers[key]:
-                # Key on (file, field), NOT line: the two captures of one
-                # cfg_reg_rmw_tensix<X_RMW> write (the `call` fact and the
-                # `cfg_rmw:X_RMW` macro fact) share a field but only share a line
-                # when the call is on ONE source line. Keying on line would let a
-                # LINE-WRAPPED call's two facts both survive, and the surviving
-                # non-atomic `cfg_rmw:` entry would flip the word SAFE->CLOBBER and
-                # double-list it. (file, field) collapses them regardless of wrap.
-                k = (w["file"], w["field"])
+                # Collapse the double-capture of ONE cfg_reg_rmw_tensix<X_RMW> write
+                # (its `call` fact + `cfg_rmw:X_RMW` macro fact) — they share
+                # (file, line, field) on a single-line call. Key on all three, NOT
+                # (file, field): that would also merge two DISTINCT same-field writes
+                # in one file, undercounting the writer list / evidence. The only gap
+                # is a call wrapped ACROSS lines (call vs macro on different lines) —
+                # dormant: current RMW calls are single-line, and multi-line RMWs use
+                # the spelled-out _ADDR32/_SHAMT/_MASK form (which emits no macro fact).
+                k = (w["file"], w["line"], w["field"])
                 prev = seen.get(k)
                 if prev is None or (
                     prev["how"].startswith("cfg_rmw:")
