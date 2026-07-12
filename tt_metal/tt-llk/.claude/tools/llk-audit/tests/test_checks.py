@@ -1574,7 +1574,8 @@ def test_cfg_word_unresolved_cowriter_widens():
 @case
 def test_thread_of_fact_function_name_fallback():
     # A token-less file (Quasar common/lib header) falls back to the writing
-    # function name — so #49192-class clobbers there are no longer dropped UNKNOWN.
+    # function name — so a cross-function clobber (full-word write in one function,
+    # masked sibling in another) there is no longer dropped as UNKNOWN.
     from llkaudit import registry
 
     assert (

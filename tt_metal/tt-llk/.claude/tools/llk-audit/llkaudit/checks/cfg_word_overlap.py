@@ -46,7 +46,8 @@ class CfgWordOverlap(Check):
         "sibling) is benign, and a sibling written only out-of-tree is missed; "
         "the full-word and masked-sibling writes are compared across the whole "
         "THREAD (all functions/files — deliberately, since the real clobbers span "
-        "functions, e.g. #49192), so two writes on mutually-exclusive paths can be "
+        "functions: a full-word write in one config function and the masked sibling "
+        "in another), so two writes on mutually-exclusive paths can be "
         "a false candidate the LLM rules out. A cfg16 (half-word) write is treated "
         "as a masked field write, NOT a full-word clobberer, so a cfg16 store that "
         "zeroes a sibling in its 16-bit half is not recalled as INTRA_THREAD_CLOBBER "
@@ -75,8 +76,9 @@ class CfgWordOverlap(Check):
         def add(ns, word, field, fact, how):
             # thread_of_fact: file's thread, else fall back to the writing function
             # name (Quasar common/lib headers are token-less; their pack/unpack/math
-            # functions still carry it) — so #49192-class cross-function clobbers in
-            # such files are no longer dropped as UNKNOWN. WH/BH resolve by file.
+            # functions still carry it) — so a cross-function clobber (full-word write
+            # in one function, masked sibling in another) in such files is no longer
+            # dropped as UNKNOWN. WH/BH resolve by file.
             thr = registry.thread_of_fact(fact)
             writers[(ns, word)].append(
                 {
