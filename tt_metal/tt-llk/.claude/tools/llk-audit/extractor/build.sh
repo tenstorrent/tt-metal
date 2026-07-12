@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Build the llk_extract front end against the system Clang/LLVM (>=18).
-# Links the aggregate libclang-cpp shared library.
+# Links the aggregate libclang-cpp shared library (and libLLVM — see the link line).
 set -euo pipefail
 cd "$(dirname "$0")"
 
