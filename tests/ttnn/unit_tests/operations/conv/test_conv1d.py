@@ -892,6 +892,13 @@ def run_conv1d_route(
     fused_activation=None,
     golden_activation=None,
     dilation=1,
+    prepared_weight=None,
+    return_prepared_weight=False,
+    expected_memory_layout=None,
+    expected_shard_width=None,
+    weight_on_device=False,
+    input_memory_config=None,
+    transpose_shards=False,
 ):
     """Run ttnn.conv1d and check it against the torch golden.
 
@@ -921,9 +928,21 @@ def run_conv1d_route(
         dtype=activations_dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG if input_in_dram else ttnn.L1_MEMORY_CONFIG,
+        memory_config=(
+            input_memory_config
+            if input_memory_config is not None
+            else (ttnn.DRAM_MEMORY_CONFIG if input_in_dram else ttnn.L1_MEMORY_CONFIG)
+        ),
     )
-    weight_tt = ttnn.from_torch(torch_weight, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+    weight_tt = prepared_weight
+    if weight_tt is None:
+        weight_tt = ttnn.from_torch(
+            torch_weight,
+            dtype=ttnn.float32 if weights_dtype == ttnn.bfloat8_b else weights_dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        if weight_on_device:
+            weight_tt = ttnn.to_device(weight_tt, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     conv_config = ttnn.Conv1dConfig(
         weights_dtype=weights_dtype,
@@ -931,6 +950,7 @@ def run_conv1d_route(
         deallocate_activation=False,
         config_tensors_in_dram=config_tensors_in_dram,
         activation=fused_activation,
+        transpose_shards=transpose_shards,
     )
     if act_block_h is not None:
         conv_config.act_block_h_override = act_block_h
@@ -941,7 +961,7 @@ def run_conv1d_route(
         packer_l1_acc=packer_l1_acc,
     )
 
-    tt_out, out_length = ttnn.conv1d(
+    conv_result = ttnn.conv1d(
         input_tensor=input_tt,
         weight_tensor=weight_tt,
         device=device,
@@ -959,12 +979,26 @@ def run_conv1d_route(
         slice_config=slice_config,
         dtype=output_dtype,
         return_output_dim=True,
+        return_weights_and_bias=return_prepared_weight,
     )
+    if return_prepared_weight:
+        tt_out, out_length, [prepared_weight, _] = conv_result
+    else:
+        tt_out, out_length = conv_result
+
+    if expected_memory_layout is not None:
+        output_memory_config = tt_out.memory_config()
+        assert output_memory_config.memory_layout == expected_memory_layout
+        assert output_memory_config.shard_spec is not None
+        assert output_memory_config.shard_spec.shape[1] < out_channels
+        assert output_memory_config.shard_spec.shape[1] % ttnn.TILE_SIZE == 0
+    if expected_shard_width is not None:
+        assert tt_out.memory_config().shard_spec.shape[1] == expected_shard_width
 
     out = ttnn.to_torch(tt_out).reshape(batch_size, out_length, out_channels).permute(0, 2, 1)
     passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=pcc)
     assert passing, pcc_msg
-    return out
+    return (out, prepared_weight) if return_prepared_weight else out
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
@@ -1036,6 +1070,256 @@ def test_conv1d_depthwise_fused_activation(device, fused_activation, golden_acti
         golden_activation=golden_activation,
         pcc=0.995,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_auto_shard_qwen35_9b(device):
+    channels = 8192
+    common_args = dict(
+        device=device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=7,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=None,
+        input_in_dram=False,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        config_tensors_in_dram=True,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        golden_activation=torch.nn.functional.silu,
+        pcc=0.995,
+        expected_memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    )
+
+    _, prepared_weight = run_conv1d_route(**common_args, return_prepared_weight=True)
+    assert list(prepared_weight.shape) == [1, 4, 32, channels]
+    assert list(prepared_weight.padded_shape)[1:3] == [4, 32]
+
+    run_conv1d_route(**common_args, prepared_weight=prepared_weight)
+
+    run_conv1d_route(**{**common_args, "input_length": 10, "kernel_size": 7})
+
+    with pytest.raises(RuntimeError):
+        run_conv1d_route(
+            **{
+                **common_args,
+                "input_length": 10,
+                "kernel_size": 7,
+                "prepared_weight": prepared_weight,
+            }
+        )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_raw_device_weight(device):
+    channels = 512
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=7,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        input_in_dram=False,
+        weight_on_device=True,
+        pcc=0.995,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_rejects_prepared_weight_plan_collision(device):
+    channels = 512
+    _, prepared_weight = run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=67,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        act_block_h=64,
+        input_in_dram=False,
+        return_prepared_weight=True,
+        pcc=0.995,
+    )
+    assert list(prepared_weight.shape) == [1, 4, 64, channels]
+
+    next_plan = dict(
+        device=device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=39,
+        kernel_size=8,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        act_block_h=32,
+        input_in_dram=False,
+        pcc=0.995,
+    )
+    run_conv1d_route(**next_plan)
+    with pytest.raises(RuntimeError):
+        run_conv1d_route(**next_plan, prepared_weight=prepared_weight)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_reshards_block_input_to_tile_aligned_channels(device):
+    channels = 64
+    input_length = 10
+    input_memory_config = ttnn.create_sharded_memory_config(
+        [1, input_length, channels],
+        core_grid=ttnn.CoreGrid(x=4, y=1),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    assert input_memory_config.shard_spec.shape[1] == 16
+
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=input_length,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=None,
+        input_in_dram=False,
+        input_memory_config=input_memory_config,
+        expected_memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        pcc=0.995,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_preserves_pre_sharded_block_channel_partition(device):
+    channels = 512
+    input_length = 10
+    channel_cores = 4
+    input_memory_config = ttnn.create_sharded_memory_config(
+        [1, input_length, channels],
+        core_grid=ttnn.CoreGrid(x=channel_cores, y=1),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_shard_width = input_memory_config.shard_spec.shape[1]
+    assert input_shard_width * channel_cores == channels
+
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=input_length,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=None,
+        input_in_dram=False,
+        input_memory_config=input_memory_config,
+        expected_memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        expected_shard_width=input_shard_width,
+        pcc=0.995,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize(
+    "weights_dtype,output_dtype,pcc,transpose_shards,config_tensors_in_dram",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16, 0.995, False, True),
+        (ttnn.bfloat16, ttnn.bfloat16, 0.995, True, False),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, 0.99, False, False),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b, 0.99, True, True),
+    ],
+    ids=["bf16-row-dram", "bf16-col-l1", "bf8-row-l1", "bf8-col-dram"],
+)
+def test_conv1d_depthwise_block_sharded_multi_height(
+    device, weights_dtype, output_dtype, pcc, transpose_shards, config_tensors_in_dram
+):
+    channels = 352
+    run_conv1d_route(
+        device,
+        batch_size=1,
+        in_channels=channels,
+        out_channels=channels,
+        input_length=515,
+        kernel_size=4,
+        stride=1,
+        padding=0,
+        groups=channels,
+        shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        act_block_h=32,
+        input_in_dram=False,
+        weights_dtype=weights_dtype,
+        output_dtype=output_dtype,
+        config_tensors_in_dram=config_tensors_in_dram,
+        transpose_shards=transpose_shards,
+        expected_memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        pcc=pcc,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_rejects_width_sharding(device):
+    channels = 64
+    with pytest.raises(RuntimeError):
+        run_conv1d_route(
+            device,
+            batch_size=1,
+            in_channels=channels,
+            out_channels=channels,
+            input_length=10,
+            kernel_size=4,
+            stride=1,
+            padding=0,
+            groups=channels,
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            input_in_dram=False,
+        )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_depthwise_rejects_pre_sharded_width_input_with_height_config(device):
+    channels = 64
+    input_length = 10
+    input_memory_config = ttnn.create_sharded_memory_config(
+        [1, input_length, channels],
+        core_grid=ttnn.CoreGrid(x=4, y=1),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    with pytest.raises(RuntimeError):
+        run_conv1d_route(
+            device,
+            batch_size=1,
+            in_channels=channels,
+            out_channels=channels,
+            input_length=input_length,
+            kernel_size=4,
+            stride=1,
+            padding=0,
+            groups=channels,
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            input_in_dram=False,
+            input_memory_config=input_memory_config,
+        )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
