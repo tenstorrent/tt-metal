@@ -38,31 +38,26 @@ _BF16_ATTN_MASK_MIN = float(torch.finfo(torch.bfloat16).min)
 
 # Drain on-device profiler markers every N conformer layers when device profiling is on.
 _PROFILER_LAYER_DRAIN_INTERVAL = 8
-# Pad short sequences before block-sharded LN; single M-tile (≤32 rows) falls back to L1 interleaved.
+# Pad short sequences before block-sharded LN; a single M-tile (≤32 rows) falls back to L1 interleaved.
 _MIN_BLOCK_LN_TOKEN_ROWS = 32
-# Short-seq linears use ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (see ``common.matmul_program_config``).
-# Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
-# Long mel: 512-row chunked 1D matmuls with pinned ``in0_block_w`` for bit-exact wider chunks.
+# Long sequences (> MATMUL_1D_SEQ_THRESHOLD) use chunked 1D matmuls to avoid 2D-multicast L1 overflow.
 _LONG_SEQ_LINEAR_CHUNK_ROWS = 16 * TILE
 _LONG_SEQ_LINEAR_IN0_BLOCK_W = 8
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
-# Keep conformer residuals in DRAM above this frame count (L1 CB pressure on long audio).
-# 512 subsampled frames (≈4096 mel): sharded LN persistent L1 clashes with decode-trace + T2U/vocoder.
+# Keep conformer residuals in DRAM above this frame count: the sharded-LN persistent L1 otherwise
+# clashes with conv1d/matmul kernel CBs (and the co-resident decode trace) on long audio.
 _LONG_AUDIO_RES_DRAM_THRESHOLD = 512
-# On 1×1, conformer activations at S≥256 (≈2048 mel) diverge in L1 vs DRAM/TP paths.
+# Single device: keep long-sequence conformer activations in DRAM (L1-vs-DRAM numerics diverge here).
 _SINGLE_DEVICE_DRAM_ACT_THRESHOLD = 256
-# Query-block relative attention above this seq (avoids O(S²) L1 use).
-# Must stay <= 1024: the full [B,H,S,S] path loses bf16 precision as S grows — at S=2048 the
-# conformer speech-encoder output diverges from HF (PCC ~0.94 vs ~0.999 at 512/1024), which the
-# query-block path avoids (PCC 0.9996 at S=2048). The full path is validated only to S=1024, so
-# route everything larger through chunking. (Was 3072, which wrongly kept S=2048 on the full path.)
+# Above this seq use query-block relative attention instead of the full [B,H,S,S] path (which loses
+# bf16 precision and O(S²) L1 as S grows). Keep <= 1024: the full path is only validated to 1024.
 _ATTN_QUERY_CHUNK_THRESHOLD = 1024
 _ATTN_QUERY_CHUNK = 512
-# Fused SDPA chunked rel-attn is better through ~mel 2048 (S≈2048); explicit matmul+softmax
-# matches HF at mel 4096 (S≈4096) where fused SDPA drifts (~0.952 PCC on 1×1).
+# At/above this seq the query-block path uses explicit matmul+softmax (bf16-accurate at the top of the
+# range); below it, fused SDPA is faster and accurate enough.
 _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD = 3072
-# Adapter self-attn (non-relative fused SDPA): smaller chunks above this seq avoid L1 CB clash
-# with decode-trace reservation at ~512 subsampled frames (input ≈4096 mel).
+# Adapter self-attn (non-relative fused SDPA): smaller chunks above this seq avoid an L1 CB clash with
+# the decode-trace reservation on long audio.
 _ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD = 256
 
 
@@ -150,14 +145,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._encoder_additive_mask_cache: dict[Tuple[int, int, int], Optional[ttnn.Tensor]] = {}
         # ``ttnn.conv1d`` may re-upload preprocessed weights via host writes when raw parameters are
         # passed every call. Cache prepared (device) weights per conv geometry so trace capture
-        # (which forbids ``write_shard_to_device``) reuses them — same pattern as SDXL / vadv2.
+        # (which forbids ``write_shard_to_device``) reuses them.
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
         self._conv_config_cache: Dict[Tuple[Any, ...], ttnn.Conv1dConfig] = {}
         # Compute-kernel-config tiers: HiFi4 linears, HiFi2 attention matmuls, HiFi3 layernorm/SDPA.
-        # Linears are HiFi4 (not LoFi): at LoFi the error accumulated over the 24 conformer layers
-        # tips long-audio same-language ASR (mel ~1830) from Hindi transcription to an English
-        # translation ~20 mel frames before the bf16 reference does. See README "Long-audio
-        # same-language ASR is precision-sensitive".
+        # Linears stay HiFi4: lower fidelity accumulates enough error over the 24 conformer layers to
+        # flip long-audio same-language ASR (precision-sensitive; see README).
         self._linear_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1450,7 +1443,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads: int,
         seq_len: int,
     ) -> ttnn.Tensor:
-        """Explicit bf16 matmul+softmax blocks — best PCC on 1×1 at S≈4096 (mel 4096)."""
+        """Query-block attention with explicit bf16 matmul + softmax (most accurate at the longest seq)."""
         head_dim = int(q.shape[-1])
         dist_w = attn_module.distance_embedding.weight
         left_max = int(attn_module.left_max_position_embeddings)
@@ -1521,7 +1514,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         num_heads: int,
         seq_len: int,
     ) -> ttnn.Tensor:
-        """Matmul blocks with float32 QK/softmax — 1×1 mel 2048 (S≈2048) path."""
+        """Query-block attention with float32 QK/softmax (mid-range sequence path)."""
         head_dim = int(q.shape[-1])
         dist_w = attn_module.distance_embedding.weight
         left_max = int(attn_module.left_max_position_embeddings)
@@ -1665,8 +1658,8 @@ class TTSeamlessM4Tv2SpeechEncoder:
         if not use_relative:
             # Adapter self-attn has no relative positions — use fused SDPA.
             # K is in [B, H, S, D] form (k_transposed=False) as SDPA requires.
-            # Compact SDPA avoids L1 CB clash on TP>1 and at very long seq (≈4096 mel). On 1×1 at
-            # S∈[256,512) (≈2048 mel) the compact kernels diverge from HF; full SDPA is still safe.
+            # Compact SDPA avoids an L1 CB clash on TP>1 and at very long seq; the short/mid single-device
+            # range keeps full SDPA, whose kernels match HF there.
             compact_sdpa = seq_len >= _ADAPTER_FUSED_SDPA_COMPACT_THRESHOLD and (
                 self._tp > 1 or seq_len >= _LONG_AUDIO_RES_DRAM_THRESHOLD
             )
@@ -1796,10 +1789,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         local_ff_dim = int(ffn.intermediate_dense.weight.shape[-1])
         pc1 = self._tuned_matmul_pc(token_rows, hdim, local_ff_dim)
         pc2 = self._tuned_matmul_pc(token_rows, local_ff_dim, hdim)
-        # FFN-expand activations are bf16 (the weight is bf8, model_preprocessing.py:1279, so this is a
-        # bf8×bf16 matmul). bf8 activations here halved L1 but added enough error — over the 24 layers —
-        # to flip long-audio same-language ASR Hindi→English near ~1830 mel frames; bf16 is L1-safe even
-        # at seq=3000 (PCC 0.9970). See README "Long-audio same-language ASR is precision-sensitive".
+        # FFN-expand activations stay bf16 (weight is bf8 → a bf8×bf16 matmul). bf8 activations halve L1
+        # but accumulate enough error over the 24 layers to flip long-audio same-language ASR; bf16 is
+        # L1-safe across the sequence range (precision-sensitive; see README).
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
@@ -2075,9 +2067,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self, conv_mask_1d: ttnn.Tensor, *, kernel: int, stride: int, pad: int
     ) -> ttnn.Tensor:
         """Per-batch subsampled lengths after strided conv (HF adapter)."""
-        # float32 (not bf16): on-device ``ttnn.sum`` accumulates in the mask dtype; bf16's 8-bit
-        # mantissa cannot represent a sum of >256 ones exactly, so long mel (2048/4096) yields an
-        # off-by-one subsampled length and corrupts adapter self-attention masks on 1×1.
+        # float32 (not bf16): on-device ``ttnn.sum`` accumulates in the mask dtype, and bf16's 8-bit
+        # mantissa cannot represent a sum of >256 ones exactly — a long sequence would then yield an
+        # off-by-one subsampled length and corrupt the adapter self-attention masks.
         mask_f = ttnn.typecast(conv_mask_1d, ttnn.float32)
         s = ttnn.sum(mask_f, dim=1, keepdim=True, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mask_f)
