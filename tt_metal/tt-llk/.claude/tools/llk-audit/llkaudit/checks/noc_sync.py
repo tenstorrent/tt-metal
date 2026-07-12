@@ -9,9 +9,11 @@ The classic cross-core race: a producer writes data to a remote L1 with
 reset) — but the signal must not overtake the data. It is safe only if a NoC
 write flush/barrier (`noc_async_write_barrier` / `noc_async_writes_flushed`)
 drains the write BEFORE the signal — recognized in BOTH the free-function form and
-the modern `Noc`-method form (`noc.async_write_barrier()`) via registry.noc_op_of;
-semaphore signals stay free functions. This surface lives in JIT-compiled kernels
-OUTSIDE tt-llk, so
+the modern `Noc`-method form (`noc.async_write_barrier()`) via registry.noc_op_of.
+Signals are recognized in both forms too: the free functions AND the `Semaphore`
+object methods (`sem.set_multicast(...)`, remote `sem.up(noc, x, y, v)`); the LOCAL
+`up(value)`/`set(value)` forms are excluded (no NoC, no flush needed). This surface
+lives in JIT-compiled kernels OUTSIDE tt-llk, so
 the checker is committed and deterministic but only yields findings when fed a
 KERNEL fact base (the on-request capture — see run.sh --full-jit); empty over
 tt-llk.

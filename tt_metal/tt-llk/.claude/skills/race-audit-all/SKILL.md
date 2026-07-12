@@ -64,12 +64,18 @@ new cfg-write helper or `TTI_*` cfg instruction, a new mailbox call — the chec
 **under-recall silently**: fewer findings, no error, exit 0. A stale registry does
 not look broken; it looks *clean*. So during any audit (especially a full sweep)
 treat these as **tool-drift tells** and act on them:
-- an `unresolved` bucket rising sharply (cfg-word `UNRESOLVED`, mailbox
-  `UNRESOLVED_ENDPOINT`, a call the classifier couldn't key);
-- the kernel-tier coverage ledger listing a call/receiver shape the registry
-  didn't classify;
+- an `UNRESOLVED` bucket rising sharply in the checks that HAVE one — cfg-word
+  (`UNRESOLVED`) and mailbox (`UNRESOLVED_ENDPOINT`) surface inputs they couldn't
+  key; a jump means a new write/endpoint shape the registry doesn't classify;
+- the kernel-tier **coverage ledger** showing TUs it could not translate/parse
+  (`EMPTY-OUT` / `PARSE-FAIL` / `SKIP-*`) — a *capture* hole (the checkers never
+  saw those kernels), distinct from a classification gap but equally a silent miss;
 - **the LLM tier finding a real sync site the deterministic worklist omitted** —
-  the cleanest signal a name table is stale.
+  the cleanest tell, and the ONLY one for **cb-sync / noc-sync**, which have no
+  `UNRESOLVED` bucket (a CB/NoC object has many non-flow-control methods, so an
+  unknown method can't be flagged deterministically without over-firing) — so a
+  new `CircularBuffer`/`Noc`/`Semaphore` flow-control method shows up only as a
+  site the LLM found that the tool's candidate list didn't.
 
 On any such observation, **name the stale entry** (which `registry.py` table +
 which checker under-recalls, and the concrete API missed), tell the user the

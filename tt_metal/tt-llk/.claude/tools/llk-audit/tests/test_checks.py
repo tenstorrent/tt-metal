@@ -61,7 +61,7 @@ def macro(file, off, name, text, func=""):
     }
 
 
-def call(file, off, name, text=None, func="", arg0="", recv="", recv_type=""):
+def call(file, off, name, text=None, func="", arg0="", recv="", recv_type="", argc=-1):
     return {
         "family": "call",
         "file": file,
@@ -73,6 +73,7 @@ def call(file, off, name, text=None, func="", arg0="", recv="", recv_type=""):
         "arg0": arg0,
         "recv": recv,
         "recv_type": recv_type,
+        "argc": argc,
     }
 
 
@@ -1308,6 +1309,77 @@ def test_noc_sync_method_write_flush_recognized():
         call(K, 20, "noc_semaphore_inc", func="kernel_main", arg0="sem"),
     ]
     assert NocSync().run(FactBase("wormhole", bad))[0].hint == "NOC_SIGNAL_NO_FLUSH"
+
+
+@case
+def test_noc_sync_object_api_signals_recognized():
+    # Modern ttnn kernels signal via the Semaphore OBJECT API. A remote signal
+    # (mcast or the NoC-carrying up overload) with no preceding write flush must be
+    # flagged; the LOCAL up(value)/set(value) forms must NOT be (no NoC, no flush).
+    K = "ttnn/cpp/x/writer.cpp"
+    # sem.set_multicast(...) with no flush -> flagged (mcast is unambiguously remote)
+    mcast = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K,
+            20,
+            "set_multicast",
+            func="kernel_main",
+            recv="sem",
+            recv_type="Semaphore",
+        ),
+    ]
+    r = NocSync().run(FactBase("wormhole", mcast))
+    assert (
+        len(r) == 1
+        and r[0].hint == "NOC_SIGNAL_NO_FLUSH"
+        and r[0].kind == "noc_signal:mcast"
+    )
+    # remote sem.up(noc, x, y, v) (argc>=2) with no flush -> flagged
+    up_remote = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K, 20, "up", func="kernel_main", recv="sem", recv_type="Semaphore", argc=5
+        ),
+    ]
+    assert NocSync().run(FactBase("wormhole", up_remote))[0].kind == "noc_signal:inc"
+    # LOCAL sem.up(value) (argc==1) is NOT a remote signal -> no finding
+    up_local = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K, 20, "up", func="kernel_main", recv="sem", recv_type="Semaphore", argc=1
+        ),
+    ]
+    assert NocSync().run(FactBase("wormhole", up_local)) == []
+    # a flush before the object-API mcast signal clears it
+    guarded = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K,
+            10,
+            "async_write_barrier",
+            func="kernel_main",
+            recv="noc",
+            recv_type="Noc",
+        ),
+        call(
+            K,
+            20,
+            "set_multicast",
+            func="kernel_main",
+            recv="sem",
+            recv_type="Semaphore",
+        ),
+    ]
+    assert NocSync().run(FactBase("wormhole", guarded)) == []
+    # `up` on a NON-Semaphore receiver is never a signal (guard against false match)
+    other = [
+        fn("kernel_main", K, 0, 100),
+        call(
+            K, 20, "up", func="kernel_main", recv="counter", recv_type="Widget", argc=5
+        ),
+    ]
+    assert NocSync().run(FactBase("wormhole", other)) == []
 
 
 def main():

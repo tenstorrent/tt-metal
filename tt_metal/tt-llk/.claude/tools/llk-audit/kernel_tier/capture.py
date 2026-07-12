@@ -139,6 +139,12 @@ def main(argv=None) -> int:
             if not src or not cwd or not os.path.isdir(cwd):
                 ledger.append((cmd[:60], "SKIP-noparse", 0, 0))
                 continue
+            # The src may be relative to cwd; if it no longer exists on disk (a
+            # stale log vs a cleared cache) the extractor would emit empty output
+            # with a non-zero exit — catch it here as a NAMED skip, not a clean ok.
+            if not os.path.isfile(os.path.join(cwd, src)):
+                ledger.append((cmd[:60], "SKIP-nosrc", 0, 0))
+                continue
             label = (
                 os.path.relpath(cwd, os.path.join(args.repo_root))
                 if os.path.isabs(cwd)
@@ -163,8 +169,18 @@ def main(argv=None) -> int:
                 ledger.append((label, f"EXEC-FAIL:{type(e).__name__}", 0, 0))
                 continue
             out = r.stdout.strip()
+            # The extractor emits its JSON only after the frontend action runs; a
+            # non-recoverable failure (arg/driver error, missing source, crash)
+            # returns non-zero with empty stdout. Recording that as "ok facts=0"
+            # would be a FALSE ALL-CLEAR — indistinguishable from a genuinely clean
+            # parse, counted in the "N/N parsed" headline, and (writing a bare
+            # newline) defeating bootstrap's empty-fact-base guard. Treat it as a
+            # named coverage hole and DO NOT write it to the merged fact base.
+            if not out:
+                ledger.append((label, f"EMPTY-OUT:rc={r.returncode}", 0, 0))
+                continue
             try:
-                obj = json.loads(out) if out else {}
+                obj = json.loads(out)
             except json.JSONDecodeError:
                 ledger.append((label, "PARSE-FAIL", 0, 0))
                 continue

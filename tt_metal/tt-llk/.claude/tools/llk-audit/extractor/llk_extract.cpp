@@ -87,6 +87,7 @@ struct Fact
     std::string producer;       // pointer_write: init-callee name / var name / cast text
     std::string indexText;      // pointer_write: subscript index expression
     std::string arg0;           // call: first argument source text
+    int argc = -1;              // call: explicit argument count (disambiguates overloads)
     std::string recv;           // call: member-call receiver expr text (e.g. "cb_buf")
     std::string recvType;       // call: member-call receiver TYPE name (e.g. "CircularBuffer")
 };
@@ -358,6 +359,7 @@ public:
         {
             return true;
         }
+        f.argc = static_cast<int>(CE->getNumArgs());
         if (CE->getNumArgs() >= 1)
         {
             f.arg0 = srcText(S, CE->getArg(0)->getSourceRange());
@@ -463,6 +465,10 @@ public:
             if (f.family == "call" && !f.arg0.empty())
             {
                 o["arg0"] = f.arg0;
+            }
+            if (f.family == "call" && f.argc >= 0)
+            {
+                o["argc"] = f.argc;
             }
             if (f.family == "call" && !f.recv.empty())
             {
