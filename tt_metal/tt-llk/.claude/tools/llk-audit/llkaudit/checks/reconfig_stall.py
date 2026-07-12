@@ -104,30 +104,42 @@ class ReconfigStall(Check):
                     continue
 
                 stalls_before = [s for s in stalls if s["off"] < w["off"]]
-                # A stall drains the unit only if its 2nd operand (wait_res =
-                # ConditionMask) names a drain token; word-boundary matched so
-                # 'PACK' does not match inside 'UNPACK'.
-                draining = [
-                    s
-                    for s in stalls_before
-                    if registry.condition_drains_unit(
-                        registry.stallwait_wait_operand(s.get("text", "")), drain_tokens
-                    )
-                ]
-                # A draining stall still holds only if the unit was NOT re-armed
-                # between it and the write.
-                valid_drain = any(
-                    not any(s["off"] < r < w["off"] for r in reissue_offs)
-                    for s in draining
-                )
-                if valid_drain:
-                    continue  # this write is properly drained — check later writes
 
-                if not stalls_before:
+                # (drains_any, drains_full) per stall for this thread's unit. For MATH
+                # a FULL drain needs both the FPU and SFPU engines; a partial one
+                # drains only one (see registry.unit_drain_state). Word-boundary
+                # matched so 'PACK' does not match inside 'UNPACK'.
+                def _drain(s):
+                    return registry.unit_drain_state(
+                        registry.stallwait_wait_operand(s.get("text", "")), thr
+                    )
+
+                def _held(s):  # the drain still holds iff the unit wasn't re-armed
+                    return not any(s["off"] < r < w["off"] for r in reissue_offs)
+
+                states = [(s, *_drain(s)) for s in stalls_before]
+                if any(full and _held(s) for (s, _any, full) in states):
+                    continue  # a full, still-valid drain — check later writes
+
+                partial_held = any(
+                    a and not full and _held(s) for (s, a, full) in states
+                )
+                any_drain = any(a for (s, a, full) in states)
+                if partial_held:
+                    # MATH only: a stall drains ONE engine (FPU or SFPU) but not both.
+                    # Whether that is sufficient is code-dependent (does the OTHER
+                    # engine read the reconfig'd field?) — surface low-confidence, do
+                    # NOT silently clear (a false negative) nor hard-flag NO_UNIT_DRAIN.
+                    hint, detail = "PARTIAL_MATH_DRAIN", (
+                        f"{thr} reconfig: the preceding STALLWAIT drains only ONE of the "
+                        f"FPU(MATH)/SFPU engines — insufficient IF the reconfig'd field is "
+                        f"also sampled by the other engine (confirm which engine reads it)"
+                    )
+                elif not stalls_before:
                     hint, detail = "NO_UNIT_DRAIN", (
                         f"{thr} reconfig writes config with no preceding STALLWAIT"
                     )
-                elif draining:
+                elif any_drain:
                     hint, detail = "DRAIN_REARMED", (
                         f"{thr} unit re-issued (UNPACR/PACR/matrix) between the "
                         f"draining STALLWAIT and this config write"

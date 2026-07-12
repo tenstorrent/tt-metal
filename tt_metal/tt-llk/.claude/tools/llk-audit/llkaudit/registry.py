@@ -177,9 +177,10 @@ def is_cfg_rmw_helper(fact: dict) -> bool:
 
 
 STALL_MACRO_SUBSTR = ("STALLWAIT",)
-TRISC_CFG_TOKEN = (
-    "TRISC_CFG"  # the STALLWAIT condition (ISA C13) that orders a RISC cfg/GPR write
-)
+# The STALLWAIT condition that orders a RISC cfg/GPR write. Matched by NAME, not
+# value, because the encoding is PER-ARCH (WH = condition C13; BH = bit 10 / 0x400;
+# Quasar = index 21) — the token spelling `TRISC_CFG` is stable across archs.
+TRISC_CFG_TOKEN = "TRISC_CFG"
 
 CONSUMER_UNPACK_SUBSTR = ("UNPACR",)
 CONSUMER_PACK_SUBSTR = ("PACR",)  # checked after UNPACR
@@ -514,6 +515,26 @@ DRAIN_UNIT_TOKENS = {
     "MATH": ("MATH", "WAIT_SFPU"),
     "PACK": ("PACK", "PACK0", "PACK1"),  # PACK0/PACK1 are Quasar's per-packer tokens
 }
+# The MATH thread drives TWO independent engines: the FPU (matrix, `p_stall::MATH`)
+# and the SFPU (vector, `p_stall::WAIT_SFPU` == `SFPU1`; other archs add `SFPU0`/…).
+# Draining one does NOT drain the other, so a math reconfig fully drains only when it
+# waits on BOTH. UNPACK/PACK tokens are aliases of a single unit (any one = full).
+MATH_FPU_TOKENS = ("MATH",)
+
+
+def unit_drain_state(operand: str, thread: str):
+    """(drains_any, drains_full) for a STALLWAIT wait-condition wrt `thread`'s unit.
+    For MATH: FPU + SFPU are separate engines (SFPU matched by the 'SFPU' substring so
+    WAIT_SFPU/SFPU1/SFPU0/... all count) — full drain needs BOTH, partial drains one.
+    For UNPACK/PACK the tokens alias one unit, so any drain is a full drain."""
+    if thread == "MATH":
+        fpu = any(re.search(rf"\b{re.escape(t)}\b", operand) for t in MATH_FPU_TOKENS)
+        sfpu = "SFPU" in operand.upper()
+        return (fpu or sfpu, fpu and sfpu)
+    d = condition_drains_unit(operand, DRAIN_UNIT_TOKENS.get(thread, ()))
+    return (d, d)
+
+
 # Config-write macros that write the UNIT-SAMPLED CONFIG register file (the ones
 # a reconfig must drain the unit before). Deliberately EXCLUDES SETDMAREG, which
 # writes a GPR (a source value for a later REG2FLOP), not a sampled config reg —

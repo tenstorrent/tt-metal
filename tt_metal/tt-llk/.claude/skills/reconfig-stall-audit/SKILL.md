@@ -28,7 +28,12 @@ before its first config write):
 `NO_UNIT_DRAIN` = a config write with no preceding STALLWAIT; `THCON_ONLY` = a
 stall that orders the GPR→cfg write but drains no execution unit; `DRAIN_REARMED`
 = a draining stall precedes the write but the unit was re-issued (UNPACR/PACR/
-matrix) between the drain and the write, so the drain no longer holds. All are
+matrix) between the drain and the write, so the drain no longer holds;
+`PARTIAL_MATH_DRAIN` = a **MATH** reconfig whose stall drains only ONE of the two
+MATH engines (FPU=`MATH` vs SFPU=`WAIT_SFPU`/`SFPU1`) — **code-dependent, so
+low-confidence**: it is sufficient only if the reconfig'd field is not sampled by
+the other engine, which you must confirm (e.g. `_llk_math_reconfig_data_format_`
+draining only `MATH` is a real gap iff the SFPU also reads that format). All are
 **candidates** — decide with the rule below. The tool now walks EVERY config
 write in a function (a latched first write no longer hides a later sampled one)
 and emits the first offending write. The tool models the latched-register
