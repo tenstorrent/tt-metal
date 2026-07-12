@@ -800,21 +800,13 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // subsumed by the split-reader deferral above (enable_split_reader is forced false), so it can never
     // arise here.
 
-    // QSR pack base-alignment fix (localized): the borrowed OUTPUT tensor's L1 base is only 16B-aligned
-    // (Quasar L1_ALIGNMENT=16) and can land NOT face-aligned (observed +192B, i.e. ≡12 mod 32 units). The
-    // Quasar packer (PACR0 face-stepping) then walks off the tile/face grid -> PACR0_TILE_INC OOB on the
-    // matmul pack into MATMUL_PARTIALS (which aliases OUTPUT when globally allocated). The conv's OWN CBs are
-    // face-aligned by the CB allocator, so give MATMUL_PARTIALS its own buffer instead of borrowing OUTPUT:
-    // clear is_globally_allocated so partials_cb_uses_output below is false and the DFB gets a real, face-
-    // aligned allocation. Costs per_core_out_ntiles extra tiles of L1. (Bumping L1_ALIGNMENT globally is not
-    // viable: dispatch's message-offset math divides DISPATCH_MESSAGES_MAX_OFFSET by l1_alignment,
-    // dispatch_mem_map.cpp:74.) OUT itself stays borrowed (it must be the output tensor); if the bias->OUT
-    // pack also faults on the misaligned OUT base, the output tensor allocation needs face-alignment too.
-    for (auto& info : cb_info) {
-        if (info.name == Conv2dCb::MATMUL_PARTIALS) {
-            info.is_globally_allocated = false;
-        }
-    }
+    // NOTE: the Quasar packer's pack-target base-alignment requirement (PACR0 face-stepping needs a >=512B/
+    // face-aligned base, else off-grid PACR0_TILE_INC OOB) is now satisfied by over-aligning L1 allocations to
+    // a face on Quasar (l1_banking_allocator.cpp generate_config). So the borrowed OUTPUT (and thus the
+    // aliased MATMUL_PARTIALS) base is face-aligned and both the matmul and bias packs land on-grid — no need
+    // to un-borrow partials (an earlier diagnostic did that to prove the root; it cost per_core_out_ntiles
+    // extra L1 and overflowed the static DFB region, so it is reverted). Partials stays globally allocated
+    // (borrowed from OUTPUT), zero extra L1.
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
     const bool partials_cb_uses_output =
