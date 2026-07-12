@@ -123,9 +123,25 @@ void PinnedMemoryImpl::initialize_from_devices(
     // Create one buffer per unique MMIO device, all mapping the same aligned host memory
     std::unordered_map<ChipId, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
     if (MetalContext::instance().hal().get_supports_64_bit_pcie_addressing()) {
-        // On Blackhole, we can use 64-bit address space, so we don't need to use the iATU.
-        map_to_noc = false;
-        use_64bit_address_space_ = true;
+        // On Blackhole the NOC can address host memory directly (no iATU needed), so pinned host
+        // buffers used to be mapped with the raw DMA IOVA (map_for_dma) and that IOVA was reused as
+        // the NOC address (use_64bit_address_space_). That is unsafe: on an IOMMU host the kernel
+        // dma-iommu allocator can hand back a top-down 64-bit IOVA (near 2^64) that the NOC's 36-bit
+        // local address cannot express, so cq_prefetch's relay read targets a wrong/unmapped
+        // address and the device wedges (tenstorrent/tt-metal#49691).
+        //
+        // Prefer the NOC-DMA mapping (map_to_noc -> SysmemBuffer::map_buffer_to_noc), which the KMD
+        // allocates bottom-up inside the NOC-addressable window and returns a proper noc_address, so
+        // the device always gets a reachable address regardless of buffer size. Fall back to the raw
+        // 64-bit IOVA only when the KMD is too old to support NOC-DMA mapping (< 2.0), where the
+        // #49691 addressability guard in buffer_dispatch still protects the large-buffer case.
+        if (cluster.is_noc_mapping_enabled()) {
+            map_to_noc = true;
+            use_64bit_address_space_ = false;
+        } else {
+            map_to_noc = false;
+            use_64bit_address_space_ = true;
+        }
     }
 
     for (ChipId mmio_device_id : unique_mmio_devices) {
