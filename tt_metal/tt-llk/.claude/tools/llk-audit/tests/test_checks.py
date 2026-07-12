@@ -1242,8 +1242,9 @@ def test_noc_sync_remote_signals_and_local_set():
     ]
     assert NocSync().run(FactBase("wormhole", facts)) == []
     # a bare FLUSHED (not an ack barrier) does NOT clear an ATOMIC inc (conservative:
-    # departure != landing) -> still flagged, but TAGGED low-confidence since a flush
-    # is present (likely the same-NoC/VC-unicast-safe idiom).
+    # departure != commit) -> still flagged, but TAGGED FLUSH_NOT_BARRIER since a flush
+    # is present (for the skill to confirm vs the NoC Ordering + posted_writes docs,
+    # not a pre-declared safe idiom).
     facts = [
         fn("kernel_main", K, 0, 100),
         call(K, 10, "noc_async_write_flushed_with_trid", func="kernel_main"),
@@ -1651,6 +1652,33 @@ def test_cli_changed_file_with_no_facts_marks_degraded():
         assert "degraded" in out and any("fileB.h" in d for d in out["degraded"]), out
     finally:
         os.remove(path)
+
+
+@case
+def test_stallwait_operand_quasar_4operand():
+    # Quasar's TTI_STALLWAIT is 4-operand: the wait condition spans the last three
+    # operands (operand 2 is often 0). WH/BH are 2-operand. stallwait_wait_operand
+    # must return ALL wait_res operands so the Quasar drain token is seen.
+    from llkaudit import registry as r
+
+    q = "TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU)"
+    w = "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::MATH)"
+    assert r.condition_drains_unit(
+        r.stallwait_wait_operand(q), r.DRAIN_UNIT_TOKENS["MATH"]
+    )
+    assert r.condition_drains_unit(
+        r.stallwait_wait_operand(w), r.DRAIN_UNIT_TOKENS["MATH"]
+    )
+    # stall_res (operand 1) is NOT the drain condition: STALL_UNPACK must not read
+    # as an UNPACK drain.
+    assert not r.condition_drains_unit(
+        r.stallwait_wait_operand(w), r.DRAIN_UNIT_TOKENS["UNPACK"]
+    )
+    # Quasar per-packer tokens are recognized (word-boundary: PACK0 != PACK).
+    qp = "TTI_STALLWAIT(p_stall::STALL_CFG, 0, 0, p_stall::PACK1)"
+    assert r.condition_drains_unit(
+        r.stallwait_wait_operand(qp), r.DRAIN_UNIT_TOKENS["PACK"]
+    )
 
 
 def main():
