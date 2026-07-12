@@ -148,8 +148,15 @@ subblock heuristic** — a shared util used across tt_dit models ⇒ **HIGH blas
 matmul), needs a warm iterate+PCC loop + `build_metal` if it dips into C++, NOT a fire-and-exit cron one-shot (a blind
 subblock guess fails op-validation, cf. Batch B exp-kernel SIGABRT). Gate: video block PCC≥0.988 + WARM_FWD_MS vs F0
 16.88ms. **Value ceiling: even a fully-free CCL bucket floors the block at the ~7.9s no-finetune wall.**
-- [~] **G0 — get_matmul_config subblock tune (WARM-AUTHORING).** Scoped + source-mapped; not a cron lap-tail (shared
-  util edit + possible build_metal + iterate loop). Parked alongside the W-mask in-kernel fold (Batch C) for a warm session.
+- [x] **G0 — matmul block-tune (MEASURED ~flat, compute-bound; CLOSED 2026-07-12 06:00Z, job 055639-7).** Prior "WARM-
+  AUTHORING / build_metal" classification was WRONG: `get_matmul_config` (matmul.py:189) returns a pure-Python
+  `ttnn.MinimalMatmulConfig` from lookup tables → block/subblock is a `register_matmul_configs` edit, PCC-safe, NO
+  build_metal (there's even a no-build sweep harness `sweep_mm_block_sizes.py`). The `_BH_GALAXY_MAX_CORE_GRID=(11,10)`
+  clamp orphaned the S2 tunings (keyed 12x9 in `grid_12_9_configs`; runtime queries 11x10 → fallback), so the dominant
+  S2 to_out AGMM `(4864,4096,4096)` runs untuned 8x8x8. A/B: registered FE-pattern `(4,8,12,(1,4))` on 11x10 →
+  WARM_FWD_MS 16.70 vs 16.88 baseline = **−1.1% (noise) + PCC 99.966% PASS ⇒ NO WIN** (compute-bound, matches MASTER_PLAN
+  + FE "aggregate ~flat"). Reverted. Loose thread: guessed block, not the 12x9 swept-optimal `(5,8,16)`; a full 11x10
+  re-sweep (`sweep_mm_block_sizes.py`, tracy, ~2h off-cron) caps at a few % = polish, not a 6.0s path.
 
 ## Batch H — CCL-matmul weight/activation QUANT sweep (the dominant op, env-only, PCC-gated, cron-in-budget)
 `LTX_QUANT=<preset>` on the F0 block harness (`test_ltx_transformer_block -k 'video and stage_2 and
