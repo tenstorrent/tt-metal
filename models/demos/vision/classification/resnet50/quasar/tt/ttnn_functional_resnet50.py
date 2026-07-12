@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import _nearest_y, is_blackhole, is_wormhole_b0, nearest_32
+from models.common.utility_functions import _nearest_y, is_blackhole, is_quasar, is_wormhole_b0, nearest_32
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50_model_utils import is_blackhole_p100
 
 
@@ -32,6 +32,26 @@ def fit_width_sharded_cores(width_elems, desired_cores, device):
     return num_cores, ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
 
 
+# uint16 DFB ring-extent limit for a bf16 tile (2048B = 128 x 16B units; entry*cap < 65536 -> <512 tiles).
+_DFB_RING_LIMIT_TILES = 511
+
+
+def _no_spill_out_block(per_core_N, in0_block_w):
+    """Largest out_block_w that (a) divides per_core_N and (b) keeps the in1 DFB ring
+    (out_block_w * in0_block_w tiles, no mcast-depth x2 since num_blocks==1) within the uint16 limit,
+    plus a matching out_subblock_w (divides out_block_w, dest holds <=8 bf16 tiles with per_core_M==1)."""
+    max_obw = max(1, _DFB_RING_LIMIT_TILES // in0_block_w)
+    out_block_w = 1
+    for cand in range(min(per_core_N, max_obw), 0, -1):
+        if per_core_N % cand == 0:
+            out_block_w = cand
+            break
+    out_subblock_w = out_block_w
+    while out_subblock_w > 1 and (out_block_w % out_subblock_w != 0 or out_subblock_w > 8):
+        out_subblock_w -= 1
+    return out_block_w, out_subblock_w
+
+
 def fit_fc_grid(device, n_tiles, k_tiles):
     """Pick a rectangular core grid for the resnet fc 1D-mcast matmul that fits the device and
     evenly tiles the N output dimension.
@@ -44,6 +64,18 @@ def fit_fc_grid(device, n_tiles, k_tiles):
     row-wise core set) is required because both the matmul config and the activation width-shard
     feeding it take a (grid_x, grid_y) and must agree.
     """
+    if is_quasar():
+        # Quasar no-spill fc (Option 1). mcast_in0 width-shards K across the grid, so
+        # num_blocks == num_cores; ANY multi-core grid forces num_blocks > 1 -> the interm0/mm_partials
+        # K-spill accumulate, which hits the intra-tensix TILE_COUNTERS fault on Quasar (no compute-side
+        # implicit-sync opt-out exists). Run the fc on a SINGLE core so the whole K sits on that core and
+        # in0_block_w == full K (num_blocks == 1, no spill, interm0 never touched). Shrink out_block_w so
+        # the in1 DFB ring (out_block_w * in0_block_w tiles) fits the uint16 ring-extent limit.
+        per_core_N = n_tiles
+        in0_block_w = k_tiles
+        out_block_w, out_subblock_w = _no_spill_out_block(per_core_N, in0_block_w)
+        return 1, 1, 1, per_core_N, in0_block_w, out_block_w, out_subblock_w
+
     grid = device.compute_with_storage_grid_size()
     best_gx, best_gy, best_nc = 1, 1, 1
     for gy in range(1, grid.y + 1):
@@ -54,7 +86,9 @@ def fit_fc_grid(device, n_tiles, k_tiles):
     per_core_N = n_tiles // best_nc
     kt_per_core = k_tiles // best_nc  # best_nc | n_tiles | k_tiles, so this is exact
     in0_block_w = 2 if kt_per_core % 2 == 0 else kt_per_core
-    return best_gx, best_gy, best_nc, per_core_N, in0_block_w
+    # WH/BH keep the full per-core N as one output block (out_block_w=None -> ResnetLinear leaves the
+    # config's out_block_* to normalize_program_config, i.e. unchanged from before).
+    return best_gx, best_gy, best_nc, per_core_N, in0_block_w, None, 1
 
 
 def ResnetLinear(
@@ -66,22 +100,41 @@ def ResnetLinear(
     matmul_grid=(8, 4),
     per_core_N=1,
     in0_block_w=2,
+    out_block_w=None,
+    out_subblock_w=1,
 ):
     """
     Returns a function for linear operation in resnet with bias.
     """
 
-    matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=matmul_grid,
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=1,
-        per_core_N=per_core_N,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
+    if out_block_w is not None:
+        # Quasar no-spill config: explicit out_block_h/out_block_w so in0_block_w==full K gives
+        # num_blocks==1 (no interm0/mm_partials K-spill) while the in1 ring stays within the uint16 limit.
+        matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=matmul_grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            out_block_h=1,
+            out_block_w=out_block_w,
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+    else:
+        matmul_config = ttnn._ttnn.operations.experimental.quasar.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=matmul_grid,
+            in0_block_w=in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=1,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
     weight = weight.reshape(weight.shape.to_rank(4))
     bias = bias.reshape(bias.shape.to_rank(4))
 
@@ -495,7 +548,9 @@ class resnet50:
         # per_core_N=1; on a smaller part it shrinks the grid and raises per_core_N so all N tiles
         # are covered. The same (grid_x, grid_y) is reused for the activation width-shard feeding
         # fc (see run()), since mcast_in0 requires the input sharding to match the matmul grid.
-        fc_gx, fc_gy, self.fc_num_cores, fc_per_core_N, fc_in0_block_w = fit_fc_grid(device, n_tiles=32, k_tiles=64)
+        fc_gx, fc_gy, self.fc_num_cores, fc_per_core_N, fc_in0_block_w, fc_out_block_w, fc_out_subblock_w = fit_fc_grid(
+            device, n_tiles=32, k_tiles=64
+        )
         self.fc_matmul_grid = (fc_gx, fc_gy)
         self.fc = ResnetLinear(
             weight=ttnn.experimental.quasar.to_device(parameters.fc.weight, device),
@@ -506,6 +561,8 @@ class resnet50:
             matmul_grid=self.fc_matmul_grid,
             per_core_N=fc_per_core_N,
             in0_block_w=fc_in0_block_w,
+            out_block_w=fc_out_block_w,
+            out_subblock_w=fc_out_subblock_w,
         )  # num_classes = 1000
 
         act_block_h_override = 0
@@ -559,7 +616,10 @@ class resnet50:
         n = batch_size
         h += kernel_size * 2
         w += kernel_size * 2
-        C = _nearest_y(c, 4)
+        # Quasar aligns fold channels to 8 (bf16 row-major 16B shard-width); the first-conv weights are
+        # folded to groups*8 input channels (see custom_preprocessing), so the direct fold's aligned
+        # groups*8 output feeds conv1 with no per-group padding strip. WH/BH keep alignment 4.
+        C = _nearest_y(c, 8 if is_quasar() else 4)
         self.fold_pad_c = C - c
         self.fold_pad_h = kernel_size
         self.fold_pad_w = kernel_size
@@ -571,13 +631,14 @@ class resnet50:
         )
         num_cores_x = 8
         num_cores_y = 8
-        if self.batch_size == 16:
-            num_cores_x = 8
-            num_cores_y = 8
-            self.fold_compute_grid_size = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
-            )
-        elif self.batch_size == 20:
+        # Default grid, used for batch 16 and for any batch not explicitly handled below (e.g. the
+        # small batches used on the 2x3 emulator / craq-sim grid). The device-cap clamp further down
+        # reduces this to the device's real core count, so leaving fold_compute_grid_size always-set
+        # here is what lets resnet run on tiny grids instead of hitting an undefined-attribute error.
+        self.fold_compute_grid_size = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+        )
+        if self.batch_size == 20:
             if is_wormhole_b0():
                 num_cores_x = 8
                 num_cores_y = 5
@@ -697,15 +758,32 @@ class resnet50:
         logger.debug(f"==== fold on device")
 
         # run fold
-        fold_output_tensor = ttnn.experimental.quasar.fold(
-            input_tensor,
-            self.fold_stride_h,
-            self.fold_stride_w,
-            use_transpose_as_fold=True,
-            padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
-            grid_size=self.fold_compute_grid_size,
-            override_memory_config=self.override_fold_mem_config,
-        )
+        if is_quasar():
+            # Direct data-movement fold. Input arrives channels-last (NHWC), host-padded to the aligned
+            # width (see setup_l1_sharded_input); the transpose-chain fold has no Quasar kernel. output_shape
+            # C == groups*C_aligned (== fold_output_shape[3]) so c_keep == c_aligned -> the fold skips the
+            # per-group padding strip and returns the aligned groups*C_aligned width directly, which conv1
+            # consumes (its weights are folded to groups*C_aligned input channels with zero pad channels).
+            fold_output_tensor = ttnn.experimental.quasar.fold(
+                input_tensor,
+                self.fold_stride_h,
+                self.fold_stride_w,
+                use_transpose_as_fold=False,
+                padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
+                grid_size=self.fold_compute_grid_size,
+                input_is_nhwc=True,
+                output_shape=ttnn.Shape(list(self.fold_output_shape)),
+            )
+        else:
+            fold_output_tensor = ttnn.experimental.quasar.fold(
+                input_tensor,
+                self.fold_stride_h,
+                self.fold_stride_w,
+                use_transpose_as_fold=True,
+                padding=[self.fold_pad_h, self.fold_pad_h, self.fold_pad_w, self.fold_pad_w, 0, self.fold_pad_c],
+                grid_size=self.fold_compute_grid_size,
+                override_memory_config=self.override_fold_mem_config,
+            )
         n, c, h, w = fold_output_tensor.shape
         fold_output_tensor = ttnn.experimental.quasar.reshape(fold_output_tensor, (1, 1, n * c * h, w))
 
@@ -848,7 +926,14 @@ class resnet50:
             layer_module="layer2_module4",
         )
 
-        reshard = is_blackhole()
+        # Quasar: block-shard layer3 like WH does. height_shard is already False here (block config, via
+        # is_blackhole()==False), but the WH block-input reshard below is gated on is_wormhole_b0() and
+        # skips Quasar, leaving the input height-sharded -> the 512->1024 conv keeps the full 1024-ch
+        # weight matrix per core (1 MB) and overflows the uint16_t DFB ring. Enable reshard_if_not_optimal
+        # so the op reshards the height-sharded input to the optimal block layout (grid-agnostic; the
+        # reshard_if_not_optimal path is the one BH uses here). Splitting output channels across the grid
+        # keeps the per-core weights DFB well under 1 MB.
+        reshard = is_blackhole() or is_quasar()
         height_shard = is_blackhole()
         if is_wormhole_b0():
             x = ttnn.experimental.quasar.to_memory_config(
@@ -917,7 +1002,11 @@ class resnet50:
             layer_module="layer3_module6",
         )
 
-        reshard = False
+        # Quasar: same block-shard gap as layer3 (the WH/BH block-input reshards below skip Quasar).
+        # height_shard is already False (block config); enable reshard_if_not_optimal so the op reshards
+        # the input to the optimal block layout, keeping the 1024->2048 conv's per-core weights DFB
+        # under the uint16_t ring limit.
+        reshard = is_quasar()
         height_shard = False
 
         if is_wormhole_b0():

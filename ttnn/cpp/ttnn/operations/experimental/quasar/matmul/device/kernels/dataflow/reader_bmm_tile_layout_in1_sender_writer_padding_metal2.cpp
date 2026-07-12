@@ -195,7 +195,9 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
     //  WRITER
-    const auto s = TensorAccessor(tensor::out);
+    // Used only when the output-write path below is compiled in (some mcast configs write via DFB
+    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable, matching s_sparsity below.
+    [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // sparsity accessor. cb_sparsity is an inert DMA-landing scratch used only when sparsity is
     // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by

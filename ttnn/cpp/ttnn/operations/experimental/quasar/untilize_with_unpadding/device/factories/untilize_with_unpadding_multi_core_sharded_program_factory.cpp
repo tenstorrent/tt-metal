@@ -145,7 +145,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = IN_DFB, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles_per_core"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: companion opt-out on the input-DFB producer side (mirrors tilize default reader+writer).
+        // This reader does full-page tile reads, but reverting its DFB to explicit reserve_back/push_back
+        // keeps credits authoritative so it clears NRBW once the sub-tile writer drains the pipeline.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ------------------------------------------------------------------------
@@ -156,7 +162,15 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithUnpaddingMultiCoreShardedPr
     // ------------------------------------------------------------------------
     KernelSpec writer{
         .unique_id = WRITER,
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: all three runtime-selected writer variants DRAIN the untilized output DFB with per-row
+        // (stick) sub-tile NOC writes (cb_untilize_out/cb_out0.get_read_ptr() + partial noc_async_write per
+        // row) — the sub-tile DFB-transfer pattern that deadlocks implicit-sync credit accounting (writer
+        // pinned at NWFW / NRBW). Mirror tilize default + transpose HC-sharded: opt out of DFB implicit sync
+        // so the kernel's explicit wait_front/pop_front stay authoritative (correctness-safe).
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
     if (out_sharded) {
         // Both out-sharded writers consume OUT (untilized tiles) and produce the resident OUT_SHARDED

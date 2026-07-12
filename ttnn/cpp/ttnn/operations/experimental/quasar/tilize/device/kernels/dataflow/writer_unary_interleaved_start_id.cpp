@@ -12,11 +12,9 @@ void kernel_main() {
     const auto num_pages = get_arg(args::num_pages);
     const auto start_id = get_arg(args::start_id);
 
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = get_local_cb_interface(dfb::out).fifo_page_size;
-
-    Noc noc;
     DataflowBuffer cb(dfb::out);
+    const uint32_t page_bytes = cb.get_entry_size();
+    Noc noc;
 
 #ifdef OUT_SHARDED
     cb.wait_front(num_pages);

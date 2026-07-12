@@ -12,7 +12,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import divup, is_blackhole, is_wormhole_b0
+from models.common.utility_functions import _nearest_y, divup, is_blackhole, is_quasar, is_wormhole_b0
 from models.demos.vision.classification.resnet50.quasar.tt.custom_preprocessing import create_custom_mesh_preprocessor
 from models.demos.vision.classification.resnet50.quasar.tt.ttnn_functional_resnet50 import is_blackhole_p100, resnet50
 from tests.ttnn.utils_for_testing import check_with_pcc
@@ -147,8 +147,12 @@ class ResNet50TestInfra:
         self.resnet50_first_conv_kernel_size = 3
         self.resnet50_first_conv_stride = 2
 
-        if batch_size <= 2:
-            pytest.skip("Batch size 1 and 2 are not supported with sharded data")
+        # Batch 1-2 were only validated as unsupported on the Wormhole/Blackhole silicon targets. On the
+        # Quasar sim/emulator they run on BOTH the 2x3 grid AND the full 32-core grid (the latter is ~16x
+        # faster since per-core work = total/num_cores) — the small-grid bring-up path the LLK team uses.
+        # So skip only on WH/BH; let small batch through on Quasar.
+        if batch_size <= 2 and (is_wormhole_b0() or is_blackhole()):
+            pytest.skip("Batch size 1 and 2 are not supported with sharded data on Wormhole/Blackhole")
         elif batch_size == 8:
             pytest.skip("Skipping batch size 8 due to memory config issue")
         elif is_wormhole_b0() and batch_size == 20:
@@ -210,6 +214,10 @@ class ResNet50TestInfra:
         return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        # Default grid; the device-cap clamp below (num_cores = min(..., max_num_cores, ...)) reduces it
+        # to the device's real core count, so batches not explicitly handled here (e.g. the small batches
+        # used on the 2x3 emulator / craq-sim grid) still get a valid grid instead of an undefined name.
+        core_grid = ttnn.CoreGrid(y=8, x=8)
         if self.batch_size == 16:
             core_grid = ttnn.CoreGrid(y=8, x=6)
         elif self.batch_size == 20:
@@ -227,6 +235,20 @@ class ResNet50TestInfra:
 
         n, c, h, w = torch_input_tensor.shape
         n = n // self.num_devices
+
+        if is_quasar():
+            # Quasar uses the direct data-movement fold (ttnn...fold(use_transpose_as_fold=False,
+            # input_is_nhwc=True)); it has no on-device NCHW->NHWC transpose kernel, so upload the image
+            # CHANNELS-LAST, host-padded to the 16B-aligned width (C -> nearest_y(c, 8)). Interleaved L1;
+            # the fold reshards onto its compute grid internally (see run()).
+            c_aligned = _nearest_y(c, 8)
+            nhwc = torch_input_tensor.permute(0, 2, 3, 1).contiguous()
+            if c_aligned != c:
+                nhwc = torch.nn.functional.pad(nhwc, (0, c_aligned - c))
+            tt_inputs_host = ttnn.from_torch(
+                nhwc, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+            )
+            return tt_inputs_host, ttnn.L1_MEMORY_CONFIG
 
         # Tie the shard count to the device's real compute-core count. The per-batch `core_grid`
         # above targets a full silicon part; Quasar has at most 32 Tensix neo clusters and the

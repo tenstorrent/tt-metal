@@ -11,7 +11,9 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/experimental/quasar/binary/binary.hpp"  // quasar DFB add for post-process bias
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"  // ttnn::typecast (addmm dtype-match, port of c3da306a7dd)
 #include "ttnn/operations/creation/creation.hpp"
 
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
@@ -108,6 +110,13 @@ static bool get_post_process_bias(
     // MatmulMultiCoreProgramConfig doesn't support bias fusion, so we need to apply it as a post-process
     bool post_process_bias = false;
     if (bias.has_value()) {
+        // Quasar: the fused matmul+bias compute kernel (bmm_large_block_zm_fused_bias_activation_metal2)
+        // trips a TILE_COUNTERS hardware fault (bias-DFB credit mismatch, esp. the padded-lane /
+        // num_blocks_w_dim==1 path). Plain (unbiased) matmul passes, so route bias through a post-process
+        // ttnn::add on the matmul output instead. Revert once the fused-bias tile-counter path is fixed.
+        if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
+            return true;
+        }
         // Fused matmul+bias does not support batched weights; apply bias via add().
         if (detail::is_input_batched(input_tensor_b_adjusted.logical_shape())) {
             return true;
@@ -265,12 +274,24 @@ static ttnn::Tensor bound_matmul(
 
     // Apply bias as post-processing if needed
     if (post_process_bias) {
-        output_tensor = ttnn::add(
-            output_tensor,
-            bias.value(),
-            /*output_dtype=*/std::nullopt,
-            output_tensor.memory_config(),
-            optional_output_tensor);
+        if (input_tensor_a_adjusted.device()->arch() == tt::ARCH::QUASAR) {
+            // Standard ttnn::add lowers to a legacy DataMovementKernel, which Quasar rejects
+            // ("DataMovementKernel is not supported on Quasar"). Route through the experimental quasar
+            // binary add (Metal-2.0 DFB / QuasarDataMovementKernel path) instead.
+            output_tensor = ttnn::operations::experimental::quasar::binary::add(
+                output_tensor,
+                bias.value(),
+                /*output_dtype=*/std::nullopt,
+                output_tensor.memory_config(),
+                optional_output_tensor);
+        } else {
+            output_tensor = ttnn::add(
+                output_tensor,
+                bias.value(),
+                /*output_dtype=*/std::nullopt,
+                output_tensor.memory_config(),
+                optional_output_tensor);
+        }
     }
 
     const auto& matmul_shape = utilities::compute_matmul_output_shape(
@@ -518,7 +539,12 @@ Tensor addmm(
     }
 
     if (beta != 0.0) {
-        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta, out_tensor.dtype()) : input_tensor;
+        // Port of tt-metal c3da306a7dd: the matmul output dtype can differ from input_tensor's when
+        // `dtype` overrides it; binary_ng's in-place add_ requires both operands share a dtype.
+        if (add_tensor.dtype() != out_tensor.dtype()) {
+            add_tensor = ttnn::typecast(add_tensor, out_tensor.dtype());
+        }
         add_(out_tensor, add_tensor);
     }
 

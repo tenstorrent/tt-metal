@@ -112,7 +112,10 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks_per_core_read", "num_read_per_barrier", "start_id", "curr_c", "curr_h", "curr_n"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ------------------------------------------------------------------------
@@ -126,7 +129,10 @@ ttnn::device_operation::ProgramArtifacts TransposeHCRMProgramFactory::create_pro
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_TENSOR, .accessor_name = "dst"}},
         .compile_time_args = {{"W_size_bytes", stick_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_sticks_per_core_read", "num_read_per_barrier", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ------------------------------------------------------------------------

@@ -14,11 +14,14 @@
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/experimental/quasar/reshard/reshard.hpp"
+#include "ttnn/operations/experimental/quasar/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/experimental/quasar/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/experimental/quasar/fold/device/fold_device_op.hpp"
@@ -339,8 +342,17 @@ static Tensor apply_halo_padding(
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/reshaped_tensor.dtype() == DataType::FLOAT32,
         /*default_l1_acc=*/false);
-    auto halo_output =
-        ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    // The standard ttnn::halo builds a legacy DataMovementKernel (ProgramDescriptor path), which is
+    // rejected on Quasar (Gen2 requires QuasarDataMovementKernel / Metal-2.0). Use the Metal-2.0 quasar
+    // halo op there, matching the standard call's flags (pad_val=0, remote_read=false,
+    // transpose_mcast=false, is_out_tiled=false). WH/BH keep the standard halo (unchanged).
+    Tensor halo_output;
+    if (tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR) {
+        halo_output = ttnn::operations::experimental::quasar::halo(
+            reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    } else {
+        halo_output = ttnn::halo(reshaped_tensor, sliding_window_config, compute_kernel_config, 0, false, false, false);
+    }
 
     // Reshape back to padded original dimensions
     ::ttnn::Shape padded_shape(
@@ -399,7 +411,8 @@ Tensor fold(
     const std::optional<const ttnn::Shape>& output_shape,
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>, std::array<uint32_t, 6>> padding,
     const std::optional<CoreRangeSet>& core_grid,
-    const std::optional<MemoryConfig>& override_memory_config) {
+    const std::optional<MemoryConfig>& override_memory_config,
+    bool input_is_nhwc) {
     // Extract padding values
     const std::array<uint32_t, 6> padding_values = operations::experimental::quasar::extract_padding_values(padding);
     const uint32_t pad_top = padding_values[0];
@@ -437,38 +450,140 @@ Tensor fold(
                    input_tensor, output_shape, stride_h, stride_w, pad_c, pad_h, pad_w)
             .at(0);
     }
-    // Modern sharded tensor path
-    if (input_tensor.memory_config().is_l1() && input_tensor.is_sharded()) {
-        operations::experimental::quasar::validate_height_sharding(input_tensor);
+    // Modern sharded tensor path (also the Quasar channels-last direct path).
+    if (input_is_nhwc || (input_tensor.memory_config().is_l1() && input_tensor.is_sharded())) {
+        // prim::qsr::fold needs NHWC (C last), height-sharded row-major, and Quasar row-major shards need
+        // a 16B-aligned page width (bf16 -> C must be a multiple of 8). Common pipeline below: obtain an
+        // INTERLEAVED NHWC `processed_tensor`, pad C up to 8 (aligned), interleaved_to_sharded, halo(H,W),
+        // fold -> C*s^2 = 32, then slice each spatial group's real (C+pad_c) channels back down to match
+        // the golden.
+        const auto l1_interleaved =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1};
+        // Step-6 reshapes target DRAM interleaved: an interleaved target makes the quasar reshape skip the
+        // final interleaved_to_sharded reshard (which would allocate the full folded tensor on one core and
+        // OOM the already-packed 2-core L1), and keeps the large [N*Ho*Wo, groups*C_aligned] intermediates
+        // in DRAM instead of L1.
+        const auto dram_interleaved =
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-        Tensor processed_tensor = input_tensor;
+        uint32_t real_c;
+        CoreRangeSet in_grid;
+        Tensor processed_tensor;
+        if (input_is_nhwc) {
+            // Quasar path: input is already channels-last [N,H,W,C] (C last), so we SKIP the NCHW->NHWC
+            // transpose. That transpose has no Quasar kernel -- ttnn transpose(2,3) on interleaved-RM
+            // routes to a legacy DataMovementKernel via prim::permute (kernel.hpp:382), see ~/fold_quasar.md.
+            // Have the caller upload channels-last and set input_is_nhwc=true instead.
+            real_c = static_cast<uint32_t>(input_tensor.logical_shape()[3]);
+            in_grid = input_tensor.is_sharded() ? input_tensor.shard_spec().value().grid
+                                                : core_grid.value();  // caller must pass grid_size when interleaved
+            processed_tensor =
+                input_tensor.is_sharded()
+                    ? ttnn::operations::experimental::quasar::sharded_to_interleaved(input_tensor, l1_interleaved)
+                    : input_tensor;
+        } else {
+            // NCHW input (WH/BH). Transpose to NHWC on-device via transpose(1,2) then transpose(2,3).
+            // On Quasar this FATALs (no WH transpose kernel); pass input_is_nhwc=true with a
+            // channels-last upload for Quasar.
+            operations::experimental::quasar::validate_height_sharding(input_tensor);
+            real_c = static_cast<uint32_t>(input_tensor.logical_shape()[1]);
+            in_grid = input_tensor.shard_spec().value().grid;
+            processed_tensor = ttnn::operations::experimental::quasar::transpose(input_tensor, 1, 2, l1_interleaved);
+            processed_tensor =
+                ttnn::operations::experimental::quasar::transpose(processed_tensor, 2, 3, l1_interleaved);
+        }
+        const uint32_t groups = stride_h * stride_w;
+        uint32_t c_keep;
+        uint32_t c_aligned;
+        if (input_is_nhwc) {
+            // The caller uploaded channels-last already padded to a 16B-aligned width (Quasar row-major
+            // shards need bf16 width % 8 == 0). We do NOT pad C on device: the quasar pad op cannot inject
+            // channel padding on Quasar -- its RM factory self-loops cb_pad on a DM kernel, which Gen2
+            // rejects (program_spec.cpp:1309). So real_c is already the aligned width; recover the kept
+            // (real + pad_c) channel count per group from output_shape.
+            TT_FATAL(
+                output_shape.has_value(),
+                "Quasar channels-last fold (input_is_nhwc) requires output_shape to recover the kept channel count");
+            c_aligned = real_c;                                                // already aligned by caller
+            c_keep = static_cast<uint32_t>(output_shape.value()[3]) / groups;  // e.g. 16 / 4 = 4
+        } else {
+            c_keep = real_c + pad_c_front + pad_c_back;  // golden per-group channels (e.g. 3+1=4)
+            c_aligned = tt::round_up(c_keep, 8u);        // 16B-aligned fold-input C width (8)
 
-        // Apply H,W padding using halo if needed
+            // 2) Pad C up to the 16B-aligned width, while interleaved (no sub-16B row-major shard width).
+            const auto s = processed_tensor.logical_shape();  // [N,H,W,real_c]
+            const tt::tt_metal::Array4D padded_shape = {
+                static_cast<uint32_t>(s[0]), static_cast<uint32_t>(s[1]), static_cast<uint32_t>(s[2]), c_aligned};
+            processed_tensor = ttnn::operations::experimental::quasar::pad(
+                processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
+        }
+
+        // 3) Interleaved -> height-sharded (over N*H*W, width = C_aligned) for the halo/fold path.
+        //    (quasar::reshard is sharded->sharded; the permute+pad output is interleaved, so use
+        //    interleaved_to_sharded to move it onto the shard grid.)
+        processed_tensor = ttnn::operations::experimental::quasar::interleaved_to_sharded(
+            processed_tensor,
+            create_sharded_memory_config(processed_tensor.logical_shape(), in_grid, ShardOrientation::ROW_MAJOR));
+
+        // 4) H,W halo padding (now correctly uses dims 1,2 = H,W).
         if (has_hw_padding) {
             processed_tensor = operations::experimental::quasar::apply_halo_padding(
                 processed_tensor, pad_top, pad_bottom, pad_left, pad_right);
         }
 
-        // Apply channel padding separately if needed
-        if (has_c_padding) {
-            const auto current_shape = processed_tensor.logical_shape();
-            const tt::tt_metal::Array4D padded_shape = {
-                static_cast<uint32_t>(current_shape[0]),
-                static_cast<uint32_t>(current_shape[1]),
-                static_cast<uint32_t>(current_shape[2]),
-                static_cast<uint32_t>(current_shape[3] + pad_c_front + pad_c_back)};
-            processed_tensor = ::ttnn::operations::experimental::quasar::pad(
-                processed_tensor, padded_shape, tt::tt_metal::Array4D({0, 0, 0, pad_c_front}), 0);
-        }
-
-        // If processed tensor is tiled, convert to row-major.
         if (processed_tensor.layout() == Layout::TILE) {
             processed_tensor = ttnn::operations::experimental::quasar::to_layout(processed_tensor, Layout::ROW_MAJOR);
         }
-        // Reshard if needed for optimal fold computation
         processed_tensor = operations::experimental::quasar::reshard_if_needed(processed_tensor, stride_h, stride_w);
 
-        return ttnn::prim::qsr::fold(processed_tensor, stride_h, stride_w);
+        // 5) fold: prim::qsr::fold flattens (N,Ho,Wo) -> [1, 1, N*Ho*Wo, groups * C_aligned]. Capture the
+        //    real NHWC output dims first (from the pre-fold [N, H_fold, W_fold, C_aligned]) so we can
+        //    un-flatten to [N, Ho, Wo, C] at the end to match the NHWC golden.
+        const auto pre_fold = processed_tensor.logical_shape();
+        const uint32_t out_n = static_cast<uint32_t>(pre_fold[0]);
+        const uint32_t out_ho = static_cast<uint32_t>(pre_fold[1]) / stride_h;
+        const uint32_t out_wo = static_cast<uint32_t>(pre_fold[2]) / stride_w;
+        auto folded = ttnn::prim::qsr::fold(processed_tensor, stride_h, stride_w);
+
+        // 6a) Fast path (C=8 / padding-absorbed-into-conv-weights): when the consumer accepts the full
+        //     aligned width (c_keep == c_aligned, i.e. output_shape's C == groups * C_aligned), there are no
+        //     per-group padding channels to strip. Skip the reshape/slice/reshape un-weave (the slow DRAM
+        //     tail: on the 2-core emulator that chain is minutes of row-major page movement) and just
+        //     un-flatten the fold's [1,1,N*Ho*Wo, groups*C_aligned] row dim back to NHWC. This mirrors how
+        //     the WH/BH transpose fold already keeps the aligned width and relies on the first conv's weights
+        //     being folded to groups*C_aligned with zero pad channels (pad_and_fold_conv_filters_for_unity_
+        //     stride at align_c == C_aligned), so the padding is harmless and the strip is unnecessary.
+        if (c_keep == c_aligned) {
+            return ttnn::operations::experimental::quasar::reshape(
+                folded, ttnn::Shape{out_n, out_ho, out_wo, groups * c_aligned}, dram_interleaved);
+        }
+
+        // 6b) Keep only the real c_keep channels of each of the `groups` spatial sub-positions (the rest of
+        //    C_aligned is padding). 4D-only: reinterpret each group as a separate W-row, slice the prefix,
+        //    fold the groups back into C. Result last dim = groups * c_keep (e.g. 4*4 = 16), matching golden.
+        const auto fs = folded.logical_shape();  // [N, Ho, Wo, groups * C_aligned]
+        folded = ttnn::operations::experimental::quasar::reshape(
+            folded,
+            ttnn::Shape{
+                static_cast<uint32_t>(fs[0]),
+                static_cast<uint32_t>(fs[1]),
+                static_cast<uint32_t>(fs[2]) * groups,
+                c_aligned},
+            dram_interleaved);
+        folded = ttnn::operations::experimental::quasar::slice(
+            folded,
+            tt::tt_metal::Array4D({0, 0, 0, 0}),
+            tt::tt_metal::Array4D(
+                {static_cast<uint32_t>(fs[0]),
+                 static_cast<uint32_t>(fs[1]),
+                 static_cast<uint32_t>(fs[2]) * groups,
+                 c_keep}),
+            tt::tt_metal::Array4D({1, 1, 1, 1}),
+            dram_interleaved);
+        // Un-flatten the fold's [1,1,N*Ho*Wo, groups*c_keep] back to NHWC [N, Ho, Wo, groups*c_keep].
+        folded = ttnn::operations::experimental::quasar::reshape(
+            folded, ttnn::Shape{out_n, out_ho, out_wo, groups * c_keep}, dram_interleaved);
+        return folded;
     }
     // Interleaved tensor path (DRAM or L1)
     Tensor processed_tensor = input_tensor;

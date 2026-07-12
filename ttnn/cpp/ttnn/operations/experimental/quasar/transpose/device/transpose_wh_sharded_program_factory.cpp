@@ -120,7 +120,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_IN0, .accessor_name = "cb_in0", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     KernelSpec writer_spec{
@@ -131,7 +134,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedProgramFactory::creat
         .dfb_bindings = {DFBBinding{
             .dfb_spec_name = CB_OUT0, .accessor_name = "cb_out0", .endpoint_type = DFBEndpointType::CONSUMER}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_units"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     ComputeHardwareConfig compute_cfg{.fp32_dest_acc_en = fp32_dest_acc_en};

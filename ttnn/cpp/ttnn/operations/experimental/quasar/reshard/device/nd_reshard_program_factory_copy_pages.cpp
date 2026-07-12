@@ -86,7 +86,10 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     KernelSpec writer{
@@ -107,7 +110,10 @@ ttnn::device_operation::ProgramArtifacts NdReshardCopyPagesFactory::create_progr
                 {"page_size", aligned_page_size},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"start_page", "end_page"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // Work split: per-core page ranges.

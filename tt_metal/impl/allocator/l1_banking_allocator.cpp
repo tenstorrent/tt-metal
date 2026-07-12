@@ -145,13 +145,20 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
             config_->disable_interleaved,
             l1_deps);
     } else {
+        // Base-address alignment for L1 buffers (bank-manager free-list). Defaults to dram_alignment; on
+        // Quasar it is bumped to a face (see AllocatorConfig::l1_base_alignment) so the packer never gets a
+        // sub-face-aligned pack target. This is the free-list (6th) arg ONLY — alignment_bytes_ (5th =
+        // l1_alignment) still does page-size rounding at the smaller value, so small-page buffers are NOT
+        // inflated.
+        const uint32_t l1_base_alignment =
+            config_->l1_base_alignment != 0 ? config_->l1_base_alignment : config_->dram_alignment;
         l1_manager_ = std::make_unique<BankManager>(
             BufferType::L1,
             bank_id_to_bank_offset,
             allocatable_l1_size,
             interleaved_address_limit,
             config_->l1_alignment,
-            config_->dram_alignment,
+            l1_base_alignment,
             config_->l1_unreserved_base,
             config_->disable_interleaved);
     }
@@ -237,6 +244,13 @@ AllocatorConfig L1BankingAllocator::generate_config(
          .l1_bank_remap = std::move(l1_bank_remap),
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
          .l1_alignment = hal.get_alignment(HalMemType::L1),
+         // Quasar: the packer (PACR0 face-stepping) faults on a pack target whose L1 BASE is not >=512B
+         // (face) aligned; a plain L1 tensor at the default 16B alignment can land face-misaligned (seen on
+         // the conv output tensor -> PACR0_TILE_INC OOB). Over-align L1 buffer BASES to a face on Quasar via
+         // the bank-manager free-list (l1_base_alignment), NOT l1_alignment (which also rounds page sizes and
+         // would inflate small-page buffers, and which dispatch's offset math reads). 0 elsewhere => bases
+         // keep the dram_alignment they always had.
+         .l1_base_alignment = (hal.get_arch() == tt::ARCH::QUASAR) ? 512u : 0u,
          .disable_interleaved = false});
     TT_FATAL(
         config.l1_small_size < config.worker_l1_size - config.l1_unreserved_base,

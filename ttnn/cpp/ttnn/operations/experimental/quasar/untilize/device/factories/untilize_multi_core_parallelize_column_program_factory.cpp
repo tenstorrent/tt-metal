@@ -110,7 +110,13 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
             .dfb_spec_name = IN, .accessor_name = "in", .endpoint_type = DFBEndpointType::PRODUCER}},
         .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_pages", "start_id"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: companion opt-out on the input-DFB producer side (mirrors tilize default reader+writer).
+        // This reader does full-page tile reads, but reverting its DFB to explicit reserve_back/push_back
+        // keeps credits authoritative so it clears NRBW once the sub-tile writer drains the pipeline.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Writer (Metal 2.0 fork of writer_..._interleaved_parallel_columns) ----
@@ -125,7 +131,15 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreParallelizeColumnProgr
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"num_sticks", "num_tiles_per_core", "tile_width_size", "start_stick_id", "offset_within_stick"}},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+        // QSR: this writer DRAINS the output DFB with per-row (stick) sub-tile NOC writes
+        // (cb_out.get_read_ptr() + partial noc_async_write per row into row-major output pages) — the
+        // sub-tile DFB-transfer pattern that deadlocks implicit-sync credit accounting (writer pinned at
+        // NWFW / NRBW). Mirror tilize default + transpose HC-sharded: opt out of DFB implicit sync so the
+        // kernel's explicit wait_front/pop_front stay authoritative (correctness-safe).
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::WRITER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     // ---- Compute (Metal 2.0 fork of untilize; full + cliff) ----

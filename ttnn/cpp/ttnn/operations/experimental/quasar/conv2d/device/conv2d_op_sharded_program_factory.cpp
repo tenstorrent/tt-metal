@@ -335,11 +335,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         input_cores == output_cores || block_sharded,
         "For height sharded convs input and output cores must be the same");
 
+    // Anchor the compute / kernel-placement rectangle on the INPUT shard grid's bounding box rather than a
+    // (0,0)-origin grid_size rectangle.  For height-sharded, input_cores == output_cores and their bbox
+    // equals (grid_size.x, grid_size.y) whenever the grid starts at (0,0) — so this is byte-identical on
+    // the default grid.  On an offset grid (conv_config.core_grid placed away from (0,0), e.g. a 2-core
+    // sub-grid at logical y=1) it keeps the kernels on the tensor's actual cores instead of requesting
+    // non-existent logical coords (e.g. (1,1) on a 2x1 grid).
     CoreRangeSet all_cores;
     if (height_sharded) {
-        all_cores = CoreRangeSet(CoreRange(
-            CoreCoord(0, 0),
-            CoreCoord(parallelization_config.grid_size.x - 1, parallelization_config.grid_size.y - 1)));
+        all_cores = CoreRangeSet(input_cores.bounding_box());
     } else {
         all_cores = input_cores.merge(output_cores);
     }
@@ -351,7 +355,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
 
-    const bool slice_inner_dim = (height_sharded && !enable_activation_reuse) || (block_sharded && !full_inner_dim);
+    // full_inner_dim => keep the whole reduction dim in one K-block (num_blocks_act_w = 1, no matmul-partials
+    // accumulate). For height-sharded this is the Quasar fit-guarded "no-spill" path (set upstream in conv2d.cpp
+    // for small-K convs whose full window fits L1); block-sharded already used it. When full_inner_dim is false we
+    // slice by kernel row and spill as before.
+    const bool slice_inner_dim =
+        (height_sharded && !enable_activation_reuse && !full_inner_dim) || (block_sharded && !full_inner_dim);
 
     uint32_t conv_act_c_blocks = 1;
     uint32_t out_conv_c_blocks = 1;
@@ -702,7 +711,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t tilized_act_tile_size = tt::tile_size(tilized_act_df);
 
     // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2.
-    const bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
+    // QSR: the Quasar hardware packer-L1-accumulate pack path (PACR0_TILE_INC in-place accumulate combined
+    // with the QSR_RESTORE_WR / g_dfb ring rewind between K-blocks) mis-addresses the matmul_partials CB and
+    // overruns it -> OOB L1 write -> ERROR_TRISC1 fault on the pack thread (opcode 0x19 = PACR0_TILE_INC).
+    // Unlike WH/BH (address derived from fifo_wr_ptr), Quasar's packer DST_TILE_FACE_ROW_IDX counter is not
+    // resynced to the rewound descriptor. Force off so K-accumulation goes through the FPU-reload path
+    // (copy_block_matmul_partials reload + re-accumulate), which IS ported/validated on Quasar. This only
+    // drops a perf optimization; correctness is preserved. Remove once the LLK packer-L1-acc + ring-rewind
+    // counter resync is fixed. (This factory is Quasar-only, so no arch guard is needed.)
+    const bool packer_l1_acc_en = false;
+    (void)determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
     const uint32_t batch = sliding_window_config.get_output_shape()[0];
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
@@ -782,6 +800,14 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // subsumed by the split-reader deferral above (enable_split_reader is forced false), so it can never
     // arise here.
 
+    // NOTE: the Quasar packer's pack-target base-alignment requirement (PACR0 face-stepping needs a >=512B/
+    // face-aligned base, else off-grid PACR0_TILE_INC OOB) is now satisfied by over-aligning L1 allocations to
+    // a face on Quasar (l1_banking_allocator.cpp generate_config). So the borrowed OUTPUT (and thus the
+    // aliased MATMUL_PARTIALS) base is face-aligned and both the matmul and bias packs land on-grid — no need
+    // to un-borrow partials (an earlier diagnostic did that to prove the root; it cost per_core_out_ntiles
+    // extra L1 and overflowed the static DFB region, so it is reverted). Partials stays globally allocated
+    // (borrowed from OUTPUT), zero extra L1.
+
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
     const bool partials_cb_uses_output =
         !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
@@ -805,11 +831,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
     const uint32_t in_num_cores_y = input_cores.bounding_box().end_coord.y + 1;
 
-    const CoreCoord top_left_core = {(std::size_t)0, (std::size_t)0};
-    const CoreCoord top_left_core_plus_one = {(std::size_t)1, (std::size_t)1};
+    // Anchor mcast geometry on the actual grid origin (input shard bbox top-left) so an offset core_grid
+    // (e.g. a sub-grid at logical y=1) works; grid_start == (0,0) on the default grid, so every derived
+    // coord below is unchanged there.
+    const CoreCoord grid_start = input_cores.bounding_box().start_coord;
+    const CoreCoord top_left_core = grid_start;
+    const CoreCoord top_left_core_plus_one = {grid_start.x + 1, grid_start.y + 1};
     const CoreCoord bottom_right_core = {(std::size_t)in_num_cores_x - 1, (std::size_t)in_num_cores_y - 1};
     const CoreCoord top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
-    const CoreCoord top_left_core_plus_one_physical = device->worker_core_from_logical_core(top_left_core_plus_one);
+    // top_left_core_plus_one (logical origin + {1,1}) is consumed ONLY by the block-sharded 2D
+    // weights-mcast sender path.  Resolving its physical coord unconditionally throws on grids that don't
+    // contain that logical coord (a height-sharded 1D conv on a 2x1 grid, or any 2-core sub-grid), so only
+    // resolve it when block-sharded; height-sharded leaves it unused.
+    const CoreCoord top_left_core_plus_one_physical =
+        block_sharded ? device->worker_core_from_logical_core(top_left_core_plus_one) : CoreCoord{0, 0};
     const CoreCoord bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
     CoreRangeSet mcast_sender_cores =
@@ -964,6 +999,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         // Non-block-sharded paths consume ACT_TILIZED from compute:
         // - depthwise path emits/consumes ACT_TILIZED in compute
         // - height-sharded non-depthwise path tilizes ACT internally in compute
+        // (The 2x ACT_TILIZED double-buffering diagnostic was reverted: a 392-tile K-block is ~800 KB
+        //  = 50,176 units of 16 B, and 2x = 100,352 units overflows the uint16_t DFB ring-extent field
+        //  (max 65,536 = 1 MB). Capacity double-buffering of a full K-block is structurally impossible
+        //  on Quasar — see dfb_conv2d_analysis.md.)
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
     }
 
@@ -1097,11 +1136,21 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .dfb_bindings = std::move(reader_dfb_bindings),
         .semaphore_bindings = std::move(reader_sem_bindings),
         .tensor_bindings = std::move(reader_tensor_bindings),
+        // QSR: this conv activation reader (all 3 variants: height-sharded / 2D-mcast / depthwise) fills the
+        // ACT (and ACT_ROW_MAJOR) DFB via per-window "stick" NOC reads — read_sticks() in conv_reader_common.hpp
+        // issues many sub-tile (conv_act_c_read_bytes each) async reads per act block, then reserve_back/push_back.
+        // That sub-tile stick fill is exactly the pattern that stalls the DFB implicit-sync credit accounting
+        // (reader pinned at NRBW/cb_reserve_back, compute idle, writer at NWFW). Mirror the tilize/transpose
+        // HC-sharded workaround: opt out of implicit sync so explicit reserve/push credits stay authoritative.
+        // (The writer/weights kernels do full-tile page reads into WEIGHTS/BIAS only — no opt-out needed; and
+        // the reader is the only DM kernel on the ACT/ACT_RM producer + ACT_TILIZED consumer sides, so the
+        // cross-kernel agreement rule is satisfied.)
         .hw_config =
             m2::DataMovementHardwareConfig{
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc},
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
 
@@ -1341,6 +1390,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                // The sender does explicit reserve_back/push_back on WEIGHTS/BIAS/ACT_SECOND to publish
+                // blocks to compute. On Quasar the implicit-sync ISR would ALSO bump those tile counters
+                // -> double-count -> 16-bit counter overflow -> TILE_COUNTERS fault on the compute unpack
+                // that consumes WEIGHTS. Opt out so explicit credits stay authoritative (mirrors the reader
+                // + matmul mcast fix).
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
     // The sender always builds the weights-mcast Semaphore objects (even under SKIP_MCAST), so always bind.
@@ -1395,6 +1450,10 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .gen1_config =
                     m2::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_mcast_noc},
+                // Same as the sender: the receiver does explicit reserve_back/push_back on WEIGHTS/BIAS/
+                // ACT_SECOND; opt out of implicit sync so those tile counters aren't double-bumped
+                // (else TILE_COUNTERS overflow on the compute unpack consuming WEIGHTS).
+                .gen2_config = m2::DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
             },
     };
     if (create_writer_mcast_receiver) {

@@ -129,6 +129,22 @@ TransposeDeviceOperation::program_factory_t TransposeDeviceOperation::select_pro
     bool use_sharded_wh =
         native && ((input_width_and_height_fully_in_shard && output_width_and_height_fully_in_shard) ||
                    (N == 1 && C == 1 && input_height_sharded && output_width_sharded));
+
+    // QSR: route ALL WH row-major sharded transposes to the interleaved WH factory (transpose_wh_rm.cpp,
+    // which reads the sharded input transparently via TensorAccessor). The sharded WH RM kernel
+    // (transpose_wh_rm_sharded.cpp) is broken multiple ways on Quasar:
+    //   (1) narrow output (H % TILE_HEIGHT != 0) hits pack_untilize_dest_init's
+    //       LLK_ASSERT(narrow_row == false, "narrow_row not supported on Quasar") -> all TRISCs hang; and
+    //   (2) even non-narrow, the compute's self-loop path stalls in a later iteration's tilize (n>=1)
+    //       (#47797: n=0 completes incl. the cb_out0 self-loop, n=1's tilize never finishes).
+    // The interleaved compute (producer-only of cb_out0, no self-loop) runs tilize across all iterations
+    // and completes. (Tiled sharded WH does not untilize, so this is RM only.) NOTE: the interleaved
+    // writer needs disable_implicit_sync_for={CB_OUT0} to avoid a craq-sim sub-tile NOC credit spin
+    // (handled in transpose_wh_program_factory.cpp).
+    if (use_sharded_wh && is_row_major && input_tensor.device()->arch() == tt::ARCH::QUASAR) {
+        use_sharded_wh = false;
+    }
+
     bool use_sharded_hc = native && input_height_sharded && output_height_sharded && is_row_major;
 
     auto parallelization_strategy = get_parallelization_strategy(operation_attributes, tensor_args);

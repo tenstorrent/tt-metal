@@ -118,6 +118,21 @@ inline void llk_unpack_tilizeA_B_init(
     bd_val.f.z_dim = 1;
     ckernel::trisc::_configure_buf_desc_table_(operandA_id, bd_val);
 
+    // QSR: operand B (the reduce scalar) is read one face at a time by UNPACR1_FACE, but
+    // llk_unpack_hw_configure programmed its descriptor as z=4/y=1 (scalar face geom {face_r_dim=1,
+    // num_faces=4} -> nf_r==nf_c==2 -> z_dim=total_num_faces=4). That partial-face (y<16) tile in a 2x2-face
+    // (z=4) layout is unaddressable by UNPACR1_FACE -> UNPACKER_1 hardware fault (subcode 0x2). Mirror the
+    // operand-A reprogram above and describe the scalar as a single valid face (x=16, y=1, z=1). The reduce
+    // math uses tensor_shape_A (not B), so this only corrects B's own face addressing; the scalar is a single
+    // broadcast value, so one face is exactly what UNPACR1_FACE consumes per reduce iteration.
+    buffer_descriptor_u bd_val_b = {0};
+    bd_val_b.f.l1_addr_16B = get_local_dfb_interface(operandB_id).tc_slots[0].base_addr;
+    bd_val_b.f.format = static_cast<std::uint8_t>(unpack_src_format[operandB_id]);
+    bd_val_b.f.x_dim = ckernel::trisc::FACE_C_DIM;
+    bd_val_b.f.y_dim = 1;
+    bd_val_b.f.z_dim = 1;
+    ckernel::trisc::_configure_buf_desc_table_(operandB_id, bd_val_b);
+
     _llk_unpack_reduce_col_tilizeA_strided_init_(operandA_id, operandB_id, ct_dim, tensor_shape_A);
 }
 
@@ -165,10 +180,15 @@ inline void llk_unpack_tilizeA_B(
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
     const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx;
-    const std::uint32_t tile_row_stride =
-        tensor_shape_A.num_faces_r_dim *
-        tensor_shape_A.face_r_dim;  // used to advance to the next row of tiles in the L1 buffer
-    const std::uint32_t l1_index_a = rd_entry_idx_a * tile_row_stride + tile_index_a;
+    // Compute how many l1_index units fit in one DFB entry.
+    // _llk_unpack_reduce_col_tilizeA_strided_ internally scales
+    // l1_index by num_faces_c_dim, so one l1_index unit = num_faces_c_dim face-rows in L1.
+    const std::uint32_t entry_size_16B = local_dfb_interface_a.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                                      // Buffer Descriptor granularity in 16B
+        SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ckernel::trisc::FACE_C_DIM) >> 4;
+    const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
+        entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
+    const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 
     const std::uint32_t l1_index_b =
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;

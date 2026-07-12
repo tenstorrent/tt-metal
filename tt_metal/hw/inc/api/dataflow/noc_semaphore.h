@@ -47,6 +47,9 @@ public:
 #endif
     }
 
+    // [DEBUG #47797] Read the current local semaphore value (for handshake instrumentation). Remove after.
+    uint32_t get_value() const { return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_l1_addr_); }
+
     /**
      * @brief Increment the semaphore by the specified value.
      * @note Currently atomicity is not guaranteed, multiple cores incrementing simultaneously may lead to lost updates.

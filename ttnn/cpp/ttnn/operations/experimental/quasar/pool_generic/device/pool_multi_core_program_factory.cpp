@@ -306,6 +306,9 @@ const DFBSpecName DFB_IN_SCALAR_0{"in_scalar_cb_0"};
 const DFBSpecName DFB_IN_SCALAR_1{"in_scalar_cb_1"};
 const DFBSpecName DFB_CLEAR_VALUE{"clear_value_cb"};
 const DFBSpecName DFB_IN_SHARD{"in_shard_cb"};  // raw_in_cb (borrowed input)
+// [DEBUG scratch->out workaround] borrowed OUTPUT view for the DM readers, so they can NoC-copy the
+// correct full-tile scratch row 0 into the output tensor (bypassing the broken narrow pack). (remove after)
+const DFBSpecName DFB_OUT_SHARD{"out_shard_cb"};
 const DFBSpecName DFB_READER_INDICES{"reader_indices_cb"};
 const DFBSpecName DFB_IN_0{"in_cb_0"};
 const DFBSpecName DFB_IN_1{"in_cb_1"};
@@ -323,6 +326,10 @@ const DFBSpecName DFB_FAST_TILIZE{"fast_tilize_cb"};
 const DFBSpecName DFB_OUT{"out_cb"};
 const DFBSpecName DFB_OUT_IDX{"out_idx_cb"};
 const DFBSpecName DFB_CONFIG{"config_cb"};
+// [DEBUG] Per-reader scratch pack-untilize targets, read out (DPRINT'd) from the DM readers — only DM-core
+// L1 reads are reliable on the sim. Two CBs (mirroring in_cb_0/in_cb_1) keep the split reader in lockstep.
+const DFBSpecName DFB_SCRATCH_0{"scratch_cb_0"};  // (remove after)
+const DFBSpecName DFB_SCRATCH_1{"scratch_cb_1"};  // (remove after)
 
 const KernelSpecName READER0_KERNEL{"reader0"};
 const KernelSpecName READER1_KERNEL{"reader1"};
@@ -548,6 +555,20 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         in_w,
         output_layout);
 
+    // QSR: the reduce-col strided tilize consumes a full 32x32 (num_faces=4) SrcA tile (see the
+    // num_faces_in_input_tile_for_cb=4 override below; the LLK asserts total_row_dim()==total_col_dim()==32).
+    // The shared WH/BH small-window optimization (pool_utils.cpp) sizes num_tilized_rows to only
+    // kernel_size_hw (e.g. 9 for a 3x3 window) so the in_cb page holds < 32 rows. On Quasar the reduce
+    // then reads the unwritten tail rows [window_size, 32), which hold STALE L1 (leftover halo output),
+    // inflating a MAX to the global input max. This is invisible to a constant-per-channel input probe
+    // (every stick equal per channel, so stale == correct) but corrupts real/per-stick data. Size the
+    // in_cb to a full TILE_HEIGHT so the tail rows exist in-page and the reader fills them with the pool
+    // identity (-inf max / 0 avg via the tail-fill + clear_value_cb); reducing them is then a no-op.
+    // (MPWI/return_indices uses a different in_cb geometry -- left unchanged.)
+    if (!return_indices) {
+        params.num_tilized_rows = tt::constants::TILE_HEIGHT;
+    }
+
     const uint32_t eff_kernel_h = ((kernel_h - 1) * dilation_h) + 1;
     const uint32_t eff_kernel_w = ((kernel_w - 1) * dilation_w) + 1;
     const uint32_t in_h_padded = in_h + pad_h + setup.ceil_pad_h;
@@ -646,11 +667,33 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // -----------------------------------------------------------------------
     const auto scalar_face = FaceGeometry{.face_r_dim = 1, .num_faces = 4};
     const uint32_t window_size_hw = kernel_h * kernel_w;
-    const uint32_t raw_face_r = std::min(window_size_hw, 16u);
-    const uint32_t num_faces_in_input_tile_for_cb =
-        (params.max_rows_for_reduction < tt::constants::TILE_HEIGHT || window_size_hw <= tt::constants::FACE_HEIGHT)
-            ? 2u
-            : 4u;
+    // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
+    // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
+    // (validate_tensor_shape_tile_dependent_ops_ in common/tensor_shape.h, validate_buffer_desc in
+    // tt_llk_quasar/common/inc/ckernel_trisc_common.h). WH/BH accept the raw window size directly
+    // (e.g. 9 for a 3x3 window) since they don't run those validators; Quasar asserts. Round the
+    // packed face_r_dim up to the next power of 2 so the tile shape validates (9 -> 16, giving the
+    // valid 16x16 tile: x=16,y=16,z=1). The input CB page is already padded to a full tile
+    // (round_up(in_cb_sz, TILE_HW) in pool_utils.cpp) so the larger face_r_dim reads no OOB.
+    // NOTE: this is a bring-up workaround. For correct results the padded rows [window_size, pow2)
+    // must hold the pool identity (-inf max / 0 avg) via clear_value_cb; otherwise stale L1 leaks
+    // into the reduce. Remove once Quasar reduce/buffer-descriptor supports non-pow2 face_r_dim.
+    const uint32_t raw_face_r_unpadded = std::min(window_size_hw, 16u);
+    uint32_t raw_face_r_pow2 = 1;
+    while (raw_face_r_pow2 < raw_face_r_unpadded) {
+        raw_face_r_pow2 <<= 1;
+    }
+    const uint32_t raw_face_r = raw_face_r_pow2;
+    // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
+    // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
+    // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
+    // 16x32 (num_faces=2) tile, which (a) violates that requirement -> wrong tilized data, and (b) makes
+    // the always-4-face strided unpack over-produce SrcA vs the 2-GMPOOL reduce -> SrcA double-buffer
+    // overflow -> deadlock (unpacker spins UPTW, math stalls on SrcB). Always describe the (already
+    // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
+    // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
+    // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
+    const uint32_t num_faces_in_input_tile_for_cb = 4u;
     const std::optional<FaceGeometry> input_face_geometry =
         return_indices
             ? std::nullopt
@@ -688,11 +731,14 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         borrowed_dfb(DFB_IN_SHARD, in_nbytes_c, input.shard_spec().value().shape[0], params.data_format, INPUT_TENSOR));
     // reader indices CB (borrowed L1 config tensor, or local scratch for DRAM path)
     const uint32_t in_reader_indices_cb_pagesize = tt::round_up(top_left_indices[0].size(), 4);
+    // RawUInt16 (not UInt16): the reader-indices DFB is a raw packed-uint16 index/config buffer, and Quasar
+    // does not support the typed UInt16 DFB format (is_supported_quasar) — RawUInt16 is the raw 16-bit format
+    // supported on Quasar (and WH/BH), semantically correct here.
     if (config_tensor_in_dram) {
-        dfbs.push_back(local_dfb(DFB_READER_INDICES, reader_indices_page_size, 1, tt::DataFormat::UInt16));
+        dfbs.push_back(local_dfb(DFB_READER_INDICES, reader_indices_page_size, 1, tt::DataFormat::RawUInt16));
     } else {
         dfbs.push_back(borrowed_dfb(
-            DFB_READER_INDICES, in_reader_indices_cb_pagesize, 1, tt::DataFormat::UInt16, READER_INDICES_TENSOR));
+            DFB_READER_INDICES, in_reader_indices_cb_pagesize, 1, tt::DataFormat::RawUInt16, READER_INDICES_TENSOR));
     }
     // input CB(s). The second input stream (in_cb_1) only exists for the pool2d split-reader
     // (mpwi has a single input stream — reader1 is the writer face, not a second producer).
@@ -755,6 +801,38 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         OUTPUT_TENSOR,
         is_output_tiled ? std::nullopt : std::optional{pack_untilize_face},
         is_output_tiled ? std::nullopt : pack_untilize_tile));
+    // [DEBUG scratch] local (non-borrowed) pack-untilize target, same spec as out_cb's RM view, so the
+    // compute kernel can pack the reduced DEST into it and DPRINT the result in isolation (remove after).
+    if (!return_indices) {
+        // [DEBUG scratch 32x32] FULL-TILE pack target: face geometry {face_r_dim=16, num_faces=4} so the
+        // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
+        // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
+        const uint32_t scratch_npages =
+            (output_shard_shape[1] / tt::constants::FACE_WIDTH) * tt::constants::TILE_HEIGHT;
+        const auto scratch_full_face = FaceGeometry{.face_r_dim = tt::constants::FACE_HEIGHT, .num_faces = 4};
+        dfbs.push_back(local_dfb(
+            DFB_SCRATCH_0,
+            cb_sizes.out_cb_pagesize,
+            scratch_npages,
+            params.output_data_format,
+            std::optional{scratch_full_face},
+            std::nullopt));
+        // Second scratch CB for reader1 (only exists under split reader, like in_cb_1).
+        if (cb_sizes.has_split_reader) {
+            dfbs.push_back(local_dfb(
+                DFB_SCRATCH_1,
+                cb_sizes.out_cb_pagesize,
+                scratch_npages,
+                params.output_data_format,
+                std::optional{scratch_full_face},
+                std::nullopt));
+        }
+        // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
+        // via NoC. page = output row bytes; npages = output sticks per core. Mirrors DFB_IN_SHARD.
+        const uint32_t out_row_bytes = output_shard_shape[1] * params.nbytes;
+        dfbs.push_back(borrowed_dfb(
+            DFB_OUT_SHARD, out_row_bytes, output_shard_shape[0], params.output_data_format, OUTPUT_TENSOR));
+    }
     if (cb_sizes.has_out_idx) {
         TT_FATAL(output_tensors.size() == 2, "return_indices requires two outputs, got {}", output_tensors.size());
         dfbs.push_back(borrowed_dfb(
@@ -800,6 +878,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"pool_type_is_avg", static_cast<uint32_t>(params.is_avg_pool)},
         {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
         {"in_nbytes_c", in_nbytes_c},
+        // [DEBUG scratch->out] output row stride (bytes) for the DM NoC copy of scratch row 0.
+        {"out_row_bytes", output_shard_shape[1] * params.nbytes},
+        // [DEBUG scratch->out] full page count of one scratch CB; the reader waits/pops the WHOLE CB per
+        // stick (single-tile scratch, serialized) so it never reads a partially/overlapping-written tile.
+        {"scratch_npages", (output_shard_shape[1] / tt::constants::FACE_WIDTH) * tt::constants::TILE_HEIGHT},
         {"shard_width_bytes", shard_width_bytes},
         {"multi_buffering_factor", params.multi_buffering_factor},
         {"stride_w", stride_w},
@@ -971,6 +1054,31 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
                     .accessor_name = "clear_value_cb",
                     .endpoint_type = DFBEndpointType::CONSUMER});
             }
+            // [DEBUG scratch->DM] each reader consumes its own scratch CB (reader0->scratch_cb_0,
+            // reader1->scratch_cb_1) so the DM core can read the compute-packed L1 (only DM-core L1 reads
+            // are reliable on the sim), then NoC-copy scratch row 0 into the output. (remove after)
+            b.push_back(DFBBinding{
+                .dfb_spec_name = is_reader1 ? DFB_SCRATCH_1 : DFB_SCRATCH_0,
+                .accessor_name = "scratch_cb",
+                .endpoint_type = DFBEndpointType::CONSUMER});
+            // [DEBUG scratch->out] borrowed OUTPUT view for the NoC write. reader0=P / reader1=C when
+            // split (roles just satisfy the 1P1C binding; both use the base pointer), self-loop on
+            // reader0 otherwise. Mirrors in_shard_cb.
+            if (params.split_reader) {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT_SHARD,
+                    .accessor_name = "out_shard_cb",
+                    .endpoint_type = is_reader1 ? DFBEndpointType::CONSUMER : DFBEndpointType::PRODUCER});
+            } else {
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT_SHARD,
+                    .accessor_name = "out_shard_cb",
+                    .endpoint_type = DFBEndpointType::PRODUCER});
+                b.push_back(DFBBinding{
+                    .dfb_spec_name = DFB_OUT_SHARD,
+                    .accessor_name = "out_shard_cb",
+                    .endpoint_type = DFBEndpointType::CONSUMER});
+            }
         }
         return b;
     };
@@ -1010,6 +1118,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         reader0_defines.insert({"HAS_CONFIG", "1"});
         reader1_defines.insert({"HAS_CONFIG", "1"});
     }
+    // Mirror compute_defines' OUTPUT_TILED gate (below) onto the readers: for TILED output, compute
+    // packs straight into the real out_cb (borrowed from the output tensor) and never produces
+    // scratch_cb_0/1, so the reader's scratch-consume/NoC-copy-to-out_shard workaround (which only
+    // exists to route around the ROW_MAJOR path's broken narrow pack) must not run -- otherwise the
+    // reader deadlocks forever on scratch_cb.wait_front waiting for pushes that will never come.
+    if (is_output_tiled) {
+        reader0_defines.insert({"OUTPUT_TILED", "1"});
+        reader1_defines.insert({"OUTPUT_TILED", "1"});
+    }
 
     KernelSpec reader0{
         .unique_id = READER0_KERNEL,
@@ -1019,7 +1136,15 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         .tensor_bindings = make_reader_tensor_bindings(false),
         .compile_time_args = reader_cta,
         .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-        .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::READER},
+        // QSR: this reader fills the input DFB(s) with many sub-tile per-row "stick" NOC reads
+        // (noc.async_read of read_bytes*w_multiple per stick, MAX_BYTES_PER_REDUCTION per c-block) —
+        // exactly the sub-tile pattern that stalls the DFB implicit-sync credit accounting (reader
+        // pinned at NRBW/cb_reserve_back, compute idle). Mirror the tilize/transpose HC-sharded
+        // workaround and opt out of implicit sync so explicit reserve/push credits stay authoritative.
+        .hw_config =
+            DataMovementHardwareConfig{
+                .role = DataMovementRoleHint::READER,
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
     };
 
     std::optional<KernelSpec> reader1;
@@ -1032,7 +1157,13 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .tensor_bindings = make_reader_tensor_bindings(true),
             .compile_time_args = reader1_cta,
             .runtime_arg_schema = {.runtime_arg_names = reader_rta_names},
-            .hw_config = DataMovementHardwareConfig{.role = DataMovementRoleHint::WRITER},
+            // QSR: companion opt-out on the split/second reader (writer-face). Same sub-tile stick
+            // DFB transfers as reader0; keep explicit reserve/push credits authoritative to avoid the
+            // implicit-sync NWFW/NRBW stall (mirrors tilize/transpose HC-sharded).
+            .hw_config =
+                DataMovementHardwareConfig{
+                    .role = DataMovementRoleHint::WRITER,
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true}},
         };
     }
 
@@ -1051,6 +1182,9 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"is_output_tiled", static_cast<uint32_t>(is_output_tiled)},
         {"is_output_block_format", static_cast<uint32_t>(is_output_block_format)},
         {"force_max_tiles_per_reduction_4", 0u},
+        // [DEBUG scratch->out] full page count of one scratch CB (one full-tile write). Compute
+        // reserves/pushes the WHOLE CB per stick so the single-tile scratch serializes cleanly.
+        {"scratch_npages", (output_shard_shape[1] / tt::constants::FACE_WIDTH) * tt::constants::TILE_HEIGHT},
     };
     if (return_indices) {
         compute_cta["stride_h"] = stride_h;
@@ -1093,6 +1227,18 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::PRODUCER});
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = DFB_OUT, .accessor_name = "out_cb", .endpoint_type = DFBEndpointType::CONSUMER});
+        // [DEBUG scratch->DM] compute is PRODUCER of the per-reader scratch CB(s); the matching DM reader
+        // is the CONSUMER (see make_reader_bindings), so it can wait_front + DPRINT the packed L1.
+        compute_bindings.push_back(DFBBinding{
+            .dfb_spec_name = DFB_SCRATCH_0,
+            .accessor_name = "scratch_cb_0",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        if (cb_sizes.has_split_reader) {
+            compute_bindings.push_back(DFBBinding{
+                .dfb_spec_name = DFB_SCRATCH_1,
+                .accessor_name = "scratch_cb_1",
+                .endpoint_type = DFBEndpointType::PRODUCER});
+        }
         if (cb_sizes.has_pre_tilize) {
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
@@ -1180,9 +1326,16 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         /*default_l1_acc=*/false,
         /*default_dst_full_sync_en=*/(params.is_large_kernel && return_indices) || indexes_32_bit);
 
+    // QSR: fp32_dest_acc_en=true is a KNOWN-BROKEN config for the tilizeA_B reduce on Quasar (ISSUE #48504;
+    // the LLK test QuasarComputeUnpackTilizeA_B in test_untilize_tilize.cpp:1210 disables the fp32 case with a
+    // TODO). The pool reduce ALWAYS goes through tilizeA_B, so any path that would enable fp32 dest-acc here
+    // (notably avg-pool large-kernel: default_fp32_acc = is_avg_pool && is_large_kernel) would hit the broken
+    // primitive. Force it OFF until #48504 is fixed — bf16 dest accumulate is the safe fallback vs a wrong
+    // result. (MAX pool already defaults false; this pins the avg-pool/large-kernel path too.)
+    const bool fp32_dest_acc_en = false;  // was: get_fp32_dest_acc_en(device_compute_kernel_config)
     ComputeHardwareConfig compute_hw{
         .math_fidelity = get_math_fidelity(device_compute_kernel_config),
-        .fp32_dest_acc_en = get_fp32_dest_acc_en(device_compute_kernel_config),
+        .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = get_dst_full_sync_en(device_compute_kernel_config),
         .math_approx_mode = false,
     };

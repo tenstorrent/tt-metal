@@ -9,6 +9,7 @@
 #include <utility>
 
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>  // tt::tile_size (DFB ring-extent cap for no-spill conv)
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -99,6 +100,39 @@ static void tilize_with_optional_deallocation_qsr(ttnn::Tensor& input_tensor_on_
     input_tensor_on_device = std::move(input_tensor_tilized);
 }
 
+// Relocate a (0,0)-anchored CoreRangeSet onto the same-shaped ranges whose top-left is `offset`. The
+// shared conv host helpers (get_conv_padded_input_shape_and_mem_config, determine_*_parallel_config)
+// always build shard grids from (0,0); this shifts them onto conv_config.core_grid's origin so the
+// conv's activation/output shards — and therefore the program factory's kernel placement, which follows
+// the input shard grid — land on the requested cores instead of always starting at (0,0). No-op when
+// offset == (0,0), so the default-grid path is unchanged.
+static CoreRangeSet offset_core_range_set_qsr(const CoreRangeSet& crs, const CoreCoord& offset) {
+    if (offset.x == 0 && offset.y == 0) {
+        return crs;
+    }
+    std::vector<CoreRange> ranges;
+    ranges.reserve(crs.ranges().size());
+    for (const CoreRange& r : crs.ranges()) {
+        ranges.emplace_back(
+            CoreCoord(r.start_coord.x + offset.x, r.start_coord.y + offset.y),
+            CoreCoord(r.end_coord.x + offset.x, r.end_coord.y + offset.y));
+    }
+    return CoreRangeSet(ranges);
+}
+
+// Rebuild a sharded MemoryConfig with its shard grid relocated to `offset` (shape/shard-shape preserved).
+static ttnn::MemoryConfig offset_sharded_mem_config_qsr(const ttnn::MemoryConfig& mem_config, const CoreCoord& offset) {
+    if ((offset.x == 0 && offset.y == 0) || !mem_config.shard_spec().has_value()) {
+        return mem_config;
+    }
+    const auto& shard_spec = mem_config.shard_spec().value();
+    return tt::tt_metal::MemoryConfig(
+        mem_config.memory_layout(),
+        mem_config.buffer_type(),
+        tt::tt_metal::ShardSpec(
+            offset_core_range_set_qsr(shard_spec.grid, offset), shard_spec.shape, shard_spec.orientation));
+}
+
 // Quasar variant of conv2d_utils::shard_or_reshard_tensor_if_required. Mirrors the shared function but
 // routes the per-conv input pad / reshard / reallocation through the QUASAR pad / to_memory_config / move
 // (hence the quasar reshard + interleaved<->sharded kernels). The BLOCK_SHARDED mm-conv tilize workaround
@@ -122,6 +156,17 @@ static std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard
     auto [input_padded_shape, input_tensor_sharded_memory_config, needs_shard_or_reshard] =
         get_conv_padded_input_shape_and_mem_config(
             device, input_tensor_, conv_config, batch_size, height, width, in_channels, out_channels, is_mm_conv);
+
+    // Honor the OFFSET of conv_config.core_grid (the shared helper honors only its size, always anchoring
+    // at (0,0)). Shift the activation shard grid onto that origin so the conv runs on the requested cores
+    // — e.g. a 2-core sub-grid at logical y=1 on a small (emulated) device. For HEIGHT_SHARDED the output
+    // parallel config == the input parallel config, so this offset propagates to the output shard (and
+    // thus the program factory's placement) automatically. No-op when core_grid is unset or starts at (0,0).
+    const CoreCoord core_grid_offset =
+        conv_config.core_grid.has_value() ? conv_config.core_grid.value().bounding_box().start_coord : CoreCoord{0, 0};
+    input_tensor_sharded_memory_config =
+        offset_sharded_mem_config_qsr(input_tensor_sharded_memory_config, core_grid_offset);
+
     ParallelConfig parallel_config = {
         .grid = input_tensor_sharded_memory_config.shard_spec().value().grid,
         .shard_scheme = input_tensor_sharded_memory_config.memory_layout(),
@@ -404,6 +449,86 @@ Result conv2d_L1(
         conv_is_1d_depthwise,
         coalesce_1d_depthwise_kw_reads);
 
+    // ---- FIT-GUARDED Quasar "no-spill" (single K-block) conv path ----
+    // The Quasar matmul-partials K-accumulate (RESTORE_PARTIALS_WR / QSR_RESTORE_WR g_dfb ring rewind in
+    // conv_bmm_tilize_metal2.cpp) is a known-broken LLK path: the packer PACR0_TILE_INC in-place accumulate
+    // mis-addresses the matmul_partials CB after the ring rewind and writes OOB in L1 (ERROR_TRISC1, opcode
+    // 0x19). The reduction dim K is spilled into filter_h blocks (num_blocks_act_w = filter_h) only because a
+    // height-sharded conv slices its inner dim by kernel row. When the WHOLE reduction dim
+    // (filter_h*filter_w*in_channels) fits in one small K-block we can instead run a single matmul block, so
+    // matmul_partials is never accumulated (compute kernel spill = in0_num_blocks_w > 1 stays false).
+    //
+    // Lever = full_inner_dim (same "don't slice the reduction dim" semantics block-sharded already uses):
+    //   (i)   override block_config.act_block_w_ntiles to the FULL-K tile count (was one filter row),
+    //   (ii)  conv_config.full_inner_dim = true  -> factory slice_inner_dim = false -> num_blocks_act_w = 1
+    //         and the reader reads the full window per block,
+    //   (iii) force the weight matrix into its full-inner-dim (single-block) layout below.
+    // FIT GUARD: height-sharded, real conv (not 1x1-matmul, not depthwise), filter_h > 1 (so the sliced path
+    // would actually spill), and the full single K-block is small enough to fit L1 / the uint16 DFB ring.
+    // Deep/large-K convs (e.g. resnet layer2+ >32 K-tiles) fall through and keep the (validated) spilling path.
+    // NOTE: this is Quasar-only (experimental/quasar/conv2d tree); the shared conv2d_utils / prepare_conv2d_weights
+    // decisions are left untouched, so non-Quasar convs (which set full_inner_dim=true on height-sharded layers,
+    // e.g. resnet50) are unaffected.
+    constexpr uint32_t kQuasarConvNoSpillMaxKTiles = 32;  // stem full-K ~= 16 tiles; conservative L1/DFB headroom
+    const bool height_sharded_conv = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED;
+    const uint32_t full_inner_dim_k_ntiles =
+        tt::round_up(in_channels_padded * kernel_size[0] * kernel_size[1], tt::constants::TILE_WIDTH) /
+        tt::constants::TILE_HEIGHT;
+    const bool force_conv_no_spill = height_sharded_conv && !mm_conv && !conv_is_1d_depthwise && (kernel_size[0] > 1) &&
+                                     (full_inner_dim_k_ntiles <= kQuasarConvNoSpillMaxKTiles);
+    if (force_conv_no_spill) {
+        opt_conv_op_block_config.act_block_w_ntiles = full_inner_dim_k_ntiles;
+        conv_config.full_inner_dim = true;
+
+        // The no-spill path grows act_block_w from one filter row to the full K (filter_h*filter_w*Cin).
+        // The ACT and ACT_TILIZED CBs are sized act_block_h * act_block_w tiles, so a large per-core output
+        // height (act_block_h, e.g. the stem's 112 tiles) would push a CB's Quasar DFB TRISC ring extent
+        // (capacity * entry_size, in 16-byte units) past the uint16_t limit (65536 units = 1 MB). Cap
+        // act_block_h (more, smaller M-blocks: num_blocks_act_h grows) so the largest activation CB ring
+        // stays under the limit. This splits only the OUTPUT-HEIGHT (M) axis; the reduction dim
+        // (K / act_block_w / num_blocks_act_w) is untouched, so num_blocks_act_w stays 1 and NO
+        // matmul-partials accumulate is reintroduced.
+        const uint32_t act_in_units_per_tile =
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(input_tensor_post_tm.dtype())) / 16u;
+        const uint32_t act_tilized_units_per_tile =
+            tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype)) / 16u;
+        const uint32_t act_db = conv_config.enable_act_double_buffer ? 2u : 1u;
+        // Worst-case ring units per act_block_h tile-row = act_block_w(full-K) * max(ACT CB, ACT_TILIZED CB).
+        // ACT uses the input data format and may be double-buffered; ACT_TILIZED uses the output data format.
+        const uint32_t act_db_units = act_db * act_in_units_per_tile;
+        const uint32_t worst_units_per_h =
+            full_inner_dim_k_ntiles *
+            (act_db_units > act_tilized_units_per_tile ? act_db_units : act_tilized_units_per_tile);
+        constexpr uint32_t kDfbRingUnitCap = 65535u;  // strictly below the 65536 uint16_t DFB ring limit
+        const uint32_t per_core_h_ntiles = opt_conv_op_parallel_config.per_core_out_matrix_height_ntile;
+        const uint32_t max_act_block_h =
+            worst_units_per_h == 0 ? per_core_h_ntiles : (kDfbRingUnitCap / worst_units_per_h);
+        const uint32_t hi = max_act_block_h < per_core_h_ntiles ? max_act_block_h : per_core_h_ntiles;
+        // Keep act_block_h a multiple of the (already-valid) out_subblock height AND a divisor of the per-core
+        // output height, so the compute subblocking stays valid (factory asserts act_block_h % out_subblock_h
+        // == 0) and no partial M-block is produced. out_subblock_h divides the per-core height, so it is
+        // always a valid fallback.
+        const uint32_t osh = opt_conv_op_block_config.out_subblock_h_ntiles;
+        uint32_t capped_act_block_h = osh;
+        for (uint32_t h = (hi / osh) * osh; h >= osh; h -= osh) {
+            if (per_core_h_ntiles % h == 0) {
+                capped_act_block_h = h;
+                break;
+            }
+        }
+        opt_conv_op_block_config.act_block_h_ntiles = capped_act_block_h;
+
+        log_debug(
+            tt::LogOp,
+            "conv2d Quasar: no-spill full-inner-dim path (act_block_w_ntiles={} K-tiles, num_blocks_act_w=1) to "
+            "avoid the broken matmul-partials K-accumulate; capped act_block_h_ntiles={} (per-core height {} "
+            "tiles, num_blocks_act_h={}) to keep every activation CB DFB ring under the uint16_t limit.",
+            full_inner_dim_k_ntiles,
+            capped_act_block_h,
+            per_core_h_ntiles,
+            per_core_h_ntiles / capped_act_block_h);
+    }
+
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
@@ -424,7 +549,12 @@ Result conv2d_L1(
         bias_tensor.has_value(),
         conv_config.enable_kernel_stride_folding.value(),
         conv_config.full_inner_dim,
-        conv_config.enable_activation_reuse,
+        // Height-sharded weight layout picks full-inner-dim (single-block, [r][s][c] flattened, no per-kernel-row
+        // tile padding) vs sliced-by-kernel-row via this activation-reuse arg (to_weight_special_padding_tile_layout).
+        // For the no-spill path we need the full-inner-dim layout so it matches act_block_w_ntiles = full K and the
+        // factory's single-block reader. We only borrow the layout here; enable_activation_reuse is NOT passed on to
+        // the device op (line below), so the deferred split-reader reuse optimization stays off.
+        conv_config.enable_activation_reuse || force_conv_no_spill,
         coalesce_1d_depthwise_kw_reads,
         orig_stride);
 

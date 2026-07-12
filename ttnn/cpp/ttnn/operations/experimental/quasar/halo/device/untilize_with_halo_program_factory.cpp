@@ -299,8 +299,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         });
     }
 
-    // Per-reader pad scratch (only used when pad_val != 0).
-    const bool use_pad_scratch = enable_padding && (pad_val != 0);
+    // Per-reader pad scratch. Always allocate it when padding is enabled: Quasar has no static
+    // MEM_ZEROS L1 region (WH/BH-only) for the zero-pad case to copy from, so the kernel always
+    // sources padding from this scratch DFB -- filled via noc.async_write_zeros for pad_val==0, or
+    // the immediate value otherwise.
+    const bool use_pad_scratch = enable_padding;
     const uint32_t pad_cb_pagesize = aligned_stick_nbytes;
     if (use_pad_scratch) {
         dataflow_buffers.push_back(DataflowBufferSpec{
@@ -405,10 +408,18 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
         KernelSpec reader{
             .unique_id = name,
             .source = std::filesystem::path(kReaderKernelPath),
+            // QSR: this reader fills/drains DFBs with many sub-tile (per-row stick) NOC reads/writes
+            // (gather scatter-writes sticks sourced from dfb::untilize_out; pad_fill/pad_read replicate a
+            // single stick; DRAM config scratch is a partial-page NOC read) — the same sub-tile pattern that
+            // stalls the DFB implicit-sync credit accounting (reader pinned at NRBW; compute idle; peer stuck
+            // at NWFW). The tilize default and transpose HC-sharded factories hit the identical stall and work
+            // around it with disable_dfb_implicit_sync_for_all; mirror it here so explicit push_back/pop_front
+            // stays authoritative. (The craq-sim subtile-autopost fix does not cover the emulator/HW path.)
             .hw_config =
                 DataMovementHardwareConfig{
                     .role = DataMovementRoleHint::UNSPECIFIED,
                     .gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
+                    .gen2_config = DataMovementHardwareConfig::Gen2Config{.disable_dfb_implicit_sync_for_all = true},
                 },
         };
 
