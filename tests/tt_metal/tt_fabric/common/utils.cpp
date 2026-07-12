@@ -777,7 +777,7 @@ void expect_galaxy_rank_group_4x4_4x4split_check(
     std::set<std::string> hostnames;
     std::map<uint32_t, size_t> chips_per_tray;
 
-    for (const auto chip_id : mesh_graph.get_chip_ids(mesh_id).values()) {
+    for (const auto& [_, chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
         const FabricNodeId fabric_node_id(mesh_id, static_cast<std::uint32_t>(chip_id));
         const auto asic_id = control_plane.get_asic_id_from_fabric_node_id(fabric_node_id);
         const uint32_t tray_id_value = *psd.get_tray_id(asic_id);

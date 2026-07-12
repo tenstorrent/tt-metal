@@ -1949,8 +1949,8 @@ void add_rank_binding_constraints(
 }
 
 // Helper function to build pinning constraints.
-// Returns nullopt on success, or a descriptive error message if pinning constraints cannot be satisfied
-// (e.g., pinned ASIC position not in physical topology or incompatible with rank bindings).
+// Only applies pinnings whose ASIC positions exist on the current physical grouping; absent positions are
+// skipped. Returns an error if a present pinning conflicts with rank bindings (spill).
 std::optional<std::string> add_pinning_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
@@ -1967,33 +1967,22 @@ std::optional<std::string> add_pinning_constraints(
         fabric_node_to_positions[fabric_node].push_back(position);
     }
 
-    bool success = true;
-    std::vector<std::string> missing_position_failures;
-
-    // Apply pinning constraints
+    // Apply pinning constraints that exist on this physical grouping
     for (const auto& [fabric_node, positions] : fabric_node_to_positions) {
         std::set<tt::tt_metal::AsicID> asic_ids;
 
-        // Convert the ASIC positions to ASIC IDs
+        // Convert the ASIC positions to ASIC IDs; skip positions absent from the physical mesh
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
                 log_trace(
                     tt::LogFabric,
                     "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
-                    "{}) from MGD not found in physical topology",
+                    "{}) from MGD not found in physical topology; skipping",
                     position.first.get(),
                     position.second.get(),
                     fabric_node.mesh_id.get(),
                     fabric_node.chip_id);
-                missing_position_failures.push_back(fmt::format(
-                    "fabric node (mesh={}, chip={}) requires pinned ASIC position (tray_id={}, asic_location={}) "
-                    "which is absent from the mapped physical mesh",
-                    fabric_node.mesh_id.get(),
-                    fabric_node.chip_id,
-                    position.first.get(),
-                    position.second.get()));
-                success = false;
                 continue;
             }
             asic_ids.insert(it->second.begin(), it->second.end());
@@ -2010,12 +1999,6 @@ std::optional<std::string> add_pinning_constraints(
         }
     }
 
-    if (!success) {
-        return fmt::format(
-            "MGD/galaxy corner pinning unsatisfied for logical mesh {} on this physical mesh: {}",
-            logical_mesh_id.get(),
-            fmt::join(missing_position_failures, "; "));
-    }
     return std::nullopt;
 }
 
