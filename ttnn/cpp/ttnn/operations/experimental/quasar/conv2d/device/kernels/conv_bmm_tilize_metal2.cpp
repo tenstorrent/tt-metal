@@ -568,6 +568,19 @@ void kernel_main() {
                             (uint32_t)_ti.num_tcs_to_rr,
                             (uint32_t)_ti.tc_slots[_ti.tc_idx].base_addr);
                     }()));
+                    // DEBUG (HW descriptor-table ground truth): read the ACTUAL bd_table entries the PACR0
+                    // packer reads, AFTER llk_pack_hw_configure ran. bd_table is indexed directly by
+                    // buf_desc_id == logical CB id (no offset). If bdtil != 91552 -> _configure_buf_desc_table_
+                    // did NOT land 91552 at index tilized on the sim; if bdtil == 91552 yet the tilize still
+                    // faults at the out base -> the tilize pack MOP is using a buf_desc_id other than tilized.
+                    // bdout/bdpart printed for comparison (expect out/partials base 215692). Remove after.
+                    PACK(([&] {
+                        DPRINT(
+                            "TZBDTAB bdtil={} bdout={} bdpart={}\n",
+                            (uint32_t)bd_table[tilized_in0_cb_id].f.l1_addr_16B,
+                            (uint32_t)bd_table[out_cb_id].f.l1_addr_16B,
+                            (uint32_t)bd_table[matmul_partials_cb].f.l1_addr_16B);
+                    }()));
 #endif
 
                     // DEBUG (tilize-pack OOB locator): mirrors MMPACK (~line 636, at the matmul pack). Prints
