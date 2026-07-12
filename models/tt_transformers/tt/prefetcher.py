@@ -5,22 +5,16 @@
 import math
 import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, List, Optional, Union
 
 import torch
-import yaml
 from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.tt_transformers.tt.common import Mode
-
-# Prefetcher yaml config file describes the sender/receiver core placements
-_CONFIG_PATH = Path(__file__).parent / "prefetcher/prefetcher_config.yaml"
-with open(_CONFIG_PATH) as f:
-    ARCH_CONFIG = yaml.safe_load(f)
+from models.tt_transformers.tt.prefetcher_config import ARCH_CONFIG
 
 # Model configurations for which DRAM prefetcher is supported
 # TODO #38278: to be removed when model support matrix is unified in tt-transformers
@@ -122,19 +116,19 @@ def is_tensor_prefetcher_supported(
     if not is_blackhole() or not ttnn.experimental.is_tensor_prefetcher_supported(mesh_device):
         return False
 
-    from models.tt_transformers.tt.tensor_prefetcher import is_tensor_prefetcher_config_supported
+    from models.tt_transformers.tt.tensor_prefetcher import select_tensor_prefetcher_receiver_layout
 
     model_name = model_name or os.getenv("HF_MODEL", "")
-    num_senders = mesh_device.dram_grid_size().x
-    receiver_candidates = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
-    return any(
-        is_tensor_prefetcher_config_supported(
+    configured_candidates = ARCH_CONFIG["blackhole"]["tensor_prefetcher"]["receiver_candidates"]
+    receiver_candidates = [num_receiver_cores] if num_receiver_cores is not None else configured_candidates
+    return (
+        select_tensor_prefetcher_receiver_layout(
+            mesh_device,
             model_name,
             mesh_device.get_num_devices(),
-            num_senders,
-            receivers_per_bank,
+            receiver_candidates,
         )
-        for receivers_per_bank in receiver_candidates
+        is not None
     )
 
 
@@ -429,6 +423,8 @@ class Prefetcher(LightweightModule):
             receiver_mapping_override=self.receiver_mapping_override,
         )
         self.ring_size = self.num_receiver_cores * self.num_senders
+        self.ring_cols = self.num_senders
+        self.ring_rows = self.num_receiver_cores
         self.dram_banks = self.core_config.dram_banks
 
         ### Worker core ranges for the worker sub device

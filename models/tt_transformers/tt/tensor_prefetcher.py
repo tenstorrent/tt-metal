@@ -19,28 +19,77 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.prefetcher_config import (
+    ARCH_CONFIG,
+    TensorPrefetcherReceiverLayout,
+    allocate_tensor_prefetcher_receiver_layout,
+)
 from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
-from models.tt_transformers.tt.recv_contig_layout import ring_pos_coord as _ring_pos_coord
 
 STREAMING_GCB_MAX_SIZE = 788032
 
-_SPREAD_CONTIGUOUS_RING32_BANK_CORES = (
-    ((0, 0), (1, 0), (2, 0), (6, 0)),
-    ((0, 1), (1, 1), (3, 1), (6, 1)),
-    ((0, 2), (1, 2), (2, 2), (4, 2)),
-    ((0, 4), (1, 4), (4, 4), (5, 4)),
-    ((7, 5), (8, 5), (9, 5), (10, 5)),
-    ((2, 6), (3, 6), (7, 6), (8, 6)),
-    ((0, 7), (7, 7), (9, 7), (10, 7)),
-    ((0, 8), (6, 8), (7, 8), (8, 8)),
-)
+
+def get_tensor_prefetcher_receiver_layout(
+    mesh_device: ttnn.MeshDevice, receivers_per_bank: int
+) -> Optional[TensorPrefetcherReceiverLayout]:
+    """Allocate one logical receiver ring shared by every device in ``mesh_device``."""
+    try:
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_dram_banks = mesh_device.dram_grid_size().x
+        if hasattr(mesh_device, "get_optimal_dram_bank_to_logical_worker_assignments"):
+            device_anchors = mesh_device.get_optimal_dram_bank_to_logical_worker_assignments(ttnn.NOC.NOC_0)
+        elif hasattr(mesh_device, "get_devices"):
+            device_anchors = [
+                device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+                for device in mesh_device.get_devices()
+            ]
+        else:
+            device_anchors = [mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)]
+
+        anchor_sets = tuple(tuple((anchor.x, anchor.y) for anchor in anchors) for anchors in device_anchors)
+        if not anchor_sets or any(len(anchors) != num_dram_banks for anchors in anchor_sets):
+            return None
+        right_anchor_sets = tuple(anchors[num_dram_banks // 2 :] for anchors in anchor_sets)
+        if any(not right_anchors for right_anchors in right_anchor_sets):
+            return None
+
+        layout = allocate_tensor_prefetcher_receiver_layout(
+            (grid.x, grid.y),
+            anchor_sets[0],
+            num_dram_banks,
+            receivers_per_bank,
+            device_right_starts=tuple(
+                min(anchor[0] for anchor in right_anchors) for right_anchors in right_anchor_sets
+            ),
+        )
+        if layout is None:
+            return None
+
+        # MeshDevice validates that each logical worker has the same translated address on
+        # every device. Differing physical harvesting is handled by each device's translation.
+        for x, y in layout.receiver_coords:
+            mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+    except (AttributeError, RuntimeError, ValueError):
+        return None
+
+    return layout
 
 
-def _receiver_ring_cores(num_senders: int, receivers_per_sender: int) -> List[ttnn.CoreCoord]:
-    """Return receiver cores in contiguous bank-arc/ring-position order."""
-    if num_senders == 8 and receivers_per_sender == 4:
-        return [ttnn.CoreCoord(x, y) for bank_cores in _SPREAD_CONTIGUOUS_RING32_BANK_CORES for x, y in bank_cores]
-    return [_ring_pos_coord(ring_pos, num_senders) for ring_pos in range(num_senders * receivers_per_sender)]
+def select_tensor_prefetcher_receiver_layout(
+    mesh_device: ttnn.MeshDevice,
+    model_name: str,
+    num_devices: int,
+    receiver_candidates: List[int],
+) -> Optional[TensorPrefetcherReceiverLayout]:
+    """Select the largest model-valid receiver profile that the device can allocate."""
+    num_dram_banks = mesh_device.dram_grid_size().x
+    for receivers_per_bank in receiver_candidates:
+        if not is_tensor_prefetcher_config_supported(model_name, num_devices, num_dram_banks, receivers_per_bank):
+            continue
+        layout = get_tensor_prefetcher_receiver_layout(mesh_device, receivers_per_bank)
+        if layout is not None:
+            return layout
+    return None
 
 
 def gcb_block_bytes(k_tiles: int, per_core_n_tiles: int, ring_size: int, tile_bytes: int) -> int:
@@ -140,10 +189,11 @@ def is_tensor_prefetcher_config_supported(
 class TensorPrefetcher(LightweightModule):
     """Tensor-prefetcher state shared by Tensor-Prefetcher-fed model matmuls.
 
-    Bank ``b``'s receivers occupy contiguous ring positions ``[b*r, (b+1)*r)``. The verified
-    8-bank, 4-receiver configuration uses a congestion-optimized sparse placement; other
-    configurations retain the rectangular row-major placement. DRAM sender cores live on a
-    separate programmable core type and don't occupy worker grid coordinates.
+    Bank ``b``'s receivers occupy contiguous ring positions ``[b*r, (b+1)*r)``. Receiver
+    profiles are loaded from ``prefetcher_config.yaml`` and materialized on the runtime
+    logical worker grid, including deterministic fallback when worker columns are harvested.
+    DRAM sender cores live on a separate programmable core type and don't occupy worker grid
+    coordinates.
     """
 
     def __init__(
@@ -166,26 +216,30 @@ class TensorPrefetcher(LightweightModule):
         self.stream_in1: bool = os.getenv("TT_METAL_TENSOR_PREFETCHER_STREAM_IN1", "0") == "1"
         self.uses_tensor_prefetcher: bool = True
 
-        # Pick recv_per_bank. Auto-mode walks 8,4,2,1 (descending) and takes the largest supported.
-        candidates: List[int] = [num_receiver_cores] if num_receiver_cores is not None else [8, 4, 2, 1]
-        picked = None
-        for rpb in candidates:
-            if is_tensor_prefetcher_config_supported(
-                self.model_name, self.mesh_device.get_num_devices(), self.num_senders, rpb
-            ):
-                picked = rpb
-                break
-        assert picked is not None, (
+        # Pick recv_per_bank only when both model geometry and runtime core allocation support it.
+        configured_candidates = ARCH_CONFIG["blackhole"]["tensor_prefetcher"]["receiver_candidates"]
+        candidates: List[int] = [num_receiver_cores] if num_receiver_cores is not None else configured_candidates
+        receiver_layout = select_tensor_prefetcher_receiver_layout(
+            self.mesh_device,
+            self.model_name,
+            self.mesh_device.get_num_devices(),
+            candidates,
+        )
+        assert receiver_layout is not None, (
             f"No supported recv_per_bank for {self.model_name} on {self.mesh_device.get_num_devices()} devices with "
             f"{self.num_senders} DRAM banks. Tried {candidates}."
         )
-        self.num_receiver_cores: int = picked
+        self.num_receiver_cores: int = receiver_layout.ring_rows
         self.ring_size: int = self.num_senders * self.num_receiver_cores
+        self.ring_cols: int = receiver_layout.ring_cols
+        self.ring_rows: int = receiver_layout.ring_rows
+        self.receiver_layout_name: str = receiver_layout.profile_name
+        self.receiver_layout_used_fallback: bool = receiver_layout.used_fallback
 
         # Receiver cores in ring-position order. The gather_in0 matmul walks its core_grid in
         # this order, so ring core r computes output N-cols [r*per_core_N, (r+1)*per_core_N).
         # receiver_cores() returns this list (flattened) as the matmul grid.
-        self._ring_cores: List[ttnn.CoreCoord] = _receiver_ring_cores(self.num_senders, self.num_receiver_cores)
+        self._ring_cores: List[ttnn.CoreCoord] = [ttnn.CoreCoord(x, y) for x, y in receiver_layout.receiver_coords]
 
         # Consumer sub-device covers the entire worker grid. DRAM senders are on a
         # separate programmable core type and are not in this set. The matmul receivers
@@ -220,7 +274,7 @@ class TensorPrefetcher(LightweightModule):
         self._stopped: bool = False
         # Surrounding (non-GCB-matmul) ops — SDPA, create/concat heads, lm_head, rope — are NOT
         # co-located on the prefetcher's cores: the DRISC senders are off the worker grid and the
-        # receiver ring is a small rectangle, so those ops use the model's default placement (the
+        # receiver ring is sparse, so those ops use the model's default placement (the
         # same the no-prefetcher path uses). The worker-core backend sets this True and reserves
         # its worker grid for them. Config functions branch on this instead of the backend type.
         self.colocate_ops: bool = False
@@ -228,7 +282,7 @@ class TensorPrefetcher(LightweightModule):
         logger.info(
             f"[TensorPrefetcher] model={self.model_name} banks={self.num_senders} "
             f"recv/bank={self.num_receiver_cores} ring={self.ring_size} "
-            f"layout={'spread' if self.num_senders == 8 and self.num_receiver_cores == 4 else 'rectangle'} "
+            f"layout={self.receiver_layout_name} fallback={self.receiver_layout_used_fallback} "
             f"dual_senders={self.dual_senders_per_bank} stream_in1={self.stream_in1}"
         )
 
@@ -377,7 +431,7 @@ class TensorPrefetcher(LightweightModule):
         """Allocate ``num_cores`` worker cores as a solid model-helper rectangle.
 
         The returned grid remains anchored below row ``num_receiver_cores`` to preserve the existing
-        model configurations. With the sparse ring-32 placement it can intersect receiver cores;
+        model configurations. With a sparse configured receiver placement it can intersect receiver cores;
         this is supported because the persistent GCB and model programs use disjoint L1 regions.
         It must be filled (``num_cores() == bounding-box``) because consumers like residual RMSNorm
         require a rectangular shard grid.

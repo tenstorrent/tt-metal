@@ -1289,6 +1289,7 @@ class ModelArgs:
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                         stream_in1=prefetcher.stream_in1,
+                        core_grid=(prefetcher.ring_cols, prefetcher.ring_rows),
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1341,6 +1342,7 @@ class ModelArgs:
                         prefetcher.ring_size,
                         num_global_cb_receivers=prefetcher.num_receiver_cores,
                         stream_in1=prefetcher.stream_in1,
+                        core_grid=(prefetcher.ring_cols, prefetcher.ring_rows),
                     )
                 else:
                     return self.dram_matmul_config(
@@ -1641,6 +1643,7 @@ class ModelArgs:
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
                     untilize_out=True,
                     stream_in1=prefetcher.stream_in1,
+                    core_grid=(prefetcher.ring_cols, prefetcher.ring_rows),
                 )
             else:
                 return self.dram_matmul_config(
@@ -1907,6 +1910,7 @@ class ModelArgs:
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
                     stream_in1=prefetcher.stream_in1,
+                    core_grid=(prefetcher.ring_cols, prefetcher.ring_rows),
                 )
             else:
                 if self.use_fused_all_gather_matmul:
@@ -1969,6 +1973,7 @@ class ModelArgs:
                     prefetcher.ring_size,
                     num_global_cb_receivers=prefetcher.num_receiver_cores,
                     stream_in1=prefetcher.stream_in1,
+                    core_grid=(prefetcher.ring_cols, prefetcher.ring_rows),
                 )
             elif self.is_galaxy:
                 return None  # TG uses core_grid parameter instead
@@ -2294,6 +2299,7 @@ class ModelArgs:
                 prefetch=False,
                 num_global_cb_receivers=1,
                 untilize_out=True,
+                core_grid=(prefetcher.ring_cols, prefetcher.ring_rows),
             )
         else:
             return self.dram_matmul_config(
@@ -3343,6 +3349,7 @@ class ModelArgs:
         untilize_out=False,
         fp32_dest_acc_en=None,
         stream_in1=False,
+        core_grid=None,
     ):
         M *= B  # Fuse batch always enabled
 
@@ -3381,7 +3388,11 @@ class ModelArgs:
                 for x, y in hop_grid
             }
         )
-        grid = num_to_coregrid(num_cores)
+        if core_grid is None:
+            grid = num_to_coregrid(num_cores)
+        else:
+            assert core_grid[0] * core_grid[1] == num_cores, f"core_grid {core_grid} must contain num_cores={num_cores}"
+            grid = ttnn.CoreGrid(x=core_grid[0], y=core_grid[1])
 
         # tt-metal/ttnn/cpp/ttnn/operations/matmul/device/matmul_op_multi_core_reuse_mcast_1d_program_factory.cpp
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(

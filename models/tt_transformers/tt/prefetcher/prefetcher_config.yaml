@@ -26,6 +26,61 @@ blackhole:
   receiver_cols:
     left: [1, 7]
     right: [8, 11]
+  tensor_prefetcher:
+    receiver_candidates: [8, 4, 2, 1]
+    fallback_profile_dram_banks: 8
+    ring_grid:
+      columns: dram_banks
+      rows: receivers_per_bank
+    fallback:
+      spill_rows: [0, 1, 2, 4, 5, 6, 7, 8, 3, 9]
+      side_order: [preferred, opposite]
+    profiles:
+      8:
+        1:
+          name: spread_contiguous_ring8
+          banks:
+            - [[left, 0, 0]]
+            - [[left, 0, 1]]
+            - [[left, 0, 2]]
+            - [[left, 0, 4]]
+            - [[right, 0, 5]]
+            - [[left, 2, 6]]
+            - [[left, 0, 7]]
+            - [[left, 0, 8]]
+        2:
+          name: spread_contiguous_ring16
+          banks:
+            - [[left, 0, 0], [left, 1, 0]]
+            - [[left, 0, 1], [left, 1, 1]]
+            - [[left, 0, 2], [left, 1, 2]]
+            - [[left, 0, 4], [left, 1, 4]]
+            - [[right, 0, 5], [right, 1, 5]]
+            - [[left, 2, 6], [left, 3, 6]]
+            - [[left, 0, 7], [right, 0, 7]]
+            - [[left, 0, 8], [left, 6, 8]]
+        4:
+          name: spread_contiguous_ring32
+          banks:
+            - [[left, 0, 0], [left, 1, 0], [left, 2, 0], [left, 6, 0]]
+            - [[left, 0, 1], [left, 1, 1], [left, 3, 1], [left, 6, 1]]
+            - [[left, 0, 2], [left, 1, 2], [left, 2, 2], [left, 4, 2]]
+            - [[left, 0, 4], [left, 1, 4], [left, 4, 4], [left, 5, 4]]
+            - [[right, 0, 5], [right, 1, 5], [right, 2, 5], [right, 3, 5]]
+            - [[left, 2, 6], [left, 3, 6], [right, 0, 6], [right, 1, 6]]
+            - [[left, 0, 7], [right, 0, 7], [right, 2, 7], [right, 3, 7]]
+            - [[left, 0, 8], [left, 6, 8], [right, 0, 8], [right, 1, 8]]
+        8:
+          name: bank_row_contiguous_ring64
+          banks:
+            - [[left, 0, 0], [left, 1, 0], [left, 2, 0], [left, 3, 0], [left, 4, 0], [left, 5, 0], [left, 6, 0], [right, 0, 0]]
+            - [[left, 0, 1], [left, 1, 1], [left, 2, 1], [left, 3, 1], [left, 4, 1], [left, 5, 1], [left, 6, 1], [right, 0, 1]]
+            - [[left, 0, 2], [left, 1, 2], [left, 2, 2], [left, 3, 2], [left, 4, 2], [left, 5, 2], [left, 6, 2], [right, 0, 2]]
+            - [[left, 0, 4], [left, 1, 4], [left, 2, 4], [left, 3, 4], [left, 4, 4], [left, 5, 4], [left, 6, 4], [right, 0, 4]]
+            - [[right, 0, 5], [right, 1, 5], [right, 2, 5], [right, 3, 5], [left, 0, 5], [left, 1, 5], [left, 2, 5], [left, 3, 5]]
+            - [[right, 0, 6], [right, 1, 6], [right, 2, 6], [right, 3, 6], [left, 0, 6], [left, 1, 6], [left, 2, 6], [left, 3, 6]]
+            - [[right, 0, 7], [right, 1, 7], [right, 2, 7], [right, 3, 7], [left, 0, 7], [left, 1, 7], [left, 2, 7], [left, 3, 7]]
+            - [[right, 0, 8], [right, 1, 8], [right, 2, 8], [right, 3, 8], [left, 0, 8], [left, 1, 8], [left, 2, 8], [left, 3, 8]]
 
 wormhole:
   dram_banks: [1, 2, 3, 0, 4, 6, 9, 10, 11, 8, 7, 5]

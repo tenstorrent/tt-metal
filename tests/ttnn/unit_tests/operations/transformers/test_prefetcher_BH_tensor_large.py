@@ -53,6 +53,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
+from models.tt_transformers.tt.tensor_prefetcher import get_tensor_prefetcher_receiver_layout
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
@@ -96,33 +97,6 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int)
         row = ring_pos // ring_cols
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
     return ttnn.CoreRangeSet(cores)
-
-
-_SPREAD_CONTIGUOUS_RING32_BANK_CORES = (
-    ((0, 0), (1, 0), (2, 0), (6, 0)),
-    ((0, 1), (1, 1), (3, 1), (6, 1)),
-    ((0, 2), (1, 2), (2, 2), (4, 2)),
-    ((0, 4), (1, 4), (4, 4), (5, 4)),
-    ((7, 5), (8, 5), (9, 5), (10, 5)),
-    ((2, 6), (3, 6), (7, 6), (8, 6)),
-    ((0, 7), (7, 7), (9, 7), (10, 7)),
-    ((0, 8), (6, 8), (7, 8), (8, 8)),
-)
-
-
-def _spread_contiguous_ring32_bank_receivers(bank_idx: int) -> ttnn.CoreRangeSet:
-    """Congestion-optimized CONTIGUOUS_1D receiver arc for one Blackhole DRAM bank.
-
-    Coordinates are logical worker coordinates. On an unharvested Blackhole they map to the
-    physical NoC placement documented in tensor_prefetcher_noc.local.md. Each bank's four cores
-    remain consecutive in the full receiver set's row-major walk.
-    """
-    return ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y))
-            for x, y in _SPREAD_CONTIGUOUS_RING32_BANK_CORES[bank_idx]
-        ]
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -841,18 +815,14 @@ def test_tensor_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_til
     num_dram_banks = device.dram_grid_size().x
     num_receivers_per_bank = 4
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = num_dram_banks
-    ring_rows = num_receivers_per_bank
-    if num_dram_banks != len(_SPREAD_CONTIGUOUS_RING32_BANK_CORES):
-        pytest.skip("Spread-column ring-32 placement requires an unharvested 8-bank Blackhole")
+    receiver_layout = get_tensor_prefetcher_receiver_layout(device, num_receivers_per_bank)
+    if receiver_layout is None:
+        pytest.skip("No Tensor Prefetcher receiver layout is available for this device")
+    ring_cols = receiver_layout.ring_cols
+    ring_rows = receiver_layout.ring_rows
+    receiver_cores = [ttnn.CoreCoord(x, y) for x, y in receiver_layout.receiver_coords]
 
-    receiver_core_range_set = ttnn.CoreRangeSet(
-        [
-            core_range
-            for bank_idx in range(num_dram_banks)
-            for core_range in _spread_contiguous_ring32_bank_receivers(bank_idx).ranges()
-        ]
-    )
+    receiver_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in receiver_cores])
 
     M = 32
     K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
@@ -906,7 +876,20 @@ def test_tensor_prefetcher_recv_contig_batched_matmul_ring32(device, name, k_til
     tile_bytes = _bytes_per_tile(dtype)
     in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
     gcb_size = ring_size * in1_block_size_bytes
-    bank_to_receivers = [(b, _spread_contiguous_ring32_bank_receivers(b)) for b in range(num_dram_banks)]
+    bank_to_receivers = [
+        (
+            bank_idx,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(core, core)
+                    for core in receiver_cores[
+                        bank_idx * num_receivers_per_bank : (bank_idx + 1) * num_receivers_per_bank
+                    ]
+                ]
+            ),
+        )
+        for bank_idx in range(num_dram_banks)
+    ]
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     output_mem_config = ttnn.create_sharded_memory_config(

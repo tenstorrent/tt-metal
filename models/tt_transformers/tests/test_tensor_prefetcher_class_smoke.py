@@ -24,6 +24,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole, run_for_blackhole
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.recv_contig_layout import recv_contig_mem_config
+from models.tt_transformers.tt.tensor_prefetcher import get_tensor_prefetcher_receiver_layout
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up
 
@@ -34,6 +35,16 @@ pytestmark = run_for_blackhole("Tensor Prefetcher requires Blackhole")
 def _require_tensor_prefetcher(device):
     if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip("Tensor prefetcher requires Blackhole firmware >= 19.12.0.0")
+
+
+@pytest.mark.parametrize("recv_per_bank", [1, 2, 4, 8])
+def test_tensor_prefetcher_receiver_layout_profiles(device, recv_per_bank):
+    layout = get_tensor_prefetcher_receiver_layout(device, recv_per_bank)
+    assert layout is not None
+    assert len(layout.receiver_coords) == device.dram_grid_size().x * recv_per_bank
+    assert len(set(layout.receiver_coords)) == len(layout.receiver_coords)
+    assert layout.ring_cols == device.dram_grid_size().x
+    assert layout.ring_rows == recv_per_bank
 
 
 @torch.no_grad()
@@ -108,7 +119,7 @@ def test_tensor_prefetcher_class_smoke(device, recv_per_bank):
     while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
         out_subblock_w -= 1
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=(num_dram_banks, recv_per_bank),
+        compute_with_storage_grid_size=(prefetcher.ring_cols, prefetcher.ring_rows),
         in0_block_w=1,
         out_subblock_h=1,
         out_subblock_w=out_subblock_w,

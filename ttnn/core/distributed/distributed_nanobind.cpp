@@ -263,6 +263,17 @@ void py_module(nb::module_& mod) {
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
+            "get_optimal_dram_bank_to_logical_worker_assignments",
+            [](MeshDevice& self, NOC noc) {
+                std::vector<std::vector<CoreCoord>> assignments;
+                assignments.reserve(self.num_devices());
+                for (auto* device : self.get_devices()) {
+                    assignments.push_back(device->get_optimal_dram_bank_to_logical_worker_assignment(noc));
+                }
+                return assignments;
+            },
+            nb::arg("noc"))
+        .def(
             "get_device_id",
             [](MeshDevice& self, const MeshCoordinate& coord) {
                 auto* device = self.get_device(coord);

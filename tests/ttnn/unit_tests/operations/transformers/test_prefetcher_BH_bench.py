@@ -50,6 +50,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
+from models.tt_transformers.tt.tensor_prefetcher import get_tensor_prefetcher_receiver_layout
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
@@ -536,67 +537,24 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
             f"got {num_dram_banks} x {num_receivers_per_bank}"
         )
 
-    # Production scattered receiver layout (identical to the K-row-major bench) so the
-    # matmul receiver/in0-gather NoC paths match exactly.
-    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
-
-    bh_cfg = ARCH_CONFIG["blackhole"]
-    raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=num_receivers_per_bank)
-    left_y = bh_cfg["bank_ordered_y_coords"]["left"]
-    right_y = bh_cfg["bank_ordered_y_coords"]["right"]
-    left_col = bh_cfg["sender_cols"]["left"]
-    right_col = bh_cfg["sender_cols"]["right"]
-    ordered_senders = [(left_col, y) for y in left_y] + [(right_col, y) for y in right_y]
-    receivers_by_y: dict = {}
-    for sx, sy in ordered_senders:
-        receivers_by_y.setdefault(sy, []).extend(raw_mapping[(sx, sy)])
-    sorted_ys = sorted(receivers_by_y.keys())
-    assert len(sorted_ys) == num_dram_banks, f"want {num_dram_banks} y-rows, got {len(sorted_ys)}"
-    receivers_per_y = [sorted(receivers_by_y[y]) for y in sorted_ys]  # row-major-sortable
     receiver_layout = os.environ.get("BENCH_RECEIVER_LAYOUT", "production")
-    receiver_ring = [coord for row in receivers_per_y for coord in row]
+    receiver_ring = []
     if receiver_layout == "rectangle":
         if ring_size != 32:
             pytest.skip("Rectangle receiver-layout A/B requires ring=32")
         receiver_ring = [(r % num_dram_banks, r // num_dram_banks) for r in range(ring_size)]
+    elif receiver_layout == "production":
+        production_layout = get_tensor_prefetcher_receiver_layout(device, num_receivers_per_bank)
+        assert production_layout is not None
+        receiver_ring = list(production_layout.receiver_coords)
     elif receiver_layout == "spread":
         if ring_size != 32:
             pytest.skip("Spread receiver-layout A/B requires ring=32")
-        receiver_ring = [
-            (0, 0),
-            (1, 0),
-            (2, 0),
-            (6, 0),
-            (0, 1),
-            (1, 1),
-            (3, 1),
-            (6, 1),
-            (0, 2),
-            (1, 2),
-            (2, 2),
-            (4, 2),
-            (0, 4),
-            (1, 4),
-            (4, 4),
-            (5, 4),
-            (7, 5),
-            (8, 5),
-            (9, 5),
-            (10, 5),
-            (2, 6),
-            (3, 6),
-            (7, 6),
-            (8, 6),
-            (0, 7),
-            (7, 7),
-            (9, 7),
-            (10, 7),
-            (0, 8),
-            (6, 8),
-            (7, 8),
-            (8, 8),
-        ]
-    elif receiver_layout != "production":
+        production_layout = get_tensor_prefetcher_receiver_layout(device, num_receivers_per_bank)
+        assert production_layout is not None
+        assert production_layout.profile_name == "spread_contiguous_ring32"
+        receiver_ring = list(production_layout.receiver_coords)
+    else:
         raise ValueError(f"Unknown BENCH_RECEIVER_LAYOUT={receiver_layout!r}")
 
     receiver_core_range_set = ttnn.CoreRangeSet(
