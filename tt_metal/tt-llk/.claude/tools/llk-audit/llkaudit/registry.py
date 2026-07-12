@@ -730,7 +730,11 @@ def mailbox_thread_arg(arg0: str):
     if not m:
         return None
     n = m.group(1).upper()
-    for key in ("UNPACK", "MATH", "PACK"):  # UNPACK before PACK (startswith)
+    for key in (
+        "UNPACK",
+        "MATH",
+        "PACK",
+    ):  # order-independent: none is a prefix of another
         if n.startswith(key):
             return key
     return None

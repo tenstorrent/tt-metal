@@ -22,14 +22,19 @@ fi
 CXX="${CXX:-clang++}"
 LIBDIR="$($LLVM_CONFIG --libdir)"
 
-# Prefer unversioned -l; fall back to the HIGHEST versioned .so if no dev symlink
-# (sort -V so .so.20 beats .so.9). The trailing `|| true` keeps a no-match `ls`
-# from failing the pipeline under `pipefail` and tripping `set -e` here (this is
-# the command after the final `||`); an empty result then fails loudly at link.
-CLANG_CPP="-lclang-cpp"
-[ -e "$LIBDIR/libclang-cpp.so" ] || CLANG_CPP="$(ls "$LIBDIR"/libclang-cpp.so.* 2>/dev/null | sort -V | tail -1 || true)"
-LLVM_LIB="-lLLVM"
-[ -e "$LIBDIR/libLLVM.so" ] || LLVM_LIB="$(ls "$LIBDIR"/libLLVM.so.* 2>/dev/null | sort -V | tail -1 || true)"
+# Prefer unversioned -l<name>; fall back to the HIGHEST versioned .so if no dev
+# symlink (sort -V so .so.20 beats .so.9). The trailing `|| true` keeps a no-match
+# `ls` from failing the pipeline under `pipefail` and tripping `set -e` (this is the
+# command after the final `||`); an empty result then fails loudly at link.
+pick_lib() {  # $1 = soname (e.g. clang-cpp), $2 = default -l flag
+  if [ -e "$LIBDIR/lib$1.so" ]; then
+    echo "$2"
+  else
+    ls "$LIBDIR"/lib"$1".so.* 2>/dev/null | sort -V | tail -1 || true
+  fi
+}
+CLANG_CPP="$(pick_lib clang-cpp -lclang-cpp)"
+LLVM_LIB="$(pick_lib LLVM -lLLVM)"
 
 echo "Using $($LLVM_CONFIG --version) at $LIBDIR"
 $CXX -std=c++17 -fno-rtti -O2 \

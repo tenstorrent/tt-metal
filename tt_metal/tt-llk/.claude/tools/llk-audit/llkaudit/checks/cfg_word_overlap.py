@@ -190,11 +190,7 @@ class CfgWordOverlap(Check):
             # skip.
             if len(threads) < 2 and not (len(threads) == 1 and has_unknown):
                 continue
-            ev = [
-                f'{w["file"].split("/")[-1]}:{w["line"]} [{w["thread"]}] '
-                f'{w["field"]} ({w["how"]})'
-                for w in ws
-            ]
+            ev = [self._w_ev(w) for w in ws]
             fields = sorted({w["field"] for w in ws})
             safety, bits = self._safety(ws, fb.addr32)
             if len(threads) < 2:  # 1 known + unknown co-writer: low-confidence widen
@@ -334,8 +330,9 @@ class CfgWordOverlap(Check):
         return out
 
     @staticmethod
-    def _w_ev(w: dict, what: str) -> str:
-        return f'{w["file"].split("/")[-1]}:{w["line"]} [{w["thread"]}] {w["field"]} ({w["how"]}) {what}'
+    def _w_ev(w: dict, what: str = "") -> str:
+        base = f'{w["file"].split("/")[-1]}:{w["line"]} [{w["thread"]}] {w["field"]} ({w["how"]})'
+        return f"{base} {what}" if what else base
 
     def _unresolved(self, fact: dict, field: str) -> Finding:
         return Finding(

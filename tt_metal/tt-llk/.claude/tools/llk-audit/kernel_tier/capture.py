@@ -35,6 +35,9 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 EXTRACT = os.path.join(HERE, "..", "extractor", "llk_extract")
 SHIM = os.path.join(HERE, "..", "out", "sfpi_shim")
+EXTRACT_TIMEOUT_SEC = (
+    180  # per-kernel extraction cap; expiry -> an EXEC-FAIL ledger entry
+)
 
 # The one line tt-metal emits per kernel compile (build.cpp), e.g.
 #   ... g++ compile cmd: cd <dir> && <gpp> <flags> -c -o obj src -MF dep <defines>
@@ -195,7 +198,11 @@ def main(argv=None) -> int:
             ]
             try:
                 r = subprocess.run(
-                    inv, cwd=cwd, capture_output=True, text=True, timeout=180
+                    inv,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=EXTRACT_TIMEOUT_SEC,
                 )
             except (OSError, subprocess.TimeoutExpired) as e:
                 ledger.append((label, f"EXEC-FAIL:{type(e).__name__}", 0, 0))
