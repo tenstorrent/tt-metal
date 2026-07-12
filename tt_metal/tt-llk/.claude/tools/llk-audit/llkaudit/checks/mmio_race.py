@@ -35,7 +35,15 @@ class MmioRace(Check):
         "block mask covers the consumer. On Quasar, writes are marked "
         "AUTOTTSYNC_ORDERED (TTSync HW-orders the write->consume direction); this "
         "does NOT cover an MMIO *read* that depends on a multi-cycle instruction "
-        "result (needs wait_*_idle), nor the EN_SUBDIVIDED cross-unpacker corner."
+        "result (needs wait_*_idle), nor the EN_SUBDIVIDED cross-unpacker corner. "
+        "MOP/REPLAY are treated as OPAQUE consumers (one consumer, stall-before): "
+        "the tool does not see the instructions inside a MOP, does not distinguish "
+        "TTI_REPLAY record (load) vs execute mode, does not model the "
+        "record->execute DECOUPLING (a buffer programmed in one function and "
+        "replayed/looped in another), and only recognizes a RAW TTI_REPLAY / "
+        "mop_run — a WRAPPED replay-execute call (e.g. _execute_*_replay_buffer_) "
+        "is not flagged as a consumer. The LLM must trace replay record->execute "
+        "and per-iteration re-runs."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
