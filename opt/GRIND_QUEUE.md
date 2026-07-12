@@ -292,6 +292,22 @@ if <5% it's DEAD regardless of PCC.
   REVERTED (no win; finding is the receipt). ⇒ **the compute-precision axis on VAE is now closed on BOTH sub-paths (weight
   bf8 = segfault/warm-authoring K; math-fidelity LoFi = −1.77% null O).** No env-only VAE compute lever moves the decode.
 
+## Batch P — S1 + `all_bf8_lofi_sdpa_lofi_fp32acc` (fill the quant-preset × stage matrix; measure-don't-reason)
+Batch L measured this preset on S2 (99.93% PASS, −4.9% sub-gate); I3 marked the two SDPA-LoFi presets "S1 dead by
+composition (no run)". Per the Batch J/L precedent (measurement overturned two dead-by-composition calls), converted the
+one that PCC-passes on S2 to a real S1 measurement — no-edit env A/B on the I0/I3 S1 harness (`-k 'video and stage_1 and
+ring_bh_4x8sp1tp0 and ckpt_fast'`, `LTX_QUANT=all_bf8_lofi_sdpa_lofi_fp32acc`, env `opt/env_sdpa.yaml`, ~24s warm).
+- [x] **S1 fp32acc-quant — NULL @ passing PCC; caught + killed a false gate-crossing from cross-reservation baseline drift.**
+  Two clean fp32acc samples (jobs **023548-121** 11.99ms / **023717-123** 11.78ms, mean **11.89ms**, PCC **99.8996 %** PASS,
+  deterministic, re-verified from raw logs). Both landed *below* the stale I0 baseline 12.73 (−5.8%, nominally OVER the >5%
+  gate) AND below I3 `all_bf8_lofi` 12.35 — physically impossible as a real fp32acc win (fp32acc ADDS accumulate cost over
+  its bf8 base). Dispatched a **fresh same-session default baseline** (job **023830-124**) = **12.25ms** (PCC 99.9937 %):
+  against apples-to-apples the preset is **−2.9% NULL (sub-5% gate)** — the apparent −5.8% was **~4% cross-reservation
+  baseline drift** (stale 12.73 vs fresh 12.25), not compute. **Receipt of a methodological trap:** single-sample baselines
+  from a prior reservation can manufacture a false gate-crossing; re-measure the baseline in-session. Mirrors Batch L (S2):
+  fp32acc PCC-recovers to PASS but no shippable speed win. **Both denoise stages now confirmed: no quant preset clears the
+  5% gate at passing quality ⇒ collective/dispatch-bound.** No source edit (env A/B) ⇒ nothing to revert. **Batch P CLOSED.**
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
