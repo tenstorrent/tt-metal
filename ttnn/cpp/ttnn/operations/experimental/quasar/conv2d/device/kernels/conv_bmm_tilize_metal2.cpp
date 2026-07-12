@@ -633,6 +633,15 @@ void kernel_main() {
                 // compute_pool_2d.cpp's llk_pack_init re-init. See ~/QuasarProgrammingQuirks.md quirk #1.
                 PACK((llk_pack_init(curr_matmul_out_cb)));
 #endif
+                // DEBUG (op localizer): marks the matmul pack for this height block. Printed BEFORE the packs
+                // (flushes) so the LAST marker seen before the PACR0_TILE_INC fault tells whether the faulting
+                // pack is the MATMUL (MMBLK) or the fuse_bias->OUT pack (BIASBLK). base is the current pack
+                // write ptr; expected first-tile addr = base, tiles step by 128 units. Remove after diagnosis.
+                PACK(DPRINT(
+                    "MMBLK h={} cb={} base={}\n",
+                    (uint32_t)in0_block_h_i,
+                    (uint32_t)curr_matmul_out_cb,
+                    (uint32_t)cb_matmul_partials.get_write_ptr()));
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {
@@ -838,6 +847,12 @@ void kernel_main() {
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
                 add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
+                // DEBUG (op localizer): marks the fuse_bias->OUT pack for this height block. See MMBLK above.
+                PACK(DPRINT(
+                    "BIASBLK h={} cb={} base={}\n",
+                    (uint32_t)in0_block_h_i,
+                    (uint32_t)untilize_mode_out_cb_id,
+                    (uint32_t)cb_untilize_mode_out.get_write_ptr()));
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
