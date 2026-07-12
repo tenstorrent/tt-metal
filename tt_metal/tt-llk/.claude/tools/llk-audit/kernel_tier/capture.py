@@ -147,8 +147,16 @@ def main(argv=None) -> int:
     ledger = []  # (label, status, facts, parse_errors)
     with open(facts_path, "w") as merged:
         for cmd in uniq:
-            cwd, src, incs, defs = _parse_cmd(cmd)
-            short = cmd[:60]  # single label width — the two skip ledgers can't drift
+            short = cmd[:60]  # single label width — the skip ledgers can't drift
+            # shlex.split (in _parse_cmd) raises ValueError on POSIX-unbalanced
+            # quotes — reachable, since build.cpp single-quotes each -D value without
+            # escaping. Catch it as a NAMED skip of THIS command, not an unhandled
+            # exception that aborts main() and discards EVERY kernel's facts.
+            try:
+                cwd, src, incs, defs = _parse_cmd(cmd)
+            except ValueError:
+                ledger.append((short, "SKIP-noparse", 0, 0))
+                continue
             if not src or not cwd or not os.path.isdir(cwd):
                 ledger.append((short, "SKIP-noparse", 0, 0))
                 continue
