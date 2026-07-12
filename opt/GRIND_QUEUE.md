@@ -335,6 +335,29 @@ ceiling: char-only (is_fsdp=True is not the prod BH path) below the ~7.9s floor;
   optimal; FSDP is a +10.5% regression.** All no-edit block-harness axes on both dominant buckets are now swept across
   topology · links · quant(4/4) · fidelity · parallelism(SP fixed; TP infra-dead M) · FSDP — block is dispatch-bound.
 
+## Batch R — VAE conv3d `_BLOCKINGS` degenerate-fallback (the ONE untouched harness on the data-movement-bound VAE bucket) — DEAD for 1080p (source-verified)
+The harness inventory had a real gap: three LTX test files were NEVER touched by any batch. Checked all three
+(2026-07-12 03:12Z lap): `test_ccl_allgather_scoped.py` = **2x4sp1tp0-ONLY** parametrize (test:56) → the same
+fabric-DEAD 2x4 mesh as Batch M + it's a NoC-trace/tracy harness (cold-timeout); `test_ltx_stage_scoped.py` =
+`skipif` needs the absent `ltx-2.3-22b-distilled-1.1.safetensors` (test:64-66) + builds the full `LTXDistilledPipeline`
+(test:98) → SKIP + out-of-budget. The 3rd — **`test_ltx_conv3d_sweep_720p.py`** — is the genuinely-new signal: a
+self-contained conv3d BLOCKING microbenchmark (1x1 submesh, no 22B ckpt, no full pipeline) whose docstring says the
+deep 1024-ch decoder/upsampler convs **miss the tuned `_BLOCKINGS` table and fall to the degenerate `(Cin,32,1,1,1)`
+one-pixel-per-work-unit path (~9× slower)**. This is exactly VAE decode's regime — Batch O proved VAE is DATA-MOVEMENT-
+bound, then only tested math-fidelity (LoFi null) + weight-dtype (bf8 segfault); the conv3d BLOCKING config (the actual
+data-movement lever) was never checked. A real gap in "VAE exhausted."
+- [x] **DEAD for the 1080p north star — the 1080p decode is already tuned; the fallback is 720p-specific.** Source gate
+  (`models/tt_dit/utils/conv3d.py:518-521`, authored comment): *"LTX-2.3 22B VAE decoder + latent upsampler … These
+  channel combos all have swept exact `_BLOCKINGS` entries for 2x4/4x8 **1080p**; they remain here as the cross-mesh/
+  cross-resolution fallback (the hardcoded full-Cin default OOMs at these widths)."* So the 1080p-high decode convs hit
+  `[exact]` `_BLOCKINGS.get(blocking_key)` (conv3d.py:707), NOT `[fallback]` (:723). The degenerate `(256,32,1,1,1)`
+  one-pixel entries in `_DEFAULT_BLOCKINGS` (:529 s0_up, :530 s1_up, :535 ups final_conv) are the CROSS-resolution
+  fallback for **off-1080p** spatial dims (:528 "OOMs at off-1080p spatial dims"). **704×1280 (720p) is a distinct gen
+  config, NOT an internal stage of 1080p-high** (which is S1 544×960 → S2 1088×1920 → VAE decode 1088×1920) ⇒ running
+  the 720p sweep tunes a resolution we don't ship. No no-edit device cell advances the 1080p goal here, and no
+  warm-authoring lever either (1080p `_BLOCKINGS` is already swept-exact). Closes the last harness-inventory gap; the
+  VAE decode data-movement bucket is tuned at 1080p, not fallback-degraded. No source edit ⇒ nothing to revert.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
 - **all_bf8_lofi @ prod-4x8 video block: WARM_FWD_MS 16.69 vs F0 16.88 = −1.1% NULL @ PCC 99.89% PASS (job 010011-89).** CCL-matmul is collective/dispatch-bound, not compute- or BW-bound. (Old "0.876 FAIL" was a coarser path.)
