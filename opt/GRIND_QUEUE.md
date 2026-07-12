@@ -75,5 +75,25 @@ a2v `:475-485` / v2a `:493-506` / audio_attn2 `:441-444`) preserved IF a runnabl
 - [ ] Make a full-pipeline run actually COMPLETE: run the prewarm capture+compile, then submit the run TWICE (first warms the trace, second measures) OR raise the run-stage timeout via a 2-reservation split. Then measure 6+2 E2E speed + quality.
   NOTE: raw 4x8 full-pipeline = guaranteed timeout; this is why it's last + needs the multi-pass warm.
 
+## Batch F — CCL-collective matmul (the DOMINANT op, 56.3% = 11.57ms/block; NEVER config-swept)
+Profile ranked CCL-matmul (AllGatherMatmul + MatmulReduceScatter, fused all-gather/reduce-scatter into the
+to_out / QKV / FFN matmuls) as the largest block bucket — 56.3%, ~2× the SDPA bucket that Batch A swept dead.
+**Harness (in-budget, NO tracy, PCC-gated, self-contained — no 22B ckpt):** the VIDEO-only stage_2 block
+`test_ltx_transformer_block[NOTSET-ckpt_fast-pcc-video-stage_2-<mesh>]`. It uses scaled-random weights via
+`_convert_diffusers_video_block_to_tt` (video path never hits the absent-22B skip that killed all Batch-D `av`
+runs), `do_pcc = run_pcc and not has_audio` = **True** (video PCC-gates @ pcc=0.988/rmse=0.10 on 32-dev mesh,
+test:920), and emits **`WARM_FWD_MS=`** directly (test:876-889) under `LTX_PROFILE_ITERS>1` (iter 0 cold, rest
+warm) ⇒ no tracy, no CSV, immune to the tracy multi-word `-k` bug (exact bracket node-id). Env `opt/env_sdpa.yaml`
+(warm ltxrt caches, PINNED=0). **Enumerable config space that's dispatchable in-budget WITHOUT a source edit:**
+mesh param exposes both `ring_bh_4x8sp1tp0` (Topology.Ring) AND `line_bh_4x8sp1tp0` (Topology.Line) ⇒ a CLEAN
+CCL-topology A/B on the fused all-gather-matmul (num_links=2 HW-cap holds for both). Fidelity axis already probed
+(all_bf8 weights −0.04s null); matmul program-config (grid/subblock) is source-computed ⇒ warm-authoring, not cron.
+- [~] **F0 — video-block warm-FW baseline @ ring_bh_4x8** (job **001703-77**, 00:17Z). Establishes the warm VIDEO
+  per-block FW (all prior block runs were `av`→SKIP; the 44.77ms number was AV single-blocking). Substrate for F1's
+  topology A/B. Extract `WARM_FWD_MS=` + confirm `PASSED block PCC`. NEXT lap: read log, tick `[x]`, dispatch F1.
+- [ ] **F1 — video-block warm-FW @ line_bh_4x8 (Topology.Line)** vs F0 Ring. Node-id
+  `test_ltx_transformer_block[NOTSET-ckpt_fast-pcc-video-stage_2-line_bh_4x8sp1tp0]`, same env/iters. Clean no-edit
+  CCL-topology A/B: does Linear all-gather beat Ring for the fused matmul at block scale? >5% FW delta = a win to wire in.
+
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
