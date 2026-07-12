@@ -100,11 +100,12 @@ class HunyuanTtMLP(LightweightModule):
         # SwiGLU: split into gate (x1) and up (x2) halves along the last dim.
         x1, x2 = ttnn.chunk(gu, 2, dim=-1)
         ttnn.deallocate(gu)
-        act = ttnn.silu(x2)
-        h = ttnn.multiply(x1, act)
+        # x1 * silu(x2), with SiLU folded into the multiply's LHS activation (one
+        # fused BinaryNg instead of a separate silu Unary + multiply). SILU must apply
+        # to x2 (the up half); multiply(x2, x1, a_acts=[SILU]) == x1 * silu(x2).
+        h = ttnn.multiply(x2, x1, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
-        ttnn.deallocate(act)
 
         out = l1_sharded_linear(
             h,
