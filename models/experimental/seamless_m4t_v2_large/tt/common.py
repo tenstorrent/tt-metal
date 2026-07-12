@@ -1234,15 +1234,20 @@ def all_reduce_sum_replicate(
 # Encoder single-chip (tp==1) residual L1/DRAM threshold; full residual stays in L1 up to this many
 # token rows. Matches ``MATMUL_1D_SEQ_THRESHOLD``; encoder attention is full-S (bidirectional).
 ENCODER_L1_MICROBATCH_ROWS = MATMUL_1D_SEQ_THRESHOLD
-# TP block-sharded matmul row-chunk size: the linear runs SINGLE-SHOT up to the encoder's design-max
-# sequence (``max_position_embeddings`` = 4096), which fits BH-QB L1; longer sequences chunk at this
-# size. Single-shot keeps block-sharded matmul FLOPs efficiency high vs shattering into small chunks.
-ENCODER_TP_BS_CHUNK_DEFAULT = 4096
+# TP block-sharded matmul row-chunk size: the linear runs SINGLE-SHOT up to this many token rows,
+# and row-chunks above it. Set to 2048 (not the 4096 design-max): a single-shot block-sharded matmul
+# at M=4096 makes per-core circular buffers so large they clash with the resident interleaved
+# activation on BH-QB L1 in the full-model demo (matmul TT_THROW "static circular buffers clash with
+# L1 buffers" at seq 4096 — isolated PCC passes, but the demo's co-resident decode KV/trace tips it
+# over). Chunking 4096 into 2×2048 halves the per-core CB footprint and clears the clash — the same
+# reason the decoder prefill uses ``_DECODER_PREFILL_BS_CHUNK_M = 2048``. 2048 is still large enough to
+# keep block-sharded FLOPs efficiency; only the 4096 ceiling pays the extra chunk + concat.
+ENCODER_TP_BS_CHUNK_DEFAULT = 2048
 # Decoder / shared all-reduce helper: spill L1→DRAM at this many rows.
 ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256
 # Keep the encoder TP residual / all-reduce / matmul reshards L1-resident up to the design-max
-# sequence; single-shot matmuls leave L1 headroom for it, so the reshards stay L1-local rather than
-# reading DRAM. Above it, spill to DRAM.
+# sequence; chunked matmuls (see ``ENCODER_TP_BS_CHUNK_DEFAULT``) leave L1 headroom for it, so the
+# reshards stay L1-local rather than reading DRAM. Above it, spill to DRAM.
 ENCODER_L1_RESIDENT_DEFAULT = 4096
 
 
