@@ -5,6 +5,8 @@
   "test_gdn_tp": 0.92,
   "test_gdn_tp_prefill": 0.95,
   "test_mlp_tp": 0.97,
+  "test_partial_rope_prefill": 0.99,
+  "test_partial_rope_decode": 0.99,
   "test_model_tp_contract": 0.99,
   "test_model_tp_long_prefill": 0.99,
   "test_model_tp_long_prefill_traced": 0.99,
