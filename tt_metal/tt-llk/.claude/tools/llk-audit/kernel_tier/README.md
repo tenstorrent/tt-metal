@@ -48,7 +48,14 @@ kernels emit no compile command, so without it the ledger may show 0 op kernels.
    clang's `--target=riscv32-unknown-elf` + the sfpi `-isystem` paths + an SFPU
    shim, keep the kernel's own `-I`/`-D`.
 3. Run `llk_extract` per kernel **from its cache build dir** (so relative includes
-   and the generated `kernel_includes.hpp` resolve) into one merged fact base.
+   and the generated `kernel_includes.hpp` resolve) into one merged fact base,
+   scoped by `--path-filter` (default **`/kernels/`**) to the KERNEL surface. This
+   must NOT be the repo root: sfpi (STL) lives under `runtime/sfpi` and the
+   dataflow/LLK primitive **definitions** live under `hw/inc/api`, `hw/ckernels`,
+   `tt_llk_*` — all in-repo — so a repo-root filter floods the base with library
+   internals and the checkers flag the primitive *definitions* (e.g.
+   `Semaphore::inc_multicast`'s own body) as kernel races. `/kernels/` keeps the JIT
+   kernel dirs + ttnn/models kernel trees (it does not match `/ckernels/`).
 4. `bootstrap.sh` runs `cb-sync,noc-sync,mailbox-sync` over the merged facts.
 
 ## Coverage is honest, not silent

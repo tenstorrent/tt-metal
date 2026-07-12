@@ -118,6 +118,12 @@ def main(argv=None) -> int:
     ap.add_argument(
         "--sfpi", default=None, help="sfpi root (default <repo>/runtime/sfpi)"
     )
+    ap.add_argument(
+        "--path-filter",
+        default="/kernels/",
+        help="only emit facts whose file path contains this substring "
+        "(default '/kernels/' — the JIT KERNEL surface)",
+    )
     args = ap.parse_args(argv)
 
     sfpi = args.sfpi or os.path.join(args.repo_root, "runtime", "sfpi")
@@ -125,9 +131,14 @@ def main(argv=None) -> int:
     for stub in ("sfpi.h", "sfpi_classes.h"):
         open(os.path.join(SHIM, stub), "a").close()
     base = _clang_base(sfpi)
-    # path-filter = the repo root, so we keep every in-repo kernel/API fact and
-    # drop sfpi/system headers.
-    pf = os.path.abspath(args.repo_root)
+    # path-filter scopes the fact base to the KERNEL surface. It must NOT be the repo
+    # root: sfpi (STL) lives under runtime/sfpi and the dataflow/LLK primitive
+    # DEFINITIONS live under hw/inc/api, hw/ckernels, tt_llk_* — all in-repo — so a
+    # repo-root filter floods the base with library internals and the checkers then
+    # flag the primitive DEFINITIONS (e.g. Semaphore::inc_multicast's own body) as
+    # kernel races. '/kernels/' keeps the JIT kernel dirs + ttnn/models kernel trees
+    # and drops those (it does not match '/ckernels/'). See kernel_tier/README.md.
+    pf = args.path_filter
 
     cmds = []
     with open(args.log, errors="replace") as fh:
