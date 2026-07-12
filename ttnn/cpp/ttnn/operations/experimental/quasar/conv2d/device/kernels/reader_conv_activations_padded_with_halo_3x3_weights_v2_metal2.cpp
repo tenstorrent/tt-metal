@@ -108,14 +108,11 @@ void kernel_main() {
     // Vertical (kernel-row) stride in the halo'd L1 shard: one padded input row. Same value as
     // window_outer_offset; used by the full-window gather (read_channels<weight_size_h>) to step between
     // kernel rows within a single K-block.
-    // DEBUG ISOLATION (temporary — REVERT to window_outer_offset): stride_h_bytes=0 makes the full-window
-    // gather re-read kernel row 0 Kh times instead of stepping to rows 1..Kh-1. Dest writes, tile counts, and
-    // NoC-read count are IDENTICAL to the real fix, but the SOURCE stays at row 0 (in-bounds, = the old
-    // access range). If the PACR0_TILE_INC pack fault (0x376xx) DISAPPEARS -> it's a SOURCE over-read on the
-    // folded/padded_slice shard (the sliced shard lacks the Kh vertically-adjacent rows at window_outer_offset
-    // stride) -> fix the halo/slice extent. If the fault PERSISTS -> it's the dest/compute (ACT_TILIZED
-    // self-loop / pack) path. (PCC will be wrong either way in this experiment — it's a fault locator only.)
-    constexpr uint32_t stride_h_bytes = 0;  // was: window_outer_offset;
+    // Vertical (kernel-row) stride in the halo'd L1 shard: one padded input row. Same value as
+    // window_outer_offset; used by the full-window gather (read_channels<weight_size_h>) to step between
+    // kernel rows within a single K-block. (ISOLATION with stride_h_bytes=0 showed the pack fault PERSISTS,
+    // so it's the dest/compute path (ACT_TILIZED self-loop / pack), NOT a source over-read — restored.)
+    constexpr uint32_t stride_h_bytes = window_outer_offset;
     // window_outer == 1  <=> the whole reduction window is kept in ONE K-block (full_inner_dim / Quasar
     //                        "no-spill" path): the full window (all weight_size_h kernel rows) must be
     //                        gathered per stick here.
