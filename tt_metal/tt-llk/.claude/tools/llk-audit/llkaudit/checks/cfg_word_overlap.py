@@ -49,7 +49,11 @@ class CfgWordOverlap(Check):
         "annotation derives a writer's bitmask from the field's own _MASK, NOT "
         "the literal 3rd MASK operand of cfg_reg_rmw_tensix<ADDR32,SHAMT,MASK> — "
         "a wider mask can under-report bits and mis-label SAFE_BY_MASKING (the "
-        "CROSS_THREAD_SHARED_WORD finding is still emitted regardless)."
+        "CROSS_THREAD_SHARED_WORD finding is still emitted regardless). (c) a "
+        "config write RECORDED into a MOP/replay buffer (e.g. a WRCFG baked into a "
+        "replay buffer) is seen as an ordinary in-place write, but its effect is "
+        "DEFERRED to replay time (possibly looped / in another function) — the LLM "
+        "must account for buffered/replayed config writes."
     )
 
     def run(self, fb: FactBase) -> list[Finding]:
