@@ -185,15 +185,16 @@ def conv_transpose1d(
     output_dtype: ttnn.DataType,
     math_fidelity: ttnn.MathFidelity,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
-    """1D transposed conv via ``ttnn.conv_transpose2d`` with a singleton height.
+    """1D transposed conv via ``ttnn.conv_transpose2d`` with a singleton width.
 
-    Input ``[B, T, Cin]`` -> ``[B, 1, T, Cin]`` (NHWC); weight is stored as
-    ``[Cin, Cout, kernel, 1]``. Returns ``([B, Tout, Cout], weight, bias)``.
+    The kernel lives on the height axis, so the time length must too: input
+    ``[B, T, Cin]`` -> ``[B, T, 1, Cin]`` (NHWC), weight ``[Cin, Cout, kernel, 1]``.
+    Returns ``([B, Tout, Cout], weight, bias)``.
     """
     x_rm = as_row_major(x_btc)
     batch = x_rm.shape[0]
     length = x_rm.shape[1]
-    x_nhwc = ttnn.reshape(x_rm, (batch, 1, length, in_channels))
+    x_nhwc = ttnn.reshape(x_rm, (batch, length, 1, in_channels))
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
@@ -216,8 +217,8 @@ def conv_transpose1d(
         padding=(padding, 0),
         output_padding=(0, 0),
         batch_size=batch,
-        input_height=1,
-        input_width=length,
+        input_height=length,
+        input_width=1,
         device=device,
         conv_config=conv_config,
         compute_config=compute_config,
@@ -226,7 +227,7 @@ def conv_transpose1d(
     )
     out = ttnn.sharded_to_interleaved(out) if out.is_sharded() else out
     out = as_row_major(out)
-    out = ttnn.reshape(out, (batch, out_w, out_channels))
+    out = ttnn.reshape(out, (batch, out_h, out_channels))
     return out, weight_dev, bias_dev
 
 
