@@ -310,8 +310,9 @@
 </dt>
 <dd>
 <p>Applies leaky_relu to <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> element-wise with negative_slope.</p>
+<p>Passes non-negative inputs through unchanged and scales negative inputs by negative_slope.</p>
 <div class="math notranslate nohighlight">
-\[\mathrm{output\_tensor}_i = \verb|leaky_relu|(\mathrm{input\_tensor}_i, \verb|negative_slope|)\]</div>
+\[\mathrm{output\_tensor}_i = \max(0, \mathrm{input\_tensor}_i) + \verb|negative_slope| \cdot \min(0, \mathrm{input\_tensor}_i)\]</div>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -348,7 +349,7 @@
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>FLOAT32, BFLOAT16, BFLOAT8_B</p></td>
+<td><p>FLOAT32, BFLOAT16, BFLOAT8_B, UINT32, UINT16, UINT8</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>

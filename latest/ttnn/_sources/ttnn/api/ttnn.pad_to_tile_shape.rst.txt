@@ -1,8 +1,0 @@
-﻿ttnn.pad\_to\_tile\_shape
-=========================
-
-.. currentmodule:: ttnn
-
-.. _ttnn.pad_to_tile_shape:
-
-.. autodata:: ttnn.pad_to_tile_shape
