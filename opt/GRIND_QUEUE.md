@@ -103,14 +103,30 @@ single-quoted `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and ckpt_fast'` survi
   Job **002930-85** (re-verified from raw log): Line 20.97ms vs F0 Ring 16.88ms = **+24% SLOWER**. Ring wins decisively;
   Linear all-gather is worse for the fused matmul at 4x8 block scale. No source edit (topology param A/B) ⇒ nothing to
   revert. ⇒ **BOTH no-edit CCL-topology cells measured at prod 4x8; Ring stays. Batch F topology axis CLOSED.**
-- [~] **F2 — video-block warm-FW @ ring_bh_4x8 with `LTX_NUM_LINKS=1`** vs F0 Ring (num_links=2) 16.88ms — job
-  **003505-87** (00:35Z). `test_transformer_ltx.py:510` reads `LTX_NUM_LINKS` env ⇒ a no-edit link-count A/B on the
-  SAME prod ring mesh. num_links=2 is the BH HW cap (A2), so 1 can only be ≥slower — this is NOT a win-hunt but a
-  **characterization**: how link-BW-sensitive is the dominant fused CCL-matmul (56.3%)? Big 1→2 gap = link-BW-bound
-  (fabric headroom exists); small gap = matmul-compute-bound (confirms the honest floor is compute, not interconnect).
-  Same env_sdpa.yaml / LTX_PROFILE_ITERS=4 / timeout 260-200 / noise-strip. NEXT lap: read 003505-87 → WARM_FWD_MS +
-  PASSED block PCC → tick `[x]` with the link-BW verdict → the no-edit CCL config space (topology×links) is then fully
-  swept; re-profile the dominant op / generate the next batch (grid-subblock needs warm authoring, not cron).
+- [x] **F2 — video-block warm-FW @ ring_bh_4x8 `LTX_NUM_LINKS=1` = WARM_FWD_MS 19.58 (PCC 99.966%, gate 0.988) →
+  characterization DONE.** Job **003505-87** (re-verified from raw log: `WARM_FWD_MS=19.58 num_links=1 iters=3`,
+  "PASSED block PCC: video (1,38760,4096)", 1 passed/39 deselected in 55.71s, JIT 398/424 warm). num_links=1 19.58ms
+  vs F0 num_links=2 16.88ms = **+16% slower (Δ 2.70ms)**. So the 2nd link (already the BH HW cap, A2) saves 2.70ms =
+  only ~16% of the block ⇒ **the dominant fused CCL-matmul is largely COMPUTE-bound, not interconnect-bound** — modest
+  fabric headroom (~2.7ms) that prod num_links=2 ALREADY captures at the cap. Sharpens the honest floor: the 56.3% CCL
+  bucket is matmul compute, not link BW ⇒ no interconnect win to chase. No source edit (env A/B) ⇒ nothing to revert.
+→ **BATCH F CLOSED — the entire no-edit CCL config space is swept at prod 4x8:** topology (Ring 16.88 < Line 20.97),
+  links (num_links=2 16.88 < 1 19.58, and 2 is the HW cap), fidelity (all_bf8 −0.04s null, DONE line). Ring+num_links=2
+  is prod-optimal on every no-edit axis; the CCL bucket is compute-bound. **No remaining no-edit block-harness lever.**
+
+## Batch G — CCL-matmul grid/subblock program-config (the ONLY remaining CCL axis; source-verified WARM-AUTHORING, not cron)
+The fused CCL-matmul program config is **computed** by `get_matmul_config(M, K, N_out, core_grid)` at
+`models/tt_dit/models/transformers/ltx/attention_ltx.py:320` (all_gather_minimal_matmul_async path) and `:351`
+(dit_minimal_matmul_addcmul_fused path). **Source-verified there is NO env knob** (only `LTX_NUM_LINKS`, mesh-param
+topology, `LTX_QUANT` — all swept in A/B/F) and the grid axis is already MAXED: `core_grid` = `CoreCoord(full_grid.x,
+full_grid.y-1)` (:319, all-gather reserves 1 row for CCL workers) / `full_grid` (:350, reduce-scatter). Growing the
+grid is impossible (already full device); shrinking only slows. The only tunable left is **inside `get_matmul_config`'s
+subblock heuristic** — a shared util used across tt_dit models ⇒ **HIGH blast radius** (a change touches every model's
+matmul), needs a warm iterate+PCC loop + `build_metal` if it dips into C++, NOT a fire-and-exit cron one-shot (a blind
+subblock guess fails op-validation, cf. Batch B exp-kernel SIGABRT). Gate: video block PCC≥0.988 + WARM_FWD_MS vs F0
+16.88ms. **Value ceiling: even a fully-free CCL bucket floors the block at the ~7.9s no-finetune wall.**
+- [~] **G0 — get_matmul_config subblock tune (WARM-AUTHORING).** Scoped + source-mapped; not a cron lap-tail (shared
+  util edit + possible build_metal + iterate loop). Parked alongside the W-mask in-kernel fold (Batch C) for a warm session.
 
 ## DONE (measured, with the number)
 - audio-trace: SHIPPED -0.3s. VAE-trace: 0.19ms DEAD. num_links=4: HW-capped. RMSNorm QK-merge: null (45.08 vs 44.03). tilize: cold artifact. all_bf8 weights: -0.04s null.
