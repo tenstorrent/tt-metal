@@ -41,12 +41,21 @@ enum SparseCB : uint32_t {
     cb_recip_scratch,  // 1-tile reciprocal scratch for normalize_row_streaming
     cb_kreq,           // reader->writer K-gather handoff {base, half, is_last} (dual-NoC split)
     cb_kack,           // writer->reader ack that its half of the chunk landed in cb_k_rm
+    // qr-ring stat export (return_stats): fixed intermediates for the ping-pong max/sum, then their untilized
+    // row-major forms drained by the writer. Always allocated (tiny); only used when return_stats.
+    cb_m_im,  // copy of the final running max (raw), [Sqt,1]
+    cb_l_im,  // copy of the final running sum  (l),   [Sqt,1]
+    cb_m_rm,  // untilized m -> writer ([Sqt] tiles row-major, col 0 = value)
+    cb_l_rm,  // untilized l -> writer
     cb_count
 };
 
 tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::create_descriptor(
-    const SparseSDPAParams& attrs, const SparseSDPAInputs& t, Tensor& output) {
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t, tensor_return_value_t& outputs) {
     tt::tt_metal::ProgramDescriptor desc;
+
+    Tensor& output = outputs[0];  // O; outputs[1]=m, outputs[2]=l when return_stats
+    const bool return_stats = attrs.return_stats;
 
     const uint32_t H = t.q.logical_shape()[1];  // head count, from the tensor (any multiple of TILE_HEIGHT)
     const uint32_t S = t.q.logical_shape()[2];
@@ -132,6 +141,10 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(tile_bytes, 1, bf);                    // cb_recip_scratch : 1-tile reciprocal scratch
     cb(16, 2, bf);                            // cb_kreq : reader->writer K-gather handoff (dual-NoC split)
     cb(16, 2, bf);                            // cb_kack : writer->reader gather ack
+    cb(tile_bytes, Sqt, bf);                  // cb_m_im : copy of final running max [Sqt,1]
+    cb(tile_bytes, Sqt, bf);                  // cb_l_im : copy of final running sum [Sqt,1]
+    cb(tile_bytes, Sqt, bf);                  // cb_m_rm : untilized m (row-major, col0=value)
+    cb(tile_bytes, Sqt, bf);                  // cb_l_rm : untilized l
 
     // ---- compile-time args ----
     // CB ids are passed to each kernel as compile-time args (the SparseCB enum is the single source).
@@ -161,6 +174,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.kv.buffer(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_ct, writer_crt);
+    // qr-ring stat export: chain the m/l output accessors AFTER kv (parsed under RETURN_STATS in the writer).
+    if (return_stats) {
+        tt::tt_metal::TensorAccessorArgs(outputs[1].buffer()).append_to(writer_ct, writer_crt);  // m
+        tt::tt_metal::TensorAccessorArgs(outputs[2].buffer()).append_to(writer_ct, writer_crt);  // l
+    }
 
     std::vector<uint32_t> compute_ct = {H,
                                         DHt,
@@ -240,6 +258,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             {"K_DIM", std::to_string(k_dim)},
             {"KV_ELEM_BYTES", std::to_string(kv_elem_bytes)}};
         add_bc_defines(wdefs);  // same block-cyclic remap defines as the reader
+        if (return_stats) {
+            wdefs["RETURN_STATS"] = "1";
+            wdefs["CB_M_RM"] = std::to_string(cb_m_rm);
+            wdefs["CB_L_RM"] = std::to_string(cb_l_rm);
+        }
         writer_desc.defines = tt::tt_metal::KernelDescriptor::Defines(wdefs.begin(), wdefs.end());
     }
 
@@ -263,6 +286,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         }
     }
     compute_ct.push_back(qsb);
+    // qr-ring stat export CBs (indices 26..29). Always appended so the kernel's compile-arg indices are
+    // stable; only read/used under the RETURN_STATS define.
+    compute_ct.push_back(cb_m_im);
+    compute_ct.push_back(cb_l_im);
+    compute_ct.push_back(cb_m_rm);
+    compute_ct.push_back(cb_l_rm);
 
     tt::tt_metal::KernelDescriptor compute_desc;
     compute_desc.kernel_source = kdir + "compute/sparse_sdpa_compute.cpp";
@@ -288,12 +317,19 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     std::map<std::string, std::string> cdefs{
         {"EXP_APPROX_MODE", std::to_string(static_cast<int>(math_approx))},
     };
+    if (return_stats) {
+        cdefs["RETURN_STATS"] = "1";
+    }
     compute_desc.defines = tt::tt_metal::KernelDescriptor::Defines(cdefs.begin(), cdefs.end());
 
     auto* q_buf = t.q.buffer();
     auto* kv_buf = t.kv.buffer();
     auto* idx_buf = t.indices.buffer();
     auto* out_buf = output.buffer();
+    // qr-ring stat outputs (nullptr when !return_stats). Appended after kv_batch_page_offset so the fixed
+    // reader/writer arg indices (sparse_sdpa_rt) are unchanged.
+    auto* m_buf = return_stats ? outputs[1].buffer() : nullptr;
+    auto* l_buf = return_stats ? outputs[2].buffer() : nullptr;
     // Indexed KV cache: the gather page ids are offset by cache_batch_idx * T to select the cache's batch
     // slot. Baked here for the cache-miss build; re-applied on every dispatch by get_dynamic_runtime_args
     // (so changing the slot doesn't recompile). 0 when not indexed (kv is a single [1,1,T,K_DIM] cache).
@@ -309,8 +345,14 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         // on a cache hit by get_dynamic_runtime_args (the slot changes per dispatch). If you reorder the args
         // before it, update those constants or the re-apply targets the wrong slot.
         reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
-        writer_desc.emplace_runtime_args(
-            core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather
+        if (return_stats) {
+            // {out, tok_start, tok_count, kv, kv_batch_page_offset, m, l} — m/l appended last (indices 5,6).
+            writer_desc.emplace_runtime_args(
+                core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset, m_buf, l_buf});
+        } else {
+            writer_desc.emplace_runtime_args(
+                core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather
+        }
         compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
     }
 

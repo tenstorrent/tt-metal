@@ -33,8 +33,10 @@ inline constexpr uint32_t kWriterBatchOffsetArg = 4;  // {out, tok_start, tok_co
 struct SparseSDPAOperation {
     using operation_attributes_t = SparseSDPAParams;
     using tensor_args_t = SparseSDPAInputs;
-    using spec_return_value_t = TensorSpec;
-    using tensor_return_value_t = Tensor;
+    // Vector return: [O] normally, or [O, m, l] when return_stats (qr-ring Q-gather stat export). O is always
+    // element 0 and byte-identical to the single-tensor path.
+    using spec_return_value_t = std::vector<TensorSpec>;
+    using tensor_return_value_t = std::vector<Tensor>;
 
     struct SparseSDPAProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
@@ -62,7 +64,9 @@ struct SparseSDPAOperation {
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
-Tensor sparse_sdpa(
+// Returns [O] normally, or [O, m, l] when return_stats. O (element 0) is byte-identical to the pre-existing
+// single-tensor output.
+std::vector<Tensor> sparse_sdpa(
     const Tensor& q,
     const Tensor& kv,
     const Tensor& indices,
@@ -71,6 +75,7 @@ Tensor sparse_sdpa(
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
-    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt);
+    std::optional<BlockCyclicLayout> block_cyclic = std::nullopt,
+    bool return_stats = false);
 
 }  // namespace ttnn::prim

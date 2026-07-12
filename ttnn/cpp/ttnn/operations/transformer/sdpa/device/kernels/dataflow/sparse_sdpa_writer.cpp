@@ -34,6 +34,13 @@ void kernel_main() {
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
+#ifdef RETURN_STATS
+    // qr-ring stat outputs m,l: accessors chained after kv (see program factory).
+    constexpr auto m_args =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto l_args =
+        TensorAccessorArgs<m_args.next_compile_time_args_offset(), m_args.next_common_runtime_args_offset()>();
+#endif
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t tok_start = get_arg_val<uint32_t>(1);
@@ -41,6 +48,10 @@ void kernel_main() {
     const uint32_t kv_addr = get_arg_val<uint32_t>(3);  // dual-NoC K-half gather
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset = get_arg_val<uint32_t>(4);
+#ifdef RETURN_STATS
+    const uint32_t m_out_addr = get_arg_val<uint32_t>(5);  // stat outputs appended after kv_batch_page_offset
+    const uint32_t l_out_addr = get_arg_val<uint32_t>(6);
+#endif
     // Block-cyclic remap (BC_ENABLE): all its constants are compile-time defines (the cache length T is hashed
     // for this path) — no runtime arg here. See sparse_sdpa_gather.hpp for the remap.
 
@@ -50,6 +61,14 @@ void kernel_main() {
     Noc noc;
     experimental::CB out_cb(cb_out_rm);
     const auto out = TensorAccessor(out_args, out_addr);
+#ifdef RETURN_STATS
+    // m/l row-major CBs (untilized [H,32], col 0 = per-head value). Written per-head-row like O, 32-wide bf16.
+    experimental::CB m_cb(CB_M_RM), l_cb(CB_L_RM);
+    const auto m_out = TensorAccessor(m_args, m_out_addr);
+    const auto l_out = TensorAccessor(l_args, l_out_addr);
+    constexpr uint32_t stat_block_tiles = (H / tt::constants::TILE_HEIGHT);  // Sqt
+    constexpr uint32_t stat_row_bytes = tt::constants::TILE_WIDTH * 2;       // 32 bf16 per head-row (64B)
+#endif
     // Dual-NoC K gather: the writer co-gathers half of each K chunk on ITS NoC into the shared cb_k_rm L1
     // (the reader owns the reserve/push; we fill rows [0,half) at the same write ptr). This spreads the
     // K response-data load over both NoC links. Indices live in the reader's shared cb_idx
@@ -111,5 +130,21 @@ void kernel_main() {
         }
         noc.async_write_barrier();
         out_cb.pop_front(block_tiles);
+
+#ifdef RETURN_STATS
+        // Drain the per-head m and l scalars (row-major, col 0) to their [1,H,S,32] outputs. Same paging as O
+        // (page = h*S + tok), 32-wide bf16 rows; the host reads column 0 and flash-merges across SP shards.
+        m_cb.wait_front(stat_block_tiles);
+        l_cb.wait_front(stat_block_tiles);
+        for (uint32_t h = 0; h < H; ++h) {
+            noc.async_write(
+                m_cb, m_out, stat_row_bytes, {.offset_bytes = h * stat_row_bytes}, {.page_id = h * S + tok});
+            noc.async_write(
+                l_cb, l_out, stat_row_bytes, {.offset_bytes = h * stat_row_bytes}, {.page_id = h * S + tok});
+        }
+        noc.async_write_barrier();
+        m_cb.pop_front(stat_block_tiles);
+        l_cb.pop_front(stat_block_tiles);
+#endif
     }
 }

@@ -370,6 +370,33 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("block_cyclic_sp_axis") = nb::none(),
         nb::arg("block_cyclic_chunk_local") = nb::none());
 
+    ttnn::bind_function<"sparse_sdpa_stats", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        qr-ring Q-gather variant of sparse_sdpa. Same attention, but ALSO returns the per-(head, query)
+        softmax stats so per-SP-shard outputs can be flash-merged (online softmax) across a stationary-KV
+        ring — the KV cache stays put, the queries travel, transport is flat in context length.
+
+        Returns:
+            [O, m, l]:
+              O (ttnn.Tensor): [1, H, S, v_dim] normalized per-shard output (== sparse_sdpa's output).
+              m (ttnn.Tensor): [1, H, S, 32] raw row-max in col 0 (UNSCALED max of q·k over selected keys).
+              l (ttnn.Tensor): [1, H, S, 32] softmax denominator in col 0 (sum exp(scale*(q·k - m))).
+            Merge across shards i: M=max_i(scale*m_i); w_i=exp(scale*m_i - M)*l_i; out=Σ w_i O_i / Σ w_i.
+        )doc",
+        &ttnn::transformer::sparse_sdpa_stats,
+        nb::arg("q").noconvert(),
+        nb::arg("kv").noconvert(),
+        nb::arg("indices").noconvert(),
+        nb::arg("v_dim"),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("k_chunk_size") = 128,
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
+
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,
         R"doc(

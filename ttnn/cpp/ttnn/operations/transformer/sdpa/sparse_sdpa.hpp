@@ -49,4 +49,22 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
 
+// qr-ring Q-gather variant: same op, but ALSO returns the per-(head,query) softmax stats so per-SP-shard
+// outputs can be flash-merged (online softmax) across a stationary-KV ring. Returns {O, m, l}:
+//   O [1, H, S, v_dim]  — the normalized per-shard output (identical to sparse_sdpa's output)
+//   m [1, H, S, 32]     — raw row-max (col 0; UNSCALED max of q·k over the shard's selected keys)
+//   l [1, H, S, 32]     — softmax denominator (col 0; sum exp(scale*(q·k - m)))
+// Merge across shards i: M=max_i(scale*m_i); w_i=exp(scale*m_i - M)*l_i; out = sum_i w_i O_i / sum_i w_i.
+std::vector<ttnn::Tensor> sparse_sdpa_stats(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& kv,
+    const ttnn::Tensor& indices,
+    uint32_t v_dim,
+    std::optional<float> scale = std::nullopt,
+    uint32_t k_chunk_size = 128,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+
 }  // namespace ttnn::transformer

@@ -176,13 +176,29 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
-    return TensorSpec(
+    std::vector<TensorSpec> specs;
+    specs.emplace_back(
         shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+    if (attrs.return_stats) {
+        // m (raw row-max) and l (softmax denom) per (head, query). Padded to a full tile width (32) so the
+        // writer drains them with the same per-head-row paged write as O (value in col 0); bf16 stats.
+        auto stat_shape = t.q.logical_shape();      // [1, H, S, K_DIM]
+        stat_shape[3] = tt::constants::TILE_WIDTH;  // [1, H, S, 32]
+        const tt::tt_metal::TensorLayout stat_layout(
+            tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem);
+        specs.emplace_back(stat_shape, stat_layout);  // m
+        specs.emplace_back(stat_shape, stat_layout);  // l
+    }
+    return specs;
 }
 
 SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(
     const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
-    return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
+    std::vector<Tensor> outputs;
+    for (const auto& spec : compute_output_specs(attrs, t)) {
+        outputs.push_back(create_device_tensor(spec, t.q.device()));
+    }
+    return outputs;
 }
 
 ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
@@ -222,6 +238,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.has_block_cyclic(),
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        // return_stats gates two extra outputs + a compute/writer #ifdef, so it is a distinct program.
+        attrs.return_stats,
         t.indices.logical_shape(),
         t.indices.dtype());
 }
@@ -229,7 +247,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
 std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_runtime_args(
     const SparseSDPAParams& attrs,
     const SparseSDPAInputs& t,
-    Tensor& /*output*/,
+    tensor_return_value_t& /*output*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // kv_batch_page_offset = cache_batch_idx*T depends on the runtime SLOT (and T, which is NOT hashed for an
     // interleaved kv), so the same program is reused across slots/T — create_descriptor bakes it at build time
@@ -267,7 +285,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     return args;
 }
 
-Tensor sparse_sdpa(
+std::vector<Tensor> sparse_sdpa(
     const Tensor& q,
     const Tensor& kv,
     const Tensor& indices,
@@ -276,7 +294,8 @@ Tensor sparse_sdpa(
     uint32_t k_chunk_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     std::optional<uint32_t> cache_batch_idx,
-    std::optional<BlockCyclicLayout> block_cyclic) {
+    std::optional<BlockCyclicLayout> block_cyclic,
+    bool return_stats) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -286,6 +305,7 @@ Tensor sparse_sdpa(
             .compute_kernel_config = compute_kernel_config,
             .cache_batch_idx = cache_batch_idx,
             .block_cyclic = block_cyclic,
+            .return_stats = return_stats,
         },
         OperationType::tensor_args_t{
             .q = q,

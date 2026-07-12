@@ -49,6 +49,30 @@ ALWI void swap_cb(CircularBuffer& a, CircularBuffer& b) {
     b = t;
 }
 
+#ifdef RETURN_STATS
+// Non-destructive copy of `num_tiles` from src_cb (front) into dst_cb. src is NOT popped (a runtime-id
+// ping-pong buffer whose owner still needs it). Mirrors recip_block_inplace's copy_tile/pack pattern so the
+// LLK init/reconfig sequence matches the tested path. Used to snapshot the final running max/sum so they can
+// be untilized (untilize needs a compile-time CB id, which the ping-pong buffers don't have).
+ALWI void copy_front_to_cb(uint32_t src_cb, uint32_t dst_cb, uint32_t num_tiles) {
+    CircularBuffer src(src_cb), dst(dst_cb);
+    copy_tile_to_dst_init_short(src_cb);
+    reconfig_data_format_srca(src_cb);
+    pack_reconfig_data_format(dst_cb);
+    src.wait_front(num_tiles);
+    dst.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        tile_regs_acquire();
+        copy_tile(src_cb, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, dst_cb);
+        tile_regs_release();
+    }
+    dst.push_back(num_tiles);
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(0);
     constexpr uint32_t DHt = get_compile_time_arg_val(1);
@@ -80,6 +104,11 @@ void kernel_main() {
     constexpr uint32_t cb_recip_scratch = get_compile_time_arg_val(24);
 
     constexpr uint32_t qsb = get_compile_time_arg_val(25);    // query tile-rows per DST group (<= dst_size)
+    // qr-ring stat export CBs (always present; used only under RETURN_STATS).
+    [[maybe_unused]] constexpr uint32_t cb_m_im = get_compile_time_arg_val(26);  // copy of final running max
+    [[maybe_unused]] constexpr uint32_t cb_l_im = get_compile_time_arg_val(27);  // copy of final running sum (l)
+    [[maybe_unused]] constexpr uint32_t cb_m_rm = get_compile_time_arg_val(28);  // untilized m (row-major)
+    [[maybe_unused]] constexpr uint32_t cb_l_rm = get_compile_time_arg_val(29);  // untilized l (row-major)
     constexpr uint32_t Sqt = H / tt::constants::TILE_HEIGHT;  // total query tile-rows (32 heads each)
     constexpr uint32_t q_groups = Sqt / qsb;                  // DST-bound work runs in this many query-row passes
     constexpr uint32_t KT_stride = Skt;                       // cb_qk_im physical row width
@@ -314,6 +343,13 @@ void kernel_main() {
             out_cur.push_back(Sqt * vDHt);
 
             if (is_last) {
+#ifdef RETURN_STATS
+                // Snapshot the final running max (raw m) and sum (l) BEFORE normalize consumes sum_cur and
+                // before max_cur is popped. Non-destructive: the flash state is untouched, so the normalized-O
+                // path below is byte-identical to the no-stats build.
+                copy_front_to_cb(sum_cur.get_cb_id(), cb_l_im, Sqt);
+                copy_front_to_cb(max_cur.get_cb_id(), cb_m_im, Sqt);
+#endif
                 // Finalize: row-sum (matmul vs col-identity) -> recip -> out *= 1/sum -> cb_out_im.
                 // normalize_row_streaming is DST-safe for any sbh, so it does all Sqt rows in one call.
                 normalize_row_streaming<
@@ -340,5 +376,10 @@ void kernel_main() {
 
         // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
         compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+#ifdef RETURN_STATS
+        // Untilize the snapshotted m/l ([Sqt,1] tiles) to row-major (col 0 = per-head value) for the writer.
+        compute_kernel_lib::untilize<1, cb_m_im, cb_m_rm>(/*num_blocks=*/Sqt);
+        compute_kernel_lib::untilize<1, cb_l_im, cb_l_rm>(/*num_blocks=*/Sqt);
+#endif
     }
 }

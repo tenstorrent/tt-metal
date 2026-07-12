@@ -42,6 +42,11 @@ struct SparseSDPAParams {
     // arg). Assumes a consistent-size preallocated cache (per-size recompile, once, is acceptable).
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
     bool has_block_cyclic() const { return block_cyclic.has_value(); }
+    // qr-ring Q-gather: also export the per-(head,query) softmax stats m (raw row-max) and l (softmax denom)
+    // as two extra [1, H, S, 32] outputs (value in col 0). Lets a caller run the op per SP shard over a
+    // stationary KV stripe and flash-merge the normalized partials across shards (online softmax). The op's
+    // normalized O output is unchanged; this only ADDS the two stat tensors. Folded into the program hash.
+    bool return_stats = false;
 };
 
 struct SparseSDPAInputs {

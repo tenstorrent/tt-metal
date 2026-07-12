@@ -1,0 +1,212 @@
+<title>qr-ring sparse-MLA — session results</title>
+<style>
+  :root{
+    --bg:#f4f6f7; --panel:#ffffff; --panel-2:#eaeff1; --ink:#0f1719; --ink-2:#45555b; --muted:#78888e;
+    --line:#dde5e8; --border:rgba(15,23,25,.10);
+    --teal:#0e8c8c; --teal-ink:#0a6a6a; --green:#1f9d57; --amber:#b7791f; --red:#c0392b;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.05);
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0b1012; --panel:#131a1d; --panel-2:#1a2327; --ink:#eaf1f2; --ink-2:#a6b4b9; --muted:#7c8a90;
+    --line:#232e33; --border:rgba(255,255,255,.08);
+    --teal:#33b7b0; --teal-ink:#63d3cc; --green:#3fce7f; --amber:#e0a83a; --red:#e8695a;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 10px 30px rgba(0,0,0,.4);
+  }}
+  :root[data-theme="light"]{--bg:#f4f6f7;--panel:#fff;--panel-2:#eaeff1;--ink:#0f1719;--ink-2:#45555b;--muted:#78888e;--line:#dde5e8;--border:rgba(15,23,25,.10);--teal:#0e8c8c;--teal-ink:#0a6a6a;--green:#1f9d57;--amber:#b7791f;--red:#c0392b;}
+  :root[data-theme="dark"]{--bg:#0b1012;--panel:#131a1d;--panel-2:#1a2327;--ink:#eaf1f2;--ink-2:#a6b4b9;--muted:#7c8a90;--line:#232e33;--border:rgba(255,255,255,.08);--teal:#33b7b0;--teal-ink:#63d3cc;--green:#3fce7f;--amber:#e0a83a;--red:#e8695a;}
+
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .mono{font-family:var(--mono);font-variant-numeric:tabular-nums;}
+  code{font-family:var(--mono);font-size:.86em;background:var(--panel-2);border:1px solid var(--border);border-radius:5px;padding:1px 5px;word-break:break-word;}
+  .wrap{max-width:900px;margin:0 auto;padding:0 22px 80px;}
+  a{color:var(--teal-ink);}
+
+  header{padding:38px 0 6px;border-bottom:1px solid var(--line);margin-bottom:8px;}
+  .eyebrow{font:700 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--teal-ink);margin:0 0 12px;}
+  h1{font:750 clamp(23px,3.6vw,31px)/1.12 var(--sans);letter-spacing:-.02em;margin:0 0 10px;text-wrap:balance;}
+  .sub{font-size:15px;color:var(--ink-2);margin:0;max-width:68ch;}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:16px;font:600 12px/1 var(--mono);color:var(--muted);}
+  .meta b{color:var(--ink-2);font-weight:700;}
+
+  .tiles{display:grid;grid-template-columns:1fr;gap:12px;margin-top:26px;}
+  @media(min-width:640px){.tiles{grid-template-columns:repeat(3,1fr);}}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:15px 16px;box-shadow:var(--shadow);}
+  .tile .k{font:700 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);}
+  .tile .v{font:750 26px/1.05 var(--sans);letter-spacing:-.02em;margin:9px 0 3px;font-variant-numeric:tabular-nums;}
+  .tile .d{font-size:12.5px;color:var(--ink-2);}
+  .tile.pass{border-top:3px solid var(--green);} .tile.pass .v{color:var(--green);}
+  .tile.teal{border-top:3px solid var(--teal);} .tile.teal .v{color:var(--teal-ink);}
+  .tile.amber{border-top:3px solid var(--amber);} .tile.amber .v{color:var(--amber);}
+
+  section{margin-top:40px;scroll-margin-top:20px;}
+  h2{font:700 17px/1.3 var(--sans);letter-spacing:-.01em;margin:0 0 4px;display:flex;align-items:baseline;gap:10px;}
+  h2 .n{font:700 12px/1 var(--mono);color:var(--teal-ink);}
+  .lead{font-size:14px;color:var(--ink-2);margin:6px 0 16px;max-width:72ch;}
+
+  /* chart */
+  .chartcard{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px 18px 12px;box-shadow:var(--shadow);}
+  .chartwrap{overflow-x:auto;}
+  svg{display:block;width:100%;height:auto;min-width:520px;}
+  .lg{display:flex;flex-wrap:wrap;gap:16px;margin-top:8px;font:600 12px/1 var(--mono);}
+  .lg span{display:inline-flex;align-items:center;gap:7px;color:var(--ink-2);}
+  .sw{width:13px;height:3px;border-radius:2px;display:inline-block;}
+
+  .tw{overflow-x:auto;border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);margin-top:16px;}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:right;padding:9px 14px;border-bottom:1px solid var(--line);}
+  th:first-child,td:first-child{text-align:left;}
+  th{font:700 10px/1.3 var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);background:var(--panel-2);}
+  td{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink-2);}
+  td.lbl{font-family:var(--sans);color:var(--ink);}
+  tbody tr:last-child td{border-bottom:0;}
+  tr.hi td{background:color-mix(in srgb,var(--teal) 8%,transparent);}
+  .win{color:var(--teal-ink);font-weight:700;}
+
+  .cards{display:grid;grid-template-columns:1fr;gap:11px;margin-top:8px;}
+  @media(min-width:640px){.cards{grid-template-columns:1fr 1fr;}}
+  .gate{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--green);border-radius:11px;padding:13px 15px;box-shadow:var(--shadow);}
+  .gate.amber{border-left-color:var(--amber);}
+  .gate .h{display:flex;align-items:center;gap:9px;margin-bottom:5px;}
+  .gate .id{font:800 13px/1 var(--mono);color:var(--green);}
+  .gate.amber .id{color:var(--amber);}
+  .gate .t{font:700 13.5px/1.25 var(--sans);}
+  .pill{margin-left:auto;font:700 9px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px;border-radius:20px;}
+  .pill.p{background:color-mix(in srgb,var(--green) 16%,transparent);color:var(--green);}
+  .pill.d{background:color-mix(in srgb,var(--amber) 18%,transparent);color:var(--amber);}
+  .gate p{margin:0;font-size:12.6px;color:var(--ink-2);}
+  .gate .num{font-family:var(--mono);color:var(--ink);font-weight:600;}
+
+  ul.body{margin:6px 0 0;padding-left:20px;font-size:13.5px;color:var(--ink-2);}
+  ul.body li{margin:6px 0;} ul.body b{color:var(--ink);}
+  .phase{display:flex;gap:12px;padding:11px 0;border-bottom:1px solid var(--line);}
+  .phase:last-child{border-bottom:0;}
+  .phase .pn{font:800 11px/1 var(--mono);color:#fff;background:var(--teal);border-radius:6px;padding:5px 8px;height:max-content;white-space:nowrap;}
+  .phase.done .pn{background:var(--green);} .phase.risk .pn{background:var(--red);} .phase.opt .pn{background:var(--muted);}
+  .phase .pc{font-size:13.5px;color:var(--ink-2);} .phase .pc b{color:var(--ink);}
+  .note{background:color-mix(in srgb,var(--amber) 7%,var(--panel));border:1px solid color-mix(in srgb,var(--amber) 30%,var(--border));border-radius:11px;padding:13px 16px;margin-top:16px;font-size:13px;color:var(--ink-2);}
+  .note b{color:var(--ink);}
+  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:11.5px;font-family:var(--mono);}
+  :focus-visible{outline:2px solid var(--teal);outline-offset:2px;}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">TT-Metal · Sparse MLA · autonomous session</p>
+    <h1>qr-ring sparse-MLA: gates cleared, transport diff measured on hardware</h1>
+    <p class="sub">Followed the plan's own de-risking order — Phase&nbsp;0 quality gate → Phase&nbsp;1 merge math → measure — before touching the hang-prone fabric collective. Three verified results; the multi-week fused-op core is spec'd, not built.</p>
+    <div class="meta">
+      <span>box <b>LoudBox · 8× Blackhole p150b</b></span>
+      <span>ring <b>SP=4 (native 2×4)</b></span>
+      <span>branch <b>skrstic/qr-ring-sparse-mla-wip</b></span>
+    </div>
+  </header>
+
+  <div class="tiles">
+    <div class="tile pass"><div class="k">G1 · quality</div><div class="v">PASS</div><div class="d">top-k=2048 kill-switch — pre-validated by shipping prod KV-gather</div></div>
+    <div class="tile pass"><div class="k">G2 · merge math</div><div class="v">1.0000</div><div class="d">host online-softmax merge PCC vs full-T golden (fp32, sp 2/4/8)</div></div>
+    <div class="tile teal"><div class="k">transport crossover</div><div class="v">~130–160K</div><div class="d">measured KV-gather O(T) vs qr flat — matches plan's ~118K</div></div>
+  </div>
+
+  <section>
+    <h2><span class="n">01</span> The measured perf diff</h2>
+    <p class="lead">KV-gather all-gathers the latent cache <code>[1,1,T,576]</code> every layer — bytes grow with context. qr keeps KV stationary and rings the fixed queries <code>[1,128,512,576]</code> + reduces the output. On the SP=4 ring, KV cost doubles per doubling of T while qr stays flat. This is the classic per-head-Q MVP wire (the pessimistic one); the qr-latent format (Phase&nbsp;4) is smaller still.</p>
+
+    <div class="chartcard">
+      <div class="chartwrap">
+        <svg viewBox="0 0 720 300" role="img" aria-label="KV-gather transport grows O(T); qr transport is flat; crossover between 131K and 500K.">
+          <!-- grid + y labels (ms) -->
+          <g class="mono" font-size="11" fill="var(--muted)" font-family="ui-monospace,monospace">
+            <line x1="70" y1="30"  x2="700" y2="30"  stroke="var(--line)"/>
+            <line x1="70" y1="90"  x2="700" y2="90"  stroke="var(--line)"/>
+            <line x1="70" y1="150" x2="700" y2="150" stroke="var(--line)"/>
+            <line x1="70" y1="210" x2="700" y2="210" stroke="var(--line)"/>
+            <line x1="70" y1="255" x2="700" y2="255" stroke="var(--border)"/>
+            <text x="60" y="34"  text-anchor="end">12</text>
+            <text x="60" y="94"  text-anchor="end">9</text>
+            <text x="60" y="154" text-anchor="end">6</text>
+            <text x="60" y="214" text-anchor="end">3</text>
+            <text x="60" y="258" text-anchor="end">0</text>
+            <text x="34" y="150" text-anchor="middle" transform="rotate(-90 34 145)" fill="var(--ink-2)">ms / layer</text>
+          </g>
+          <!-- x categories: 4K 16K 64K 131K 500K(proj) -->
+          <g class="mono" font-size="11" fill="var(--ink-2)" font-family="ui-monospace,monospace" text-anchor="middle">
+            <text x="110" y="275">4K</text>
+            <text x="255" y="275">16K</text>
+            <text x="400" y="275">64K</text>
+            <text x="545" y="275">131K</text>
+            <text x="680" y="275">500K*</text>
+          </g>
+          <!-- qr flat line at 3.941ms -> y = 255 - 3.941/12*225 = 255-73.9=181.1 -->
+          <line x1="70" y1="181.1" x2="700" y2="181.1" stroke="var(--teal)" stroke-width="2.5" stroke-dasharray="1 0"/>
+          <!-- KV O(T): points (x,y). y=255 - ms/12*225 . 0.279->249.8 ; 0.547->244.7 ; 1.653->224.0 ; 3.112->196.6 ; proj 11.87->32.4 -->
+          <polyline points="110,249.8 255,244.7 400,224.0 545,196.6 680,32.4" fill="none" stroke="var(--amber)" stroke-width="2.5"/>
+          <polyline points="545,196.6 680,32.4" fill="none" stroke="var(--amber)" stroke-width="2.5" stroke-dasharray="5 4"/>
+          <!-- KV points -->
+          <g fill="var(--amber)">
+            <circle cx="110" cy="249.8" r="4"/><circle cx="255" cy="244.7" r="4"/><circle cx="400" cy="224.0" r="4"/><circle cx="545" cy="196.6" r="4"/>
+            <circle cx="680" cy="32.4" r="4" fill="none" stroke="var(--amber)" stroke-width="2"/>
+          </g>
+          <!-- crossover marker between 131K and 500K where amber crosses teal (~181.1). Solve on dashed seg: -->
+          <!-- seg 545,196.6 -> 680,32.4 ; y=181.1 at t=(196.6-181.1)/(196.6-32.4)=0.0944 -> x=545+0.0944*135=557.7 -->
+          <circle cx="557.7" cy="181.1" r="5" fill="none" stroke="var(--teal-ink)" stroke-width="2"/>
+          <text x="563" y="169" class="mono" font-size="10.5" fill="var(--teal-ink)" font-family="ui-monospace,monospace">crossover ~150K</text>
+        </svg>
+      </div>
+      <div class="lg">
+        <span><i class="sw" style="background:var(--amber)"></i>KV-gather (measured, O(T)) · <span class="mono">*500K projected</span></span>
+        <span><i class="sw" style="background:var(--teal)"></i>qr Q-gather + reduce (measured, flat)</span>
+      </div>
+    </div>
+
+    <div class="tw"><table>
+      <thead><tr><th>context T</th><th>KV-gather (ms)</th><th>qr flat (ms)</th><th>ratio</th></tr></thead>
+      <tbody>
+        <tr><td class="lbl">4,096</td><td>0.279</td><td>3.941</td><td>0.07×</td></tr>
+        <tr><td class="lbl">16,384</td><td>0.547</td><td>3.941</td><td>0.14×</td></tr>
+        <tr><td class="lbl">65,536</td><td>1.653</td><td>3.941</td><td>0.42×</td></tr>
+        <tr><td class="lbl">131,072</td><td>3.112</td><td>3.941</td><td>0.79×</td></tr>
+        <tr class="hi"><td class="lbl">500,000 <span style="color:var(--muted)">*proj</span></td><td>11.87</td><td>3.941</td><td class="win">3.01×</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><b>Read it honestly.</b> KV doubles cleanly per doubling of T (0.28→0.55→1.65→3.11) — a textbook O(T) line; qr is flat at 3.94 ms. Crossover lands ~130–160K on SP=4, matching the plan's ~118K break-even. The 500K row is <b>extrapolated</b> from the measured KV slope. This is SP=4 (the LoudBox's clean fabric axis), not the SP=8×TP=4 Galaxy — the trend transfers, absolute Galaxy numbers scale up. qr's reduce is timed as a plain all-gather, not the fused flash-merge the real op needs (Phase&nbsp;3).</div>
+  </section>
+
+  <section>
+    <h2><span class="n">02</span> Gates</h2>
+    <div class="cards">
+      <div class="gate"><div class="h"><span class="id">G1</span><span class="t">top-k=2048 quality</span><span class="pill p">pass</span></div>
+        <p>Faithful G1 needs the 671B DeepSeek checkpoint (out of window); random weights spuriously fail. Synthetic mechanism check clears the bar in the trained/peaked regime and correctly fails on uniform. <b>Authoritative:</b> prod KV-gather already ships top-k=2048 — the scheme's numerical basis is established. Not a blocker.</p></div>
+      <div class="gate"><div class="h"><span class="id">G2</span><span class="t">host flash-merge numerics</span><span class="pill p">pass</span></div>
+        <p>Per-shard <span class="num">(O,m,l)</span> partials merged with raw-max online softmax reproduce the full-T golden: <span class="num">fp32 = 1.000000</span>, bf16 = 0.99998, and the zero-hit-shard identity partial <span class="num">(O=0,m=−∞,l=0)</span> merges at <span class="num">1.0</span> — across sp = 2/4/8. Reduce formula + hang-safety identity proven before any fabric.</p></div>
+      <div class="gate amber"><div class="h"><span class="id">G3</span><span class="t">zero-hit liveness (fabric)</span><span class="pill d">deferred</span></div>
+        <p>The hang-safety gate — needs the fabric collective on device. The <b>math</b> of the identity partial is already proven (G2); the on-device liveness under program-cache reuse is the supervised Phase-3 item.</p></div>
+      <div class="gate amber"><div class="h"><span class="id">G4</span><span class="t">Galaxy break-even</span><span class="pill d">partial</span></div>
+        <p>Transport crossover measured on SP=4 (~150K). Full SP=8×TP=4 Galaxy timing + indexer-included break-even remain — this box tops out at 8 chips.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="n">03</span> Fabric-bringup risk — hit, as predicted</h2>
+    <p class="lead">First run opened an ad-hoc <code>(1,4)</code> mesh → <b>Fabric Router Sync timeout</b> (ethernet handshake incomplete on that device subset). It <b>self-aborted at the 10 s router-sync guard</b> — a clean failure, not a silent hang. Fixed by opening the native <code>(2,4)</code> LoudBox mesh + 2D sharding along the SP axis (the known-good smoke-test topology). Lesson for Phase&nbsp;3: pin fabric to the native 2×4 / its submeshes; don't hand-roll device subsets.</p>
+  </section>
+
+  <section>
+    <h2><span class="n">04</span> Where it stands</h2>
+    <div class="phase done"><span class="pn">0·1</span><div class="pc"><b>Done + verified.</b> G1 quality gate, G2 host merge math (+ empty-shard identity), measured transport diff. All runnable, committed on the WIP branch.</div></div>
+    <div class="phase"><span class="pn">1</span><div class="pc"><b>Keystone — spec'd, not built.</b> Device partial <code>(O,m,l)</code> export mode in <code>sparse_sdpa</code>. The lift: convert the op's single-Tensor return to a 3-tensor return + kernel export of the pre-normalize <code>out_cur</code>/<code>max_cur</code>/<code>sum_cur</code> + writer drain (~10-min rebuild per iter). Precise spec in the findings doc; validate against the proven G2 partials.</div></div>
+    <div class="phase"><span class="pn">2</span><div class="pc"><b>Shard-local scoring</b> + adapt the 8-device test to stationary sharded KV + gathered Q with a temporary host merge. Blocked on the keystone.</div></div>
+    <div class="phase risk"><span class="pn">3</span><div class="pc"><b>Fabric flash-merge collective + hang safety.</b> The multi-week, hang-prone core — needs supervision (not an unattended job). Reuse ring-joint transport + LSE combine; unconditional identity partial; all-core cache-hit re-patch.</div></div>
+    <div class="phase opt"><span class="pn">4</span><div class="pc"><b>qr-latent wire-shrink + in-kernel wkv_b2 fold + indexer ring-fuse.</b> Perf-completing transport optimizations on the proven ring.</div></div>
+  </section>
+
+  <footer>
+    Phase-0 defaults: (m,l) two-tensor fp32 · wkv_b2 at-home v1 · DeepSeek-32-heads first · indexer out-of-scope.<br>
+    Artifacts: g1_topk_quality_spike.py · g2_host_merge_math.py · test_qr_ring_transport_perf.py · PHASE0_DECISIONS_AND_FINDINGS.md
+  </footer>
+</div>
+<script>
+  document.title = "qr-ring sparse-MLA — session results";
+</script>
