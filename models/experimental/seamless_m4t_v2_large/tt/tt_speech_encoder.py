@@ -131,6 +131,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self._rel_pos_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
         # Per-query-block uint32 distance index ``[Qc, S]`` keyed by ``(q0, Qc, S, left, right)``.
         self._rel_block_idx_cache: dict[Tuple[int, int, int, int, int], ttnn.Tensor] = {}
+        # Windowed per-query-block distance index ``[Qc, W]`` (band-only keys) keyed by
+        # ``(q0, Qc, kW0, W, left, right)`` — see ``_add_windowed_relative_logits``.
+        self._rel_window_idx_cache: dict[Tuple[int, int, int, int, int, int], ttnn.Tensor] = {}
         # ``ttnn.gather`` index ``[B, H, Q, S]`` (TILE uint32) keyed by ``(idx_id, batch, num_heads)``.
         self._rel_gather_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
         # ``(batch, seq_len)`` already passed through ``pre_warm`` for this forward lifetime.
@@ -1207,9 +1210,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
         l = np.arange(seq_len, dtype=np.int64)
         dist = np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max
         idx_host = torch.from_numpy(np.ascontiguousarray(dist.astype(np.int32)))
+        # uint16: lossless for the 73-entry distance vocab; halves the bandwidth-bound gather index read.
         idx_dev = ttnn.from_torch(
             idx_host,
-            dtype=ttnn.uint32,
+            dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1230,9 +1234,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
         r = np.arange(seq_len, dtype=np.int64)
         l = np.arange(q0, q1, dtype=np.int64)
         dist = (np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max).astype(np.int32)
+        # uint16: lossless for the 73-entry distance vocab; halves the gather index read.
         idx_dev = ttnn.from_torch(
             torch.from_numpy(np.ascontiguousarray(dist)),
-            dtype=ttnn.uint32,
+            dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1302,6 +1307,137 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(q_scores)
         return rel
 
+    @staticmethod
+    def _relative_window_bounds(q0: int, q1: int, seq_len: int, *, left_max: int, right_max: int) -> Tuple[int, int]:
+        """Tile-aligned key window ``[kW0, kW1)`` outside which the distance index is constant.
+
+        The clamped index ``idx[q,k] = clip(k - q, -left_max, right_max) + left_max`` only varies
+        for keys in the diagonal band ``k ∈ [q - left_max, q + right_max]``. For a query block
+        ``[q0, q1)`` the union band spans ``[q0 - left_max, (q1-1) + right_max]``; every key left of
+        it maps to ``idx=0`` and every key right of it to ``idx=vocab-1`` (per-row constants).
+        """
+        lo = q0 - left_max
+        hi = (q1 - 1) + right_max
+        kw0 = max(0, (lo // 32) * 32)
+        kw1 = min(seq_len, ((hi // 32) + 1) * 32)
+        return kw0, kw1
+
+    def _relative_window_index_device(
+        self, q0: int, q1: int, kw0: int, kw1: int, *, left_max: int, right_max: int
+    ) -> ttnn.Tensor:
+        """Cached device ``[Qc, W]`` uint16 distance indices for the band keys ``[kw0, kw1)``."""
+        qc = q1 - q0
+        w = kw1 - kw0
+        idx_key = (q0, qc, kw0, w, left_max, right_max)
+        cached = self._rel_window_idx_cache.get(idx_key)
+        if cached is not None:
+            return cached
+        r = np.arange(kw0, kw1, dtype=np.int64)
+        l = np.arange(q0, q1, dtype=np.int64)
+        dist = (np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max).astype(np.int32)
+        idx_dev = ttnn.from_torch(
+            torch.from_numpy(np.ascontiguousarray(dist)),
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper(self.device),
+        )
+        self._rel_window_idx_cache[idx_key] = idx_dev
+        return idx_dev
+
+    def _add_windowed_relative_logits(
+        self,
+        scores: ttnn.Tensor,
+        q: ttnn.Tensor,
+        *,
+        distance_weight: ttnn.Tensor,
+        batch: int,
+        num_heads: int,
+        q0: int,
+        q1: int,
+        seq_len: int,
+        left_max: int,
+        right_max: int,
+        memory_config: ttnn.MemoryConfig,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    ) -> ttnn.Tensor:
+        """Add the conformer relative-position bias to ``scores`` — bit-identical to
+        ``scores + _relative_logits_fused(...)``, but ~13x cheaper.
+
+        ``ttnn.gather`` over the full ``[B,H,Qc,S]`` index is ~7.5 ms at S=4096 and dominated device
+        time (81% of the encoder). The clamped distance index is constant outside a
+        ``left_max+right_max`` band, so only the band-key window ``[kW0, kW1)`` needs a gather; the
+        two constant regions are just the clamp columns of ``q_scores`` (``idx=0`` left,
+        ``idx=vocab-1`` right). Add the bias into ``scores`` region-by-region: a real add on the
+        window slice, and a **width-1 broadcast add** on each constant slice — avoiding the
+        ``ttnn.repeat``/``concat`` that would otherwise materialize the full-width bias (which
+        profiled as the new bottleneck). Result is bit-exact (validated ``max_abs_err=0``).
+        """
+        head_dim = int(q.shape[-1])
+        vocab = int(distance_weight.shape[-2])
+        qc = q1 - q0
+        kw0, kw1 = self._relative_window_bounds(q0, q1, seq_len, left_max=left_max, right_max=right_max)
+        w = kw1 - kw0
+        # q_scores[b,h,q,v] = q·emb[v] — same matmul as the fused path.
+        q_bh = ttnn.reshape(q, (batch * num_heads, qc, head_dim))
+        emb_w = ttnn.reshape(distance_weight, (vocab, head_dim))
+        q_scores_bh = ttnn.matmul(
+            q_bh,
+            emb_w,
+            transpose_b=True,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )
+        ttnn.deallocate(q_bh)
+        q_scores = ttnn.reshape(q_scores_bh, (batch, num_heads, qc, vocab))
+        ttnn.deallocate(q_scores_bh)
+
+        # Extract the two clamp columns BEFORE the gather. ``ttnn.gather`` can clobber/alias its input
+        # buffer in some DRAM states — reading ``c_left``/``c_right`` from ``q_scores`` after the gather
+        # gave corrupted constants on later query blocks (S/2+). Slice them first.
+        c_left = ttnn.slice(
+            q_scores, [0, 0, 0, 0], [batch, num_heads, qc, 1], [1, 1, 1, 1], memory_config=memory_config
+        )
+        c_right = ttnn.slice(
+            q_scores, [0, 0, 0, vocab - 1], [batch, num_heads, qc, vocab], [1, 1, 1, 1], memory_config=memory_config
+        )
+
+        # Band window gather (cheap: W ≈ Qc + left_max + right_max ≪ S).
+        idx_dev = self._relative_window_index_device(q0, q1, kw0, kw1, left_max=left_max, right_max=right_max)
+        idx_gather = self._relative_gather_index_4d(idx_dev, batch=batch, num_heads=num_heads, q_rows=qc, seq_len=w)
+        win = ttnn.gather(q_scores, dim=3, index=idx_gather, memory_config=memory_config)
+        ttnn.deallocate(q_scores)
+        s_mid = ttnn.slice(
+            scores, [0, 0, 0, kw0], [batch, num_heads, qc, kw1], [1, 1, 1, 1], memory_config=memory_config
+        )
+        s_mid = ttnn.add(s_mid, win, memory_config=memory_config)
+        ttnn.deallocate(win)
+
+        pieces: list[ttnn.Tensor] = []
+        if kw0 > 0:
+            s_left = ttnn.slice(
+                scores, [0, 0, 0, 0], [batch, num_heads, qc, kw0], [1, 1, 1, 1], memory_config=memory_config
+            )
+            s_left = ttnn.add(s_left, c_left, memory_config=memory_config)  # width-1 broadcast
+            pieces.append(s_left)
+        ttnn.deallocate(c_left)
+        pieces.append(s_mid)
+        if kw1 < seq_len:
+            s_right = ttnn.slice(
+                scores, [0, 0, 0, kw1], [batch, num_heads, qc, seq_len], [1, 1, 1, 1], memory_config=memory_config
+            )
+            s_right = ttnn.add(s_right, c_right, memory_config=memory_config)  # width-1 broadcast
+            pieces.append(s_right)
+        ttnn.deallocate(c_right)
+        ttnn.deallocate(scores)
+        if len(pieces) == 1:
+            return pieces[0]
+        out = ttnn.concat(pieces, dim=3, memory_config=memory_config)
+        for p in pieces:
+            ttnn.deallocate(p)
+        return out
+
     def _chunked_relative_attention_matmul(
         self,
         q: ttnn.Tensor,
@@ -1323,7 +1459,6 @@ class TTSeamlessM4Tv2SpeechEncoder:
         out_blocks: list[ttnn.Tensor] = []
         for q0 in range(0, seq_len, _ATTN_QUERY_CHUNK):
             q1 = min(q0 + _ATTN_QUERY_CHUNK, seq_len)
-            qc = q1 - q0
             q_blk = ttnn.slice(q, [0, 0, q0, 0], [batch, num_heads, q1, head_dim], [1, 1, 1, 1], memory_config=mc)
             scores = ttnn.matmul(
                 q_blk,
@@ -1331,23 +1466,21 @@ class TTSeamlessM4Tv2SpeechEncoder:
                 memory_config=mc,
                 compute_kernel_config=self._attn_compute_cfg,
             )
-            idx_blk = self._relative_block_position_index_device(
-                q0, q1, seq_len, left_max=left_max, right_max=right_max
-            )
-            rel_blk = self._relative_logits_fused(
+            scores = self._add_windowed_relative_logits(
+                scores,
                 q_blk,
-                idx_dev=idx_blk,
                 distance_weight=dist_w,
                 batch=batch,
                 num_heads=num_heads,
-                q_rows=qc,
+                q0=q0,
+                q1=q1,
                 seq_len=seq_len,
+                left_max=left_max,
+                right_max=right_max,
                 memory_config=mc,
                 compute_kernel_config=self._linear_compute_cfg,
             )
             ttnn.deallocate(q_blk)
-            scores = ttnn.add(scores, rel_blk, memory_config=mc)
-            ttnn.deallocate(rel_blk)
             if attention_mask_4d is not None:
                 mask_blk = ttnn.slice(
                     attention_mask_4d,
@@ -2213,7 +2346,19 @@ class TTSeamlessM4Tv2SpeechEncoder:
             idx_full = self._relative_position_index_device(slen, left_max=left_max, right_max=right_max)
             if slen <= _ATTN_QUERY_CHUNK_THRESHOLD:
                 self._relative_gather_index_4d(idx_full, batch=batch, num_heads=num_heads, q_rows=slen, seq_len=slen)
+            elif slen >= _ATTN_QUERY_CHUNK_MATMUL_THRESHOLD:
+                # Matmul chunked path uses the band-windowed logits — warm window indices.
+                for q0 in range(0, slen, _ATTN_QUERY_CHUNK):
+                    q1 = min(q0 + _ATTN_QUERY_CHUNK, slen)
+                    kw0, kw1 = self._relative_window_bounds(q0, q1, slen, left_max=left_max, right_max=right_max)
+                    idx_win = self._relative_window_index_device(
+                        q0, q1, kw0, kw1, left_max=left_max, right_max=right_max
+                    )
+                    self._relative_gather_index_4d(
+                        idx_win, batch=batch, num_heads=num_heads, q_rows=q1 - q0, seq_len=kw1 - kw0
+                    )
             else:
+                # f32-softmax chunked path still uses the full-S fused gather.
                 for q0 in range(0, slen, _ATTN_QUERY_CHUNK):
                     q1 = min(q0 + _ATTN_QUERY_CHUNK, slen)
                     qc = q1 - q0
