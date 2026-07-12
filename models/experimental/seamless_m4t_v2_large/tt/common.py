@@ -1262,15 +1262,32 @@ ENCODER_L1_MICROBATCH_ROWS = MATMUL_1D_SEQ_THRESHOLD
 ENCODER_TP_BS_CHUNK_DEFAULT = 4096
 # Decoder / shared all-reduce helper: spill L1→DRAM at this many rows (unchanged policy).
 ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256
+# Keep the encoder TP residual / all-reduce / matmul reshards L1-resident up to the design-max
+# sequence (``max_position_embeddings`` = 4096), which fits BH-QB L1 once the matmul runs single-shot
+# (measured: reshards go L1-local, -4.6 ms at seq=4096). Above it, spill to DRAM.
+ENCODER_L1_RESIDENT_DEFAULT = 4096
+
+
+def _encoder_l1_resident_max() -> int:
+    """Max token rows for which the encoder TP residual / all-reduce / reshards stay in L1.
+
+    Default ``ENCODER_L1_RESIDENT_DEFAULT`` (4096 = design-max seq); above it residuals live in DRAM
+    so they do not fight block-sharded matmul CBs. ``SEAMLESS_ENCODER_L1_RESIDENT_MAX`` overrides
+    (lower it if L1 is tight on a given mesh / batch).
+    """
+    try:
+        return int(os.environ.get("SEAMLESS_ENCODER_L1_RESIDENT_MAX", str(ENCODER_L1_RESIDENT_DEFAULT)))
+    except ValueError:
+        return ENCODER_L1_RESIDENT_DEFAULT
 
 
 def encoder_tp_activation_memory_config(token_rows: int) -> ttnn.MemoryConfig:
     """Activation buffer type for encoder TP prefill (interleaved BSH).
 
-    L1 when ``token_rows <= ENCODER_L1_MICROBATCH_ROWS``; DRAM otherwise so long-seq
+    L1 when ``token_rows <= _encoder_l1_resident_max()``; DRAM otherwise so long-seq
     residuals do not fight block-sharded matmul CBs / FFN mid tensors.
     """
-    if token_rows > ENCODER_L1_MICROBATCH_ROWS:
+    if token_rows > _encoder_l1_resident_max():
         return ttnn.DRAM_MEMORY_CONFIG
     return ttnn.L1_MEMORY_CONFIG
 
@@ -1299,7 +1316,7 @@ def encoder_all_reduce_sum_replicate(
     token_rows = 1
     for d in x_shape[:-1]:
         token_rows *= int(d)
-    if mc.buffer_type == ttnn.BufferType.L1 and token_rows > ENCODER_L1_MICROBATCH_ROWS:
+    if mc.buffer_type == ttnn.BufferType.L1 and token_rows > _encoder_l1_resident_max():
         mc = ttnn.DRAM_MEMORY_CONFIG
 
     result = ttnn.all_reduce(
