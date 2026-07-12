@@ -435,20 +435,25 @@ A2) isolating is_fsdp. Drift-immune (Batch P): BOTH cells in ONE reservation. WA
   (param selection only) ⇒ nothing to revert. **Batch T CLOSED — the S1×collective-pattern matrix is now complete; every
   runtime/env-selectable no-edit axis on both stages has a receipt.**
 
-## Batch U — CCL-matmul math-fidelity at bf16 (`all_lofi`): the one quant-preset cell Batch H never ran
-Batch H measured `all_bf8_lofi` (bf8 weights+acts **AND** LoFi matmul math-fidelity, −1.1% null) and concluded the
-dominant 56% CCL-matmul is "not compute-bound." But that run CONFLATES two levers: the bf8 dtype (halves the collective's
-transferred bytes) and the LoFi fidelity (halves matmul math phases). `QuantConfig.all_lofi` (quant_config.py:100-115) is a
-DISTINCT registered preset — bf16 weights+acts, LoFi math-fidelity on all 7 linears + SDPA, **no dtype change** — and was
-NEVER run (grep: only `all_bf8_lofi*` variants exist). It isolates matmul math-fidelity from the bf8 BW confound: a clean
-probe of "is the dominant matmul compute-bound at native bf16." Same F0/H0 block harness, env-only (`LTX_QUANT=all_lofi`),
-PCC-gated vs 0.988 oracle, cron-in-budget (~50s). Promoted from dead-by-composition to a MEASUREMENT per the Batch L/N/P
-precedent (measure-don't-reason). Predicted null (≤ the −1.1% `all_bf8_lofi` already banked, since it drops the bf8 BW win),
-but the number closes the last unmeasured quant-preset cell with a receipt instead of a compositional argument.
-- [~] **`all_lofi` (bf16 weights, LoFi matmul+SDPA fidelity, no bf8) — job 120504-11 (2026-07-12 12:05Z, dispatched).**
-  F0 S2 video-block harness, `LTX_QUANT=all_lofi LTX_PROFILE_ITERS=4`, `-k 'video and stage_2 and ring_bh_4x8sp1tp0 and
-  ckpt_fast'`, num_links=param=2, env opt/env_sdpa.yaml, timeout 250s. Emits WARM_FWD_MS (vs F0 16.88ms) + video PCC.
-  Next lap: re-verify from raw log, record number, tick `[x]`.
+## Batch U — CCL-matmul math-fidelity at bf16 (`all_lofi`): DEAD-ON-ARRIVAL, the preset does NOT exist
+The 12:05Z dispatch premise was FALSE. It claimed `QuantConfig.all_lofi` (quant_config.py:100-115) and `all_weights_bf8`
+(:86) are "distinct registered presets never run." **Source-verified 2026-07-12 12:33Z: they do not exist.** `QuantConfig`
+(models/tt_dit/pipelines/ltx/quant_config.py) has EXACTLY 4 factory staticmethods — `default` (:78), `all_bf8_lofi` (:93),
+`all_bf8_lofi_sdpa_lofi` (:133), `all_bf8_lofi_sdpa_lofi_fp32acc` (:146) — all already measured (baseline · H −1.1% · J
+98.57% FAIL · L/P −4.9%). The cited lines are INSIDE existing bodies: :86 is `cross_attn_out=lc,` (a field in `default()`),
+:101 is a docstring line in `all_bf8_lofi()`. The prior lap misread a field + a docstring as new factory methods and
+dispatched a nonexistent preset name. The test resolves presets via `getattr(QuantConfig, LTX_QUANT)` (test:868), so the
+run FAILED at `assert callable(_factory)`: **`AssertionError: LTX_QUANT='all_lofi' is not a QuantConfig preset`** — zero
+device measurement, harness/config error, not a result.
+Even had the preset been authored (a source edit, not a no-edit cell): `all_lofi` = LoFi math + bf16 dtype applies a strict
+SUBSET of `all_bf8_lofi`'s optimizations (which stacks bf8 dtype on top), so its speedup is bounded ABOVE by the
+already-measured `all_bf8_lofi` −1.1% (sub-gate) ⇒ predetermined-null within a CLOSED compute-precision axis (LoFi-math
+alone already isolated null on VAE, Batch O −1.77%). Authoring it = the thrash the north star forbids. **Quant-preset space
+is genuinely 4/4 CLOSED** (the "6 presets" belief was the misread). No source edited by the dispatch (env-only) ⇒ nothing to revert.
+- [x] **`all_lofi` — DEAD-ON-ARRIVAL (job 120504-11, 2026-07-12 12:05Z): preset does not exist.** Test failed at the
+  `getattr(QuantConfig, 'all_lofi')` factory assertion in 39.7s (`1 failed`, exit 0 masked by `| tail`). Source-verified
+  the QuantConfig class has only the 4 measured presets; `all_lofi`/`all_weights_bf8` were a source-misread. No device data,
+  nothing to revert. Batch U CLOSED; quant-preset axis 4/4 complete.
 
 ## DONE (measured, with the number)
 
